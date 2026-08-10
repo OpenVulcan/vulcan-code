@@ -1,0 +1,102 @@
+{
+  "schema_version": "provider-manifest-execution-fixture.v1",
+  "fixture_id": "tavily-extract-generic",
+  "base_manifest": "tavily.json",
+  "production_target_refs": [
+    "tavily::public-api.extract"
+  ],
+  "tool_target": {
+    "target_id": "public-api.fixture-extract-generic",
+    "description": "Generic JSON Tavily extraction wire-contract fixture.",
+    "service_entry_id": "public-api",
+    "credential_profile_ids": ["api-key"],
+    "upstream_target_id": "extract",
+    "display_name": "Tavily Extract Generic Fixture",
+    "tool_id": "fixture_tavily_extract_generic",
+    "capability": "web_extract",
+    "input_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "urls": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+        "timeout_seconds": {"type": "number", "minimum": 1, "maximum": 60}
+      },
+      "required": ["urls"]
+    },
+    "output": {
+      "kind": "extract",
+      "source_path": "/results",
+      "normalized_result_path": "extract",
+      "resource_kind": null,
+      "mime_types": []
+    },
+    "execution": {
+      "endpoint_path": "/extract",
+      "authentication": "bearer_authorization",
+      "adapter": "generic_json",
+      "execution_kind": "http_json_sync"
+    }
+  },
+  "operation": {
+    "operation_id": "fixture.tavily-extract-generic",
+    "operation": "web_extract",
+    "carrier": "provider_tool",
+    "input_resources": [],
+    "output_resources": [],
+    "tool_target_refs": ["public-api.fixture-extract-generic"],
+    "request_profile_refs": ["fixture.tavily-extract.request.v1"],
+    "response_profile_refs": [],
+    "upload_channel_refs": [],
+    "upload_bindings": [],
+    "timeout_ms": 60000,
+    "idempotent": false
+  },
+  "upload_channels": [],
+  "request_profiles": [
+    {
+      "profile_id": "fixture.tavily-extract.request.v1",
+      "description": "Freeze the reviewed Tavily extraction defaults.",
+      "payload": {
+        "profile_id": "fixture.tavily-extract.request.v1",
+        "revision": 1,
+        "steps": [
+          {"op": "set_default_if_missing", "path": "/chunks_per_source", "value": 3},
+          {"op": "set_default_if_missing", "path": "/extract_depth", "value": "basic"},
+          {"op": "set_default_if_missing", "path": "/format", "value": "markdown"},
+          {"op": "set_default_if_missing", "path": "/include_images", "value": false},
+          {"op": "set_default_if_missing", "path": "/include_favicon", "value": false},
+          {"op": "rename_json_pointer", "from": "/timeout_seconds", "to": "/timeout"},
+          {"op": "set_literal", "path": "/include_usage", "value": true}
+        ]
+      }
+    }
+  ],
+  "response_profiles": [],
+  "required_execution_primitives": ["http_json_sync"],
+  "required_upload_primitives": [],
+  "required_transformers": ["rename_json_pointer", "set_default_if_missing", "set_literal"],
+  "arguments": {"urls": ["https://example.com/page"], "timeout_seconds": 15},
+  "interactions": [
+    {
+      "method": "POST",
+      "path": "/extract",
+      "expected_json_body": {
+        "urls": ["https://example.com/page"],
+        "chunks_per_source": 3,
+        "extract_depth": "basic",
+        "format": "markdown",
+        "include_images": false,
+        "include_favicon": false,
+        "timeout": 15,
+        "include_usage": true
+      },
+      "response_status": 200,
+      "response_json_body": {
+        "request_id": "tavily-extract-fixture",
+        "results": [{"url": "https://example.com/page", "raw_content": "# Example"}],
+        "failed_results": []
+      }
+    }
+  ],
+  "expected_output_kind": "extract"
+}

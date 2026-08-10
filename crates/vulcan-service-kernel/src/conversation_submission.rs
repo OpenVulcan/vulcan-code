@@ -45,10 +45,11 @@ use super::{
     replace_conversation_messages_in_workbench_window, retain_slow_submission_diagnostic,
     retained_submission_snapshot_has_session_context, retained_submission_snapshot_is_usable,
     rollback_persisted_session_before_user_prompt, runtime_parts_from_state,
-    session_has_blocking_system_prompt_work, snapshot_webui_context_before_user_prompt,
-    spawn_service_task, spawn_workspace_session_persist_task,
-    start_reserved_webui_session_kernel_user_turn, start_webui_precheck_or_continue,
-    start_webui_session_kernel_user_turn, store_workspace_snapshot_without_workbench_rebuild,
+    session_has_blocking_system_prompt_work, session_process_public_ai_selection,
+    snapshot_webui_context_before_user_prompt, spawn_service_task,
+    spawn_workspace_session_persist_task, start_reserved_webui_session_kernel_user_turn,
+    start_webui_precheck_or_continue, start_webui_session_kernel_user_turn,
+    store_workspace_snapshot_without_workbench_rebuild,
     sync_hydrated_session_dialogue_ready_marker, validate_composer_attachment_summary,
     webui_session_allows_user_prompt_editing, webui_session_kernel_has_active_turn,
     webui_shared_prompt_precheck_plan, webui_submit_trace, webui_trace_if_slow,
@@ -481,8 +482,49 @@ fn apply_submission_model_selection(
             selection.connection_id, selection.provider_id
         ));
     }
-    if !configuration.model_is_enabled(selection.provider_id.as_str(), selection.model_id.as_str())
-    {
+    // leasedSelection is evaluated before current-catalog membership because an established
+    // session route is intentionally allowed to outlive a hot Manifest model removal.
+    // leasedSelection 在当前目录成员关系之前求值，因为已建立会话路由被明确允许在热更新
+    // Manifest 移除模型后继续存在。
+    let leased_selection = session_process_public_ai_selection(
+        runtime,
+        session_id,
+        workspace_snapshot.session_runtime_state.get(&session_id),
+    )?
+    .filter(|leased| {
+        leased.route.provider.id == selection.provider_id
+            && leased.route.connection.id == selection.connection_id
+            && leased.model.id == selection.model_id
+    });
+    if leased_selection.is_some() {
+        // Explicit provider/account access revocation still terminates the lease. Manifest-owned
+        // catalog/default changes are not treated as user revocation.
+        // 显式供应商或账号访问撤销仍会终止租约；Manifest 持有的目录或默认值变化不视为用户撤销。
+        let explicitly_disabled = configuration
+            .model_enabled_override(selection.provider_id.as_str(), selection.model_id.as_str())
+            == Some(false)
+            || !configuration.connection_model_is_enabled(
+                selection.connection_id.as_str(),
+                selection.model_id.as_str(),
+            );
+        if explicitly_disabled {
+            return Err(format!(
+                "Provider `{}` model `{}` is disabled.",
+                selection.provider_id, selection.model_id
+            ));
+        }
+        let runtime_state = workspace_snapshot
+            .session_runtime_state
+            .get_mut(&session_id)
+            .ok_or_else(|| format!("Conversation `{session_id}` has no runtime state."))?;
+        runtime_state.updated_at = current_unix_millis_text();
+        return Ok(());
+    }
+    if !runtime.model_is_enabled_for_connection(
+        &configuration,
+        selection.connection_id.as_str(),
+        selection.model_id.as_str(),
+    )? {
         return Err(format!(
             "Provider `{}` model `{}` is disabled.",
             selection.provider_id, selection.model_id
@@ -527,6 +569,19 @@ fn apply_submission_model_selection(
         .session_runtime_state
         .get_mut(&session_id)
         .ok_or_else(|| format!("Conversation `{session_id}` has no runtime state."))?;
+    // targetChanged distinguishes the composer's per-submit snapshot from an explicit model
+    // change. The composer sends its current selection on every turn, so clearing an unchanged
+    // target here would silently adopt a newly activated Manifest route on the next turn.
+    // targetChanged 区分输入区逐次提交快照与显式模型变更。输入区每轮都会发送当前选择，
+    // 因此若在目标未变化时清除租约，下一轮会静默采用新激活的 Manifest 路由。
+    let target_changed = runtime_state.active_provider_id.as_deref()
+        != Some(selection.provider_id.as_str())
+        || runtime_state.active_connection_id.as_deref() != Some(selection.connection_id.as_str())
+        || runtime_state.active_model_id.as_deref() != Some(selection.model_id.as_str());
+    if target_changed {
+        runtime.clear_session_selection_leases(session_id.to_string().as_str())?;
+        runtime_state.provider_route_lease = None;
+    }
     runtime_state.active_provider_id = Some(selection.provider_id.clone());
     runtime_state.active_connection_id = Some(selection.connection_id.clone());
     runtime_state.active_model_id = Some(selection.model_id.clone());
@@ -549,6 +604,36 @@ mod submission_model_selection_tests {
 
     /// Builds one configured runtime whose global active model differs from the submitted model.
     /// 构建一个全局激活模型与本次提交模型不同的已配置运行时。
+    /// Adds one protocol variant for each protocol id to every model of one catalog.
+    /// 给一个目录的每个模型按协议 ID 各添加一个协议变体。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `protocol_profile_ids` are the exact protocols the models bind to; every model
+    /// receives a variant for each id so system-manifest bindings can prove their exact
+    /// variant before execution (plan §R5.1).
+    /// `protocol_profile_ids` 是模型绑定的精确协议；每个模型为每个 ID 获得一个变体，
+    /// 使系统清单绑定能够在执行前证明其精确变体（方案 §R5.1）。
+    fn with_protocol_variants(
+        mut catalog: vulcan_provider_adapters::ConnectionModelCatalog,
+        protocol_profile_ids: &[&str],
+    ) -> vulcan_provider_adapters::ConnectionModelCatalog {
+        for model in &mut catalog.models {
+            for protocol_profile_id in protocol_profile_ids {
+                model.protocol_variants.insert(
+                    (*protocol_profile_id).to_string(),
+                    vulcan_provider_adapters::ProtocolModelVariant {
+                        capabilities: model.capabilities.clone(),
+                        capability_evidence: Default::default(),
+                        discovery_signature: String::from("test-signature"),
+                        catalog_generation: catalog.generation,
+                    },
+                );
+            }
+        }
+        catalog
+    }
+
     fn configured_runtime() -> PublicAiRuntime {
         let runtime =
             PublicAiRuntime::first_batch(std::sync::Arc::new(UnavailableCredentialSecretResolver))
@@ -565,35 +650,47 @@ mod submission_model_selection_tests {
             secret_reference: String::from("secret-openrouter-account"),
             management_secret_reference: None,
             service_origin_override: None,
-            verified_protocols: BTreeSet::from([String::from("openai-chat-completions.v1")]),
+            verified_protocols: BTreeSet::from([
+                String::from("openai-chat-completions.v1"),
+                String::from("openai-responses.v1"),
+            ]),
             selected_protocol: String::from("openai-chat-completions.v1"),
             prompt_cache_by_protocol: BTreeMap::new(),
             usage_scope_override: None,
         };
         configuration
             .connection_graph
-            .add_connection(runtime.providers(), connection)
+            .add_connection(
+                &runtime
+                    .providers()
+                    .expect("provider registry should resolve"),
+                connection,
+            )
             .expect("connection should register");
-        configuration.set_model_enabled("openrouter", "vendor/previous", true);
-        configuration.set_model_enabled("openrouter", "vendor/submitted", true);
+        configuration.set_model_enabled("openrouter", "openai/gpt-5.6-terra", true);
+        configuration.set_model_enabled("openrouter", "openai/gpt-5.6-sol", true);
         configuration.active = Some(vulcan_provider_adapters::ActiveAiModelSelection {
             provider_id: String::from("openrouter"),
-            model_id: String::from("vendor/previous"),
+            model_id: String::from("openai/gpt-5.6-terra"),
             connection_id: String::from("openrouter-account"),
         });
         runtime
-            .replace_catalog(
+            .stage_source_catalog_for_testing(with_protocol_variants(
                 parse_openrouter_model_catalog(
                     "openrouter-account",
                     1,
-                    r#"{"data":[{"id":"vendor/previous","name":"Previous","context_length":8192,"supported_parameters":["tools"],"architecture":{"input_modalities":["text"],"output_modalities":["text"]},"top_provider":{"max_completion_tokens":4096}},{"id":"vendor/submitted","name":"Submitted","context_length":8192,"supported_parameters":["tools"],"architecture":{"input_modalities":["text"],"output_modalities":["text"]},"top_provider":{"max_completion_tokens":4096}}]}"#,
+                    r#"{"data":[{"id":"openai/gpt-5.6-terra","name":"Previous","context_length":8192,"supported_parameters":["tools"],"architecture":{"input_modalities":["text"],"output_modalities":["text"]},"top_provider":{"max_completion_tokens":4096}},{"id":"openai/gpt-5.6-sol","name":"Submitted","context_length":8192,"supported_parameters":["tools"],"architecture":{"input_modalities":["text"],"output_modalities":["text"]},"top_provider":{"max_completion_tokens":4096}}]}"#,
                 )
                 .expect("catalog should parse"),
-            )
-            .expect("catalog should install");
+                &[vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID],
+            ))
+            .expect("source catalog should stage");
         runtime
-            .replace_configuration(configuration)
+            .replace_configuration(configuration.clone())
             .expect("configuration should install");
+        runtime
+            .reapply_model_catalog_overlays(&configuration)
+            .expect("configured test generation should publish");
         runtime
     }
 
@@ -632,7 +729,7 @@ mod submission_model_selection_tests {
             .expect("session runtime state should initialize");
         let selection = SubmissionModelSelection {
             provider_id: String::from("openrouter"),
-            model_id: String::from("vendor/submitted"),
+            model_id: String::from("openai/gpt-5.6-sol"),
             connection_id: String::from("openrouter-account"),
         };
 
@@ -658,7 +755,7 @@ mod submission_model_selection_tests {
         );
         assert_eq!(
             runtime_state.active_model_id.as_deref(),
-            Some("vendor/submitted")
+            Some("openai/gpt-5.6-sol")
         );
         assert_eq!(
             runtime
@@ -667,7 +764,249 @@ mod submission_model_selection_tests {
                 .active
                 .as_ref()
                 .map(|active| active.model_id.as_str()),
-            Some("vendor/previous")
+            Some("openai/gpt-5.6-terra")
+        );
+    }
+
+    /// Verifies an unchanged per-submit model snapshot preserves the session route lease.
+    /// 验证逐次提交中未变化的模型快照会保留会话路由租约。
+    #[test]
+    fn repeated_submission_selection_preserves_lease_until_target_changes() {
+        let runtime = configured_runtime();
+        let session_id = Uuid::new_v4();
+        let mut workspace_snapshot = WorkspaceSnapshot {
+            task_projects: Vec::new(),
+            archived_task_projects: Vec::new(),
+            sessions: vec![SessionSummary::new(
+                session_id,
+                Some(String::from("project-a")),
+                "Existing conversation",
+                "",
+                SessionState::Running,
+                0,
+                0,
+                "now",
+            )],
+            archived_sessions: Vec::new(),
+            session_messages: BTreeMap::new(),
+            archived_session_messages: BTreeMap::new(),
+            session_compactions: BTreeMap::new(),
+            archived_session_compactions: BTreeMap::new(),
+            session_runtime_state: BTreeMap::new(),
+            archived_session_runtime_state: BTreeMap::new(),
+            session_run_phases: BTreeMap::new(),
+            expanded_task_projects: BTreeSet::new(),
+            selected_session: session_id,
+            hydrated_session_ids: BTreeSet::new(),
+        };
+        ensure_webui_session_runtime_state(&mut workspace_snapshot, session_id, None)
+            .expect("session runtime state should initialize");
+        let selection = SubmissionModelSelection {
+            provider_id: String::from("openrouter"),
+            model_id: String::from("openai/gpt-5.6-sol"),
+            connection_id: String::from("openrouter-account"),
+        };
+        apply_submission_model_selection(
+            &runtime,
+            &mut workspace_snapshot,
+            session_id,
+            Some(&selection),
+        )
+        .expect("initial selection should apply");
+
+        // leasedSelection simulates the immutable route installed by the first prepared turn.
+        // leasedSelection 模拟首个已准备回合安装的不可变路由。
+        let configuration = runtime
+            .configuration_snapshot()
+            .expect("configuration should remain readable");
+        let leased_selection = runtime
+            .resolve_connection_model_selection(
+                &configuration,
+                selection.connection_id.as_str(),
+                selection.provider_id.as_str(),
+                selection.model_id.as_str(),
+            )
+            .expect("selected route should resolve");
+        let lease_identity =
+            vulcan_agent_runtime::agent_runtime::provider::provider_route_lease_identity(
+                &leased_selection,
+            );
+        runtime
+            .lease_session_selection(session_id.to_string(), leased_selection.clone())
+            .expect("session route should lease");
+        workspace_snapshot
+            .session_runtime_state
+            .get_mut(&session_id)
+            .expect("session runtime state should exist")
+            .provider_route_lease = Some(lease_identity.clone());
+
+        apply_submission_model_selection(
+            &runtime,
+            &mut workspace_snapshot,
+            session_id,
+            Some(&selection),
+        )
+        .expect("unchanged submission snapshot should apply");
+        assert_eq!(
+            runtime
+                .session_selection_lease(session_id.to_string().as_str())
+                .expect("session lease should remain readable")
+                .as_ref()
+                .map(|selection| selection.route_revision.as_str()),
+            Some(leased_selection.route_revision.as_str()),
+            "an unchanged per-submit snapshot must not clear the process-local lease"
+        );
+        assert_eq!(
+            workspace_snapshot
+                .session_runtime_state
+                .get(&session_id)
+                .and_then(|runtime_state| runtime_state.provider_route_lease.as_ref()),
+            Some(&lease_identity),
+            "an unchanged per-submit snapshot must not clear the persisted lease identity"
+        );
+
+        // replacementCatalog simulates a hot catalog generation that removes the leased model.
+        // replacementCatalog 模拟移除已租用模型的热更新目录代际。
+        let replacement_catalog = with_protocol_variants(
+            parse_openrouter_model_catalog(
+                "openrouter-account",
+                2,
+                r#"{"data":[{"id":"openai/gpt-5.6-terra","name":"Replacement","context_length":8192,"supported_parameters":["tools"],"architecture":{"input_modalities":["text"],"output_modalities":["text"]},"top_provider":{"max_completion_tokens":4096}}]}"#,
+            )
+            .expect("replacement catalog should parse"),
+            &[vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID],
+        );
+        runtime
+            .stage_source_catalog_for_testing(replacement_catalog)
+            .expect("replacement source catalog should stage");
+        runtime
+            .reapply_model_catalog_overlays(&configuration)
+            .expect("replacement generation should publish");
+        let replacement_catalogs = runtime
+            .catalog_snapshot()
+            .expect("replacement catalogs should remain readable");
+        assert!(
+            replacement_catalogs
+                .get("openrouter-account")
+                .is_some_and(|catalog| catalog
+                    .models
+                    .iter()
+                    .all(|model| model.id != selection.model_id)),
+            "the current catalog must actually remove the leased model"
+        );
+
+        let selected_runtime_state = workspace_snapshot.session_runtime_state.get(&session_id);
+        let workbench_selection = crate::public_ai_workbench_selection(
+            &configuration,
+            &runtime,
+            Some(session_id),
+            selected_runtime_state,
+        )
+        .expect("lease-aware workbench selection should resolve")
+        .expect("the process-local lease must remain the effective selection");
+        assert_eq!(
+            workbench_selection.route_revision, leased_selection.route_revision,
+            "a hot catalog removal must not replace the selected session route"
+        );
+        let rows = crate::public_ai_provider_rows_for_selection(
+            &configuration,
+            &runtime,
+            Some(&workbench_selection),
+        )
+        .expect("lease-aware provider rows should project");
+        assert!(
+            rows.iter()
+                .any(|row| row.catalog_models.iter().any(|model| {
+                    model.id == selection.model_id && model.active && model.status.is_some()
+                })),
+            "the leased model must remain visible only as the selected session row"
+        );
+        let changed_sessions =
+            crate::public_ai_settings::reconcile_missing_session_model_selections(
+                &mut workspace_snapshot,
+                &runtime,
+                &configuration,
+                &replacement_catalogs,
+            )
+            .expect("lease-aware session reconciliation should succeed");
+        assert!(
+            changed_sessions.is_empty(),
+            "hot catalog removal must not reconcile an established session lease"
+        );
+        apply_submission_model_selection(
+            &runtime,
+            &mut workspace_snapshot,
+            session_id,
+            Some(&selection),
+        )
+        .expect("the unchanged leased selection must survive current catalog removal");
+        assert!(
+            runtime
+                .session_selection_lease(session_id.to_string().as_str())
+                .expect("session lease should remain readable")
+                .is_some(),
+            "per-submit validation must not clear a model removed only by hot catalog refresh"
+        );
+
+        // Clearing only the process snapshot simulates a restart while persisted lease identity
+        // remains authoritative for drift detection.
+        // 只清除进程快照用于模拟重启，而持久化租约身份仍对漂移检测保持权威。
+        runtime
+            .clear_session_selection_leases(session_id.to_string().as_str())
+            .expect("process-local lease should clear for restart simulation");
+        let changed_after_restart =
+            crate::public_ai_settings::reconcile_missing_session_model_selections(
+                &mut workspace_snapshot,
+                &runtime,
+                &configuration,
+                &replacement_catalogs,
+            )
+            .expect("restart reconciliation should preserve persisted lease evidence");
+        assert!(
+            changed_after_restart.is_empty(),
+            "restart reconciliation must not silently replace a drifted persisted lease"
+        );
+        let restarted_runtime_state = workspace_snapshot
+            .session_runtime_state
+            .get(&session_id)
+            .expect("session runtime state should remain present");
+        assert_eq!(
+            restarted_runtime_state.active_model_id.as_deref(),
+            Some(selection.model_id.as_str()),
+            "the persisted target must remain available to exact recovery validation"
+        );
+        assert_eq!(
+            restarted_runtime_state.provider_route_lease.as_ref(),
+            Some(&lease_identity),
+            "the persisted lease identity must survive restart catalog reconciliation"
+        );
+
+        let replacement = SubmissionModelSelection {
+            provider_id: String::from("openrouter"),
+            model_id: String::from("openai/gpt-5.6-terra"),
+            connection_id: String::from("openrouter-account"),
+        };
+        apply_submission_model_selection(
+            &runtime,
+            &mut workspace_snapshot,
+            session_id,
+            Some(&replacement),
+        )
+        .expect("changed submission target should apply");
+        assert!(
+            runtime
+                .session_selection_lease(session_id.to_string().as_str())
+                .expect("session lease should remain readable")
+                .is_none(),
+            "an explicit target change must clear the process-local lease"
+        );
+        assert!(
+            workspace_snapshot
+                .session_runtime_state
+                .get(&session_id)
+                .and_then(|runtime_state| runtime_state.provider_route_lease.as_ref())
+                .is_none(),
+            "an explicit target change must clear the persisted lease identity"
         );
     }
 }
@@ -1181,12 +1520,19 @@ pub(super) async fn service_submit_conversation_prompt(
     }
     // Media preparation starts only after queue admission so a queued prompt uploads at its real dispatch boundary.
     // 媒体准备仅在队列准入判断后开始，确保排队提示词在实际分发边界上传媒体。
+    // submissionMediaRuntimeState carries the exact persisted lease identity from the loaded
+    // workspace snapshot without re-reading mutable service state during upload.
+    // submissionMediaRuntimeState 从已加载工作区快照携带精确持久化租约身份，上传期间不再读取
+    // 可变服务状态。
+    let submission_media_runtime_state = submission_session_id
+        .and_then(|session_id| workspace_snapshot.session_runtime_state.get(&session_id));
     prepare_submission_media(
         &app,
         &state,
         &agent_runtime,
         client_submission_id.as_str(),
-        conversation_id.as_deref(),
+        submission_session_id,
+        submission_media_runtime_state,
         model_selection.as_ref(),
         attachments.as_slice(),
     )

@@ -1,0 +1,4395 @@
+{
+  "alibaba": {
+    "id": "alibaba",
+    "display_name": "Alibaba Cloud",
+    "kind": "system",
+    "category": "cloud_maas",
+    "credential_directory_visibility": "configured_only",
+    "credential_registration": "direct",
+    "service_entries": [
+      {
+        "id": "coding-plan-cn",
+        "display_name": "Coding Plan China",
+        "kind": "conversation",
+        "base_url": "https://coding.dashscope.aliyuncs.com",
+        "credential_profiles": [
+          {
+            "id": "coding-plan-api-key",
+            "display_name": "Coding Plan API Key",
+            "credential_mode": "token",
+            "billing_kind": "token_plan",
+            "account_usage_query": "unsupported",
+            "key_prefix": "sk-sp-",
+            "allowed_usage_scopes": [
+              "interactive_agent"
+            ]
+          }
+        ],
+        "authentication": "bearer_authorization",
+        "model_discovery": "manifest_static",
+        "request_projector": "compatible",
+        "protocol_routes": [
+          {
+            "protocol_profile_id": "openai-chat-completions.v1",
+            "endpoint_path": "/v1/chat/completions",
+            "request_projection_profiles": [
+              {
+                "profile_id": "alibaba.chat.thinking.v1",
+                "revision": 1,
+                "steps": [
+                  {
+                    "op": "delete_json_pointer",
+                    "path": "/reasoning_effort"
+                  },
+                  {
+                    "op": "enum_map",
+                    "path": "/enable_thinking",
+                    "source": "request_field",
+                    "source_path": "@reasoning_effort",
+                    "mapping": {
+                      "adaptive": true,
+                      "none": false
+                    },
+                    "unmatched": "error"
+                  }
+                ]
+              }
+            ],
+            "verified": true
+          },
+          {
+            "protocol_profile_id": "anthropic-messages.v1",
+            "endpoint_path": "/v1/messages",
+            "base_url_override": "https://coding.dashscope.aliyuncs.com/apps/anthropic",
+            "request_headers": {
+              "anthropic-version": "2023-06-01"
+            },
+            "authentication": "x_api_key",
+            "request_projection_profiles": [
+              {
+                "profile_id": "alibaba.anthropic.thinking.v1",
+                "revision": 1,
+                "steps": [
+                  {
+                    "op": "enum_map",
+                    "path": "/thinking",
+                    "source": "request_field",
+                    "source_path": "@reasoning_effort",
+                    "mapping": {
+                      "adaptive": {
+                        "type": "enabled"
+                      },
+                      "none": {
+                        "type": "disabled"
+                      }
+                    },
+                    "unmatched": "error"
+                  },
+                  {
+                    "op": "delete_if_equals",
+                    "path": "/output_config/effort",
+                    "source": "request_field",
+                    "source_path": "@reasoning_effort",
+                    "equals": "none"
+                  },
+                  {
+                    "op": "remove_if_empty",
+                    "path": "/output_config"
+                  }
+                ]
+              }
+            ],
+            "verified": true
+          }
+        ],
+        "allowed_usage_scopes": [
+          "interactive_agent"
+        ]
+      },
+      {
+        "id": "coding-plan-global",
+        "display_name": "Coding Plan International",
+        "kind": "conversation",
+        "base_url": "https://coding-intl.dashscope.aliyuncs.com",
+        "credential_profiles": [
+          {
+            "id": "coding-plan-api-key",
+            "display_name": "Coding Plan API Key",
+            "credential_mode": "token",
+            "billing_kind": "token_plan",
+            "account_usage_query": "unsupported",
+            "key_prefix": "sk-sp-",
+            "allowed_usage_scopes": [
+              "interactive_agent"
+            ]
+          }
+        ],
+        "authentication": "bearer_authorization",
+        "model_discovery": "manifest_static",
+        "request_projector": "compatible",
+        "protocol_routes": [
+          {
+            "protocol_profile_id": "openai-chat-completions.v1",
+            "endpoint_path": "/v1/chat/completions",
+            "request_projection_profiles": [
+              {
+                "profile_id": "alibaba.chat.thinking.v1",
+                "revision": 1,
+                "steps": [
+                  {
+                    "op": "delete_json_pointer",
+                    "path": "/reasoning_effort"
+                  },
+                  {
+                    "op": "enum_map",
+                    "path": "/enable_thinking",
+                    "source": "request_field",
+                    "source_path": "@reasoning_effort",
+                    "mapping": {
+                      "adaptive": true,
+                      "none": false
+                    },
+                    "unmatched": "error"
+                  }
+                ]
+              }
+            ],
+            "verified": true
+          },
+          {
+            "protocol_profile_id": "anthropic-messages.v1",
+            "endpoint_path": "/v1/messages",
+            "base_url_override": "https://coding-intl.dashscope.aliyuncs.com/apps/anthropic",
+            "request_headers": {
+              "anthropic-version": "2023-06-01"
+            },
+            "authentication": "x_api_key",
+            "request_projection_profiles": [
+              {
+                "profile_id": "alibaba.anthropic.thinking.v1",
+                "revision": 1,
+                "steps": [
+                  {
+                    "op": "enum_map",
+                    "path": "/thinking",
+                    "source": "request_field",
+                    "source_path": "@reasoning_effort",
+                    "mapping": {
+                      "adaptive": {
+                        "type": "enabled"
+                      },
+                      "none": {
+                        "type": "disabled"
+                      }
+                    },
+                    "unmatched": "error"
+                  },
+                  {
+                    "op": "delete_if_equals",
+                    "path": "/output_config/effort",
+                    "source": "request_field",
+                    "source_path": "@reasoning_effort",
+                    "equals": "none"
+                  },
+                  {
+                    "op": "remove_if_empty",
+                    "path": "/output_config"
+                  }
+                ]
+              }
+            ],
+            "verified": true
+          }
+        ],
+        "allowed_usage_scopes": [
+          "interactive_agent"
+        ]
+      },
+      {
+        "id": "token-plan-personal-cn",
+        "display_name": "Token Plan Personal China",
+        "kind": "conversation",
+        "base_url": "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+        "credential_profiles": [
+          {
+            "id": "token-plan-api-key",
+            "display_name": "Token Plan API Key",
+            "credential_mode": "token",
+            "billing_kind": "token_plan",
+            "account_usage_query": "unsupported",
+            "key_prefix": "sk-sp-",
+            "allowed_usage_scopes": [
+              "interactive_agent"
+            ]
+          }
+        ],
+        "authentication": "bearer_authorization",
+        "model_discovery": "manifest_static",
+        "request_projector": "compatible",
+        "protocol_routes": [
+          {
+            "protocol_profile_id": "openai-chat-completions.v1",
+            "endpoint_path": "/chat/completions",
+            "request_headers": {
+              "x-dashscope-ossresource-resolve": "enable"
+            },
+            "input_resource_constraints": [
+              {
+                "resource_kind": "image",
+                "max_bytes": 1073741824,
+                "reference_policy": "local_only",
+                "upload_channel_refs": [
+                  "cn.temporary-oss"
+                ]
+              },
+              {
+                "resource_kind": "video",
+                "max_bytes": 1073741824,
+                "reference_policy": "local_only",
+                "upload_channel_refs": [
+                  "cn.temporary-oss"
+                ]
+              }
+            ],
+            "request_projection_profiles": [
+              {
+                "profile_id": "alibaba.chat.thinking.v1",
+                "revision": 1,
+                "steps": [
+                  {
+                    "op": "delete_json_pointer",
+                    "path": "/reasoning_effort"
+                  },
+                  {
+                    "op": "enum_map",
+                    "path": "/enable_thinking",
+                    "source": "request_field",
+                    "source_path": "@reasoning_effort",
+                    "mapping": {
+                      "adaptive": true,
+                      "none": false
+                    },
+                    "unmatched": "error"
+                  }
+                ]
+              }
+            ],
+            "verified": true
+          },
+          {
+            "protocol_profile_id": "openai-responses.v1",
+            "endpoint_path": "/responses",
+            "request_headers": {
+              "x-dashscope-ossresource-resolve": "enable"
+            },
+            "input_resource_constraints": [
+              {
+                "resource_kind": "image",
+                "max_bytes": 1073741824,
+                "reference_policy": "local_only",
+                "upload_channel_refs": [
+                  "cn.temporary-oss"
+                ]
+              },
+              {
+                "resource_kind": "video",
+                "max_bytes": 1073741824,
+                "reference_policy": "local_only",
+                "upload_channel_refs": [
+                  "cn.temporary-oss"
+                ]
+              }
+            ],
+            "usage_extraction_profiles": [
+              {
+                "profile_id": "alibaba.openai.responses.body.v1",
+                "revision": 1,
+                "record_kind": "json_body",
+                "update_kind": "final",
+                "required_pointer": "/usage",
+                "bindings": [
+                  {
+                    "field": "input_tokens",
+                    "pointers": [
+                      "/usage/input_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "cache_read_tokens",
+                    "pointers": [
+                      "/usage/input_tokens_details/cached_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "output_tokens",
+                    "pointers": [
+                      "/usage/output_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "reasoning_tokens",
+                    "pointers": [
+                      "/usage/output_tokens_details/reasoning_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "audio_input_tokens",
+                    "pointers": [
+                      "/usage/input_tokens_details/audio_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "audio_output_tokens",
+                    "pointers": [
+                      "/usage/output_tokens_details/audio_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "total_tokens",
+                    "pointers": [
+                      "/usage/total_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "response_model",
+                    "pointers": [
+                      "/model"
+                    ],
+                    "encoding": "string"
+                  },
+                  {
+                    "field": "response_id",
+                    "pointers": [
+                      "/id"
+                    ],
+                    "encoding": "string"
+                  },
+                  {
+                    "field": "billing_details",
+                    "pointers": [
+                      "/usage/x_details"
+                    ],
+                    "encoding": "alibaba_responses_billing_details"
+                  }
+                ],
+                "derivations": [
+                  "uncached_input_from_input_minus_cache_read"
+                ]
+              },
+              {
+                "profile_id": "alibaba.openai.responses.sse.completed.v1",
+                "revision": 1,
+                "record_kind": "sse_event",
+                "update_kind": "final",
+                "event_type_pointer": "/type",
+                "event_type_value": "response.completed",
+                "required_pointer": "/response/usage",
+                "bindings": [
+                  {
+                    "field": "input_tokens",
+                    "pointers": [
+                      "/response/usage/input_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "cache_read_tokens",
+                    "pointers": [
+                      "/response/usage/input_tokens_details/cached_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "output_tokens",
+                    "pointers": [
+                      "/response/usage/output_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "reasoning_tokens",
+                    "pointers": [
+                      "/response/usage/output_tokens_details/reasoning_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "audio_input_tokens",
+                    "pointers": [
+                      "/response/usage/input_tokens_details/audio_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "audio_output_tokens",
+                    "pointers": [
+                      "/response/usage/output_tokens_details/audio_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "total_tokens",
+                    "pointers": [
+                      "/response/usage/total_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "response_model",
+                    "pointers": [
+                      "/response/model"
+                    ],
+                    "encoding": "string"
+                  },
+                  {
+                    "field": "response_id",
+                    "pointers": [
+                      "/response/id"
+                    ],
+                    "encoding": "string"
+                  },
+                  {
+                    "field": "billing_details",
+                    "pointers": [
+                      "/response/usage/x_details"
+                    ],
+                    "encoding": "alibaba_responses_billing_details"
+                  }
+                ],
+                "derivations": [
+                  "uncached_input_from_input_minus_cache_read"
+                ]
+              },
+              {
+                "profile_id": "alibaba.openai.responses.ws.completed.v1",
+                "revision": 1,
+                "record_kind": "web_socket_frame",
+                "update_kind": "final",
+                "event_type_pointer": "/type",
+                "event_type_value": "response.completed",
+                "required_pointer": "/response/usage",
+                "bindings": [
+                  {
+                    "field": "input_tokens",
+                    "pointers": [
+                      "/response/usage/input_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "cache_read_tokens",
+                    "pointers": [
+                      "/response/usage/input_tokens_details/cached_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "output_tokens",
+                    "pointers": [
+                      "/response/usage/output_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "reasoning_tokens",
+                    "pointers": [
+                      "/response/usage/output_tokens_details/reasoning_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "total_tokens",
+                    "pointers": [
+                      "/response/usage/total_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "response_model",
+                    "pointers": [
+                      "/response/model"
+                    ],
+                    "encoding": "string"
+                  },
+                  {
+                    "field": "response_id",
+                    "pointers": [
+                      "/response/id"
+                    ],
+                    "encoding": "string"
+                  },
+                  {
+                    "field": "billing_details",
+                    "pointers": [
+                      "/response/usage/x_details"
+                    ],
+                    "encoding": "alibaba_responses_billing_details"
+                  }
+                ],
+                "derivations": [
+                  "uncached_input_from_input_minus_cache_read"
+                ]
+              }
+            ],
+            "verified": true
+          },
+          {
+            "protocol_profile_id": "anthropic-messages.v1",
+            "endpoint_path": "/v1/messages",
+            "base_url_override": "https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic",
+            "request_headers": {
+              "anthropic-version": "2023-06-01",
+              "x-dashscope-ossresource-resolve": "enable"
+            },
+            "authentication": "x_api_key",
+            "input_resource_constraints": [
+              {
+                "resource_kind": "image",
+                "max_bytes": 1073741824,
+                "reference_policy": "local_only",
+                "upload_channel_refs": [
+                  "cn.temporary-oss"
+                ]
+              },
+              {
+                "resource_kind": "video",
+                "max_bytes": 1073741824,
+                "reference_policy": "local_only",
+                "upload_channel_refs": [
+                  "cn.temporary-oss"
+                ]
+              }
+            ],
+            "request_projection_profiles": [
+              {
+                "profile_id": "alibaba.anthropic.thinking.v1",
+                "revision": 1,
+                "steps": [
+                  {
+                    "op": "enum_map",
+                    "path": "/thinking",
+                    "source": "request_field",
+                    "source_path": "@reasoning_effort",
+                    "mapping": {
+                      "adaptive": {
+                        "type": "enabled"
+                      },
+                      "none": {
+                        "type": "disabled"
+                      }
+                    },
+                    "unmatched": "error"
+                  },
+                  {
+                    "op": "delete_if_equals",
+                    "path": "/output_config/effort",
+                    "source": "request_field",
+                    "source_path": "@reasoning_effort",
+                    "equals": "none"
+                  },
+                  {
+                    "op": "remove_if_empty",
+                    "path": "/output_config"
+                  }
+                ]
+              }
+            ],
+            "verified": true
+          }
+        ],
+        "allowed_usage_scopes": [
+          "interactive_agent"
+        ]
+      },
+      {
+        "id": "token-plan-personal-global",
+        "display_name": "Token Plan Personal International",
+        "kind": "conversation",
+        "base_url": "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
+        "credential_profiles": [
+          {
+            "id": "token-plan-api-key",
+            "display_name": "Token Plan API Key",
+            "credential_mode": "token",
+            "billing_kind": "token_plan",
+            "account_usage_query": "unsupported",
+            "key_prefix": "sk-sp-",
+            "allowed_usage_scopes": [
+              "interactive_agent"
+            ]
+          }
+        ],
+        "authentication": "bearer_authorization",
+        "model_discovery": "manifest_static",
+        "request_projector": "compatible",
+        "protocol_routes": [
+          {
+            "protocol_profile_id": "openai-chat-completions.v1",
+            "endpoint_path": "/chat/completions",
+            "request_projection_profiles": [
+              {
+                "profile_id": "alibaba.chat.thinking.v1",
+                "revision": 1,
+                "steps": [
+                  {
+                    "op": "delete_json_pointer",
+                    "path": "/reasoning_effort"
+                  },
+                  {
+                    "op": "enum_map",
+                    "path": "/enable_thinking",
+                    "source": "request_field",
+                    "source_path": "@reasoning_effort",
+                    "mapping": {
+                      "adaptive": true,
+                      "none": false
+                    },
+                    "unmatched": "error"
+                  }
+                ]
+              }
+            ],
+            "verified": true
+          },
+          {
+            "protocol_profile_id": "openai-responses.v1",
+            "endpoint_path": "/responses",
+            "usage_extraction_profiles": [
+              {
+                "profile_id": "alibaba.openai.responses.body.v1",
+                "revision": 1,
+                "record_kind": "json_body",
+                "update_kind": "final",
+                "required_pointer": "/usage",
+                "bindings": [
+                  {
+                    "field": "input_tokens",
+                    "pointers": [
+                      "/usage/input_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "cache_read_tokens",
+                    "pointers": [
+                      "/usage/input_tokens_details/cached_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "output_tokens",
+                    "pointers": [
+                      "/usage/output_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "reasoning_tokens",
+                    "pointers": [
+                      "/usage/output_tokens_details/reasoning_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "audio_input_tokens",
+                    "pointers": [
+                      "/usage/input_tokens_details/audio_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "audio_output_tokens",
+                    "pointers": [
+                      "/usage/output_tokens_details/audio_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "total_tokens",
+                    "pointers": [
+                      "/usage/total_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "response_model",
+                    "pointers": [
+                      "/model"
+                    ],
+                    "encoding": "string"
+                  },
+                  {
+                    "field": "response_id",
+                    "pointers": [
+                      "/id"
+                    ],
+                    "encoding": "string"
+                  },
+                  {
+                    "field": "billing_details",
+                    "pointers": [
+                      "/usage/x_details"
+                    ],
+                    "encoding": "alibaba_responses_billing_details"
+                  }
+                ],
+                "derivations": [
+                  "uncached_input_from_input_minus_cache_read"
+                ]
+              },
+              {
+                "profile_id": "alibaba.openai.responses.sse.completed.v1",
+                "revision": 1,
+                "record_kind": "sse_event",
+                "update_kind": "final",
+                "event_type_pointer": "/type",
+                "event_type_value": "response.completed",
+                "required_pointer": "/response/usage",
+                "bindings": [
+                  {
+                    "field": "input_tokens",
+                    "pointers": [
+                      "/response/usage/input_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "cache_read_tokens",
+                    "pointers": [
+                      "/response/usage/input_tokens_details/cached_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "output_tokens",
+                    "pointers": [
+                      "/response/usage/output_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "reasoning_tokens",
+                    "pointers": [
+                      "/response/usage/output_tokens_details/reasoning_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "audio_input_tokens",
+                    "pointers": [
+                      "/response/usage/input_tokens_details/audio_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "audio_output_tokens",
+                    "pointers": [
+                      "/response/usage/output_tokens_details/audio_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "total_tokens",
+                    "pointers": [
+                      "/response/usage/total_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "response_model",
+                    "pointers": [
+                      "/response/model"
+                    ],
+                    "encoding": "string"
+                  },
+                  {
+                    "field": "response_id",
+                    "pointers": [
+                      "/response/id"
+                    ],
+                    "encoding": "string"
+                  },
+                  {
+                    "field": "billing_details",
+                    "pointers": [
+                      "/response/usage/x_details"
+                    ],
+                    "encoding": "alibaba_responses_billing_details"
+                  }
+                ],
+                "derivations": [
+                  "uncached_input_from_input_minus_cache_read"
+                ]
+              },
+              {
+                "profile_id": "alibaba.openai.responses.ws.completed.v1",
+                "revision": 1,
+                "record_kind": "web_socket_frame",
+                "update_kind": "final",
+                "event_type_pointer": "/type",
+                "event_type_value": "response.completed",
+                "required_pointer": "/response/usage",
+                "bindings": [
+                  {
+                    "field": "input_tokens",
+                    "pointers": [
+                      "/response/usage/input_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "cache_read_tokens",
+                    "pointers": [
+                      "/response/usage/input_tokens_details/cached_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "output_tokens",
+                    "pointers": [
+                      "/response/usage/output_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "reasoning_tokens",
+                    "pointers": [
+                      "/response/usage/output_tokens_details/reasoning_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "total_tokens",
+                    "pointers": [
+                      "/response/usage/total_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "response_model",
+                    "pointers": [
+                      "/response/model"
+                    ],
+                    "encoding": "string"
+                  },
+                  {
+                    "field": "response_id",
+                    "pointers": [
+                      "/response/id"
+                    ],
+                    "encoding": "string"
+                  },
+                  {
+                    "field": "billing_details",
+                    "pointers": [
+                      "/response/usage/x_details"
+                    ],
+                    "encoding": "alibaba_responses_billing_details"
+                  }
+                ],
+                "derivations": [
+                  "uncached_input_from_input_minus_cache_read"
+                ]
+              }
+            ],
+            "verified": true
+          },
+          {
+            "protocol_profile_id": "anthropic-messages.v1",
+            "endpoint_path": "/v1/messages",
+            "base_url_override": "https://token-plan.ap-southeast-1.maas.aliyuncs.com/apps/anthropic",
+            "request_headers": {
+              "anthropic-version": "2023-06-01"
+            },
+            "authentication": "x_api_key",
+            "request_projection_profiles": [
+              {
+                "profile_id": "alibaba.anthropic.thinking.v1",
+                "revision": 1,
+                "steps": [
+                  {
+                    "op": "enum_map",
+                    "path": "/thinking",
+                    "source": "request_field",
+                    "source_path": "@reasoning_effort",
+                    "mapping": {
+                      "adaptive": {
+                        "type": "enabled"
+                      },
+                      "none": {
+                        "type": "disabled"
+                      }
+                    },
+                    "unmatched": "error"
+                  },
+                  {
+                    "op": "delete_if_equals",
+                    "path": "/output_config/effort",
+                    "source": "request_field",
+                    "source_path": "@reasoning_effort",
+                    "equals": "none"
+                  },
+                  {
+                    "op": "remove_if_empty",
+                    "path": "/output_config"
+                  }
+                ]
+              }
+            ],
+            "verified": true
+          }
+        ],
+        "allowed_usage_scopes": [
+          "interactive_agent"
+        ]
+      },
+      {
+        "id": "token-plan-team-cn",
+        "display_name": "Token Plan Team China",
+        "kind": "conversation",
+        "base_url": "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+        "credential_profiles": [
+          {
+            "id": "token-plan-api-key",
+            "display_name": "Token Plan API Key",
+            "credential_mode": "token",
+            "billing_kind": "token_plan",
+            "account_usage_query": "unsupported",
+            "key_prefix": "sk-sp-",
+            "allowed_usage_scopes": [
+              "interactive_agent"
+            ]
+          }
+        ],
+        "authentication": "bearer_authorization",
+        "model_discovery": "manifest_static",
+        "request_projector": "compatible",
+        "protocol_routes": [
+          {
+            "protocol_profile_id": "openai-chat-completions.v1",
+            "endpoint_path": "/chat/completions",
+            "request_projection_profiles": [
+              {
+                "profile_id": "alibaba.chat.thinking.v1",
+                "revision": 1,
+                "steps": [
+                  {
+                    "op": "delete_json_pointer",
+                    "path": "/reasoning_effort"
+                  },
+                  {
+                    "op": "enum_map",
+                    "path": "/enable_thinking",
+                    "source": "request_field",
+                    "source_path": "@reasoning_effort",
+                    "mapping": {
+                      "adaptive": true,
+                      "none": false
+                    },
+                    "unmatched": "error"
+                  }
+                ]
+              }
+            ],
+            "verified": true
+          },
+          {
+            "protocol_profile_id": "openai-responses.v1",
+            "endpoint_path": "/responses",
+            "usage_extraction_profiles": [
+              {
+                "profile_id": "alibaba.openai.responses.body.v1",
+                "revision": 1,
+                "record_kind": "json_body",
+                "update_kind": "final",
+                "required_pointer": "/usage",
+                "bindings": [
+                  {
+                    "field": "input_tokens",
+                    "pointers": [
+                      "/usage/input_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "cache_read_tokens",
+                    "pointers": [
+                      "/usage/input_tokens_details/cached_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "output_tokens",
+                    "pointers": [
+                      "/usage/output_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "reasoning_tokens",
+                    "pointers": [
+                      "/usage/output_tokens_details/reasoning_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "audio_input_tokens",
+                    "pointers": [
+                      "/usage/input_tokens_details/audio_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "audio_output_tokens",
+                    "pointers": [
+                      "/usage/output_tokens_details/audio_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "total_tokens",
+                    "pointers": [
+                      "/usage/total_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "response_model",
+                    "pointers": [
+                      "/model"
+                    ],
+                    "encoding": "string"
+                  },
+                  {
+                    "field": "response_id",
+                    "pointers": [
+                      "/id"
+                    ],
+                    "encoding": "string"
+                  },
+                  {
+                    "field": "billing_details",
+                    "pointers": [
+                      "/usage/x_details"
+                    ],
+                    "encoding": "alibaba_responses_billing_details"
+                  }
+                ],
+                "derivations": [
+                  "uncached_input_from_input_minus_cache_read"
+                ]
+              },
+              {
+                "profile_id": "alibaba.openai.responses.sse.completed.v1",
+                "revision": 1,
+                "record_kind": "sse_event",
+                "update_kind": "final",
+                "event_type_pointer": "/type",
+                "event_type_value": "response.completed",
+                "required_pointer": "/response/usage",
+                "bindings": [
+                  {
+                    "field": "input_tokens",
+                    "pointers": [
+                      "/response/usage/input_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "cache_read_tokens",
+                    "pointers": [
+                      "/response/usage/input_tokens_details/cached_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "output_tokens",
+                    "pointers": [
+                      "/response/usage/output_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "reasoning_tokens",
+                    "pointers": [
+                      "/response/usage/output_tokens_details/reasoning_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "audio_input_tokens",
+                    "pointers": [
+                      "/response/usage/input_tokens_details/audio_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "audio_output_tokens",
+                    "pointers": [
+                      "/response/usage/output_tokens_details/audio_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "total_tokens",
+                    "pointers": [
+                      "/response/usage/total_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "response_model",
+                    "pointers": [
+                      "/response/model"
+                    ],
+                    "encoding": "string"
+                  },
+                  {
+                    "field": "response_id",
+                    "pointers": [
+                      "/response/id"
+                    ],
+                    "encoding": "string"
+                  },
+                  {
+                    "field": "billing_details",
+                    "pointers": [
+                      "/response/usage/x_details"
+                    ],
+                    "encoding": "alibaba_responses_billing_details"
+                  }
+                ],
+                "derivations": [
+                  "uncached_input_from_input_minus_cache_read"
+                ]
+              },
+              {
+                "profile_id": "alibaba.openai.responses.ws.completed.v1",
+                "revision": 1,
+                "record_kind": "web_socket_frame",
+                "update_kind": "final",
+                "event_type_pointer": "/type",
+                "event_type_value": "response.completed",
+                "required_pointer": "/response/usage",
+                "bindings": [
+                  {
+                    "field": "input_tokens",
+                    "pointers": [
+                      "/response/usage/input_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "cache_read_tokens",
+                    "pointers": [
+                      "/response/usage/input_tokens_details/cached_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "output_tokens",
+                    "pointers": [
+                      "/response/usage/output_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "reasoning_tokens",
+                    "pointers": [
+                      "/response/usage/output_tokens_details/reasoning_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "total_tokens",
+                    "pointers": [
+                      "/response/usage/total_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "response_model",
+                    "pointers": [
+                      "/response/model"
+                    ],
+                    "encoding": "string"
+                  },
+                  {
+                    "field": "response_id",
+                    "pointers": [
+                      "/response/id"
+                    ],
+                    "encoding": "string"
+                  },
+                  {
+                    "field": "billing_details",
+                    "pointers": [
+                      "/response/usage/x_details"
+                    ],
+                    "encoding": "alibaba_responses_billing_details"
+                  }
+                ],
+                "derivations": [
+                  "uncached_input_from_input_minus_cache_read"
+                ]
+              }
+            ],
+            "verified": true
+          },
+          {
+            "protocol_profile_id": "anthropic-messages.v1",
+            "endpoint_path": "/v1/messages",
+            "base_url_override": "https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic",
+            "request_headers": {
+              "anthropic-version": "2023-06-01"
+            },
+            "authentication": "x_api_key",
+            "request_projection_profiles": [
+              {
+                "profile_id": "alibaba.anthropic.thinking.v1",
+                "revision": 1,
+                "steps": [
+                  {
+                    "op": "enum_map",
+                    "path": "/thinking",
+                    "source": "request_field",
+                    "source_path": "@reasoning_effort",
+                    "mapping": {
+                      "adaptive": {
+                        "type": "enabled"
+                      },
+                      "none": {
+                        "type": "disabled"
+                      }
+                    },
+                    "unmatched": "error"
+                  },
+                  {
+                    "op": "delete_if_equals",
+                    "path": "/output_config/effort",
+                    "source": "request_field",
+                    "source_path": "@reasoning_effort",
+                    "equals": "none"
+                  },
+                  {
+                    "op": "remove_if_empty",
+                    "path": "/output_config"
+                  }
+                ]
+              }
+            ],
+            "verified": true
+          }
+        ],
+        "allowed_usage_scopes": [
+          "interactive_agent"
+        ]
+      },
+      {
+        "id": "token-plan-team-global",
+        "display_name": "Token Plan Team International",
+        "kind": "conversation",
+        "base_url": "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
+        "credential_profiles": [
+          {
+            "id": "token-plan-api-key",
+            "display_name": "Token Plan API Key",
+            "credential_mode": "token",
+            "billing_kind": "token_plan",
+            "account_usage_query": "unsupported",
+            "key_prefix": "sk-sp-",
+            "allowed_usage_scopes": [
+              "interactive_agent"
+            ]
+          }
+        ],
+        "authentication": "bearer_authorization",
+        "model_discovery": "manifest_static",
+        "request_projector": "compatible",
+        "protocol_routes": [
+          {
+            "protocol_profile_id": "openai-chat-completions.v1",
+            "endpoint_path": "/chat/completions",
+            "request_projection_profiles": [
+              {
+                "profile_id": "alibaba.chat.thinking.v1",
+                "revision": 1,
+                "steps": [
+                  {
+                    "op": "delete_json_pointer",
+                    "path": "/reasoning_effort"
+                  },
+                  {
+                    "op": "enum_map",
+                    "path": "/enable_thinking",
+                    "source": "request_field",
+                    "source_path": "@reasoning_effort",
+                    "mapping": {
+                      "adaptive": true,
+                      "none": false
+                    },
+                    "unmatched": "error"
+                  }
+                ]
+              }
+            ],
+            "verified": true
+          },
+          {
+            "protocol_profile_id": "openai-responses.v1",
+            "endpoint_path": "/responses",
+            "usage_extraction_profiles": [
+              {
+                "profile_id": "alibaba.openai.responses.body.v1",
+                "revision": 1,
+                "record_kind": "json_body",
+                "update_kind": "final",
+                "required_pointer": "/usage",
+                "bindings": [
+                  {
+                    "field": "input_tokens",
+                    "pointers": [
+                      "/usage/input_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "cache_read_tokens",
+                    "pointers": [
+                      "/usage/input_tokens_details/cached_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "output_tokens",
+                    "pointers": [
+                      "/usage/output_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "reasoning_tokens",
+                    "pointers": [
+                      "/usage/output_tokens_details/reasoning_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "audio_input_tokens",
+                    "pointers": [
+                      "/usage/input_tokens_details/audio_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "audio_output_tokens",
+                    "pointers": [
+                      "/usage/output_tokens_details/audio_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "total_tokens",
+                    "pointers": [
+                      "/usage/total_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "response_model",
+                    "pointers": [
+                      "/model"
+                    ],
+                    "encoding": "string"
+                  },
+                  {
+                    "field": "response_id",
+                    "pointers": [
+                      "/id"
+                    ],
+                    "encoding": "string"
+                  },
+                  {
+                    "field": "billing_details",
+                    "pointers": [
+                      "/usage/x_details"
+                    ],
+                    "encoding": "alibaba_responses_billing_details"
+                  }
+                ],
+                "derivations": [
+                  "uncached_input_from_input_minus_cache_read"
+                ]
+              },
+              {
+                "profile_id": "alibaba.openai.responses.sse.completed.v1",
+                "revision": 1,
+                "record_kind": "sse_event",
+                "update_kind": "final",
+                "event_type_pointer": "/type",
+                "event_type_value": "response.completed",
+                "required_pointer": "/response/usage",
+                "bindings": [
+                  {
+                    "field": "input_tokens",
+                    "pointers": [
+                      "/response/usage/input_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "cache_read_tokens",
+                    "pointers": [
+                      "/response/usage/input_tokens_details/cached_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "output_tokens",
+                    "pointers": [
+                      "/response/usage/output_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "reasoning_tokens",
+                    "pointers": [
+                      "/response/usage/output_tokens_details/reasoning_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "audio_input_tokens",
+                    "pointers": [
+                      "/response/usage/input_tokens_details/audio_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "audio_output_tokens",
+                    "pointers": [
+                      "/response/usage/output_tokens_details/audio_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "total_tokens",
+                    "pointers": [
+                      "/response/usage/total_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "response_model",
+                    "pointers": [
+                      "/response/model"
+                    ],
+                    "encoding": "string"
+                  },
+                  {
+                    "field": "response_id",
+                    "pointers": [
+                      "/response/id"
+                    ],
+                    "encoding": "string"
+                  },
+                  {
+                    "field": "billing_details",
+                    "pointers": [
+                      "/response/usage/x_details"
+                    ],
+                    "encoding": "alibaba_responses_billing_details"
+                  }
+                ],
+                "derivations": [
+                  "uncached_input_from_input_minus_cache_read"
+                ]
+              },
+              {
+                "profile_id": "alibaba.openai.responses.ws.completed.v1",
+                "revision": 1,
+                "record_kind": "web_socket_frame",
+                "update_kind": "final",
+                "event_type_pointer": "/type",
+                "event_type_value": "response.completed",
+                "required_pointer": "/response/usage",
+                "bindings": [
+                  {
+                    "field": "input_tokens",
+                    "pointers": [
+                      "/response/usage/input_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "cache_read_tokens",
+                    "pointers": [
+                      "/response/usage/input_tokens_details/cached_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "output_tokens",
+                    "pointers": [
+                      "/response/usage/output_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "reasoning_tokens",
+                    "pointers": [
+                      "/response/usage/output_tokens_details/reasoning_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "total_tokens",
+                    "pointers": [
+                      "/response/usage/total_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "response_model",
+                    "pointers": [
+                      "/response/model"
+                    ],
+                    "encoding": "string"
+                  },
+                  {
+                    "field": "response_id",
+                    "pointers": [
+                      "/response/id"
+                    ],
+                    "encoding": "string"
+                  },
+                  {
+                    "field": "billing_details",
+                    "pointers": [
+                      "/response/usage/x_details"
+                    ],
+                    "encoding": "alibaba_responses_billing_details"
+                  }
+                ],
+                "derivations": [
+                  "uncached_input_from_input_minus_cache_read"
+                ]
+              }
+            ],
+            "verified": true
+          },
+          {
+            "protocol_profile_id": "anthropic-messages.v1",
+            "endpoint_path": "/v1/messages",
+            "base_url_override": "https://token-plan.ap-southeast-1.maas.aliyuncs.com/apps/anthropic",
+            "request_headers": {
+              "anthropic-version": "2023-06-01"
+            },
+            "authentication": "x_api_key",
+            "request_projection_profiles": [
+              {
+                "profile_id": "alibaba.anthropic.thinking.v1",
+                "revision": 1,
+                "steps": [
+                  {
+                    "op": "enum_map",
+                    "path": "/thinking",
+                    "source": "request_field",
+                    "source_path": "@reasoning_effort",
+                    "mapping": {
+                      "adaptive": {
+                        "type": "enabled"
+                      },
+                      "none": {
+                        "type": "disabled"
+                      }
+                    },
+                    "unmatched": "error"
+                  },
+                  {
+                    "op": "delete_if_equals",
+                    "path": "/output_config/effort",
+                    "source": "request_field",
+                    "source_path": "@reasoning_effort",
+                    "equals": "none"
+                  },
+                  {
+                    "op": "remove_if_empty",
+                    "path": "/output_config"
+                  }
+                ]
+              }
+            ],
+            "verified": true
+          }
+        ],
+        "allowed_usage_scopes": [
+          "interactive_agent"
+        ]
+      },
+      {
+        "id": "model-studio-cn",
+        "display_name": "Model Studio China",
+        "kind": "conversation",
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "credential_profiles": [
+          {
+            "id": "api-key",
+            "display_name": "API Key",
+            "credential_mode": "token",
+            "billing_kind": "pay_as_you_go",
+            "account_usage_query": "unsupported",
+            "key_prefix": "sk-",
+            "allowed_usage_scopes": [
+              "interactive_agent",
+              "internal_background",
+              "external_service"
+            ]
+          }
+        ],
+        "authentication": "bearer_authorization",
+        "service_origin_override_policy": {
+          "host_suffix": ".cn-beijing.maas.aliyuncs.com",
+          "allowed_input_paths": [
+            "",
+            "/apps/anthropic",
+            "/compatible-api/v1",
+            "/compatible-mode/v1"
+          ],
+          "protocol_base_paths": {
+            "anthropic-messages.v1": "/apps/anthropic",
+            "openai-chat-completions.v1": "/compatible-mode/v1",
+            "openai-responses.v1": "/compatible-mode/v1"
+          },
+          "example_origin": "https://workspace-id.cn-beijing.maas.aliyuncs.com"
+        },
+        "native_inference_bindings": [
+          {
+            "operation": "embedding_create",
+            "binding_id": "alibaba.model_studio.embeddings.v1",
+            "endpoint_path": "/embeddings",
+            "projection": "compatible",
+            "requires_service_origin_override": false
+          },
+          {
+            "operation": "rerank_documents",
+            "binding_id": "alibaba.model_studio.rerank.v1",
+            "endpoint_path": "/reranks",
+            "projection": "compatible",
+            "service_origin_base_path": "/compatible-api/v1",
+            "requires_service_origin_override": true,
+            "rerank_truncation": "provider_default"
+          }
+        ],
+        "model_discovery": "manifest_static",
+        "request_projector": "compatible",
+        "protocol_routes": [
+          {
+            "protocol_profile_id": "openai-chat-completions.v1",
+            "endpoint_path": "/chat/completions",
+            "request_headers": {
+              "x-dashscope-ossresource-resolve": "enable"
+            },
+            "input_resource_constraints": [
+              {
+                "resource_kind": "image",
+                "max_bytes": 1073741824,
+                "reference_policy": "local_only",
+                "upload_channel_refs": [
+                  "cn.temporary-oss"
+                ]
+              },
+              {
+                "resource_kind": "video",
+                "max_bytes": 1073741824,
+                "reference_policy": "local_only",
+                "upload_channel_refs": [
+                  "cn.temporary-oss"
+                ]
+              }
+            ],
+            "request_projection_profiles": [
+              {
+                "profile_id": "alibaba.chat.thinking.v1",
+                "revision": 1,
+                "steps": [
+                  {
+                    "op": "delete_json_pointer",
+                    "path": "/reasoning_effort"
+                  },
+                  {
+                    "op": "enum_map",
+                    "path": "/enable_thinking",
+                    "source": "request_field",
+                    "source_path": "@reasoning_effort",
+                    "mapping": {
+                      "adaptive": true,
+                      "none": false
+                    },
+                    "unmatched": "error"
+                  }
+                ]
+              }
+            ],
+            "verified": true
+          },
+          {
+            "protocol_profile_id": "openai-responses.v1",
+            "endpoint_path": "/responses",
+            "request_headers": {
+              "x-dashscope-ossresource-resolve": "enable"
+            },
+            "input_resource_constraints": [
+              {
+                "resource_kind": "image",
+                "max_bytes": 1073741824,
+                "reference_policy": "local_only",
+                "upload_channel_refs": [
+                  "cn.temporary-oss"
+                ]
+              },
+              {
+                "resource_kind": "video",
+                "max_bytes": 1073741824,
+                "reference_policy": "local_only",
+                "upload_channel_refs": [
+                  "cn.temporary-oss"
+                ]
+              }
+            ],
+            "usage_extraction_profiles": [
+              {
+                "profile_id": "alibaba.openai.responses.body.v1",
+                "revision": 1,
+                "record_kind": "json_body",
+                "update_kind": "final",
+                "required_pointer": "/usage",
+                "bindings": [
+                  {
+                    "field": "input_tokens",
+                    "pointers": [
+                      "/usage/input_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "cache_read_tokens",
+                    "pointers": [
+                      "/usage/input_tokens_details/cached_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "output_tokens",
+                    "pointers": [
+                      "/usage/output_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "reasoning_tokens",
+                    "pointers": [
+                      "/usage/output_tokens_details/reasoning_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "audio_input_tokens",
+                    "pointers": [
+                      "/usage/input_tokens_details/audio_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "audio_output_tokens",
+                    "pointers": [
+                      "/usage/output_tokens_details/audio_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "total_tokens",
+                    "pointers": [
+                      "/usage/total_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "response_model",
+                    "pointers": [
+                      "/model"
+                    ],
+                    "encoding": "string"
+                  },
+                  {
+                    "field": "response_id",
+                    "pointers": [
+                      "/id"
+                    ],
+                    "encoding": "string"
+                  },
+                  {
+                    "field": "billing_details",
+                    "pointers": [
+                      "/usage/x_details"
+                    ],
+                    "encoding": "alibaba_responses_billing_details"
+                  }
+                ],
+                "derivations": [
+                  "uncached_input_from_input_minus_cache_read"
+                ]
+              },
+              {
+                "profile_id": "alibaba.openai.responses.sse.completed.v1",
+                "revision": 1,
+                "record_kind": "sse_event",
+                "update_kind": "final",
+                "event_type_pointer": "/type",
+                "event_type_value": "response.completed",
+                "required_pointer": "/response/usage",
+                "bindings": [
+                  {
+                    "field": "input_tokens",
+                    "pointers": [
+                      "/response/usage/input_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "cache_read_tokens",
+                    "pointers": [
+                      "/response/usage/input_tokens_details/cached_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "output_tokens",
+                    "pointers": [
+                      "/response/usage/output_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "reasoning_tokens",
+                    "pointers": [
+                      "/response/usage/output_tokens_details/reasoning_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "audio_input_tokens",
+                    "pointers": [
+                      "/response/usage/input_tokens_details/audio_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "audio_output_tokens",
+                    "pointers": [
+                      "/response/usage/output_tokens_details/audio_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "total_tokens",
+                    "pointers": [
+                      "/response/usage/total_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "response_model",
+                    "pointers": [
+                      "/response/model"
+                    ],
+                    "encoding": "string"
+                  },
+                  {
+                    "field": "response_id",
+                    "pointers": [
+                      "/response/id"
+                    ],
+                    "encoding": "string"
+                  },
+                  {
+                    "field": "billing_details",
+                    "pointers": [
+                      "/response/usage/x_details"
+                    ],
+                    "encoding": "alibaba_responses_billing_details"
+                  }
+                ],
+                "derivations": [
+                  "uncached_input_from_input_minus_cache_read"
+                ]
+              },
+              {
+                "profile_id": "alibaba.openai.responses.ws.completed.v1",
+                "revision": 1,
+                "record_kind": "web_socket_frame",
+                "update_kind": "final",
+                "event_type_pointer": "/type",
+                "event_type_value": "response.completed",
+                "required_pointer": "/response/usage",
+                "bindings": [
+                  {
+                    "field": "input_tokens",
+                    "pointers": [
+                      "/response/usage/input_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "cache_read_tokens",
+                    "pointers": [
+                      "/response/usage/input_tokens_details/cached_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "output_tokens",
+                    "pointers": [
+                      "/response/usage/output_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "reasoning_tokens",
+                    "pointers": [
+                      "/response/usage/output_tokens_details/reasoning_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "total_tokens",
+                    "pointers": [
+                      "/response/usage/total_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "response_model",
+                    "pointers": [
+                      "/response/model"
+                    ],
+                    "encoding": "string"
+                  },
+                  {
+                    "field": "response_id",
+                    "pointers": [
+                      "/response/id"
+                    ],
+                    "encoding": "string"
+                  },
+                  {
+                    "field": "billing_details",
+                    "pointers": [
+                      "/response/usage/x_details"
+                    ],
+                    "encoding": "alibaba_responses_billing_details"
+                  }
+                ],
+                "derivations": [
+                  "uncached_input_from_input_minus_cache_read"
+                ]
+              }
+            ],
+            "verified": true
+          },
+          {
+            "protocol_profile_id": "anthropic-messages.v1",
+            "endpoint_path": "/v1/messages",
+            "base_url_override": "https://dashscope.aliyuncs.com/apps/anthropic",
+            "request_headers": {
+              "anthropic-version": "2023-06-01",
+              "x-dashscope-ossresource-resolve": "enable"
+            },
+            "authentication": "x_api_key",
+            "input_resource_constraints": [
+              {
+                "resource_kind": "image",
+                "max_bytes": 1073741824,
+                "reference_policy": "local_only",
+                "upload_channel_refs": [
+                  "cn.temporary-oss"
+                ]
+              },
+              {
+                "resource_kind": "video",
+                "max_bytes": 1073741824,
+                "reference_policy": "local_only",
+                "upload_channel_refs": [
+                  "cn.temporary-oss"
+                ]
+              }
+            ],
+            "request_projection_profiles": [
+              {
+                "profile_id": "alibaba.anthropic.thinking.v1",
+                "revision": 1,
+                "steps": [
+                  {
+                    "op": "enum_map",
+                    "path": "/thinking",
+                    "source": "request_field",
+                    "source_path": "@reasoning_effort",
+                    "mapping": {
+                      "adaptive": {
+                        "type": "enabled"
+                      },
+                      "none": {
+                        "type": "disabled"
+                      }
+                    },
+                    "unmatched": "error"
+                  },
+                  {
+                    "op": "delete_if_equals",
+                    "path": "/output_config/effort",
+                    "source": "request_field",
+                    "source_path": "@reasoning_effort",
+                    "equals": "none"
+                  },
+                  {
+                    "op": "remove_if_empty",
+                    "path": "/output_config"
+                  }
+                ]
+              }
+            ],
+            "verified": true
+          }
+        ],
+        "allowed_usage_scopes": [
+          "interactive_agent",
+          "internal_background",
+          "external_service"
+        ]
+      },
+      {
+        "id": "model-studio-singapore",
+        "display_name": "Model Studio Singapore",
+        "kind": "conversation",
+        "base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+        "credential_profiles": [
+          {
+            "id": "api-key",
+            "display_name": "API Key",
+            "credential_mode": "token",
+            "billing_kind": "pay_as_you_go",
+            "account_usage_query": "unsupported",
+            "key_prefix": "sk-",
+            "allowed_usage_scopes": [
+              "interactive_agent",
+              "internal_background",
+              "external_service"
+            ]
+          }
+        ],
+        "authentication": "bearer_authorization",
+        "service_origin_override_policy": {
+          "host_suffix": ".ap-southeast-1.maas.aliyuncs.com",
+          "allowed_input_paths": [
+            "",
+            "/apps/anthropic",
+            "/compatible-api/v1",
+            "/compatible-mode/v1"
+          ],
+          "protocol_base_paths": {
+            "anthropic-messages.v1": "/apps/anthropic",
+            "openai-chat-completions.v1": "/compatible-mode/v1",
+            "openai-responses.v1": "/compatible-mode/v1"
+          },
+          "example_origin": "https://workspace-id.ap-southeast-1.maas.aliyuncs.com"
+        },
+        "native_inference_bindings": [
+          {
+            "operation": "embedding_create",
+            "binding_id": "alibaba.model_studio.embeddings.v1",
+            "endpoint_path": "/embeddings",
+            "projection": "compatible",
+            "requires_service_origin_override": false
+          },
+          {
+            "operation": "rerank_documents",
+            "binding_id": "alibaba.model_studio.rerank.v1",
+            "endpoint_path": "/reranks",
+            "projection": "compatible",
+            "service_origin_base_path": "/compatible-mode/v1",
+            "requires_service_origin_override": true,
+            "rerank_truncation": "provider_default"
+          }
+        ],
+        "model_discovery": "manifest_static",
+        "request_projector": "compatible",
+        "protocol_routes": [
+          {
+            "protocol_profile_id": "openai-chat-completions.v1",
+            "endpoint_path": "/chat/completions",
+            "request_projection_profiles": [
+              {
+                "profile_id": "alibaba.chat.thinking.v1",
+                "revision": 1,
+                "steps": [
+                  {
+                    "op": "delete_json_pointer",
+                    "path": "/reasoning_effort"
+                  },
+                  {
+                    "op": "enum_map",
+                    "path": "/enable_thinking",
+                    "source": "request_field",
+                    "source_path": "@reasoning_effort",
+                    "mapping": {
+                      "adaptive": true,
+                      "none": false
+                    },
+                    "unmatched": "error"
+                  }
+                ]
+              }
+            ],
+            "verified": true
+          },
+          {
+            "protocol_profile_id": "openai-responses.v1",
+            "endpoint_path": "/responses",
+            "usage_extraction_profiles": [
+              {
+                "profile_id": "alibaba.openai.responses.body.v1",
+                "revision": 1,
+                "record_kind": "json_body",
+                "update_kind": "final",
+                "required_pointer": "/usage",
+                "bindings": [
+                  {
+                    "field": "input_tokens",
+                    "pointers": [
+                      "/usage/input_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "cache_read_tokens",
+                    "pointers": [
+                      "/usage/input_tokens_details/cached_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "output_tokens",
+                    "pointers": [
+                      "/usage/output_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "reasoning_tokens",
+                    "pointers": [
+                      "/usage/output_tokens_details/reasoning_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "audio_input_tokens",
+                    "pointers": [
+                      "/usage/input_tokens_details/audio_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "audio_output_tokens",
+                    "pointers": [
+                      "/usage/output_tokens_details/audio_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "total_tokens",
+                    "pointers": [
+                      "/usage/total_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "response_model",
+                    "pointers": [
+                      "/model"
+                    ],
+                    "encoding": "string"
+                  },
+                  {
+                    "field": "response_id",
+                    "pointers": [
+                      "/id"
+                    ],
+                    "encoding": "string"
+                  },
+                  {
+                    "field": "billing_details",
+                    "pointers": [
+                      "/usage/x_details"
+                    ],
+                    "encoding": "alibaba_responses_billing_details"
+                  }
+                ],
+                "derivations": [
+                  "uncached_input_from_input_minus_cache_read"
+                ]
+              },
+              {
+                "profile_id": "alibaba.openai.responses.sse.completed.v1",
+                "revision": 1,
+                "record_kind": "sse_event",
+                "update_kind": "final",
+                "event_type_pointer": "/type",
+                "event_type_value": "response.completed",
+                "required_pointer": "/response/usage",
+                "bindings": [
+                  {
+                    "field": "input_tokens",
+                    "pointers": [
+                      "/response/usage/input_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "cache_read_tokens",
+                    "pointers": [
+                      "/response/usage/input_tokens_details/cached_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "output_tokens",
+                    "pointers": [
+                      "/response/usage/output_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "reasoning_tokens",
+                    "pointers": [
+                      "/response/usage/output_tokens_details/reasoning_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "audio_input_tokens",
+                    "pointers": [
+                      "/response/usage/input_tokens_details/audio_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "audio_output_tokens",
+                    "pointers": [
+                      "/response/usage/output_tokens_details/audio_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "total_tokens",
+                    "pointers": [
+                      "/response/usage/total_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "response_model",
+                    "pointers": [
+                      "/response/model"
+                    ],
+                    "encoding": "string"
+                  },
+                  {
+                    "field": "response_id",
+                    "pointers": [
+                      "/response/id"
+                    ],
+                    "encoding": "string"
+                  },
+                  {
+                    "field": "billing_details",
+                    "pointers": [
+                      "/response/usage/x_details"
+                    ],
+                    "encoding": "alibaba_responses_billing_details"
+                  }
+                ],
+                "derivations": [
+                  "uncached_input_from_input_minus_cache_read"
+                ]
+              },
+              {
+                "profile_id": "alibaba.openai.responses.ws.completed.v1",
+                "revision": 1,
+                "record_kind": "web_socket_frame",
+                "update_kind": "final",
+                "event_type_pointer": "/type",
+                "event_type_value": "response.completed",
+                "required_pointer": "/response/usage",
+                "bindings": [
+                  {
+                    "field": "input_tokens",
+                    "pointers": [
+                      "/response/usage/input_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "cache_read_tokens",
+                    "pointers": [
+                      "/response/usage/input_tokens_details/cached_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "output_tokens",
+                    "pointers": [
+                      "/response/usage/output_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "reasoning_tokens",
+                    "pointers": [
+                      "/response/usage/output_tokens_details/reasoning_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "total_tokens",
+                    "pointers": [
+                      "/response/usage/total_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "response_model",
+                    "pointers": [
+                      "/response/model"
+                    ],
+                    "encoding": "string"
+                  },
+                  {
+                    "field": "response_id",
+                    "pointers": [
+                      "/response/id"
+                    ],
+                    "encoding": "string"
+                  },
+                  {
+                    "field": "billing_details",
+                    "pointers": [
+                      "/response/usage/x_details"
+                    ],
+                    "encoding": "alibaba_responses_billing_details"
+                  }
+                ],
+                "derivations": [
+                  "uncached_input_from_input_minus_cache_read"
+                ]
+              }
+            ],
+            "verified": true
+          },
+          {
+            "protocol_profile_id": "anthropic-messages.v1",
+            "endpoint_path": "/v1/messages",
+            "base_url_override": "https://dashscope-intl.aliyuncs.com/apps/anthropic",
+            "request_headers": {
+              "anthropic-version": "2023-06-01"
+            },
+            "authentication": "x_api_key",
+            "request_projection_profiles": [
+              {
+                "profile_id": "alibaba.anthropic.thinking.v1",
+                "revision": 1,
+                "steps": [
+                  {
+                    "op": "enum_map",
+                    "path": "/thinking",
+                    "source": "request_field",
+                    "source_path": "@reasoning_effort",
+                    "mapping": {
+                      "adaptive": {
+                        "type": "enabled"
+                      },
+                      "none": {
+                        "type": "disabled"
+                      }
+                    },
+                    "unmatched": "error"
+                  },
+                  {
+                    "op": "delete_if_equals",
+                    "path": "/output_config/effort",
+                    "source": "request_field",
+                    "source_path": "@reasoning_effort",
+                    "equals": "none"
+                  },
+                  {
+                    "op": "remove_if_empty",
+                    "path": "/output_config"
+                  }
+                ]
+              }
+            ],
+            "verified": true
+          }
+        ],
+        "allowed_usage_scopes": [
+          "interactive_agent",
+          "internal_background",
+          "external_service"
+        ]
+      }
+    ]
+  },
+  "anthropic": {
+    "id": "anthropic",
+    "display_name": "Anthropic",
+    "kind": "system",
+    "category": "official",
+    "credential_directory_visibility": "configured_only",
+    "credential_registration": "direct",
+    "service_entries": [
+      {
+        "id": "public-api",
+        "display_name": "Claude API",
+        "kind": "conversation",
+        "base_url": "https://api.anthropic.com",
+        "credential_profiles": [
+          {
+            "id": "api-key",
+            "display_name": "API Key",
+            "credential_mode": "token",
+            "billing_kind": "pay_as_you_go",
+            "account_usage_query": "unsupported",
+            "allowed_usage_scopes": [
+              "interactive_agent",
+              "internal_background",
+              "external_service"
+            ]
+          }
+        ],
+        "authentication": "x_api_key",
+        "request_headers": {
+          "anthropic-version": "2023-06-01"
+        },
+        "model_discovery": "anthropic",
+        "request_projector": "direct",
+        "protocol_routes": [
+          {
+            "protocol_profile_id": "anthropic-messages.v1",
+            "endpoint_path": "/v1/messages",
+            "verified": true
+          }
+        ],
+        "allowed_usage_scopes": [
+          "interactive_agent",
+          "internal_background",
+          "external_service"
+        ]
+      },
+      {
+        "id": "claude-code-subscription",
+        "display_name": "Claude Code Subscription",
+        "kind": "conversation",
+        "base_url": "https://api.anthropic.com",
+        "credential_profiles": [
+          {
+            "id": "claude-code-oauth",
+            "display_name": "Claude Code Login",
+            "credential_mode": "auth",
+            "oauth_provider": "claude_code",
+            "billing_kind": "provider_managed",
+            "account_usage_query": "unsupported",
+            "allowed_usage_scopes": [
+              "interactive_agent"
+            ]
+          }
+        ],
+        "authentication": "bearer_authorization",
+        "request_headers": {
+          "anthropic-beta": "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14",
+          "anthropic-version": "2023-06-01"
+        },
+        "model_discovery": "anthropic",
+        "request_projector": "direct",
+        "protocol_routes": [
+          {
+            "protocol_profile_id": "claude-code-messages.v1",
+            "endpoint_path": "/v1/messages?beta=true",
+            "verified": true
+          }
+        ],
+        "allowed_usage_scopes": [
+          "interactive_agent"
+        ]
+      }
+    ]
+  },
+  "apikeyfun": {
+    "id": "apikeyfun",
+    "display_name": "APIKEY.FUN",
+    "kind": "system",
+    "category": "relay",
+    "credential_directory_visibility": "pinned_onboarding",
+    "credential_registration": "direct",
+    "promotion": {
+      "signup_url": "https://apikey.fun/register",
+      "referral_url": "https://apikey.fun/register?aff=LY4DT3DCTM9N",
+      "campaign_id": "LY4DT3DCTM9N",
+      "partnership_kind": "referral",
+      "disclosure_key": "settings.providerPromotion.referralDisclosure"
+    },
+    "service_entries": [
+      {
+        "id": "public-api",
+        "display_name": "Default API",
+        "kind": "conversation",
+        "base_url": "https://api.apikey.fun/v1",
+        "credential_profiles": [
+          {
+            "id": "api-key",
+            "display_name": "API Key",
+            "credential_mode": "token",
+            "billing_kind": "provider_managed",
+            "account_usage_query": "unsupported",
+            "allowed_usage_scopes": [
+              "interactive_agent",
+              "internal_background",
+              "external_service"
+            ]
+          }
+        ],
+        "authentication": "bearer_authorization",
+        "model_discovery": "open_ai",
+        "request_projector": "direct",
+        "protocol_routes": [
+          {
+            "protocol_profile_id": "openai-chat-completions.v1",
+            "endpoint_path": "/chat/completions",
+            "verified": true
+          }
+        ],
+        "allowed_usage_scopes": [
+          "interactive_agent",
+          "internal_background",
+          "external_service"
+        ]
+      },
+      {
+        "id": "slb-api",
+        "display_name": "SLB API (Image Generation Disabled)",
+        "kind": "conversation",
+        "base_url": "https://slb.apikey.fun/v1",
+        "credential_profiles": [
+          {
+            "id": "api-key",
+            "display_name": "API Key",
+            "credential_mode": "token",
+            "billing_kind": "provider_managed",
+            "account_usage_query": "unsupported",
+            "allowed_usage_scopes": [
+              "interactive_agent",
+              "internal_background",
+              "external_service"
+            ]
+          }
+        ],
+        "authentication": "bearer_authorization",
+        "model_discovery": "open_ai",
+        "request_projector": "direct",
+        "protocol_routes": [
+          {
+            "protocol_profile_id": "openai-chat-completions.v1",
+            "endpoint_path": "/chat/completions",
+            "verified": true
+          }
+        ],
+        "allowed_usage_scopes": [
+          "interactive_agent",
+          "internal_background",
+          "external_service"
+        ]
+      }
+    ]
+  },
+  "claudeapi": {
+    "id": "claudeapi",
+    "display_name": "ClaudeAPI",
+    "kind": "system",
+    "category": "relay",
+    "credential_directory_visibility": "pinned_onboarding",
+    "credential_registration": "direct",
+    "promotion": {
+      "signup_url": "https://console.apito.ai/register",
+      "referral_url": "https://console.apito.ai/register?aff=8jvf",
+      "campaign_id": "8jvf",
+      "partnership_kind": "referral",
+      "disclosure_key": "settings.providerPromotion.referralDisclosure"
+    },
+    "service_entries": [
+      {
+        "id": "gateway",
+        "display_name": "ClaudeAPI Gateway",
+        "kind": "conversation",
+        "base_url": "https://gw.claudeapi.com/v1",
+        "credential_profiles": [
+          {
+            "id": "api-key",
+            "display_name": "API Key",
+            "credential_mode": "token",
+            "billing_kind": "provider_managed",
+            "account_usage_query": "unsupported",
+            "key_prefix": "sk-",
+            "allowed_usage_scopes": [
+              "interactive_agent",
+              "internal_background",
+              "external_service"
+            ]
+          }
+        ],
+        "authentication": "bearer_authorization",
+        "model_discovery": "open_ai",
+        "request_projector": "direct",
+        "protocol_routes": [
+          {
+            "protocol_profile_id": "anthropic-messages.v1",
+            "endpoint_path": "/v1/messages",
+            "base_url_override": "https://gw.claudeapi.com",
+            "request_headers": {
+              "anthropic-version": "2023-06-01"
+            },
+            "authentication": "x_api_key",
+            "model_discovery_base_url_override": "https://gw.claudeapi.com/v1",
+            "verified": true
+          }
+        ],
+        "allowed_usage_scopes": [
+          "interactive_agent",
+          "internal_background",
+          "external_service"
+        ]
+      }
+    ]
+  },
+  "code0": {
+    "id": "code0",
+    "display_name": "Code0",
+    "kind": "system",
+    "category": "relay",
+    "credential_directory_visibility": "pinned_onboarding",
+    "credential_registration": "direct",
+    "promotion": {
+      "signup_url": "https://console.code0.ai/register",
+      "referral_url": "https://console.code0.ai/register?aff=il6p",
+      "campaign_id": "il6p",
+      "partnership_kind": "referral",
+      "disclosure_key": "settings.providerPromotion.referralDisclosure"
+    },
+    "service_entries": [
+      {
+        "id": "hong-kong",
+        "display_name": "Code0 Hong Kong Gateway",
+        "kind": "conversation",
+        "base_url": "https://hk.code0.ai/v1",
+        "credential_profiles": [
+          {
+            "id": "api-key",
+            "display_name": "API Key",
+            "credential_mode": "token",
+            "billing_kind": "provider_managed",
+            "account_usage_query": "unsupported",
+            "key_prefix": "sk-",
+            "allowed_usage_scopes": [
+              "interactive_agent",
+              "internal_background",
+              "external_service"
+            ]
+          }
+        ],
+        "authentication": "bearer_authorization",
+        "model_discovery": "open_ai",
+        "request_projector": "direct",
+        "protocol_routes": [
+          {
+            "protocol_profile_id": "openai-chat-completions.v1",
+            "endpoint_path": "/chat/completions",
+            "verified": true
+          },
+          {
+            "protocol_profile_id": "anthropic-messages.v1",
+            "endpoint_path": "/v1/messages",
+            "base_url_override": "https://hk.code0.ai",
+            "request_headers": {
+              "anthropic-version": "2023-06-01"
+            },
+            "authentication": "x_api_key",
+            "model_discovery_base_url_override": "https://hk.code0.ai/v1",
+            "verified": true
+          }
+        ],
+        "allowed_usage_scopes": [
+          "interactive_agent",
+          "internal_background",
+          "external_service"
+        ]
+      }
+    ]
+  },
+  "deepseek": {
+    "id": "deepseek",
+    "display_name": "DeepSeek",
+    "kind": "system",
+    "category": "official",
+    "credential_directory_visibility": "configured_only",
+    "credential_registration": "direct",
+    "service_entries": [
+      {
+        "id": "official-api",
+        "display_name": "DeepSeek API",
+        "kind": "conversation",
+        "base_url": "https://api.deepseek.com",
+        "credential_profiles": [
+          {
+            "id": "api-key",
+            "display_name": "API Key",
+            "credential_mode": "token",
+            "billing_kind": "pay_as_you_go",
+            "account_usage_query": "deep_seek_balance",
+            "key_prefix": "sk-",
+            "allowed_usage_scopes": [
+              "interactive_agent",
+              "internal_background",
+              "external_service"
+            ]
+          }
+        ],
+        "authentication": "bearer_authorization",
+        "model_discovery": "open_ai",
+        "request_projector": "compatible",
+        "protocol_routes": [
+          {
+            "protocol_profile_id": "openai-chat-completions.v1",
+            "endpoint_path": "/chat/completions",
+            "usage_extraction_profiles": [
+              {
+                "profile_id": "deepseek.chat.body.v1",
+                "revision": 1,
+                "record_kind": "json_body",
+                "update_kind": "final",
+                "required_pointer": "/usage",
+                "bindings": [
+                  {
+                    "field": "input_tokens",
+                    "pointers": [
+                      "/usage/prompt_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "uncached_input_tokens",
+                    "pointers": [
+                      "/usage/prompt_cache_miss_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "cache_read_tokens",
+                    "pointers": [
+                      "/usage/prompt_cache_hit_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "output_tokens",
+                    "pointers": [
+                      "/usage/completion_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "reasoning_tokens",
+                    "pointers": [
+                      "/usage/completion_tokens_details/reasoning_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "total_tokens",
+                    "pointers": [
+                      "/usage/total_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "response_model",
+                    "pointers": [
+                      "/model"
+                    ],
+                    "encoding": "string"
+                  },
+                  {
+                    "field": "response_id",
+                    "pointers": [
+                      "/id"
+                    ],
+                    "encoding": "string"
+                  }
+                ],
+                "derivations": []
+              },
+              {
+                "profile_id": "deepseek.chat.sse.usage.v1",
+                "revision": 1,
+                "record_kind": "sse_event",
+                "update_kind": "final",
+                "required_pointer": "/usage",
+                "bindings": [
+                  {
+                    "field": "input_tokens",
+                    "pointers": [
+                      "/usage/prompt_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "uncached_input_tokens",
+                    "pointers": [
+                      "/usage/prompt_cache_miss_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "cache_read_tokens",
+                    "pointers": [
+                      "/usage/prompt_cache_hit_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "output_tokens",
+                    "pointers": [
+                      "/usage/completion_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "reasoning_tokens",
+                    "pointers": [
+                      "/usage/completion_tokens_details/reasoning_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "total_tokens",
+                    "pointers": [
+                      "/usage/total_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "response_model",
+                    "pointers": [
+                      "/model"
+                    ],
+                    "encoding": "string"
+                  },
+                  {
+                    "field": "response_id",
+                    "pointers": [
+                      "/id"
+                    ],
+                    "encoding": "string"
+                  }
+                ],
+                "derivations": []
+              }
+            ],
+            "request_projection_profiles": [
+              {
+                "profile_id": "deepseek.chat.thinking.v1",
+                "revision": 1,
+                "steps": [
+                  {
+                    "op": "enum_map",
+                    "path": "/thinking",
+                    "source": "request_field",
+                    "source_path": "@reasoning_effort",
+                    "mapping": {
+                      "high": {
+                        "type": "enabled"
+                      },
+                      "max": {
+                        "type": "enabled"
+                      },
+                      "none": {
+                        "type": "disabled"
+                      }
+                    },
+                    "unmatched": "error"
+                  },
+                  {
+                    "op": "delete_if_equals",
+                    "path": "/reasoning_effort",
+                    "source": "request_field",
+                    "source_path": "@reasoning_effort",
+                    "equals": "none"
+                  },
+                  {
+                    "op": "delete_unless_equals",
+                    "path": "/temperature",
+                    "source": "request_field",
+                    "source_path": "@reasoning_effort",
+                    "equals": "none"
+                  }
+                ]
+              }
+            ],
+            "verified": true
+          },
+          {
+            "protocol_profile_id": "anthropic-messages.v1",
+            "endpoint_path": "/anthropic/v1/messages",
+            "request_headers": {
+              "anthropic-version": "2023-06-01"
+            },
+            "authentication": "x_api_key",
+            "request_projection_profiles": [
+              {
+                "profile_id": "deepseek.anthropic.thinking.v1",
+                "revision": 1,
+                "steps": [
+                  {
+                    "op": "enum_map",
+                    "path": "/thinking",
+                    "source": "request_field",
+                    "source_path": "@reasoning_effort",
+                    "mapping": {
+                      "high": {
+                        "type": "enabled"
+                      },
+                      "max": {
+                        "type": "enabled"
+                      },
+                      "none": {
+                        "type": "disabled"
+                      }
+                    },
+                    "unmatched": "error"
+                  },
+                  {
+                    "op": "copy_request_field",
+                    "path": "/output_config/effort",
+                    "field": "reasoning_effort"
+                  },
+                  {
+                    "op": "delete_if_equals",
+                    "path": "/output_config/effort",
+                    "source": "request_field",
+                    "source_path": "@reasoning_effort",
+                    "equals": "none"
+                  },
+                  {
+                    "op": "remove_if_empty",
+                    "path": "/output_config"
+                  }
+                ]
+              }
+            ],
+            "verified": true
+          },
+          {
+            "protocol_profile_id": "openai-responses.v1",
+            "endpoint_path": "/responses",
+            "request_projection_profiles": [
+              {
+                "profile_id": "deepseek.responses.docs.v1",
+                "revision": 1,
+                "steps": [
+                  {
+                    "op": "delete_json_pointer",
+                    "path": "/store"
+                  },
+                  {
+                    "op": "delete_json_pointer",
+                    "path": "/include"
+                  }
+                ]
+              }
+            ],
+            "verified": true
+          }
+        ],
+        "allowed_usage_scopes": [
+          "interactive_agent",
+          "internal_background",
+          "external_service"
+        ]
+      }
+    ]
+  },
+  "fennoai": {
+    "id": "fennoai",
+    "display_name": "FennoAI",
+    "kind": "system",
+    "category": "relay",
+    "credential_directory_visibility": "pinned_onboarding",
+    "credential_registration": "direct",
+    "promotion": {
+      "signup_url": "https://api.fenno.ai/register",
+      "referral_url": "https://api.fenno.ai/s/v59N",
+      "campaign_id": "v59N",
+      "partnership_kind": "referral",
+      "disclosure_key": "settings.providerPromotion.referralDisclosure"
+    },
+    "service_entries": [
+      {
+        "id": "gateway",
+        "display_name": "Fenno AI Gateway",
+        "kind": "conversation",
+        "base_url": "https://api.fenno.ai/v1",
+        "credential_profiles": [
+          {
+            "id": "api-key",
+            "display_name": "API Key",
+            "credential_mode": "token",
+            "billing_kind": "provider_managed",
+            "account_usage_query": "unsupported",
+            "allowed_usage_scopes": [
+              "interactive_agent",
+              "internal_background",
+              "external_service"
+            ]
+          }
+        ],
+        "authentication": "bearer_authorization",
+        "model_discovery": "open_ai",
+        "request_projector": "direct",
+        "protocol_routes": [
+          {
+            "protocol_profile_id": "openai-chat-completions.v1",
+            "endpoint_path": "/chat/completions",
+            "verified": true
+          },
+          {
+            "protocol_profile_id": "anthropic-messages.v1",
+            "endpoint_path": "/messages",
+            "request_headers": {
+              "anthropic-version": "2023-06-01"
+            },
+            "authentication": "x_api_key",
+            "verified": true
+          }
+        ],
+        "allowed_usage_scopes": [
+          "interactive_agent",
+          "internal_background",
+          "external_service"
+        ]
+      }
+    ]
+  },
+  "google": {
+    "id": "google",
+    "display_name": "Google",
+    "kind": "system",
+    "category": "official",
+    "credential_directory_visibility": "configured_only",
+    "credential_registration": "direct",
+    "service_entries": [
+      {
+        "id": "gemini-api",
+        "display_name": "Gemini API Key",
+        "kind": "conversation",
+        "base_url": "https://generativelanguage.googleapis.com/v1beta",
+        "credential_profiles": [
+          {
+            "id": "api-key",
+            "display_name": "API Key",
+            "credential_mode": "token",
+            "billing_kind": "pay_as_you_go",
+            "account_usage_query": "unsupported",
+            "allowed_usage_scopes": [
+              "interactive_agent",
+              "internal_background",
+              "external_service"
+            ]
+          }
+        ],
+        "authentication": "google_api_key",
+        "model_discovery": "gemini",
+        "request_projector": "compatible",
+        "protocol_routes": [
+          {
+            "protocol_profile_id": "google.gemini.generate_content",
+            "verified": true
+          },
+          {
+            "protocol_profile_id": "gemini-interactions.v1",
+            "verified": true
+          }
+        ],
+        "allowed_usage_scopes": [
+          "interactive_agent",
+          "internal_background",
+          "external_service"
+        ]
+      },
+      {
+        "id": "gemini-oauth",
+        "display_name": "Gemini OAuth",
+        "kind": "conversation",
+        "base_url": "https://generativelanguage.googleapis.com/v1beta",
+        "credential_profiles": [
+          {
+            "id": "gemini-oauth",
+            "display_name": "Gemini Login",
+            "credential_mode": "auth",
+            "oauth_provider": "google_gemini",
+            "billing_kind": "provider_managed",
+            "account_usage_query": "unsupported",
+            "allowed_usage_scopes": [
+              "interactive_agent"
+            ]
+          }
+        ],
+        "authentication": "google_gemini_bearer",
+        "model_discovery": "gemini",
+        "request_projector": "compatible",
+        "protocol_routes": [
+          {
+            "protocol_profile_id": "google.gemini.generate_content",
+            "verified": true
+          },
+          {
+            "protocol_profile_id": "gemini-interactions.v1",
+            "verified": true
+          }
+        ],
+        "allowed_usage_scopes": [
+          "interactive_agent"
+        ]
+      },
+      {
+        "id": "code-assist",
+        "display_name": "Google Code Assist",
+        "kind": "conversation",
+        "base_url": "https://cloudcode-pa.googleapis.com",
+        "credential_profiles": [
+          {
+            "id": "code-assist-oauth",
+            "display_name": "Code Assist Login",
+            "credential_mode": "auth",
+            "oauth_provider": "google_code_assist",
+            "billing_kind": "provider_managed",
+            "account_usage_query": "unsupported",
+            "allowed_usage_scopes": [
+              "interactive_agent"
+            ]
+          }
+        ],
+        "authentication": "google_code_assist_bearer",
+        "request_headers": {
+          "user-agent": "vulcan-code/0.1"
+        },
+        "model_discovery": "google_code_assist",
+        "request_projector": "compatible",
+        "protocol_routes": [
+          {
+            "protocol_profile_id": "google.code_assist.generate_content.v1",
+            "endpoint_path": "/v1internal:streamGenerateContent?alt=sse",
+            "verified": true
+          }
+        ],
+        "allowed_usage_scopes": [
+          "interactive_agent"
+        ]
+      }
+    ]
+  },
+  "kimi": {
+    "id": "kimi",
+    "display_name": "Kimi",
+    "kind": "system",
+    "category": "official",
+    "credential_directory_visibility": "configured_only",
+    "credential_registration": "direct",
+    "service_entries": [
+      {
+        "id": "platform-cn",
+        "display_name": "Kimi Open Platform China",
+        "kind": "conversation",
+        "base_url": "https://api.moonshot.cn/v1",
+        "credential_profiles": [
+          {
+            "id": "api-key",
+            "display_name": "API Key",
+            "credential_mode": "token",
+            "billing_kind": "pay_as_you_go",
+            "account_usage_query": "unsupported",
+            "key_prefix": "sk-",
+            "allowed_usage_scopes": [
+              "interactive_agent",
+              "internal_background",
+              "external_service"
+            ]
+          }
+        ],
+        "authentication": "bearer_authorization",
+        "model_discovery": "open_ai",
+        "request_projector": "compatible",
+        "protocol_routes": [
+          {
+            "protocol_profile_id": "openai-chat-completions.v1",
+            "endpoint_path": "/chat/completions",
+            "request_projection_profiles": [
+              {
+                "profile_id": "kimi.chat.reasoning.v1",
+                "revision": 1,
+                "steps": [
+                  {
+                    "op": "delete_json_pointer",
+                    "path": "/reasoning_effort"
+                  },
+                  {
+                    "op": "conditional_set",
+                    "path": "/thinking",
+                    "source": "request_field",
+                    "source_path": "@reasoning_effort",
+                    "equals": "none",
+                    "then": null,
+                    "otherwise": {
+                      "type": "enabled"
+                    }
+                  }
+                ]
+              }
+            ],
+            "verified": true
+          }
+        ],
+        "allowed_usage_scopes": [
+          "interactive_agent",
+          "internal_background",
+          "external_service"
+        ]
+      },
+      {
+        "id": "platform-global",
+        "display_name": "Kimi Open Platform International",
+        "kind": "conversation",
+        "base_url": "https://api.moonshot.ai/v1",
+        "credential_profiles": [
+          {
+            "id": "api-key",
+            "display_name": "API Key",
+            "credential_mode": "token",
+            "billing_kind": "pay_as_you_go",
+            "account_usage_query": "unsupported",
+            "key_prefix": "sk-",
+            "allowed_usage_scopes": [
+              "interactive_agent",
+              "internal_background",
+              "external_service"
+            ]
+          }
+        ],
+        "authentication": "bearer_authorization",
+        "model_discovery": "open_ai",
+        "request_projector": "compatible",
+        "protocol_routes": [
+          {
+            "protocol_profile_id": "openai-chat-completions.v1",
+            "endpoint_path": "/chat/completions",
+            "request_projection_profiles": [
+              {
+                "profile_id": "kimi.chat.reasoning.v1",
+                "revision": 1,
+                "steps": [
+                  {
+                    "op": "delete_json_pointer",
+                    "path": "/reasoning_effort"
+                  },
+                  {
+                    "op": "conditional_set",
+                    "path": "/thinking",
+                    "source": "request_field",
+                    "source_path": "@reasoning_effort",
+                    "equals": "none",
+                    "then": null,
+                    "otherwise": {
+                      "type": "enabled"
+                    }
+                  }
+                ]
+              }
+            ],
+            "verified": true
+          }
+        ],
+        "allowed_usage_scopes": [
+          "interactive_agent",
+          "internal_background",
+          "external_service"
+        ]
+      },
+      {
+        "id": "coding-plan",
+        "display_name": "Kimi Code",
+        "kind": "conversation",
+        "base_url": "https://api.kimi.com/coding/v1",
+        "credential_profiles": [
+          {
+            "id": "coding-api-key",
+            "display_name": "Coding API Key",
+            "credential_mode": "token",
+            "billing_kind": "token_plan",
+            "account_usage_query": "kimi_coding_plan",
+            "allowed_usage_scopes": [
+              "interactive_agent"
+            ]
+          },
+          {
+            "id": "coding-plan-login",
+            "display_name": "Coding Plan Login",
+            "credential_mode": "auth",
+            "oauth_provider": "kimi_coding_plan",
+            "billing_kind": "token_plan",
+            "account_usage_query": "kimi_coding_plan",
+            "authentication": "coding_device_bearer",
+            "allowed_usage_scopes": [
+              "interactive_agent"
+            ]
+          }
+        ],
+        "authentication": "coding_device_bearer",
+        "model_discovery": "open_ai",
+        "request_projector": "compatible",
+        "protocol_routes": [
+          {
+            "protocol_profile_id": "openai-chat-completions.v1",
+            "endpoint_path": "/chat/completions",
+            "request_projection_profiles": [
+              {
+                "profile_id": "kimi.chat.reasoning.v1",
+                "revision": 1,
+                "steps": [
+                  {
+                    "op": "delete_json_pointer",
+                    "path": "/reasoning_effort"
+                  },
+                  {
+                    "op": "conditional_set",
+                    "path": "/thinking",
+                    "source": "request_field",
+                    "source_path": "@reasoning_effort",
+                    "equals": "none",
+                    "then": null,
+                    "otherwise": {
+                      "type": "enabled"
+                    }
+                  }
+                ]
+              }
+            ],
+            "verified": true
+          },
+          {
+            "protocol_profile_id": "anthropic-messages.v1",
+            "endpoint_path": "/messages",
+            "request_headers": {
+              "anthropic-beta": "oauth-2025-04-20,interleaved-thinking-2025-05-14",
+              "anthropic-version": "2023-06-01"
+            },
+            "authentication": "coding_device_bearer",
+            "verified": true
+          },
+          {
+            "protocol_profile_id": "anthropic-messages-video.v1",
+            "endpoint_path": "/messages",
+            "request_headers": {
+              "anthropic-beta": "oauth-2025-04-20,interleaved-thinking-2025-05-14",
+              "anthropic-version": "2023-06-01"
+            },
+            "authentication": "coding_device_bearer",
+            "input_resource_constraints": [
+              {
+                "resource_kind": "video",
+                "max_bytes": 1073741824,
+                "reference_policy": "local_only",
+                "upload_channel_refs": [
+                  "coding-plan.video-file"
+                ]
+              }
+            ],
+            "verified": true
+          }
+        ],
+        "allowed_usage_scopes": [
+          "interactive_agent"
+        ]
+      }
+    ]
+  },
+  "minimax": {
+    "id": "minimax",
+    "display_name": "MiniMax",
+    "kind": "system",
+    "category": "official",
+    "credential_directory_visibility": "configured_only",
+    "credential_registration": "mini_max_regional_api_key",
+    "service_entries": [
+      {
+        "id": "global",
+        "display_name": "International",
+        "kind": "conversation",
+        "base_url": "https://api.minimax.io",
+        "credential_profiles": [
+          {
+            "id": "payg-api-key",
+            "display_name": "Pay-as-you-go API Key",
+            "credential_mode": "token",
+            "billing_kind": "pay_as_you_go",
+            "account_usage_query": "unsupported",
+            "key_prefix": "sk-api-",
+            "allowed_usage_scopes": [
+              "interactive_agent",
+              "internal_background",
+              "external_service"
+            ]
+          },
+          {
+            "id": "token-plan-key",
+            "display_name": "Token Plan Key",
+            "credential_mode": "token",
+            "billing_kind": "token_plan",
+            "account_usage_query": "mini_max_token_plan",
+            "key_prefix": "sk-cp-",
+            "allowed_usage_scopes": [
+              "interactive_agent"
+            ]
+          },
+          {
+            "id": "token-plan-oauth",
+            "display_name": "Token Plan Login",
+            "credential_mode": "auth",
+            "oauth_provider": "mini_max_global_token_plan",
+            "billing_kind": "token_plan",
+            "account_usage_query": "mini_max_token_plan",
+            "authentication": "bearer_authorization",
+            "allowed_usage_scopes": [
+              "interactive_agent"
+            ]
+          }
+        ],
+        "authentication": "x_api_key",
+        "model_discovery": "anthropic_compatible",
+        "request_projector": "compatible",
+        "protocol_routes": [
+          {
+            "protocol_profile_id": "anthropic-messages.v1",
+            "endpoint_path": "/anthropic/v1/messages",
+            "model_discovery_base_url_override": "https://api.minimax.io/anthropic/v1",
+            "input_resource_constraints": [
+              {
+                "resource_kind": "video",
+                "max_bytes": 50000000,
+                "reference_policy": "local_only",
+                "upload_channel_refs": [
+                  "global.video-file"
+                ]
+              }
+            ],
+            "request_projection_profiles": [
+              {
+                "profile_id": "minimax.anthropic.thinking.v1",
+                "revision": 1,
+                "steps": [
+                  {
+                    "op": "enum_map",
+                    "path": "/thinking",
+                    "source": "request_field",
+                    "source_path": "@reasoning_effort",
+                    "mapping": {
+                      "adaptive": {
+                        "type": "adaptive"
+                      },
+                      "none": {
+                        "type": "disabled"
+                      }
+                    },
+                    "unmatched": "error"
+                  },
+                  {
+                    "op": "delete_json_pointer",
+                    "path": "/output_config/effort"
+                  },
+                  {
+                    "op": "remove_if_empty",
+                    "path": "/output_config"
+                  },
+                  {
+                    "op": "reject_if_present",
+                    "source": "request_field",
+                    "source_path": "@model_parameters.minimax.reasoning_split",
+                    "message": "MiniMax reasoning_split is registered only for OpenAI Chat."
+                  }
+                ]
+              }
+            ],
+            "verified": true
+          },
+          {
+            "protocol_profile_id": "openai-chat-completions.v1",
+            "endpoint_path": "/v1/chat/completions",
+            "authentication": "bearer_authorization",
+            "model_discovery": "open_ai",
+            "model_discovery_base_url_override": "https://api.minimax.io/v1",
+            "input_resource_constraints": [
+              {
+                "resource_kind": "video",
+                "max_bytes": 50000000,
+                "reference_policy": "local_only",
+                "upload_channel_refs": [
+                  "global.video-file"
+                ]
+              }
+            ],
+            "request_projection_profiles": [
+              {
+                "profile_id": "minimax.chat.thinking.v1",
+                "revision": 1,
+                "steps": [
+                  {
+                    "op": "enum_map",
+                    "path": "/thinking",
+                    "source": "request_field",
+                    "source_path": "@reasoning_effort",
+                    "mapping": {
+                      "adaptive": {
+                        "type": "adaptive"
+                      },
+                      "none": {
+                        "type": "disabled"
+                      }
+                    },
+                    "unmatched": "error"
+                  },
+                  {
+                    "op": "delete_json_pointer",
+                    "path": "/reasoning_effort"
+                  },
+                  {
+                    "op": "copy_request_field",
+                    "path": "/reasoning_split",
+                    "field": "model_parameters.minimax.reasoning_split"
+                  }
+                ]
+              }
+            ],
+            "verified": true
+          }
+        ],
+        "allowed_usage_scopes": [
+          "interactive_agent",
+          "internal_background",
+          "external_service"
+        ]
+      },
+      {
+        "id": "cn",
+        "display_name": "China",
+        "kind": "conversation",
+        "base_url": "https://api.minimaxi.com",
+        "credential_profiles": [
+          {
+            "id": "payg-api-key",
+            "display_name": "Pay-as-you-go API Key",
+            "credential_mode": "token",
+            "billing_kind": "pay_as_you_go",
+            "account_usage_query": "unsupported",
+            "key_prefix": "sk-api-",
+            "allowed_usage_scopes": [
+              "interactive_agent",
+              "internal_background",
+              "external_service"
+            ]
+          },
+          {
+            "id": "token-plan-key",
+            "display_name": "Token Plan Key",
+            "credential_mode": "token",
+            "billing_kind": "token_plan",
+            "account_usage_query": "mini_max_token_plan",
+            "key_prefix": "sk-cp-",
+            "allowed_usage_scopes": [
+              "interactive_agent"
+            ]
+          },
+          {
+            "id": "token-plan-oauth",
+            "display_name": "Token Plan Login",
+            "credential_mode": "auth",
+            "oauth_provider": "mini_max_china_token_plan",
+            "billing_kind": "token_plan",
+            "account_usage_query": "mini_max_token_plan",
+            "authentication": "bearer_authorization",
+            "allowed_usage_scopes": [
+              "interactive_agent"
+            ]
+          }
+        ],
+        "authentication": "x_api_key",
+        "model_discovery": "anthropic_compatible",
+        "request_projector": "compatible",
+        "protocol_routes": [
+          {
+            "protocol_profile_id": "anthropic-messages.v1",
+            "endpoint_path": "/anthropic/v1/messages",
+            "model_discovery_base_url_override": "https://api.minimaxi.com/anthropic/v1",
+            "input_resource_constraints": [
+              {
+                "resource_kind": "video",
+                "max_bytes": 50000000,
+                "reference_policy": "local_only",
+                "upload_channel_refs": [
+                  "cn.video-file"
+                ]
+              }
+            ],
+            "request_projection_profiles": [
+              {
+                "profile_id": "minimax.anthropic.thinking.v1",
+                "revision": 1,
+                "steps": [
+                  {
+                    "op": "enum_map",
+                    "path": "/thinking",
+                    "source": "request_field",
+                    "source_path": "@reasoning_effort",
+                    "mapping": {
+                      "adaptive": {
+                        "type": "adaptive"
+                      },
+                      "none": {
+                        "type": "disabled"
+                      }
+                    },
+                    "unmatched": "error"
+                  },
+                  {
+                    "op": "delete_json_pointer",
+                    "path": "/output_config/effort"
+                  },
+                  {
+                    "op": "remove_if_empty",
+                    "path": "/output_config"
+                  },
+                  {
+                    "op": "reject_if_present",
+                    "source": "request_field",
+                    "source_path": "@model_parameters.minimax.reasoning_split",
+                    "message": "MiniMax reasoning_split is registered only for OpenAI Chat."
+                  }
+                ]
+              }
+            ],
+            "verified": true
+          },
+          {
+            "protocol_profile_id": "openai-chat-completions.v1",
+            "endpoint_path": "/v1/chat/completions",
+            "authentication": "bearer_authorization",
+            "model_discovery": "open_ai",
+            "model_discovery_base_url_override": "https://api.minimaxi.com/v1",
+            "input_resource_constraints": [
+              {
+                "resource_kind": "video",
+                "max_bytes": 50000000,
+                "reference_policy": "local_only",
+                "upload_channel_refs": [
+                  "cn.video-file"
+                ]
+              }
+            ],
+            "request_projection_profiles": [
+              {
+                "profile_id": "minimax.chat.thinking.v1",
+                "revision": 1,
+                "steps": [
+                  {
+                    "op": "enum_map",
+                    "path": "/thinking",
+                    "source": "request_field",
+                    "source_path": "@reasoning_effort",
+                    "mapping": {
+                      "adaptive": {
+                        "type": "adaptive"
+                      },
+                      "none": {
+                        "type": "disabled"
+                      }
+                    },
+                    "unmatched": "error"
+                  },
+                  {
+                    "op": "delete_json_pointer",
+                    "path": "/reasoning_effort"
+                  },
+                  {
+                    "op": "copy_request_field",
+                    "path": "/reasoning_split",
+                    "field": "model_parameters.minimax.reasoning_split"
+                  }
+                ]
+              }
+            ],
+            "verified": true
+          }
+        ],
+        "allowed_usage_scopes": [
+          "interactive_agent",
+          "internal_background",
+          "external_service"
+        ]
+      }
+    ]
+  },
+  "openai": {
+    "id": "openai",
+    "display_name": "OpenAI",
+    "kind": "system",
+    "category": "official",
+    "credential_directory_visibility": "configured_only",
+    "credential_registration": "direct",
+    "service_entries": [
+      {
+        "id": "public-api",
+        "display_name": "OpenAI API",
+        "kind": "conversation",
+        "base_url": "https://api.openai.com/v1",
+        "credential_profiles": [
+          {
+            "id": "api-key",
+            "display_name": "API Key",
+            "credential_mode": "token",
+            "billing_kind": "pay_as_you_go",
+            "account_usage_query": "unsupported",
+            "allowed_usage_scopes": [
+              "interactive_agent",
+              "internal_background",
+              "external_service"
+            ]
+          }
+        ],
+        "authentication": "bearer_authorization",
+        "model_discovery": "open_ai",
+        "request_projector": "direct",
+        "protocol_routes": [
+          {
+            "protocol_profile_id": "openai-chat-completions.v1",
+            "endpoint_path": "/chat/completions",
+            "provider_request_id_headers": [
+              "x-request-id",
+              "x-oai-request-id"
+            ],
+            "verified": true
+          },
+          {
+            "protocol_profile_id": "openai-responses.v1",
+            "endpoint_path": "/responses",
+            "provider_request_id_headers": [
+              "x-request-id",
+              "x-oai-request-id"
+            ],
+            "verified": true
+          }
+        ],
+        "allowed_usage_scopes": [
+          "interactive_agent",
+          "internal_background",
+          "external_service"
+        ]
+      },
+      {
+        "id": "codex-subscription",
+        "display_name": "OpenAI Codex Subscription",
+        "kind": "conversation",
+        "base_url": "https://chatgpt.com/backend-api/codex",
+        "credential_profiles": [
+          {
+            "id": "codex-oauth",
+            "display_name": "Codex Login",
+            "credential_mode": "auth",
+            "oauth_provider": "open_ai_codex",
+            "billing_kind": "provider_managed",
+            "account_usage_query": "unsupported",
+            "allowed_usage_scopes": [
+              "interactive_agent"
+            ]
+          }
+        ],
+        "authentication": "open_ai_codex_bearer",
+        "request_headers": {
+          "originator": "codex_cli_rs",
+          "user-agent": "codex_cli_rs/0.144.1 (Windows 11; x86_64) vulcan-code/0.1"
+        },
+        "model_discovery": "open_ai_codex",
+        "request_projector": "direct",
+        "protocol_routes": [
+          {
+            "protocol_profile_id": "openai-codex-responses.v1",
+            "endpoint_path": "/responses",
+            "responses_features": {
+              "remote_compaction": "enabled_with_local_fallback",
+              "websocket": "verified"
+            },
+            "provider_request_id_headers": [
+              "x-request-id",
+              "x-oai-request-id"
+            ],
+            "verified": true
+          }
+        ],
+        "allowed_usage_scopes": [
+          "interactive_agent"
+        ]
+      }
+    ]
+  },
+  "openrouter": {
+    "id": "openrouter",
+    "display_name": "OpenRouter",
+    "kind": "system",
+    "category": "relay",
+    "credential_directory_visibility": "configured_only",
+    "credential_registration": "direct",
+    "service_entries": [
+      {
+        "id": "public-api",
+        "display_name": "Public API",
+        "kind": "conversation",
+        "base_url": "https://openrouter.ai/api/v1",
+        "credential_profiles": [
+          {
+            "id": "api-key",
+            "display_name": "API Key",
+            "credential_mode": "token",
+            "billing_kind": "provider_managed",
+            "account_usage_query": "open_router_credits",
+            "allowed_usage_scopes": [
+              "interactive_agent",
+              "internal_background",
+              "external_service"
+            ]
+          }
+        ],
+        "authentication": "bearer_authorization",
+        "request_headers": {
+          "http-referer": "https://code.openvulcan.com",
+          "x-openrouter-metadata": "enabled",
+          "x-openrouter-title": "Vulcan Code"
+        },
+        "native_inference_bindings": [
+          {
+            "operation": "embedding_create",
+            "binding_id": "openrouter.embeddings.v1",
+            "endpoint_path": "/embeddings",
+            "projection": "routed_compatible",
+            "requires_service_origin_override": false
+          },
+          {
+            "operation": "rerank_documents",
+            "binding_id": "openrouter.rerank.v1",
+            "endpoint_path": "/rerank",
+            "projection": "routed_compatible",
+            "requires_service_origin_override": false,
+            "rerank_truncation": "disabled",
+            "response_model_aliases": {
+              "cohere/rerank-4-fast": [
+                "rerank-v4.0-fast"
+              ],
+              "cohere/rerank-4-pro": [
+                "rerank-v4.0-pro"
+              ]
+            }
+          }
+        ],
+        "model_discovery": "open_router",
+        "request_projector": "routed_compatible",
+        "protocol_routes": [
+          {
+            "protocol_profile_id": "anthropic-messages.v1",
+            "endpoint_path": "/messages",
+            "request_projection_profiles": [
+              {
+                "profile_id": "openrouter.anthropic.reasoning.v1",
+                "revision": 2,
+                "steps": [
+                  {
+                    "op": "reject_if_all_present",
+                    "conditions": [
+                      {
+                        "source": "request_field",
+                        "source_path": "@reasoning_effort"
+                      },
+                      {
+                        "source": "request_field",
+                        "source_path": "@model_parameters.reasoning.max_tokens"
+                      }
+                    ],
+                    "message": "OpenRouter reasoning effort and reasoning max_tokens are mutually exclusive."
+                  },
+                  {
+                    "op": "reject_if_present",
+                    "source": "request_field",
+                    "source_path": "@prompt_cache",
+                    "message": "OpenRouter explicit prompt caching requires a verified model-endpoint capability."
+                  },
+                  {
+                    "op": "copy_request_field",
+                    "path": "/reasoning/max_tokens",
+                    "field": "model_parameters.reasoning.max_tokens"
+                  },
+                  {
+                    "op": "copy_request_field",
+                    "path": "/output_config/effort",
+                    "field": "reasoning_effort"
+                  },
+                  {
+                    "op": "delete_if_equals",
+                    "path": "/output_config/effort",
+                    "source": "request_field",
+                    "source_path": "@reasoning_effort",
+                    "equals": "none"
+                  },
+                  {
+                    "op": "remove_if_empty",
+                    "path": "/output_config"
+                  },
+                  {
+                    "op": "copy_request_field",
+                    "path": "/reasoning/effort",
+                    "field": "reasoning_effort"
+                  },
+                  {
+                    "op": "delete_if_equals",
+                    "path": "/reasoning/effort",
+                    "source": "request_field",
+                    "source_path": "@reasoning_effort",
+                    "equals": "adaptive"
+                  },
+                  {
+                    "op": "enum_map",
+                    "path": "/reasoning/enabled",
+                    "source": "request_field",
+                    "source_path": "@reasoning_effort",
+                    "mapping": {
+                      "adaptive": true
+                    },
+                    "unmatched": "remove"
+                  }
+                ]
+              }
+            ],
+            "verified": true
+          },
+          {
+            "protocol_profile_id": "openai-chat-completions.v1",
+            "endpoint_path": "/chat/completions",
+            "input_resource_constraints": [
+              {
+                "resource_kind": "audio",
+                "reference_policy": "local_only"
+              },
+              {
+                "resource_kind": "file",
+                "accepted_mime_types": [
+                  "application/pdf"
+                ],
+                "reference_policy": "any"
+              }
+            ],
+            "usage_extraction_profiles": [
+              {
+                "profile_id": "openrouter.chat.body.v1",
+                "revision": 1,
+                "record_kind": "json_body",
+                "update_kind": "final",
+                "required_pointer": "/usage",
+                "bindings": [
+                  {
+                    "field": "input_tokens",
+                    "pointers": [
+                      "/usage/prompt_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "cache_read_tokens",
+                    "pointers": [
+                      "/usage/prompt_tokens_details/cached_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "output_tokens",
+                    "pointers": [
+                      "/usage/completion_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "reasoning_tokens",
+                    "pointers": [
+                      "/usage/completion_tokens_details/reasoning_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "total_tokens",
+                    "pointers": [
+                      "/usage/total_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "response_model",
+                    "pointers": [
+                      "/model"
+                    ],
+                    "encoding": "string"
+                  },
+                  {
+                    "field": "response_id",
+                    "pointers": [
+                      "/id"
+                    ],
+                    "encoding": "string"
+                  },
+                  {
+                    "field": "reported_cost_usd",
+                    "pointers": [
+                      "/usage/cost"
+                    ],
+                    "encoding": "decimal"
+                  }
+                ],
+                "derivations": [
+                  "uncached_input_from_input_minus_cache_read"
+                ]
+              },
+              {
+                "profile_id": "openrouter.chat.sse.usage.v1",
+                "revision": 1,
+                "record_kind": "sse_event",
+                "update_kind": "final",
+                "required_pointer": "/usage",
+                "bindings": [
+                  {
+                    "field": "input_tokens",
+                    "pointers": [
+                      "/usage/prompt_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "cache_read_tokens",
+                    "pointers": [
+                      "/usage/prompt_tokens_details/cached_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "output_tokens",
+                    "pointers": [
+                      "/usage/completion_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "reasoning_tokens",
+                    "pointers": [
+                      "/usage/completion_tokens_details/reasoning_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "total_tokens",
+                    "pointers": [
+                      "/usage/total_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "response_model",
+                    "pointers": [
+                      "/model"
+                    ],
+                    "encoding": "string"
+                  },
+                  {
+                    "field": "response_id",
+                    "pointers": [
+                      "/id"
+                    ],
+                    "encoding": "string"
+                  },
+                  {
+                    "field": "reported_cost_usd",
+                    "pointers": [
+                      "/usage/cost"
+                    ],
+                    "encoding": "decimal"
+                  }
+                ],
+                "derivations": [
+                  "uncached_input_from_input_minus_cache_read"
+                ]
+              }
+            ],
+            "request_projection_profiles": [
+              {
+                "profile_id": "openrouter.chat.reasoning.v1",
+                "revision": 2,
+                "steps": [
+                  {
+                    "op": "reject_if_all_present",
+                    "conditions": [
+                      {
+                        "source": "request_field",
+                        "source_path": "@reasoning_effort"
+                      },
+                      {
+                        "source": "request_field",
+                        "source_path": "@model_parameters.reasoning.max_tokens"
+                      }
+                    ],
+                    "message": "OpenRouter reasoning effort and reasoning max_tokens are mutually exclusive."
+                  },
+                  {
+                    "op": "reject_if_present",
+                    "source": "request_field",
+                    "source_path": "@prompt_cache",
+                    "message": "OpenRouter explicit prompt caching requires a verified model-endpoint capability."
+                  },
+                  {
+                    "op": "copy_request_field",
+                    "path": "/reasoning/max_tokens",
+                    "field": "model_parameters.reasoning.max_tokens"
+                  },
+                  {
+                    "op": "delete_json_pointer",
+                    "path": "/reasoning_effort"
+                  },
+                  {
+                    "op": "copy_request_field",
+                    "path": "/reasoning/effort",
+                    "field": "reasoning_effort"
+                  },
+                  {
+                    "op": "delete_if_equals",
+                    "path": "/reasoning/effort",
+                    "source": "request_field",
+                    "source_path": "@reasoning_effort",
+                    "equals": "adaptive"
+                  },
+                  {
+                    "op": "enum_map",
+                    "path": "/reasoning/enabled",
+                    "source": "request_field",
+                    "source_path": "@reasoning_effort",
+                    "mapping": {
+                      "adaptive": true
+                    },
+                    "unmatched": "remove"
+                  }
+                ]
+              }
+            ],
+            "verified": true
+          },
+          {
+            "protocol_profile_id": "openai-responses.v1",
+            "endpoint_path": "/responses",
+            "request_projection_profiles": [
+              {
+                "profile_id": "openrouter.responses.reasoning.v1",
+                "revision": 2,
+                "steps": [
+                  {
+                    "op": "reject_if_all_present",
+                    "conditions": [
+                      {
+                        "source": "request_field",
+                        "source_path": "@reasoning_effort"
+                      },
+                      {
+                        "source": "request_field",
+                        "source_path": "@model_parameters.reasoning.max_tokens"
+                      }
+                    ],
+                    "message": "OpenRouter reasoning effort and reasoning max_tokens are mutually exclusive."
+                  },
+                  {
+                    "op": "reject_if_present",
+                    "source": "request_field",
+                    "source_path": "@prompt_cache",
+                    "message": "OpenRouter explicit prompt caching requires a verified model-endpoint capability."
+                  },
+                  {
+                    "op": "copy_request_field",
+                    "path": "/reasoning/max_tokens",
+                    "field": "model_parameters.reasoning.max_tokens"
+                  },
+                  {
+                    "op": "copy_request_field",
+                    "path": "/reasoning/effort",
+                    "field": "reasoning_effort"
+                  },
+                  {
+                    "op": "delete_if_equals",
+                    "path": "/reasoning/effort",
+                    "source": "request_field",
+                    "source_path": "@reasoning_effort",
+                    "equals": "adaptive"
+                  },
+                  {
+                    "op": "enum_map",
+                    "path": "/reasoning/enabled",
+                    "source": "request_field",
+                    "source_path": "@reasoning_effort",
+                    "mapping": {
+                      "adaptive": true
+                    },
+                    "unmatched": "remove"
+                  }
+                ]
+              }
+            ],
+            "verified": true
+          }
+        ],
+        "allowed_usage_scopes": [
+          "interactive_agent",
+          "internal_background",
+          "external_service"
+        ]
+      }
+    ]
+  },
+  "qiniu": {
+    "id": "qiniu",
+    "display_name": "七牛云",
+    "kind": "system",
+    "category": "cloud_maas",
+    "credential_directory_visibility": "pinned_onboarding",
+    "credential_registration": "direct",
+    "promotion": {
+      "signup_url": "https://portal.qiniu.com/signup",
+      "referral_url": "https://s.qiniu.com/reuYBn",
+      "campaign_id": "reuYBn",
+      "partnership_kind": "referral",
+      "disclosure_key": "settings.providerPromotion.referralDisclosure"
+    },
+    "service_entries": [
+      {
+        "id": "token-api",
+        "display_name": "七牛云 AI Token API",
+        "kind": "conversation",
+        "base_url": "https://api.qnaigc.com/v1",
+        "credential_profiles": [
+          {
+            "id": "api-key",
+            "display_name": "API Key",
+            "credential_mode": "token",
+            "billing_kind": "pay_as_you_go",
+            "account_usage_query": "unsupported",
+            "allowed_usage_scopes": [
+              "interactive_agent",
+              "internal_background",
+              "external_service"
+            ]
+          }
+        ],
+        "authentication": "bearer_authorization",
+        "model_discovery": "open_ai",
+        "request_projector": "direct",
+        "protocol_routes": [
+          {
+            "protocol_profile_id": "openai-chat-completions.v1",
+            "endpoint_path": "/chat/completions",
+            "verified": true
+          },
+          {
+            "protocol_profile_id": "anthropic-messages.v1",
+            "endpoint_path": "/messages",
+            "request_headers": {
+              "anthropic-version": "2023-06-01"
+            },
+            "authentication": "bearer_authorization",
+            "verified": true
+          }
+        ],
+        "allowed_usage_scopes": [
+          "interactive_agent",
+          "internal_background",
+          "external_service"
+        ]
+      }
+    ]
+  },
+  "tavily": {
+    "id": "tavily",
+    "display_name": "Tavily",
+    "kind": "system",
+    "category": "official",
+    "credential_directory_visibility": "configured_only",
+    "credential_registration": "direct",
+    "service_entries": [
+      {
+        "id": "public-api",
+        "display_name": "Tavily Search API",
+        "kind": "provider_tools",
+        "base_url": "https://api.tavily.com",
+        "credential_profiles": [
+          {
+            "id": "api-key",
+            "display_name": "API Key",
+            "credential_mode": "token",
+            "billing_kind": "provider_managed",
+            "account_usage_query": "tavily_credits",
+            "key_prefix": "tvly-",
+            "allowed_usage_scopes": [
+              "interactive_agent",
+              "internal_background",
+              "external_service"
+            ]
+          }
+        ],
+        "authentication": "bearer_authorization",
+        "model_discovery": "provider_tools_only",
+        "request_projector": "direct",
+        "protocol_routes": [],
+        "allowed_usage_scopes": [
+          "interactive_agent",
+          "internal_background",
+          "external_service"
+        ]
+      }
+    ]
+  }
+}

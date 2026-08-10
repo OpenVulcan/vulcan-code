@@ -38,8 +38,11 @@ pub use responses_websocket::{
 pub use usage::{
     CostBreakdown, CostCalculator, ModelPricing, UsageAccumulator, UsageDerivation,
     UsageExtractionProfile, UsageField, UsageFieldBinding, UsageObservation, UsageRecordKind,
-    UsageValueEncoding, alibaba_responses_usage_profiles, deepseek_chat_usage_profiles,
-    openrouter_chat_usage_profiles, standard_usage_profiles,
+    UsageValueEncoding, standard_usage_profiles,
+};
+#[cfg(any(test, feature = "provider-migration-oracles"))]
+pub use usage::{
+    alibaba_responses_usage_profiles, deepseek_chat_usage_profiles, openrouter_chat_usage_profiles,
 };
 /// Selects the provider-side wire protocol reached from the Responses baseline.
 /// 选择从 Responses 基线到达的供应商侧 Wire 协议。

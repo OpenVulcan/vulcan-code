@@ -74,6 +74,9 @@ pub struct PromptCompactionModelTarget {
     /// Exact model identifier selected by the owning session.
     /// 所属会话选择的精确模型标识。
     pub model_id: String,
+    /// Persisted non-secret identity of the exact session provider-route lease.
+    /// 精确会话供应商路由租约的持久化非秘密身份。
+    pub provider_route_lease_identity: vulcan_workbench_model::SessionProviderRouteLeaseIdentity,
     /// Whether the non-secret exact route explicitly enables standalone remote compaction.
     /// 不含密钥的精确路由是否显式启用独立远端压缩。
     pub remote_compaction_enabled: bool,
@@ -228,46 +231,52 @@ impl PromptCompactionLaunchContext {
 /// 返回不可变精确目标；仅当会话目标与全局活动模型均不存在时返回 `None`；选择不完整或无效时返回显式错误。
 pub fn resolve_prompt_compaction_model_target(
     runtime: &vulcan_provider_adapters::PublicAiRuntime,
+    session_id: &str,
+    expected_route_lease: Option<&vulcan_workbench_model::SessionProviderRouteLeaseIdentity>,
     provider_id_override: Option<&str>,
     connection_id_override: Option<&str>,
     model_id_override: Option<&str>,
 ) -> Result<Option<PromptCompactionModelTarget>, String> {
-    // configuration freezes the authoritative connection graph for this resolution.
-    // configuration 为本次解析冻结权威连接图。
-    let configuration = runtime.configuration_snapshot()?;
-    // selection preserves the exact session account so compaction and the resumed turn cannot diverge.
-    // selection 保留精确会话账号，避免压缩与恢复后的回合发生路由分歧。
-    let selection = match (provider_id_override, model_id_override) {
-        (Some(provider_id), Some(model_id)) => match connection_id_override {
-            Some(connection_id) => runtime.resolve_connection_model_selection(
-                &configuration,
-                connection_id,
-                provider_id,
-                model_id,
-            )?,
-            None => runtime.resolve_model_selection(&configuration, provider_id, model_id)?,
-        },
-        (None, None) if connection_id_override.is_none() => {
-            if configuration.active.is_none() {
-                return Ok(None);
-            }
-            runtime.resolve_active_selection(&configuration)?
-        }
-        _ => {
-            return Err(String::from(
-                "Context compaction requires provider and model overrides together; a connection override cannot stand alone.",
-            ));
-        }
-    };
+    if provider_id_override.is_none()
+        && model_id_override.is_none()
+        && connection_id_override.is_none()
+        && runtime.configuration_snapshot()?.active.is_none()
+    {
+        return Ok(None);
+    }
+    // blueprint reuses the same session lease authority as an ordinary provider turn.
+    // blueprint 复用与普通供应商回合相同的会话租约权威。
+    let blueprint = crate::agent_runtime::provider::resolve_public_ai_provider_blueprint(
+        runtime,
+        session_id,
+        expected_route_lease,
+        ReasoningEffortLevel::Off,
+        provider_id_override,
+        model_id_override,
+        connection_id_override,
+    )?;
+    // selection is guaranteed for a dispatchable blueprint and carries every frozen profile.
+    // selection 对可分派蓝图必然存在，并携带全部冻结 Profile。
+    let selection = blueprint.frozen_selection.as_ref().ok_or_else(|| {
+        String::from("Context compaction model resolution did not freeze a provider selection.")
+    })?;
     // remoteCompactionEnabled avoids credential resolution when the selected route opted out.
     // remoteCompactionEnabled 在所选路由未启用时避免解析凭据。
     let remote_compaction_enabled = selection.route.protocol_route.protocol_profile_id
         == vulcan_ai_protocols::OPENAI_CODEX_RESPONSES_PROFILE_ID
         && selection.route.protocol_route.remote_compaction_enabled();
+    // providerRouteLeaseIdentity persists only the non-secret identity needed for restart validation.
+    // providerRouteLeaseIdentity 仅持久化重启校验所需的非秘密身份。
+    let provider_route_lease_identity = blueprint
+        .session_provider_route_lease_identity()
+        .ok_or_else(|| {
+            String::from("Context compaction model target has no route lease identity.")
+        })?;
     Ok(Some(PromptCompactionModelTarget {
-        provider_id: selection.route.provider.id,
-        connection_id: selection.route.connection.id,
-        model_id: selection.model.id,
+        provider_id: selection.route.provider.id.clone(),
+        connection_id: selection.route.connection.id.clone(),
+        model_id: selection.model.id.clone(),
+        provider_route_lease_identity,
         remote_compaction_enabled,
     }))
 }
@@ -1378,6 +1387,8 @@ fn build_prompt_compaction_launch_request(
         provider_id_override: model_target.map(|target| target.provider_id.clone()),
         model_id_override: model_target.map(|target| target.model_id.clone()),
         connection_id_override: model_target.map(|target| target.connection_id.clone()),
+        provider_route_lease_identity: model_target
+            .map(|target| target.provider_route_lease_identity.clone()),
         provider_tool_selections_override: launch_context.provider_tool_selections_override.clone(),
         subagent_prompt_context: launch_context.subagent_prompt_context.clone(),
         task_session_store_root: launch_context.task_session_store_root.clone(),

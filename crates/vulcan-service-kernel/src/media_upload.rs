@@ -6,7 +6,11 @@ use crate::conversation_submission::SubmissionModelSelection;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use vulcan_core::types::{ConversationAttachment, ConversationAttachmentKind};
-use vulcan_provider_adapters::{MediaUploadCancellation, MediaUploadProgressCallback};
+use vulcan_provider_adapters::{
+    CONVERSATION_MEDIA_INPUT_OPERATION_ID, MediaUploadCancellation, MediaUploadProgressCallback,
+    ProviderOperationalProfileRevision, ProviderOperationalTelemetryEvent,
+    ProviderOperationalTelemetryEventName, record_provider_operational_telemetry,
+};
 use vulcan_service_api::{
     MediaUploadPhase, MediaUploadProgressChangedDelta, ServiceEvent, WorkbenchDelta,
     WorkbenchDeltaEnvelope,
@@ -16,6 +20,45 @@ use vulcan_service_api::{
 /// 按客户端提交标识索引的进程内待处理媒体提交。
 static PENDING_MEDIA_UPLOADS: OnceLock<StdMutex<BTreeMap<String, MediaUploadCancellation>>> =
     OnceLock::new();
+
+/// Immutable non-secret route identity copied into every progress and telemetry event for one file.
+/// 为单个文件复制到每条进度与遥测事件的不可变非秘密路由身份。
+#[derive(Clone)]
+struct MediaUploadTelemetryIdentity {
+    /// Exact provider identifier.
+    /// 精确供应商标识。
+    provider_id: String,
+    /// Exact service-entry identifier.
+    /// 精确服务入口标识。
+    service_entry_id: String,
+    /// Exact credential connection identifier.
+    /// 精确凭据连接标识。
+    connection_id: String,
+    /// Exact upstream model identifier.
+    /// 精确上游模型标识。
+    model_id: String,
+    /// Exact provider-neutral protocol profile.
+    /// 精确供应商无关协议 Profile。
+    protocol_profile_id: String,
+    /// Frozen manifest revision.
+    /// 冻结 Manifest 修订号。
+    manifest_revision: u64,
+    /// Frozen runtime manifest generation.
+    /// 冻结运行时 Manifest 代际。
+    manifest_generation: u64,
+    /// Content-addressed complete route revision.
+    /// 内容寻址的完整路由修订号。
+    route_revision: String,
+    /// Exact manifest or host-inline upload channel.
+    /// 精确 Manifest 或宿主内联上传通道。
+    upload_channel_id: String,
+    /// Frozen request projection profile identities.
+    /// 冻结请求投影 Profile 身份。
+    request_profiles: Vec<ProviderOperationalProfileRevision>,
+    /// Frozen response projection profile identities.
+    /// 冻结响应投影 Profile 身份。
+    response_profiles: Vec<ProviderOperationalProfileRevision>,
+}
 
 /// Returns the process-local pending media cancellation registry.
 /// 返回进程内待处理媒体取消注册表。
@@ -67,23 +110,121 @@ fn remove_media_upload(client_submission_id: &str) {
     }
 }
 
+/// Builds one complete progress payload from immutable route identity and current byte facts.
+/// 从不可变路由身份与当前字节事实构建一条完整进度载荷。
+///
+/// # Parameters
+/// 参数
+/// `identity` is the frozen route; the remaining arguments are exact submission and file state.
+/// `identity` 是冻结路由；其余参数是精确提交与文件状态。
+///
+/// # Returns
+/// 返回值
+/// One browser-safe progress delta with the same trace identity as operational telemetry.
+/// 返回一条浏览器安全进度增量，其追踪身份与运行遥测完全一致。
+#[allow(clippy::too_many_arguments)]
+fn media_upload_progress_delta(
+    identity: &MediaUploadTelemetryIdentity,
+    client_submission_id: &str,
+    conversation_id: Option<&str>,
+    file_name: &str,
+    media_kind: &str,
+    file_index: usize,
+    file_count: usize,
+    phase: MediaUploadPhase,
+    bytes_sent: u64,
+    total_bytes: Option<u64>,
+    error: Option<String>,
+) -> MediaUploadProgressChangedDelta {
+    MediaUploadProgressChangedDelta {
+        client_submission_id: client_submission_id.to_string(),
+        conversation_id: conversation_id.map(str::to_string),
+        provider_id: identity.provider_id.clone(),
+        service_entry_id: identity.service_entry_id.clone(),
+        connection_id: identity.connection_id.clone(),
+        model_id: identity.model_id.clone(),
+        protocol_profile_id: identity.protocol_profile_id.clone(),
+        manifest_revision: identity.manifest_revision,
+        manifest_generation: identity.manifest_generation,
+        route_revision: identity.route_revision.clone(),
+        operation_id: CONVERSATION_MEDIA_INPUT_OPERATION_ID.to_string(),
+        upload_channel_id: identity.upload_channel_id.clone(),
+        file_name: file_name.to_string(),
+        media_kind: media_kind.to_string(),
+        file_index,
+        file_count,
+        phase,
+        bytes_sent,
+        total_bytes,
+        error,
+    }
+}
+
+/// Emits one low-frequency upload lifecycle event without file names, paths, URLs, or bodies.
+/// 发出一条不含文件名、路径、URL 或正文的低频上传生命周期事件。
+///
+/// # Parameters
+/// 参数
+/// `identity` is the exact frozen route; `event_name` is a closed lifecycle point and
+/// `failure_kind` is a stable host category for terminal failures.
+/// `identity` 是精确冻结路由；`event_name` 是封闭生命周期点，`failure_kind` 是终态失败的
+/// 稳定宿主分类。
+///
+/// # Returns
+/// 返回值
+/// Returns no value because telemetry diagnostics cannot change provider execution outcome.
+/// 不返回值，因为遥测诊断不能改变供应商执行结果。
+fn emit_media_operational_telemetry(
+    identity: &MediaUploadTelemetryIdentity,
+    event_name: ProviderOperationalTelemetryEventName,
+    failure_kind: Option<&str>,
+) {
+    let mut event = ProviderOperationalTelemetryEvent::new(event_name);
+    event.provider_id = Some(identity.provider_id.clone());
+    event.service_entry_id = Some(identity.service_entry_id.clone());
+    event.connection_id = Some(identity.connection_id.clone());
+    event.model_id = Some(identity.model_id.clone());
+    event.protocol_profile_id = Some(identity.protocol_profile_id.clone());
+    event.route_revision = Some(identity.route_revision.clone());
+    event.manifest_revision = Some(identity.manifest_revision);
+    event.manifest_generation = Some(identity.manifest_generation);
+    event.request_profiles = identity.request_profiles.clone();
+    event.response_profiles = identity.response_profiles.clone();
+    event.operation_id = Some(CONVERSATION_MEDIA_INPUT_OPERATION_ID.to_string());
+    event.upload_channel_id = Some(identity.upload_channel_id.clone());
+    event.failure_kind = failure_kind.map(str::to_string);
+    if let Err(error) = record_provider_operational_telemetry(event) {
+        eprintln!("[media-upload] structured telemetry was rejected: {error}");
+    }
+}
+
 /// Prepares every local attachment before session materialization and provider dispatch.
 /// 在会话物化与供应商分派前准备所有本地附件。
 ///
 /// # Parameters
 /// 参数
-/// `agent_runtime` resolves the exact selected account and provider route.
-/// `agent_runtime` 解析精确选定的账号与供应商路由。
-/// `attachments` are the already validated core attachments from the composer submission.
-/// `attachments` 是输入区提交中已经校验的核心附件。
 /// `app` and `state` carry ordered progress events without persisting ephemeral byte counters.
 /// `app` 与 `state` 发送有序进度事件，但不持久化临时字节计数。
+/// `agent_runtime` resolves the exact selected account and provider route; `client_submission_id`
+/// owns cancellation and progress; `session_id` scopes the immutable route lease;
+/// `session_runtime_state` supplies the persisted lease identity; `model_selection` is the exact
+/// composer snapshot; and `attachments` are the already validated core attachments.
+/// `agent_runtime` 解析精确选定的账号与供应商路由；`client_submission_id` 持有取消与进度；
+/// `session_id` 约束不可变路由租约；`session_runtime_state` 提供持久化租约身份；
+/// `model_selection` 是精确输入区快照；`attachments` 是已经校验的核心附件。
+///
+/// # Returns
+/// 返回值
+/// Success after every attachment is prepared and remembered, or an explicit lease, capability,
+/// credential, upload, cancellation, or projection error.
+/// 全部附件完成准备并记忆后返回成功；否则返回明确的租约、能力、凭据、上传、取消或投影错误。
 pub(crate) async fn prepare_submission_media(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     agent_runtime: &AgentRuntimeBridge,
     client_submission_id: &str,
-    conversation_id: Option<&str>,
+    session_id: Option<SessionId>,
+    session_runtime_state: Option<&vulcan_workbench_model::SessionRuntimeStateEntry>,
     model_selection: Option<&SubmissionModelSelection>,
     attachments: &[ConversationAttachment],
 ) -> Result<(), String> {
@@ -96,7 +237,8 @@ pub(crate) async fn prepare_submission_media(
         state,
         agent_runtime,
         client_submission_id,
-        conversation_id,
+        session_id,
+        session_runtime_state,
         model_selection,
         attachments,
         &cancellation,
@@ -106,65 +248,143 @@ pub(crate) async fn prepare_submission_media(
     result
 }
 
+/// Resolves media preparation through the same immutable session route as provider dispatch.
+/// 通过与供应商分派相同的不可变会话路由解析媒体准备执行。
+///
+/// # Parameters
+/// 参数
+/// `agent_runtime` owns current catalogs and secrets; session inputs identify the lease owner and
+/// persisted identity; `model_selection` is the exact per-submit UI snapshot.
+/// `agent_runtime` 持有当前目录与秘密；会话输入标识租约所有者与持久化身份；
+/// `model_selection` 是精确的逐次提交界面快照。
+///
+/// # Returns
+/// 返回值
+/// A credential-bearing execution built from the frozen session selection, or from current
+/// configuration only for a draft without a session owner.
+/// 返回从冻结会话选择构建的携带凭据执行；仅无会话所有者的草稿从当前配置构建。
+async fn resolve_submission_media_execution(
+    agent_runtime: &AgentRuntimeBridge,
+    session_id: Option<SessionId>,
+    session_runtime_state: Option<&vulcan_workbench_model::SessionRuntimeStateEntry>,
+    model_selection: Option<&SubmissionModelSelection>,
+) -> Result<vulcan_provider_adapters::ResolvedPublicAiExecution, String> {
+    // requestTarget follows the explicit submission snapshot, then queued-runtime overrides,
+    // then the persisted session target. Partial targets remain explicit errors.
+    // requestTarget 依次采用显式提交快照、排队运行时覆盖和持久化会话目标；不完整目标保持显式错误。
+    let request_target = if let Some(selection) = model_selection {
+        (
+            Some(selection.provider_id.as_str()),
+            Some(selection.model_id.as_str()),
+            Some(selection.connection_id.as_str()),
+        )
+    } else if agent_runtime.provider_id_override.is_some()
+        || agent_runtime.model_id_override.is_some()
+        || agent_runtime.connection_id_override.is_some()
+    {
+        (
+            agent_runtime.provider_id_override.as_deref(),
+            agent_runtime.model_id_override.as_deref(),
+            agent_runtime.connection_id_override.as_deref(),
+        )
+    } else {
+        (
+            session_runtime_state.and_then(|state| state.active_provider_id.as_deref()),
+            session_runtime_state.and_then(|state| state.active_model_id.as_deref()),
+            session_runtime_state.and_then(|state| state.active_connection_id.as_deref()),
+        )
+    };
+    if let Some(session_id) = session_id {
+        // blueprint installs or restores exactly one session lease and validates persisted identity
+        // before any source file is read or uploaded.
+        // blueprint 在读取或上传任何源文件前安装或恢复唯一会话租约，并校验持久化身份。
+        let blueprint =
+            vulcan_agent_runtime::agent_runtime::provider::resolve_public_ai_provider_blueprint(
+                agent_runtime.public_ai_runtime.as_ref(),
+                session_id.to_string().as_str(),
+                session_runtime_state.and_then(|state| state.provider_route_lease.as_ref()),
+                ReasoningEffortLevel::Off,
+                request_target.0,
+                request_target.1,
+                request_target.2,
+            )?;
+        let selection = blueprint.frozen_selection.ok_or_else(|| {
+            String::from("Media preparation did not freeze a session provider route.")
+        })?;
+        return agent_runtime
+            .public_ai_runtime
+            .resolve_execution_from_frozen_selection(selection)
+            .await;
+    }
+
+    let configuration = agent_runtime.public_ai_runtime.configuration_snapshot()?;
+    match request_target {
+        (Some(provider_id), Some(model_id), Some(connection_id)) => {
+            agent_runtime
+                .public_ai_runtime
+                .resolve_connection_model_execution(
+                    &configuration,
+                    connection_id,
+                    provider_id,
+                    model_id,
+                )
+                .await
+        }
+        (Some(provider_id), Some(model_id), None) => {
+            agent_runtime
+                .public_ai_runtime
+                .resolve_model_execution(&configuration, provider_id, model_id)
+                .await
+        }
+        (None, None, None) => {
+            agent_runtime
+                .public_ai_runtime
+                .resolve_active_execution(&configuration)
+                .await
+        }
+        _ => Err(String::from(
+            "Media preparation requires provider_id and model_id together; connection_id is optional only with both.",
+        )),
+    }
+}
+
 /// Executes the cancellable attachment loop while the outer registration remains visible to RPC callers.
 /// 在外层注册仍对 RPC 调用方可见期间执行可取消的附件循环。
+///
+/// # Parameters
+/// 参数
+/// `app`, `state`, and `client_submission_id` publish ordered progress; `agent_runtime`,
+/// `session_id`, `session_runtime_state`, and `model_selection` resolve the frozen execution;
+/// `attachments` are exact source resources; and `cancellation` is the registered submission token.
+/// `app`、`state` 与 `client_submission_id` 发布有序进度；`agent_runtime`、`session_id`、
+/// `session_runtime_state` 与 `model_selection` 解析冻结执行；`attachments` 是精确源资源；
+/// `cancellation` 是已注册的提交取消令牌。
+///
+/// # Returns
+/// 返回值
+/// Success after every attachment crosses its required preparation path, or the first explicit error.
+/// 全部附件越过其必需准备路径后返回成功；否则返回首个明确错误。
 async fn prepare_submission_media_inner(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     agent_runtime: &AgentRuntimeBridge,
     client_submission_id: &str,
-    conversation_id: Option<&str>,
+    session_id: Option<SessionId>,
+    session_runtime_state: Option<&vulcan_workbench_model::SessionRuntimeStateEntry>,
     model_selection: Option<&SubmissionModelSelection>,
     attachments: &[ConversationAttachment],
     cancellation: &MediaUploadCancellation,
 ) -> Result<(), String> {
-    let configuration = agent_runtime.public_ai_runtime.configuration_snapshot()?;
-    let execution = if let Some(selection) = model_selection {
-        agent_runtime
-            .public_ai_runtime
-            .resolve_connection_model_execution(
-                &configuration,
-                selection.connection_id.as_str(),
-                selection.provider_id.as_str(),
-                selection.model_id.as_str(),
-            )
-            .await?
-    } else {
-        match (
-            agent_runtime.provider_id_override.as_deref(),
-            agent_runtime.model_id_override.as_deref(),
-            agent_runtime.connection_id_override.as_deref(),
-        ) {
-            (Some(provider_id), Some(model_id), Some(connection_id)) => {
-                agent_runtime
-                    .public_ai_runtime
-                    .resolve_connection_model_execution(
-                        &configuration,
-                        connection_id,
-                        provider_id,
-                        model_id,
-                    )
-                    .await?
-            }
-            (Some(provider_id), Some(model_id), None) => {
-                agent_runtime
-                    .public_ai_runtime
-                    .resolve_model_execution(&configuration, provider_id, model_id)
-                    .await?
-            }
-            (None, None, None) => {
-                agent_runtime
-                    .public_ai_runtime
-                    .resolve_active_execution(&configuration)
-                    .await?
-            }
-            _ => {
-                return Err(String::from(
-                    "Media preparation requires provider_id and model_id together; connection_id is optional only with both.",
-                ));
-            }
-        }
-    };
+    let execution = resolve_submission_media_execution(
+        agent_runtime,
+        session_id,
+        session_runtime_state,
+        model_selection,
+    )
+    .await?;
+    // conversationId is derived from the parsed session owner and cannot diverge from lease scope.
+    // conversationId 从已解析会话所有者派生，无法与租约作用域产生偏离。
+    let conversation_id = session_id.map(|session_id| session_id.to_string());
     let provider_id = execution.route.provider.id.clone();
     let model_id = execution.model.id.clone();
     validate_submission_media_support(
@@ -177,28 +397,73 @@ async fn prepare_submission_media_inner(
     for (file_index, attachment) in attachments.iter().enumerate() {
         let media_kind = attachment_kind_text(attachment.kind.clone());
         let total_bytes = attachment.byte_len;
+        let resource_kind = attachment_kind(attachment.kind.clone());
+        let upload_channel_id = execution
+            .client
+            .conversation_media_upload_channel_id(
+                &execution.route,
+                resource_kind,
+                attachment.mime_type.as_str(),
+            )?
+            .unwrap_or_else(|| String::from("host.inline_payload"));
+        // identity is captured once before any source read so progress, telemetry, cache, and
+        // dispatch cannot disagree after a manifest hot replacement.
+        // identity 在任何源读取前只捕获一次，确保 Manifest 热替换后进度、遥测、缓存与分派
+        // 不会产生分歧。
+        let identity = MediaUploadTelemetryIdentity {
+            provider_id: provider_id.clone(),
+            service_entry_id: execution.route.entry.id.clone(),
+            connection_id: execution.route.connection.id.clone(),
+            model_id: model_id.clone(),
+            protocol_profile_id: execution.route.protocol_route.protocol_profile_id.clone(),
+            manifest_revision: execution.route.manifest_revision,
+            manifest_generation: execution.route.manifest_generation,
+            route_revision: execution.route.route_revision.clone(),
+            upload_channel_id,
+            request_profiles: execution
+                .route
+                .request_projection_profiles
+                .iter()
+                .map(|profile| ProviderOperationalProfileRevision {
+                    profile_id: profile.profile_id.clone(),
+                    revision: profile.revision,
+                })
+                .collect(),
+            response_profiles: execution
+                .route
+                .response_projection_profiles
+                .iter()
+                .map(|profile| ProviderOperationalProfileRevision {
+                    profile_id: profile.profile_id.clone(),
+                    revision: profile.revision,
+                })
+                .collect(),
+        };
+        emit_media_operational_telemetry(
+            &identity,
+            ProviderOperationalTelemetryEventName::ProviderUploadStarted,
+            None,
+        );
         emit_media_upload_progress(
             app,
             state,
-            MediaUploadProgressChangedDelta {
-                client_submission_id: client_submission_id.to_string(),
-                conversation_id: conversation_id.map(str::to_string),
-                provider_id: provider_id.clone(),
-                model_id: model_id.clone(),
-                file_name: attachment.file_name.clone(),
-                media_kind: media_kind.to_string(),
+            media_upload_progress_delta(
+                &identity,
+                client_submission_id,
+                conversation_id.as_deref(),
+                attachment.file_name.as_str(),
+                media_kind,
                 file_index,
                 file_count,
-                phase: MediaUploadPhase::Preparing,
-                bytes_sent: 0,
+                MediaUploadPhase::Preparing,
+                0,
                 total_bytes,
-                error: None,
-            },
+                None,
+            ),
         );
         let progress_attachment = attachment.clone();
-        let progress_provider_id = provider_id.clone();
-        let progress_model_id = model_id.clone();
-        let progress_conversation_id = conversation_id.map(str::to_string);
+        let progress_identity = identity.clone();
+        let progress_conversation_id = conversation_id.clone();
         let progress_client_submission_id = client_submission_id.to_string();
         let progress_media_kind = media_kind.to_string();
         let progress_state = state.clone();
@@ -207,20 +472,19 @@ async fn prepare_submission_media_inner(
             emit_media_upload_progress(
                 &progress_app,
                 &progress_state,
-                MediaUploadProgressChangedDelta {
-                    client_submission_id: progress_client_submission_id.clone(),
-                    conversation_id: progress_conversation_id.clone(),
-                    provider_id: progress_provider_id.clone(),
-                    model_id: progress_model_id.clone(),
-                    file_name: progress_attachment.file_name.clone(),
-                    media_kind: progress_media_kind.clone(),
+                media_upload_progress_delta(
+                    &progress_identity,
+                    progress_client_submission_id.as_str(),
+                    progress_conversation_id.as_deref(),
+                    progress_attachment.file_name.as_str(),
+                    progress_media_kind.as_str(),
                     file_index,
                     file_count,
-                    phase: MediaUploadPhase::Uploading,
+                    MediaUploadPhase::Uploading,
                     bytes_sent,
                     total_bytes,
-                    error: None,
-                },
+                    None,
+                ),
             );
         });
         let prepared = execution
@@ -230,7 +494,7 @@ async fn prepare_submission_media_inner(
                 model_id.as_str(),
                 &execution.secret,
                 std::path::Path::new(attachment.local_path.as_str()),
-                attachment_kind(attachment.kind.clone()),
+                resource_kind,
                 attachment.mime_type.as_str(),
                 Some(progress),
                 cancellation,
@@ -239,96 +503,110 @@ async fn prepare_submission_media_inner(
         let prepared = match prepared {
             Ok(prepared) => prepared,
             Err(error) if cancellation.is_cancelled() || error == "media upload cancelled" => {
+                emit_media_operational_telemetry(
+                    &identity,
+                    ProviderOperationalTelemetryEventName::ProviderUploadCancelled,
+                    Some("host_cancelled"),
+                );
                 emit_media_upload_progress(
                     app,
                     state,
-                    MediaUploadProgressChangedDelta {
-                        client_submission_id: client_submission_id.to_string(),
-                        conversation_id: conversation_id.map(str::to_string),
-                        provider_id: provider_id.clone(),
-                        model_id: model_id.clone(),
-                        file_name: attachment.file_name.clone(),
-                        media_kind: media_kind.to_string(),
+                    media_upload_progress_delta(
+                        &identity,
+                        client_submission_id,
+                        conversation_id.as_deref(),
+                        attachment.file_name.as_str(),
+                        media_kind,
                         file_index,
                         file_count,
-                        phase: MediaUploadPhase::Cancelled,
-                        bytes_sent: 0,
+                        MediaUploadPhase::Cancelled,
+                        0,
                         total_bytes,
-                        error: None,
-                    },
+                        None,
+                    ),
                 );
                 return Err(String::from("submission_cancelled: media upload cancelled"));
             }
             Err(error) => {
+                emit_media_operational_telemetry(
+                    &identity,
+                    ProviderOperationalTelemetryEventName::ProviderUploadFailed,
+                    Some("materialization_failed"),
+                );
                 emit_media_upload_progress(
                     app,
                     state,
-                    MediaUploadProgressChangedDelta {
-                        client_submission_id: client_submission_id.to_string(),
-                        conversation_id: conversation_id.map(str::to_string),
-                        provider_id: provider_id.clone(),
-                        model_id: model_id.clone(),
-                        file_name: attachment.file_name.clone(),
-                        media_kind: media_kind.to_string(),
+                    media_upload_progress_delta(
+                        &identity,
+                        client_submission_id,
+                        conversation_id.as_deref(),
+                        attachment.file_name.as_str(),
+                        media_kind,
                         file_index,
                         file_count,
-                        phase: MediaUploadPhase::Failed,
-                        bytes_sent: 0,
+                        MediaUploadPhase::Failed,
+                        0,
                         total_bytes,
-                        error: Some(error.clone()),
-                    },
+                        Some(error.clone()),
+                    ),
                 );
                 return Err(error);
             }
         };
         if cancellation.is_cancelled() {
+            emit_media_operational_telemetry(
+                &identity,
+                ProviderOperationalTelemetryEventName::ProviderUploadCancelled,
+                Some("host_cancelled"),
+            );
             emit_media_upload_progress(
                 app,
                 state,
-                MediaUploadProgressChangedDelta {
-                    client_submission_id: client_submission_id.to_string(),
-                    conversation_id: conversation_id.map(str::to_string),
-                    provider_id: provider_id.clone(),
-                    model_id: model_id.clone(),
-                    file_name: attachment.file_name.clone(),
-                    media_kind: media_kind.to_string(),
+                media_upload_progress_delta(
+                    &identity,
+                    client_submission_id,
+                    conversation_id.as_deref(),
+                    attachment.file_name.as_str(),
+                    media_kind,
                     file_index,
                     file_count,
-                    phase: MediaUploadPhase::Cancelled,
-                    bytes_sent: total_bytes.unwrap_or_default(),
+                    MediaUploadPhase::Cancelled,
+                    total_bytes.unwrap_or_default(),
                     total_bytes,
-                    error: None,
-                },
+                    None,
+                ),
             );
             return Err(String::from("submission_cancelled: media upload cancelled"));
         }
-        if let Some(prepared_url) = prepared {
-            execution.client.remember_prepared_media(
-                &execution.route,
-                model_id.as_str(),
-                std::path::Path::new(attachment.local_path.as_str()),
-                attachment_kind(attachment.kind.clone()),
-                attachment.mime_type.as_str(),
-                prepared_url,
-            );
-        }
+        execution.client.remember_prepared_media(
+            &execution.route,
+            model_id.as_str(),
+            std::path::Path::new(attachment.local_path.as_str()),
+            attachment_kind(attachment.kind.clone()),
+            attachment.mime_type.as_str(),
+            prepared,
+        );
+        emit_media_operational_telemetry(
+            &identity,
+            ProviderOperationalTelemetryEventName::ProviderUploadCompleted,
+            None,
+        );
         emit_media_upload_progress(
             app,
             state,
-            MediaUploadProgressChangedDelta {
-                client_submission_id: client_submission_id.to_string(),
-                conversation_id: conversation_id.map(str::to_string),
-                provider_id: provider_id.clone(),
-                model_id: model_id.clone(),
-                file_name: attachment.file_name.clone(),
-                media_kind: media_kind.to_string(),
+            media_upload_progress_delta(
+                &identity,
+                client_submission_id,
+                conversation_id.as_deref(),
+                attachment.file_name.as_str(),
+                media_kind,
                 file_index,
                 file_count,
-                phase: MediaUploadPhase::Completed,
-                bytes_sent: total_bytes.unwrap_or_default(),
+                MediaUploadPhase::Completed,
+                total_bytes.unwrap_or_default(),
                 total_bytes,
-                error: None,
-            },
+                None,
+            ),
         );
     }
     Ok(())

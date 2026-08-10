@@ -1,0 +1,113 @@
+{
+  "schema_version": "provider-manifest-execution-fixture.v1",
+  "fixture_id": "json-only-image-edit-upload",
+  "base_manifest": "tavily.json",
+  "production_target_refs": [
+    "alibaba::model-studio-cn.qwen-image-2.0-pro.image-edit",
+    "alibaba::model-studio-singapore.qwen-image-2.0-pro.image-edit"
+  ],
+  "tool_target": {
+    "target_id": "public-api.fixture-image-edit",
+    "description": "JSON-only image editing fixture with upload materialization.",
+    "service_entry_id": "public-api",
+    "credential_profile_ids": ["api-key"],
+    "upstream_target_id": "fixture-image-edit-v1",
+    "display_name": "Fixture Image Edit V1",
+    "tool_id": "fixture_image_edit",
+    "capability": "image_edit",
+    "input_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "instruction": {"type": "string", "minLength": 1},
+        "source_paths": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string", "minLength": 1}
+        }
+      },
+      "required": ["instruction", "source_paths"]
+    },
+    "output": {
+      "kind": "resources",
+      "source_path": "/data/images",
+      "normalized_result_path": "resources",
+      "resource_kind": "image",
+      "mime_types": ["image/png"],
+      "resource_decoders": [
+        {
+          "source_path": "/data/images",
+          "encoding": "https_url",
+          "download_host_suffixes": ["example.com"],
+          "resource_kind": "image",
+          "mime_type": "image/png",
+          "output_id_prefix": "image"
+        }
+      ]
+    },
+    "execution": {
+      "endpoint_path": "/fixtures/image-edit",
+      "authentication": "bearer_authorization",
+      "adapter": "generic_json",
+      "execution_kind": "http_json_sync"
+    }
+  },
+  "operation": {
+    "operation_id": "fixture.json-only-image-edit-upload",
+    "operation": "image_edit",
+    "carrier": "provider_tool",
+    "input_resources": ["image"],
+    "output_resources": ["image"],
+    "tool_target_refs": ["public-api.fixture-image-edit"],
+    "request_profile_refs": [],
+    "response_profile_refs": [],
+    "upload_channel_refs": ["fixture.inline-image"],
+    "upload_bindings": [
+      {
+        "source_path": "/source_paths",
+        "target_path": "/source_images",
+        "upload_channel_refs": ["fixture.inline-image"],
+        "mime_type": "image/png",
+        "required": true,
+        "remove_source": true
+      }
+    ],
+    "timeout_ms": 60000,
+    "idempotent": false
+  },
+  "upload_channels": [
+    {
+      "upload_channel_id": "fixture.inline-image",
+      "description": "Fixture inline image Data URL channel.",
+      "primitive": "inline_data_url",
+      "accepted_mime_types": ["image/png"],
+      "max_bytes": 1024,
+      "max_count": 1,
+      "progress_supported": false,
+      "cancellation_supported": false,
+      "reference_encoding": "response_url"
+    }
+  ],
+  "required_execution_primitives": ["http_json_sync"],
+  "required_upload_primitives": ["inline_data_url"],
+  "arguments": {
+    "instruction": "increase contrast",
+    "source_paths": ["data:image/png;base64,iVBORw0KGgo="]
+  },
+  "interactions": [
+    {
+      "method": "POST",
+      "path": "/fixtures/image-edit",
+      "expected_json_body": {
+        "instruction": "increase contrast",
+        "source_images": ["data:image/png;base64,iVBORw0KGgo="]
+      },
+      "response_status": 200,
+      "response_json_body": {
+        "id": "fixture-edit-request",
+        "data": {"images": ["https://example.com/edited.png"]}
+      }
+    }
+  ],
+  "expected_output_kind": "resources"
+}

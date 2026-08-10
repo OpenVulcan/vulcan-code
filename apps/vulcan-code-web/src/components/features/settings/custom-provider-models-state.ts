@@ -2,6 +2,7 @@ import type {
   PublicAiCatalogDiscoveryStatus,
   PublicAiConnection,
   PublicAiCustomModelDefinition,
+  PublicAiCustomModelProtocolPreference,
   PublicAiCustomModelTemplateDecision,
   PublicAiModel,
   PublicAiModelCapabilityOverrides,
@@ -198,6 +199,44 @@ export function shouldBlockManualModelSubmission(
   suggestionLoading: boolean,
 ): boolean {
   return saving || suggestionLoading
+}
+
+// mergeCustomModelProtocolPreferences builds the complete sparse replacement payload expected by
+// the Service API while preserving preferences owned by every untouched model.
+// mergeCustomModelProtocolPreferences 构建 Service API 期望的完整稀疏替换载荷，同时保留
+// 每个未编辑模型持有的偏好。
+//
+// Parameters
+// 参数
+// current is the exact provider snapshot and updates contains the deliberate model edits.
+// current 是精确供应商快照，updates 包含用户明确执行的模型编辑。
+//
+// Returns
+// 返回值
+// Returns a deterministic full-provider list; Auto is represented by absence to keep persistence sparse.
+// 返回确定性的供应商完整列表；Auto 以缺省表示，使持久化保持稀疏。
+export function mergeCustomModelProtocolPreferences(
+  current: ReadonlyMap<string, PublicAiCustomModelProtocolPreference>,
+  updates: ReadonlyArray<{
+    modelId: string
+    preference: PublicAiCustomModelProtocolPreference
+  }>,
+): { modelId: string; preference: PublicAiCustomModelProtocolPreference }[] {
+  // merged owns one exact preference per model before deterministic serialization.
+  // merged 在确定性序列化前持有每个模型的一项精确偏好。
+  const merged = new Map(
+    [...current].filter(([, preference]) => preference.mode !== "auto"),
+  )
+  for (const update of updates) {
+    if (update.preference.mode === "auto") {
+      merged.delete(update.modelId)
+    } else {
+      merged.set(update.modelId, update.preference)
+    }
+  }
+  return [...merged]
+    .sort(([leftModelId], [rightModelId]) => leftModelId.localeCompare(rightModelId))
+    .map(([modelId, preference]) => ({ modelId, preference }))
 }
 
 // connectionModelKey builds the browser-only exact key for one availability record lookup.

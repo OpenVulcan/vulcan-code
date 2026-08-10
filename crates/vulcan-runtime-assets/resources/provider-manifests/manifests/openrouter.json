@@ -1,0 +1,815 @@
+{
+  "schema_version": "vulcan.provider-manifest.v1",
+  "provider_id": "openrouter",
+  "revision": 4,
+  "published_at": "2026-08-06T00:00:00Z",
+  "engine_contract": {
+    "minimum_manifest_engine": 1,
+    "required_protocol_profiles": [
+      "anthropic-messages.v1",
+      "openai-chat-completions.v1",
+      "openai-responses.v1"
+    ],
+    "required_execution_primitives": [],
+    "required_upload_primitives": [],
+    "required_transformers": [
+      "copy_request_field",
+      "delete_if_equals",
+      "delete_json_pointer",
+      "enum_map",
+      "reject_if_all_present",
+      "reject_if_present",
+      "remove_if_empty"
+    ]
+  },
+  "display": {
+    "name": "OpenRouter",
+    "category": "relay",
+    "credential_directory_visibility": "configured_only"
+  },
+  "services": [
+    {
+      "service_entry_id": "public-api",
+      "display_name": "Public API",
+      "kind": "conversation",
+      "base_url": "https://openrouter.ai/api/v1",
+      "credential_profiles": [
+        {
+          "credential_profile_id": "api-key",
+          "display_name": "API Key",
+          "credential_mode": "token",
+          "billing_kind": "provider_managed",
+          "account_usage_query": "open_router_credits",
+          "allowed_usage_scopes": [
+            "interactive_agent",
+            "internal_background",
+            "external_service"
+          ]
+        }
+      ],
+      "default_authentication": "bearer_authorization",
+      "request_headers": {
+        "http-referer": "https://code.openvulcan.com",
+        "x-openrouter-metadata": "enabled",
+        "x-openrouter-title": "Vulcan Code"
+      },
+      "native_inference_bindings": [
+        {
+          "operation": "embedding_create",
+          "binding_id": "openrouter.embeddings.v1",
+          "endpoint_path": "/embeddings",
+          "projection": "routed_compatible"
+        },
+        {
+          "operation": "rerank_documents",
+          "binding_id": "openrouter.rerank.v1",
+          "endpoint_path": "/rerank",
+          "projection": "routed_compatible",
+          "rerank_truncation": "disabled",
+          "response_model_aliases": {
+            "cohere/rerank-4-fast": ["rerank-v4.0-fast"],
+            "cohere/rerank-4-pro": ["rerank-v4.0-pro"]
+          }
+        }
+      ],
+      "request_projector": "routed_compatible",
+      "model_catalog": {
+        "source_policy": "manifest_and_discovery",
+        "discovery_kind": "open_router"
+      },
+      "protocol_routes": [
+        {
+          "protocol_profile_id": "anthropic-messages.v1",
+          "endpoint_path": "/messages",
+          "usage_profile_refs": [],
+          "request_profile_refs": [
+            "openrouter.anthropic.reasoning.v1"
+          ],
+          "response_profile_refs": [],
+          "provider_request_id_headers": [],
+          "verified": true
+        },
+        {
+          "protocol_profile_id": "openai-chat-completions.v1",
+          "endpoint_path": "/chat/completions",
+          "usage_profile_refs": [
+            "openrouter.chat.body.v1",
+            "openrouter.chat.sse.usage.v1"
+          ],
+          "request_profile_refs": [
+            "openrouter.chat.reasoning.v1"
+          ],
+          "input_resource_constraints": [
+            {
+              "resource_kind": "audio",
+              "reference_policy": "local_only"
+            },
+            {
+              "resource_kind": "file",
+              "accepted_mime_types": [
+                "application/pdf"
+              ]
+            }
+          ],
+          "response_profile_refs": [],
+          "provider_request_id_headers": [],
+          "verified": true
+        },
+        {
+          "protocol_profile_id": "openai-responses.v1",
+          "endpoint_path": "/responses",
+          "usage_profile_refs": [],
+          "request_profile_refs": [
+            "openrouter.responses.reasoning.v1"
+          ],
+          "response_profile_refs": [],
+          "provider_request_id_headers": [],
+          "verified": true
+        }
+      ]
+    }
+  ],
+  "model_defaults": {
+    "default_enabled": false,
+    "catalog_membership_policy": "declared_and_discovery",
+    "unknown_model_policy": "declared_rule_required",
+    "supported_protocols": [
+      "anthropic-messages.v1",
+      "openai-chat-completions.v1",
+      "openai-responses.v1"
+    ],
+    "selected_protocol": "anthropic-messages.v1",
+    "default_usage_profile_refs": [],
+    "default_request_profile_refs": [],
+    "default_response_profile_refs": [],
+    "default_operation_refs": []
+  },
+  "model_rules": [
+    {
+      "rule_id": "featured-openai-gpt-5.6-sol",
+      "scope": {
+        "service_entry_ids": [],
+        "credential_profile_ids": []
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "openai/gpt-5.6-sol"
+      },
+      "supported_protocols": [
+        "openai-responses.v1",
+        "anthropic-messages.v1",
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-responses.v1",
+      "model_parameters": [],
+      "default_enabled": true
+    },
+    {
+      "rule_id": "featured-openai-gpt-5.6-terra",
+      "scope": {
+        "service_entry_ids": [],
+        "credential_profile_ids": []
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "openai/gpt-5.6-terra"
+      },
+      "supported_protocols": [
+        "openai-responses.v1",
+        "anthropic-messages.v1",
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-responses.v1",
+      "model_parameters": [],
+      "default_enabled": true
+    },
+    {
+      "rule_id": "featured-anthropic-claude-sonnet-5",
+      "scope": {
+        "service_entry_ids": [],
+        "credential_profile_ids": []
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "anthropic/claude-sonnet-5"
+      },
+      "supported_protocols": [
+        "openai-responses.v1",
+        "anthropic-messages.v1",
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "anthropic-messages.v1",
+      "model_parameters": [],
+      "default_enabled": true
+    },
+    {
+      "rule_id": "featured-anthropic-claude-opus-4.8",
+      "scope": {
+        "service_entry_ids": [],
+        "credential_profile_ids": []
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "anthropic/claude-opus-4.8"
+      },
+      "supported_protocols": [
+        "openai-responses.v1",
+        "anthropic-messages.v1",
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "anthropic-messages.v1",
+      "model_parameters": [],
+      "default_enabled": true
+    },
+    {
+      "rule_id": "featured-google-gemini-3.1-pro-preview",
+      "scope": {
+        "service_entry_ids": [],
+        "credential_profile_ids": []
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "google/gemini-3.1-pro-preview"
+      },
+      "supported_protocols": [
+        "openai-responses.v1",
+        "anthropic-messages.v1",
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-responses.v1",
+      "model_parameters": [],
+      "default_enabled": true
+    },
+    {
+      "rule_id": "featured-google-gemini-3.5-flash",
+      "scope": {
+        "service_entry_ids": [],
+        "credential_profile_ids": []
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "google/gemini-3.5-flash"
+      },
+      "supported_protocols": [
+        "openai-responses.v1",
+        "anthropic-messages.v1",
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-responses.v1",
+      "model_parameters": [],
+      "default_enabled": true
+    },
+    {
+      "rule_id": "featured-deepseek-deepseek-v4-pro",
+      "scope": {
+        "service_entry_ids": [],
+        "credential_profile_ids": []
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "deepseek/deepseek-v4-pro"
+      },
+      "supported_protocols": [
+        "openai-responses.v1",
+        "anthropic-messages.v1",
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "anthropic-messages.v1",
+      "model_parameters": [],
+      "default_enabled": true
+    },
+    {
+      "rule_id": "featured-deepseek-deepseek-v4-flash",
+      "scope": {
+        "service_entry_ids": [],
+        "credential_profile_ids": []
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "deepseek/deepseek-v4-flash"
+      },
+      "supported_protocols": [
+        "openai-responses.v1",
+        "anthropic-messages.v1",
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "anthropic-messages.v1",
+      "model_parameters": [],
+      "default_enabled": true
+    },
+    {
+      "rule_id": "featured-qwen-qwen3.6-plus",
+      "scope": {
+        "service_entry_ids": [],
+        "credential_profile_ids": []
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "qwen/qwen3.6-plus"
+      },
+      "supported_protocols": [
+        "openai-responses.v1",
+        "anthropic-messages.v1",
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-responses.v1",
+      "model_parameters": [],
+      "default_enabled": true
+    },
+    {
+      "rule_id": "featured-z-ai-glm-5.2",
+      "scope": {
+        "service_entry_ids": [],
+        "credential_profile_ids": []
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "z-ai/glm-5.2"
+      },
+      "supported_protocols": [
+        "openai-responses.v1",
+        "anthropic-messages.v1",
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-responses.v1",
+      "model_parameters": [],
+      "default_enabled": true
+    },
+    {
+      "rule_id": "featured-minimax-minimax-m3",
+      "scope": {
+        "service_entry_ids": [],
+        "credential_profile_ids": []
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "minimax/minimax-m3"
+      },
+      "supported_protocols": [
+        "openai-responses.v1",
+        "anthropic-messages.v1",
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-responses.v1",
+      "model_parameters": [],
+      "default_enabled": true
+    },
+    {
+      "rule_id": "featured-openai-text-embedding-3-small",
+      "scope": {
+        "service_entry_ids": [],
+        "credential_profile_ids": []
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "openai/text-embedding-3-small"
+      },
+      "supported_protocols": [
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-chat-completions.v1",
+      "model_parameters": [],
+      "default_enabled": true
+    },
+    {
+      "rule_id": "featured-cohere-rerank-v3.5",
+      "scope": {
+        "service_entry_ids": [],
+        "credential_profile_ids": []
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "cohere/rerank-v3.5"
+      },
+      "supported_protocols": [
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-chat-completions.v1",
+      "model_parameters": [],
+      "default_enabled": true
+    },
+    {
+      "rule_id": "featured-openai-gpt-image-1",
+      "scope": {
+        "service_entry_ids": [],
+        "credential_profile_ids": []
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "openai/gpt-image-1"
+      },
+      "supported_protocols": [
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-chat-completions.v1",
+      "model_parameters": [],
+      "default_enabled": true
+    },
+    {
+      "rule_id": "featured-google-veo-3.1",
+      "scope": {
+        "service_entry_ids": [],
+        "credential_profile_ids": []
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "google/veo-3.1"
+      },
+      "supported_protocols": [
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-chat-completions.v1",
+      "model_parameters": [],
+      "default_enabled": true
+    },
+    {
+      "rule_id": "featured-minimax-speech-2.8-turbo",
+      "scope": {
+        "service_entry_ids": [],
+        "credential_profile_ids": []
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "minimax/speech-2.8-turbo"
+      },
+      "supported_protocols": [
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-chat-completions.v1",
+      "model_parameters": [],
+      "default_enabled": true
+    },
+    {
+      "rule_id": "featured-openai-whisper-large-v3-turbo",
+      "scope": {
+        "service_entry_ids": [],
+        "credential_profile_ids": []
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "openai/whisper-large-v3-turbo"
+      },
+      "supported_protocols": [
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-chat-completions.v1",
+      "model_parameters": [],
+      "default_enabled": true
+    }
+  ],
+  "usage_profiles": [
+    {
+      "profile_id": "openrouter.chat.body.v1",
+      "description": "Migrated legacy provider usage extraction (stage 7)",
+      "payload": {
+        "profile_id": "openrouter.chat.body.v1",
+        "revision": 1,
+        "record_kind": "json_body",
+        "update_kind": "final",
+        "required_pointer": "/usage",
+        "bindings": [
+          {
+            "field": "input_tokens",
+            "pointers": [
+              "/usage/prompt_tokens"
+            ],
+            "encoding": "unsigned_integer"
+          },
+          {
+            "field": "cache_read_tokens",
+            "pointers": [
+              "/usage/prompt_tokens_details/cached_tokens"
+            ],
+            "encoding": "unsigned_integer"
+          },
+          {
+            "field": "output_tokens",
+            "pointers": [
+              "/usage/completion_tokens"
+            ],
+            "encoding": "unsigned_integer"
+          },
+          {
+            "field": "reasoning_tokens",
+            "pointers": [
+              "/usage/completion_tokens_details/reasoning_tokens"
+            ],
+            "encoding": "unsigned_integer"
+          },
+          {
+            "field": "total_tokens",
+            "pointers": [
+              "/usage/total_tokens"
+            ],
+            "encoding": "unsigned_integer"
+          },
+          {
+            "field": "response_model",
+            "pointers": [
+              "/model"
+            ],
+            "encoding": "string"
+          },
+          {
+            "field": "response_id",
+            "pointers": [
+              "/id"
+            ],
+            "encoding": "string"
+          },
+          {
+            "field": "reported_cost_usd",
+            "pointers": [
+              "/usage/cost"
+            ],
+            "encoding": "decimal"
+          }
+        ],
+        "derivations": [
+          "uncached_input_from_input_minus_cache_read"
+        ]
+      }
+    },
+    {
+      "profile_id": "openrouter.chat.sse.usage.v1",
+      "description": "Migrated legacy provider usage extraction (stage 7)",
+      "payload": {
+        "profile_id": "openrouter.chat.sse.usage.v1",
+        "revision": 1,
+        "record_kind": "sse_event",
+        "update_kind": "final",
+        "required_pointer": "/usage",
+        "bindings": [
+          {
+            "field": "input_tokens",
+            "pointers": [
+              "/usage/prompt_tokens"
+            ],
+            "encoding": "unsigned_integer"
+          },
+          {
+            "field": "cache_read_tokens",
+            "pointers": [
+              "/usage/prompt_tokens_details/cached_tokens"
+            ],
+            "encoding": "unsigned_integer"
+          },
+          {
+            "field": "output_tokens",
+            "pointers": [
+              "/usage/completion_tokens"
+            ],
+            "encoding": "unsigned_integer"
+          },
+          {
+            "field": "reasoning_tokens",
+            "pointers": [
+              "/usage/completion_tokens_details/reasoning_tokens"
+            ],
+            "encoding": "unsigned_integer"
+          },
+          {
+            "field": "total_tokens",
+            "pointers": [
+              "/usage/total_tokens"
+            ],
+            "encoding": "unsigned_integer"
+          },
+          {
+            "field": "response_model",
+            "pointers": [
+              "/model"
+            ],
+            "encoding": "string"
+          },
+          {
+            "field": "response_id",
+            "pointers": [
+              "/id"
+            ],
+            "encoding": "string"
+          },
+          {
+            "field": "reported_cost_usd",
+            "pointers": [
+              "/usage/cost"
+            ],
+            "encoding": "decimal"
+          }
+        ],
+        "derivations": [
+          "uncached_input_from_input_minus_cache_read"
+        ]
+      }
+    }
+  ],
+  "request_profiles": [
+    {
+      "profile_id": "openrouter.chat.reasoning.v1",
+      "description": "OpenRouter Chat reasoning projection",
+      "payload": {
+        "profile_id": "openrouter.chat.reasoning.v1",
+        "revision": 2,
+        "steps": [
+          {
+            "op": "reject_if_all_present",
+            "conditions": [
+              {
+                "source": "request_field",
+                "source_path": "@reasoning_effort"
+              },
+              {
+                "source": "request_field",
+                "source_path": "@model_parameters.reasoning.max_tokens"
+              }
+            ],
+            "message": "OpenRouter reasoning effort and reasoning max_tokens are mutually exclusive."
+          },
+          {
+            "op": "reject_if_present",
+            "source": "request_field",
+            "source_path": "@prompt_cache",
+            "message": "OpenRouter explicit prompt caching requires a verified model-endpoint capability."
+          },
+          {
+            "op": "copy_request_field",
+            "path": "/reasoning/max_tokens",
+            "field": "model_parameters.reasoning.max_tokens"
+          },
+          {
+            "op": "delete_json_pointer",
+            "path": "/reasoning_effort"
+          },
+          {
+            "op": "copy_request_field",
+            "path": "/reasoning/effort",
+            "field": "reasoning_effort"
+          },
+          {
+            "op": "delete_if_equals",
+            "path": "/reasoning/effort",
+            "source": "request_field",
+            "source_path": "@reasoning_effort",
+            "equals": "adaptive"
+          },
+          {
+            "op": "enum_map",
+            "path": "/reasoning/enabled",
+            "source": "request_field",
+            "source_path": "@reasoning_effort",
+            "mapping": {
+              "adaptive": true
+            },
+            "unmatched": "remove",
+            "default": null
+          }
+        ]
+      }
+    },
+    {
+      "profile_id": "openrouter.anthropic.reasoning.v1",
+      "description": "OpenRouter Anthropic reasoning projection",
+      "payload": {
+        "profile_id": "openrouter.anthropic.reasoning.v1",
+        "revision": 2,
+        "steps": [
+          {
+            "op": "reject_if_all_present",
+            "conditions": [
+              {
+                "source": "request_field",
+                "source_path": "@reasoning_effort"
+              },
+              {
+                "source": "request_field",
+                "source_path": "@model_parameters.reasoning.max_tokens"
+              }
+            ],
+            "message": "OpenRouter reasoning effort and reasoning max_tokens are mutually exclusive."
+          },
+          {
+            "op": "reject_if_present",
+            "source": "request_field",
+            "source_path": "@prompt_cache",
+            "message": "OpenRouter explicit prompt caching requires a verified model-endpoint capability."
+          },
+          {
+            "op": "copy_request_field",
+            "path": "/reasoning/max_tokens",
+            "field": "model_parameters.reasoning.max_tokens"
+          },
+          {
+            "op": "copy_request_field",
+            "path": "/output_config/effort",
+            "field": "reasoning_effort"
+          },
+          {
+            "op": "delete_if_equals",
+            "path": "/output_config/effort",
+            "source": "request_field",
+            "source_path": "@reasoning_effort",
+            "equals": "none"
+          },
+          {
+            "op": "remove_if_empty",
+            "path": "/output_config"
+          },
+          {
+            "op": "copy_request_field",
+            "path": "/reasoning/effort",
+            "field": "reasoning_effort"
+          },
+          {
+            "op": "delete_if_equals",
+            "path": "/reasoning/effort",
+            "source": "request_field",
+            "source_path": "@reasoning_effort",
+            "equals": "adaptive"
+          },
+          {
+            "op": "enum_map",
+            "path": "/reasoning/enabled",
+            "source": "request_field",
+            "source_path": "@reasoning_effort",
+            "mapping": {
+              "adaptive": true
+            },
+            "unmatched": "remove",
+            "default": null
+          }
+        ]
+      }
+    },
+    {
+      "profile_id": "openrouter.responses.reasoning.v1",
+      "description": "OpenRouter Responses reasoning projection",
+      "payload": {
+        "profile_id": "openrouter.responses.reasoning.v1",
+        "revision": 2,
+        "steps": [
+          {
+            "op": "reject_if_all_present",
+            "conditions": [
+              {
+                "source": "request_field",
+                "source_path": "@reasoning_effort"
+              },
+              {
+                "source": "request_field",
+                "source_path": "@model_parameters.reasoning.max_tokens"
+              }
+            ],
+            "message": "OpenRouter reasoning effort and reasoning max_tokens are mutually exclusive."
+          },
+          {
+            "op": "reject_if_present",
+            "source": "request_field",
+            "source_path": "@prompt_cache",
+            "message": "OpenRouter explicit prompt caching requires a verified model-endpoint capability."
+          },
+          {
+            "op": "copy_request_field",
+            "path": "/reasoning/max_tokens",
+            "field": "model_parameters.reasoning.max_tokens"
+          },
+          {
+            "op": "copy_request_field",
+            "path": "/reasoning/effort",
+            "field": "reasoning_effort"
+          },
+          {
+            "op": "delete_if_equals",
+            "path": "/reasoning/effort",
+            "source": "request_field",
+            "source_path": "@reasoning_effort",
+            "equals": "adaptive"
+          },
+          {
+            "op": "enum_map",
+            "path": "/reasoning/enabled",
+            "source": "request_field",
+            "source_path": "@reasoning_effort",
+            "mapping": {
+              "adaptive": true
+            },
+            "unmatched": "remove",
+            "default": null
+          }
+        ]
+      }
+    }
+  ],
+  "response_profiles": [],
+  "upload_channels": [],
+  "operations": [],
+  "tool_targets": [],
+  "provenance": {
+    "status": "verified",
+    "sources": [
+      {
+        "url": "https://openrouter.ai/docs/llms.txt",
+        "note": "Curated featured model menu maintained by Vulcan; upstream catalog is not authoritative for the featured list. Protocol assignment is platform-level (OpenRouter conversion layer) with vendor-default selected protocol."
+      }
+    ]
+  }
+}

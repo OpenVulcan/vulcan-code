@@ -678,8 +678,17 @@ const handleForkConversation = React.useCallback(async (conversationId: string, 
 // handleSelectWorkbenchReasoningEffort persists one reasoning-effort choice through the shared service router.
 // handleSelectWorkbenchReasoningEffort 通过共享服务路由持久化单个思考档位选择。
 const handleSelectWorkbenchReasoningEffort = React.useCallback(async (effort: string): Promise<boolean> => {
+  // conversationId freezes the exact owner in this callback instance. A queued write keeps this
+  // closure even if the user navigates before the former write settles.
+  // conversationId 在本回调实例中冻结精确归属。即使用户在前一写入结束前切换会话，排队写入
+  // 仍会保留该闭包。
+  const conversationId = selectedDraftConversation ? null : selectedConversationId;
+  if (!conversationId) {
+    toast.error("Reasoning effort can only be persisted for a materialized conversation.");
+    return false;
+  }
   try {
-    const snapshot = await selectWorkbenchReasoningEffort(effort);
+    const snapshot = await selectWorkbenchReasoningEffort(effort, conversationId);
     if (snapshot) {
       setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
     }
@@ -688,7 +697,12 @@ const handleSelectWorkbenchReasoningEffort = React.useCallback(async (effort: st
     toast.error(nextError instanceof Error ? nextError.message : String(nextError));
     return false;
   }
-}, [mergeWorkbenchWithLocalCaches, setWorkbenchState]);
+}, [
+  mergeWorkbenchWithLocalCaches,
+  selectedConversationId,
+  selectedDraftConversation,
+  setWorkbenchState,
+]);
 
 // handleSelectWorkbenchThinkingDisplayMode persists one thinking display preference through the shared service router.
 // handleSelectWorkbenchThinkingDisplayMode 通过共享服务路由持久化单个思考展示偏好。

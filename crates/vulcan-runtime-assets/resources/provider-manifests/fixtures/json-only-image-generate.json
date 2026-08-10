@@ -1,0 +1,136 @@
+{
+  "schema_version": "provider-manifest-execution-fixture.v1",
+  "fixture_id": "json-only-image-generate",
+  "base_manifest": "tavily.json",
+  "production_target_refs": [
+    "alibaba::model-studio-singapore.qwen-image-2.0-pro.image-generate",
+    "alibaba::token-plan-team-cn.qwen-image-2.0.image-generate",
+    "alibaba::token-plan-team-cn.qwen-image-2.0-pro.image-generate",
+    "alibaba::token-plan-team-global.qwen-image-2.0.image-generate",
+    "alibaba::token-plan-team-global.qwen-image-2.0-pro.image-generate",
+    "alibaba::token-plan-personal-cn.wan2.7-image.image-generate",
+    "alibaba::token-plan-personal-cn.wan2.7-image-pro.image-generate",
+    "alibaba::token-plan-personal-global.wan2.7-image.image-generate",
+    "alibaba::token-plan-personal-global.wan2.7-image-pro.image-generate",
+    "alibaba::token-plan-team-cn.wan2.7-image.image-generate",
+    "alibaba::token-plan-team-cn.wan2.7-image-pro.image-generate",
+    "alibaba::token-plan-team-global.wan2.7-image.image-generate",
+    "alibaba::token-plan-team-global.wan2.7-image-pro.image-generate",
+    "alibaba::template.alibaba.model-studio-cn.qwen-image-generate.v1.9a98962304f77417deab99879f61862085b7720e3b4d91af22583f3625c160ed"
+  ],
+  "tool_target": {
+    "target_id": "public-api.fixture-image-generate",
+    "description": "JSON-only synchronous image generation fixture.",
+    "service_entry_id": "public-api",
+    "credential_profile_ids": ["api-key"],
+    "upstream_target_id": "fixture-image-v1",
+    "display_name": "Fixture Image V1",
+    "tool_id": "fixture_image_generate",
+    "capability": "image_generate",
+    "input_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "prompt": {"type": "string", "minLength": 1}
+      },
+      "required": ["prompt"]
+    },
+    "output": {
+      "kind": "resources",
+      "source_path": "/data/images",
+      "normalized_result_path": "resources",
+      "resource_kind": "image",
+      "mime_types": ["image/png"],
+      "resource_decoders": [
+        {
+          "source_path": "/data/images",
+          "encoding": "https_url",
+          "download_host_suffixes": ["example.com"],
+          "resource_kind": "image",
+          "mime_type": "image/png",
+          "output_id_prefix": "image"
+        }
+      ]
+    },
+    "execution": {
+      "endpoint_path": "/fixtures/image-generate",
+      "authentication": "bearer_authorization",
+      "adapter": "generic_json",
+      "execution_kind": "http_json_sync"
+    }
+  },
+  "operation": {
+    "operation_id": "fixture.json-only-image-generate",
+    "operation": "image_generate",
+    "carrier": "provider_tool",
+    "input_resources": [],
+    "output_resources": ["image"],
+    "tool_target_refs": ["public-api.fixture-image-generate"],
+    "request_profile_refs": ["fixture.image.request.v1"],
+    "response_profile_refs": ["fixture.image.response.v1"],
+    "upload_channel_refs": [],
+    "upload_bindings": [],
+    "timeout_ms": 60000,
+    "idempotent": false
+  },
+  "upload_channels": [],
+  "request_profiles": [
+    {
+      "profile_id": "fixture.image.request.v1",
+      "description": "Map canonical image arguments into the fixture provider wire schema.",
+      "payload": {
+        "profile_id": "fixture.image.request.v1",
+        "revision": 1,
+        "steps": [
+          {
+            "op": "rename_json_pointer",
+            "from": "/prompt",
+            "to": "/payload/prompt"
+          },
+          {
+            "op": "set_default_if_missing",
+            "path": "/parameters/quality",
+            "value": "standard"
+          }
+        ]
+      }
+    }
+  ],
+  "response_profiles": [
+    {
+      "profile_id": "fixture.image.response.v1",
+      "description": "Map the fixture provider resource envelope into the output contract.",
+      "payload": {
+        "profile_id": "fixture.image.response.v1",
+        "revision": 1,
+        "steps": [
+          {
+            "op": "rename_json_pointer",
+            "from": "/result/assets",
+            "to": "/data/images"
+          }
+        ]
+      }
+    }
+  ],
+  "required_execution_primitives": ["http_json_sync"],
+  "required_upload_primitives": [],
+  "required_transformers": ["rename_json_pointer", "set_default_if_missing"],
+  "arguments": {"prompt": "draw a mountain"},
+  "interactions": [
+    {
+      "method": "POST",
+      "path": "/fixtures/image-generate",
+      "expected_json_body": {
+        "payload": {"prompt": "draw a mountain"},
+        "parameters": {"quality": "standard"}
+      },
+      "response_status": 200,
+      "response_json_body": {
+        "request_id": "fixture-image-request",
+        "result": {"assets": ["https://example.com/fixture.png"]}
+      }
+    }
+  ],
+  "expected_output_kind": "resources"
+}

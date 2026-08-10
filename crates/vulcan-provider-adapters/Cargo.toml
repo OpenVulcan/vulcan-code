@@ -6,6 +6,11 @@ authors.workspace = true
 license.workspace = true
 description = "Strongly typed provider connection graphs and request projectors for Vulcan AI."
 
+[features]
+# Exposes dependency-injection seams used only by cross-crate transport E2E tests.
+# 仅暴露跨 crate 传输 E2E 测试使用的依赖注入接缝。
+test-support = []
+
 [dependencies]
 async-trait.workspace = true
 async-stream = "0.3.6"
@@ -14,19 +19,25 @@ futures-util = "0.3.31"
 reqwest = { workspace = true, features = ["stream", "multipart", "gzip", "brotli", "deflate", "zstd"] }
 rustls.workspace = true
 httpdate.workspace = true
+jsonschema.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 rust_decimal.workspace = true
 sha2.workspace = true
+hex = "0.4"
 tokio.workspace = true
 tokio-util.workspace = true
+time = { version = "0.3.44", features = ["parsing"] }
 uuid.workspace = true
 vulcan-ai-contract.workspace = true
 vulcan-context.workspace = true
 vulcan-llm-core.workspace = true
+vulcan-runtime-assets.workspace = true
 
 [dev-dependencies]
+tempfile = "3.27.0"
 tokio-tungstenite.workspace = true
+vulcan-llm-core = { workspace = true, features = ["provider-migration-oracles"] }
 
 [lints]
 workspace = true

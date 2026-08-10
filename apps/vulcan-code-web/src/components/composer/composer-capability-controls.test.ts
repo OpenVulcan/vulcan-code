@@ -23,6 +23,7 @@ function settingsFixture(): PublicAiSettingsSnapshot {
     modelOverrides: {},
     modelOverrideRecords: [],
     modelAccessRecords: [],
+    providerToolTemplateModels: [],
     connectionModelAccessPolicyRecords: [],
     customModels: {},
     customProviderSystemModelDefaults: {

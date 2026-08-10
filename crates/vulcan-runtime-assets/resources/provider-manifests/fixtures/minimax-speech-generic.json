@@ -1,0 +1,222 @@
+{
+  "schema_version": "provider-manifest-execution-fixture.v1",
+  "fixture_id": "minimax-speech-generic",
+  "base_manifest": "minimax.json",
+  "production_target_refs": [
+    "minimax::global.speech-2.8-hd",
+    "minimax::global.speech-2.8-turbo",
+    "minimax::global.speech-2.6",
+    "minimax::global.speech-02",
+    "minimax::cn.speech-2.8-hd",
+    "minimax::cn.speech-2.8-turbo",
+    "minimax::cn.speech-2.6",
+    "minimax::cn.speech-02",
+    "alibaba::model-studio-cn.cosyvoice-v2.speech-synthesize",
+    "alibaba::model-studio-cn.cosyvoice-v3-flash.speech-synthesize",
+    "alibaba::model-studio-cn.cosyvoice-v3-plus.speech-synthesize",
+    "alibaba::model-studio-cn.cosyvoice-v3.5-flash.speech-synthesize",
+    "alibaba::model-studio-cn.cosyvoice-v3.5-plus.speech-synthesize",
+    "alibaba::model-studio-cn.qwen3-tts-flash.speech-synthesize",
+    "alibaba::model-studio-cn.qwen3-tts-instruct-flash.speech-synthesize",
+    "alibaba::model-studio-singapore.cosyvoice-v3-flash.speech-synthesize",
+    "alibaba::model-studio-singapore.cosyvoice-v3-plus.speech-synthesize",
+    "alibaba::model-studio-singapore.qwen3-tts-flash.speech-synthesize",
+    "alibaba::model-studio-singapore.qwen3-tts-instruct-flash.speech-synthesize"
+  ],
+  "tool_target": {
+    "target_id": "global:fixture-speech-generic",
+    "description": "Generic MiniMax speech wire-contract fixture.",
+    "service_entry_id": "global",
+    "credential_profile_ids": ["payg-api-key"],
+    "upstream_target_id": "speech-2.8-hd",
+    "display_name": "MiniMax Speech Generic Fixture",
+    "tool_id": "fixture_minimax_speech_generic",
+    "capability": "speech_synthesize",
+    "input_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {"required": ["bitrate"]},
+          "then": {"properties": {"output_format": {"const": "mp3"}}}
+        }
+      ],
+      "properties": {
+        "text": {"type": "string", "minLength": 1, "maxLength": 9999},
+        "voice_id": {"type": "string", "minLength": 1},
+        "language": {"type": "string"},
+        "speed": {"type": "number", "minimum": 0.5, "maximum": 2, "default": 1.0},
+        "volume": {"type": "number", "exclusiveMinimum": 0, "maximum": 10, "default": 1.0},
+        "pitch": {"type": "integer", "minimum": -12, "maximum": 12, "default": 0},
+        "sample_rate": {"type": "integer"},
+        "bitrate": {"type": "integer"},
+        "channels": {"type": "integer", "enum": [1, 2], "default": 1},
+        "output_format": {"type": "string", "enum": ["mp3", "wav", "pcm", "flac", "pcmu_raw", "pcmu_wav", "opus"], "default": "mp3"},
+        "timestamps": {"type": "boolean", "default": false},
+        "pronunciations": {"type": "array", "items": {"type": "string", "minLength": 1}}
+      },
+      "required": ["text", "voice_id"]
+    },
+    "output": {
+      "kind": "resources",
+      "source_path": "/data/audio",
+      "normalized_result_path": "resources",
+      "resource_kind": "audio",
+      "mime_types": ["audio/mpeg", "audio/wav", "audio/pcm", "audio/flac", "audio/basic", "audio/opus", "application/json"],
+      "resource_decoders": [
+        {
+          "source_path": "/data/audio",
+          "encoding": "hex",
+          "resource_kind": "audio",
+          "mime_type_request_path": "/output_format",
+          "mime_types_by_request_value": {
+            "mp3": "audio/mpeg",
+            "wav": "audio/wav",
+            "pcm": "audio/pcm",
+            "flac": "audio/flac",
+            "pcmu_raw": "audio/basic",
+            "pcmu_wav": "audio/wav",
+            "opus": "audio/opus"
+          },
+          "optional": false,
+          "max_bytes": 10000000,
+          "output_id_prefix": "audio"
+        },
+        {
+          "source_path": "/data/subtitle_file",
+          "encoding": "public_http_url",
+          "download_host_suffixes": ["example.com"],
+          "resource_kind": "file",
+          "mime_type": "application/json",
+          "optional": true,
+          "output_id_prefix": "subtitle"
+        }
+      ]
+    },
+    "execution": {
+      "endpoint_path": "/v1/t2a_v2",
+      "authentication": "bearer_authorization",
+      "adapter": "generic_json",
+      "execution_kind": "http_json_sync"
+    }
+  },
+  "operation": {
+    "operation_id": "fixture.minimax-speech-generic",
+    "operation": "speech_synthesize",
+    "carrier": "provider_tool",
+    "input_resources": [],
+    "output_resources": ["audio"],
+    "tool_target_refs": ["global:fixture-speech-generic"],
+    "request_profile_refs": ["fixture.minimax.speech.request.v1"],
+    "response_profile_refs": ["fixture.minimax.speech.response.v1"],
+    "upload_channel_refs": [],
+    "upload_bindings": [],
+    "timeout_ms": 60000,
+    "idempotent": false
+  },
+  "upload_channels": [],
+  "request_profiles": [
+    {
+      "profile_id": "fixture.minimax.speech.request.v1",
+      "description": "Build the MiniMax speech wire body.",
+      "payload": {
+        "profile_id": "fixture.minimax.speech.request.v1",
+        "revision": 1,
+        "steps": [
+          {
+            "op": "rebuild_json_template",
+            "template": {
+              "model": {"$vulcan_model_id": true},
+              "text": {"$vulcan_ref": {"path": "/text"}},
+              "stream": false,
+              "output_format": "hex",
+              "voice_setting": {
+                "voice_id": {"$vulcan_ref": {"path": "/voice_id"}},
+                "speed": {"$vulcan_ref": {"path": "/speed"}},
+                "vol": {"$vulcan_ref": {"path": "/volume"}},
+                "pitch": {"$vulcan_ref": {"path": "/pitch"}}
+              },
+              "audio_setting": {
+                "sample_rate": {
+                  "$vulcan_coalesce": [
+                    {"$vulcan_ref": {"path": "/sample_rate", "optional": true}},
+                    {"$vulcan_enum": {"path": "/output_format", "mapping": {"opus": 24000, "pcmu_raw": 8000, "pcmu_wav": 8000}, "default": 32000}}
+                  ]
+                },
+                "format": {"$vulcan_ref": {"path": "/output_format"}},
+                "channel": {"$vulcan_ref": {"path": "/channels"}},
+                "bitrate": {
+                  "$vulcan_if_equals": {
+                    "path": "/output_format",
+                    "equals": "mp3",
+                    "then": {"$vulcan_coalesce": [{"$vulcan_ref": {"path": "/bitrate", "optional": true}}, 128000]},
+                    "otherwise": {"$vulcan_ref": {"path": "/bitrate", "optional": true}}
+                  }
+                }
+              },
+              "language_boost": {"$vulcan_ref": {"path": "/language", "optional": true}},
+              "subtitle_enable": {"$vulcan_if_equals": {"path": "/timestamps", "equals": true, "then": true}},
+              "pronunciation_dict": {"tone": {"$vulcan_ref": {"path": "/pronunciations", "optional": true}}}
+            }
+          },
+          {"op": "remove_if_empty", "path": "/pronunciation_dict/tone"},
+          {"op": "remove_if_empty", "path": "/pronunciation_dict"}
+        ]
+      }
+    }
+  ],
+  "response_profiles": [
+    {
+      "profile_id": "fixture.minimax.speech.response.v1",
+      "description": "Normalize MiniMax speech application status.",
+      "payload": {
+        "profile_id": "fixture.minimax.speech.response.v1",
+        "revision": 1,
+        "steps": [
+          {
+            "op": "rebuild_json_template",
+            "template": {
+              "$vulcan_if_equals": {
+                "path": "/base_resp/status_code",
+                "equals": 0,
+                "then": {
+                  "$vulcan_if_equals": {
+                    "path": "/data/status",
+                    "equals": 2,
+                    "then": {"data": {"$vulcan_ref": {"path": "/data"}}},
+                    "otherwise": {"error": {"code": "incomplete_result", "message": "incomplete speech"}}
+                  }
+                },
+                "otherwise": {"error": {"code": {"$vulcan_ref": {"path": "/base_resp/status_code"}}, "message": {"$vulcan_ref": {"path": "/base_resp/status_msg"}}}}
+              }
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "required_execution_primitives": ["http_json_sync"],
+  "required_upload_primitives": [],
+  "required_transformers": ["rebuild_json_template", "remove_if_empty"],
+  "arguments": {"text": "hello", "voice_id": "voice-1"},
+  "interactions": [
+    {
+      "method": "POST",
+      "path": "/v1/t2a_v2",
+      "expected_json_body": {
+        "model": "speech-2.8-hd",
+        "text": "hello",
+        "stream": false,
+        "output_format": "hex",
+        "voice_setting": {"voice_id": "voice-1", "speed": 1.0, "vol": 1.0, "pitch": 0},
+        "audio_setting": {"sample_rate": 32000, "format": "mp3", "channel": 1, "bitrate": 128000}
+      },
+      "response_status": 200,
+      "response_json_body": {
+        "data": {"audio": "6869", "status": 2, "subtitle_file": ""},
+        "base_resp": {"status_code": 0, "status_msg": "ok"}
+      }
+    }
+  ],
+  "expected_output_kind": "resources"
+}

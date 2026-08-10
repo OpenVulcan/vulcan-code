@@ -1,0 +1,75 @@
+{
+  "schema_version": "provider-manifest-execution-fixture.v1",
+  "fixture_id": "alibaba-qwen-asr-sync-generic",
+  "base_manifest": "alibaba.json",
+  "production_target_refs": [
+    "alibaba::model-studio-cn.qwen3-asr-flash.speech-transcribe",
+    "alibaba::model-studio-singapore.qwen3-asr-flash.speech-transcribe"
+  ],
+  "tool_target": {
+    "target_id": "model-studio-cn.fixture-qwen-asr-sync-generic",
+    "description": "Generic synchronous speech transcription execution fixture.",
+    "service_entry_id": "model-studio-cn",
+    "credential_profile_ids": ["api-key"],
+    "upstream_target_id": "qwen3-asr-flash",
+    "display_name": "Alibaba Qwen ASR Sync Generic Fixture",
+    "tool_id": "fixture_alibaba_qwen_asr_sync_generic",
+    "capability": "speech_transcribe",
+    "input_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "audio_url": {"type": "string", "minLength": 1}
+      },
+      "required": ["audio_url"]
+    },
+    "output": {
+      "kind": "text",
+      "source_path": "/text",
+      "normalized_result_path": "text",
+      "resource_kind": null,
+      "mime_types": []
+    },
+    "execution": {
+      "endpoint_path": "/fixture/qwen-asr-sync",
+      "authentication": "bearer_authorization",
+      "adapter": "generic_json",
+      "execution_kind": "http_json_sync"
+    }
+  },
+  "operation": {
+    "operation_id": "fixture.alibaba-qwen-asr-sync-generic",
+    "operation": "speech_transcribe",
+    "carrier": "provider_tool",
+    "input_resources": ["audio"],
+    "output_resources": [],
+    "tool_target_refs": ["model-studio-cn.fixture-qwen-asr-sync-generic"],
+    "request_profile_refs": [],
+    "response_profile_refs": [],
+    "upload_channel_refs": [],
+    "upload_bindings": [],
+    "timeout_ms": 60000,
+    "idempotent": false
+  },
+  "upload_channels": [],
+  "request_profiles": [],
+  "response_profiles": [],
+  "required_execution_primitives": ["http_json_sync"],
+  "required_upload_primitives": [],
+  "arguments": {
+    "audio_url": "data:audio/wav;base64,aGVsbG8="
+  },
+  "interactions": [
+    {
+      "method": "POST",
+      "path": "/fixture/qwen-asr-sync",
+      "expected_json_body": {
+        "audio_url": "data:audio/wav;base64,aGVsbG8="
+      },
+      "response_status": 200,
+      "response_json_body": {"text": "fixture transcript"}
+    }
+  ],
+  "expected_output_kind": "text",
+  "expected_text_output": "fixture transcript"
+}

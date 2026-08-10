@@ -59,7 +59,7 @@ fn provider_request_checkpoint_event(
             injection_fingerprint: None,
             request_fingerprint: Some(request_fingerprint),
             cache_policy_fingerprint: Some(stable_provider_cache_policy_fingerprint(snapshot)),
-            cache_policy_diagnostic: provider_cache_policy_diagnostic(snapshot),
+            cache_policy_diagnostic: provider_cache_policy_diagnostic(provider_family, snapshot),
             converter_version: 1,
         },
     )
@@ -200,7 +200,20 @@ pub(crate) fn stable_provider_cache_policy_fingerprint(
 
 /// Returns the cache-policy diagnostic for providers that cannot represent cache hints.
 /// 返回无法表达缓存提示的 Provider 对应缓存策略诊断。
+///
+/// # Parameters
+/// 参数
+/// `provider_family` is the exact manifest-resolved protocol profile identifier.
+/// `provider_family` 是清单解析得到的精确协议配置档标识。
+/// `snapshot` is the provider-neutral request inspected for cacheable boundaries.
+/// `snapshot` 是用于检查可缓存边界的 Provider 中立请求。
+///
+/// # Returns
+/// 返回值
+/// A stable diagnostic only when the selected protocol cannot encode cache hints.
+/// 仅当所选协议无法编码缓存提示时返回稳定诊断。
 pub(crate) fn provider_cache_policy_diagnostic(
+    provider_family: &str,
     snapshot: &ProviderRequestSnapshot,
 ) -> Option<String> {
     let has_cacheable_boundary = !snapshot.system_prompt.trim().is_empty()
@@ -208,10 +221,7 @@ pub(crate) fn provider_cache_policy_diagnostic(
         || !snapshot.tool_schemas.is_empty()
         || !snapshot.history.is_empty();
     if has_cacheable_boundary
-        && !snapshot
-            .provider_id
-            .to_ascii_lowercase()
-            .contains("anthropic")
+        && provider_family != vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID
     {
         Some(String::from("cache_hints_unsupported"))
     } else {
@@ -335,6 +345,22 @@ mod tests {
             request_headers: None,
             continuation: vulcan_core::types::ProviderContinuation::default(),
         };
+        assert_eq!(
+            provider_cache_policy_diagnostic(
+                vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID,
+                &snapshot,
+            ),
+            None,
+            "cache support must follow the protocol profile instead of the provider id",
+        );
+        assert_eq!(
+            provider_cache_policy_diagnostic(
+                vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID,
+                &snapshot,
+            ),
+            Some(String::from("cache_hints_unsupported")),
+            "an OpenAI protocol must not inherit Anthropic cache semantics from a provider name",
+        );
         // event is the exact runtime audit value handed to segmented-log persistence.
         // event 是交给分段日志持久化的精确运行时审计值。
         let event = provider_request_checkpoint_event(

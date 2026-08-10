@@ -41,6 +41,7 @@ pub enum PromptCacheTtlSelection {
 /// Describes one supported cache TTL option.
 /// 描述一个受支持的缓存 TTL 选项。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PromptCacheTtlOption {
     /// Stable option identifier.
     /// 稳定选项标识。
@@ -57,6 +58,7 @@ pub struct PromptCacheTtlOption {
 /// Describes prompt-cache support for one executable route.
 /// 描述一条可执行路由的提示词缓存支持。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PromptCacheCapability {
     /// User-visible description of provider-default behavior.
     /// 供应商默认行为的用户可见说明。

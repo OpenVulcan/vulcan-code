@@ -4,12 +4,10 @@
 use crate::media::{MediaUploadCancellation, MediaUploadProgressCallback};
 use crate::{
     AuthenticationProjection, CredentialConnection, CredentialExecutionSecret,
-    CustomModelRequestProjection, MINIMAX_REASONING_SPLIT_PARAMETER_ID,
-    OPENROUTER_REASONING_MAX_TOKENS_PARAMETER_ID, ProtocolRoute, ProviderDescriptor,
-    ProviderToolTarget, RequestProjectorKind, SAMPLING_TEMPERATURE_PARAMETER_ID,
-    SecondaryRouteSelection, ServiceEntry,
+    CustomModelRequestProjection, ProtocolRoute, ProviderDescriptor, ProviderToolTarget,
+    RequestProjectorKind, SAMPLING_TEMPERATURE_PARAMETER_ID, SecondaryRouteSelection, ServiceEntry,
 };
-use async_stream::{stream, try_stream};
+use async_stream::try_stream;
 use futures_util::{Stream, StreamExt};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use rust_decimal::Decimal;
@@ -24,9 +22,8 @@ use std::time::{Duration, Instant, SystemTime};
 use vulcan_ai_contract::{
     AiErrorCategory, AiExecutionError, AiExecutionRequest, AiStreamEvent, AiStreamStateMachine,
     AiTransportKind, ContentItem, DispatchOutcome, InputTokenCount, ModelParameterValue,
-    PromptCachePolicy, ReasoningEffort, ResourceKind, RetryAfterHint, RetryAfterSource,
-    StructuredOutputPolicy, canonicalize_codex_responses_replay_items,
-    is_replayable_codex_responses_item,
+    PromptCachePolicy, ResourceKind, RetryAfterHint, RetryAfterSource, StructuredOutputPolicy,
+    canonicalize_codex_responses_replay_items, is_replayable_codex_responses_item,
 };
 use vulcan_ai_protocols::{
     ANTHROPIC_MESSAGES_PROFILE_ID, ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID,
@@ -63,10 +60,6 @@ impl ProtocolRuntimeSource for Arc<LlmProtocolRuntime> {
     }
 }
 
-/// MiniMax documented maximum JSON request-body size.
-/// MiniMax 文档化的 JSON 请求体最大字节数。
-const MINIMAX_REQUEST_BODY_BYTE_LIMIT: usize = 64_000_000;
-
 /// Official Codex multiplier from stream idle timeout to the complete unary compact timeout.
 /// 官方 Codex 从流空闲超时换算完整一元压缩超时所使用的倍数。
 const RESPONSES_COMPACT_TIMEOUT_IDLE_MULTIPLIER: u32 = 4;
@@ -75,6 +68,14 @@ const RESPONSES_COMPACT_TIMEOUT_IDLE_MULTIPLIER: u32 = 4;
 /// 用于启用不含密钥的供应商传输计时诊断的可选环境变量。
 const PROVIDER_TRANSPORT_TRACE_ENV: &str = "VULCAN_PROVIDER_TRANSPORT_TRACE";
 
+/// Maximum bytes retained from one provider-controlled diagnostic response-header value.
+/// 单个供应商控制的诊断响应头值允许保留的最大字节数。
+const PROVIDER_DIAGNOSTIC_HEADER_VALUE_MAX_BYTES: usize = 1_024;
+
+/// Explicit suffix appended when a provider diagnostic header value is truncated.
+/// 供应商诊断响应头值被截断时附加的显式后缀。
+const PROVIDER_DIAGNOSTIC_HEADER_TRUNCATION_SUFFIX: &str = "...[truncated]";
+
 /// Codex Responses WebSocket protocol revision frozen from the adopted source baseline.
 /// 从已采纳源码基线冻结的 Codex Responses WebSocket 协议修订值。
 const CODEX_RESPONSES_WEBSOCKET_BETA: &str = "responses_websockets=2026-02-06";
@@ -82,6 +83,19 @@ const CODEX_RESPONSES_WEBSOCKET_BETA: &str = "responses_websockets=2026-02-06";
 /// Official control error indicating that the active socket no longer owns the referenced chain.
 /// 表示活动 Socket 已不再持有被引用链的官方控制错误。
 const RESPONSES_WEBSOCKET_PREVIOUS_RESPONSE_NOT_FOUND_CODE: &str = "previous_response_not_found";
+
+/// Maximum process-local prepared media references retained across all providers and accounts.
+/// 全部供应商与账号合计允许保留的最大进程内媒体准备引用数。
+const PREPARED_MEDIA_CACHE_MAX_ENTRIES: usize = 256;
+/// Maximum process-local Responses WebSocket sessions retained across all roots.
+/// 全部根会话合计允许保留的最大进程内 Responses WebSocket 会话数。
+const RESPONSES_WEBSOCKET_SESSION_MAX_ENTRIES: usize = 256;
+/// Maximum sticky Responses WebSocket circuit breakers retained across all roots.
+/// 全部根会话合计允许保留的最大粘性 Responses WebSocket 熔断器数量。
+const RESPONSES_WEBSOCKET_BREAKER_MAX_ENTRIES: usize = 4_096;
+/// Stable provider-neutral operation identity for pre-dispatch conversation media materialization.
+/// 分派前对话媒体物化使用的稳定供应商无关 operation 身份。
+pub const CONVERSATION_MEDIA_INPUT_OPERATION_ID: &str = "conversation.media_input";
 
 /// Immutable route selected before an execution starts.
 /// 在执行开始前选择的不可变路由。
@@ -108,6 +122,27 @@ pub struct ProviderExecutionRoute {
     /// Optional frozen local billing profile resolved from explicit configuration.
     /// 从显式配置解析出的可选冻结本地计费 Profile。
     pub billing_profile: Option<ResolvedBillingProfile>,
+    /// Ordered request-projection profile chain effective for this exact model route; route
+    /// defaults form the base and an explicitly present model-rule list replaces them, including
+    /// an explicit empty list that clears the chain (plan §R8.4/§R8.5).
+    /// 当前精确模型路由生效的有序请求投影 Profile 链；路由默认引用构成基座，模型规则中
+    /// 显式存在的列表会替换基座，其中显式空列表会清空该链（方案 §R8.4/§R8.5）。
+    pub request_projection_profiles: Vec<crate::provider_manifest::RequestProjectionProfile>,
+    /// Ordered response-projection profile chain effective for this exact model route.
+    /// 当前精确模型路由生效的有序响应投影 Profile 链。
+    pub response_projection_profiles: Vec<crate::provider_manifest::ResponseProjectionProfile>,
+    /// Upload channels frozen from the same manifest generation as this route.
+    /// 与当前路由来自同一 Manifest 代际的冻结上传通道。
+    pub upload_channels: Vec<crate::UploadChannelDeclaration>,
+    /// Manifest revision that owns the selected model-protocol binding.
+    /// 持有所选模型协议绑定的 Manifest 修订号。
+    pub manifest_revision: u64,
+    /// Runtime manifest generation frozen with this route.
+    /// 与当前路由一同冻结的运行时 Manifest 代际。
+    pub manifest_generation: u64,
+    /// Content-addressed identity of the complete effective execution route.
+    /// 完整生效执行路由的内容寻址身份。
+    pub route_revision: String,
 }
 
 /// Frozen exact pricing facts applied to normalized usage updates.
@@ -150,6 +185,7 @@ impl ProviderExecutionRoute {
         entry: ServiceEntry,
         connection: CredentialConnection,
         secondary_route: SecondaryRouteSelection,
+        effective_protocol_id: &str,
     ) -> Result<Self, ProviderExecutionFailure> {
         if provider.id != connection.provider_id {
             return Err(pre_dispatch_failure(format!(
@@ -180,55 +216,47 @@ impl ProviderExecutionRoute {
         let mut protocol_route = entry
             .protocol_routes
             .iter()
-            .find(|route| route.protocol_profile_id == connection.selected_protocol)
+            .find(|route| route.protocol_profile_id == effective_protocol_id)
             .cloned()
             .ok_or_else(|| {
                 pre_dispatch_failure(format!(
                     "Protocol `{}` is not registered for service entry `{}`.",
-                    connection.selected_protocol, entry.id
+                    effective_protocol_id, entry.id
                 ))
             })?;
+        // Manifest-declared extraction profiles are authoritative; the protocol baseline only
+        // applies when the route declares no usage profile (plan §15.4).
+        // Manifest 声明的提取 Profile 是权威；仅当路由未声明 usage Profile 时应用协议基线（方案 §15.4）。
         if protocol_route.usage_extraction_profiles.is_empty()
             && let Some(protocol) =
                 upstream_protocol_for_profile_id(protocol_route.protocol_profile_id.as_str())
         {
             protocol_route.usage_extraction_profiles =
                 vulcan_llm_core::standard_usage_profiles(protocol);
-            if entry.request_projector == RequestProjectorKind::Alibaba
-                && protocol == UpstreamProtocol::OpenAiResponses
-            {
-                protocol_route.usage_extraction_profiles =
-                    vulcan_llm_core::alibaba_responses_usage_profiles();
-            } else if entry.request_projector == RequestProjectorKind::DeepSeek
-                && protocol == UpstreamProtocol::OpenAiChatCompletions
-            {
-                protocol_route.usage_extraction_profiles =
-                    vulcan_llm_core::deepseek_chat_usage_profiles();
-            } else if provider.id == "openrouter"
-                && protocol == UpstreamProtocol::OpenAiChatCompletions
-            {
-                protocol_route.usage_extraction_profiles =
-                    vulcan_llm_core::openrouter_chat_usage_profiles();
-            }
         }
         if !protocol_route.verified
             || !connection
                 .verified_protocols
-                .contains(&connection.selected_protocol)
+                .contains(effective_protocol_id)
         {
             return Err(pre_dispatch_failure(format!(
                 "Protocol `{}` is not verified for connection `{}`.",
-                connection.selected_protocol, connection.id
+                effective_protocol_id, connection.id
             )));
         }
         if !matches!(secondary_route, SecondaryRouteSelection::Automatic)
-            && provider.id != "openrouter"
+            && entry.request_projector != RequestProjectorKind::RoutedCompatible
         {
             return Err(pre_dispatch_failure(format!(
                 "Provider `{}` does not register secondary routing.",
                 provider.id
             )));
         }
+        // Route default profiles are cloned before the route moves into the snapshot so the
+        // model-level override chain can replace them during selection (plan §R8.4).
+        // 在路由移入快照前克隆路由默认 Profile，使选择期可用模型级覆盖链替换它们（方案 §R8.4）。
+        let request_projection_profiles = protocol_route.request_projection_profiles.clone();
+        let response_projection_profiles = protocol_route.response_projection_profiles.clone();
         Ok(Self {
             provider,
             entry,
@@ -237,6 +265,12 @@ impl ProviderExecutionRoute {
             secondary_route,
             custom_model_projection: None,
             billing_profile: None,
+            request_projection_profiles,
+            response_projection_profiles,
+            upload_channels: Vec::new(),
+            manifest_revision: 0,
+            manifest_generation: 0,
+            route_revision: String::new(),
         })
     }
 
@@ -258,6 +292,57 @@ impl ProviderExecutionRoute {
             .trim_end_matches('/'),
             ensure_leading_slash(encoded_path)
         )
+    }
+
+    /// Returns model parameters that a frozen manifest guard conflicts with one request field.
+    /// 返回冻结 Manifest 守卫中与一个请求字段冲突的模型参数。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `request_field` is the registered field name without the leading `@` marker.
+    /// `request_field` 是不带前导 `@` 标记的已注册字段名。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Stable parameter identifiers from all-present guards that include the requested field.
+    /// 返回包含目标请求字段的全部存在守卫中声明的稳定参数标识。
+    pub fn model_parameters_conflicting_with_request_field(
+        &self,
+        request_field: &str,
+    ) -> BTreeSet<String> {
+        let expected_request_field = format!("@{request_field}");
+        let mut conflicts = BTreeSet::new();
+        for profile in &self.request_projection_profiles {
+            for step in &profile.steps {
+                let crate::provider_manifest::MappingStep::RejectIfAllPresent {
+                    conditions, ..
+                } = step
+                else {
+                    continue;
+                };
+                let guards_request_field = conditions.iter().any(|condition| {
+                    condition.source == crate::provider_manifest::MappingStepSource::RequestField
+                        && condition.source_path == expected_request_field
+                });
+                if !guards_request_field {
+                    continue;
+                }
+                for condition in conditions {
+                    if condition.source != crate::provider_manifest::MappingStepSource::RequestField
+                    {
+                        continue;
+                    }
+                    if let Some(parameter_id) = condition
+                        .source_path
+                        .strip_prefix("@model_parameters.")
+                        .filter(|parameter_id| !parameter_id.is_empty())
+                    {
+                        conflicts.insert(parameter_id.to_string());
+                    }
+                }
+            }
+        }
+        conflicts
     }
 }
 
@@ -302,6 +387,204 @@ pub struct ResponsesCompactResult {
 pub type ProviderExecutionStream =
     Pin<Box<dyn Stream<Item = Result<AiStreamEvent, ProviderExecutionFailure>> + Send>>;
 
+/// Closed host-side download authority carried with one provider resource URL.
+/// 随单个供应商资源 URL 携带的封闭宿主侧下载权限。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderToolResourceDownloadPolicy {
+    /// Reviewed URL encoding, including the exact permitted scheme family.
+    /// 已审核的 URL 编码，包含精确允许的 Scheme 范围。
+    pub encoding: crate::ProviderToolResourceEncoding,
+    /// Reviewed exact hosts or dot-prefixed DNS suffixes accepted from the provider response.
+    /// 允许供应商响应返回的已审核精确宿主或点前缀 DNS 后缀。
+    pub host_suffixes: Vec<String>,
+}
+
+impl ProviderToolResourceDownloadPolicy {
+    /// Validates one provider-returned URL against the frozen scheme and host authority.
+    /// 根据冻结的 Scheme 与宿主权限校验供应商返回的 URL。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `value` is the untrusted provider locator and `label` scopes controlled diagnostics.
+    /// `value` 是不受信任的供应商定位符，`label` 用于限定受控诊断信息。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A parsed URL only when it remains inside the complete declared download boundary.
+    /// 仅当 URL 完整处于声明的下载边界内时返回解析结果。
+    pub fn validate_url(&self, value: &str, label: &str) -> Result<reqwest::Url, String> {
+        self.validate_url_with_optional_exact_origin(value, label, None)
+    }
+
+    /// Validates a provider-returned URL while admitting one frozen exact operation origin.
+    /// 校验供应商返回 URL，同时允许一个冻结的精确操作 Origin。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `value` and `label` retain the ordinary download contract; `exact_origin` is the
+    /// already-validated endpoint that initiated this provider task.
+    /// `value` 与 `label` 保留普通下载契约；`exact_origin` 是启动该供应商任务的
+    /// 已验证端点。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A parsed URL only when a non-default port matches the frozen operation origin exactly.
+    /// 仅当非默认端口与冻结操作 Origin 精确一致时返回解析 URL。
+    pub(crate) fn validate_url_with_exact_origin(
+        &self,
+        value: &str,
+        label: &str,
+        exact_origin: &reqwest::Url,
+    ) -> Result<reqwest::Url, String> {
+        self.validate_url_with_optional_exact_origin(value, label, Some(exact_origin))
+    }
+
+    /// Implements URL validation with an optional host-owned exact-origin port grant.
+    /// 使用可选的宿主持有精确 Origin 端口授权实现 URL 校验。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `value` is untrusted, `label` scopes diagnostics, and `exact_origin` never comes from the
+    /// response being checked.
+    /// `value` 不受信任，`label` 限定诊断，`exact_origin` 绝不来自当前被校验响应。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The same closed result as `validate_url` with no broadened host or scheme authority.
+    /// 返回与 `validate_url` 相同的封闭结果，不扩大宿主或 Scheme 权限。
+    fn validate_url_with_optional_exact_origin(
+        &self,
+        value: &str,
+        label: &str,
+        exact_origin: Option<&reqwest::Url>,
+    ) -> Result<reqwest::Url, String> {
+        if self.host_suffixes.is_empty()
+            || self.host_suffixes.len() > 16
+            || self
+                .host_suffixes
+                .iter()
+                .any(|suffix| !provider_resource_host_suffix_is_safe(suffix))
+        {
+            return Err(format!(
+                "{label} download policy has no valid bounded host authority."
+            ));
+        }
+        let url = reqwest::Url::parse(value).map_err(|_| format!("{label} is not a valid URL."))?;
+        let scheme_allowed = match self.encoding {
+            crate::ProviderToolResourceEncoding::HttpsUrl => url.scheme() == "https",
+            crate::ProviderToolResourceEncoding::PublicHttpUrl => {
+                matches!(url.scheme(), "http" | "https")
+            }
+            _ => false,
+        };
+        let host = url
+            .host_str()
+            .ok_or_else(|| format!("{label} must declare an absolute host."))?;
+        // portAllowed grants the default scheme port or the one exact initiating operation origin;
+        // response data can never introduce a third network authority.
+        // portAllowed 只授权 Scheme 默认端口或精确的启动操作 Origin；响应数据绝不能
+        // 引入第三个网络权限。
+        let port_allowed = url.port().is_none()
+            || exact_origin.is_some_and(|origin| provider_resource_urls_share_origin(&url, origin));
+        if !scheme_allowed
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || !port_allowed
+            || url.fragment().is_some()
+            || !provider_resource_host_matches_suffixes(host, &self.host_suffixes)
+        {
+            return Err(format!(
+                "{label} is outside the declared scheme, default port or exact operation origin, and host suffixes."
+            ));
+        }
+        Ok(url)
+    }
+}
+
+/// Reports whether two parsed URLs select the same scheme, host, and effective port.
+/// 报告两个已解析 URL 是否选择相同 Scheme、宿主与有效端口。
+///
+/// # Parameters
+/// 参数
+/// `candidate` is provider-returned and `authority` is the frozen initiating endpoint.
+/// `candidate` 由供应商返回；`authority` 是冻结的启动端点。
+///
+/// # Returns
+/// 返回值
+/// True only for an exact network-origin match.
+/// 仅在网络 Origin 精确匹配时返回真。
+fn provider_resource_urls_share_origin(candidate: &reqwest::Url, authority: &reqwest::Url) -> bool {
+    candidate.scheme() == authority.scheme()
+        && candidate.host_str().zip(authority.host_str()).is_some_and(
+            |(candidate_host, authority_host)| candidate_host.eq_ignore_ascii_case(authority_host),
+        )
+        && candidate.port_or_known_default() == authority.port_or_known_default()
+}
+
+/// Reports whether one manifest host matcher is a safe exact host or DNS suffix.
+/// 报告一个 Manifest 宿主匹配项是否为安全的精确宿主或 DNS 后缀。
+///
+/// # Parameters
+/// 参数
+/// `suffix` is an exact IPv4/DNS host or a dot-prefixed DNS subdomain suffix.
+/// `suffix` 是精确 IPv4/DNS 宿主或点前缀 DNS 子域后缀。
+///
+/// # Returns
+/// 返回值
+/// True only for bounded lowercase host syntax without wildcard or URL components.
+/// 仅对不含通配符或 URL 组件的有界小写宿主语法返回真。
+pub fn provider_resource_host_suffix_is_safe(suffix: &str) -> bool {
+    if suffix.is_empty() || suffix.len() > 253 {
+        return false;
+    }
+    let host = suffix.strip_prefix('.').unwrap_or(suffix);
+    if host.is_empty() || host.parse::<std::net::Ipv6Addr>().is_ok() {
+        return false;
+    }
+    if host.parse::<std::net::Ipv4Addr>().is_ok() {
+        return !suffix.starts_with('.');
+    }
+    if !host.contains('.') || host.ends_with('.') {
+        return false;
+    }
+    host.split('.').all(|label| {
+        !label.is_empty()
+            && label.len() <= 63
+            && label.chars().next().is_some_and(|character| {
+                character.is_ascii_lowercase() || character.is_ascii_digit()
+            })
+            && label.chars().last().is_some_and(|character| {
+                character.is_ascii_lowercase() || character.is_ascii_digit()
+            })
+            && label.chars().all(|character| {
+                character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
+            })
+    })
+}
+
+/// Reports whether one parsed host belongs to a manifest-owned exact/suffix allowlist.
+/// 报告一个已解析宿主是否属于 Manifest 持有的精确/后缀允许列表。
+///
+/// # Parameters
+/// 参数
+/// `host` is the parsed URL host and `suffixes` contains already validated matchers.
+/// `host` 是解析后的 URL 宿主，`suffixes` 包含已经校验的匹配项。
+///
+/// # Returns
+/// 返回值
+/// True only for an exact match or a non-root dot-suffix match.
+/// 仅在精确匹配或非根域点后缀匹配时返回真。
+pub fn provider_resource_host_matches_suffixes(host: &str, suffixes: &[String]) -> bool {
+    let host = host.to_ascii_lowercase();
+    suffixes.iter().any(|suffix| {
+        if suffix.starts_with('.') {
+            host.len() > suffix.len() && host.ends_with(suffix)
+        } else {
+            host == *suffix
+        }
+    })
+}
+
 /// One normalized generated resource returned by a provider tool.
 /// 供应商工具返回的一项归一化生成资源。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -321,6 +604,10 @@ pub struct ProviderToolGeneratedResource {
     /// Public provider download URL when returned by reference.
     /// 供应商以引用形式返回的公开下载 URL。
     pub download_url: Option<String>,
+    /// Frozen download authority required exactly when `download_url` is present.
+    /// 仅在存在 `download_url` 时必须携带的冻结下载权限。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub download_policy: Option<ProviderToolResourceDownloadPolicy>,
 }
 
 /// One normalized provider web-search result.
@@ -524,17 +811,29 @@ pub struct ProviderExecutionClient {
     pub(crate) http: reqwest::Client,
     /// Core-owned protocol runtime facade.
     /// 由核心拥有的协议运行时门面。
-    protocols: Arc<LlmProtocolRuntime>,
+    pub(crate) protocols: Arc<LlmProtocolRuntime>,
     /// Process-local prepared media references shared by preflight and dispatch clones.
     /// 由分派前准备与实际分派副本共享的进程内媒体引用缓存。
     prepared_media: Arc<StdMutex<BTreeMap<String, PreparedMediaCacheEntry>>>,
     /// Credential-, route-, and session-isolated Responses WebSocket connections.
     /// 按凭据、路由与会话隔离的 Responses WebSocket 连接。
     responses_websocket_sessions:
-        Arc<TokioMutex<BTreeMap<String, Arc<TokioMutex<ResponsesWebsocketSession>>>>>,
+        Arc<TokioMutex<BTreeMap<String, ResponsesWebsocketSessionCacheEntry>>>,
     /// Session-scoped WebSocket circuit breakers activated after transport failure.
     /// 传输失败后激活的会话作用域 WebSocket 熔断器。
-    responses_websocket_breakers: Arc<StdMutex<BTreeSet<String>>>,
+    responses_websocket_breakers: Arc<StdMutex<BTreeMap<String, Instant>>>,
+}
+
+/// Stores one shared Responses WebSocket connection and its last cache access.
+/// 保存一个共享 Responses WebSocket 连接及其最近缓存访问时间。
+#[derive(Clone)]
+struct ResponsesWebsocketSessionCacheEntry {
+    /// Shared non-multiplexed connection handle.
+    /// 共享的非多路复用连接句柄。
+    session: Arc<TokioMutex<ResponsesWebsocketSession>>,
+    /// Monotonic timestamp used for deterministic least-recently-used eviction.
+    /// 用于确定性最久未使用淘汰的单调时间戳。
+    last_used_at: Instant,
 }
 
 /// Stores one temporary provider media reference until the matching request is dispatched.
@@ -547,8 +846,23 @@ struct PreparedMediaCacheEntry {
     /// Expiry prevents an abandoned submission from retaining a reference forever.
     /// 过期时间防止放弃的提交永久保留远端引用。
     expires_at: Instant,
+    /// Creation time provides deterministic oldest-first capacity eviction.
+    /// 创建时间用于确定性的最旧优先容量淘汰。
+    created_at: Instant,
     /// Source metadata prevents a rewritten file from reusing an older provider reference.
     /// 源文件元数据防止被改写的文件复用旧供应商引用。
+    source_fingerprint: PreparedMediaSourceFingerprint,
+}
+
+/// Carries one prepared media outcome together with the exact verified source revision.
+/// 携带一次媒体准备结果及其经过精确验证的源文件修订。
+#[derive(Debug)]
+pub struct PreparedConversationMedia {
+    /// Provider-native reference when the frozen route uses an upload channel.
+    /// 冻结路由使用上传通道时产生的供应商原生引用。
+    native_reference: Option<String>,
+    /// Content-addressed source revision verified before and after materialization.
+    /// 在物化前后验证过的内容寻址源文件修订。
     source_fingerprint: PreparedMediaSourceFingerprint,
 }
 
@@ -562,19 +876,148 @@ struct PreparedMediaSourceFingerprint {
     /// Last modification time when the host exposes it.
     /// 宿主可以提供时记录源文件最后修改时间。
     modified_at: Option<SystemTime>,
+    /// SHA-256 digest of the exact source bytes.
+    /// 精确源字节的 SHA-256 摘要。
+    content_sha256: [u8; 32],
 }
 
-/// Reads the stable host metadata used to validate one cached media reference.
-/// 读取用于校验媒体缓存引用的稳定宿主元数据。
-fn prepared_media_source_fingerprint(local_path: &Path) -> Option<PreparedMediaSourceFingerprint> {
-    let metadata = std::fs::metadata(local_path).ok()?;
+/// Streams and hashes the exact stable source revision used by one media reference.
+/// 流式读取并哈希一个媒体引用所使用的精确稳定源文件修订。
+///
+/// # Parameters
+/// 参数
+/// `local_path` is the exact local file, `progress` observes monotonic bytes for the optional
+/// pre-dispatch read, and `cancellation` cooperatively stops long media hashing.
+/// `local_path` 是精确本地文件，`progress` 观察可选分派前读取的单调字节进度，
+/// `cancellation` 协作终止长媒体哈希。
+///
+/// # Returns
+/// 返回值
+/// A content-addressed fingerprint only when metadata and byte length remain stable for the full
+/// read, otherwise a controlled disappearance, mutation, I/O, or cancellation failure.
+/// 仅当完整读取期间元数据与字节长度保持稳定时返回内容寻址指纹；否则返回受控的消失、
+/// 变更、I/O 或取消失败。
+async fn prepared_media_source_fingerprint(
+    local_path: &Path,
+    progress: Option<MediaUploadProgressCallback>,
+    cancellation: Option<&MediaUploadCancellation>,
+) -> Result<PreparedMediaSourceFingerprint, String> {
+    let metadata = tokio::fs::metadata(local_path)
+        .await
+        .map_err(|error| format!("Media source metadata could not be read: {error}"))?;
     if !metadata.is_file() {
-        return None;
+        return Err(String::from("Media source must be a file."));
     }
-    Some(PreparedMediaSourceFingerprint {
-        byte_len: metadata.len(),
-        modified_at: metadata.modified().ok(),
+    let expected_byte_len = metadata.len();
+    if expected_byte_len == 0 {
+        return Err(String::from("Media source must be a non-empty file."));
+    }
+    let modified_at = metadata.modified().ok();
+    let file = tokio::fs::File::open(local_path)
+        .await
+        .map_err(|error| format!("Media source could not be opened: {error}"))?;
+    let mut source = tokio_util::io::ReaderStream::new(file);
+    let mut content_hasher = Sha256::new();
+    let mut processed = 0_u64;
+    while let Some(chunk) = source.next().await {
+        if cancellation.is_some_and(MediaUploadCancellation::is_cancelled) {
+            return Err(String::from("media upload cancelled"));
+        }
+        let chunk = chunk.map_err(|error| format!("Media source could not be read: {error}"))?;
+        processed = processed
+            .checked_add(chunk.len() as u64)
+            .ok_or_else(|| String::from("Media source byte count overflowed."))?;
+        if processed > expected_byte_len {
+            return Err(String::from(
+                "Media source changed while its content fingerprint was being read.",
+            ));
+        }
+        content_hasher.update(chunk.as_ref());
+        if let Some(callback) = progress.as_ref() {
+            callback(processed, Some(expected_byte_len));
+        }
+    }
+    if processed != expected_byte_len {
+        return Err(String::from(
+            "Media source changed while its content fingerprint was being read.",
+        ));
+    }
+    let current_metadata = tokio::fs::metadata(local_path)
+        .await
+        .map_err(|_| String::from("Media source disappeared during preparation."))?;
+    if !current_metadata.is_file()
+        || current_metadata.len() != expected_byte_len
+        || current_metadata.modified().ok() != modified_at
+    {
+        return Err(String::from(
+            "Media source changed during preparation; please retry the submission.",
+        ));
+    }
+    Ok(PreparedMediaSourceFingerprint {
+        byte_len: expected_byte_len,
+        modified_at,
+        content_sha256: content_hasher.finalize().into(),
     })
+}
+
+/// Resolves the declaration that materializes one pre-dispatch conversation resource.
+/// 解析物化一个分派前对话资源的声明。
+///
+/// # Parameters
+/// 参数
+/// `route` is the frozen route; `kind` and `mime_type` are the exact normalized resource facts.
+/// `route` 是冻结路由；`kind` 与 `mime_type` 是精确归一化资源事实。
+///
+/// # Returns
+/// 返回值
+/// The selected channel, `None` for inline host materialization, or a closed reference failure.
+/// 返回选中通道；宿主内联物化返回 `None`；引用错误返回封闭失败。
+fn resolve_conversation_media_upload_channel<'a>(
+    route: &'a ProviderExecutionRoute,
+    kind: ResourceKind,
+    mime_type: &str,
+) -> Result<Option<&'a crate::UploadChannelDeclaration>, String> {
+    let credential_profile = route
+        .entry
+        .credential_profiles
+        .iter()
+        .find(|profile| profile.id == route.connection.credential_profile_id)
+        .ok_or_else(|| {
+            format!(
+                "Provider route credential profile `{}` is absent from service entry `{}`.",
+                route.connection.credential_profile_id, route.entry.id
+            )
+        })?;
+    let Some(constraint) =
+        route
+            .protocol_route
+            .input_resource_constraints
+            .iter()
+            .find(|constraint| {
+                constraint.resource_kind == kind && !constraint.upload_channel_refs.is_empty()
+            })
+    else {
+        return Ok(None);
+    };
+    // Channel selection depends only on the frozen references, resource kind, and MIME allowlist;
+    // byte and path checks remain inside the materializer before network dispatch.
+    // 通道选择只依赖冻结引用、资源类别与 MIME 允许列表；字节与路径检查仍由物化器在网络
+    // 分派前执行。
+    let resource = crate::upload_engine::UploadResource {
+        local_path: None,
+        inline_bytes: None,
+        mime_type: mime_type.to_string(),
+        byte_len: 1,
+        remote_url: None,
+        item_count: 1,
+    };
+    crate::upload_engine::resolve_upload_channel(
+        route.upload_channels.as_slice(),
+        constraint.upload_channel_refs.as_slice(),
+        &resource,
+        credential_profile.credential_role.as_deref(),
+    )
+    .map(Some)
 }
 
 /// Builds the process-local cache key for one exact provider media projection.
@@ -585,16 +1028,76 @@ fn prepared_media_key(
     local_path: &Path,
     kind: ResourceKind,
     mime_type: &str,
-) -> String {
-    format!(
-        "{}|{}|{}|{:?}|{}|{}",
-        route.provider.id,
-        route.connection.id,
+) -> Option<String> {
+    let credential_profile = route
+        .entry
+        .credential_profiles
+        .iter()
+        .find(|profile| profile.id == route.connection.credential_profile_id)?;
+    let source = crate::upload_engine::UploadResource {
+        local_path: Some(local_path.to_path_buf()),
+        inline_bytes: None,
+        mime_type: mime_type.to_string(),
+        byte_len: 1,
+        remote_url: None,
+        item_count: 1,
+    };
+    let constraint = route
+        .protocol_route
+        .input_resource_constraints
+        .iter()
+        .find(|constraint| {
+            constraint.resource_kind == kind && !constraint.upload_channel_refs.is_empty()
+        })?;
+    let channel = crate::upload_engine::resolve_upload_channel(
+        route.upload_channels.as_slice(),
+        constraint.upload_channel_refs.as_slice(),
+        &source,
+        credential_profile.credential_role.as_deref(),
+    )
+    .ok()?;
+    channel.cache_duration_ms?;
+    // material includes account, protocol, manifest generation, complete route revision, and
+    // the resolved upload declaration so no hot update can reuse a stale provider reference.
+    // material 同时包含账号、协议、Manifest 代际、完整路由修订与解析后的上传声明，确保
+    // 热更新绝不会复用过期的供应商引用。
+    let material = serde_json::to_vec(&(
+        route.provider.id.as_str(),
+        route.connection.id.as_str(),
         model_id,
+        route.protocol_route.protocol_profile_id.as_str(),
+        route.manifest_revision,
+        route.manifest_generation,
+        route.route_revision.as_str(),
+        CONVERSATION_MEDIA_INPUT_OPERATION_ID,
+        constraint,
+        channel,
         kind,
         mime_type,
         local_path.to_string_lossy(),
-    )
+    ))
+    .ok()?;
+    Some(format!("sha256:{:x}", Sha256::digest(material)))
+}
+
+/// Removes expired prepared media references and enforces the global process-local capacity.
+/// 移除已过期媒体准备引用并强制执行进程内全局容量上限。
+fn prune_prepared_media_cache(cache: &mut BTreeMap<String, PreparedMediaCacheEntry>, now: Instant) {
+    cache.retain(|_, entry| entry.expires_at > now);
+    while cache.len() > PREPARED_MEDIA_CACHE_MAX_ENTRIES {
+        let Some(oldest_key) = cache
+            .iter()
+            .min_by(|(left_key, left), (right_key, right)| {
+                left.created_at
+                    .cmp(&right.created_at)
+                    .then_with(|| left_key.cmp(right_key))
+            })
+            .map(|(key, _)| key.clone())
+        else {
+            break;
+        };
+        cache.remove(&oldest_key);
+    }
 }
 
 impl ProviderExecutionClient {
@@ -619,7 +1122,7 @@ impl ProviderExecutionClient {
             protocols: protocols.into_protocol_runtime(),
             prepared_media: Arc::new(StdMutex::new(BTreeMap::new())),
             responses_websocket_sessions: Arc::new(TokioMutex::new(BTreeMap::new())),
-            responses_websocket_breakers: Arc::new(StdMutex::new(BTreeSet::new())),
+            responses_websocket_breakers: Arc::new(StdMutex::new(BTreeMap::new())),
         }
     }
 
@@ -637,9 +1140,9 @@ impl ProviderExecutionClient {
     ///
     /// # Returns
     /// 返回值
-    /// A provider-native reference when the provider has an upload contract, otherwise `None`
-    /// after the local inline payload has been completely pre-read.
-    /// 供应商存在上传契约时返回原生引用；否则在完整预读取本地内联载荷后返回 `None`。
+    /// A prepared outcome containing the optional provider-native reference and the exact source
+    /// fingerprint verified before and after materialization.
+    /// 返回包含可选供应商原生引用的准备结果，以及在物化前后验证过的精确源文件指纹。
     // Keep route, model, credential, media, progress, and cancellation boundaries explicit for callers.
     // 保持路由、模型、凭据、媒体、进度和取消边界显式，便于调用方准确控制生命周期。
     #[allow(clippy::too_many_arguments)]
@@ -653,83 +1156,108 @@ impl ProviderExecutionClient {
         mime_type: &str,
         progress: Option<MediaUploadProgressCallback>,
         cancellation: &MediaUploadCancellation,
-    ) -> Result<Option<String>, String> {
+    ) -> Result<PreparedConversationMedia, String> {
         if cancellation.is_cancelled() {
             return Err(String::from("media upload cancelled"));
-        }
-        let metadata = tokio::fs::metadata(local_path)
-            .await
-            .map_err(|error| format!("Media source metadata could not be read: {error}"))?;
-        if !metadata.is_file() || metadata.len() == 0 {
-            return Err(String::from("Media source must be a non-empty file."));
         }
         // The request must never bind a provider reference to a source that changed during preparation.
         // 请求绝不能把供应商引用绑定到准备期间已经发生变化的源文件。
-        let source_fingerprint = PreparedMediaSourceFingerprint {
-            byte_len: metadata.len(),
-            modified_at: metadata.modified().ok(),
+        let source_fingerprint =
+            prepared_media_source_fingerprint(local_path, None, Some(cancellation)).await?;
+        let native_reference = if let Some(channel) =
+            resolve_conversation_media_upload_channel(route, kind, mime_type)?
+        {
+            // The frozen route selects a bounded upload channel by resource kind and ordered
+            // channel references; provider identity never participates in dispatch.
+            // 冻结路由按资源类型与有序通道引用选择有界上传通道；供应商身份不参与分派。
+            let resource = crate::upload_engine::UploadResource {
+                local_path: Some(local_path.to_path_buf()),
+                inline_bytes: None,
+                mime_type: mime_type.to_string(),
+                byte_len: source_fingerprint.byte_len,
+                remote_url: None,
+                item_count: 1,
+            };
+            let credential_profile = route
+                .entry
+                .credential_profiles
+                .iter()
+                .find(|profile| profile.id == route.connection.credential_profile_id)
+                .ok_or_else(|| {
+                    format!(
+                        "Provider route credential profile `{}` is absent from service entry `{}`.",
+                        route.connection.credential_profile_id, route.entry.id
+                    )
+                })?;
+            Some(
+                crate::upload_engine::materialize_upload(
+                    crate::upload_engine::UploadExecutionContext {
+                        http: &self.http,
+                        entry: &route.entry,
+                        secret,
+                        credential_profile,
+                        progress: progress.clone(),
+                        cancellation,
+                        model_id: Some(model_id),
+                    },
+                    channel,
+                    &resource,
+                )
+                .await?
+                .reference,
+            )
+        } else {
+            None
         };
-        let total_bytes = Some(metadata.len());
-        let native_reference = match route.provider.id.as_str() {
-            "kimi" if kind == ResourceKind::Video => Some(
-                self.upload_multipart_media(
-                    route,
-                    secret,
-                    local_path,
-                    mime_type,
-                    "/files",
-                    "video",
-                    "ms://",
-                    progress.clone(),
-                    cancellation,
-                )
-                .await?,
-            ),
-            "minimax" if kind == ResourceKind::Video => Some(
-                self.upload_multipart_media(
-                    route,
-                    secret,
-                    local_path,
-                    mime_type,
-                    "/v1/files/upload",
-                    "retrieval",
-                    "mm_file://",
-                    progress.clone(),
-                    cancellation,
-                )
-                .await?,
-            ),
-            "alibaba" if matches!(kind, ResourceKind::Image | ResourceKind::Video) => Some(
-                crate::alibaba_provider_tools::upload_user_media(
-                    &self.http,
-                    &route.entry,
-                    model_id,
-                    secret,
-                    local_path,
-                    mime_type,
-                    metadata.len(),
-                    progress.clone(),
-                    cancellation,
-                )
-                .await?,
-            ),
-            _ => None,
-        };
-        if native_reference.is_none() {
-            self.pre_read_inline_media(local_path, total_bytes, progress, cancellation)
-                .await?;
-        }
         if cancellation.is_cancelled() {
             return Err(String::from("media upload cancelled"));
         }
-        let current_source_fingerprint = prepared_media_source_fingerprint(local_path)
-            .ok_or_else(|| String::from("Media source disappeared during preparation."))?;
+        // Inline materialization reports progress during the final verified read; provider-native
+        // channels already reported transfer progress and therefore verify without a second cycle.
+        // 内联物化在最终校验读取期间报告进度；供应商原生通道已经报告传输进度，因此后续
+        // 校验不再产生第二轮进度。
+        let verification_progress = if native_reference.is_none() {
+            progress
+        } else {
+            None
+        };
+        let current_source_fingerprint = prepared_media_source_fingerprint(
+            local_path,
+            verification_progress,
+            Some(cancellation),
+        )
+        .await?;
         if current_source_fingerprint != source_fingerprint {
             return Err(String::from(
                 "Media source changed during preparation; please retry the submission.",
             ));
         }
-        Ok(native_reference)
+        Ok(PreparedConversationMedia {
+            native_reference,
+            source_fingerprint: current_source_fingerprint,
+        })
+    }
+
+    /// Resolves the exact non-secret upload-channel identity used for one conversation resource.
+    /// 解析一个对话资源使用的精确非秘密上传通道身份。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `route` is the immutable execution route; `kind` and `mime_type` identify the exact resource.
+    /// `route` 是不可变执行路由；`kind` 与 `mime_type` 标识精确资源。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The manifest channel id, `None` for host inline materialization, or a closed route error.
+    /// 返回 Manifest 通道标识；宿主内联物化返回 `None`；路由错误返回封闭错误。
+    pub fn conversation_media_upload_channel_id(
+        &self,
+        route: &ProviderExecutionRoute,
+        kind: ResourceKind,
+        mime_type: &str,
+    ) -> Result<Option<String>, String> {
+        resolve_conversation_media_upload_channel(route, kind, mime_type)
+            .map(|channel| channel.map(|channel| channel.upload_channel_id.clone()))
     }
 
     /// Remembers one provider-native reference for the exact route and local source.
@@ -741,27 +1269,79 @@ impl ProviderExecutionClient {
         local_path: &Path,
         kind: ResourceKind,
         mime_type: &str,
-        url: String,
+        prepared: PreparedConversationMedia,
     ) {
-        let Some(source_fingerprint) = prepared_media_source_fingerprint(local_path) else {
+        let PreparedConversationMedia {
+            native_reference: Some(url),
+            source_fingerprint,
+        } = prepared
+        else {
             return;
         };
-        let key = prepared_media_key(route, model_id, local_path, kind, mime_type);
+        let resource = crate::upload_engine::UploadResource {
+            local_path: Some(local_path.to_path_buf()),
+            inline_bytes: None,
+            mime_type: mime_type.to_string(),
+            byte_len: source_fingerprint.byte_len,
+            remote_url: None,
+            item_count: 1,
+        };
+        let Some(credential_profile) = route
+            .entry
+            .credential_profiles
+            .iter()
+            .find(|profile| profile.id == route.connection.credential_profile_id)
+        else {
+            return;
+        };
+        let credential_role = credential_profile.credential_role.as_deref();
+        let cache_duration_ms = route
+            .protocol_route
+            .input_resource_constraints
+            .iter()
+            .find(|constraint| {
+                constraint.resource_kind == kind && !constraint.upload_channel_refs.is_empty()
+            })
+            .and_then(|constraint| {
+                crate::upload_engine::resolve_upload_channel(
+                    route.upload_channels.as_slice(),
+                    constraint.upload_channel_refs.as_slice(),
+                    &resource,
+                    credential_role,
+                )
+                .ok()
+            })
+            .and_then(|channel| channel.cache_duration_ms);
+        // An absent cache declaration intentionally disables reuse; the host must not invent
+        // a lifetime that can outlive the provider-issued reference.
+        // 缺少缓存声明时应有意禁用复用；宿主不得虚构可能超过供应商引用有效期的生命周期。
+        let Some(cache_duration_ms) = cache_duration_ms else {
+            return;
+        };
+        let Some(key) = prepared_media_key(route, model_id, local_path, kind, mime_type) else {
+            return;
+        };
+        let now = Instant::now();
+        let Some(expires_at) = now.checked_add(Duration::from_millis(cache_duration_ms)) else {
+            return;
+        };
         if let Ok(mut cache) = self.prepared_media.lock() {
             cache.insert(
                 key,
                 PreparedMediaCacheEntry {
                     url,
-                    expires_at: Instant::now() + Duration::from_secs(30 * 60),
+                    expires_at,
+                    created_at: now,
                     source_fingerprint,
                 },
             );
+            prune_prepared_media_cache(&mut cache, now);
         }
     }
 
     /// Returns a still-valid provider-native reference for the exact local source.
     /// 返回精确本地源仍然有效的供应商原生引用。
-    pub fn prepared_media_url(
+    pub async fn prepared_media_url(
         &self,
         route: &ProviderExecutionRoute,
         model_id: &str,
@@ -769,163 +1349,18 @@ impl ProviderExecutionClient {
         kind: ResourceKind,
         mime_type: &str,
     ) -> Option<String> {
-        let source_fingerprint = prepared_media_source_fingerprint(local_path)?;
-        let key = prepared_media_key(route, model_id, local_path, kind, mime_type);
+        let source_fingerprint = prepared_media_source_fingerprint(local_path, None, None)
+            .await
+            .ok()?;
+        let key = prepared_media_key(route, model_id, local_path, kind, mime_type)?;
         let mut cache = self.prepared_media.lock().ok()?;
+        prune_prepared_media_cache(&mut cache, Instant::now());
         let entry = cache.get(&key)?.clone();
-        if entry.expires_at <= Instant::now() || entry.source_fingerprint != source_fingerprint {
+        if entry.source_fingerprint != source_fingerprint {
             cache.remove(&key);
             return None;
         }
         Some(entry.url)
-    }
-
-    /// Streams one provider multipart upload while reporting bytes and honoring cancellation.
-    /// 流式执行一次供应商 Multipart 上传，同时报告字节数并响应取消。
-    // Keep multipart transport inputs explicit because each field maps to an independent provider contract value.
-    // 保持 Multipart 传输输入显式，因为每个字段都对应供应商契约中的独立值。
-    #[allow(clippy::too_many_arguments)]
-    async fn upload_multipart_media(
-        &self,
-        route: &ProviderExecutionRoute,
-        secret: &CredentialExecutionSecret,
-        local_path: &Path,
-        mime_type: &str,
-        path: &str,
-        purpose: &str,
-        reference_prefix: &str,
-        progress: Option<MediaUploadProgressCallback>,
-        cancellation: &MediaUploadCancellation,
-    ) -> Result<String, String> {
-        let metadata = tokio::fs::metadata(local_path)
-            .await
-            .map_err(|error| format!("Media upload source metadata could not be read: {error}"))?;
-        let total_bytes = metadata.len();
-        let file = tokio::fs::File::open(local_path)
-            .await
-            .map_err(|error| format!("Media upload source cannot be opened: {error}"))?;
-        let file_name = local_path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .filter(|name| !name.is_empty())
-            .unwrap_or("resource.bin")
-            .to_string();
-        let upload_cancellation = cancellation.clone();
-        let upload_progress = progress.clone();
-        let stream = stream! {
-            let mut source = tokio_util::io::ReaderStream::new(file);
-            let mut sent = 0_u64;
-            while let Some(chunk) = source.next().await {
-                if upload_cancellation.is_cancelled() {
-                    yield Err(std::io::Error::new(
-                        std::io::ErrorKind::Interrupted,
-                        "media upload cancelled",
-                    ));
-                    return;
-                }
-                let chunk = match chunk {
-                    Ok(chunk) => chunk,
-                    Err(error) => {
-                        yield Err(error);
-                        return;
-                    }
-                };
-                sent = sent.saturating_add(chunk.len() as u64);
-                if let Some(callback) = upload_progress.as_ref() {
-                    callback(sent, Some(total_bytes));
-                }
-                yield Ok(chunk);
-            }
-            if sent != total_bytes {
-                yield Err(std::io::Error::new(
-                    std::io::ErrorKind::UnexpectedEof,
-                    "media upload source length changed during transfer",
-                ));
-            }
-        };
-        let part = reqwest::multipart::Part::stream_with_length(
-            reqwest::Body::wrap_stream(stream),
-            total_bytes,
-        )
-        .file_name(file_name)
-        .mime_str(mime_type)
-        .map_err(|error| format!("Media upload MIME type is invalid: {error}"))?;
-        let form = reqwest::multipart::Form::new()
-            .text("purpose", purpose.to_string())
-            .part("file", part);
-        let url = route.request_url(path);
-        let mut headers = execution_headers(route, &BTreeMap::new(), secret)
-            .map_err(|error| error.to_string())?;
-        headers.remove(reqwest::header::CONTENT_TYPE);
-        let response = tokio::select! {
-            response = self.http.post(url.as_str()).headers(headers).multipart(form).send() => response
-                .map_err(|error| {
-                    if cancellation.is_cancelled() {
-                        String::from("media upload cancelled")
-                    } else {
-                        format!("Media upload to `{url}` failed: {error}")
-                    }
-                })?,
-            _ = cancellation.wait() => return Err(String::from("media upload cancelled")),
-        };
-        if cancellation.is_cancelled() {
-            return Err(String::from("media upload cancelled"));
-        }
-        let status = response.status();
-        let body = tokio::select! {
-            body = crate::provider_tool_execution::read_bounded_provider_response(
-                response,
-                "Media upload",
-            ) => body.map_err(|error| format!("Media upload response from `{url}` could not be read: {error}"))?,
-            _ = cancellation.wait() => return Err(String::from("media upload cancelled")),
-        };
-        if cancellation.is_cancelled() {
-            return Err(String::from("media upload cancelled"));
-        }
-        if !status.is_success() {
-            return Err(format!(
-                "Media upload failed with HTTP {}: {}",
-                status.as_u16(),
-                body
-            ));
-        }
-        let body: Value = serde_json::from_str(body.as_str())
-            .map_err(|error| format!("Media upload response JSON is invalid: {error}"))?;
-        let id = body
-            .pointer("/id")
-            .and_then(Value::as_str)
-            .or_else(|| body.pointer("/file/file_id").and_then(Value::as_str))
-            .filter(|value| !value.trim().is_empty())
-            .ok_or_else(|| String::from("Media upload response did not contain a file id."))?;
-        Ok(format!("{reference_prefix}{id}"))
-    }
-
-    /// Reads an inline media source once before dispatch so every path exposes the same progress lifecycle.
-    /// 在分派前读取一次内联媒体源，使所有路径暴露一致的进度生命周期。
-    async fn pre_read_inline_media(
-        &self,
-        local_path: &Path,
-        total_bytes: Option<u64>,
-        progress: Option<MediaUploadProgressCallback>,
-        cancellation: &MediaUploadCancellation,
-    ) -> Result<(), String> {
-        let file = tokio::fs::File::open(local_path)
-            .await
-            .map_err(|error| format!("Inline media source cannot be opened: {error}"))?;
-        let mut source = tokio_util::io::ReaderStream::new(file);
-        let mut processed = 0_u64;
-        while let Some(chunk) = source.next().await {
-            if cancellation.is_cancelled() {
-                return Err(String::from("media upload cancelled"));
-            }
-            let chunk =
-                chunk.map_err(|error| format!("Inline media source could not be read: {error}"))?;
-            processed = processed.saturating_add(chunk.len() as u64);
-            if let Some(callback) = progress.as_ref() {
-                callback(processed, total_bytes);
-            }
-        }
-        Ok(())
     }
 
     /// Executes one frozen provider-native tool target and normalizes its output.
@@ -955,8 +1390,59 @@ impl ProviderExecutionClient {
                 target.target_id, entry.id
             ));
         }
+        let arguments = crate::provider_tool_execution::canonicalize_provider_tool_arguments(
+            target, arguments,
+        )?;
         crate::provider_tool_execution::execute_provider_tool(
-            &self.http, entry, target, arguments, secret,
+            &self.http,
+            entry,
+            target,
+            &[],
+            &[],
+            arguments,
+            secret,
+        )
+        .await
+    }
+
+    /// Executes one provider tool through frozen operation request and response profiles.
+    /// 通过冻结的操作请求与响应 Profile 执行一个供应商工具。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `entry`, `target`, and `secret` freeze the route; `request_profiles` and
+    /// `response_profiles` come from the same manifest generation; `arguments` are canonical
+    /// operation inputs after upload materialization.
+    /// `entry`、`target` 与 `secret` 冻结路由；`request_profiles` 与 `response_profiles` 来自
+    /// 同一清单代际；`arguments` 是上传物化后的规范操作输入。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A normalized result or a controlled ownership, profile, transport, or contract failure.
+    /// 返回归一化结果，或受控的归属、Profile、传输与契约失败。
+    pub(crate) async fn execute_provider_tool_with_profiles(
+        &self,
+        entry: &ServiceEntry,
+        target: &ProviderToolTarget,
+        request_profiles: &[crate::provider_manifest::RequestProjectionProfile],
+        response_profiles: &[crate::provider_manifest::ResponseProjectionProfile],
+        arguments: Value,
+        secret: &CredentialExecutionSecret,
+    ) -> Result<ProviderToolExecutionResult, String> {
+        if target.service_entry_id != entry.id {
+            return Err(format!(
+                "Provider tool target `{}` does not belong to service entry `{}`.",
+                target.target_id, entry.id
+            ));
+        }
+        crate::provider_tool_execution::execute_provider_tool(
+            &self.http,
+            entry,
+            target,
+            request_profiles,
+            response_profiles,
+            arguments,
+            secret,
         )
         .await
     }
@@ -979,6 +1465,7 @@ impl ProviderExecutionClient {
         request: &AiExecutionRequest,
     ) -> Result<EncodedWireRequest, ProviderExecutionFailure> {
         validate_request_policy(route, request)?;
+        validate_request_projection_guards_before_encoding(route, request)?;
         // The extracted LLM core owns the canonical Codex Responses request body.
         // 提取后的 LLM 核心拥有规范 Codex Responses 请求正文的唯一编码权。
         let encoded = encode_codex_responses_request(request).map_err(|error| {
@@ -1035,23 +1522,22 @@ impl ProviderExecutionClient {
         let websocket_allowed = websocket_key.as_ref().is_some_and(|key| {
             route.protocol_route.responses_websocket_enabled()
                 && upstream_protocol_for_route(route) == Some(UpstreamProtocol::OpenAiResponses)
-                && !self
-                    .responses_websocket_breakers
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .contains(key)
+                && !self.responses_websocket_disabled(key)
         });
         let effective_request = if websocket_allowed {
-            let existing = self
-                .responses_websocket_sessions
-                .lock()
-                .await
-                .get(
-                    websocket_key
-                        .as_deref()
-                        .expect("allowed route has a cache key"),
-                )
-                .cloned();
+            let existing = {
+                let mut sessions = self.responses_websocket_sessions.lock().await;
+                sessions
+                    .get_mut(
+                        websocket_key
+                            .as_deref()
+                            .expect("allowed route has a cache key"),
+                    )
+                    .map(|entry| {
+                        entry.last_used_at = Instant::now();
+                        Arc::clone(&entry.session)
+                    })
+            };
             if let Some(existing) = existing {
                 let session = existing.lock().await;
                 if session.replacement_required() {
@@ -1133,6 +1619,7 @@ impl ProviderExecutionClient {
                 &trace_started_at,
             );
             validate_request_policy(&route, &request)?;
+            validate_request_projection_guards_before_encoding(&route, &request)?;
             emit_provider_transport_trace(
                 trace_id.as_str(),
                 "responses_compact",
@@ -1264,6 +1751,11 @@ impl ProviderExecutionClient {
                     compact_request_timeout,
                 )
                 .await?;
+                let body = project_response_record_text(
+                    &route.response_projection_profiles,
+                    body.as_str(),
+                )
+                .map_err(protocol_failure)?;
                 return Err(http_failure(status.as_u16(), retry_after, body.as_str()));
             }
             let content_type = response
@@ -1290,11 +1782,18 @@ impl ProviderExecutionClient {
                 compact_request_timeout,
             )
             .await?;
-            let value: Value = serde_json::from_str(body.as_str()).map_err(|error| {
+            let mut value: Value = serde_json::from_str(body.as_str()).map_err(|error| {
                 compact_protocol_failure(format!(
                     "Provider compaction response from `{url}` is invalid JSON: {error}"
                 ))
             })?;
+            crate::provider_manifest::validate_runtime_json_bounds(
+                &value,
+                "Provider compaction response",
+            )
+            .map_err(|error| compact_protocol_failure(error.to_string()))?;
+            apply_response_projection_profiles(&route.response_projection_profiles, &mut value)
+                .map_err(protocol_failure)?;
             emit_responses_compact_response_shape_trace(
                 trace_id.as_str(),
                 &value,
@@ -1303,6 +1802,10 @@ impl ProviderExecutionClient {
             decode_responses_compact_result(&value, url.as_str())
         }
         .await;
+        // result crosses the same exact-secret redaction boundary as streaming execution errors.
+        // result 与流式执行错误经过同一条精确秘密脱敏边界。
+        let result =
+            result.map_err(|failure| sanitize_provider_execution_failure(failure, &secret));
         match &result {
             Ok(_) => emit_provider_transport_trace(
                 trace_id.as_str(),
@@ -1341,47 +1844,92 @@ impl ProviderExecutionClient {
         request: &AiExecutionRequest,
         secret: &CredentialExecutionSecret,
     ) -> Result<InputTokenCount, ProviderExecutionFailure> {
-        if route.provider.id != "google"
-            || !matches!(route.entry.id.as_str(), "gemini-api" | "gemini-oauth")
-            || route.protocol_route.protocol_profile_id
-                != vulcan_ai_protocols::GEMINI_GENERATE_CONTENT_PROFILE_ID
+        if route.protocol_route.protocol_profile_id
+            != vulcan_ai_protocols::GEMINI_GENERATE_CONTENT_PROFILE_ID
         {
             return Err(pre_dispatch_failure(
                 "Provider-authoritative CountTokens is only registered for the public Gemini GenerateContent route.",
             ));
         }
         validate_request_policy(route, request)?;
+        let transport = self
+            .protocols
+            .transport_profile(route.protocol_route.protocol_profile_id.as_str())
+            .map_err(llm_core_protocol_failure)?;
         let encoded = encode_gemini_count_tokens_request(request).map_err(protocol_failure)?;
         let url = route.request_url(encoded.path.as_str());
         let headers = execution_headers(route, &encoded.headers, secret)?;
-        let response = self
-            .http
-            .post(url.as_str())
-            .headers(headers)
-            .json(&encoded.body)
-            .send()
-            .await
-            .map_err(|error| {
-                http_send_transport_failure(
-                    &error,
-                    format!("Provider CountTokens request to `{url}` failed: {error}"),
-                )
-            })?;
+        let response = tokio::time::timeout(
+            Duration::from_millis(transport.response_headers_timeout_ms),
+            self.http
+                .post(url.as_str())
+                .headers(headers)
+                .json(&encoded.body)
+                .send(),
+        )
+        .await
+        .map_err(|_| {
+            transport_failure(format!(
+                "Provider CountTokens request to `{url}` exceeded the registered {} ms response-header timeout.",
+                transport.response_headers_timeout_ms
+            ))
+        })?
+        .map_err(|error| {
+            http_send_transport_failure(
+                &error,
+                format!("Provider CountTokens request to `{url}` failed: {error}"),
+            )
+        })?;
         let status = response.status();
         if !status.is_success() {
             let retry_after = parse_retry_after_headers(response.headers(), SystemTime::now());
-            let body = response.text().await.map_err(|error| {
-                transport_failure(format!(
-                    "Provider CountTokens error response from `{url}` could not be read: {error}"
-                ))
-            })?;
-            return Err(http_failure(status.as_u16(), retry_after, body.as_str()));
+            let body = read_bounded_response_text(
+                response,
+                transport.max_error_body_bytes,
+                url.as_str(),
+                status.as_u16(),
+                retry_after.clone(),
+                Duration::from_millis(transport.stream_idle_timeout_ms),
+            )
+            .await?;
+            return Err(sanitize_provider_execution_failure(
+                http_failure(status.as_u16(), retry_after, body.as_str()),
+                secret,
+            ));
         }
-        let body = response.json::<Value>().await.map_err(|error| {
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default();
+        if !content_type
+            .split(';')
+            .next()
+            .is_some_and(|value| value.trim().eq_ignore_ascii_case("application/json"))
+        {
+            return Err(response_headers_protocol_failure(format!(
+                "Provider CountTokens response from `{url}` must use application/json, got `{content_type}`."
+            )));
+        }
+        let body = read_bounded_response_text(
+            response,
+            transport.max_frame_bytes,
+            url.as_str(),
+            status.as_u16(),
+            None,
+            Duration::from_millis(transport.stream_idle_timeout_ms),
+        )
+        .await?;
+        let body = serde_json::from_str::<Value>(&body).map_err(|error| {
             protocol_failure(ProtocolConversionError::new(format!(
                 "Gemini CountTokens response JSON is invalid: {error}"
             )))
         })?;
+        crate::provider_manifest::validate_runtime_json_bounds(
+            &body,
+            "Gemini CountTokens response",
+        )
+        .map_err(|error| protocol_failure(ProtocolConversionError::new(error)))?;
         decode_gemini_count_tokens_response(&body).map_err(protocol_failure)
     }
 
@@ -1406,26 +1954,35 @@ impl ProviderExecutionClient {
         secret: CredentialExecutionSecret,
         execution_id: String,
     ) -> ProviderExecutionStream {
+        // diagnostic_secret remains available only to the final stream error boundary after the
+        // transport receives its own frozen credential clone.
+        // diagnostic_secret 仅供最终流错误边界使用，传输层接收其独立的冻结凭据副本。
+        let diagnostic_secret = secret.clone();
         let websocket_key = responses_websocket_cache_key(&route, &request, &secret);
         let websocket_allowed = websocket_key.as_ref().is_some_and(|key| {
             route.protocol_route.responses_websocket_enabled()
                 && upstream_protocol_for_route(&route) == Some(UpstreamProtocol::OpenAiResponses)
-                && !self
-                    .responses_websocket_breakers
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .contains(key)
+                && !self.responses_websocket_disabled(key)
         });
-        if websocket_allowed {
-            return self.execute_responses_websocket(
+        // stream selects exactly one declared transport before the credential leaves this boundary.
+        // stream 在凭据离开当前边界前精确选择一个已声明传输。
+        let stream = if websocket_allowed {
+            self.execute_responses_websocket(
                 route,
                 request,
                 secret,
                 execution_id,
                 websocket_key.expect("allowed WebSocket route has a cache key"),
-            );
-        }
-        self.execute_http(route, request, secret, execution_id)
+            )
+        } else {
+            self.execute_http(route, request, secret, execution_id)
+        };
+        // Every asynchronous error crosses one common secret-safe and bounded public boundary.
+        // 每个异步错误都经过同一条不含秘密且有界的公共边界。
+        Box::pin(stream.map(move |result| {
+            result
+                .map_err(|failure| sanitize_provider_execution_failure(failure, &diagnostic_secret))
+        }))
     }
 
     /// Executes one explicitly enabled Responses route over a non-multiplexed WebSocket.
@@ -1559,6 +2116,7 @@ impl ProviderExecutionClient {
                 )
                 .map_err(llm_core_protocol_failure)?;
             let usage_profiles = route.protocol_route.usage_extraction_profiles.clone();
+            let response_profiles = route.response_projection_profiles.clone();
             let profiled_usage_enabled = !usage_profiles.is_empty();
             let mut usage_accumulator = UsageAccumulator::default();
             let mut profiled_usage_gate = ProfiledUsageEventGate::default();
@@ -1566,7 +2124,7 @@ impl ProviderExecutionClient {
             let mut stream_state = AiStreamStateMachine::default();
             let mut terminal_observed = false;
             loop {
-                let frame = match session.next_frame().await {
+                let mut frame = match session.next_frame().await {
                     Ok(Some(frame)) => frame,
                     Ok(None) => {
                         client.disable_responses_websocket(websocket_key.as_str());
@@ -1595,6 +2153,18 @@ impl ProviderExecutionClient {
                         ))?
                     }
                 };
+                apply_response_projection_profiles(&response_profiles, &mut frame.value).map_err(
+                    |error| {
+                        abandon_responses_websocket_attempt(
+                            &mut session,
+                            stream_protocol_failure_for_transport(
+                                error,
+                                semantic_output_observed,
+                                AiTransportKind::ResponsesWebsocket,
+                            ),
+                        )
+                    },
+                )?;
                 if let Some((code, message)) = responses_websocket_retry_control(&frame.value) {
                     Err(responses_websocket_control_failure(
                         code,
@@ -1621,7 +2191,19 @@ impl ProviderExecutionClient {
                 for usage_event in &mut profiled_usage_events {
                     apply_local_cost_estimate(&route, usage_event);
                 }
-                for mut usage_event in profiled_usage_gate.stage(profiled_usage_events) {
+                for mut usage_event in profiled_usage_gate
+                    .stage(profiled_usage_events)
+                    .map_err(|error| {
+                        abandon_responses_websocket_attempt(
+                            &mut session,
+                            stream_protocol_failure_for_transport(
+                                error,
+                                semantic_output_observed,
+                                AiTransportKind::ResponsesWebsocket,
+                            ),
+                        )
+                    })?
+                {
                     validate_stream_event(
                         &mut stream_state,
                         &usage_event,
@@ -1781,32 +2363,81 @@ impl ProviderExecutionClient {
         key: &str,
         config: ResponsesWebsocketConfig,
     ) -> Result<Arc<TokioMutex<ResponsesWebsocketSession>>, vulcan_llm_core::LlmCoreError> {
-        if let Some(existing) = self
-            .responses_websocket_sessions
-            .lock()
-            .await
-            .get(key)
-            .cloned()
         {
-            return Ok(existing);
+            let mut sessions = self.responses_websocket_sessions.lock().await;
+            if let Some(existing) = sessions.get_mut(key) {
+                existing.last_used_at = Instant::now();
+                return Ok(Arc::clone(&existing.session));
+            }
+            if sessions.len() >= RESPONSES_WEBSOCKET_SESSION_MAX_ENTRIES
+                && oldest_idle_responses_websocket_session_key(&sessions).is_none()
+            {
+                return Err(LlmCoreError::new(format!(
+                    "Responses WebSocket session capacity {} is exhausted by active connections.",
+                    RESPONSES_WEBSOCKET_SESSION_MAX_ENTRIES
+                )));
+            }
         }
-        let session = Arc::new(TokioMutex::new(
+        let connected = Arc::new(TokioMutex::new(
             ResponsesWebsocketSession::connect(config).await?,
         ));
         let mut sessions = self.responses_websocket_sessions.lock().await;
-        Ok(sessions
-            .entry(key.to_string())
-            .or_insert_with(|| Arc::clone(&session))
-            .clone())
+        if let Some(existing) = sessions.get_mut(key) {
+            existing.last_used_at = Instant::now();
+            return Ok(Arc::clone(&existing.session));
+        }
+        if sessions.len() >= RESPONSES_WEBSOCKET_SESSION_MAX_ENTRIES {
+            let eviction_key = oldest_idle_responses_websocket_session_key(&sessions)
+                .ok_or_else(|| {
+                    LlmCoreError::new(format!(
+                        "Responses WebSocket session capacity {} is exhausted by active connections.",
+                        RESPONSES_WEBSOCKET_SESSION_MAX_ENTRIES
+                    ))
+                })?;
+            sessions.remove(eviction_key.as_str());
+        }
+        sessions.insert(
+            key.to_string(),
+            ResponsesWebsocketSessionCacheEntry {
+                session: Arc::clone(&connected),
+                last_used_at: Instant::now(),
+            },
+        );
+        Ok(connected)
+    }
+
+    /// Reports whether a session-scoped WebSocket breaker is active and refreshes its LRU age.
+    /// 报告会话作用域 WebSocket 熔断器是否生效，并刷新其 LRU 时间。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `key` is the opaque credential-, route-, model-, and root-session-bound cache key.
+    /// `key` 是绑定凭据、路由、模型与根会话的不透明缓存键。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` only when this exact cache key has an active process-local breaker.
+    /// 仅当该精确缓存键存在活动的进程内熔断器时返回 `true`。
+    fn responses_websocket_disabled(&self, key: &str) -> bool {
+        let mut breakers = self
+            .responses_websocket_breakers
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Some(last_used_at) = breakers.get_mut(key) else {
+            return false;
+        };
+        *last_used_at = Instant::now();
+        true
     }
 
     /// Activates a sticky circuit breaker for one route and root session.
     /// 为一条路由与根会话激活粘性熔断器。
     fn disable_responses_websocket(&self, key: &str) {
-        self.responses_websocket_breakers
+        let mut breakers = self
+            .responses_websocket_breakers
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .insert(key.to_string());
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        insert_bounded_responses_websocket_breaker(&mut breakers, key, Instant::now());
     }
 
     /// Starts one immutable HTTP SSE execution without transport fallback.
@@ -1829,23 +2460,13 @@ impl ProviderExecutionClient {
             );
             let request = request_without_nonpersistent_responses_continuation(&route, &request);
             let encoded = client.encode_request_with_credential(&route, &request, &secret)?;
+            let response_profiles = route.response_projection_profiles.clone();
             let transport = client
                 .protocols
                 .transport_profile(route.protocol_route.protocol_profile_id.as_str())
                 .map_err(llm_core_protocol_failure)?;
             let url = route.request_url(encoded.path.as_str());
-            let mut headers = execution_headers(&route, &encoded.headers, &secret)?;
-            // Alibaba requires an explicit resolver switch whenever the request carries an OSS reference.
-            // 阿里云请求携带 OSS 引用时必须显式开启对象解析开关。
-            if route.provider.id == "alibaba"
-                && serde_json::to_string(&encoded.body)
-                    .is_ok_and(|body| body.contains("oss://"))
-            {
-                headers.insert(
-                    HeaderName::from_static("x-dashscope-ossresource-resolve"),
-                    HeaderValue::from_static("enable"),
-                );
-            }
+            let headers = execution_headers(&route, &encoded.headers, &secret)?;
             emit_provider_transport_trace(
                 execution_id.as_str(),
                 "http_sse",
@@ -1907,8 +2528,11 @@ impl ProviderExecutionClient {
                     url.as_str(),
                     status.as_u16(),
                     retry_after.clone(),
+                    Duration::from_millis(transport.stream_idle_timeout_ms),
                 )
                 .await?;
+                let body = project_response_record_text(&response_profiles, body.as_str())
+                    .map_err(protocol_failure)?;
                 Err(http_failure(
                     status.as_u16(),
                     retry_after,
@@ -1974,17 +2598,29 @@ impl ProviderExecutionClient {
                     .push(chunk.as_ref())
                     .map_err(|error| stream_protocol_failure(error, semantic_output_observed))?
                 {
+                    let projected_data = project_response_record_text(
+                        &response_profiles,
+                        frame.data.as_str(),
+                    )
+                    .map_err(|error| {
+                        stream_protocol_failure(error, semantic_output_observed)
+                    })?;
                     let mut profiled_usage_events = extract_profiled_usage_events(
                         &usage_profiles,
                         UsageRecordKind::SseEvent,
-                        frame.data.as_str(),
+                        projected_data.as_str(),
                         &mut usage_accumulator,
                     )
                     .map_err(|error| stream_protocol_failure(error, semantic_output_observed))?;
                     for usage_event in &mut profiled_usage_events {
                         apply_local_cost_estimate(&route, usage_event);
                     }
-                    for mut usage_event in profiled_usage_gate.stage(profiled_usage_events) {
+                    for mut usage_event in profiled_usage_gate
+                        .stage(profiled_usage_events)
+                        .map_err(|error| {
+                            stream_protocol_failure(error, semantic_output_observed)
+                        })?
+                    {
                         validate_stream_event(
                             &mut stream_state,
                             &usage_event,
@@ -1997,7 +2633,7 @@ impl ProviderExecutionClient {
                         yield usage_event;
                     }
                     for mut event in decoder
-                        .push_sse(frame.event_name.as_deref(), frame.data.as_str())
+                        .push_sse(frame.event_name.as_deref(), projected_data.as_str())
                         .map_err(|error| {
                             stream_protocol_failure(error, semantic_output_observed)
                         })?
@@ -2054,17 +2690,25 @@ impl ProviderExecutionClient {
                 .finish()
                 .map_err(|error| stream_protocol_failure(error, semantic_output_observed))?
             {
+                let projected_data = project_response_record_text(
+                    &response_profiles,
+                    frame.data.as_str(),
+                )
+                .map_err(|error| stream_protocol_failure(error, semantic_output_observed))?;
                 let mut profiled_usage_events = extract_profiled_usage_events(
                     &usage_profiles,
                     UsageRecordKind::SseEvent,
-                    frame.data.as_str(),
+                    projected_data.as_str(),
                     &mut usage_accumulator,
                 )
                 .map_err(|error| stream_protocol_failure(error, semantic_output_observed))?;
                 for usage_event in &mut profiled_usage_events {
                     apply_local_cost_estimate(&route, usage_event);
                 }
-                for mut usage_event in profiled_usage_gate.stage(profiled_usage_events) {
+                for mut usage_event in profiled_usage_gate
+                    .stage(profiled_usage_events)
+                    .map_err(|error| stream_protocol_failure(error, semantic_output_observed))?
+                {
                     validate_stream_event(
                         &mut stream_state,
                         &usage_event,
@@ -2077,7 +2721,7 @@ impl ProviderExecutionClient {
                     yield usage_event;
                 }
                 for mut event in decoder
-                    .push_sse(frame.event_name.as_deref(), frame.data.as_str())
+                    .push_sse(frame.event_name.as_deref(), projected_data.as_str())
                     .map_err(|error| stream_protocol_failure(error, semantic_output_observed))?
                 {
                     if profiled_usage_enabled
@@ -2168,6 +2812,10 @@ impl ProviderExecutionClient {
     }
 }
 
+/// Maximum profiled usage events retained before the normalized response starts.
+/// 规范化响应开始前允许保留的最大 Profile 用量事件数。
+const PROFILED_USAGE_GATE_MAX_PENDING_EVENTS: usize = 256;
+
 /// Delays raw profiled usage until the normalized response lifecycle has started.
 /// 将原始 Profile 用量延迟到规范化响应生命周期开始之后。
 #[derive(Debug, Default)]
@@ -2183,12 +2831,31 @@ struct ProfiledUsageEventGate {
 impl ProfiledUsageEventGate {
     /// Stages newly extracted usage and returns events that may be published immediately.
     /// 暂存新提取的用量并返回可以立即发布的事件。
-    fn stage(&mut self, events: Vec<AiStreamEvent>) -> Vec<AiStreamEvent> {
+    ///
+    /// # Parameters
+    /// 参数
+    /// `events` contains one bounded frame's extracted usage observations.
+    /// `events` 包含从一个有界帧提取的用量观测。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Immediate events after response start, an empty vector while staging, or a bounded overflow error.
+    /// 响应开始后返回立即发布事件；暂存期间返回空向量；超过上限时返回有界溢出错误。
+    fn stage(
+        &mut self,
+        events: Vec<AiStreamEvent>,
+    ) -> Result<Vec<AiStreamEvent>, ProtocolConversionError> {
         if self.response_started {
-            return events;
+            return Ok(events);
+        }
+        if self.pending.len().saturating_add(events.len()) > PROFILED_USAGE_GATE_MAX_PENDING_EVENTS
+        {
+            return Err(ProtocolConversionError::new(format!(
+                "Provider usage before response start exceeds the {PROFILED_USAGE_GATE_MAX_PENDING_EVENTS}-event limit."
+            )));
         }
         self.pending.extend(events);
-        Vec::new()
+        Ok(Vec::new())
     }
 
     /// Observes one validated normalized event and releases pending usage after response start.
@@ -2457,6 +3124,64 @@ fn responses_websocket_cache_key(
     }))
     .ok()?;
     Some(format!("sha256:{:x}", Sha256::digest(material)))
+}
+
+/// Selects the least-recently-used WebSocket session that has no external owner.
+/// 选择没有外部持有者且最久未使用的 WebSocket 会话。
+///
+/// # Parameters
+/// 参数
+/// `sessions` is the complete bounded process-local WebSocket session table.
+/// `sessions` 是完整的有界进程内 WebSocket 会话表。
+///
+/// # Returns
+/// 返回值
+/// The deterministic eviction key, or `None` when every cached session is currently referenced.
+/// 返回确定性的淘汰键；当每个缓存会话当前都被引用时返回 `None`。
+fn oldest_idle_responses_websocket_session_key(
+    sessions: &BTreeMap<String, ResponsesWebsocketSessionCacheEntry>,
+) -> Option<String> {
+    sessions
+        .iter()
+        .filter(|(_, entry)| Arc::strong_count(&entry.session) == 1)
+        .min_by(|(left_key, left), (right_key, right)| {
+            left.last_used_at
+                .cmp(&right.last_used_at)
+                .then_with(|| left_key.cmp(right_key))
+        })
+        .map(|(key, _)| key.clone())
+}
+
+/// Inserts one sticky WebSocket breaker while enforcing a deterministic LRU capacity bound.
+/// 在强制确定性 LRU 容量上限的同时插入一个粘性 WebSocket 熔断器。
+///
+/// # Parameters
+/// 参数
+/// `breakers` is the mutable process-local breaker table, `key` is the opaque session key, and
+/// `observed_at` is the monotonic access timestamp.
+/// `breakers` 是可变进程内熔断器表，`key` 是不透明会话键，`observed_at` 是单调访问时间。
+///
+/// # Returns
+/// 返回值
+/// No value; an older breaker is evicted before a new key can exceed the hard limit.
+/// 不返回值；新键超过硬上限前会先淘汰一个更旧的熔断器。
+fn insert_bounded_responses_websocket_breaker(
+    breakers: &mut BTreeMap<String, Instant>,
+    key: &str,
+    observed_at: Instant,
+) {
+    if !breakers.contains_key(key)
+        && breakers.len() >= RESPONSES_WEBSOCKET_BREAKER_MAX_ENTRIES
+        && let Some(oldest_key) = breakers
+            .iter()
+            .min_by(|(left_key, left_at), (right_key, right_at)| {
+                left_at.cmp(right_at).then_with(|| left_key.cmp(right_key))
+            })
+            .map(|(oldest_key, _)| oldest_key.clone())
+    {
+        breakers.remove(oldest_key.as_str());
+    }
+    breakers.insert(key.to_string(), observed_at);
 }
 
 /// Converts the exact HTTP Responses endpoint to its WebSocket scheme.
@@ -2780,6 +3505,41 @@ fn validate_stream_event(
         .map_err(|message| stream_protocol_failure(ProtocolConversionError::new(message), observed))
 }
 
+/// Reports whether one route's manifest request profiles reference a model parameter.
+/// 报告一个路由的 Manifest 请求 Profile 是否引用某模型参数。
+///
+/// A closed step references a parameter either through a `CopyRequestField` field value or
+/// through a request-field source path with the `@model_parameters.<id>` form (plan §R8.5).
+/// 封闭步骤通过 `CopyRequestField` 的字段值或 `@model_parameters.<id>` 形式的请求字段
+/// 源路径引用参数（方案 §R8.5）。
+fn request_projection_profiles_cover_parameter(
+    route: &ProviderExecutionRoute,
+    parameter_id: &str,
+) -> bool {
+    let expected_field = format!("model_parameters.{parameter_id}");
+    let expected_source = format!("@model_parameters.{parameter_id}");
+    route.request_projection_profiles.iter().any(|profile| {
+        profile.steps.iter().any(|step| match step {
+            crate::provider_manifest::MappingStep::CopyRequestField { field, .. } => {
+                *field == expected_field
+            }
+            crate::provider_manifest::MappingStep::EnumMap { source_path, .. }
+            | crate::provider_manifest::MappingStep::ConditionalSet { source_path, .. }
+            | crate::provider_manifest::MappingStep::DeleteIfEquals { source_path, .. }
+            | crate::provider_manifest::MappingStep::DeleteUnlessEquals { source_path, .. }
+            | crate::provider_manifest::MappingStep::RejectIfPresent { source_path, .. } => {
+                *source_path == expected_source
+            }
+            crate::provider_manifest::MappingStep::RejectIfAllPresent { conditions, .. } => {
+                conditions
+                    .iter()
+                    .any(|condition| condition.source_path == expected_source)
+            }
+            _ => false,
+        })
+    })
+}
+
 /// Applies route-scoped request policy before encoding.
 /// 在编码前应用路由作用域请求策略。
 fn validate_request_policy(
@@ -2787,57 +3547,74 @@ fn validate_request_policy(
     request: &AiExecutionRequest,
 ) -> Result<(), ProviderExecutionFailure> {
     for parameter_id in request.model_parameters.keys() {
-        let registered_temperature_route = parameter_id == SAMPLING_TEMPERATURE_PARAMETER_ID
-            && ((route.entry.request_projector == RequestProjectorKind::MiniMax
-                && matches!(
-                    route.protocol_route.protocol_profile_id.as_str(),
-                    vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID
-                        | vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID
-                ))
-                || (route.entry.request_projector == RequestProjectorKind::DeepSeek
-                    && matches!(
-                        route.protocol_route.protocol_profile_id.as_str(),
-                        vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID
-                            | vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID
-                    ))
-                || route.entry.request_projector == RequestProjectorKind::OpenRouter);
-        let registered_minimax_reasoning_split = parameter_id
-            == MINIMAX_REASONING_SPLIT_PARAMETER_ID
-            && route.entry.request_projector == RequestProjectorKind::MiniMax
-            && route.protocol_route.protocol_profile_id
-                == vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID;
-        let registered_openrouter_reasoning_budget = parameter_id
-            == OPENROUTER_REASONING_MAX_TOKENS_PARAMETER_ID
-            && route.entry.request_projector == RequestProjectorKind::OpenRouter;
+        // Temperature is a protocol-neutral host primitive; provider-specific admissibility and
+        // conditional omission are declared by the effective model Profile.
+        // Temperature 是协议无关的宿主原语；供应商特定的可用性与条件省略由生效模型
+        // Profile 声明。
+        let registered_temperature_route = parameter_id == SAMPLING_TEMPERATURE_PARAMETER_ID;
         let registered_custom_parameter = route
             .custom_model_projection
             .as_ref()
             .is_some_and(|projection| projection.model_parameter_paths.contains_key(parameter_id));
-        if !registered_temperature_route
-            && !registered_minimax_reasoning_split
-            && !registered_openrouter_reasoning_budget
-            && !registered_custom_parameter
-        {
+        // Manifest request profiles register the model parameters their closed steps reference;
+        // the legacy per-provider projector gate is superseded by the profile chain (plan §R8.5).
+        // Manifest 请求 Profile 注册其封闭步骤引用的模型参数；旧版逐供应商投影器门槛被
+        // Profile 链取代（方案 §R8.5）。
+        let registered_by_profile =
+            request_projection_profiles_cover_parameter(route, parameter_id);
+        if !registered_temperature_route && !registered_custom_parameter && !registered_by_profile {
             return Err(pre_dispatch_failure(format!(
                 "Model-specific parameter `{parameter_id}` has no registered route projector."
             )));
         }
     }
-    if !matches!(request.prompt_cache, PromptCachePolicy::ProviderDefault)
-        && route.entry.request_projector == RequestProjectorKind::OpenRouter
-    {
-        return Err(pre_dispatch_failure(
-            "OpenRouter explicit prompt caching requires a verified model-endpoint capability.",
-        ));
-    }
-    if request.reasoning_effort.is_some()
-        && request
-            .model_parameters
-            .contains_key(OPENROUTER_REASONING_MAX_TOKENS_PARAMETER_ID)
-    {
-        return Err(pre_dispatch_failure(
-            "OpenRouter reasoning effort and reasoning max_tokens are mutually exclusive.",
-        ));
+    Ok(())
+}
+
+/// Evaluates request-field-only manifest guards before the canonical protocol encoder runs.
+/// 在规范协议编码器运行前执行仅依赖请求字段的 Manifest 守卫。
+///
+/// Provider profiles may declare a more specific endpoint restriction than the provider-neutral
+/// baseline encoder. Running only pure request-field guards here preserves that configuration
+/// authority; guards that depend on the encoded body remain deferred to normal projection.
+/// 供应商 Profile 可以声明比供应商无关基线编码器更具体的端点限制。此处仅提前执行纯请求字段
+/// 守卫，以保留配置权威；依赖编码正文的守卫仍延后到常规投影阶段。
+///
+/// # Parameters
+/// 参数
+/// `route` is the frozen route and `request` is the immutable provider-neutral request.
+/// `route` 是冻结路由，`request` 是不可变的供应商无关请求。
+///
+/// # Returns
+/// 返回值
+/// Success when every eligible guard accepts the request, otherwise its manifest-owned failure.
+/// 所有可提前执行的守卫均接受请求时返回成功，否则返回其 Manifest 自有失败。
+fn validate_request_projection_guards_before_encoding(
+    route: &ProviderExecutionRoute,
+    request: &AiExecutionRequest,
+) -> Result<(), ProviderExecutionFailure> {
+    let mut preflight = EncodedWireRequest {
+        path: String::from("/manifest-request-guard-preflight"),
+        headers: BTreeMap::new(),
+        body: Value::Object(Default::default()),
+    };
+    for profile in &route.request_projection_profiles {
+        for step in &profile.steps {
+            let request_field_only = match step {
+                crate::provider_manifest::MappingStep::RejectIfPresent { source, .. } => {
+                    *source == crate::provider_manifest::MappingStepSource::RequestField
+                }
+                crate::provider_manifest::MappingStep::RejectIfAllPresent {
+                    conditions, ..
+                } => conditions.iter().all(|condition| {
+                    condition.source == crate::provider_manifest::MappingStepSource::RequestField
+                }),
+                _ => false,
+            };
+            if request_field_only {
+                apply_mapping_step(request, &mut preflight, step)?;
+            }
+        }
     }
     Ok(())
 }
@@ -2909,7 +3686,7 @@ fn upstream_protocol_for_route(route: &ProviderExecutionRoute) -> Option<Upstrea
 
 /// Maps one exact registered protocol profile to the conversion-core wire protocol.
 /// 将一个精确注册协议 Profile 映射到转换核心 Wire 协议。
-fn upstream_protocol_for_profile_id(profile_id: &str) -> Option<UpstreamProtocol> {
+pub(crate) fn upstream_protocol_for_profile_id(profile_id: &str) -> Option<UpstreamProtocol> {
     match profile_id {
         OPENAI_RESPONSES_PROFILE_ID | OPENAI_CODEX_RESPONSES_PROFILE_ID => {
             Some(UpstreamProtocol::OpenAiResponses)
@@ -3039,31 +3816,14 @@ fn project_provider_request(
     if let Some(endpoint_path) = route.protocol_route.endpoint_path.as_ref() {
         encoded.path = endpoint_path.clone();
     }
-    // DeepSeek V4 enables thinking by default, where temperature is documented as ineffective.
-    // DeepSeek V4 默认启用思考模式，而官方文档说明该模式下温度参数不生效。
-    if route.entry.request_projector != RequestProjectorKind::DeepSeek
-        || request.reasoning_effort == Some(ReasoningEffort::None)
-    {
-        project_sampling_temperature(request, &mut encoded)?;
-    }
-    match route.entry.request_projector {
-        RequestProjectorKind::Direct | RequestProjectorKind::Google => {}
-        RequestProjectorKind::MiniMax => {
-            project_minimax_request(route, request, &mut encoded)?;
-        }
-        RequestProjectorKind::OpenRouter => {
-            project_openrouter_request(route, request, &mut encoded)?;
-        }
-        RequestProjectorKind::Kimi => {
-            project_kimi_request(route, request, &mut encoded)?;
-        }
-        RequestProjectorKind::DeepSeek => {
-            project_deepseek_request(route, request, &mut encoded)?;
-        }
-        RequestProjectorKind::Alibaba => {
-            project_alibaba_request(route, request, &mut encoded)?;
-        }
-    }
+    project_sampling_temperature(request, &mut encoded)?;
+    // The ordered Manifest Profile chain is the only provider/model-specific request mapper.
+    // Empty chains mean that baseline protocol encoding needs no vendor mutation and never
+    // reactivate a hidden code-owned provider projector (plan §R8.5/§R10).
+    // 有序 Manifest Profile 链是唯一的供应商/模型特定请求映射器。空链表示协议基线无需
+    // 供应商变换，绝不会重新启用隐藏的代码持有供应商 projector（方案 §R8.5/§R10）。
+    apply_request_projection_profiles(route, request, &mut encoded)?;
+    project_secondary_route(route, &mut encoded)?;
     if let Some(projection) = route.custom_model_projection.as_ref() {
         project_custom_model_request(projection, request, &mut encoded)?;
     }
@@ -3071,7 +3831,1511 @@ fn project_provider_request(
     Ok(encoded)
 }
 
-/// Verifies protocol-native JSON Schema fields survive provider-specific request projection.
+/// Projects an explicitly frozen secondary endpoint through the registered order primitive.
+/// 通过已注册的顺序原语投影一条显式冻结的二级端点。
+///
+/// # Parameters
+/// 参数
+/// `route` carries the immutable secondary selection and `encoded` is the protocol body.
+/// `route` 承载不可变二级选择，`encoded` 是协议请求体。
+///
+/// # Returns
+/// 返回值
+/// Success for automatic routing or one non-conflicting pinned endpoint.
+/// 自动路由或一条不冲突的固定端点返回成功。
+fn project_secondary_route(
+    route: &ProviderExecutionRoute,
+    encoded: &mut EncodedWireRequest,
+) -> Result<(), ProviderExecutionFailure> {
+    let SecondaryRouteSelection::PinnedEndpoint { route_id, .. } = &route.secondary_route else {
+        return Ok(());
+    };
+    let body = request_body_mut(encoded, "Secondary route")?;
+    if body.contains_key("provider") {
+        return Err(pre_dispatch_failure(
+            "Secondary-route projection conflicts with an existing provider field.",
+        ));
+    }
+    body.insert(
+        String::from("provider"),
+        json!({
+            "order": [route_id],
+            "allow_fallbacks": false,
+        }),
+    );
+    Ok(())
+}
+
+/// Applies the ordered closed request-projection profile chain to one encoded wire request.
+/// 把有序封闭请求投影 Profile 链应用到一个编码 Wire 请求。
+///
+/// Steps run in declaration order over the encoded body; the chain carries frozen profile
+/// revisions for telemetry and every step is a registered primitive (plan §6.6/§R8.2).
+/// 步骤按声明顺序作用于编码请求体；链携带冻结 Profile 修订用于遥测，每个步骤都是
+/// 已注册原语（方案 §6.6/§R8.2）。
+fn apply_request_projection_profiles(
+    route: &ProviderExecutionRoute,
+    request: &AiExecutionRequest,
+    encoded: &mut EncodedWireRequest,
+) -> Result<(), ProviderExecutionFailure> {
+    for profile in &route.request_projection_profiles {
+        for step in &profile.steps {
+            apply_mapping_step(request, encoded, step)?;
+        }
+    }
+    Ok(())
+}
+
+/// Executes one compiled request profile over a JSON body for the executable fixture harness.
+/// 为可执行 fixture 验证器在 JSON 正文上执行一份已编译请求 Profile。
+///
+/// # Parameters
+/// 参数
+/// `profile` is the exact compiled payload; `model_id` supplies the canonical request identity;
+/// `body` is the already protocol-encoded JSON body consumed by production mapping steps.
+/// `profile` 是精确已编译载荷；`model_id` 提供规范请求身份；`body` 是生产映射步骤消费的
+/// 已完成协议编码 JSON 正文。
+///
+/// # Returns
+/// 返回值
+/// The projected body, or the same controlled pre-dispatch failure used in production.
+/// 返回投影后的正文，或与生产环境相同的受控分发前错误。
+pub(crate) fn execute_request_profile_fixture(
+    profile: &crate::provider_manifest::RequestProjectionProfile,
+    model_id: &str,
+    body: Value,
+) -> Result<Value, String> {
+    project_json_request_profiles(std::slice::from_ref(profile), model_id, body)
+}
+
+/// Applies an ordered request-profile chain to a JSON provider-operation body.
+/// 将有序请求 Profile 链应用到 JSON 供应商操作正文。
+///
+/// # Parameters
+/// 参数
+/// `profiles` are frozen payloads from one manifest generation, `model_id` is the exact
+/// provider-tool target identity used by bounded templates, and `body` is the canonical JSON
+/// operation body after upload materialization.
+/// `profiles` 是同一清单代际冻结的载荷，`model_id` 是受限模板使用的精确供应商工具目标身份，
+/// `body` 是上传物化后的规范 JSON 操作正文。
+///
+/// # Returns
+/// 返回值
+/// The projected wire body, or the production-equivalent controlled pre-dispatch diagnostic.
+/// 返回投影后的 Wire 正文，或与生产一致的受控分派前诊断。
+pub(crate) fn project_json_request_profiles(
+    profiles: &[crate::provider_manifest::RequestProjectionProfile],
+    model_id: &str,
+    body: Value,
+) -> Result<Value, String> {
+    let request = AiExecutionRequest {
+        operation: vulcan_ai_contract::AiOperation::ConversationRespond,
+        model_id: model_id.to_string(),
+        cache_scope_id: None,
+        continuation: None,
+        messages: Vec::new(),
+        tools: Vec::new(),
+        native_tools: Vec::new(),
+        tool_choice: Default::default(),
+        parallel_tool_calls: Default::default(),
+        structured_output: Default::default(),
+        stop_sequences: Vec::new(),
+        prompt_cache: PromptCachePolicy::ProviderDefault,
+        reasoning_effort: None,
+        reasoning_output: Default::default(),
+        model_parameters: BTreeMap::new(),
+        resources: Vec::new(),
+        output_token_limit: None,
+    };
+    let mut encoded = EncodedWireRequest {
+        path: String::from("/fixture"),
+        headers: BTreeMap::new(),
+        body,
+    };
+    for profile in profiles {
+        for step in &profile.steps {
+            apply_mapping_step(&request, &mut encoded, step)
+                .map_err(|failure| failure.error.message)?;
+        }
+    }
+    Ok(encoded.body)
+}
+
+/// Applies an ordered response-profile chain to one JSON provider-operation response.
+/// 将有序响应 Profile 链应用到一个 JSON 供应商操作响应。
+///
+/// # Parameters
+/// 参数
+/// `profiles` are frozen payloads from one manifest generation and `body` is the decoded raw
+/// provider response before output-contract normalization.
+/// `profiles` 是同一清单代际冻结的载荷，`body` 是输出契约归一化前已解码的原始供应商响应。
+///
+/// # Returns
+/// 返回值
+/// The projected response JSON, or a deterministic profile conversion diagnostic.
+/// 返回投影后的响应 JSON，或确定性的 Profile 转换诊断。
+pub(crate) fn project_json_response_profiles(
+    profiles: &[crate::provider_manifest::ResponseProjectionProfile],
+    mut body: Value,
+) -> Result<Value, String> {
+    apply_response_projection_profiles(profiles, &mut body).map_err(|error| error.to_string())?;
+    Ok(body)
+}
+
+/// Applies every frozen response/error profile to one decoded provider JSON value.
+/// 把每一份冻结响应/错误 Profile 应用于一个已解码供应商 JSON 值。
+fn apply_response_projection_profiles(
+    profiles: &[crate::provider_manifest::ResponseProjectionProfile],
+    value: &mut Value,
+) -> Result<(), ProtocolConversionError> {
+    if profiles.is_empty() {
+        return Ok(());
+    }
+    if !value.is_object() {
+        return Err(ProtocolConversionError::new(
+            "Manifest response projection requires a JSON object value.",
+        ));
+    }
+    for profile in profiles {
+        for step in &profile.steps {
+            apply_response_mapping_step(value, step)?;
+        }
+    }
+    Ok(())
+}
+
+/// Parses, projects, and re-serializes one stream or HTTP-error JSON record.
+/// 解析、投影并重新序列化一条流式或 HTTP 错误 JSON 记录。
+pub(crate) fn project_response_record_text(
+    profiles: &[crate::provider_manifest::ResponseProjectionProfile],
+    text: &str,
+) -> Result<String, ProtocolConversionError> {
+    if profiles.is_empty() || text.trim() == "[DONE]" {
+        return Ok(text.to_string());
+    }
+    let mut value: Value = serde_json::from_str(text).map_err(|error| {
+        ProtocolConversionError::new(format!(
+            "Manifest response projection expected JSON but decoding failed: {error}"
+        ))
+    })?;
+    apply_response_projection_profiles(profiles, &mut value)?;
+    serde_json::to_string(&value).map_err(|error| {
+        ProtocolConversionError::new(format!(
+            "Manifest response projection failed to serialize JSON: {error}"
+        ))
+    })
+}
+
+/// Applies one request-independent closed mapping step to a response JSON object.
+/// 把一个不依赖请求上下文的封闭映射步骤应用于响应 JSON 对象。
+fn apply_response_mapping_step(
+    body: &mut Value,
+    step: &crate::provider_manifest::MappingStep,
+) -> Result<(), ProtocolConversionError> {
+    match step {
+        crate::provider_manifest::MappingStep::SetLiteral { path, value } => {
+            write_response_json_pointer(body, path, value.clone())?;
+        }
+        crate::provider_manifest::MappingStep::SetDefaultIfMissing { path, value } => {
+            if pointer_value(body, path).is_none() {
+                write_response_json_pointer(body, path, value.clone())?;
+            }
+        }
+        crate::provider_manifest::MappingStep::CopyJsonPointer { from, to } => {
+            if let Some(value) = pointer_value(body, from).cloned() {
+                write_response_json_pointer(body, to, value)?;
+            }
+        }
+        crate::provider_manifest::MappingStep::RenameJsonPointer { from, to } => {
+            if let Some(value) = pointer_value(body, from).cloned() {
+                delete_json_pointer(body, from);
+                write_response_json_pointer(body, to, value)?;
+            }
+        }
+        crate::provider_manifest::MappingStep::DeleteJsonPointer { path } => {
+            delete_json_pointer(body, path);
+        }
+        crate::provider_manifest::MappingStep::EnumMap {
+            path,
+            source,
+            source_path,
+            mapping,
+            unmatched,
+            default,
+        } => {
+            ensure_response_body_source(*source)?;
+            let source_value = pointer_value(body, source_path).cloned();
+            let mapped = source_value
+                .as_ref()
+                .and_then(|value| value.as_str().and_then(|text| mapping.get(text).cloned()));
+            match (source_value, mapped, unmatched, default) {
+                (None, _, _, Some(fallback)) => {
+                    write_response_json_pointer(body, path, fallback.clone())?;
+                }
+                (None, _, _, None) => {}
+                (_, Some(mapped), _, _) => write_response_json_pointer(body, path, mapped)?,
+                (Some(_), None, crate::provider_manifest::EnumMapUnmatched::Remove, _) => {
+                    delete_json_pointer(body, path);
+                }
+                (Some(_), None, crate::provider_manifest::EnumMapUnmatched::Error, _) => {
+                    return Err(ProtocolConversionError::new(format!(
+                        "Response enum map source `{source_path}` is not in the declared mapping table."
+                    )));
+                }
+                (Some(_), None, crate::provider_manifest::EnumMapUnmatched::KeepLiteral, _) => {}
+            }
+        }
+        crate::provider_manifest::MappingStep::WrapSingletonArray { path } => {
+            if let Some(value) = pointer_value(body, path).cloned() {
+                write_response_json_pointer(body, path, Value::Array(vec![value]))?;
+            }
+        }
+        crate::provider_manifest::MappingStep::UnwrapSingletonArray { path } => {
+            if let Some(Value::Array(items)) = pointer_value(body, path).cloned()
+                && items.len() == 1
+            {
+                write_response_json_pointer(
+                    body,
+                    path,
+                    items.into_iter().next().unwrap_or(Value::Null),
+                )?;
+            }
+        }
+        crate::provider_manifest::MappingStep::ConditionalSet {
+            path,
+            source,
+            source_path,
+            equals,
+            then,
+            otherwise,
+        } => {
+            ensure_response_body_source(*source)?;
+            if let Some(value) = pointer_value(body, source_path) {
+                let selected = if value.as_str().is_some_and(|text| text == equals) {
+                    then
+                } else {
+                    otherwise
+                };
+                write_or_delete_response(body, path, selected)?;
+            }
+        }
+        crate::provider_manifest::MappingStep::DeleteIfEquals {
+            path,
+            source,
+            source_path,
+            equals,
+        } => {
+            ensure_response_body_source(*source)?;
+            if pointer_value(body, source_path)
+                .and_then(Value::as_str)
+                .is_some_and(|text| text == equals)
+            {
+                delete_json_pointer(body, path);
+            }
+        }
+        crate::provider_manifest::MappingStep::DeleteUnlessEquals {
+            path,
+            source,
+            source_path,
+            equals,
+        } => {
+            ensure_response_body_source(*source)?;
+            let retains_target = pointer_value(body, source_path)
+                .and_then(Value::as_str)
+                .is_some_and(|text| text == equals);
+            if !retains_target {
+                delete_json_pointer(body, path);
+            }
+        }
+        crate::provider_manifest::MappingStep::RemoveIfEmpty { path } => {
+            let empty = matches!(pointer_value(body, path), Some(Value::Array(items)) if items.is_empty())
+                || matches!(pointer_value(body, path), Some(Value::Object(items)) if items.is_empty());
+            if empty {
+                delete_json_pointer(body, path);
+            }
+        }
+        crate::provider_manifest::MappingStep::RejectIfPresent {
+            source,
+            source_path,
+            message,
+        } => {
+            ensure_response_body_source(*source)?;
+            if pointer_value(body, source_path).is_some() {
+                return Err(ProtocolConversionError::new(message.clone()));
+            }
+        }
+        crate::provider_manifest::MappingStep::RejectIfAllPresent {
+            conditions,
+            message,
+        } => {
+            for condition in conditions {
+                ensure_response_body_source(condition.source)?;
+            }
+            if conditions
+                .iter()
+                .all(|condition| pointer_value(body, &condition.source_path).is_some())
+            {
+                return Err(ProtocolConversionError::new(message.clone()));
+            }
+        }
+        crate::provider_manifest::MappingStep::StringTemplate { .. }
+        | crate::provider_manifest::MappingStep::CopyRequestField { .. } => {
+            return Err(ProtocolConversionError::new(
+                "Response projection contains a request-only mapping step.",
+            ));
+        }
+        crate::provider_manifest::MappingStep::RebuildJsonTemplate { template } => {
+            let source = body.clone();
+            let rendered = render_complete_json_template(template, &source, "")
+                .map_err(ProtocolConversionError::new)?;
+            if !rendered.is_object() {
+                return Err(ProtocolConversionError::new(
+                    "Manifest response JSON template must render an object body.",
+                ));
+            }
+            *body = rendered;
+        }
+    }
+    Ok(())
+}
+
+/// Enforces that response mapping sources come only from the decoded response body.
+/// 强制响应映射源只能来自已解码响应正文。
+fn ensure_response_body_source(
+    source: crate::provider_manifest::MappingStepSource,
+) -> Result<(), ProtocolConversionError> {
+    if source == crate::provider_manifest::MappingStepSource::BodyJsonPointer {
+        Ok(())
+    } else {
+        Err(ProtocolConversionError::new(
+            "Response projection may not read host request fields.",
+        ))
+    }
+}
+
+/// Safely writes one response JSON pointer without panicking on remote scalar ancestors.
+/// 安全写入一个响应 JSON Pointer，远端标量祖先存在时不会触发 panic。
+fn write_response_json_pointer(
+    body: &mut Value,
+    path: &str,
+    value: Value,
+) -> Result<(), ProtocolConversionError> {
+    let segments = pointer_segments(path);
+    if segments.is_empty() {
+        return Err(ProtocolConversionError::new(
+            "Response projection target JSON pointer is empty.",
+        ));
+    }
+    let mut current = body;
+    for segment in &segments[..segments.len() - 1] {
+        let object = current.as_object_mut().ok_or_else(|| {
+            ProtocolConversionError::new(format!(
+                "Response projection target `{path}` crosses a non-object ancestor."
+            ))
+        })?;
+        current = object
+            .entry(segment.to_string())
+            .or_insert_with(|| Value::Object(Default::default()));
+    }
+    let object = current.as_object_mut().ok_or_else(|| {
+        ProtocolConversionError::new(format!(
+            "Response projection target `{path}` has a non-object parent."
+        ))
+    })?;
+    let last = segments.last().expect("validated non-empty response path");
+    object.insert(last.to_string(), value);
+    Ok(())
+}
+
+/// Writes a response value or deletes the target when the selected value is null.
+/// 写入响应值；所选值为 null 时删除目标。
+fn write_or_delete_response(
+    body: &mut Value,
+    path: &str,
+    value: &Value,
+) -> Result<(), ProtocolConversionError> {
+    if value.is_null() {
+        delete_json_pointer(body, path);
+        Ok(())
+    } else {
+        write_response_json_pointer(body, path, value.clone())
+    }
+}
+
+/// Applies one closed mapping step to the encoded wire request.
+/// 把一个封闭映射步骤应用到编码 Wire 请求。
+/// Maximum array entries emitted by one declarative JSON-template map expression.
+/// 单个声明式 JSON 模板映射表达式允许输出的最大数组项数。
+const JSON_TEMPLATE_MAX_ARRAY_ITEMS: usize = 256;
+
+/// Maximum serialized byte size emitted by one declarative JSON template.
+/// 单份声明式 JSON 模板允许输出的最大序列化字节数。
+const JSON_TEMPLATE_MAX_OUTPUT_BYTES: usize = 1024 * 1024;
+
+/// One internal template rendering outcome, including an explicitly omitted optional value.
+/// 一种内部模板渲染结果，包含被显式省略的可选值。
+enum JsonTemplateRender {
+    /// One concrete rendered JSON value.
+    /// 一份具体的已渲染 JSON 值。
+    Value(Value),
+    /// One absent optional source omitted from its containing object or array.
+    /// 一个从所属对象或数组中省略的缺失可选来源。
+    Omitted,
+}
+
+/// Immutable source context available to one bounded JSON-template expression.
+/// 单个有界 JSON 模板表达式可读取的不可变来源上下文。
+struct JsonTemplateContext<'a> {
+    /// Complete body captured before the rebuild step starts.
+    /// 重建步骤开始前捕获的完整正文。
+    body: &'a Value,
+    /// Current array item while rendering a registered map expression.
+    /// 渲染已注册映射表达式时的当前数组项。
+    item: Option<&'a Value>,
+    /// Exact immutable model or upstream target identifier.
+    /// 精确不可变模型或上游目标标识。
+    model_id: &'a str,
+}
+
+/// Renders one complete body from the closed declarative JSON-template language.
+/// 使用封闭的声明式 JSON 模板语言渲染一份完整正文。
+///
+/// # Parameters
+/// 参数
+/// `template` is the manifest-owned template, `source` is the exact original body, and
+/// `model_id` is the already frozen route identifier.
+/// `template` 是 Manifest 持有的模板，`source` 是精确原始正文，`model_id` 是已冻结路由标识。
+///
+/// # Returns
+/// 返回值
+/// A bounded JSON value or one controlled validation/rendering error.
+/// 返回有界 JSON 值或一条受控校验/渲染错误。
+fn render_complete_json_template(
+    template: &Value,
+    source: &Value,
+    model_id: &str,
+) -> Result<Value, String> {
+    let context = JsonTemplateContext {
+        body: source,
+        item: None,
+        model_id,
+    };
+    let rendered = match render_json_template_value(template, &context, 0)? {
+        JsonTemplateRender::Value(value) => value,
+        JsonTemplateRender::Omitted => {
+            return Err(String::from(
+                "A complete JSON template cannot resolve to an omitted optional value.",
+            ));
+        }
+    };
+    let serialized = serde_json::to_vec(&rendered)
+        .map_err(|error| format!("Rendered JSON template could not be serialized: {error}"))?;
+    if serialized.len() > JSON_TEMPLATE_MAX_OUTPUT_BYTES {
+        return Err(format!(
+            "Rendered JSON template exceeds the {JSON_TEMPLATE_MAX_OUTPUT_BYTES} byte limit."
+        ));
+    }
+    Ok(rendered)
+}
+
+/// Renders one recursive declarative JSON-template node under fixed depth and array limits.
+/// 在固定深度与数组限制下渲染一个递归声明式 JSON 模板节点。
+fn render_json_template_value(
+    template: &Value,
+    context: &JsonTemplateContext<'_>,
+    depth: usize,
+) -> Result<JsonTemplateRender, String> {
+    if depth > crate::provider_manifest::MAX_JSON_DEPTH {
+        return Err(format!(
+            "JSON template exceeds the {} level depth limit.",
+            crate::provider_manifest::MAX_JSON_DEPTH
+        ));
+    }
+    match template {
+        Value::Object(object) => {
+            if let Some((tag, specification)) = json_template_registered_form(object)? {
+                return render_json_template_form(tag, specification, context, depth + 1);
+            }
+            let mut rendered = serde_json::Map::new();
+            for (key, value) in object {
+                match render_json_template_value(value, context, depth + 1)? {
+                    JsonTemplateRender::Value(value) => {
+                        rendered.insert(key.clone(), value);
+                    }
+                    JsonTemplateRender::Omitted => {}
+                }
+            }
+            Ok(JsonTemplateRender::Value(Value::Object(rendered)))
+        }
+        Value::Array(values) => {
+            if values.len() > JSON_TEMPLATE_MAX_ARRAY_ITEMS {
+                return Err(format!(
+                    "JSON template literal array exceeds the {JSON_TEMPLATE_MAX_ARRAY_ITEMS} item limit."
+                ));
+            }
+            let mut rendered = Vec::with_capacity(values.len());
+            for value in values {
+                if let JsonTemplateRender::Value(value) =
+                    render_json_template_value(value, context, depth + 1)?
+                {
+                    rendered.push(value);
+                }
+            }
+            Ok(JsonTemplateRender::Value(Value::Array(rendered)))
+        }
+        scalar => Ok(JsonTemplateRender::Value(scalar.clone())),
+    }
+}
+
+/// Detects one exact registered template form and rejects ambiguous reserved-key objects.
+/// 识别一个精确已注册模板形式，并拒绝含糊的保留键对象。
+fn json_template_registered_form(
+    object: &serde_json::Map<String, Value>,
+) -> Result<Option<(&str, &Value)>, String> {
+    let reserved = object
+        .iter()
+        .filter(|(key, _)| key.starts_with("$vulcan_"))
+        .collect::<Vec<_>>();
+    if reserved.is_empty() {
+        return Ok(None);
+    }
+    if object.len() != 1 || reserved.len() != 1 {
+        return Err(String::from(
+            "A registered JSON template form must be the object's only property.",
+        ));
+    }
+    let (tag, specification) = reserved[0];
+    match tag.as_str() {
+        "$vulcan_ref"
+        | "$vulcan_model_id"
+        | "$vulcan_map"
+        | "$vulcan_enum"
+        | "$vulcan_if_equals"
+        | "$vulcan_if_present"
+        | "$vulcan_concat"
+        | "$vulcan_if_array_length"
+        | "$vulcan_array_concat"
+        | "$vulcan_coalesce"
+        | "$vulcan_trim" => Ok(Some((tag.as_str(), specification))),
+        _ => Err(format!("JSON template form `{tag}` is not registered.")),
+    }
+}
+
+/// Executes one exact registered template form without dynamic code or reflective field lookup.
+/// 在不执行动态代码或反射字段查找的情况下执行一个精确已注册模板形式。
+fn render_json_template_form(
+    tag: &str,
+    specification: &Value,
+    context: &JsonTemplateContext<'_>,
+    depth: usize,
+) -> Result<JsonTemplateRender, String> {
+    match tag {
+        "$vulcan_ref" => render_json_template_reference(specification, context),
+        "$vulcan_model_id" => {
+            if specification != &Value::Bool(true) {
+                return Err(String::from(
+                    "$vulcan_model_id must carry the literal boolean true.",
+                ));
+            }
+            Ok(JsonTemplateRender::Value(Value::String(
+                context.model_id.to_string(),
+            )))
+        }
+        "$vulcan_map" => render_json_template_map(specification, context, depth),
+        "$vulcan_enum" => render_json_template_enum(specification, context),
+        "$vulcan_if_equals" => render_json_template_condition(specification, context, depth),
+        "$vulcan_if_present" => {
+            render_json_template_presence_condition(specification, context, depth)
+        }
+        "$vulcan_if_array_length" => {
+            render_json_template_array_length_condition(specification, context, depth)
+        }
+        "$vulcan_concat" => render_json_template_concat(specification, context, depth),
+        "$vulcan_array_concat" => render_json_template_array_concat(specification, context, depth),
+        "$vulcan_coalesce" => render_json_template_coalesce(specification, context, depth),
+        "$vulcan_trim" => render_json_template_trimmed_string(specification, context),
+        _ => Err(format!("JSON template form `{tag}` is not registered.")),
+    }
+}
+
+/// Resolves one body or current-item JSON Pointer declared by a template form.
+/// 解析模板形式声明的一个正文或当前项 JSON Pointer。
+fn json_template_source<'a>(
+    specification: &'a serde_json::Map<String, Value>,
+    context: &'a JsonTemplateContext<'a>,
+) -> Result<Option<&'a Value>, String> {
+    let scope = specification
+        .get("scope")
+        .and_then(Value::as_str)
+        .unwrap_or("body");
+    let path = specification
+        .get("path")
+        .and_then(Value::as_str)
+        .ok_or_else(|| String::from("JSON template source requires a string `path`."))?;
+    if !path.is_empty() && !path.starts_with('/') {
+        return Err(String::from(
+            "JSON template source path must be empty or an absolute JSON Pointer.",
+        ));
+    }
+    let source = match scope {
+        "body" => context.body,
+        "item" => context.item.ok_or_else(|| {
+            String::from("JSON template item scope is only available inside $vulcan_map.")
+        })?,
+        _ => {
+            return Err(format!(
+                "JSON template source scope `{scope}` is not registered."
+            ));
+        }
+    };
+    Ok(if path.is_empty() {
+        Some(source)
+    } else {
+        source.pointer(path)
+    })
+}
+
+/// Renders one required or optional JSON Pointer reference.
+/// 渲染一个必需或可选的 JSON Pointer 引用。
+fn render_json_template_reference(
+    specification: &Value,
+    context: &JsonTemplateContext<'_>,
+) -> Result<JsonTemplateRender, String> {
+    let object = specification
+        .as_object()
+        .ok_or_else(|| String::from("$vulcan_ref requires an object specification."))?;
+    let optional = object
+        .get("optional")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let omit_if_empty = object
+        .get("omit_if_empty")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    match json_template_source(object, context)? {
+        Some(value)
+            if !value.is_null()
+                && !(omit_if_empty
+                    && (matches!(value, Value::String(text) if text.is_empty())
+                        || matches!(value, Value::Array(items) if items.is_empty())
+                        || matches!(value, Value::Object(items) if items.is_empty()))) =>
+        {
+            Ok(JsonTemplateRender::Value(value.clone()))
+        }
+        _ if optional => Ok(JsonTemplateRender::Omitted),
+        _ => Err(String::from(
+            "$vulcan_ref could not resolve its required source value.",
+        )),
+    }
+}
+
+/// Resolves and trims one bounded string source without changing any other value type.
+/// 解析并裁剪一个有界字符串源，不改变任何其他值类型。
+///
+/// # Parameters
+/// 参数
+/// `specification` declares the exact source pointer and optionality; `context` owns the frozen
+/// body and current-item roots.
+/// `specification` 声明精确源 Pointer 与可选性；`context` 持有冻结正文与当前条目根。
+///
+/// # Returns
+/// 返回值
+/// A non-empty trimmed string, an omitted optional value, or a deterministic type/presence error.
+/// 返回非空裁剪字符串、省略的可选值，或确定性的类型与存在性错误。
+fn render_json_template_trimmed_string(
+    specification: &Value,
+    context: &JsonTemplateContext<'_>,
+) -> Result<JsonTemplateRender, String> {
+    let object = specification
+        .as_object()
+        .ok_or_else(|| String::from("$vulcan_trim requires an object specification."))?;
+    let optional = object
+        .get("optional")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let Some(value) = json_template_source(object, context)? else {
+        return if optional {
+            Ok(JsonTemplateRender::Omitted)
+        } else {
+            Err(String::from(
+                "$vulcan_trim could not resolve its required source value.",
+            ))
+        };
+    };
+    let trimmed = value
+        .as_str()
+        .ok_or_else(|| String::from("$vulcan_trim source must be a string."))?
+        .trim();
+    if trimmed.is_empty() {
+        return if optional {
+            Ok(JsonTemplateRender::Omitted)
+        } else {
+            Err(String::from(
+                "$vulcan_trim source must contain non-whitespace text.",
+            ))
+        };
+    }
+    Ok(JsonTemplateRender::Value(Value::String(
+        trimmed.to_string(),
+    )))
+}
+
+/// Renders one bounded source array through a nested template for each item.
+/// 使用嵌套模板逐项渲染一个有界来源数组。
+fn render_json_template_map(
+    specification: &Value,
+    context: &JsonTemplateContext<'_>,
+    depth: usize,
+) -> Result<JsonTemplateRender, String> {
+    let object = specification
+        .as_object()
+        .ok_or_else(|| String::from("$vulcan_map requires an object specification."))?;
+    let template = object
+        .get("template")
+        .ok_or_else(|| String::from("$vulcan_map requires a `template`."))?;
+    let optional = object
+        .get("optional")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let flatten = object
+        .get("flatten")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let Some(source) = json_template_source(object, context)? else {
+        return if optional {
+            Ok(JsonTemplateRender::Omitted)
+        } else {
+            Err(String::from(
+                "$vulcan_map could not resolve its source array.",
+            ))
+        };
+    };
+    let items = source
+        .as_array()
+        .ok_or_else(|| String::from("$vulcan_map source must be an array."))?;
+    if items.len() > JSON_TEMPLATE_MAX_ARRAY_ITEMS {
+        return Err(format!(
+            "$vulcan_map source exceeds the {JSON_TEMPLATE_MAX_ARRAY_ITEMS} item limit."
+        ));
+    }
+    let mut rendered = Vec::with_capacity(items.len());
+    for item in items {
+        let item_context = JsonTemplateContext {
+            body: context.body,
+            item: Some(item),
+            model_id: context.model_id,
+        };
+        if let JsonTemplateRender::Value(value) =
+            render_json_template_value(template, &item_context, depth + 1)?
+        {
+            if flatten {
+                let values = value.as_array().ok_or_else(|| {
+                    String::from("$vulcan_map with flatten=true must render arrays.")
+                })?;
+                if rendered.len().saturating_add(values.len()) > JSON_TEMPLATE_MAX_ARRAY_ITEMS {
+                    return Err(format!(
+                        "$vulcan_map flattened output exceeds the {JSON_TEMPLATE_MAX_ARRAY_ITEMS} item limit."
+                    ));
+                }
+                rendered.extend(values.iter().cloned());
+            } else {
+                rendered.push(value);
+            }
+        }
+    }
+    Ok(JsonTemplateRender::Value(Value::Array(rendered)))
+}
+
+/// Maps one exact string source through a bounded literal table.
+/// 通过有界字面量表映射一个精确字符串来源。
+fn render_json_template_enum(
+    specification: &Value,
+    context: &JsonTemplateContext<'_>,
+) -> Result<JsonTemplateRender, String> {
+    let object = specification
+        .as_object()
+        .ok_or_else(|| String::from("$vulcan_enum requires an object specification."))?;
+    let mapping = object
+        .get("mapping")
+        .and_then(Value::as_object)
+        .ok_or_else(|| String::from("$vulcan_enum requires an object `mapping`."))?;
+    let optional = object
+        .get("optional")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let Some(source) = json_template_source(object, context)? else {
+        return match object.get("default") {
+            Some(value) => Ok(JsonTemplateRender::Value(value.clone())),
+            None if optional => Ok(JsonTemplateRender::Omitted),
+            None => Err(String::from("$vulcan_enum could not resolve its source.")),
+        };
+    };
+    let source = source
+        .as_str()
+        .ok_or_else(|| String::from("$vulcan_enum source must be a string."))?;
+    match mapping.get(source).or_else(|| object.get("default")) {
+        Some(value) => Ok(JsonTemplateRender::Value(value.clone())),
+        None if optional => Ok(JsonTemplateRender::Omitted),
+        None => Err(format!(
+            "$vulcan_enum source value `{source}` is not in its mapping table."
+        )),
+    }
+}
+
+/// Selects and renders one of two templates using exact JSON equality.
+/// 使用精确 JSON 相等判断选择并渲染两个模板之一。
+fn render_json_template_condition(
+    specification: &Value,
+    context: &JsonTemplateContext<'_>,
+    depth: usize,
+) -> Result<JsonTemplateRender, String> {
+    let object = specification
+        .as_object()
+        .ok_or_else(|| String::from("$vulcan_if_equals requires an object specification."))?;
+    let expected = object
+        .get("equals")
+        .ok_or_else(|| String::from("$vulcan_if_equals requires `equals`."))?;
+    let selected = if json_template_source(object, context)? == Some(expected) {
+        object.get("then")
+    } else {
+        object.get("otherwise")
+    };
+    match selected {
+        Some(template) => render_json_template_value(template, context, depth + 1),
+        None => Ok(JsonTemplateRender::Omitted),
+    }
+}
+
+/// Renders one nested template only when its exact JSON Pointer resolves to a non-null value.
+/// 仅当精确 JSON Pointer 解析为非 null 值时渲染一个嵌套模板。
+///
+/// # Parameters
+/// 参数
+/// `specification` declares the source and the required `then` template; `context` is immutable.
+/// `specification` 声明来源与必需的 `then` 模板；`context` 保持不可变。
+///
+/// # Returns
+/// 返回值
+/// The rendered branch when present, otherwise an explicit omission marker.
+/// 当来源存在时返回已渲染分支，否则返回显式省略标记。
+fn render_json_template_presence_condition(
+    specification: &Value,
+    context: &JsonTemplateContext<'_>,
+    depth: usize,
+) -> Result<JsonTemplateRender, String> {
+    let object = specification
+        .as_object()
+        .ok_or_else(|| String::from("$vulcan_if_present requires an object specification."))?;
+    if !object.contains_key("then") && !object.contains_key("otherwise") {
+        return Err(String::from(
+            "$vulcan_if_present requires `then` or `otherwise`.",
+        ));
+    }
+    let non_empty = object
+        .get("non_empty")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let selected = match json_template_source(object, context)? {
+        Some(value)
+            if !value.is_null()
+                && !(non_empty
+                    && (matches!(value, Value::String(text) if text.is_empty())
+                        || matches!(value, Value::Array(items) if items.is_empty())
+                        || matches!(value, Value::Object(items) if items.is_empty()))) =>
+        {
+            object.get("then")
+        }
+        _ => object.get("otherwise"),
+    };
+    match selected {
+        Some(template) => render_json_template_value(template, context, depth + 1),
+        None => Ok(JsonTemplateRender::Omitted),
+    }
+}
+
+/// Selects one template branch by the exact length of a resolved JSON array.
+/// 按已解析 JSON 数组的精确长度选择一个模板分支。
+///
+/// # Parameters
+/// 参数
+/// `specification` declares the source, expected length, and optional branches.
+/// `specification` 声明来源、期望长度与可选分支。
+///
+/// # Returns
+/// 返回值
+/// The selected rendered branch, or omission when the selected branch is absent.
+/// 返回所选已渲染分支；所选分支缺失时返回省略标记。
+fn render_json_template_array_length_condition(
+    specification: &Value,
+    context: &JsonTemplateContext<'_>,
+    depth: usize,
+) -> Result<JsonTemplateRender, String> {
+    let object = specification
+        .as_object()
+        .ok_or_else(|| String::from("$vulcan_if_array_length requires an object specification."))?;
+    let expected = object
+        .get("equals")
+        .and_then(Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
+        .filter(|value| *value <= JSON_TEMPLATE_MAX_ARRAY_ITEMS)
+        .ok_or_else(|| {
+            format!(
+                "$vulcan_if_array_length equals must be an integer from 0 through {JSON_TEMPLATE_MAX_ARRAY_ITEMS}."
+            )
+        })?;
+    let actual = json_template_source(object, context)?
+        .and_then(Value::as_array)
+        .map(Vec::len);
+    let selected = if actual == Some(expected) {
+        object.get("then")
+    } else {
+        object.get("otherwise")
+    };
+    match selected {
+        Some(template) => render_json_template_value(template, context, depth + 1),
+        None => Ok(JsonTemplateRender::Omitted),
+    }
+}
+
+/// Concatenates rendered scalar template values into one bounded string.
+/// 把已渲染的标量模板值拼接为一个有界字符串。
+fn render_json_template_concat(
+    specification: &Value,
+    context: &JsonTemplateContext<'_>,
+    depth: usize,
+) -> Result<JsonTemplateRender, String> {
+    let values = specification
+        .as_array()
+        .ok_or_else(|| String::from("$vulcan_concat requires an array specification."))?;
+    if values.len() > JSON_TEMPLATE_MAX_ARRAY_ITEMS {
+        return Err(format!(
+            "$vulcan_concat exceeds the {JSON_TEMPLATE_MAX_ARRAY_ITEMS} item limit."
+        ));
+    }
+    let mut output = String::new();
+    for value in values {
+        let rendered = match render_json_template_value(value, context, depth + 1)? {
+            JsonTemplateRender::Value(value) => value,
+            JsonTemplateRender::Omitted => continue,
+        };
+        match rendered {
+            Value::String(value) => output.push_str(value.as_str()),
+            Value::Number(value) => output.push_str(value.to_string().as_str()),
+            Value::Bool(value) => output.push_str(if value { "true" } else { "false" }),
+            _ => {
+                return Err(String::from(
+                    "$vulcan_concat items must render to strings, numbers, or booleans.",
+                ));
+            }
+        }
+        if output.len() > JSON_TEMPLATE_MAX_OUTPUT_BYTES {
+            return Err(format!(
+                "$vulcan_concat exceeds the {JSON_TEMPLATE_MAX_OUTPUT_BYTES} byte limit."
+            ));
+        }
+    }
+    Ok(JsonTemplateRender::Value(Value::String(output)))
+}
+
+/// Concatenates rendered array templates into one bounded ordered array.
+/// 把已渲染的数组模板拼接为一个有界有序数组。
+///
+/// # Parameters
+/// 参数
+/// `specification` is an ordered bounded template list and `context` is the immutable source.
+/// `specification` 是有序有界模板列表，`context` 是不可变来源。
+///
+/// # Returns
+/// 返回值
+/// One flattened array whose total item count never exceeds the shared template ceiling.
+/// 返回一个扁平数组，其总元素数量永不超过共享模板上限。
+fn render_json_template_array_concat(
+    specification: &Value,
+    context: &JsonTemplateContext<'_>,
+    depth: usize,
+) -> Result<JsonTemplateRender, String> {
+    let templates = specification
+        .as_array()
+        .filter(|templates| {
+            !templates.is_empty() && templates.len() <= JSON_TEMPLATE_MAX_ARRAY_ITEMS
+        })
+        .ok_or_else(|| {
+            format!(
+                "$vulcan_array_concat requires between 1 and {JSON_TEMPLATE_MAX_ARRAY_ITEMS} templates."
+            )
+        })?;
+    let mut output = Vec::new();
+    for template in templates {
+        let rendered = match render_json_template_value(template, context, depth + 1)? {
+            JsonTemplateRender::Value(value) => value,
+            JsonTemplateRender::Omitted => continue,
+        };
+        let values = rendered
+            .as_array()
+            .ok_or_else(|| String::from("$vulcan_array_concat templates must render to arrays."))?;
+        if output.len().saturating_add(values.len()) > JSON_TEMPLATE_MAX_ARRAY_ITEMS {
+            return Err(format!(
+                "$vulcan_array_concat exceeds the {JSON_TEMPLATE_MAX_ARRAY_ITEMS} item limit."
+            ));
+        }
+        output.extend(values.iter().cloned());
+    }
+    Ok(JsonTemplateRender::Value(Value::Array(output)))
+}
+
+/// Selects the first non-omitted value from an ordered bounded template list.
+/// 从一份有序有界模板列表中选择首个未省略值。
+///
+/// # Parameters
+/// 参数
+/// `specification` is the closed ordered template array and `context` is the immutable source.
+/// `specification` 是封闭有序模板数组，`context` 是不可变来源。
+///
+/// # Returns
+/// 返回值
+/// The first rendered value, or `Omitted` when every candidate is explicitly optional and absent.
+/// 返回首个已渲染值；当每个候选均显式可选且缺失时返回 `Omitted`。
+fn render_json_template_coalesce(
+    specification: &Value,
+    context: &JsonTemplateContext<'_>,
+    depth: usize,
+) -> Result<JsonTemplateRender, String> {
+    // Candidate count is bounded by the same collection ceiling as literal arrays and maps.
+    // 候选数量与字面数组、映射使用相同集合上限。
+    let candidates = specification
+        .as_array()
+        .filter(|candidates| {
+            !candidates.is_empty() && candidates.len() <= JSON_TEMPLATE_MAX_ARRAY_ITEMS
+        })
+        .ok_or_else(|| {
+            format!(
+                "$vulcan_coalesce requires between 1 and {JSON_TEMPLATE_MAX_ARRAY_ITEMS} candidates."
+            )
+        })?;
+    for candidate in candidates {
+        match render_json_template_value(candidate, context, depth + 1)? {
+            JsonTemplateRender::Value(value) => {
+                return Ok(JsonTemplateRender::Value(value));
+            }
+            JsonTemplateRender::Omitted => {}
+        }
+    }
+    Ok(JsonTemplateRender::Omitted)
+}
+
+fn apply_mapping_step(
+    request: &AiExecutionRequest,
+    encoded: &mut EncodedWireRequest,
+    step: &crate::provider_manifest::MappingStep,
+) -> Result<(), ProviderExecutionFailure> {
+    if !encoded.body.is_object() {
+        return Err(pre_dispatch_failure(
+            "Manifest request projection requires a JSON object body.",
+        ));
+    }
+    let body = &mut encoded.body;
+    match step {
+        crate::provider_manifest::MappingStep::SetLiteral { path, value } => {
+            write_json_pointer(body, path, value.clone())?;
+        }
+        crate::provider_manifest::MappingStep::SetDefaultIfMissing { path, value } => {
+            if pointer_value(body, path).is_none() {
+                write_json_pointer(body, path, value.clone())?;
+            }
+        }
+        crate::provider_manifest::MappingStep::CopyJsonPointer { from, to } => {
+            if let Some(value) = pointer_value(body, from).cloned() {
+                write_json_pointer(body, to, value)?;
+            }
+        }
+        crate::provider_manifest::MappingStep::RenameJsonPointer { from, to } => {
+            if let Some(value) = pointer_value(body, from).cloned() {
+                delete_json_pointer(body, from);
+                write_json_pointer(body, to, value)?;
+            }
+        }
+        crate::provider_manifest::MappingStep::DeleteJsonPointer { path } => {
+            delete_json_pointer(body, path);
+        }
+        crate::provider_manifest::MappingStep::EnumMap {
+            path,
+            source,
+            source_path,
+            mapping,
+            unmatched,
+            default,
+        } => {
+            let value = projection_source_value(*source, source_path, request, body);
+            let mapped = value
+                .as_ref()
+                .and_then(|value| value.as_str().and_then(|text| mapping.get(text).cloned()));
+            match (value, mapped, unmatched, default) {
+                (None, _, _, Some(fallback)) => {
+                    write_json_pointer(body, path, fallback.clone())?;
+                }
+                (None, _, _, None) => {}
+                (_, Some(mapped), _, _) => {
+                    write_json_pointer(body, path, mapped)?;
+                }
+                (Some(_), None, _, _) => match unmatched {
+                    crate::provider_manifest::EnumMapUnmatched::Remove => {
+                        delete_json_pointer(body, path);
+                    }
+                    crate::provider_manifest::EnumMapUnmatched::Error => {
+                        return Err(pre_dispatch_failure(format!(
+                            "Enum map source `{source_path}` value is not in the declared mapping table."
+                        )));
+                    }
+                    crate::provider_manifest::EnumMapUnmatched::KeepLiteral => {}
+                },
+            }
+        }
+        crate::provider_manifest::MappingStep::WrapSingletonArray { path } => {
+            if let Some(value) = pointer_value(body, path).cloned() {
+                write_json_pointer(body, path, Value::Array(vec![value]))?;
+            }
+        }
+        crate::provider_manifest::MappingStep::UnwrapSingletonArray { path } => {
+            if let Some(Value::Array(items)) = pointer_value(body, path).cloned()
+                && items.len() == 1
+            {
+                write_json_pointer(body, path, items.into_iter().next().unwrap_or(Value::Null))?;
+            }
+        }
+        crate::provider_manifest::MappingStep::StringTemplate { path, template } => {
+            let rendered = template.replace("{model_id}", &request.model_id);
+            write_json_pointer(body, path, Value::String(rendered))?;
+        }
+        crate::provider_manifest::MappingStep::CopyRequestField { path, field } => {
+            if let Some(value) = request_field_value(field, request) {
+                write_json_pointer(body, path, value)?;
+            }
+        }
+        crate::provider_manifest::MappingStep::ConditionalSet {
+            path,
+            source,
+            source_path,
+            equals,
+            then,
+            otherwise,
+        } => {
+            let value = projection_source_value(*source, source_path, request, body);
+            let matched = value
+                .as_ref()
+                .and_then(|value| value.as_str())
+                .is_some_and(|text| text == equals);
+            match (value, matched) {
+                (None, _) => {}
+                (_, true) => write_or_delete(body, path, then)?,
+                (_, false) => write_or_delete(body, path, otherwise)?,
+            }
+        }
+        crate::provider_manifest::MappingStep::DeleteIfEquals {
+            path,
+            source,
+            source_path,
+            equals,
+        } => {
+            let value = projection_source_value(*source, source_path, request, body);
+            if value
+                .as_ref()
+                .and_then(|value| value.as_str())
+                .is_some_and(|text| text == equals)
+            {
+                delete_json_pointer(body, path);
+            }
+        }
+        crate::provider_manifest::MappingStep::DeleteUnlessEquals {
+            path,
+            source,
+            source_path,
+            equals,
+        } => {
+            let retains_target = projection_source_value(*source, source_path, request, body)
+                .as_ref()
+                .and_then(Value::as_str)
+                .is_some_and(|text| text == equals);
+            if !retains_target {
+                delete_json_pointer(body, path);
+            }
+        }
+        crate::provider_manifest::MappingStep::RemoveIfEmpty { path } => {
+            let empty = matches!(
+                pointer_value(body, path),
+                Some(Value::Array(items)) if items.is_empty()
+            ) || matches!(
+                pointer_value(body, path),
+                Some(Value::Object(items)) if items.is_empty()
+            );
+            if empty {
+                delete_json_pointer(body, path);
+            }
+        }
+        crate::provider_manifest::MappingStep::RejectIfPresent {
+            source,
+            source_path,
+            message,
+        } => {
+            if projection_source_value(*source, source_path, request, body).is_some() {
+                return Err(pre_dispatch_failure(message.clone()));
+            }
+        }
+        crate::provider_manifest::MappingStep::RejectIfAllPresent {
+            conditions,
+            message,
+        } => {
+            if conditions.iter().all(|condition| {
+                projection_source_value(condition.source, &condition.source_path, request, body)
+                    .is_some()
+            }) {
+                return Err(pre_dispatch_failure(message.clone()));
+            }
+        }
+        crate::provider_manifest::MappingStep::RebuildJsonTemplate { template } => {
+            let source = body.clone();
+            let rendered = render_complete_json_template(template, &source, &request.model_id)
+                .map_err(pre_dispatch_failure)?;
+            if !rendered.is_object() {
+                return Err(pre_dispatch_failure(
+                    "Manifest request JSON template must render an object body.",
+                ));
+            }
+            *body = rendered;
+        }
+    }
+    Ok(())
+}
+
+/// Safely writes one request JSON pointer while creating missing object ancestors.
+/// 安全写入一个请求 JSON Pointer，并创建缺失的对象祖先。
+///
+/// # Parameters
+/// 参数
+/// `body` is the protocol-encoded request object, `path` is the validated manifest pointer, and
+/// `value` is the exact projected value.
+/// `body` 是协议编码后的请求对象，`path` 是已校验的 Manifest 指针，`value` 是精确投影值。
+///
+/// # Returns
+/// 返回值
+/// Success after insertion, or a controlled pre-dispatch failure when runtime data places a
+/// scalar at an ancestor that the manifest expects to be an object.
+/// 插入成功时返回成功；若运行时数据在 Manifest 期望为对象的祖先位置放置标量，则返回受控的
+/// 分发前失败。
+fn write_json_pointer(
+    body: &mut Value,
+    path: &str,
+    value: Value,
+) -> Result<(), ProviderExecutionFailure> {
+    let segments = pointer_segments(path);
+    if segments.is_empty() {
+        return Err(pre_dispatch_failure(
+            "Request projection target JSON pointer is empty.",
+        ));
+    }
+    let mut current: &mut Value = body;
+    for segment in &segments[..segments.len() - 1] {
+        let object = current.as_object_mut().ok_or_else(|| {
+            pre_dispatch_failure(format!(
+                "Request projection target `{path}` crosses a non-object ancestor."
+            ))
+        })?;
+        let next = object
+            .entry(segment.to_string())
+            .or_insert_with(|| Value::Object(Default::default()));
+        current = next;
+    }
+    let object = current.as_object_mut().ok_or_else(|| {
+        pre_dispatch_failure(format!(
+            "Request projection target `{path}` has a non-object parent."
+        ))
+    })?;
+    let Some(last) = segments.last() else {
+        return Err(pre_dispatch_failure(
+            "Request projection target JSON pointer is empty.",
+        ));
+    };
+    object.insert(last.to_string(), value);
+    Ok(())
+}
+
+/// Deletes one JSON pointer path, pruning now-empty ancestors.
+/// 删除一个 JSON Pointer 路径并修剪变空的祖先。
+fn delete_json_pointer(body: &mut Value, path: &str) {
+    let segments = pointer_segments(path);
+    if segments.is_empty() {
+        return;
+    }
+    delete_pointer_recursive(body, &segments);
+}
+
+fn delete_pointer_recursive(value: &mut Value, segments: &[String]) {
+    let Some((first, rest)) = segments.split_first() else {
+        return;
+    };
+    if rest.is_empty() {
+        match value {
+            Value::Object(object) => {
+                object.remove(first);
+            }
+            Value::Array(items) => {
+                if let Some(index) = first.parse::<usize>().ok()
+                    && index < items.len()
+                {
+                    items.remove(index);
+                }
+            }
+            _ => {}
+        }
+        return;
+    }
+    match value {
+        Value::Object(object) => {
+            let Some(child) = object.get_mut(first) else {
+                return;
+            };
+            delete_pointer_recursive(child, rest);
+            if matches!(child, Value::Object(nested) if nested.is_empty()) {
+                object.remove(first);
+            }
+        }
+        Value::Array(items) => {
+            let Some(index) = first.parse::<usize>().ok() else {
+                return;
+            };
+            if index < items.len() {
+                let child = &mut items[index];
+                delete_pointer_recursive(child, rest);
+                if matches!(child, Value::Object(nested) if nested.is_empty()) {
+                    items.remove(index);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Reads one JSON pointer value from a request body map.
+/// 从请求体映射读取一个 JSON Pointer 值。
+fn pointer_value<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
+    value.pointer(path)
+}
+
+/// Splits one JSON pointer into unescaped segments.
+/// 把一个 JSON Pointer 拆分为未转义分段。
+fn pointer_segments(path: &str) -> Vec<String> {
+    path.split('/')
+        .filter(|segment| !segment.is_empty())
+        .map(|segment| segment.replace("~1", "/").replace("~0", "~"))
+        .collect()
+}
+
+/// Writes one request value or deletes the target when the value is null.
+/// 写入一个请求值；值为 null 时删除目标。
+///
+/// # Parameters
+/// 参数
+/// `body`, `path`, and `value` carry the same runtime projection boundary as
+/// `write_json_pointer`.
+/// `body`、`path` 与 `value` 承载与 `write_json_pointer` 相同的运行时投影边界。
+///
+/// # Returns
+/// 返回值
+/// Success after deletion/insertion, or the controlled pointer-write failure.
+/// 删除或插入后返回成功，或返回受控的指针写入失败。
+fn write_or_delete(
+    body: &mut Value,
+    path: &str,
+    value: &Value,
+) -> Result<(), ProviderExecutionFailure> {
+    if value.is_null() {
+        delete_json_pointer(body, path);
+        Ok(())
+    } else {
+        write_json_pointer(body, path, value.clone())
+    }
+}
+
+/// Resolves one projection source value from a body pointer or a validated host field.
+/// 从请求体指针或已校验宿主字段解析一个投影源值。
+fn projection_source_value(
+    source: crate::provider_manifest::MappingStepSource,
+    source_path: &str,
+    request: &AiExecutionRequest,
+    body: &Value,
+) -> Option<Value> {
+    match source {
+        crate::provider_manifest::MappingStepSource::BodyJsonPointer => {
+            body.pointer(source_path).cloned()
+        }
+        crate::provider_manifest::MappingStepSource::RequestField => {
+            if let Some(parameter_id) = source_path.strip_prefix("@model_parameters.") {
+                request
+                    .model_parameters
+                    .get(parameter_id)
+                    .and_then(model_parameter_to_value)
+            } else {
+                request_field_value(source_path, request)
+            }
+        }
+    }
+}
+
+/// Resolves one bounded host request field value.
+/// 解析一个有界宿主请求字段值。
+fn request_field_value(field: &str, request: &AiExecutionRequest) -> Option<Value> {
+    // The optional `@` marker distinguishes request fields from body pointers; both call
+    // sites (CopyRequestField and projection_source_value) pass the raw path, so the marker
+    // is stripped here once.
+    // 可选 `@` 标记用于区分请求字段与请求体指针；两个调用点（CopyRequestField 与
+    // projection_source_value）都传原始路径，因此在此统一剥离标记。
+    let field = field.strip_prefix('@').unwrap_or(field);
+    match field {
+        "reasoning_effort" => request
+            .reasoning_effort
+            .map(|effort| Value::String(effort.as_str().to_string())),
+        "model_id" => Some(Value::String(request.model_id.clone())),
+        "output_token_limit" => request
+            .output_token_limit
+            .map(|limit| Value::Number(limit.into())),
+        "cache_scope_id" => request
+            .cache_scope_id
+            .as_ref()
+            .map(|scope| Value::String(scope.clone())),
+        "prompt_cache" => (!matches!(request.prompt_cache, PromptCachePolicy::ProviderDefault))
+            .then_some(Value::Bool(true)),
+        _ => field
+            .strip_prefix("model_parameters.")
+            .and_then(|parameter_id| {
+                request
+                    .model_parameters
+                    .get(parameter_id)
+                    .and_then(model_parameter_to_value)
+            }),
+    }
+}
+
+/// Converts one strongly typed model parameter value into a wire JSON value.
+/// 把一个强类型模型参数值转换为 Wire JSON 值。
+fn model_parameter_to_value(value: &ModelParameterValue) -> Option<Value> {
+    match value {
+        ModelParameterValue::Boolean(value) => Some(Value::Bool(*value)),
+        ModelParameterValue::Integer(value) => Some(Value::Number((*value).into())),
+        ModelParameterValue::Decimal(value) => Some(Value::String(value.clone())),
+        ModelParameterValue::String(value) => Some(Value::String(value.clone())),
+        ModelParameterValue::Array(values) => Some(Value::Array(
+            values.iter().filter_map(model_parameter_to_value).collect(),
+        )),
+        ModelParameterValue::Object(values) => Some(Value::Object(
+            values
+                .iter()
+                .filter_map(|(key, value)| {
+                    model_parameter_to_value(value).map(|value| (key.clone(), value))
+                })
+                .collect(),
+        )),
+    }
+}
+
 /// 验证协议原生 JSON Schema 字段在供应商专属请求投影后仍然存在。
 ///
 /// # Parameters
@@ -3308,345 +5572,6 @@ fn project_sampling_temperature(
     Ok(())
 }
 
-/// Applies MiniMax-only request fields and request-size policy.
-/// 应用 MiniMax 专属请求字段与请求尺寸策略。
-///
-/// # Parameters
-/// 参数
-/// `route` freezes the selected protocol, `request` carries typed model parameters,
-/// and `encoded` is the protocol request.
-/// `route` 冻结所选协议，`request` 承载强类型模型参数，`encoded` 是协议请求。
-///
-/// # Returns
-/// 返回值
-/// Success for the documented provider-controlled reasoning shape.
-/// 对文档化的供应商控制思考形态返回成功。
-fn project_minimax_request(
-    route: &ProviderExecutionRoute,
-    request: &AiExecutionRequest,
-    encoded: &mut EncodedWireRequest,
-) -> Result<(), ProviderExecutionFailure> {
-    if let Some(effort) = request.reasoning_effort {
-        let thinking_type = match effort {
-            ReasoningEffort::None => "disabled",
-            ReasoningEffort::Adaptive => "adaptive",
-            unsupported => {
-                return Err(pre_dispatch_failure(format!(
-                    "MiniMax-M3 exposes only `none` and `adaptive` reasoning controls; received `{}`.",
-                    unsupported.as_str()
-                )));
-            }
-        };
-        let body = request_body_mut(encoded, "MiniMax")?;
-        match route.protocol_route.protocol_profile_id.as_str() {
-            vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID => {
-                // MiniMax Anthropic uses `thinking.type`; generic Anthropic `output_config.effort` is not accepted.
-                // MiniMax Anthropic 使用 `thinking.type`；通用 Anthropic `output_config.effort` 不被接受。
-                project_anthropic_output_config_effort(body, None, "MiniMax Anthropic")?;
-                body.insert(String::from("thinking"), json!({ "type": thinking_type }));
-            }
-            vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID => {
-                // MiniMax OpenAI Chat uses `thinking.type`; `reasoning_effort` belongs to other OpenAI-compatible APIs.
-                // MiniMax OpenAI Chat 使用 `thinking.type`；`reasoning_effort` 属于其他 OpenAI 兼容 API。
-                body.remove("reasoning_effort");
-                body.insert(String::from("thinking"), json!({ "type": thinking_type }));
-            }
-            protocol_id => {
-                return Err(pre_dispatch_failure(format!(
-                    "MiniMax reasoning projection is not registered for protocol `{protocol_id}`."
-                )));
-            }
-        }
-    }
-    if let Some(value) = request
-        .model_parameters
-        .get(MINIMAX_REASONING_SPLIT_PARAMETER_ID)
-    {
-        if route.protocol_route.protocol_profile_id != vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID {
-            return Err(pre_dispatch_failure(
-                "MiniMax reasoning_split is registered only for OpenAI Chat.",
-            ));
-        }
-        let ModelParameterValue::Boolean(reasoning_split) = value else {
-            return Err(pre_dispatch_failure(
-                "The registered MiniMax reasoning split value must be boolean.",
-            ));
-        };
-        request_body_mut(encoded, "MiniMax")?.insert(
-            String::from("reasoning_split"),
-            Value::Bool(*reasoning_split),
-        );
-    }
-    let body_size = serde_json::to_vec(&encoded.body)
-        .map_err(|error| {
-            pre_dispatch_failure(format!(
-                "MiniMax request body could not be measured before dispatch: {error}"
-            ))
-        })?
-        .len();
-    if body_size > MINIMAX_REQUEST_BODY_BYTE_LIMIT {
-        return Err(pre_dispatch_failure(format!(
-            "MiniMax request body is {body_size} bytes and exceeds the documented {MINIMAX_REQUEST_BODY_BYTE_LIMIT}-byte limit."
-        )));
-    }
-    Ok(())
-}
-
-/// Applies OpenRouter reasoning and pinned secondary-provider fields.
-/// 应用 OpenRouter 思考与固定二级供应商字段。
-///
-/// # Parameters
-/// 参数
-/// `route` contains the frozen protocol and endpoint selection, `request` contains typed
-/// reasoning controls, and `encoded` is the protocol request.
-/// `route` 包含冻结协议与端点选择，`request` 包含强类型思考控制，
-/// `encoded` 是协议请求。
-///
-/// # Returns
-/// 返回值
-/// Success when every requested field has an exact registered projection.
-/// 每个请求字段都有精确注册投影时返回成功。
-fn project_openrouter_request(
-    route: &ProviderExecutionRoute,
-    request: &AiExecutionRequest,
-    encoded: &mut EncodedWireRequest,
-) -> Result<(), ProviderExecutionFailure> {
-    if let Some(value) = request
-        .model_parameters
-        .get(OPENROUTER_REASONING_MAX_TOKENS_PARAMETER_ID)
-    {
-        let ModelParameterValue::Integer(max_tokens) = value else {
-            return Err(pre_dispatch_failure(
-                "The registered OpenRouter reasoning token budget must be an integer.",
-            ));
-        };
-        let reasoning = request_body_mut(encoded, "OpenRouter")?
-            .entry(String::from("reasoning"))
-            .or_insert_with(|| json!({}))
-            .as_object_mut()
-            .ok_or_else(|| {
-                pre_dispatch_failure("OpenRouter reasoning projection must be a JSON object.")
-            })?;
-        reasoning.insert(String::from("max_tokens"), json!(max_tokens));
-    }
-    if let Some(effort) = request.reasoning_effort {
-        let body = request_body_mut(encoded, "OpenRouter")?;
-        match route.protocol_route.protocol_profile_id.as_str() {
-            vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID => {
-                body.remove("reasoning_effort");
-            }
-            vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID => {
-                project_anthropic_output_config_effort(body, None, "OpenRouter Anthropic")?;
-            }
-            vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID => {}
-            protocol_id => {
-                return Err(pre_dispatch_failure(format!(
-                    "OpenRouter reasoning projection is not registered for protocol `{protocol_id}`."
-                )));
-            }
-        }
-        let reasoning = body
-            .entry(String::from("reasoning"))
-            .or_insert_with(|| json!({}))
-            .as_object_mut()
-            .ok_or_else(|| {
-                pre_dispatch_failure("OpenRouter reasoning projection must be a JSON object.")
-            })?;
-        if effort == ReasoningEffort::Adaptive {
-            // OpenRouter uses `enabled` when discovery exposes reasoning without selectable effort levels.
-            // 当发现结果只暴露推理开关而没有强度档位时，OpenRouter 使用 `enabled`。
-            reasoning.remove("effort");
-            reasoning.insert(String::from("enabled"), Value::Bool(true));
-        } else {
-            reasoning.remove("enabled");
-            reasoning.insert(String::from("effort"), json!(effort.as_str()));
-        }
-    }
-    if let SecondaryRouteSelection::PinnedEndpoint { route_id, .. } = &route.secondary_route {
-        let body = request_body_mut(encoded, "OpenRouter")?;
-        if body.contains_key("provider") {
-            return Err(pre_dispatch_failure(
-                "OpenRouter secondary-route projection conflicts with an existing provider field.",
-            ));
-        }
-        body.insert(
-            String::from("provider"),
-            json!({
-                "order": [route_id],
-                "allow_fallbacks": false,
-            }),
-        );
-    }
-    Ok(())
-}
-
-/// Applies Kimi Coding Plan thinking controls.
-/// 应用 Kimi Coding Plan 思考控制。
-///
-/// # Parameters
-/// 参数
-/// `route`, `request`, and `encoded` are the immutable route, public semantics, and wire request.
-/// `route`、`request` 与 `encoded` 分别是不可变路由、公共语义和 Wire 请求。
-///
-/// # Returns
-/// 返回值
-/// Success for the exact registered Chat projection.
-/// 对精确注册的 Chat 投影返回成功。
-fn project_kimi_request(
-    route: &ProviderExecutionRoute,
-    request: &AiExecutionRequest,
-    encoded: &mut EncodedWireRequest,
-) -> Result<(), ProviderExecutionFailure> {
-    if route.protocol_route.protocol_profile_id != vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID {
-        return Ok(());
-    }
-    let force_coding_model = matches!(
-        request.model_id.as_str(),
-        "k3" | "k3-256k" | "kimi-for-coding" | "kimi-for-coding-highspeed"
-    );
-    let reasoning_requested = request
-        .reasoning_effort
-        .is_some_and(|effort| effort != ReasoningEffort::None);
-    let body = request_body_mut(encoded, "Kimi")?;
-    body.remove("reasoning_effort");
-    if force_coding_model || reasoning_requested {
-        body.insert(String::from("thinking"), json!({ "type": "enabled" }));
-    }
-    Ok(())
-}
-
-/// Applies DeepSeek protocol-specific reasoning controls.
-/// 应用 DeepSeek 协议专属思考控制。
-///
-/// # Parameters
-/// 参数
-/// `route`, `request`, and `encoded` are the frozen route, public request, and wire request.
-/// `route`、`request` 与 `encoded` 是冻结路由、公共请求与 Wire 请求。
-///
-/// # Returns
-/// 返回值
-/// Success for one exact documented effort mapping.
-/// 对一个精确文档化档位映射返回成功。
-fn project_deepseek_request(
-    route: &ProviderExecutionRoute,
-    request: &AiExecutionRequest,
-    encoded: &mut EncodedWireRequest,
-) -> Result<(), ProviderExecutionFailure> {
-    if route.protocol_route.protocol_profile_id == vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID
-    {
-        let body = request_body_mut(encoded, "DeepSeek Responses")?;
-        // DeepSeek documents these Responses fields as unsupported even though it may ignore them.
-        // DeepSeek 文档明确列出这些 Responses 字段不支持，即使上游可能静默忽略它们。
-        body.remove("store");
-        body.remove("include");
-        return Ok(());
-    }
-    let Some(effort) = request.reasoning_effort else {
-        return Ok(());
-    };
-    match route.protocol_route.protocol_profile_id.as_str() {
-        vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID => {
-            let body = request_body_mut(encoded, "DeepSeek")?;
-            match effort {
-                ReasoningEffort::None => {
-                    body.remove("reasoning_effort");
-                    body.insert(String::from("thinking"), json!({ "type": "disabled" }));
-                }
-                ReasoningEffort::High | ReasoningEffort::Max => {
-                    body.insert(String::from("thinking"), json!({ "type": "enabled" }));
-                }
-                unsupported => {
-                    return Err(pre_dispatch_failure(format!(
-                        "DeepSeek does not expose reasoning effort `{}`.",
-                        unsupported.as_str()
-                    )));
-                }
-            }
-        }
-        vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID => {
-            let body = request_body_mut(encoded, "DeepSeek Anthropic")?;
-            match effort {
-                ReasoningEffort::None => {
-                    project_anthropic_output_config_effort(body, None, "DeepSeek Anthropic")?;
-                    body.insert(String::from("thinking"), json!({ "type": "disabled" }));
-                }
-                ReasoningEffort::High | ReasoningEffort::Max => {
-                    body.insert(String::from("thinking"), json!({ "type": "enabled" }));
-                    project_anthropic_output_config_effort(
-                        body,
-                        Some(effort.as_str()),
-                        "DeepSeek Anthropic",
-                    )?;
-                }
-                unsupported => {
-                    return Err(pre_dispatch_failure(format!(
-                        "DeepSeek Anthropic does not expose reasoning effort `{}`.",
-                        unsupported.as_str()
-                    )));
-                }
-            }
-        }
-        protocol_id => {
-            return Err(pre_dispatch_failure(format!(
-                "DeepSeek reasoning projection is not registered for protocol `{protocol_id}`."
-            )));
-        }
-    }
-    Ok(())
-}
-
-/// Applies Alibaba protocol-specific thinking controls.
-/// 应用阿里云协议专属思考控制。
-///
-/// # Parameters
-/// 参数
-/// `route`, `request`, and `encoded` are the frozen route, public request, and wire request.
-/// `route`、`request` 与 `encoded` 是冻结路由、公共请求与 Wire 请求。
-///
-/// # Returns
-/// 返回值
-/// Success for disabled or adaptive provider thinking.
-/// 对关闭或供应商自适应思考返回成功。
-fn project_alibaba_request(
-    route: &ProviderExecutionRoute,
-    request: &AiExecutionRequest,
-    encoded: &mut EncodedWireRequest,
-) -> Result<(), ProviderExecutionFailure> {
-    let Some(effort) = request.reasoning_effort else {
-        return Ok(());
-    };
-    let enabled = match effort {
-        ReasoningEffort::None => false,
-        ReasoningEffort::Adaptive => true,
-        unsupported => {
-            return Err(pre_dispatch_failure(format!(
-                "Alibaba compatible routes do not expose reasoning effort `{}`.",
-                unsupported.as_str()
-            )));
-        }
-    };
-    let body = request_body_mut(encoded, "Alibaba")?;
-    match route.protocol_route.protocol_profile_id.as_str() {
-        vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID => {
-            body.remove("reasoning_effort");
-            body.insert(String::from("enable_thinking"), Value::Bool(enabled));
-        }
-        vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID => {
-            project_anthropic_output_config_effort(body, None, "Alibaba Anthropic")?;
-            body.insert(
-                String::from("thinking"),
-                json!({ "type": if enabled { "enabled" } else { "disabled" } }),
-            );
-        }
-        protocol_id => {
-            return Err(pre_dispatch_failure(format!(
-                "Alibaba reasoning projection is not registered for protocol `{protocol_id}`."
-            )));
-        }
-    }
-    Ok(())
-}
-
 /// Borrows one encoded request body as a JSON object with a provider-specific diagnostic.
 /// 以供应商专属诊断把编码请求体借用为 JSON 对象。
 ///
@@ -3667,50 +5592,6 @@ fn request_body_mut<'a>(
         .body
         .as_object_mut()
         .ok_or_else(|| pre_dispatch_failure(format!("{label} request body must be a JSON object.")))
-}
-
-/// Updates only Anthropic reasoning effort while preserving native structured-output format fields.
-/// 仅更新 Anthropic 的思考强度，同时保留原生结构化输出格式字段。
-///
-/// # Parameters
-/// 参数
-/// `body` is the encoded Anthropic request, `effort` is the provider-supported value or removal,
-/// and `label` identifies the exact provider projection in controlled failures.
-/// `body` 是已编码的 Anthropic 请求，`effort` 是供应商支持的值或移除指令，`label` 用于在受控错误中标识精确供应商投影。
-///
-/// # Returns
-/// 返回值
-/// Success after preserving sibling fields such as `format`, or a pre-dispatch shape failure.
-/// 保留 `format` 等同级字段后返回成功，或者返回分派前结构错误。
-fn project_anthropic_output_config_effort(
-    body: &mut serde_json::Map<String, Value>,
-    effort: Option<&str>,
-    label: &str,
-) -> Result<(), ProviderExecutionFailure> {
-    if effort.is_none() && !body.contains_key("output_config") {
-        return Ok(());
-    }
-    let output_config = body
-        .entry(String::from("output_config"))
-        .or_insert_with(|| json!({}))
-        .as_object_mut()
-        .ok_or_else(|| {
-            pre_dispatch_failure(format!(
-                "{label} output_config projection must be a JSON object."
-            ))
-        })?;
-    match effort {
-        Some(value) => {
-            output_config.insert(String::from("effort"), Value::String(value.to_string()));
-        }
-        None => {
-            output_config.remove("effort");
-        }
-    }
-    if output_config.is_empty() {
-        body.remove("output_config");
-    }
-    Ok(())
 }
 
 /// Applies credential-bound non-secret identity fields immediately before dispatch.
@@ -3868,10 +5749,11 @@ pub(crate) fn execution_headers(
                 route.connection.credential_profile_id, route.entry.id
             ))
         })?;
-    match route.protocol_route.resolved_authentication(
+    let authentication = route.protocol_route.resolved_authentication(
         route.entry.authentication,
         credential_profile.authentication,
-    ) {
+    );
+    match authentication {
         AuthenticationProjection::XApiKey => {
             headers.insert(
                 HeaderName::from_static("x-api-key"),
@@ -3880,7 +5762,8 @@ pub(crate) fn execution_headers(
                 })?,
             );
         }
-        AuthenticationProjection::BearerAuthorization => {
+        AuthenticationProjection::BearerAuthorization
+        | AuthenticationProjection::CodingDeviceBearer => {
             headers.insert(
                 reqwest::header::AUTHORIZATION,
                 HeaderValue::from_str(format!("Bearer {}", secret.expose_value()).as_str())
@@ -3967,7 +5850,7 @@ pub(crate) fn execution_headers(
             );
         }
     }
-    if route.provider.id == "kimi" && route.entry.id == "coding-plan" {
+    if authentication == AuthenticationProjection::CodingDeviceBearer {
         let device_name = std::env::var("COMPUTERNAME")
             .or_else(|_| std::env::var("HOSTNAME"))
             .unwrap_or_else(|_| String::from("unknown"));
@@ -3988,7 +5871,7 @@ pub(crate) fn execution_headers(
             headers.insert(
                 HeaderName::from_static(name),
                 HeaderValue::from_str(value).map_err(|_| {
-                    pre_dispatch_failure("Kimi execution device identity is invalid.")
+                    pre_dispatch_failure("Coding-device execution identity is invalid.")
                 })?,
             );
         }
@@ -4911,8 +6794,8 @@ fn provider_transport_unix_millis() -> Result<i64, ProviderExecutionFailure> {
         .map_err(|_| transport_failure("Host Unix timestamp exceeds SQLite INTEGER."))
 }
 
-/// Copies only the fixed non-secret rate-limit response-header allowlist.
-/// 仅复制固定且不含秘密的限流响应头允许列表。
+/// Copies only the fixed non-secret rate-limit response-header allowlist with bounded values.
+/// 仅复制固定且不含秘密、值有界的限流响应头允许列表。
 fn allowlisted_rate_limit_headers(headers: &HeaderMap) -> BTreeMap<String, String> {
     const NAMES: &[&str] = &[
         "retry-after",
@@ -4933,9 +6816,50 @@ fn allowlisted_rate_limit_headers(headers: &HeaderMap) -> BTreeMap<String, Strin
             headers
                 .get(*name)
                 .and_then(|value| value.to_str().ok())
-                .map(|value| ((*name).to_string(), value.to_string()))
+                .map(|value| {
+                    (
+                        (*name).to_string(),
+                        bounded_provider_diagnostic_header_value(value),
+                    )
+                })
         })
         .collect()
+}
+
+/// Copies one provider-controlled diagnostic header value into a fixed byte budget.
+/// 将单个供应商控制的诊断响应头值复制到固定字节预算内。
+///
+/// # Parameters
+/// 参数
+/// `value` is already decoded response-header text and may still be adversarially large.
+/// `value` 是已解码的响应头文本，但仍可能被对端恶意放大。
+///
+/// # Returns
+/// 返回值
+/// The original value when bounded, otherwise a UTF-8-safe prefix plus an explicit marker whose
+/// total length never exceeds `PROVIDER_DIAGNOSTIC_HEADER_VALUE_MAX_BYTES`.
+/// 值已受限时原样返回，否则返回 UTF-8 安全前缀与显式标记，且总长度绝不超过
+/// `PROVIDER_DIAGNOSTIC_HEADER_VALUE_MAX_BYTES`。
+fn bounded_provider_diagnostic_header_value(value: &str) -> String {
+    if value.len() <= PROVIDER_DIAGNOSTIC_HEADER_VALUE_MAX_BYTES {
+        return value.to_string();
+    }
+    // prefix_budget reserves the marker inside the same hard byte ceiling.
+    // prefix_budget 在相同硬字节上限内为标记预留空间。
+    let prefix_budget = PROVIDER_DIAGNOSTIC_HEADER_VALUE_MAX_BYTES
+        .saturating_sub(PROVIDER_DIAGNOSTIC_HEADER_TRUNCATION_SUFFIX.len());
+    // boundary walks backward only when the byte budget splits one UTF-8 scalar.
+    // boundary 仅在字节预算切开 UTF-8 标量时向前回退。
+    let mut boundary = prefix_budget.min(value.len());
+    while !value.is_char_boundary(boundary) {
+        boundary = boundary.saturating_sub(1);
+    }
+    // bounded owns the exact retained prefix and explicit truncation evidence.
+    // bounded 持有精确保留前缀与显式截断证据。
+    let mut bounded = String::with_capacity(PROVIDER_DIAGNOSTIC_HEADER_VALUE_MAX_BYTES);
+    bounded.push_str(&value[..boundary]);
+    bounded.push_str(PROVIDER_DIAGNOSTIC_HEADER_TRUNCATION_SUFFIX);
+    bounded
 }
 
 /// Extracts the upstream request identifier using only the route-declared ordered headers.
@@ -4948,8 +6872,8 @@ fn allowlisted_rate_limit_headers(headers: &HeaderMap) -> BTreeMap<String, Strin
 ///
 /// # Returns
 /// 返回值
-/// The first declared non-empty identifier, absence when none is present, or a protocol failure for invalid text.
-/// 返回首个已声明且非空的标识；均不存在时返回空；文本无效时返回协议失败。
+/// The first declared non-empty bounded identifier, absence when none is present, or a protocol failure for invalid text.
+/// 返回首个已声明、非空且有界的标识；均不存在时返回空；文本无效时返回协议失败。
 fn provider_request_id_from_headers(
     headers: &HeaderMap,
     declared_names: &[String],
@@ -4964,7 +6888,7 @@ fn provider_request_id_from_headers(
             ))
         })?;
         if !value.is_empty() {
-            return Ok(Some(value.to_string()));
+            return Ok(Some(bounded_provider_diagnostic_header_value(value)));
         }
     }
     Ok(None)
@@ -5087,7 +7011,14 @@ async fn read_responses_compact_body_with_timeout(
     // result 区分完整正文、有界正文读取失败与完整请求截止超时。
     let result = tokio::time::timeout(
         remaining,
-        read_bounded_response_text(response, max_bytes, url, status, retry_after),
+        read_bounded_response_text(
+            response,
+            max_bytes,
+            url,
+            status,
+            retry_after,
+            request_timeout,
+        ),
     )
     .await;
     match result {
@@ -5126,10 +7057,25 @@ pub(crate) async fn read_bounded_response_text(
     url: &str,
     status: u16,
     retry_after: Option<RetryAfterHint>,
+    idle_timeout: Duration,
 ) -> Result<String, ProviderExecutionFailure> {
     let mut bytes = response.bytes_stream();
     let mut body = Vec::new();
-    while let Some(chunk) = bytes.next().await {
+    loop {
+        let next_chunk = tokio::time::timeout(idle_timeout, bytes.next())
+            .await
+            .map_err(|_| {
+                stream_transport_failure(
+                    format!(
+                        "Provider response body from `{url}` exceeded the registered {} ms idle timeout.",
+                        idle_timeout.as_millis()
+                    ),
+                    false,
+                )
+            })?;
+        let Some(chunk) = next_chunk else {
+            break;
+        };
         let chunk = chunk.map_err(|error| {
             stream_transport_failure(
                 format!("Provider error response from `{url}` could not be read: {error}"),
@@ -5239,7 +7185,10 @@ pub(crate) fn http_failure(
     retry_after: Option<RetryAfterHint>,
     body: &str,
 ) -> ProviderExecutionFailure {
-    let parsed = serde_json::from_str::<Value>(body).ok();
+    let parsed = serde_json::from_str::<Value>(body).ok().filter(|value| {
+        crate::provider_manifest::validate_runtime_json_bounds(value, "Provider error response")
+            .is_ok()
+    });
     let error = parsed
         .as_ref()
         .map(|value| value.get("error").unwrap_or(value));
@@ -5317,42 +7266,57 @@ pub(crate) fn http_failure(
             },
         }
     };
+    // public_field sanitizes provider-owned scalars only after raw values have completed typed
+    // classification, so redaction cannot alter retry or terminal semantics.
+    // public_field 仅在原始值完成强类型分类后清理供应商字段，确保脱敏不会改变重试或终止语义。
+    let public_field = |value: String| {
+        crate::provider_tool_execution::sanitize_provider_diagnostic_text(value.as_str())
+    };
+    let public_upstream_message = upstream_message.clone().map(&public_field);
     ProviderExecutionFailure {
         error: Box::new(AiExecutionError {
             category,
             subcategory: error_type
                 .map(str::to_string)
+                .map(&public_field)
                 .or_else(|| Some(String::from("http"))),
             stage: String::from("response_headers"),
             http_status: Some(status),
             transport: Some(AiTransportKind::Http),
             websocket_close_code: None,
-            upstream_code,
-            upstream_type: error_type.map(str::to_string),
+            upstream_code: upstream_code.map(&public_field),
+            upstream_type: error_type.map(str::to_string).map(&public_field),
             upstream_parameter: error
                 .and_then(|value| value.get("param").and_then(Value::as_str))
-                .map(str::to_string),
-            upstream_message: upstream_message.clone(),
-            request_id: parsed.as_ref().and_then(|value| {
-                value
-                    .get("request_id")
-                    .and_then(Value::as_str)
-                    .or_else(|| value.pointer("/error/request_id").and_then(Value::as_str))
-                    .map(str::to_string)
-            }),
+                .map(str::to_string)
+                .map(&public_field),
+            upstream_message: public_upstream_message.clone(),
+            request_id: parsed
+                .as_ref()
+                .and_then(|value| {
+                    value
+                        .get("request_id")
+                        .and_then(Value::as_str)
+                        .or_else(|| value.pointer("/error/request_id").and_then(Value::as_str))
+                        .map(str::to_string)
+                })
+                .map(&public_field),
             provider_id: None,
             entry_id: None,
-            model_id: parsed.as_ref().and_then(|value| {
-                value
-                    .get("model")
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-            }),
-            message: upstream_message.unwrap_or_else(|| {
+            model_id: parsed
+                .as_ref()
+                .and_then(|value| {
+                    value
+                        .get("model")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                })
+                .map(&public_field),
+            message: public_upstream_message.unwrap_or_else(|| {
                 if body.is_empty() {
                     format!("Provider returned HTTP {status} with an empty error response.")
                 } else {
-                    body.chars().take(2_000).collect()
+                    public_field(body.trim().to_string())
                 }
             }),
             dispatch_outcome: DispatchOutcome::Dispatched,
@@ -5371,16 +7335,55 @@ pub(crate) fn http_failure(
     }
 }
 
+/// Redacts the exact execution credential and bounds every public failure string.
+/// 脱敏精确执行凭据并限制每个公共错误字符串。
+///
+/// # Parameters
+/// 参数
+/// `failure` is one typed local or provider failure and `secret` is the exact credential used by
+/// its physical request.
+/// `failure` 是一个强类型本地或供应商错误，`secret` 是其物理请求使用的精确凭据。
+///
+/// # Returns
+/// 返回值
+/// The same typed failure semantics with secret-safe bounded diagnostic fields.
+/// 返回错误语义不变、诊断字段不含秘密且有界的同一强类型错误。
+pub(crate) fn sanitize_provider_execution_failure(
+    mut failure: ProviderExecutionFailure,
+    secret: &CredentialExecutionSecret,
+) -> ProviderExecutionFailure {
+    // sanitize replaces exact credential occurrences before the generic provider-controlled
+    // URL and credential-shape filter executes.
+    // sanitize 先替换精确凭据，再执行通用供应商 URL 与凭据形态过滤。
+    let sanitize = |value: String| {
+        let sensitive_value = secret.expose_value();
+        let redacted = if sensitive_value.is_empty() {
+            value
+        } else {
+            value.replace(sensitive_value, "<redacted>")
+        };
+        crate::provider_tool_execution::sanitize_provider_diagnostic_text(redacted.as_str())
+    };
+    failure.error.subcategory = failure.error.subcategory.take().map(&sanitize);
+    failure.error.stage = sanitize(std::mem::take(&mut failure.error.stage));
+    failure.error.upstream_code = failure.error.upstream_code.take().map(&sanitize);
+    failure.error.upstream_type = failure.error.upstream_type.take().map(&sanitize);
+    failure.error.upstream_parameter = failure.error.upstream_parameter.take().map(&sanitize);
+    failure.error.upstream_message = failure.error.upstream_message.take().map(&sanitize);
+    failure.error.request_id = failure.error.request_id.take().map(&sanitize);
+    failure.error.provider_id = failure.error.provider_id.take().map(&sanitize);
+    failure.error.entry_id = failure.error.entry_id.take().map(&sanitize);
+    failure.error.model_id = failure.error.model_id.take().map(&sanitize);
+    failure.error.message = sanitize(std::mem::take(&mut failure.error.message));
+    failure
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{
-        CredentialMode, ProviderRegistry, ResponsesRemoteCompactionPolicy, ResponsesRouteFeatures,
-        ResponsesWebsocketPolicy,
-        providers::{
-            alibaba_descriptor, deepseek_descriptor, kimi_descriptor, minimax_descriptor,
-            openrouter_descriptor,
-        },
+        CredentialMode, MINIMAX_REASONING_SPLIT_PARAMETER_ID, ProviderRegistry,
+        ResponsesRemoteCompactionPolicy, ResponsesRouteFeatures, ResponsesWebsocketPolicy,
     };
     use futures_util::SinkExt;
     use serde_json::json;
@@ -5395,6 +7398,7 @@ mod tests {
             protocol::{CloseFrame, frame::coding::CloseCode},
         },
     };
+    use vulcan_ai_contract::ReasoningEffort;
     use vulcan_ai_contract::{
         AiContinuation, AiMessage, AiOperation, ContentItem, MessageRole, StructuredOutputPolicy,
     };
@@ -5441,48 +7445,283 @@ mod tests {
         );
     }
 
-    /// Verifies provider-specialized dynamic usage paths are frozen by exact route metadata.
-    /// 验证供应商专属动态用量路径由精确路由元数据冻结。
-    #[test]
-    fn exact_provider_routes_install_specialized_usage_profiles() {
-        // alibaba_provider owns the explicit projector that selects documented Responses billing details.
-        // alibaba_provider 持有选择文档化 Responses 计费明细的显式投影器。
-        let alibaba_provider = alibaba_descriptor();
-        // alibaba_entry is the exact pay-as-you-go route that exposes the official Responses endpoint.
-        // alibaba_entry 是公开官方 Responses 端点的精确按量入口。
-        let alibaba_entry = alibaba_provider
+    /// Builds one exact execution route from a bundled manifest provider.
+    /// 从内置清单供应商构建一条精确执行路由。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `provider_id` selects the bundled manifest, `entry_id` the service entry, and `protocol_id`
+    /// the frozen protocol profile.
+    /// `provider_id` 选择内置清单，`entry_id` 选择服务入口，`protocol_id` 选择冻结协议 Profile。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A resolved route whose usage profiles come from the manifest declarations.
+    /// 返回已解析路由，其 usage Profile 来自清单声明。
+    fn bundled_manifest_route(
+        provider_id: &str,
+        entry_id: &str,
+        protocol_id: &str,
+    ) -> ProviderExecutionRoute {
+        let directory = vulcan_runtime_assets::resolve_bundled_provider_manifests_directory();
+        let text = std::fs::read_to_string(directory.join(format!("{provider_id}.json")))
+            .unwrap_or_else(|_| panic!("missing bundled manifest `{provider_id}`"));
+        let manifest = crate::provider_manifest::compile_manifest_text(
+            &text,
+            crate::provider_manifest::ManifestOwnership::System,
+        )
+        .expect("bundled manifest must compile");
+        let provider = manifest.provider().clone();
+        let entry = provider
             .service_entries
             .iter()
-            .find(|entry| entry.id == "model-studio-cn")
-            .expect("Alibaba Model Studio China entry must exist")
+            .find(|entry| entry.id == entry_id)
+            .expect("manifest entry must exist")
             .clone();
-        // alibaba_connection binds the test to the verified Responses protocol without URL inference.
-        // alibaba_connection 将测试绑定到已验证 Responses 协议，不使用 URL 推断。
-        let alibaba_connection = CredentialConnection {
+        // The first registered credential profile is the deterministic test identity; entries
+        // declare different profile ids per product (e.g. MiniMax payg/token-plan).
+        // 首个注册凭据配置档是确定性测试身份；入口按产品声明不同配置档（如 MiniMax）。
+        let credential_profile = entry.credential_profiles.first().cloned();
+        let credential_profile_id = credential_profile
+            .as_ref()
+            .map(|profile| profile.id.clone())
+            .unwrap_or_else(|| String::from("api-key"));
+        let connection = CredentialConnection {
             id: String::from("connection"),
-            provider_id: alibaba_provider.id.clone(),
-            service_entry_id: alibaba_entry.id.clone(),
-            credential_profile_id: String::from("api-key"),
-            credential_mode: CredentialMode::Token,
+            provider_id: provider.id.clone(),
+            service_entry_id: entry.id.clone(),
+            credential_profile_id,
+            credential_mode: credential_profile
+                .map(|profile| profile.credential_mode)
+                .unwrap_or(CredentialMode::Token),
             credential_id: String::from("credential"),
             display_name: String::from("Primary"),
             secret_reference: String::from("secret"),
             management_secret_reference: None,
             service_origin_override: None,
-            verified_protocols: BTreeSet::from([OPENAI_RESPONSES_PROFILE_ID.to_string()]),
-            selected_protocol: OPENAI_RESPONSES_PROFILE_ID.to_string(),
+            verified_protocols: BTreeSet::from([protocol_id.to_string()]),
+            selected_protocol: protocol_id.to_string(),
             prompt_cache_by_protocol: BTreeMap::new(),
             usage_scope_override: None,
         };
+        let effective_protocol_id = connection.selected_protocol.clone();
+        let mut route = ProviderExecutionRoute::resolve(
+            provider,
+            entry,
+            connection,
+            SecondaryRouteSelection::Automatic,
+            effective_protocol_id.as_str(),
+        )
+        .expect("bundled manifest route should resolve");
+        route.upload_channels = manifest.upload_channels.clone();
+        route
+    }
+
+    /// Verifies conversation media upload selection is frozen entirely from bundled manifests.
+    /// 验证对话媒体上传选择完全由内置 Manifest 冻结。
+    #[test]
+    fn bundled_media_upload_routes_are_manifest_driven() {
+        let kimi =
+            bundled_manifest_route("kimi", "coding-plan", ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID);
+        let kimi_video = kimi
+            .protocol_route
+            .input_resource_constraints
+            .iter()
+            .find(|constraint| constraint.resource_kind == ResourceKind::Video)
+            .expect("Kimi video route must declare its upload binding");
+        assert_eq!(
+            kimi_video.upload_channel_refs,
+            [String::from("coding-plan.video-file")]
+        );
+        assert!(kimi.upload_channels.iter().any(|channel| {
+            channel.upload_channel_id == "coding-plan.video-file"
+                && channel.primitive == Some(crate::UploadPrimitiveKind::MultipartFile)
+        }));
+
+        let minimax = bundled_manifest_route("minimax", "cn", OPENAI_CHAT_PROFILE_ID);
+        let minimax_video = minimax
+            .protocol_route
+            .input_resource_constraints
+            .iter()
+            .find(|constraint| constraint.resource_kind == ResourceKind::Video)
+            .expect("MiniMax video route must declare its upload binding");
+        assert_eq!(
+            minimax_video.upload_channel_refs,
+            [String::from("cn.video-file")]
+        );
+
+        let alibaba =
+            bundled_manifest_route("alibaba", "model-studio-cn", OPENAI_RESPONSES_PROFILE_ID);
+        let alibaba_image = alibaba
+            .protocol_route
+            .input_resource_constraints
+            .iter()
+            .find(|constraint| constraint.resource_kind == ResourceKind::Image)
+            .expect("Alibaba image route must declare its upload binding");
+        assert_eq!(
+            alibaba_image.upload_channel_refs,
+            [String::from("cn.temporary-oss")]
+        );
+        assert_eq!(
+            alibaba
+                .protocol_route
+                .request_headers
+                .get("x-dashscope-ossresource-resolve")
+                .map(String::as_str),
+            Some("enable")
+        );
+        assert!(alibaba.upload_channels.iter().any(|channel| {
+            channel.upload_channel_id == "cn.temporary-oss"
+                && channel.primitive == Some(crate::UploadPrimitiveKind::SignedObjectUpload)
+                && channel.signing_primitive
+                    == Some(crate::UploadSigningPrimitiveKind::TemporaryOssPolicy)
+        }));
+    }
+
+    /// Verifies prepared media keys isolate account, protocol, and manifest route generations.
+    /// 验证媒体准备缓存键会隔离账号、协议与 Manifest 路由代际。
+    #[test]
+    fn prepared_media_key_isolates_frozen_route_identity() {
+        // route is a cacheable Kimi video route with an explicit frozen generation identity.
+        // route 是带显式冻结代际身份且允许缓存的 Kimi 视频路由。
+        let mut route =
+            bundled_manifest_route("kimi", "coding-plan", ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID);
+        route.manifest_revision = 10;
+        route.manifest_generation = 20;
+        route.route_revision = String::from("sha256:route-a");
+        // first is the baseline key for one exact account and route generation.
+        // first 是一个精确账号与路由代际的基准缓存键。
+        let first = prepared_media_key(
+            &route,
+            "kimi-for-coding",
+            Path::new("C:/media/video.mp4"),
+            ResourceKind::Video,
+            "video/mp4",
+        )
+        .expect("cacheable upload route should produce a key");
+        // replaced_manifest models a hot replacement that keeps provider, account, and model stable.
+        // replaced_manifest 模拟保持供应商、账号与模型不变的热替换。
+        let mut replaced_manifest = route.clone();
+        replaced_manifest.manifest_revision = 11;
+        replaced_manifest.manifest_generation = 21;
+        replaced_manifest.route_revision = String::from("sha256:route-b");
+        // replacement_key must not reuse a reference produced by the previous manifest route.
+        // replacement_key 不得复用上一 Manifest 路由生成的引用。
+        let replacement_key = prepared_media_key(
+            &replaced_manifest,
+            "kimi-for-coding",
+            Path::new("C:/media/video.mp4"),
+            ResourceKind::Video,
+            "video/mp4",
+        )
+        .expect("replacement route should produce a key");
+        assert_ne!(first, replacement_key);
+        // other_account proves credential connections never share provider-native references.
+        // other_account 证明不同凭据连接绝不会共享供应商原生引用。
+        let mut other_account = route.clone();
+        other_account.connection.id = String::from("secondary-account");
+        // account_key is scoped to the second exact credential connection.
+        // account_key 限定到第二条精确凭据连接。
+        let account_key = prepared_media_key(
+            &other_account,
+            "kimi-for-coding",
+            Path::new("C:/media/video.mp4"),
+            ResourceKind::Video,
+            "video/mp4",
+        )
+        .expect("second account route should produce a key");
+        assert_ne!(first, account_key);
+    }
+
+    /// Verifies prepared media cache pruning expires entries and enforces global capacity.
+    /// 验证媒体准备缓存裁剪会清除过期项并强制全局容量上限。
+    #[test]
+    fn prepared_media_cache_pruning_is_bounded() {
+        // now is the deterministic pruning boundary shared by every fixture entry.
+        // now 是全部测试条目共享的确定性裁剪边界。
+        let now = Instant::now();
+        // cache intentionally exceeds capacity and includes one already expired entry.
+        // cache 故意超过容量，并包含一条已经过期的记录。
+        let mut cache = BTreeMap::new();
+        for index in 0..(PREPARED_MEDIA_CACHE_MAX_ENTRIES + 8) {
+            // created_at gives every entry a strict oldest-first order.
+            // created_at 为每条记录提供严格的最旧优先顺序。
+            let created_at = now + Duration::from_millis(index as u64 + 1);
+            cache.insert(
+                format!("key-{index:04}"),
+                PreparedMediaCacheEntry {
+                    url: format!("https://example.invalid/{index}"),
+                    expires_at: now + Duration::from_secs(60),
+                    created_at,
+                    source_fingerprint: PreparedMediaSourceFingerprint {
+                        byte_len: 1,
+                        modified_at: None,
+                        content_sha256: [0; 32],
+                    },
+                },
+            );
+        }
+        cache.insert(
+            String::from("expired"),
+            PreparedMediaCacheEntry {
+                url: String::from("https://example.invalid/expired"),
+                expires_at: now,
+                created_at: now,
+                source_fingerprint: PreparedMediaSourceFingerprint {
+                    byte_len: 1,
+                    modified_at: None,
+                    content_sha256: [u8::MAX; 32],
+                },
+            },
+        );
+        prune_prepared_media_cache(&mut cache, now);
+        assert_eq!(cache.len(), PREPARED_MEDIA_CACHE_MAX_ENTRIES);
+        assert!(!cache.contains_key("expired"));
+        assert!(!cache.contains_key("key-0000"));
+        assert!(cache.contains_key(&format!("key-{:04}", PREPARED_MEDIA_CACHE_MAX_ENTRIES + 7)));
+    }
+
+    /// Verifies equal-length media replacements receive distinct content-addressed fingerprints.
+    /// 验证同长度媒体替换会获得不同的内容寻址指纹。
+    #[tokio::test]
+    async fn prepared_media_fingerprint_detects_equal_length_content_replacement() {
+        // path is unique per test process and never overlaps a user-owned media source.
+        // path 在每个测试进程中唯一，绝不会与用户媒体源重叠。
+        let path = std::env::temp_dir().join(format!(
+            "vulcan-prepared-media-fingerprint-{}.bin",
+            uuid::Uuid::new_v4()
+        ));
+        tokio::fs::write(path.as_path(), b"source-a")
+            .await
+            .expect("first media fixture should be written");
+        let first = prepared_media_source_fingerprint(path.as_path(), None, None)
+            .await
+            .expect("first media fingerprint should be readable");
+
+        tokio::fs::write(path.as_path(), b"source-b")
+            .await
+            .expect("replacement media fixture should be written");
+        let second = prepared_media_source_fingerprint(path.as_path(), None, None)
+            .await
+            .expect("replacement media fingerprint should be readable");
+
+        assert_eq!(first.byte_len, second.byte_len);
+        assert_ne!(first.content_sha256, second.content_sha256);
+        tokio::fs::remove_file(path.as_path())
+            .await
+            .expect("media fixture should be removed");
+    }
+
+    /// Verifies provider-specialized dynamic usage paths are frozen by manifest declarations.
+    /// 验证供应商专属动态用量路径由清单声明冻结（方案 §15.4）。
+    #[test]
+    fn exact_provider_routes_install_specialized_usage_profiles() {
+        // The bundled manifest is the single fact source for the Alibaba Responses billing details.
+        // 内置清单是 Alibaba Responses 计费明细的唯一事实来源。
+        let alibaba_route =
+            bundled_manifest_route("alibaba", "model-studio-cn", OPENAI_RESPONSES_PROFILE_ID);
         // alibaba_route is the immutable execution snapshot inspected below.
         // alibaba_route 是下方检查的不可变执行快照。
-        let alibaba_route = ProviderExecutionRoute::resolve(
-            alibaba_provider,
-            alibaba_entry,
-            alibaba_connection,
-            SecondaryRouteSelection::Automatic,
-        )
-        .expect("Alibaba Responses route should resolve");
         assert!(
             alibaba_route
                 .protocol_route
@@ -5502,9 +7741,10 @@ mod tests {
                 }))
         );
 
-        // deepseek_route is resolved from the explicit DeepSeek projector and Chat protocol.
-        // deepseek_route 由显式 DeepSeek 投影器与 Chat 协议解析。
-        let deepseek_route = deepseek_route(OPENAI_CHAT_PROFILE_ID);
+        // deepseek_route is resolved from the bundled manifest Chat route.
+        // deepseek_route 由内置清单 Chat 路由解析。
+        let deepseek_route =
+            bundled_manifest_route("deepseek", "official-api", OPENAI_CHAT_PROFILE_ID);
         assert!(
             deepseek_route
                 .protocol_route
@@ -5523,9 +7763,10 @@ mod tests {
                 }))
         );
 
-        // openrouter_route proves provider identity, protocol, and usage profile are bound together.
-        // openrouter_route 证明供应商身份、协议与用量 Profile 被共同绑定。
-        let openrouter_route = pinned_openrouter_route(OPENAI_CHAT_PROFILE_ID);
+        // openrouter_route proves the manifest binds the usage profile to the exact Chat route.
+        // openrouter_route 证明清单把用量 Profile 绑定到精确 Chat 路由。
+        let openrouter_route =
+            bundled_manifest_route("openrouter", "public-api", OPENAI_CHAT_PROFILE_ID);
         assert!(
             openrouter_route
                 .protocol_route
@@ -5624,7 +7865,11 @@ mod tests {
         let usage_event = AiStreamEvent::UsageUpdated {
             usage: Box::new(vulcan_ai_contract::RequestUsage::default()),
         };
-        assert!(gate.stage(vec![usage_event]).is_empty());
+        assert!(
+            gate.stage(vec![usage_event])
+                .expect("one pending usage event should remain within the bound")
+                .is_empty()
+        );
 
         let start = AiStreamEvent::ResponseStarted {
             execution_id: String::from("execution"),
@@ -5648,8 +7893,45 @@ mod tests {
         let usage_event = AiStreamEvent::UsageUpdated {
             usage: Box::new(vulcan_ai_contract::RequestUsage::default()),
         };
-        assert!(gate.stage(vec![usage_event]).is_empty());
+        assert!(
+            gate.stage(vec![usage_event])
+                .expect("one pending usage event should remain within the bound")
+                .is_empty()
+        );
         assert!(gate.ensure_released().is_err());
+    }
+
+    /// Verifies pre-start usage staging fails closed at its explicit event ceiling.
+    /// 验证响应开始前的用量暂存会在显式事件上限处封闭失败。
+    #[test]
+    fn profiled_usage_gate_rejects_unbounded_pre_start_events() {
+        // gate starts before normalization and therefore retains extracted usage temporarily.
+        // gate 在规范化前启动，因此会临时保留提取的用量。
+        let mut gate = ProfiledUsageEventGate::default();
+        // pending_events fills the complete reviewed staging capacity in one bounded batch.
+        // pending_events 在一个有界批次中填满全部已审核暂存容量。
+        let pending_events = (0..PROFILED_USAGE_GATE_MAX_PENDING_EVENTS)
+            .map(|_| AiStreamEvent::UsageUpdated {
+                usage: Box::new(vulcan_ai_contract::RequestUsage::default()),
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            gate.stage(pending_events)
+                .expect("the exact pending usage ceiling should be accepted")
+                .is_empty()
+        );
+        // overflow is the first event that would make the retained vector unbounded.
+        // overflow 是首个会使保留向量越过上限的事件。
+        let overflow = AiStreamEvent::UsageUpdated {
+            usage: Box::new(vulcan_ai_contract::RequestUsage::default()),
+        };
+
+        // error proves the gate rejects overflow instead of dropping evidence or growing memory.
+        // error 证明门控会拒绝溢出，而不是丢弃证据或继续增长内存。
+        let error = gate
+            .stage(vec![overflow])
+            .expect_err("usage staging beyond the ceiling must fail closed");
+        assert!(error.message.contains("256-event limit"));
     }
 
     /// Verifies an emitted usage fact closes the transparent-replay safety window.
@@ -5688,6 +7970,53 @@ mod tests {
         );
     }
 
+    /// Verifies every public execution diagnostic is bounded and cannot retain the exact secret.
+    /// 验证每个公共执行诊断均有界且无法保留精确秘密。
+    #[test]
+    fn execution_failure_boundary_redacts_exact_secret_and_provider_urls() {
+        // secret models an opaque value whose shape alone would not trigger generic redaction.
+        // secret 模拟一个仅凭形态不会触发通用脱敏的不透明值。
+        let secret = crate::CredentialSecretEnvelope::new_api_key(String::from(
+            "opaque-execution-credential-value",
+        ))
+        .expect("test credential should validate")
+        .execution_secret()
+        .expect("test execution secret should resolve");
+        // failure carries the secret in a provider message and a signed URL in another public field.
+        // failure 在供应商消息中携带秘密，并在另一公共字段中携带签名 URL。
+        let mut failure = http_failure(
+            401,
+            None,
+            r#"{"error":{"type":"authentication_error","message":"echo opaque-execution-credential-value"}}"#,
+        );
+        failure.error.model_id = Some(String::from(
+            "https://provider.example/result?signature=private",
+        ));
+        failure.error.request_id = Some("r".repeat(8_192));
+
+        // sanitized preserves typed semantics while closing every public diagnostic field.
+        // sanitized 在封闭每个公共诊断字段的同时保留强类型语义。
+        let sanitized = sanitize_provider_execution_failure(failure, &secret);
+        assert_eq!(sanitized.error.category, AiErrorCategory::Authentication);
+        assert!(!sanitized.error.message.contains(secret.expose_value()));
+        assert!(
+            !sanitized
+                .error
+                .upstream_message
+                .as_deref()
+                .unwrap_or_default()
+                .contains(secret.expose_value())
+        );
+        assert_eq!(sanitized.error.model_id.as_deref(), Some("<redacted-url>"));
+        assert!(
+            sanitized
+                .error
+                .request_id
+                .as_deref()
+                .is_some_and(|value| value.chars().count() <= 2_048)
+        );
+    }
+
     /// Verifies provider request identifiers follow the route-declared header order exactly.
     /// 验证供应商请求标识严格遵循路由声明的响应头顺序。
     #[test]
@@ -5713,6 +8042,55 @@ mod tests {
                 .expect("an undeclared route should not inspect headers"),
             None
         );
+    }
+
+    /// Verifies provider-controlled diagnostic header values remain explicitly bounded.
+    /// 验证供应商控制的诊断响应头值保持显式有界。
+    #[test]
+    fn provider_diagnostic_header_values_are_bounded() {
+        // oversized_value exceeds the complete retained telemetry budget.
+        // oversized_value 超过遥测完整保留预算。
+        let oversized_value = "x".repeat(PROVIDER_DIAGNOSTIC_HEADER_VALUE_MAX_BYTES + 128);
+        // headers carries the same adversarial value through both diagnostic extraction paths.
+        // headers 通过两条诊断提取路径携带同一恶意超长值。
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-request-id",
+            HeaderValue::from_bytes(oversized_value.as_bytes())
+                .expect("oversized ASCII header must parse"),
+        );
+        headers.insert(
+            "retry-after",
+            HeaderValue::from_bytes(oversized_value.as_bytes())
+                .expect("oversized ASCII header must parse"),
+        );
+        // request_id is the bounded route-declared diagnostic value.
+        // request_id 是有界的路由声明诊断值。
+        let request_id =
+            provider_request_id_from_headers(&headers, &[String::from("x-request-id")])
+                .expect("valid diagnostic text must decode")
+                .expect("declared response header must be present");
+        assert_eq!(request_id.len(), PROVIDER_DIAGNOSTIC_HEADER_VALUE_MAX_BYTES);
+        assert!(request_id.ends_with(PROVIDER_DIAGNOSTIC_HEADER_TRUNCATION_SUFFIX));
+
+        // rate_limit_headers contains only the fixed allowlist and the same bounded representation.
+        // rate_limit_headers 仅包含固定允许列表与相同的有界表示。
+        let rate_limit_headers = allowlisted_rate_limit_headers(&headers);
+        let retry_after = rate_limit_headers
+            .get("retry-after")
+            .expect("allowlisted rate-limit header must be retained");
+        assert_eq!(
+            retry_after.len(),
+            PROVIDER_DIAGNOSTIC_HEADER_VALUE_MAX_BYTES
+        );
+        assert!(retry_after.ends_with(PROVIDER_DIAGNOSTIC_HEADER_TRUNCATION_SUFFIX));
+
+        // unicode_value proves the shared truncator never splits a UTF-8 scalar.
+        // unicode_value 证明共享截断器绝不会切开 UTF-8 标量。
+        let unicode_value = "测".repeat(PROVIDER_DIAGNOSTIC_HEADER_VALUE_MAX_BYTES);
+        let bounded_unicode = bounded_provider_diagnostic_header_value(&unicode_value);
+        assert!(bounded_unicode.len() <= PROVIDER_DIAGNOSTIC_HEADER_VALUE_MAX_BYTES);
+        assert!(bounded_unicode.ends_with(PROVIDER_DIAGNOSTIC_HEADER_TRUNCATION_SUFFIX));
     }
 
     /// Verifies only a proven connection-establishment failure is safe to replay.
@@ -5910,6 +8288,36 @@ mod tests {
         let changed = responses_websocket_cache_key(&route, &request, &secret)
             .expect("changed endpoint should still produce a key");
         assert_ne!(first, changed);
+    }
+
+    /// Verifies sticky WebSocket breakers retain a hard LRU bound and refresh existing keys.
+    /// 验证粘性 WebSocket 熔断器保持硬性 LRU 上限，并刷新既有键。
+    #[test]
+    fn responses_websocket_breakers_are_bounded_and_lru() {
+        let base = Instant::now();
+        let mut breakers = BTreeMap::new();
+        for index in 0..RESPONSES_WEBSOCKET_BREAKER_MAX_ENTRIES {
+            insert_bounded_responses_websocket_breaker(
+                &mut breakers,
+                format!("key-{index:04}").as_str(),
+                base + Duration::from_millis(index as u64),
+            );
+        }
+        insert_bounded_responses_websocket_breaker(
+            &mut breakers,
+            "key-0000",
+            base + Duration::from_secs(10),
+        );
+        insert_bounded_responses_websocket_breaker(
+            &mut breakers,
+            "key-new",
+            base + Duration::from_secs(11),
+        );
+
+        assert_eq!(breakers.len(), RESPONSES_WEBSOCKET_BREAKER_MAX_ENTRIES);
+        assert!(breakers.contains_key("key-0000"));
+        assert!(!breakers.contains_key("key-0001"));
+        assert!(breakers.contains_key("key-new"));
     }
 
     /// Verifies executable Gemini Interactions routes pass through the Responses conversion core.
@@ -6591,39 +8999,13 @@ mod tests {
     /// A frozen route with fallback disabled.
     /// 返回禁用回退的冻结路由。
     fn pinned_openrouter_route(protocol_id: &str) -> ProviderExecutionRoute {
-        let provider = openrouter_descriptor();
-        let entry = provider
-            .service_entries
-            .first()
-            .expect("OpenRouter public entry must exist")
-            .clone();
-        let connection = CredentialConnection {
-            id: String::from("connection"),
-            provider_id: provider.id.clone(),
-            service_entry_id: entry.id.clone(),
-            credential_profile_id: String::from("api-key"),
-            credential_mode: CredentialMode::Token,
-            credential_id: String::from("credential"),
-            display_name: String::from("Primary"),
-            secret_reference: String::from("secret"),
-            management_secret_reference: None,
-            service_origin_override: None,
-            verified_protocols: BTreeSet::from([protocol_id.to_string()]),
-            selected_protocol: protocol_id.to_string(),
-            prompt_cache_by_protocol: BTreeMap::new(),
-            usage_scope_override: None,
+        let mut route = bundled_manifest_route("openrouter", "public-api", protocol_id);
+        route.secondary_route = SecondaryRouteSelection::PinnedEndpoint {
+            route_id: String::from("anthropic"),
+            provider_display_name: String::from("Anthropic"),
+            endpoint_display_name: String::from("Anthropic"),
         };
-        ProviderExecutionRoute::resolve(
-            provider,
-            entry,
-            connection,
-            SecondaryRouteSelection::PinnedEndpoint {
-                route_id: String::from("anthropic"),
-                provider_display_name: String::from("Anthropic"),
-                endpoint_display_name: String::from("Anthropic"),
-            },
-        )
-        .expect("route should resolve")
+        route
     }
 
     /// Resolves one MiniMax route for an exact compatible protocol.
@@ -6639,36 +9021,7 @@ mod tests {
     /// A frozen MiniMax international API route.
     /// 返回冻结的 MiniMax 国际 API 路由。
     fn minimax_route(protocol_id: &str) -> ProviderExecutionRoute {
-        let provider = minimax_descriptor();
-        let entry = provider
-            .service_entries
-            .iter()
-            .find(|entry| entry.id == "global")
-            .expect("MiniMax global API entry must exist")
-            .clone();
-        let connection = CredentialConnection {
-            id: String::from("connection"),
-            provider_id: provider.id.clone(),
-            service_entry_id: entry.id.clone(),
-            credential_profile_id: String::from("payg-api-key"),
-            credential_mode: CredentialMode::Token,
-            credential_id: String::from("credential"),
-            display_name: String::from("Primary"),
-            secret_reference: String::from("secret"),
-            management_secret_reference: None,
-            service_origin_override: None,
-            verified_protocols: BTreeSet::from([protocol_id.to_string()]),
-            selected_protocol: protocol_id.to_string(),
-            prompt_cache_by_protocol: BTreeMap::new(),
-            usage_scope_override: None,
-        };
-        ProviderExecutionRoute::resolve(
-            provider,
-            entry,
-            connection,
-            SecondaryRouteSelection::Automatic,
-        )
-        .expect("MiniMax route should resolve")
+        bundled_manifest_route("minimax", "global", protocol_id)
     }
 
     /// Resolves one DeepSeek official API route for an exact compatible protocol.
@@ -6684,71 +9037,13 @@ mod tests {
     /// A frozen DeepSeek official API route.
     /// 返回冻结的 DeepSeek 官方 API 路由。
     fn deepseek_route(protocol_id: &str) -> ProviderExecutionRoute {
-        let provider = deepseek_descriptor();
-        let entry = provider
-            .service_entries
-            .iter()
-            .find(|entry| entry.id == "official-api")
-            .expect("DeepSeek official API entry must exist")
-            .clone();
-        let connection = CredentialConnection {
-            id: String::from("connection"),
-            provider_id: provider.id.clone(),
-            service_entry_id: entry.id.clone(),
-            credential_profile_id: String::from("api-key"),
-            credential_mode: CredentialMode::Token,
-            credential_id: String::from("credential"),
-            display_name: String::from("Primary"),
-            secret_reference: String::from("secret"),
-            management_secret_reference: None,
-            service_origin_override: None,
-            verified_protocols: BTreeSet::from([protocol_id.to_string()]),
-            selected_protocol: protocol_id.to_string(),
-            prompt_cache_by_protocol: BTreeMap::new(),
-            usage_scope_override: None,
-        };
-        ProviderExecutionRoute::resolve(
-            provider,
-            entry,
-            connection,
-            SecondaryRouteSelection::Automatic,
-        )
-        .expect("DeepSeek route should resolve")
+        bundled_manifest_route("deepseek", "official-api", protocol_id)
     }
 
     /// Resolves one exact Kimi Coding Plan route.
     /// 解析一条精确 Kimi Coding Plan 路由。
     fn kimi_coding_route() -> ProviderExecutionRoute {
-        let provider = kimi_descriptor();
-        let entry = provider
-            .service_entries
-            .iter()
-            .find(|entry| entry.id == "coding-plan")
-            .expect("Kimi Coding Plan entry")
-            .clone();
-        let connection = CredentialConnection {
-            id: String::from("connection"),
-            provider_id: provider.id.clone(),
-            service_entry_id: entry.id.clone(),
-            credential_profile_id: String::from("coding-plan-login"),
-            credential_mode: CredentialMode::Auth,
-            credential_id: String::from("credential"),
-            display_name: String::from("Kimi"),
-            secret_reference: String::from("secret"),
-            management_secret_reference: None,
-            service_origin_override: None,
-            verified_protocols: BTreeSet::from([String::from(OPENAI_CHAT_PROFILE_ID)]),
-            selected_protocol: String::from(OPENAI_CHAT_PROFILE_ID),
-            prompt_cache_by_protocol: BTreeMap::new(),
-            usage_scope_override: None,
-        };
-        ProviderExecutionRoute::resolve(
-            provider,
-            entry,
-            connection,
-            SecondaryRouteSelection::Automatic,
-        )
-        .expect("Kimi route should resolve")
+        bundled_manifest_route("kimi", "coding-plan", OPENAI_CHAT_PROFILE_ID)
     }
 
     /// Resolves one Alibaba Model Studio route with a credential-scoped workspace origin.
@@ -6764,38 +9059,11 @@ mod tests {
     /// A frozen Singapore route whose public origin is replaced by the credential setting.
     /// 返回公共源地址已被凭据设置替换的冻结新加坡路由。
     fn alibaba_workspace_route(protocol_id: &str) -> ProviderExecutionRoute {
-        let provider = alibaba_descriptor();
-        let entry = provider
-            .service_entries
-            .iter()
-            .find(|entry| entry.id == "model-studio-singapore")
-            .expect("Model Studio Singapore entry")
-            .clone();
-        let connection = CredentialConnection {
-            id: String::from("connection"),
-            provider_id: provider.id.clone(),
-            service_entry_id: entry.id.clone(),
-            credential_profile_id: String::from("api-key"),
-            credential_mode: CredentialMode::Token,
-            credential_id: String::from("credential"),
-            display_name: String::from("Workspace"),
-            secret_reference: String::from("secret"),
-            management_secret_reference: None,
-            service_origin_override: Some(String::from(
-                "https://ws-example.ap-southeast-1.maas.aliyuncs.com",
-            )),
-            verified_protocols: BTreeSet::from([protocol_id.to_string()]),
-            selected_protocol: protocol_id.to_string(),
-            prompt_cache_by_protocol: BTreeMap::new(),
-            usage_scope_override: None,
-        };
-        ProviderExecutionRoute::resolve(
-            provider,
-            entry,
-            connection,
-            SecondaryRouteSelection::Automatic,
-        )
-        .expect("Alibaba workspace route should resolve")
+        let mut route = bundled_manifest_route("alibaba", "model-studio-singapore", protocol_id);
+        route.connection.service_origin_override = Some(String::from(
+            "https://ws-example.ap-southeast-1.maas.aliyuncs.com",
+        ));
+        route
     }
 
     /// Verifies one workspace origin derives the correct protocol-specific request roots.
@@ -7254,7 +9522,7 @@ mod tests {
             failure
                 .error
                 .message
-                .contains("exposes only `none` and `adaptive`")
+                .contains("not in the declared mapping table")
         );
     }
 
@@ -7400,7 +9668,11 @@ mod tests {
                 .expect("reasoning request should encode");
             assert_eq!(encoded.body["reasoning"]["effort"], "max");
             assert!(encoded.body.get("reasoning_effort").is_none());
-            assert!(encoded.body.get("output_config").is_none());
+            if protocol_id == ANTHROPIC_MESSAGES_PROFILE_ID {
+                assert_eq!(encoded.body["output_config"]["effort"], "max");
+            } else {
+                assert!(encoded.body.get("output_config").is_none());
+            }
         }
     }
 
@@ -7436,16 +9708,46 @@ mod tests {
             reqwest::Client::new(),
             Arc::new(ProtocolRegistry::first_batch().expect("profiles should register")),
         );
+        let route = pinned_openrouter_route(OPENAI_CHAT_PROFILE_ID);
+        assert_eq!(
+            route.model_parameters_conflicting_with_request_field("reasoning_effort"),
+            BTreeSet::from([String::from("reasoning.max_tokens")])
+        );
         let mut request = minimal_request();
         request.reasoning_effort = Some(vulcan_ai_contract::ReasoningEffort::High);
         request.model_parameters.insert(
-            String::from(OPENROUTER_REASONING_MAX_TOKENS_PARAMETER_ID),
+            String::from("reasoning.max_tokens"),
             ModelParameterValue::Integer(2048),
         );
         let error = client
-            .encode_request(&pinned_openrouter_route(OPENAI_CHAT_PROFILE_ID), &request)
+            .encode_request(&route, &request)
             .expect_err("conflicting reasoning controls should fail");
         assert!(error.error.message.contains("mutually exclusive"));
+    }
+
+    /// Verifies an endpoint-specific prompt-cache restriction is enforced by the frozen manifest.
+    /// 验证端点特定的提示词缓存限制由冻结 Manifest 执行。
+    #[test]
+    fn encode_request_rejects_openrouter_explicit_prompt_cache_from_manifest() {
+        let client = ProviderExecutionClient::new(
+            reqwest::Client::new(),
+            Arc::new(ProtocolRegistry::first_batch().expect("profiles should register")),
+        );
+        let mut request = minimal_request();
+        request.prompt_cache = PromptCachePolicy::ManagedExplicit {
+            ttl: vulcan_ai_contract::PromptCacheTtlSelection::ProfileDefault,
+        };
+
+        let error = client
+            .encode_request(&pinned_openrouter_route(OPENAI_CHAT_PROFILE_ID), &request)
+            .expect_err("manifest-declared prompt-cache restriction should fail");
+
+        assert!(
+            error
+                .error
+                .message
+                .contains("verified model-endpoint capability")
+        );
     }
 
     /// Verifies protocol-required headers are merged while credential headers remain adapter-owned.
@@ -7620,5 +9922,689 @@ mod tests {
 
         assert_eq!(encoded.body["thinking"]["type"], "enabled");
         assert!(encoded.body.get("reasoning_effort").is_none());
+    }
+
+    /// Verifies a terminal Responses failure never touches the Chat or Anthropic endpoints:
+    /// every physical request stays on the bound protocol (plan §13.5.5).
+    /// 验证 Responses 终态失败绝不触达 Chat 或 Anthropic 端点：每个真实请求都停留在绑定协议上（方案 §13.5.5）。
+    #[tokio::test]
+    async fn responses_failure_never_touches_other_protocol_endpoints() {
+        use std::sync::Mutex as StdMutex;
+        use std::time::Duration;
+
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let address = listener.local_addr().expect("address should resolve");
+        let observed_paths = std::sync::Arc::new(StdMutex::new(Vec::<String>::new()));
+        let server_paths = std::sync::Arc::clone(&observed_paths);
+        let server = tokio::spawn(async move {
+            // Accept up to four requests to detect any cross-protocol attempt; each returns a
+            // terminal 400 so the client must never follow up on another protocol endpoint.
+            // 最多接受四个请求以探测任何跨协议尝试；每个都返回终态 400，
+            // 客户端绝不能在另一协议端点上继续跟进。
+            for _ in 0..4 {
+                let accepted =
+                    tokio::time::timeout(Duration::from_secs(5), listener.accept()).await;
+                let Ok(accept_result) = accepted else {
+                    break;
+                };
+                let Ok((mut stream, _)) = accept_result else {
+                    break;
+                };
+                let request = read_test_http_request(&mut stream).await;
+                let path = request
+                    .lines()
+                    .next()
+                    .unwrap_or_default()
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap_or_default()
+                    .to_string();
+                server_paths.lock().expect("path lock").push(path);
+                let response = "HTTP/1.1 400 Bad Request
+content-type: application/json
+content-length: 2
+connection: close
+
+{}";
+                stream
+                    .write_all(response.as_bytes())
+                    .await
+                    .expect("400 response should send");
+            }
+        });
+
+        let client = ProviderExecutionClient::new(
+            reqwest::Client::new(),
+            Arc::new(ProtocolRegistry::first_batch().expect("profiles should register")),
+        );
+        let mut route = pinned_openrouter_route(OPENAI_RESPONSES_PROFILE_ID);
+        route.protocol_route.base_url_override = Some(format!("http://{address}"));
+        let secret = crate::CredentialSecretEnvelope::new_api_key(String::from("secret"))
+            .expect("test key should validate")
+            .execution_secret()
+            .expect("test key should resolve");
+
+        let mut stream = client.execute(
+            route,
+            minimal_request(),
+            secret,
+            String::from("execution-responses-400"),
+        );
+        let mut terminal_seen = false;
+        while let Some(event) = stream.next().await {
+            if event.is_err() {
+                terminal_seen = true;
+                break;
+            }
+        }
+        drop(stream);
+        server.await.expect("mock server should finish");
+
+        assert!(
+            terminal_seen,
+            "the 400 must terminate the execution attempt"
+        );
+        let paths = observed_paths.lock().expect("path lock").clone();
+        assert!(
+            !paths.is_empty(),
+            "the bound protocol endpoint must have been hit"
+        );
+        assert!(
+            paths.iter().all(|path| path.starts_with("/responses")),
+            "no request may leave the bound responses protocol: {paths:?}"
+        );
+    }
+
+    /// Verifies bundled manifest usage profiles equal the legacy provider functions (plan §15.4).
+    /// 验证内置清单 usage Profile 与旧版供应商函数等价（方案 §15.4）。
+    #[test]
+    fn bundled_usage_profiles_match_legacy_provider_functions() {
+        for (provider_id, expected) in [
+            (
+                "alibaba",
+                vulcan_llm_core::alibaba_responses_usage_profiles(),
+            ),
+            ("deepseek", vulcan_llm_core::deepseek_chat_usage_profiles()),
+            (
+                "openrouter",
+                vulcan_llm_core::openrouter_chat_usage_profiles(),
+            ),
+        ] {
+            let directory = vulcan_runtime_assets::resolve_bundled_provider_manifests_directory();
+            let text = std::fs::read_to_string(directory.join(format!("{provider_id}.json")))
+                .unwrap_or_else(|_| panic!("missing bundled manifest `{provider_id}`"));
+            let manifest = crate::provider_manifest::compile_manifest_text(
+                &text,
+                crate::provider_manifest::ManifestOwnership::System,
+            )
+            .expect("bundled manifest must compile");
+            // manifest_profiles keeps the exact declared order across every route, deduplicated
+            // by profile id because multiple routes may reference the same declaration.
+            // manifest_profiles 跨全部路由保持精确声明顺序，并按 Profile 标识去重
+            // （多条路由可能引用同一声明）。
+            let mut seen = BTreeSet::new();
+            let manifest_profiles = manifest
+                .provider()
+                .service_entries
+                .iter()
+                .flat_map(|entry| entry.protocol_routes.iter())
+                .flat_map(|route| route.usage_extraction_profiles.iter())
+                .filter(|profile| profile.profile_id.starts_with(provider_id))
+                .filter(|profile| seen.insert(profile.profile_id.clone()))
+                .collect::<Vec<_>>();
+            assert!(
+                !manifest_profiles.is_empty(),
+                "{provider_id} manifest must declare its usage profiles"
+            );
+            assert_eq!(
+                manifest_profiles.len(),
+                expected.len(),
+                "{provider_id} profile count must match the legacy function"
+            );
+            for (actual, legacy) in manifest_profiles.iter().zip(expected.iter()) {
+                assert_eq!(
+                    **actual, *legacy,
+                    "{provider_id} profile `{}` must equal the legacy declaration",
+                    actual.profile_id
+                );
+            }
+        }
+    }
+
+    /// Builds one execution client used by the projection equivalence tests.
+    /// 构建投影等价测试使用的执行客户端。
+    fn projection_test_client() -> ProviderExecutionClient {
+        ProviderExecutionClient::new(
+            reqwest::Client::new(),
+            Arc::new(ProtocolRegistry::first_batch().expect("profiles should register")),
+        )
+    }
+
+    /// Verifies the bundled DeepSeek request profiles produce the legacy-equivalent wire.
+    /// 验证内置 DeepSeek 请求 Profile 产生与旧版等价的 Wire 请求。
+    #[test]
+    fn deepseek_manifest_profiles_produce_legacy_equivalent_wire() {
+        let client = projection_test_client();
+        let chat_route = bundled_manifest_route("deepseek", "official-api", OPENAI_CHAT_PROFILE_ID);
+        let anthropic_route =
+            bundled_manifest_route("deepseek", "official-api", ANTHROPIC_MESSAGES_PROFILE_ID);
+        let responses_route =
+            bundled_manifest_route("deepseek", "official-api", OPENAI_RESPONSES_PROFILE_ID);
+        assert!(
+            !chat_route.request_projection_profiles.is_empty()
+                && !anthropic_route.request_projection_profiles.is_empty()
+                && !responses_route.request_projection_profiles.is_empty(),
+            "bundled DeepSeek routes must install manifest request profiles"
+        );
+
+        // Chat: none -> thinking disabled, effort removed.
+        let mut request = minimal_request();
+        request.model_id = String::from("deepseek-chat");
+        request.reasoning_effort = Some(ReasoningEffort::None);
+        let encoded = client
+            .encode_request(&chat_route, &request)
+            .expect("DeepSeek Chat request should encode");
+        assert_eq!(encoded.body["thinking"]["type"], "disabled");
+        assert!(encoded.body.get("reasoning_effort").is_none());
+
+        // Chat: high -> thinking enabled.
+        request.reasoning_effort = Some(ReasoningEffort::High);
+        let encoded = client
+            .encode_request(&chat_route, &request)
+            .expect("DeepSeek Chat high request should encode");
+        assert_eq!(encoded.body["thinking"]["type"], "enabled");
+
+        // Anthropic: high -> thinking enabled + output_config.effort.
+        let encoded = client
+            .encode_request(&anthropic_route, &request)
+            .expect("DeepSeek Anthropic request should encode");
+        assert_eq!(encoded.body["thinking"]["type"], "enabled");
+        assert_eq!(encoded.body["output_config"]["effort"], "high");
+
+        // Anthropic: none -> thinking disabled, no output_config.
+        request.reasoning_effort = Some(ReasoningEffort::None);
+        let encoded = client
+            .encode_request(&anthropic_route, &request)
+            .expect("DeepSeek Anthropic none request should encode");
+        assert_eq!(encoded.body["thinking"]["type"], "disabled");
+        assert!(encoded.body.get("output_config").is_none());
+
+        // Responses: documented-unsupported fields removed.
+        request.reasoning_effort = None;
+        let mut request = minimal_request();
+        request.model_id = String::from("deepseek-chat");
+        let encoded = client
+            .encode_request(&responses_route, &request)
+            .expect("DeepSeek Responses request should encode");
+        assert!(encoded.body.get("store").is_none());
+        assert!(encoded.body.get("include").is_none());
+    }
+
+    /// Verifies the bundled Alibaba request profiles produce the legacy-equivalent wire.
+    /// 验证内置 Alibaba 请求 Profile 产生与旧版等价的 Wire 请求。
+    #[test]
+    fn alibaba_manifest_profiles_produce_legacy_equivalent_wire() {
+        let client = projection_test_client();
+        let chat_route =
+            bundled_manifest_route("alibaba", "model-studio-cn", OPENAI_CHAT_PROFILE_ID);
+        let anthropic_route =
+            bundled_manifest_route("alibaba", "model-studio-cn", ANTHROPIC_MESSAGES_PROFILE_ID);
+        let mut request = minimal_request();
+        request.model_id = String::from("qwen3.7-max");
+
+        request.reasoning_effort = Some(ReasoningEffort::Adaptive);
+        let encoded = client
+            .encode_request(&chat_route, &request)
+            .expect("Alibaba Chat request should encode");
+        assert_eq!(encoded.body["enable_thinking"], true);
+        assert!(encoded.body.get("reasoning_effort").is_none());
+
+        request.reasoning_effort = Some(ReasoningEffort::None);
+        let encoded = client
+            .encode_request(&chat_route, &request)
+            .expect("Alibaba Chat none request should encode");
+        assert_eq!(encoded.body["enable_thinking"], false);
+
+        request.reasoning_effort = Some(ReasoningEffort::None);
+        let encoded = client
+            .encode_request(&anthropic_route, &request)
+            .expect("Alibaba Anthropic request should encode");
+        assert_eq!(encoded.body["thinking"]["type"], "disabled");
+        assert!(encoded.body.get("output_config").is_none());
+
+        request.reasoning_effort = Some(ReasoningEffort::Adaptive);
+        let encoded = client
+            .encode_request(&anthropic_route, &request)
+            .expect("Alibaba Anthropic adaptive request should encode");
+        assert_eq!(encoded.body["thinking"]["type"], "enabled");
+    }
+
+    /// Verifies the bundled OpenRouter request profiles produce the legacy-equivalent wire.
+    /// 验证内置 OpenRouter 请求 Profile 产生与旧版等价的 Wire 请求。
+    #[test]
+    fn openrouter_manifest_profiles_produce_legacy_equivalent_wire() {
+        let client = projection_test_client();
+        let chat_route = bundled_manifest_route("openrouter", "public-api", OPENAI_CHAT_PROFILE_ID);
+        let anthropic_route =
+            bundled_manifest_route("openrouter", "public-api", ANTHROPIC_MESSAGES_PROFILE_ID);
+        let responses_route =
+            bundled_manifest_route("openrouter", "public-api", OPENAI_RESPONSES_PROFILE_ID);
+        let mut request = minimal_request();
+        request.model_id = String::from("openai/gpt-5.6-sol");
+
+        // Adaptive Chat: reasoning.enabled, no effort, no reasoning_effort.
+        request.reasoning_effort = Some(ReasoningEffort::Adaptive);
+        let encoded = client
+            .encode_request(&chat_route, &request)
+            .expect("OpenRouter Chat adaptive request should encode");
+        assert_eq!(encoded.body["reasoning"]["enabled"], true);
+        assert!(encoded.body["reasoning"].get("effort").is_none());
+        assert!(encoded.body.get("reasoning_effort").is_none());
+
+        // Non-adaptive Anthropic: output_config.effort + reasoning.effort.
+        request.reasoning_effort = Some(ReasoningEffort::Low);
+        let encoded = client
+            .encode_request(&anthropic_route, &request)
+            .expect("OpenRouter Anthropic request should encode");
+        assert_eq!(encoded.body["output_config"]["effort"], "low");
+        assert_eq!(encoded.body["reasoning"]["effort"], "low");
+        assert!(encoded.body["reasoning"].get("enabled").is_none());
+
+        // Responses max effort: reasoning.effort without the protocol effort field removal.
+        request.reasoning_effort = Some(ReasoningEffort::Max);
+        let encoded = client
+            .encode_request(&responses_route, &request)
+            .expect("OpenRouter Responses request should encode");
+        assert_eq!(encoded.body["reasoning"]["effort"], "max");
+    }
+
+    /// Verifies the OpenRouter reasoning token budget parameter projects via the manifest profile.
+    /// 验证 OpenRouter 推理 Token 预算参数经 Manifest Profile 投影。
+    #[test]
+    fn openrouter_reasoning_max_tokens_projects_via_profile() {
+        let client = projection_test_client();
+        let chat_route = bundled_manifest_route("openrouter", "public-api", OPENAI_CHAT_PROFILE_ID);
+        let mut request = minimal_request();
+        request.model_id = String::from("openai/gpt-5.6-sol");
+        request.reasoning_effort = None;
+        request.model_parameters.insert(
+            String::from("reasoning.max_tokens"),
+            ModelParameterValue::Integer(16384),
+        );
+        let encoded = client
+            .encode_request(&chat_route, &request)
+            .expect("OpenRouter max tokens request should encode");
+        assert_eq!(encoded.body["reasoning"]["max_tokens"], 16384);
+    }
+
+    /// Verifies the bundled Kimi default profile matches the non-coding-model legacy behavior.
+    /// 验证内置 Kimi 默认 Profile 与非编码模型旧版行为一致。
+    #[test]
+    fn kimi_manifest_default_profile_matches_legacy_wire() {
+        let client = projection_test_client();
+        let chat_route = bundled_manifest_route("kimi", "platform-global", OPENAI_CHAT_PROFILE_ID);
+        assert!(
+            !chat_route.request_projection_profiles.is_empty(),
+            "bundled Kimi chat route must install the default request profile"
+        );
+        let mut request = minimal_request();
+        request.model_id = String::from("moonshot-v1-8k");
+
+        request.reasoning_effort = Some(ReasoningEffort::High);
+        let encoded = client
+            .encode_request(&chat_route, &request)
+            .expect("Kimi Chat reasoning request should encode");
+        assert_eq!(encoded.body["thinking"]["type"], "enabled");
+        assert!(encoded.body.get("reasoning_effort").is_none());
+
+        request.reasoning_effort = Some(ReasoningEffort::None);
+        let encoded = client
+            .encode_request(&chat_route, &request)
+            .expect("Kimi Chat none request should encode");
+        assert!(encoded.body.get("thinking").is_none());
+    }
+
+    /// Verifies the bundled MiniMax profiles produce the legacy-equivalent wire.
+    /// 验证内置 MiniMax Profile 产生与旧版等价的 Wire 请求。
+    #[test]
+    fn minimax_manifest_request_profiles_produce_legacy_equivalent_wire() {
+        let client = projection_test_client();
+        let chat_route = bundled_manifest_route("minimax", "global", OPENAI_CHAT_PROFILE_ID);
+        let anthropic_route =
+            bundled_manifest_route("minimax", "global", ANTHROPIC_MESSAGES_PROFILE_ID);
+        assert!(
+            !chat_route.request_projection_profiles.is_empty()
+                && !anthropic_route.request_projection_profiles.is_empty(),
+            "bundled MiniMax routes must install manifest request profiles"
+        );
+        let mut request = minimal_request();
+        request.model_id = String::from("MiniMax-M3");
+
+        // Chat adaptive + reasoning split.
+        request.reasoning_effort = Some(ReasoningEffort::Adaptive);
+        request.model_parameters.insert(
+            MINIMAX_REASONING_SPLIT_PARAMETER_ID.to_string(),
+            ModelParameterValue::Boolean(true),
+        );
+        let encoded = client
+            .encode_request(&chat_route, &request)
+            .expect("MiniMax Chat request should encode");
+        assert_eq!(encoded.body["thinking"]["type"], "adaptive");
+        assert_eq!(encoded.body["reasoning_split"], true);
+        assert!(encoded.body.get("reasoning_effort").is_none());
+
+        // Anthropic disabled thinking.
+        request.reasoning_effort = Some(ReasoningEffort::None);
+        request
+            .model_parameters
+            .remove(MINIMAX_REASONING_SPLIT_PARAMETER_ID);
+        let encoded = client
+            .encode_request(&anthropic_route, &request)
+            .expect("MiniMax Anthropic request should encode");
+        assert_eq!(encoded.body["thinking"]["type"], "disabled");
+        assert!(encoded.body.get("output_config").is_none());
+
+        // Anthropic rejects reasoning_split with the controlled legacy message.
+        request.model_parameters.insert(
+            MINIMAX_REASONING_SPLIT_PARAMETER_ID.to_string(),
+            ModelParameterValue::Boolean(true),
+        );
+        let error = client
+            .encode_request(&anthropic_route, &request)
+            .expect_err("MiniMax Anthropic must reject reasoning_split");
+        assert!(
+            error
+                .error
+                .message
+                .contains("registered only for OpenAI Chat"),
+            "unexpected error: {}",
+            error.error.message
+        );
+    }
+
+    /// Verifies the projection executor rejects an unsupported MiniMax effort like the legacy fn.
+    /// 验证投影执行器像旧版函数一样拒绝不支持的 MiniMax 推理档位。
+    #[test]
+    fn minimax_profile_rejects_unsupported_effort() {
+        let client = projection_test_client();
+        let chat_route = bundled_manifest_route("minimax", "global", OPENAI_CHAT_PROFILE_ID);
+        let mut request = minimal_request();
+        request.model_id = String::from("MiniMax-M3");
+        request.reasoning_effort = Some(ReasoningEffort::High);
+        let error = client
+            .encode_request(&chat_route, &request)
+            .expect_err("MiniMax must reject unsupported effort");
+        assert!(
+            error
+                .error
+                .message
+                .contains("not in the declared mapping table"),
+            "unexpected error: {}",
+            error.error.message
+        );
+    }
+
+    /// Verifies a response profile rewrites vendor JSON before protocol decoding.
+    /// 验证响应 Profile 会在协议解码前改写供应商 JSON。
+    #[test]
+    fn response_profile_projects_stream_record_before_decode() {
+        let profile = crate::provider_manifest::ResponseProjectionProfile {
+            profile_id: String::from("vendor-response.v1"),
+            revision: 1,
+            steps: vec![crate::provider_manifest::MappingStep::RenameJsonPointer {
+                from: String::from("/vendor_usage"),
+                to: String::from("/usage"),
+            }],
+        };
+
+        let projected = project_response_record_text(
+            &[profile],
+            r#"{"type":"response.completed","vendor_usage":{"input_tokens":7}}"#,
+        )
+        .expect("response profile should project");
+        let value: Value = serde_json::from_str(&projected).expect("projected JSON should parse");
+        assert_eq!(value["usage"]["input_tokens"], 7);
+        assert!(value.get("vendor_usage").is_none());
+    }
+
+    /// Verifies an error profile normalizes vendor error JSON before protocol decoding.
+    /// 验证错误 Profile 会在协议解码前规范化供应商错误 JSON。
+    /// Verifies vendor error envelopes are normalized before protocol decoding.
+    /// 验证供应商错误信封会在协议解码前完成规范化。
+    #[test]
+    fn error_profile_projects_vendor_error_before_decode() {
+        let profile = crate::provider_manifest::ResponseProjectionProfile {
+            profile_id: String::from("vendor-error.v1"),
+            revision: 1,
+            steps: vec![crate::provider_manifest::MappingStep::RenameJsonPointer {
+                from: String::from("/vendor_error"),
+                to: String::from("/error"),
+            }],
+        };
+
+        let projected = project_response_record_text(
+            &[profile],
+            r#"{"vendor_error":{"code":"quota_exceeded","message":"limit"}}"#,
+        )
+        .expect("error profile should project");
+        let value: Value = serde_json::from_str(&projected).expect("projected JSON should parse");
+        assert_eq!(value["error"]["code"], "quota_exceeded");
+        assert!(value.get("vendor_error").is_none());
+    }
+
+    /// Verifies remote scalar ancestors produce a controlled response-projection failure.
+    /// 验证远端标量祖先会产生受控响应投影失败。
+    #[test]
+    fn response_profile_rejects_non_object_target_ancestor_without_panic() {
+        let profile = crate::provider_manifest::ResponseProjectionProfile {
+            profile_id: String::from("vendor-response.v1"),
+            revision: 1,
+            steps: vec![crate::provider_manifest::MappingStep::SetLiteral {
+                path: String::from("/error/code"),
+                value: Value::String(String::from("mapped")),
+            }],
+        };
+
+        let error = project_response_record_text(&[profile], r#"{"error":"plain"}"#)
+            .expect_err("scalar ancestor must fail closed");
+        assert!(error.message.contains("non-object"), "{error:?}");
+    }
+
+    /// Verifies runtime request scalars cannot turn a valid profile into a process panic.
+    /// 验证运行时请求标量不会把有效 Profile 变成进程 panic。
+    #[test]
+    fn request_profile_rejects_non_object_target_ancestor_without_panic() {
+        // profile expects the protocol body to expose an object-valued reasoning envelope.
+        // profile 期望协议正文提供对象类型的 reasoning 信封。
+        let profile = crate::provider_manifest::RequestProjectionProfile {
+            profile_id: String::from("vendor-request.v1"),
+            revision: 1,
+            steps: vec![crate::provider_manifest::MappingStep::SetLiteral {
+                path: String::from("/reasoning/budget_tokens"),
+                value: json!(1024),
+            }],
+        };
+
+        // error proves a runtime scalar is rejected at the pre-dispatch boundary without panic.
+        // error 证明运行时标量会在分发前边界被拒绝且不会触发 panic。
+        let error = project_json_request_profiles(
+            &[profile],
+            "vendor-model",
+            json!({"reasoning": "provider-default"}),
+        )
+        .expect_err("scalar ancestor must fail closed");
+        assert!(error.contains("non-object"), "{error}");
+    }
+
+    /// Verifies the closed template language renders every registered reusable form together.
+    /// 验证封闭模板语言可以组合渲染所有已注册的可复用形式。
+    #[test]
+    fn bounded_json_template_renders_nested_registered_forms() {
+        // The source exercises body references, optional omission, array item scope, and enum lookup.
+        // 来源同时覆盖正文引用、可选省略、数组项作用域与枚举查找。
+        let source = json!({
+            "prompt": "draw",
+            "format": "jpg",
+            "enabled": true,
+            "rows": [
+                {"name": "first", "url": "https://example.com/first"},
+                {"name": "second", "url": "https://example.com/second"}
+            ]
+        });
+        // The template combines model identity, map, enum, condition, concat, and optional reference forms.
+        // 模板组合模型标识、数组映射、枚举、条件、拼接与可选引用形式。
+        let template = json!({
+            "model": {"$vulcan_model_id": true},
+            "missing": {"$vulcan_ref": {"path": "/missing", "optional": true}},
+            "mime": {
+                "$vulcan_enum": {
+                    "path": "/format",
+                    "mapping": {"jpg": "image/jpeg", "png": "image/png"}
+                }
+            },
+            "mode": {
+                "$vulcan_if_equals": {
+                    "path": "/enabled",
+                    "equals": true,
+                    "then": "active",
+                    "otherwise": "inactive"
+                }
+            },
+            "label": {
+                "$vulcan_concat": [
+                    "prefix:",
+                    {"$vulcan_ref": {"path": "/prompt"}}
+                ]
+            },
+            "fallback": {
+                "$vulcan_coalesce": [
+                    {"$vulcan_ref": {"path": "/missing", "optional": true}},
+                    {"$vulcan_ref": {"path": "/prompt"}}
+                ]
+            },
+            "present_only": {
+                "$vulcan_if_present": {
+                    "path": "/prompt",
+                    "then": {"value": {"$vulcan_ref": {"path": "/prompt"}}}
+                }
+            },
+            "absent_only": {
+                "$vulcan_if_present": {
+                    "path": "/missing",
+                    "then": "must-not-render"
+                }
+            },
+            "items": {
+                "$vulcan_map": {
+                    "path": "/rows",
+                    "template": {
+                        "title": {"$vulcan_ref": {"scope": "item", "path": "/name"}},
+                        "url": {"$vulcan_ref": {"scope": "item", "path": "/url"}}
+                    }
+                }
+            },
+            "combined_items": {
+                "$vulcan_array_concat": [
+                    {"$vulcan_map": {"path": "/rows", "template": {"$vulcan_ref": {"scope": "item", "path": "/name"}}}},
+                    ["last"]
+                ]
+            }
+        });
+
+        // The rendered value is the exact provider-neutral wire shape.
+        // 渲染值是精确的供应商无关 Wire 结构。
+        let rendered = render_complete_json_template(&template, &source, "image-model")
+            .expect("registered template forms should render");
+
+        assert_eq!(
+            rendered,
+            json!({
+                "model": "image-model",
+                "mime": "image/jpeg",
+                "mode": "active",
+                "label": "prefix:draw",
+                "fallback": "draw",
+                "present_only": {"value": "draw"},
+                "items": [
+                    {"title": "first", "url": "https://example.com/first"},
+                    {"title": "second", "url": "https://example.com/second"}
+                ],
+                "combined_items": ["first", "second", "last"]
+            })
+        );
+    }
+
+    /// Verifies template rendering fails closed on ambiguous reserved forms and excessive arrays.
+    /// 验证模板渲染会对含糊保留形式与超限数组保持失败关闭。
+    #[test]
+    fn bounded_json_template_rejects_ambiguous_forms_and_array_overflow() {
+        // The ambiguous object mixes a registered form with an ordinary property.
+        // 含糊对象把已注册形式与普通属性混在一起。
+        let ambiguous = json!({
+            "$vulcan_ref": {"path": "/value"},
+            "extra": true
+        });
+        // The ambiguity error proves manifests cannot smuggle unvalidated sibling behavior.
+        // 含糊错误证明 Manifest 无法夹带未经校验的同级行为。
+        let ambiguity_error =
+            render_complete_json_template(&ambiguous, &json!({"value": "ok"}), "model")
+                .expect_err("ambiguous reserved form must fail");
+        assert!(
+            ambiguity_error.contains("only property"),
+            "{ambiguity_error}"
+        );
+
+        // The source exceeds the fixed collection ceiling by exactly one item.
+        // 来源数组恰好比固定集合上限多一个元素。
+        let oversized_source = Value::Array(vec![Value::Null; JSON_TEMPLATE_MAX_ARRAY_ITEMS + 1]);
+        // The map template is intentionally minimal so only the collection ceiling is exercised.
+        // 映射模板刻意保持最小，以便只验证集合上限。
+        let map_template = json!({
+            "$vulcan_map": {
+                "path": "",
+                "template": {"$vulcan_ref": {"scope": "item", "path": ""}}
+            }
+        });
+        // The overflow error is deterministic and occurs before allocating provider output.
+        // 超限错误是确定性的，并在分配供应商输出前发生。
+        let overflow_error =
+            render_complete_json_template(&map_template, &oversized_source, "model")
+                .expect_err("oversized source array must fail");
+        assert!(overflow_error.contains("item limit"), "{overflow_error}");
+    }
+
+    /// Verifies template recursion and serialized output are bounded independently.
+    /// 验证模板递归深度与序列化输出大小分别受到硬限制。
+    #[test]
+    fn bounded_json_template_rejects_depth_and_output_overflow() {
+        // The nested template starts from one scalar leaf.
+        // 嵌套模板从一个标量叶节点开始。
+        let mut deep_template = Value::Null;
+        for _ in 0..=crate::provider_manifest::MAX_JSON_DEPTH {
+            deep_template = Value::Array(vec![deep_template]);
+        }
+        // The depth error proves rendering cannot recurse beyond the manifest engine ceiling.
+        // 深度错误证明渲染不会递归超过 Manifest 引擎上限。
+        let depth_error = render_complete_json_template(&deep_template, &Value::Null, "model")
+            .expect_err("deep template must fail");
+        assert!(depth_error.contains("depth limit"), "{depth_error}");
+
+        // The source string exceeds the final serialized-output ceiling after JSON encoding.
+        // 来源字符串在 JSON 编码后超过最终序列化输出上限。
+        let oversized_text = "x".repeat(JSON_TEMPLATE_MAX_OUTPUT_BYTES + 1);
+        // The direct reference isolates the output-byte guard from collection and depth guards.
+        // 直接引用将输出字节守卫与集合、深度守卫隔离。
+        let output_template = json!({"$vulcan_ref": {"path": "/text"}});
+        // The output error proves a small template cannot amplify an unbounded source value.
+        // 输出错误证明小模板不能放大无界来源值。
+        let output_error = render_complete_json_template(
+            &output_template,
+            &json!({"text": oversized_text}),
+            "model",
+        )
+        .expect_err("oversized rendered output must fail");
+        assert!(output_error.contains("byte limit"), "{output_error}");
     }
 }

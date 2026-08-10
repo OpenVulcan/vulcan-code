@@ -291,11 +291,25 @@ export function ModelListSettingsArea() {
                               type="button"
                               variant="ghost"
                             >
-                              <span className="settings-model-route-protocol">
-                                {protocolDisplayName(route.protocolId)}
-                                <SlidersHorizontal aria-hidden="true" size={14} />
+                              <span className="settings-model-route-summary">
+                                <span className="settings-model-route-protocol">
+                                  {protocolDisplayName(route.protocolId)}
+                                  <SlidersHorizontal aria-hidden="true" size={14} />
+                                </span>
+                                <span
+                                  className="settings-model-route-binding"
+                                  title={`${route.bindingSource} · ${route.bindingRuleId ?? t("settings.models.routeNoRule")} · r${route.manifestRevision}`}
+                                >
+                                  {route.bindingSource} · {route.bindingRuleId ?? t("settings.models.routeNoRule")} · r{route.manifestRevision}
+                                </span>
+                                <span
+                                  className="settings-model-route-binding"
+                                  title={route.availableProtocols.join(", ")}
+                                >
+                                  {t("settings.models.routeAvailableProtocols")}: {route.availableProtocols.join(", ") || "—"}
+                                </span>
                               </span>
-            <ProviderModelModalitySummary model={route.model} />
+                              <ProviderModelModalitySummary model={route.model} />
                             </Button>
                           </TabsContent>
                         ))}
@@ -390,7 +404,14 @@ export function ModelListSettingsArea() {
 // modelRouteValue returns the stable tab value for one exact service-entry protocol route.
 // modelRouteValue 返回一个精确服务入口协议路由的稳定页签值。
 function modelRouteValue(route: PublicModelProtocolRoute): string {
-  return `${route.serviceEntryId}/${route.protocolId}`
+  return JSON.stringify([
+    route.serviceEntryId,
+    route.protocolId,
+    route.bindingSource,
+    route.bindingRuleId ?? null,
+    route.manifestRevision,
+    route.availableProtocols,
+  ])
 }
 
 // internalOperationsForModel returns deduplicated operation switches for one provider model.

@@ -33,6 +33,7 @@ fn test_parent_execution_request(session_id: SessionId) -> ExecutionPreparationR
         provider_id_override: None,
         model_id_override: None,
         connection_id_override: None,
+        provider_route_lease_identity: None,
         provider_tool_selections_override: Default::default(),
         subagent_prompt_context: None,
         task_session_store_root: None,
@@ -418,8 +419,8 @@ fn task_runtime_preparation_request_uses_resolved_runtime_policy() {
     assert_eq!(child_request.context_budget_override, Some(12_000));
 }
 
-/// Verifies an explicit child provider/model selection clears the parent's credential connection.
-/// 验证子代理显式选择供应商/模型时会清除父级凭据连接。
+/// Verifies an explicit child provider/model selection clears the parent's connection and lease.
+/// 验证子代理显式选择供应商/模型时会清除父级凭据连接与路由租约。
 #[test]
 fn task_runtime_preparation_request_does_not_mix_parent_connection_with_child_route() {
     let parent_session_id = Uuid::new_v4();
@@ -433,6 +434,18 @@ fn task_runtime_preparation_request_does_not_mix_parent_connection_with_child_ro
     );
     let mut parent_request = test_parent_execution_request(parent_session_id);
     parent_request.connection_id_override = Some(String::from("parent-connection"));
+    parent_request.provider_route_lease_identity =
+        Some(vulcan_workbench_model::SessionProviderRouteLeaseIdentity {
+            schema_version: 1,
+            provider_id: String::from("parent-provider"),
+            connection_id: String::from("parent-connection"),
+            model_id: String::from("parent-model"),
+            protocol_profile_id: String::from("openai-responses.v1"),
+            manifest_revision: 7,
+            manifest_generation: 11,
+            catalog_revision: String::from("parent-catalog"),
+            route_revision: String::from("parent-route"),
+        });
     let context = TaskExecutionRuntimeContext::new(
         provider_config,
         Arc::new(foundation),
@@ -477,6 +490,7 @@ fn task_runtime_preparation_request_does_not_mix_parent_connection_with_child_ro
         Some("gpt-5.6-luna")
     );
     assert_eq!(child_request.connection_id_override, None);
+    assert_eq!(child_request.provider_route_lease_identity, None);
 }
 
 /// Verifies ordinary child-agent execution hides parent-session tools by default.
@@ -1148,6 +1162,18 @@ fn task_runtime_preparation_request_clears_parent_transient_runtime_state() {
         None,
     );
     let mut parent_request = test_parent_execution_request(parent_session_id);
+    parent_request.provider_route_lease_identity =
+        Some(vulcan_workbench_model::SessionProviderRouteLeaseIdentity {
+            schema_version: 1,
+            provider_id: String::from("parent-provider"),
+            connection_id: String::from("parent-connection"),
+            model_id: String::from("parent-model"),
+            protocol_profile_id: String::from("openai-responses.v1"),
+            manifest_revision: 7,
+            manifest_generation: 11,
+            catalog_revision: String::from("parent-catalog"),
+            route_revision: String::from("parent-route"),
+        });
     parent_request.tool_request_rejection_reason = Some(String::from("parent rejection"));
     parent_request.tool_request_rejection_all_tools = true;
     parent_request
@@ -1234,6 +1260,7 @@ fn task_runtime_preparation_request_clears_parent_transient_runtime_state() {
             .expect("valid task runtime preparation");
 
     assert!(child_request.conversation_hook_turn_id.is_none());
+    assert!(child_request.provider_route_lease_identity.is_none());
     assert!(child_request.tool_request_rejection_reason.is_none());
     assert!(!child_request.tool_request_rejection_all_tools);
     assert!(child_request.tool_request_rejection_tool_ids.is_empty());

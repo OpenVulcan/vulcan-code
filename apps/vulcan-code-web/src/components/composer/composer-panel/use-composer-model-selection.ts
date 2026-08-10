@@ -1,5 +1,9 @@
 import React from "react";
 import {
+  confirmedComposerPersistenceValue,
+  enqueueComposerPersistence,
+} from "@/components/composer/composer-persistence-queue";
+import {
   modelPickerChoiceKey,
   modelPickerChoicesFromProviders,
   type ModelPickerChoice,
@@ -71,9 +75,9 @@ export interface ComposerModelSelectionController {
   // Monotonic signal used to open the reasoning picker from a slash command.
   // slash 指令用于打开推理选择器的单调信号。
   reasoningPickerOpenSignal: number;
-  // Applies one optimistic model selection and rolls back the latest failed request.
-  // 应用一个乐观模型选择，并回滚最新失败请求。
-  selectModel: (choice: ModelPickerChoice) => Promise<void>;
+  // Applies one optimistic model selection, reports persistence success, and rolls back failure.
+  // 应用一个乐观模型选择、报告持久化结果，并在失败时回滚。
+  selectModel: (choice: ModelPickerChoice) => Promise<boolean>;
   // Applies one optimistic reasoning selection and rolls back the latest failed request.
   // 应用一个乐观推理选择，并回滚最新失败请求。
   selectReasoningEffort: (effort: string) => Promise<void>;
@@ -120,6 +124,12 @@ export function useComposerModelSelection(options: UseComposerModelSelectionOpti
   // modelRequestVersionRef prevents an older failed request from rolling back a newer model choice.
   // modelRequestVersionRef 防止较早的失败请求回滚较新的模型选择。
   const modelRequestVersionRef = React.useRef(0);
+  // modelPersistenceQueueRef serializes model and account writes so an older RPC cannot finish last.
+  // modelPersistenceQueueRef 串行化模型与账号写入，避免较早 RPC 最后完成并覆盖最新意图。
+  const modelPersistenceQueueRef = React.useRef<Promise<void>>(Promise.resolve());
+  // confirmedModelChoiceRef retains the latest authoritative or successfully persisted model value.
+  // confirmedModelChoiceRef 保留最新权威或已成功持久化的模型值。
+  const confirmedModelChoiceRef = React.useRef("");
   // pendingModelChoiceRef protects the latest optimistic choice until its service request settles.
   // pendingModelChoiceRef 在最新服务请求结束前保护对应的乐观选择。
   const pendingModelChoiceRef = React.useRef<string | null>(null);
@@ -129,6 +139,21 @@ export function useComposerModelSelection(options: UseComposerModelSelectionOpti
   // reasoningRequestVersionRef prevents an older failed request from rolling back a newer reasoning choice.
   // reasoningRequestVersionRef 防止较早的失败请求回滚较新的推理选择。
   const reasoningRequestVersionRef = React.useRef(0);
+  // reasoningPersistenceQueueRef preserves user-intent order across overlapping reasoning writes.
+  // reasoningPersistenceQueueRef 在重叠推理设置写入之间保持用户意图顺序。
+  const reasoningPersistenceQueueRef = React.useRef<Promise<void>>(Promise.resolve());
+  // pendingReasoningEffortRef protects the latest optimistic effort from a stale same-session snapshot.
+  // pendingReasoningEffortRef 保护最新乐观推理档位，避免同会话旧快照覆盖。
+  const pendingReasoningEffortRef = React.useRef<string | null>(null);
+  // reasoningScopeRef distinguishes navigation from a same-session reasoning refresh.
+  // reasoningScopeRef 区分会话导航与同会话推理状态刷新。
+  const reasoningScopeRef = React.useRef(options.conversationScopeKey);
+  // reasoningEffortValueRef exposes the latest optimistic value without a stale callback closure.
+  // reasoningEffortValueRef 暴露最新乐观值，避免回调闭包读取陈旧状态。
+  const reasoningEffortValueRef = React.useRef("");
+  // confirmedReasoningEffortRef retains the latest authoritative or successfully persisted effort.
+  // confirmedReasoningEffortRef 保留最新权威或已成功持久化的推理档位。
+  const confirmedReasoningEffortRef = React.useRef("");
   // availableModelChoices flattens the authoritative provider snapshot into picker rows.
   // availableModelChoices 将权威 Provider 快照扁平化为选择器行。
   const availableModelChoices = React.useMemo(
@@ -227,26 +252,35 @@ export function useComposerModelSelection(options: UseComposerModelSelectionOpti
     }
     pendingModelChoiceRef.current = null;
     modelRequestVersionRef.current += 1;
+    confirmedModelChoiceRef.current = activeModelChoiceKey;
     setModelChoice(activeModelChoiceKey);
   }, [activeModelChoiceKey, options.conversationScopeKey]);
 
   React.useLayoutEffect(() => {
+    // scopeChanged makes another conversation's persisted reasoning immediately authoritative.
+    // scopeChanged 使另一会话的持久化推理档位立即成为权威值。
+    const scopeChanged = reasoningScopeRef.current !== options.conversationScopeKey;
+    reasoningScopeRef.current = options.conversationScopeKey;
+    if (!scopeChanged && pendingReasoningEffortRef.current !== null) {
+      return;
+    }
+    pendingReasoningEffortRef.current = null;
     reasoningRequestVersionRef.current += 1;
-    setReasoningEffort((current) => {
-      if (
-        !options.persistReasoningSelection
-        && reasoningEffortOptions.some((option) => option.value === current)
-      ) {
-        return current;
-      }
-      if (serviceSelectedReasoningEffort) {
-        return serviceSelectedReasoningEffort;
-      }
-      if (reasoningEffortOptions.some((option) => option.value === current)) {
-        return current;
-      }
-      return reasoningEffortOptions[0]?.value ?? "";
-    });
+    // currentEffort reads the immediate optimistic value rather than the render that scheduled this effect.
+    // currentEffort 读取即时乐观值，而不是调度本 Effect 的渲染快照。
+    const currentEffort = reasoningEffortValueRef.current;
+    // nextEffort applies the same authoritative/default policy without a state-updater side effect.
+    // nextEffort 在不向状态更新器写副作用的前提下应用同一权威值或默认值策略。
+    const nextEffort = !options.persistReasoningSelection
+      && reasoningEffortOptions.some((option) => option.value === currentEffort)
+      ? currentEffort
+      : serviceSelectedReasoningEffort
+        || (reasoningEffortOptions.some((option) => option.value === currentEffort)
+          ? currentEffort
+          : reasoningEffortOptions[0]?.value ?? "");
+    reasoningEffortValueRef.current = nextEffort;
+    confirmedReasoningEffortRef.current = nextEffort;
+    setReasoningEffort(nextEffort);
   }, [
     options.conversationScopeKey,
     options.persistReasoningSelection,
@@ -257,50 +291,91 @@ export function useComposerModelSelection(options: UseComposerModelSelectionOpti
   // selectModel applies an optimistic model value and only lets the latest failed request roll it back.
   // selectModel 应用乐观模型值，仅允许最新失败请求执行回滚。
   const selectModel = React.useCallback(async (choice: ModelPickerChoice) => {
-    // previousChoice is the local value restored when the latest persistence request fails.
-    // previousChoice 是最新持久化请求失败时恢复的本地值。
-    const previousChoice = modelChoice;
     // nextChoice is the canonical provider/model key rendered immediately.
     // nextChoice 是立即渲染的规范 Provider/模型键。
     const nextChoice = modelPickerChoiceKey(choice);
+    // requestScope prevents an old conversation result from changing the new conversation's local baseline.
+    // requestScope 防止旧会话结果修改新会话的本地基线。
+    const requestScope = options.conversationScopeKey;
     // requestVersion identifies this optimistic request among overlapping selections.
     // requestVersion 在重叠选择中标识本次乐观请求。
     const requestVersion = modelRequestVersionRef.current + 1;
     modelRequestVersionRef.current = requestVersion;
     pendingModelChoiceRef.current = nextChoice;
     setModelChoice(nextChoice);
+    // queuedWrite makes the latest model/account intent execute after every older write.
+    // queuedWrite 使最新模型或账号意图在全部较早写入之后执行。
+    const queuedWrite = enqueueComposerPersistence(
+      modelPersistenceQueueRef.current,
+      () => options.onSelectModel(choice),
+    );
+    modelPersistenceQueueRef.current = queuedWrite.tail;
     // saved records whether the service accepted this model selection.
     // saved 记录服务是否接受本次模型选择。
-    const saved = await options.onSelectModel(choice);
+    const saved = await queuedWrite.result;
+    if (modelChoiceScopeRef.current !== requestScope) {
+      return saved;
+    }
+    confirmedModelChoiceRef.current = confirmedComposerPersistenceValue(
+      confirmedModelChoiceRef.current,
+      nextChoice,
+      saved,
+    );
     if (modelRequestVersionRef.current === requestVersion) {
       pendingModelChoiceRef.current = null;
       if (!saved) {
-        setModelChoice(previousChoice);
+        setModelChoice(confirmedModelChoiceRef.current);
       }
     }
-  }, [modelChoice, options.onSelectModel]);
+    return saved;
+  }, [options.conversationScopeKey, options.onSelectModel]);
 
   // selectReasoningEffort applies an optimistic effort and only lets the latest failed request roll it back.
   // selectReasoningEffort 应用乐观推理档位，仅允许最新失败请求执行回滚。
   const selectReasoningEffort = React.useCallback(async (effort: string) => {
-    // previousEffort is the local value restored when the latest persistence request fails.
-    // previousEffort 是最新持久化请求失败时恢复的本地值。
-    const previousEffort = reasoningEffort;
+    // requestScope prevents an old conversation result from changing the new conversation's local baseline.
+    // requestScope 防止旧会话结果修改新会话的本地基线。
+    const requestScope = options.conversationScopeKey;
     // requestVersion identifies this optimistic request among overlapping selections.
     // requestVersion 在重叠选择中标识本次乐观请求。
     const requestVersion = reasoningRequestVersionRef.current + 1;
     reasoningRequestVersionRef.current = requestVersion;
+    reasoningEffortValueRef.current = effort;
     setReasoningEffort(effort);
     if (!options.persistReasoningSelection) {
       return;
     }
+    pendingReasoningEffortRef.current = effort;
+    // queuedWrite preserves last-intent-wins semantics at the serialized backend boundary.
+    // queuedWrite 在串行后端边界保持最后意图胜出语义。
+    const queuedWrite = enqueueComposerPersistence(
+      reasoningPersistenceQueueRef.current,
+      () => options.onSelectReasoningEffort(effort),
+    );
+    reasoningPersistenceQueueRef.current = queuedWrite.tail;
     // saved records whether the service accepted this reasoning selection.
     // saved 记录服务是否接受本次推理选择。
-    const saved = await options.onSelectReasoningEffort(effort);
-    if (!saved && reasoningRequestVersionRef.current === requestVersion) {
-      setReasoningEffort(previousEffort);
+    const saved = await queuedWrite.result;
+    if (reasoningScopeRef.current !== requestScope) {
+      return;
     }
-  }, [options.onSelectReasoningEffort, options.persistReasoningSelection, reasoningEffort]);
+    confirmedReasoningEffortRef.current = confirmedComposerPersistenceValue(
+      confirmedReasoningEffortRef.current,
+      effort,
+      saved,
+    );
+    if (reasoningRequestVersionRef.current === requestVersion) {
+      pendingReasoningEffortRef.current = null;
+      if (!saved) {
+        reasoningEffortValueRef.current = confirmedReasoningEffortRef.current;
+        setReasoningEffort(confirmedReasoningEffortRef.current);
+      }
+    }
+  }, [
+    options.conversationScopeKey,
+    options.onSelectReasoningEffort,
+    options.persistReasoningSelection,
+  ]);
 
   // openModelPicker increments the external open signal consumed by ModelPickerControl.
   // openModelPicker 递增 ModelPickerControl 使用的外部打开信号。

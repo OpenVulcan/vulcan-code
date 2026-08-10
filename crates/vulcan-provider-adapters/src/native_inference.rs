@@ -7,78 +7,47 @@ use crate::{
     execution::{
         execution_headers, http_failure, http_send_transport_failure, parse_retry_after_headers,
         pre_dispatch_failure, read_bounded_response_text, response_headers_protocol_failure,
+        transport_failure,
     },
 };
 use reqwest::header::CONTENT_TYPE;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    time::{Instant, SystemTime},
+    time::{Duration, Instant, SystemTime},
 };
 use vulcan_ai_contract::{
     AiOperation, EmbeddingEncoding, EmbeddingInputContent, EmbeddingOutputKind, EmbeddingPayload,
     EmbeddingRequest, EmbeddingResponse, EmbeddingResult, EmbeddingSpaceFingerprint, EmbeddingTask,
     ExecutionRouteSnapshot, InferenceUsageScope, RequestUsage, RerankProfileFingerprint,
-    RerankRequest, RerankResponse, RerankResult, RerankTruncation, UsageUpdateKind, UsageValue,
-    UsageValueSource,
+    RerankRequest, RerankResponse, RerankResult, UsageUpdateKind, UsageValue, UsageValueSource,
 };
 
 /// Maximum successful native inference response size retained in memory.
 /// 原生推理成功响应允许保留在内存中的最大字节数。
 const MAXIMUM_NATIVE_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 
-/// Stable native binding identifier for OpenRouter embeddings.
-/// OpenRouter 向量的稳定原生绑定标识。
-const OPENROUTER_EMBEDDING_BINDING_ID: &str = "openrouter.embeddings.v1";
-
-/// Stable native binding identifier for OpenRouter rerank.
-/// OpenRouter 重排的稳定原生绑定标识。
-const OPENROUTER_RERANK_BINDING_ID: &str = "openrouter.rerank.v1";
-
-/// Stable native binding identifier for Alibaba-compatible embeddings.
-/// 阿里云兼容向量的稳定原生绑定标识。
-const ALIBABA_EMBEDDING_BINDING_ID: &str = "alibaba.model_studio.embeddings.v1";
-
-/// Stable native binding identifier for Alibaba rerank.
-/// 阿里云重排的稳定原生绑定标识。
-const ALIBABA_RERANK_BINDING_ID: &str = "alibaba.model_studio.rerank.v1";
-
-/// Exact compatible endpoint for Alibaba Qwen3 reranking.
-/// 阿里云 Qwen3 重排使用的精确兼容接口端点。
-const ALIBABA_QWEN3_RERANK_ENDPOINT_PATH: &str = "/reranks";
-
-/// Returns the exact registered native action binding for one provider product operation.
-/// 返回一个供应商产品操作对应的精确已注册原生动作绑定。
+/// Returns the exact manifest-selected native action binding for one service operation.
+/// 返回一个服务操作对应的精确 Manifest 选择原生动作绑定。
 ///
 /// # Parameters
 /// 参数
-/// `provider_id`, `service_entry_id`, and `operation` identify one closed adapter route.
-/// `provider_id`、`service_entry_id` 与 `operation` 标识一条封闭适配器路由。
+/// `entry` is the immutable service snapshot and `operation` selects one provider-neutral action.
+/// `entry` 是不可变服务快照，`operation` 选择一个供应商无关动作。
 ///
 /// # Returns
 /// 返回值
 /// The stable action binding when a native adapter exists; otherwise no binding.
 /// 原生适配器存在时返回稳定动作绑定，否则不返回绑定。
 pub fn registered_native_action_binding_id(
-    provider_id: &str,
-    service_entry_id: &str,
+    entry: &crate::ServiceEntry,
     operation: AiOperation,
-) -> Option<&'static str> {
-    match (provider_id, service_entry_id, operation) {
-        ("openrouter", "public-api", AiOperation::EmbeddingCreate) => {
-            Some(OPENROUTER_EMBEDDING_BINDING_ID)
-        }
-        ("openrouter", "public-api", AiOperation::RerankDocuments) => {
-            Some(OPENROUTER_RERANK_BINDING_ID)
-        }
-        ("alibaba", "model-studio-cn" | "model-studio-singapore", AiOperation::EmbeddingCreate) => {
-            Some(ALIBABA_EMBEDDING_BINDING_ID)
-        }
-        ("alibaba", "model-studio-cn" | "model-studio-singapore", AiOperation::RerankDocuments) => {
-            Some(ALIBABA_RERANK_BINDING_ID)
-        }
-        _ => None,
-    }
+) -> Option<&str> {
+    entry
+        .native_inference_bindings
+        .iter()
+        .find(|binding| binding.operation == operation)
+        .map(|binding| binding.binding_id.as_str())
 }
 
 /// Validates a configured action binding against the exact native provider route.
@@ -116,19 +85,16 @@ pub(crate) fn validate_native_action_binding(
     Ok(())
 }
 
-/// Identifies one exact native inference wire route.
-/// 标识一条精确原生推理 Wire 路由。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum NativeInferenceRoute {
-    /// OpenRouter native endpoint.
-    /// OpenRouter 原生端点。
-    OpenRouter,
-    /// Alibaba Model Studio compatible endpoint.
-    /// 阿里云百炼 Model Studio 兼容端点。
-    AlibabaModelStudio,
+/// Binds one frozen service route to its manifest-selected native inference contract.
+/// 将一条冻结服务路由绑定到其 Manifest 选择的原生推理契约。
+#[derive(Debug, Clone, Copy)]
+struct NativeInferenceRoute<'a> {
+    /// Exact immutable binding declaration.
+    /// 精确且不可变的绑定声明。
+    binding: &'a crate::NativeInferenceBinding,
 }
 
-impl NativeInferenceRoute {
+impl<'a> NativeInferenceRoute<'a> {
     /// Resolves one embedding endpoint from an immutable provider route.
     /// 从不可变供应商路由解析一个向量端点。
     ///
@@ -142,24 +108,9 @@ impl NativeInferenceRoute {
     /// The wire route, relative endpoint, and stable binding identifier.
     /// 返回 Wire 路由、相对端点与稳定绑定标识。
     fn embedding(
-        route: &ProviderExecutionRoute,
-    ) -> Result<(Self, &'static str, &'static str), ProviderExecutionFailure> {
-        match (route.provider.id.as_str(), route.entry.id.as_str()) {
-            ("openrouter", "public-api") => Ok((
-                Self::OpenRouter,
-                "/embeddings",
-                OPENROUTER_EMBEDDING_BINDING_ID,
-            )),
-            ("alibaba", "model-studio-cn" | "model-studio-singapore") => Ok((
-                Self::AlibabaModelStudio,
-                "/embeddings",
-                ALIBABA_EMBEDDING_BINDING_ID,
-            )),
-            _ => Err(pre_dispatch_failure(format!(
-                "Provider route `{}/{}` does not register native embedding execution.",
-                route.provider.id, route.entry.id
-            ))),
-        }
+        route: &'a ProviderExecutionRoute,
+    ) -> Result<(Self, &'a str, &'a str), ProviderExecutionFailure> {
+        Self::for_operation(route, AiOperation::EmbeddingCreate)
     }
 
     /// Resolves one rerank endpoint from an immutable provider route.
@@ -175,22 +126,35 @@ impl NativeInferenceRoute {
     /// The wire route, relative endpoint, and stable binding identifier.
     /// 返回 Wire 路由、相对端点与稳定绑定标识。
     fn rerank(
-        route: &ProviderExecutionRoute,
-    ) -> Result<(Self, &'static str, &'static str), ProviderExecutionFailure> {
-        match (route.provider.id.as_str(), route.entry.id.as_str()) {
-            ("openrouter", "public-api") => {
-                Ok((Self::OpenRouter, "/rerank", OPENROUTER_RERANK_BINDING_ID))
-            }
-            ("alibaba", "model-studio-cn" | "model-studio-singapore") => Ok((
-                Self::AlibabaModelStudio,
-                ALIBABA_QWEN3_RERANK_ENDPOINT_PATH,
-                ALIBABA_RERANK_BINDING_ID,
-            )),
-            _ => Err(pre_dispatch_failure(format!(
-                "Provider route `{}/{}` does not register native rerank execution.",
-                route.provider.id, route.entry.id
-            ))),
-        }
+        route: &'a ProviderExecutionRoute,
+    ) -> Result<(Self, &'a str, &'a str), ProviderExecutionFailure> {
+        Self::for_operation(route, AiOperation::RerankDocuments)
+    }
+
+    /// Resolves one operation binding from the frozen service entry.
+    /// 从冻结服务入口解析一个操作绑定。
+    fn for_operation(
+        route: &'a ProviderExecutionRoute,
+        operation: AiOperation,
+    ) -> Result<(Self, &'a str, &'a str), ProviderExecutionFailure> {
+        let binding = route
+            .entry
+            .native_inference_bindings
+            .iter()
+            .find(|binding| binding.operation == operation)
+            .ok_or_else(|| {
+                pre_dispatch_failure(format!(
+                    "Provider route `{}/{}` does not register native operation `{}`.",
+                    route.provider.id,
+                    route.entry.id,
+                    operation.as_str()
+                ))
+            })?;
+        Ok((
+            Self { binding },
+            binding.endpoint_path.as_str(),
+            binding.binding_id.as_str(),
+        ))
     }
 }
 
@@ -619,12 +583,20 @@ impl ProviderExecutionClient {
     /// 返回完整有界 UTF-8 JSON 文本或结构化执行失败。
     async fn send_native_json<T: Serialize>(
         &self,
-        native_route: NativeInferenceRoute,
+        native_route: NativeInferenceRoute<'_>,
         route: &ProviderExecutionRoute,
         endpoint: &str,
         body: &T,
         secret: &CredentialExecutionSecret,
     ) -> Result<String, ProviderExecutionFailure> {
+        let transport = self
+            .protocols
+            .transport_profile(route.protocol_route.protocol_profile_id.as_str())
+            .map_err(|error| {
+                pre_dispatch_failure(format!(
+                    "Native inference transport profile is unavailable: {error}"
+                ))
+            })?;
         let headers = execution_headers(route, &BTreeMap::new(), secret)?;
         let base_url = crate::connection_endpoint::resolved_connection_protocol_base_url(
             &route.connection,
@@ -633,24 +605,31 @@ impl ProviderExecutionClient {
         );
         let url = native_request_url(
             native_route,
-            route.entry.id.as_str(),
             route.connection.service_origin_override.as_deref(),
             base_url.as_str(),
             endpoint,
         )?;
-        let response = self
-            .http
-            .post(url.as_str())
-            .headers(headers)
-            .json(body)
-            .send()
-            .await
-            .map_err(|error| {
-                http_send_transport_failure(
-                    &error,
-                    format!("Native inference request to `{url}` failed: {error}"),
-                )
-            })?;
+        let response = tokio::time::timeout(
+            Duration::from_millis(transport.response_headers_timeout_ms),
+            self.http
+                .post(url.as_str())
+                .headers(headers)
+                .json(body)
+                .send(),
+        )
+        .await
+        .map_err(|_| {
+            transport_failure(format!(
+                "Native inference request to `{url}` exceeded the registered {} ms response-header timeout.",
+                transport.response_headers_timeout_ms
+            ))
+        })?
+        .map_err(|error| {
+            http_send_transport_failure(
+                &error,
+                format!("Native inference request to `{url}` failed: {error}"),
+            )
+        })?;
         let status = response.status().as_u16();
         let retry_after = parse_retry_after_headers(response.headers(), SystemTime::now());
         let content_type = response
@@ -664,10 +643,14 @@ impl ProviderExecutionClient {
             url.as_str(),
             status,
             retry_after.clone(),
+            Duration::from_millis(transport.stream_idle_timeout_ms),
         )
         .await?;
         if !(200..300).contains(&status) {
-            return Err(http_failure(status, retry_after, response_body.as_str()));
+            return Err(crate::execution::sanitize_provider_execution_failure(
+                http_failure(status, retry_after, response_body.as_str()),
+                secret,
+            ));
         }
         if !content_type
             .as_deref()
@@ -678,52 +661,19 @@ impl ProviderExecutionClient {
                 content_type.as_deref().unwrap_or("<missing>")
             )));
         }
+        let response_value =
+            serde_json::from_str::<serde_json::Value>(&response_body).map_err(|error| {
+                response_headers_protocol_failure(format!(
+                    "Native inference response from `{url}` is invalid JSON: {error}"
+                ))
+            })?;
+        crate::provider_manifest::validate_runtime_json_bounds(
+            &response_value,
+            "Native inference response",
+        )
+        .map_err(response_headers_protocol_failure)?;
         Ok(response_body)
     }
-}
-
-/// Builds one Alibaba Qwen3 rerank URL from a validated workspace origin and regional entry.
-/// 根据已校验的工作区源地址与区域入口构建一个阿里云 Qwen3 重排 URL。
-///
-/// # Parameters
-/// 参数
-/// `service_entry_id` selects the regional Model Studio API root, while `service_origin_override`
-/// supplies the required workspace origin and `endpoint` is the registered rerank suffix.
-/// `service_entry_id` 选择区域 Model Studio API 根，`service_origin_override` 提供必需的工作区源地址，
-/// `endpoint` 是已注册的重排后缀。
-///
-/// # Returns
-/// 返回值
-/// A workspace-scoped regional Qwen3 rerank URL or a controlled pre-dispatch configuration error.
-/// 返回工作区作用域的区域 Qwen3 重排 URL，或受控的分派前配置错误。
-fn alibaba_qwen3_rerank_url(
-    service_entry_id: &str,
-    service_origin_override: Option<&str>,
-    endpoint: &str,
-) -> Result<String, ProviderExecutionFailure> {
-    let origin = service_origin_override
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            pre_dispatch_failure(format!(
-                "Alibaba Qwen3 rerank requires a workspace-scoped service origin for `{service_entry_id}`; configure the Model Studio workspace origin before testing."
-            ))
-        })?;
-    let api_root = match service_entry_id {
-        "model-studio-cn" => "/compatible-api/v1",
-        "model-studio-singapore" => "/compatible-mode/v1",
-        _ => {
-            return Err(pre_dispatch_failure(format!(
-                "Alibaba Qwen3 rerank is not registered for service entry `{service_entry_id}`."
-            )));
-        }
-    };
-    Ok(format!(
-        "{}{}{}",
-        origin.trim_end_matches('/'),
-        api_root,
-        endpoint
-    ))
 }
 
 /// Joins one registered native endpoint to its exact service-entry base URL.
@@ -731,10 +681,10 @@ fn alibaba_qwen3_rerank_url(
 ///
 /// # Parameters
 /// 参数
-/// `native_route` selects provider-specific URL rules; `service_entry_id` and
-/// `service_origin_override` identify the exact configured service; `base_url` already contains
-/// the generic product API root and `endpoint` is relative to it.
-/// `native_route` 选择供应商专属 URL 规则；`service_entry_id` 与 `service_origin_override` 标识精确配置服务；
+/// `native_route` selects manifest-owned URL rules and `service_origin_override` identifies the
+/// exact configured service; `base_url` already contains the generic product API root and
+/// `endpoint` is relative to it.
+/// `native_route` 选择 Manifest 持有的 URL 规则，`service_origin_override` 标识精确配置服务；
 /// `base_url` 已包含通用产品 API 根，`endpoint` 相对于该根。
 ///
 /// # Returns
@@ -742,16 +692,37 @@ fn alibaba_qwen3_rerank_url(
 /// One URL without inventing or duplicating protocol path segments.
 /// 返回不虚构或重复协议路径段的 URL。
 fn native_request_url(
-    native_route: NativeInferenceRoute,
-    service_entry_id: &str,
+    native_route: NativeInferenceRoute<'_>,
     service_origin_override: Option<&str>,
     base_url: &str,
     endpoint: &str,
 ) -> Result<String, ProviderExecutionFailure> {
-    if native_route == NativeInferenceRoute::AlibabaModelStudio
-        && endpoint == ALIBABA_QWEN3_RERANK_ENDPOINT_PATH
-    {
-        return alibaba_qwen3_rerank_url(service_entry_id, service_origin_override, endpoint);
+    if native_route.binding.requires_service_origin_override {
+        let origin = service_origin_override
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                pre_dispatch_failure(format!(
+                    "Native action `{}` requires a credential-scoped service origin.",
+                    native_route.binding.binding_id
+                ))
+            })?;
+        let base_path = native_route
+            .binding
+            .service_origin_base_path
+            .as_deref()
+            .ok_or_else(|| {
+                pre_dispatch_failure(format!(
+                    "Native action `{}` does not declare its required service-origin API root.",
+                    native_route.binding.binding_id
+                ))
+            })?;
+        return Ok(format!(
+            "{}{}{}",
+            origin.trim_end_matches('/'),
+            base_path,
+            endpoint
+        ));
     }
     Ok(format!("{}{}", base_url.trim_end_matches('/'), endpoint))
 }
@@ -769,7 +740,7 @@ fn native_request_url(
 /// A text-only dense request or a controlled pre-dispatch failure.
 /// 返回纯文本稠密请求或受控分派前失败。
 fn project_embedding_request(
-    native_route: NativeInferenceRoute,
+    native_route: NativeInferenceRoute<'_>,
     secondary_route: &crate::SecondaryRouteSelection,
     model_id: &str,
     request: &EmbeddingRequest,
@@ -799,14 +770,12 @@ fn project_embedding_request(
             ));
         }
     };
-    let input_type = match (native_route, request.task) {
+    let routed =
+        native_route.binding.projection == crate::NativeInferenceProjectionKind::RoutedCompatible;
+    let input_type = match (routed, request.task) {
         (_, EmbeddingTask::ProviderDefault) => None,
-        (NativeInferenceRoute::OpenRouter, EmbeddingTask::Query) => {
-            Some(String::from("search_query"))
-        }
-        (NativeInferenceRoute::OpenRouter, EmbeddingTask::Document) => {
-            Some(String::from("search_document"))
-        }
+        (true, EmbeddingTask::Query) => Some(String::from("search_query")),
+        (true, EmbeddingTask::Document) => Some(String::from("search_document")),
         _ => {
             return Err(pre_dispatch_failure(format!(
                 "Embedding task `{:?}` is not supported by this native route.",
@@ -820,8 +789,7 @@ fn project_embedding_request(
         dimensions: request.dimensions,
         encoding_format: encoding_format.to_string(),
         input_type,
-        provider: (native_route == NativeInferenceRoute::OpenRouter)
-            .then(|| openrouter_provider_policy(secondary_route)),
+        provider: routed.then(|| routed_provider_policy(secondary_route)),
     })
 }
 
@@ -838,15 +806,17 @@ fn project_embedding_request(
 /// A text-only request or a controlled pre-dispatch failure.
 /// 返回纯文本请求或受控分派前失败。
 fn project_rerank_request(
-    native_route: NativeInferenceRoute,
+    native_route: NativeInferenceRoute<'_>,
     secondary_route: &crate::SecondaryRouteSelection,
     model_id: &str,
     request: &RerankRequest,
 ) -> Result<WireRerankRequest, ProviderExecutionFailure> {
-    let expected_truncation = match native_route {
-        NativeInferenceRoute::OpenRouter => RerankTruncation::Disabled,
-        NativeInferenceRoute::AlibabaModelStudio => RerankTruncation::ProviderDefault,
-    };
+    let expected_truncation = native_route.binding.rerank_truncation.ok_or_else(|| {
+        pre_dispatch_failure(format!(
+            "Native rerank action `{}` has no truncation contract.",
+            native_route.binding.binding_id
+        ))
+    })?;
     if request.truncation != expected_truncation {
         return Err(pre_dispatch_failure(format!(
             "Rerank route requires truncation `{:?}`.",
@@ -862,8 +832,9 @@ fn project_rerank_request(
             .map(|candidate| candidate.text.clone())
             .collect(),
         top_n: request.top_n,
-        provider: (native_route == NativeInferenceRoute::OpenRouter)
-            .then(|| openrouter_provider_policy(secondary_route)),
+        provider: (native_route.binding.projection
+            == crate::NativeInferenceProjectionKind::RoutedCompatible)
+            .then(|| routed_provider_policy(secondary_route)),
     })
 }
 
@@ -879,7 +850,7 @@ fn project_rerank_request(
 /// 返回值
 /// A no-fallback policy with an exact provider order only for a pinned endpoint.
 /// 返回禁止回退的策略；仅固定端点时包含精确供应商顺序。
-fn openrouter_provider_policy(
+fn routed_provider_policy(
     secondary_route: &crate::SecondaryRouteSelection,
 ) -> OpenRouterProviderPolicy {
     let order = match secondary_route {
@@ -908,7 +879,7 @@ fn openrouter_provider_policy(
 /// Success only for an omitted identity, exact match, or OpenRouter's observed bare identity.
 /// 仅对省略身份、精确匹配或 OpenRouter 已观察的裸身份返回成功。
 fn validate_response_model(
-    native_route: NativeInferenceRoute,
+    native_route: NativeInferenceRoute<'_>,
     requested: &str,
     reported: Option<&str>,
 ) -> Result<(), ProviderExecutionFailure> {
@@ -916,27 +887,22 @@ fn validate_response_model(
         return Ok(());
     };
     let exact = reported == requested;
-    let openrouter_bare = native_route == NativeInferenceRoute::OpenRouter
+    let routed_bare = native_route.binding.projection
+        == crate::NativeInferenceProjectionKind::RoutedCompatible
         && requested
             .split_once('/')
             .is_some_and(|(_, bare)| bare == reported);
-    let openrouter_upstream_alias = native_route == NativeInferenceRoute::OpenRouter
-        && openrouter_response_model_alias_matches(requested, reported);
-    if exact || openrouter_bare || openrouter_upstream_alias {
+    let reviewed_alias = native_route
+        .binding
+        .response_model_aliases
+        .get(requested)
+        .is_some_and(|aliases| aliases.contains(reported));
+    if exact || routed_bare || reviewed_alias {
         return Ok(());
     }
     Err(response_headers_protocol_failure(format!(
         "Native inference response model `{reported}` differs from immutable target `{requested}`."
     )))
-}
-
-/// Accepts only documented upstream model identities that OpenRouter reports for a different public slug.
-/// 仅接受 OpenRouter 对不同公开 slug 回报的、已有官方依据的上游模型身份。
-fn openrouter_response_model_alias_matches(requested: &str, reported: &str) -> bool {
-    matches!(
-        (requested, reported),
-        ("cohere/rerank-4-fast", "rerank-v4.0-fast") | ("cohere/rerank-4-pro", "rerank-v4.0-pro")
-    )
 }
 
 /// Converts one closed wire embedding representation into the public payload.
@@ -1150,7 +1116,83 @@ fn elapsed_milliseconds(started_at: Instant) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use vulcan_ai_contract::{EmbeddingInput, INFERENCE_CONTRACT_VERSION, RerankText};
+    use std::sync::LazyLock;
+    use vulcan_ai_contract::{
+        EmbeddingInput, INFERENCE_CONTRACT_VERSION, RerankText, RerankTruncation,
+    };
+
+    /// Returns a routed-compatible native binding used by projection tests.
+    /// 返回投影测试使用的带路由兼容原生绑定。
+    fn routed_native_route() -> NativeInferenceRoute<'static> {
+        static BINDING: LazyLock<crate::NativeInferenceBinding> =
+            LazyLock::new(|| crate::NativeInferenceBinding {
+                operation: AiOperation::RerankDocuments,
+                binding_id: String::from("test.routed.v1"),
+                endpoint_path: String::from("/rerank"),
+                projection: crate::NativeInferenceProjectionKind::RoutedCompatible,
+                service_origin_base_path: None,
+                requires_service_origin_override: false,
+                rerank_truncation: Some(RerankTruncation::Disabled),
+                response_model_aliases: BTreeMap::from([
+                    (
+                        String::from("cohere/rerank-4-fast"),
+                        BTreeSet::from([String::from("rerank-v4.0-fast")]),
+                    ),
+                    (
+                        String::from("cohere/rerank-4-pro"),
+                        BTreeSet::from([String::from("rerank-v4.0-pro")]),
+                    ),
+                ]),
+            });
+        NativeInferenceRoute { binding: &BINDING }
+    }
+
+    /// Returns a plain-compatible native binding used by projection tests.
+    /// 返回投影测试使用的普通兼容原生绑定。
+    fn compatible_native_route() -> NativeInferenceRoute<'static> {
+        static BINDING: LazyLock<crate::NativeInferenceBinding> =
+            LazyLock::new(|| crate::NativeInferenceBinding {
+                operation: AiOperation::RerankDocuments,
+                binding_id: String::from("test.compatible.v1"),
+                endpoint_path: String::from("/reranks"),
+                projection: crate::NativeInferenceProjectionKind::Compatible,
+                service_origin_base_path: None,
+                requires_service_origin_override: false,
+                rerank_truncation: Some(RerankTruncation::ProviderDefault),
+                response_model_aliases: BTreeMap::new(),
+            });
+        NativeInferenceRoute { binding: &BINDING }
+    }
+
+    /// Returns an origin-required compatible native binding for one fixed regional API root.
+    /// 返回一个使用固定区域 API 根路径且要求源地址的兼容原生绑定。
+    fn origin_native_route(china: bool) -> NativeInferenceRoute<'static> {
+        static CHINA: LazyLock<crate::NativeInferenceBinding> =
+            LazyLock::new(|| crate::NativeInferenceBinding {
+                operation: AiOperation::RerankDocuments,
+                binding_id: String::from("test.origin.cn.v1"),
+                endpoint_path: String::from("/reranks"),
+                projection: crate::NativeInferenceProjectionKind::Compatible,
+                service_origin_base_path: Some(String::from("/compatible-api/v1")),
+                requires_service_origin_override: true,
+                rerank_truncation: Some(RerankTruncation::ProviderDefault),
+                response_model_aliases: BTreeMap::new(),
+            });
+        static SINGAPORE: LazyLock<crate::NativeInferenceBinding> =
+            LazyLock::new(|| crate::NativeInferenceBinding {
+                operation: AiOperation::RerankDocuments,
+                binding_id: String::from("test.origin.sg.v1"),
+                endpoint_path: String::from("/reranks"),
+                projection: crate::NativeInferenceProjectionKind::Compatible,
+                service_origin_base_path: Some(String::from("/compatible-mode/v1")),
+                requires_service_origin_override: true,
+                rerank_truncation: Some(RerankTruncation::ProviderDefault),
+                response_model_aliases: BTreeMap::new(),
+            });
+        NativeInferenceRoute {
+            binding: if china { &CHINA } else { &SINGAPORE },
+        }
+    }
 
     /// Builds one exact text embedding request for projection tests.
     /// 为投影测试构建一项精确文本向量请求。
@@ -1190,7 +1232,7 @@ mod tests {
     fn openrouter_embedding_projection_is_frozen() {
         let request = embedding_request(EmbeddingTask::Document);
         let projected = project_embedding_request(
-            NativeInferenceRoute::OpenRouter,
+            routed_native_route(),
             &crate::SecondaryRouteSelection::Automatic,
             "openai/text-embedding-3-small",
             &request,
@@ -1214,7 +1256,7 @@ mod tests {
             endpoint_display_name: String::from("DeepInfra US"),
         };
         let projected = project_embedding_request(
-            NativeInferenceRoute::OpenRouter,
+            routed_native_route(),
             &secondary_route,
             "openai/text-embedding-3-small",
             &embedding_request(EmbeddingTask::Document),
@@ -1234,7 +1276,7 @@ mod tests {
     #[test]
     fn alibaba_embedding_projection_requires_provider_default_task() {
         let error = project_embedding_request(
-            NativeInferenceRoute::AlibabaModelStudio,
+            compatible_native_route(),
             &crate::SecondaryRouteSelection::Automatic,
             "text-embedding-v4",
             &embedding_request(EmbeddingTask::Query),
@@ -1264,7 +1306,7 @@ mod tests {
     fn response_model_identity_is_exact_or_openrouter_bare() {
         assert!(
             validate_response_model(
-                NativeInferenceRoute::OpenRouter,
+                routed_native_route(),
                 "openai/text-embedding-3-small",
                 Some("text-embedding-3-small"),
             )
@@ -1272,7 +1314,7 @@ mod tests {
         );
         assert!(
             validate_response_model(
-                NativeInferenceRoute::OpenRouter,
+                routed_native_route(),
                 "cohere/rerank-4-fast",
                 Some("rerank-v4.0-fast"),
             )
@@ -1280,7 +1322,7 @@ mod tests {
         );
         assert!(
             validate_response_model(
-                NativeInferenceRoute::OpenRouter,
+                routed_native_route(),
                 "cohere/rerank-4-pro",
                 Some("rerank-v4.0-pro"),
             )
@@ -1288,7 +1330,7 @@ mod tests {
         );
         assert!(
             validate_response_model(
-                NativeInferenceRoute::OpenRouter,
+                routed_native_route(),
                 "cohere/rerank-4-fast",
                 Some("rerank-v4.0-pro"),
             )
@@ -1296,7 +1338,7 @@ mod tests {
         );
         assert!(
             validate_response_model(
-                NativeInferenceRoute::AlibabaModelStudio,
+                compatible_native_route(),
                 "text-embedding-v4",
                 Some("other-model"),
             )
@@ -1326,7 +1368,7 @@ mod tests {
             return_content: true,
         };
         let openrouter_projected = project_rerank_request(
-            NativeInferenceRoute::OpenRouter,
+            routed_native_route(),
             &crate::SecondaryRouteSelection::Automatic,
             "cohere/rerank-v3.5",
             &request,
@@ -1344,7 +1386,7 @@ mod tests {
         assert_eq!(openrouter_encoded["provider"]["require_parameters"], false);
         assert!(
             project_rerank_request(
-                NativeInferenceRoute::AlibabaModelStudio,
+                compatible_native_route(),
                 &crate::SecondaryRouteSelection::Automatic,
                 "qwen3-rerank",
                 &request,
@@ -1353,7 +1395,7 @@ mod tests {
         );
         request.truncation = RerankTruncation::ProviderDefault;
         let projected = project_rerank_request(
-            NativeInferenceRoute::AlibabaModelStudio,
+            compatible_native_route(),
             &crate::SecondaryRouteSelection::Automatic,
             "qwen3-rerank",
             &request,
@@ -1404,8 +1446,7 @@ mod tests {
     fn alibaba_native_urls_preserve_the_registered_compatible_root() {
         assert_eq!(
             native_request_url(
-                NativeInferenceRoute::AlibabaModelStudio,
-                "model-studio-cn",
+                compatible_native_route(),
                 None,
                 "https://dashscope.aliyuncs.com/compatible-mode/v1",
                 "/embeddings",
@@ -1415,22 +1456,20 @@ mod tests {
         );
         assert_eq!(
             native_request_url(
-                NativeInferenceRoute::AlibabaModelStudio,
-                "model-studio-singapore",
+                origin_native_route(false),
                 Some("https://ws-example.ap-southeast-1.maas.aliyuncs.com"),
                 "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-                ALIBABA_QWEN3_RERANK_ENDPOINT_PATH,
+                "/reranks",
             )
             .expect("rerank URL"),
             "https://ws-example.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1/reranks"
         );
         assert_eq!(
             native_request_url(
-                NativeInferenceRoute::AlibabaModelStudio,
-                "model-studio-cn",
+                origin_native_route(true),
                 Some("https://ws-example.cn-beijing.maas.aliyuncs.com"),
                 "https://dashscope.aliyuncs.com/compatible-mode/v1",
-                ALIBABA_QWEN3_RERANK_ENDPOINT_PATH,
+                "/reranks",
             )
             .expect("China rerank URL"),
             "https://ws-example.cn-beijing.maas.aliyuncs.com/compatible-api/v1/reranks"
@@ -1442,18 +1481,17 @@ mod tests {
     #[test]
     fn alibaba_qwen3_rerank_requires_workspace_service_origin() {
         let error = native_request_url(
-            NativeInferenceRoute::AlibabaModelStudio,
-            "model-studio-singapore",
+            origin_native_route(false),
             None,
             "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-            ALIBABA_QWEN3_RERANK_ENDPOINT_PATH,
+            "/reranks",
         )
         .expect_err("Qwen3 rerank must require a workspace origin");
 
         assert!(
             error
                 .to_string()
-                .contains("requires a workspace-scoped service origin"),
+                .contains("requires a credential-scoped service origin"),
             "{error}"
         );
     }

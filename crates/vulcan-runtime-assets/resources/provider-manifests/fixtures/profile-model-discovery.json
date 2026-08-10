@@ -1,0 +1,27 @@
+{
+  "schema_version": "provider-manifest-profile-fixture.v1",
+  "fixture_id": "profile-model-discovery",
+  "base_manifest": "deepseek.json",
+  "fixture_kind": "discovery",
+  "input": {
+    "data": [
+      {
+        "id": "future-model-json-only",
+        "context_window": 131072,
+        "max_output_tokens": 8192,
+        "input_modalities": [
+          "text"
+        ],
+        "output_modalities": [
+          "text"
+        ]
+      }
+    ]
+  },
+  "discovery_kind": "open_ai",
+  "expectations": {
+    "/model_ids/0": "future-model-json-only",
+    "/page_count": 1,
+    "/schema_revision": "openai-compatible.models.v1"
+  }
+}

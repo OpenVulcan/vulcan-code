@@ -109,6 +109,11 @@ pub(super) fn build_task_runtime_preparation_request(
 /// `request` 是正在改写为子智能体请求的父级请求克隆。
 fn clear_parent_request_runtime_state_for_task_session(request: &mut ExecutionPreparationRequest) {
     request.conversation_hook_turn_id = None;
+    // A TaskSession is an independent lease owner. The parent's persisted identity is scoped to
+    // another session id, even when the child inherits the same provider and model.
+    // TaskSession 是独立租约所有者。即使子任务继承相同供应商与模型，父级持久化身份也只
+    // 作用于另一个会话 ID。
+    request.provider_route_lease_identity = None;
     request.tool_request_rejection_reason = None;
     request.tool_request_rejection_all_tools = false;
     request.tool_request_rejection_tool_ids.clear();

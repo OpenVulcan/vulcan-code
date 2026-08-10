@@ -1,0 +1,185 @@
+{
+  "schema_version": "provider-manifest-execution-fixture.v1",
+  "fixture_id": "minimax-music-generic",
+  "base_manifest": "minimax.json",
+  "production_target_refs": [
+    "minimax::global.music-3.0",
+    "minimax::global.music-2.6",
+    "minimax::global.music-2.6-free",
+    "minimax::global.music-2.5+",
+    "minimax::global.music-2.5",
+    "minimax::cn.music-3.0",
+    "minimax::cn.music-2.6",
+    "minimax::cn.music-2.6-free",
+    "minimax::cn.music-2.5+",
+    "minimax::cn.music-2.5",
+    "alibaba::model-studio-cn.fun-music-v1",
+    "alibaba::model-studio-cn.fun-music-preview"
+  ],
+  "tool_target": {
+    "target_id": "global:fixture-music-generic",
+    "description": "Generic MiniMax music wire-contract fixture.",
+    "service_entry_id": "global",
+    "credential_profile_ids": ["payg-api-key"],
+    "upstream_target_id": "music-3.0",
+    "display_name": "MiniMax Music Generic Fixture",
+    "tool_id": "fixture_minimax_music_generic",
+    "capability": "music_generate",
+    "input_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "properties": {"instrumental": {"const": true}, "lyrics_optimizer": {"const": false}, "lyrics": {"maxLength": 0}, "prompt": {"minLength": 1}},
+          "required": ["instrumental", "prompt"]
+        },
+        {
+          "properties": {"instrumental": {"const": false}, "lyrics_optimizer": {"const": true}, "lyrics": {"maxLength": 0}, "prompt": {"minLength": 1}},
+          "required": ["lyrics_optimizer", "prompt"]
+        },
+        {
+          "properties": {"instrumental": {"const": false}, "lyrics_optimizer": {"const": false}, "lyrics": {"minLength": 1}},
+          "required": ["lyrics"]
+        }
+      ],
+      "properties": {
+        "prompt": {"type": "string", "maxLength": 2000},
+        "lyrics": {"type": "string", "maxLength": 3500},
+        "instrumental": {"type": "boolean", "default": false},
+        "lyrics_optimizer": {"type": "boolean", "default": false},
+        "sample_rate": {"type": "integer", "minimum": 1, "default": 44100},
+        "bitrate": {"type": "integer", "minimum": 1, "default": 256000},
+        "channels": {"type": "integer", "minimum": 1, "maximum": 2},
+        "seed": {"type": "integer"},
+        "watermark": {"type": "boolean", "default": false},
+        "output_format": {"type": "string", "enum": ["mp3", "wav", "pcm"], "default": "mp3"}
+      }
+    },
+    "output": {
+      "kind": "resources",
+      "source_path": "/data/audio_url",
+      "normalized_result_path": "resources",
+      "resource_kind": "audio",
+      "mime_types": ["audio/mpeg", "audio/wav", "audio/L16"],
+      "resource_decoders": [
+        {
+          "source_path": "/data/audio_url",
+          "encoding": "public_http_url",
+          "download_host_suffixes": ["example.com"],
+          "resource_kind": "audio",
+          "mime_type_request_path": "/output_format",
+          "mime_types_by_request_value": {"mp3": "audio/mpeg", "wav": "audio/wav", "pcm": "audio/L16"},
+          "optional": false,
+          "output_id_prefix": "music"
+        }
+      ]
+    },
+    "execution": {
+      "endpoint_path": "/v1/music_generation",
+      "authentication": "bearer_authorization",
+      "adapter": "generic_json",
+      "execution_kind": "http_json_sync"
+    }
+  },
+  "operation": {
+    "operation_id": "fixture.minimax-music-generic",
+    "operation": "music_generate",
+    "carrier": "provider_tool",
+    "input_resources": [],
+    "output_resources": ["audio"],
+    "tool_target_refs": ["global:fixture-music-generic"],
+    "request_profile_refs": ["fixture.minimax.music.request.v1"],
+    "response_profile_refs": ["fixture.minimax.music.response.v1"],
+    "upload_channel_refs": [],
+    "upload_bindings": [],
+    "timeout_ms": 60000,
+    "idempotent": false
+  },
+  "upload_channels": [],
+  "request_profiles": [
+    {
+      "profile_id": "fixture.minimax.music.request.v1",
+      "description": "Build the MiniMax music wire body.",
+      "payload": {
+        "profile_id": "fixture.minimax.music.request.v1",
+        "revision": 1,
+        "steps": [
+          {
+            "op": "rebuild_json_template",
+            "template": {
+              "model": {"$vulcan_model_id": true},
+              "stream": false,
+              "output_format": "url",
+              "audio_setting": {
+                "sample_rate": {"$vulcan_ref": {"path": "/sample_rate"}},
+                "bitrate": {"$vulcan_ref": {"path": "/bitrate"}},
+                "format": {"$vulcan_ref": {"path": "/output_format"}},
+                "channel": {"$vulcan_ref": {"path": "/channels", "optional": true}}
+              },
+              "prompt": {"$vulcan_ref": {"path": "/prompt", "optional": true}},
+              "lyrics": {"$vulcan_ref": {"path": "/lyrics", "optional": true}},
+              "is_instrumental": {"$vulcan_if_equals": {"path": "/instrumental", "equals": true, "then": true}},
+              "lyrics_optimizer": {"$vulcan_if_equals": {"path": "/lyrics_optimizer", "equals": true, "then": true}},
+              "seed": {"$vulcan_ref": {"path": "/seed", "optional": true}},
+              "aigc_watermark": {"$vulcan_if_equals": {"path": "/watermark", "equals": true, "then": true}}
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "response_profiles": [
+    {
+      "profile_id": "fixture.minimax.music.response.v1",
+      "description": "Normalize MiniMax music application status.",
+      "payload": {
+        "profile_id": "fixture.minimax.music.response.v1",
+        "revision": 1,
+        "steps": [
+          {
+            "op": "rebuild_json_template",
+            "template": {
+              "$vulcan_if_equals": {
+                "path": "/base_resp/status_code",
+                "equals": 0,
+                "then": {
+                  "$vulcan_if_equals": {
+                    "path": "/data/status",
+                    "equals": 2,
+                    "then": {"id": {"$vulcan_ref": {"path": "/trace_id"}}, "data": {"$vulcan_ref": {"path": "/data"}}},
+                    "otherwise": {"error": {"code": "incomplete_result", "message": "incomplete music"}}
+                  }
+                },
+                "otherwise": {"error": {"code": {"$vulcan_ref": {"path": "/base_resp/status_code"}}, "message": {"$vulcan_ref": {"path": "/base_resp/status_msg"}}}}
+              }
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "required_execution_primitives": ["http_json_sync"],
+  "required_upload_primitives": [],
+  "required_transformers": ["rebuild_json_template"],
+  "arguments": {"lyrics": "hello world"},
+  "interactions": [
+    {
+      "method": "POST",
+      "path": "/v1/music_generation",
+      "expected_json_body": {
+        "model": "music-3.0",
+        "stream": false,
+        "output_format": "url",
+        "audio_setting": {"sample_rate": 44100, "bitrate": 256000, "format": "mp3"},
+        "lyrics": "hello world"
+      },
+      "response_status": 200,
+      "response_json_body": {
+        "data": {"audio_url": "https://example.com/music.mp3", "status": 2},
+        "trace_id": "music-trace-1",
+        "base_resp": {"status_code": 0, "status_msg": "ok"}
+      }
+    }
+  ],
+  "expected_output_kind": "resources"
+}

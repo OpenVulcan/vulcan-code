@@ -1,0 +1,112 @@
+{
+  "schema_version": "vulcan.provider-manifest.v1",
+  "provider_id": "code0",
+  "revision": 1,
+  "published_at": "2026-08-06T00:00:00Z",
+  "engine_contract": {
+    "minimum_manifest_engine": 1,
+    "required_protocol_profiles": [
+      "openai-chat-completions.v1",
+      "anthropic-messages.v1"
+    ],
+    "required_execution_primitives": [],
+    "required_upload_primitives": [],
+    "required_transformers": []
+  },
+  "display": {
+    "name": "Code0",
+    "category": "relay",
+    "credential_directory_visibility": "pinned_onboarding",
+    "promotion": {
+      "signup_url": "https://console.code0.ai/register",
+      "referral_url": "https://console.code0.ai/register?aff=il6p",
+      "campaign_id": "il6p",
+      "partnership_kind": "referral",
+      "disclosure_key": "settings.providerPromotion.referralDisclosure"
+    }
+  },
+  "services": [
+    {
+      "service_entry_id": "hong-kong",
+      "display_name": "Code0 Hong Kong Gateway",
+      "kind": "conversation",
+      "base_url": "https://hk.code0.ai/v1",
+      "credential_profiles": [
+        {
+          "credential_profile_id": "api-key",
+          "display_name": "API Key",
+          "credential_mode": "token",
+          "billing_kind": "provider_managed",
+          "account_usage_query": "unsupported",
+          "key_prefix": "sk-",
+          "allowed_usage_scopes": [
+            "interactive_agent",
+            "internal_background",
+            "external_service"
+          ]
+        }
+      ],
+      "default_authentication": "bearer_authorization",
+      "request_projector": "direct",
+      "model_catalog": {
+        "source_policy": "manifest_and_discovery",
+        "discovery_kind": "open_ai"
+      },
+      "protocol_routes": [
+        {
+          "protocol_profile_id": "openai-chat-completions.v1",
+          "endpoint_path": "/chat/completions",
+          "usage_profile_refs": [],
+          "request_profile_refs": [],
+          "response_profile_refs": [],
+          "provider_request_id_headers": [],
+          "verified": true
+        },
+        {
+          "protocol_profile_id": "anthropic-messages.v1",
+          "endpoint_path": "/v1/messages",
+          "base_url_override": "https://hk.code0.ai",
+          "authentication": "x_api_key",
+          "request_headers": {
+            "anthropic-version": "2023-06-01"
+          },
+          "model_discovery_base_url_override": "https://hk.code0.ai/v1",
+          "usage_profile_refs": [],
+          "request_profile_refs": [],
+          "response_profile_refs": [],
+          "provider_request_id_headers": [],
+          "verified": true
+        }
+      ]
+    }
+  ],
+  "model_defaults": {
+    "default_enabled": true,
+    "catalog_membership_policy": "declared_and_discovery",
+    "unknown_model_policy": "default_binding_allowed",
+    "supported_protocols": [
+      "openai-chat-completions.v1",
+      "anthropic-messages.v1"
+    ],
+    "selected_protocol": "openai-chat-completions.v1",
+    "capabilities": {
+      "operations": ["conversation_respond"],
+      "evidence_revision": "code0.default-capabilities.v1"
+    },
+    "default_usage_profile_refs": [],
+    "default_request_profile_refs": [],
+    "default_response_profile_refs": [],
+    "default_operation_refs": []
+  },
+  "model_rules": [],
+  "usage_profiles": [],
+  "request_profiles": [],
+  "response_profiles": [],
+  "upload_channels": [],
+  "operations": [],
+  "tool_targets": [],
+  "provenance": {
+    "status": "migrated",
+    "sources": []
+  }
+}

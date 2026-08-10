@@ -21,17 +21,17 @@ fn provider_retry_projects_visible_display_note() {
     // sessionId provides the stable namespace for the new retry record.
     // sessionId 为新的重试记录提供稳定命名空间。
     let session_id = test_session_id();
-    // retryEvent models one unbounded rate-limit wait emitted before sleeping.
-    // retryEvent 模拟一条在等待前发出的无次数上限限流重试事件。
+    // retryEvent models one finite rate-limit wait emitted before sleeping.
+    // retryEvent 模拟一条在等待前发出的有限限流重试事件。
     let retry_event = RuntimeEvent::new(
         RuntimeEventKind::Retrying,
         "Provider 自动重试",
-        "Kimi 遇到限流，已安排第 6 次重试；32 秒后重试。",
+        "Kimi 第 6/100000 次重试将在 32 秒后开始：Provider rate limit",
     )
     .with_metadata(Some(json!({
         "attempt": 6,
-        "max_retries": 0,
-        "unbounded": true,
+        "max_retries": 100_000,
+        "unbounded": false,
         "delay_ms": 32_000,
         "delay_seconds": 32,
     })));
@@ -56,13 +56,13 @@ fn provider_retry_projects_visible_display_note() {
     assert_eq!(record.record_kind, SessionMessageRecordKind::DisplayNote);
     assert!(record.visible);
     assert_eq!(record.title, "Provider 自动重试");
-    assert!(record.body.contains("32 秒后重试"));
+    assert!(record.body.contains("第 6/100000 次重试将在 32 秒后开始"));
     assert_eq!(
         record
             .metadata
             .as_ref()
             .and_then(|value| value["unbounded"].as_bool()),
-        Some(true)
+        Some(false)
     );
     assert!(!record.record_kind.contributes_to_context());
 }

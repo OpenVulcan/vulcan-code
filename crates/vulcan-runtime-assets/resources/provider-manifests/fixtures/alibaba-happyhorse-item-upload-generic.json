@@ -1,0 +1,252 @@
+{
+  "schema_version": "provider-manifest-execution-fixture.v1",
+  "fixture_id": "alibaba-happyhorse-item-upload-generic",
+  "base_manifest": "alibaba.json",
+  "tool_target": {
+    "target_id": "model-studio-cn.fixture-happyhorse-item-upload-generic",
+    "description": "Generic HappyHorse item-scoped upload mapping fixture.",
+    "service_entry_id": "model-studio-cn",
+    "credential_profile_ids": ["api-key"],
+    "upstream_target_id": "happyhorse-1.1-r2v",
+    "display_name": "Alibaba HappyHorse Item Upload Fixture",
+    "tool_id": "fixture_alibaba_happyhorse_item_upload_generic",
+    "capability": "video_generate",
+    "input_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "prompt": {"type": "string", "minLength": 1},
+        "references": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 9,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "kind": {"type": "string", "enum": ["image", "video"]},
+              "path": {"type": "string", "minLength": 1},
+              "voice_path": {"type": "string", "minLength": 1}
+            },
+            "required": ["kind", "path"]
+          }
+        }
+      },
+      "required": ["prompt", "references"]
+    },
+    "output": {
+      "kind": "resources",
+      "source_path": "output.video_url",
+      "normalized_result_path": "resources",
+      "resource_kind": "video",
+      "mime_types": ["video/mp4"],
+      "resource_decoders": [
+        {
+          "source_path": "/output/video_url",
+          "encoding": "public_http_url",
+          "download_host_suffixes": ["example.com"],
+          "resource_kind": "video",
+          "mime_type": "video/mp4",
+          "optional": false,
+          "output_id_prefix": "video"
+        }
+      ]
+    },
+    "execution": {
+      "endpoint_path": "/api/v1/services/aigc/video-generation/video-synthesis",
+      "authentication": "bearer_authorization",
+      "adapter": "generic_json",
+      "execution_kind": "http_json_async_poll",
+      "start_fixed_headers": {"x-dashscope-async": "enable"},
+      "start_conditional_headers": [
+        {
+          "name": "x-dashscope-ossresource-resolve",
+          "value": "enable",
+          "when_any": [
+            {"pointer_pattern": "/references/*/kind", "equals": "video"},
+            {"pointer_pattern": "/references/*/voice"}
+          ]
+        }
+      ]
+    }
+  },
+  "operation": {
+    "operation_id": "fixture.alibaba-happyhorse-item-upload-generic",
+    "operation": "video_generate",
+    "carrier": "provider_tool",
+    "input_resources": ["image", "video", "audio"],
+    "output_resources": ["video"],
+    "tool_target_refs": ["model-studio-cn.fixture-happyhorse-item-upload-generic"],
+    "request_profile_refs": ["alibaba.async.happyhorse-generate.request.v1"],
+    "response_profile_refs": ["alibaba.async.task.response.v1"],
+    "upload_channel_refs": [
+      "fixture.remote-image",
+      "fixture.remote-video",
+      "fixture.remote-audio"
+    ],
+    "upload_bindings": [
+      {
+        "source_path": "/references",
+        "target_path": "/references",
+        "item_source_path": "/path",
+        "item_target_path": "/carrier",
+        "item_match_path": "/kind",
+        "item_match_value": "image",
+        "upload_channel_refs": ["fixture.remote-image"],
+        "mime_types_by_extension": {"png": "image/png"},
+        "required": true,
+        "remove_source": true
+      },
+      {
+        "source_path": "/references",
+        "target_path": "/references",
+        "item_source_path": "/path",
+        "item_target_path": "/carrier",
+        "item_match_path": "/kind",
+        "item_match_value": "video",
+        "upload_channel_refs": ["fixture.remote-video"],
+        "mime_types_by_extension": {"mp4": "video/mp4"},
+        "required": true,
+        "remove_source": true
+      },
+      {
+        "source_path": "/references",
+        "target_path": "/references",
+        "item_source_path": "/voice_path",
+        "item_target_path": "/voice",
+        "upload_channel_refs": ["fixture.remote-audio"],
+        "mime_types_by_extension": {"mp3": "audio/mpeg"},
+        "required": false,
+        "remove_source": true
+      }
+    ],
+    "async_execution": {
+      "poll_interval_ms": 250,
+      "max_backoff_ms": 1000,
+      "timeout_ms": 2000,
+      "cancellation_supported": false,
+      "generic_json": {
+        "poll_endpoint_path": "/api/v1/tasks",
+        "poll_method": "get",
+        "task_id_pointer": "/output/task_id",
+        "task_id_in_path": true,
+        "start_status_pointer": "/output/task_status",
+        "start_success_statuses": ["PENDING"],
+        "poll_task_id_pointer": "/output/task_id",
+        "status_pointer": "/output/task_status",
+        "queued_statuses": ["PENDING"],
+        "running_statuses": ["RUNNING"],
+        "success_statuses": ["SUCCEEDED"],
+        "failure_statuses": ["FAILED", "UNKNOWN"],
+        "cancelled_statuses": ["CANCELED"],
+        "start_requirements": {
+          "non_empty_string_pointers": ["/request_id"],
+          "empty_or_missing_string_pointers": ["/code"]
+        },
+        "poll_requirements": {"non_empty_string_pointers": ["/request_id"]},
+        "poll_success_requirements": {
+          "empty_or_missing_string_pointers": ["/code"]
+        }
+      }
+    },
+    "timeout_ms": 2000,
+    "idempotent": false
+  },
+  "upload_channels": [
+    {
+      "upload_channel_id": "fixture.remote-image",
+      "description": "Fixture-only reviewed remote image passthrough.",
+      "primitive": "remote_url_passthrough",
+      "remote_url_host_suffixes": ["example.com"],
+      "accepted_mime_types": ["image/png"],
+      "max_count": 9,
+      "progress_supported": false,
+      "cancellation_supported": false,
+      "reference_encoding": "response_url"
+    },
+    {
+      "upload_channel_id": "fixture.remote-video",
+      "description": "Fixture-only reviewed remote video passthrough.",
+      "primitive": "remote_url_passthrough",
+      "remote_url_host_suffixes": ["example.com"],
+      "accepted_mime_types": ["video/mp4"],
+      "max_count": 9,
+      "progress_supported": false,
+      "cancellation_supported": false,
+      "reference_encoding": "response_url"
+    },
+    {
+      "upload_channel_id": "fixture.remote-audio",
+      "description": "Fixture-only reviewed remote audio passthrough.",
+      "primitive": "remote_url_passthrough",
+      "remote_url_host_suffixes": ["example.com"],
+      "accepted_mime_types": ["audio/mpeg"],
+      "max_count": 9,
+      "progress_supported": false,
+      "cancellation_supported": false,
+      "reference_encoding": "response_url"
+    }
+  ],
+  "required_execution_primitives": ["http_json_async_poll"],
+  "required_upload_primitives": ["remote_url_passthrough"],
+  "arguments": {
+    "prompt": "combine references",
+    "references": [
+      {"kind": "image", "path": "https://example.com/reference.png"},
+      {
+        "kind": "video",
+        "path": "https://example.com/reference.mp4",
+        "voice_path": "https://example.com/voice.mp3"
+      }
+    ]
+  },
+  "interactions": [
+    {
+      "method": "POST",
+      "path": "/api/v1/services/aigc/video-generation/video-synthesis",
+      "expected_headers": {
+        "x-dashscope-async": "enable",
+        "x-dashscope-ossresource-resolve": "enable"
+      },
+      "expected_json_body": {
+        "model": "happyhorse-1.1-r2v",
+        "input": {
+          "prompt": "combine references",
+          "media": [
+            {
+              "type": "reference_image",
+              "url": "https://example.com/reference.png"
+            },
+            {
+              "type": "reference_video",
+              "url": "https://example.com/reference.mp4",
+              "reference_voice": "https://example.com/voice.mp3"
+            }
+          ]
+        },
+        "parameters": {}
+      },
+      "response_status": 200,
+      "response_json_body": {
+        "request_id": "request-start",
+        "code": "",
+        "output": {"task_id": "task-reference", "task_status": "PENDING"}
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tasks/task-reference",
+      "response_status": 200,
+      "response_json_body": {
+        "request_id": "request-poll",
+        "code": "",
+        "output": {
+          "task_id": "task-reference",
+          "task_status": "SUCCEEDED",
+          "video_url": "https://example.com/generated.mp4"
+        }
+      }
+    }
+  ],
+  "expected_output_kind": "resources"
+}

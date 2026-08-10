@@ -70,6 +70,169 @@ pub(crate) fn public_ai_provider_rows(
     public_ai_provider_rows_for_selection(configuration, runtime, active_selection.as_ref())
 }
 
+/// Returns the process-local immutable selection owned by one exact session when coherent.
+/// 当租约一致时返回一个精确会话拥有的进程内不可变选择。
+///
+/// # Parameters
+/// 参数
+/// `runtime` owns process-local leases, `session_id` selects one owner, and `runtime_state`
+/// supplies the persisted target and optional non-secret lease identity.
+/// `runtime` 持有进程内租约，`session_id` 选择一个所有者，`runtime_state` 提供持久化目标与
+/// 可选的非秘密租约身份。
+///
+/// # Returns
+/// 返回值
+/// The frozen selection only when its target and persisted identity remain coherent.
+/// 仅当目标与持久化身份仍一致时返回冻结选择。
+pub(crate) fn session_process_public_ai_selection(
+    runtime: &vulcan_provider_adapters::PublicAiRuntime,
+    session_id: crate::SessionId,
+    runtime_state: Option<&vulcan_workbench_model::SessionRuntimeStateEntry>,
+) -> Result<Option<vulcan_provider_adapters::ResolvedPublicAiSelection>, String> {
+    let Some(runtime_state) = runtime_state else {
+        return Ok(None);
+    };
+    let Some(selection) = runtime.session_selection_lease(session_id.to_string().as_str())? else {
+        return Ok(None);
+    };
+    // targetMatches prevents a stale process entry from outranking an explicit persisted model change.
+    // targetMatches 防止陈旧进程条目覆盖显式持久化模型变更。
+    let target_matches = runtime_state.active_provider_id.as_deref()
+        == Some(selection.route.provider.id.as_str())
+        && runtime_state.active_connection_id.as_deref()
+            == Some(selection.route.connection.id.as_str())
+        && runtime_state.active_model_id.as_deref() == Some(selection.model.id.as_str());
+    if !target_matches {
+        return Ok(None);
+    }
+    if let Some(expected_identity) = runtime_state.provider_route_lease.as_ref() {
+        // actualIdentity is derived by the same authoritative projection used during preparation.
+        // actualIdentity 使用准备阶段的同一权威投影生成。
+        let actual_identity =
+            vulcan_agent_runtime::agent_runtime::provider::provider_route_lease_identity(
+                &selection,
+            );
+        if !vulcan_agent_runtime::agent_runtime::provider::provider_route_lease_identity_matches(
+            expected_identity,
+            &actual_identity,
+        ) {
+            return Ok(None);
+        }
+    }
+    Ok(Some(selection))
+}
+
+/// Resolves the model selection used by session-sensitive workbench projections.
+/// 解析会话敏感工作台投影使用的模型选择。
+///
+/// # Parameters
+/// 参数
+/// `configuration` is the current catalog authority, `runtime` owns active leases, and the
+/// optional session inputs identify the selected conversation.
+/// `configuration` 是当前目录权威，`runtime` 持有活动租约，可选会话输入标识当前会话。
+///
+/// # Returns
+/// 返回值
+/// The immutable session lease first, then the current exact session target, provider/model
+/// fallback, or global active selection.
+/// 依次返回不可变会话租约、当前精确会话目标、供应商与模型回退或全局激活选择。
+pub(crate) fn public_ai_workbench_selection(
+    configuration: &vulcan_provider_adapters::PersistedAiConfiguration,
+    runtime: &vulcan_provider_adapters::PublicAiRuntime,
+    session_id: Option<crate::SessionId>,
+    runtime_state: Option<&vulcan_workbench_model::SessionRuntimeStateEntry>,
+) -> Result<Option<vulcan_provider_adapters::ResolvedPublicAiSelection>, String> {
+    if let Some(session_id) = session_id
+        && let Some(selection) =
+            session_process_public_ai_selection(runtime, session_id, runtime_state)?
+    {
+        return Ok(Some(selection));
+    }
+    public_ai_workbench_selection_from_runtime_state(configuration, runtime, runtime_state)
+}
+
+/// Resolves one Workbench selection after an explicit route-lease revocation.
+/// 在显式撤销路由租约后解析一份工作台选择。
+///
+/// # Parameters
+/// 参数
+/// `configuration` and `runtime` own the activated provider generation; `runtime_state` is the
+/// already-reconciled selected session row whose former process-local lease must not win.
+/// `configuration` 与 `runtime` 持有已激活供应商代际；`runtime_state` 是已完成协调的选中
+/// 会话行，其原进程内租约不得继续胜出。
+///
+/// # Returns
+/// 返回值
+/// The exact reconciled session selection, configured global selection, or `None`.
+/// 返回精确的已协调会话选择、已配置全局选择或 `None`。
+pub(crate) fn public_ai_workbench_selection_after_route_revocation(
+    configuration: &vulcan_provider_adapters::PersistedAiConfiguration,
+    runtime: &vulcan_provider_adapters::PublicAiRuntime,
+    runtime_state: Option<&vulcan_workbench_model::SessionRuntimeStateEntry>,
+) -> Result<Option<vulcan_provider_adapters::ResolvedPublicAiSelection>, String> {
+    public_ai_workbench_selection_from_runtime_state(configuration, runtime, runtime_state)
+}
+
+/// Resolves a Workbench selection from persisted session fields and the configured global value.
+/// 从持久会话字段与已配置全局值解析工作台选择。
+///
+/// # Parameters
+/// 参数
+/// `configuration` and `runtime` own the exact activated generation; `runtime_state` optionally
+/// supplies one session's persisted provider, connection, and model tuple.
+/// `configuration` 与 `runtime` 持有精确已激活代际；`runtime_state` 可选提供一个会话持久化的
+/// 供应商、连接与模型三元组。
+///
+/// # Returns
+/// 返回值
+/// The first exact persisted selection that resolves, then the configured global selection.
+/// 返回首个可解析的精确持久选择，其次返回已配置全局选择。
+fn public_ai_workbench_selection_from_runtime_state(
+    configuration: &vulcan_provider_adapters::PersistedAiConfiguration,
+    runtime: &vulcan_provider_adapters::PublicAiRuntime,
+    runtime_state: Option<&vulcan_workbench_model::SessionRuntimeStateEntry>,
+) -> Result<Option<vulcan_provider_adapters::ResolvedPublicAiSelection>, String> {
+    // exactSelection follows the persisted account before any provider/model-only compatibility lookup.
+    // exactSelection 在任何仅供应商与模型的兼容查找前遵循持久化账号。
+    let exact_selection = runtime_state
+        .and_then(|runtime_state| {
+            runtime_state
+                .active_provider_id
+                .as_deref()
+                .zip(runtime_state.active_connection_id.as_deref())
+                .zip(runtime_state.active_model_id.as_deref())
+        })
+        .and_then(|((provider_id, connection_id), model_id)| {
+            runtime
+                .resolve_connection_model_selection(
+                    configuration,
+                    connection_id,
+                    provider_id,
+                    model_id,
+                )
+                .ok()
+        });
+    if exact_selection.is_some() {
+        return Ok(exact_selection);
+    }
+    // providerModelSelection preserves the established compatibility behavior for old session state
+    // that predates connection ownership.
+    // providerModelSelection 为早于账号归属字段的旧会话状态保留既有兼容行为。
+    let provider_model_selection = runtime_state
+        .and_then(|runtime_state| {
+            runtime_state
+                .active_provider_id
+                .as_deref()
+                .zip(runtime_state.active_model_id.as_deref())
+        })
+        .and_then(|(provider_id, model_id)| {
+            runtime
+                .resolve_model_selection(configuration, provider_id, model_id)
+                .ok()
+        });
+    Ok(provider_model_selection.or_else(|| runtime.resolve_active_selection(configuration).ok()))
+}
+
 /// Projects credential-scoped model rows using an explicit effective workbench selection.
 /// 使用明确的工作台生效选择投影凭据作用域模型行。
 ///
@@ -89,6 +252,12 @@ pub(crate) fn public_ai_provider_rows_for_selection(
     runtime: &vulcan_provider_adapters::PublicAiRuntime,
     active_selection: Option<&vulcan_provider_adapters::ResolvedPublicAiSelection>,
 ) -> Result<Vec<ProviderSummary>, String> {
+    // runtimeConfiguration keeps every provider lacking executable authority out of the shared
+    // picker without mutating persisted connections or repair bytes.
+    // runtimeConfiguration 使全部缺少可执行权威的供应商不进入共享选择器，同时不修改持久化连接
+    // 或修复源字节。
+    let runtime_configuration = runtime.runtime_configuration_snapshot(configuration)?;
+    let configuration = &runtime_configuration;
     // Rebuild the effective snapshot from immutable catalogs and persisted overlays so model rows
     // immediately reflect capability edits instead of a stale in-memory catalog copy.
     // 从不可变目录与持久化覆盖重新构建有效快照，确保模型行立即反映能力编辑而不是旧的内存目录副本。
@@ -108,7 +277,21 @@ pub(crate) fn public_ai_provider_rows_for_selection(
         let provider = providers
             .provider(connection.provider_id.as_str())
             .ok_or_else(|| format!("Provider `{}` is not registered.", connection.provider_id))?;
-        let catalog_models = catalogs
+        let entry = provider
+            .service_entries
+            .iter()
+            .find(|entry| entry.id == connection.service_entry_id)
+            .ok_or_else(|| {
+                format!(
+                    "Service entry `{}` is not registered for provider `{}`.",
+                    connection.service_entry_id, connection.provider_id
+                )
+            })?;
+        // Secondary-route UI capability follows the manifest-declared request primitive.
+        // 二级路由 UI 能力跟随 Manifest 声明的请求原语。
+        let supports_secondary_routes = entry.request_projector
+            == vulcan_provider_adapters::RequestProjectorKind::RoutedCompatible;
+        let mut catalog_models = catalogs
             .get(connection.id.as_str())
             .map(|catalog| {
                 catalog
@@ -149,10 +332,11 @@ pub(crate) fn public_ai_provider_rows_for_selection(
                             )?
                             .id
                             == connection.id;
-                        let enabled = configuration.model_is_enabled(
-                            connection.provider_id.as_str(),
+                        let enabled = runtime.model_is_enabled_for_connection(
+                            configuration,
+                            connection.id.as_str(),
                             model.id.as_str(),
-                        );
+                        )?;
                         Ok(ProviderModelSummary {
                             id: model.id.clone(),
                             name: model.display_name.clone(),
@@ -193,7 +377,7 @@ pub(crate) fn public_ai_provider_rows_for_selection(
                                 &ProviderConfigurationFile::default(),
                                 Some(&model.capabilities),
                             ),
-                            supports_secondary_routes: connection.provider_id == "openrouter",
+                            supports_secondary_routes,
                             secondary_route,
                         })
                     })
@@ -201,6 +385,66 @@ pub(crate) fn public_ai_provider_rows_for_selection(
             })
             .transpose()?
             .unwrap_or_default();
+        if let Some(selection) = active_selection.filter(|selection| {
+            selection.route.provider.id == connection.provider_id
+                && selection.route.connection.id == connection.id
+                && !catalog_models
+                    .iter()
+                    .any(|model| model.id == selection.model.id)
+                && vulcan_provider_adapters::model_supports_text_conversation(
+                    &selection.model.capabilities,
+                )
+        }) {
+            // leasedModel keeps a removed or renamed catalog row visible only for the session that
+            // still owns its immutable process-local route. It is not added to current catalogs and
+            // therefore cannot be selected by new sessions.
+            // leasedModel 仅为仍持有进程内不可变路由的会话保留已移除或重命名的目录行；它不会
+            // 写回当前目录，因此新会话无法选择。
+            let capabilities = &selection.model.capabilities;
+            let leased_supports_secondary_routes = selection.route.entry.request_projector
+                == vulcan_provider_adapters::RequestProjectorKind::RoutedCompatible;
+            catalog_models.push(ProviderModelSummary {
+                id: selection.model.id.clone(),
+                name: selection.model.display_name.clone(),
+                active: true,
+                preferred_connection: true,
+                enabled: true,
+                status: Some(String::from("会话路由已冻结；重新选择模型后使用最新目录")),
+                family: None,
+                context_limit: capabilities
+                    .context_limit
+                    .and_then(|value| usize::try_from(value).ok()),
+                input_limit: None,
+                output_limit: capabilities
+                    .output_limit
+                    .and_then(|value| usize::try_from(value).ok()),
+                reasoning: Some(vulcan_provider_adapters::model_supports_reasoning(
+                    capabilities,
+                )),
+                attachment: Some(!capabilities.input_resources.is_empty()),
+                input_modalities: capabilities
+                    .input_resources
+                    .iter()
+                    .map(public_resource_kind_label)
+                    .collect(),
+                output_modalities: capabilities
+                    .output_resources
+                    .iter()
+                    .map(public_resource_kind_label)
+                    .collect(),
+                reasoning_profile_json: None,
+                reasoning_selection: reasoning_selection(
+                    &ProviderConfigurationFile::default(),
+                    Some(capabilities),
+                ),
+                supports_secondary_routes: leased_supports_secondary_routes,
+                secondary_route: provider_secondary_route_summary_from_public_selection(
+                    selection.route.provider.id.as_str(),
+                    selection.model.id.as_str(),
+                    &selection.route.secondary_route,
+                ),
+            });
+        }
         let models = catalog_models
             .iter()
             .filter(|model| model.enabled)

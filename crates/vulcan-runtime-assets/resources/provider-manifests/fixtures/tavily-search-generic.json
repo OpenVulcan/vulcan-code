@@ -1,0 +1,100 @@
+{
+  "schema_version": "provider-manifest-execution-fixture.v1",
+  "fixture_id": "tavily-search-generic",
+  "base_manifest": "tavily.json",
+  "production_target_refs": [
+    "tavily::public-api.search"
+  ],
+  "tool_target": {
+    "target_id": "public-api.fixture-search-generic",
+    "description": "Generic JSON Tavily search wire-contract fixture.",
+    "service_entry_id": "public-api",
+    "credential_profile_ids": ["api-key"],
+    "upstream_target_id": "search",
+    "display_name": "Tavily Search Generic Fixture",
+    "tool_id": "fixture_tavily_search_generic",
+    "capability": "web_search",
+    "input_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "query": {"type": "string", "minLength": 1},
+        "max_results": {"type": "integer", "minimum": 1, "maximum": 20}
+      },
+      "required": ["query"]
+    },
+    "output": {
+      "kind": "search",
+      "source_path": "/results",
+      "normalized_result_path": "search",
+      "resource_kind": null,
+      "mime_types": []
+    },
+    "execution": {
+      "endpoint_path": "/search",
+      "authentication": "bearer_authorization",
+      "adapter": "generic_json",
+      "execution_kind": "http_json_sync"
+    }
+  },
+  "operation": {
+    "operation_id": "fixture.tavily-search-generic",
+    "operation": "web_search",
+    "carrier": "provider_tool",
+    "input_resources": [],
+    "output_resources": [],
+    "tool_target_refs": ["public-api.fixture-search-generic"],
+    "request_profile_refs": ["fixture.tavily-search.request.v1"],
+    "response_profile_refs": [],
+    "upload_channel_refs": [],
+    "upload_bindings": [],
+    "timeout_ms": 60000,
+    "idempotent": false
+  },
+  "upload_channels": [],
+  "request_profiles": [
+    {
+      "profile_id": "fixture.tavily-search.request.v1",
+      "description": "Freeze the reviewed Tavily search defaults.",
+      "payload": {
+        "profile_id": "fixture.tavily-search.request.v1",
+        "revision": 1,
+        "steps": [
+          {"op": "set_literal", "path": "/search_depth", "value": "basic"},
+          {"op": "set_default_if_missing", "path": "/max_results", "value": 5},
+          {"op": "set_literal", "path": "/include_answer", "value": false},
+          {"op": "set_literal", "path": "/include_raw_content", "value": false},
+          {"op": "set_literal", "path": "/include_usage", "value": true}
+        ]
+      }
+    }
+  ],
+  "response_profiles": [],
+  "required_execution_primitives": ["http_json_sync"],
+  "required_upload_primitives": [],
+  "required_transformers": ["set_default_if_missing", "set_literal"],
+  "arguments": {"query": "manifest routing"},
+  "interactions": [
+    {
+      "method": "POST",
+      "path": "/search",
+      "expected_json_body": {
+        "query": "manifest routing",
+        "search_depth": "basic",
+        "max_results": 5,
+        "include_answer": false,
+        "include_raw_content": false,
+        "include_usage": true
+      },
+      "response_status": 200,
+      "response_json_body": {
+        "request_id": "tavily-search-fixture",
+        "query": "manifest routing",
+        "results": [
+          {"title": "Manifest", "url": "https://example.com/manifest", "content": "Routing evidence"}
+        ]
+      }
+    }
+  ],
+  "expected_output_kind": "search"
+}

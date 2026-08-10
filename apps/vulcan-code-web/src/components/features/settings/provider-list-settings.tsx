@@ -5,7 +5,10 @@ import { toast } from "sonner"
 import { ProviderIcon } from "@/components/features/settings/provider-icon"
 import { CredentialModelAccessDialog } from "@/components/features/settings/credential-model-access-dialog"
 import { localizedServiceEntryPresentation } from "@/components/features/settings/provider-presentation"
-import { CredentialUsageOverview } from "@/components/public-ai/credential-usage-overview"
+import {
+  CredentialUsageOverview,
+  usageCapabilityRequiresManagementKey,
+} from "@/components/public-ai/credential-usage-overview"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -580,7 +583,7 @@ interface CredentialAccountCardProps {
 function CredentialAccountCard(props: CredentialAccountCardProps) {
   const { t } = useI18n()
   const usageSupported = props.credentialProfile?.account_usage_query !== "unsupported"
-    && (props.connection.provider_id !== "openrouter" || props.connection.has_management_key)
+    && (!props.connection.usage_requires_management_key || props.connection.has_management_key)
   const providerName = props.provider?.display_name ?? props.connection.provider_id
   // serviceEntryPresentation separates Alibaba product names from composable scope and region tags.
   // serviceEntryPresentation 将阿里云产品名称与可组合的账号范围、区域标签分离。
@@ -912,7 +915,6 @@ function PublicAiConnectionDialog(props: {
   const [credentialProfileId, setCredentialProfileId] = React.useState("")
   const [credentialMode, setCredentialMode] = React.useState<CredentialMode>("token")
   const [displayName, setDisplayName] = React.useState("")
-  const [protocolId, setProtocolId] = React.useState("")
   const [secret, setSecret] = React.useState("")
   const [managementKey, setManagementKey] = React.useState("")
   const [serviceOriginOverride, setServiceOriginOverride] = React.useState("")
@@ -928,7 +930,6 @@ function PublicAiConnectionDialog(props: {
     serviceEntryId: string
     credentialProfileId: string
     displayName: string
-    selectedProtocol: string
     connectionId?: string
   } | null>(null)
   const [error, setError] = React.useState<string | null>(null)
@@ -938,10 +939,8 @@ function PublicAiConnectionDialog(props: {
   const entry = provider?.service_entries.find((item) => item.id === entryId) ?? provider?.service_entries[0]
   const credentialProfile = entry?.credential_profiles.find((item) => item.id === credentialProfileId)
     ?? entry?.credential_profiles[0]
-  const availableProtocols = entry?.protocol_routes.filter((route) => route.verified) ?? []
   const isProviderToolEntry = entry?.kind === "provider_tools"
-  const supportsServiceOriginOverride = provider?.id === "alibaba"
-    && (entry?.id === "model-studio-cn" || entry?.id === "model-studio-singapore")
+  const supportsServiceOriginOverride = entry?.service_origin_override_policy !== undefined
 
   React.useEffect(() => {
     if (!props.open) {
@@ -961,11 +960,6 @@ function PublicAiConnectionDialog(props: {
     setCredentialProfileId(existingProfile?.id ?? "")
     setCredentialMode(existingProfile?.credential_mode ?? props.connection?.credential_mode ?? "token")
     setDisplayName(props.connection?.display_name ?? "")
-    setProtocolId(
-      props.connection?.selected_protocol
-      ?? existingEntry?.protocol_routes.find((route) => route.verified)?.protocol_profile_id
-      ?? "",
-    )
     setSecret("")
     setManagementKey("")
     setServiceOriginOverride(props.connection?.service_origin_override ?? "")
@@ -1001,10 +995,7 @@ function PublicAiConnectionDialog(props: {
     } else if (selectedProfile.credential_mode !== credentialMode) {
       setCredentialMode(selectedProfile.credential_mode)
     }
-    if (!availableProtocols.some((route) => route.protocol_profile_id === protocolId)) {
-      setProtocolId(availableProtocols[0]?.protocol_profile_id ?? "")
-    }
-  }, [availableProtocols, credentialMode, credentialProfileId, entry, protocolId])
+  }, [credentialMode, credentialProfileId, entry])
 
   React.useEffect(() => {
     if (!pendingAuthorization) {
@@ -1062,7 +1053,6 @@ function PublicAiConnectionDialog(props: {
       || !entry
       || !credentialProfile
       || !displayName.trim()
-      || (!isProviderToolEntry && !protocolId)
       || (requiresToken && !secret)
     ) {
       setError("请完整填写连接信息。")
@@ -1102,7 +1092,6 @@ function PublicAiConnectionDialog(props: {
           serviceEntryId: entry.id,
           credentialProfileId: credentialProfile.id,
           displayName,
-          selectedProtocol: protocolId,
           ...(props.connection ? { connectionId: props.connection.id } : {}),
         })
         return
@@ -1114,7 +1103,6 @@ function PublicAiConnectionDialog(props: {
           serviceEntryId: entry.id,
           credentialProfileId: credentialProfile.id,
           credentialMode,
-          selectedProtocol: protocolId,
           ...(secret ? { secret } : {}),
           ...(managementKey ? { managementKey } : {}),
           ...(removeManagementKey ? { removeManagementKey: true } : {}),
@@ -1128,7 +1116,6 @@ function PublicAiConnectionDialog(props: {
           credentialProfileId: credentialProfile.id,
           credentialMode,
           displayName,
-          selectedProtocol: protocolId,
           secret,
           ...(managementKey ? { managementKey } : {}),
           ...(supportsServiceOriginOverride && serviceOriginOverride.trim()
@@ -1151,7 +1138,6 @@ function PublicAiConnectionDialog(props: {
     oauthClientSecret,
     oauthProjectId,
     props,
-    protocolId,
     provider,
     managementKey,
     removeManagementKey,
@@ -1217,7 +1203,8 @@ function PublicAiConnectionDialog(props: {
           </label>
           <label className="settings-form-field">
             <span>服务入口</span>
-            {provider?.id === "minimax" && credentialMode === "token" ? (
+            {provider?.credential_registration === "mini_max_regional_api_key"
+              && credentialMode === "token" ? (
               <strong>保存时自动识别区域</strong>
             ) : (
               <select
@@ -1254,23 +1241,6 @@ function PublicAiConnectionDialog(props: {
             <span>账号显示名</span>
             <input className="settings-input" onChange={(event) => setDisplayName(event.target.value)} value={displayName} />
           </label>
-          {isProviderToolEntry ? null : availableProtocols.length > 1 ? (
-            <label className="settings-form-field">
-              <span>调用协议</span>
-              <select className="settings-input" onChange={(event) => setProtocolId(event.target.value)} value={protocolId}>
-                {availableProtocols.map((route) => (
-                  <option key={route.protocol_profile_id} value={route.protocol_profile_id}>
-                    {protocolDisplayName(route.protocol_profile_id)}
-                  </option>
-                ))}
-              </select>
-            </label>
-          ) : (
-            <div className="settings-form-field">
-              <span>调用协议</span>
-              <strong>{protocolDisplayName(protocolId)}</strong>
-            </div>
-          )}
           {credentialMode === "token" ? (
             <label className="settings-form-field">
               <span>{props.connection ? "替换 Token（留空则不变）" : "API Token"}</span>
@@ -1289,15 +1259,14 @@ function PublicAiConnectionDialog(props: {
               <Input
                 autoComplete="off"
                 onChange={(event) => setServiceOriginOverride(event.target.value)}
-                placeholder={entry?.id === "model-studio-cn"
-                  ? "https://{workspace-id}.cn-beijing.maas.aliyuncs.com"
-                  : "https://{workspace-id}.ap-southeast-1.maas.aliyuncs.com"}
+                placeholder={entry?.service_origin_override_policy?.example_origin ?? "https://workspace.example.com"}
                 value={serviceOriginOverride}
               />
               <small>{t("settings.providerConnection.serviceOriginDescription")}</small>
             </label>
           ) : null}
-          {provider?.id === "openrouter" ? (
+          {credentialProfile
+            && usageCapabilityRequiresManagementKey(credentialProfile.account_usage_query) ? (
             <div className="settings-form-field">
               <span>管理密钥（可选）</span>
               <input
@@ -1308,7 +1277,7 @@ function PublicAiConnectionDialog(props: {
                 type="password"
                 value={managementKey}
               />
-              <small>仅用于查询 OpenRouter 账号余额，不用于模型调用。</small>
+              <small>仅用于该账号的用量查询，不用于模型调用。</small>
               {props.connection?.has_management_key ? (
                 <label className="settings-inline-checkbox">
                   <input

@@ -2,7 +2,7 @@
 //! 供各 Provider 专用流式入口复用的共享传输入口输入准备辅助模块。
 
 use crate::agent_runtime::provider_transport_request::{
-    ProviderTransportExecutionRequest, ProviderTransportTurnStartMode,
+    ProviderRouteIdentity, ProviderTransportExecutionRequest, ProviderTransportTurnStartMode,
 };
 use crate::agent_runtime::provider_transport_request_budget::ProviderRequestBudgetGuard;
 use crate::agent_runtime::provider_transport_retry::ProviderRetryPolicy;
@@ -58,6 +58,9 @@ pub(crate) struct PreparedProviderTransportRuntimeInputs {
     /// Optional scoped tool ids rejected with the rejection reason.
     /// 使用拒绝原因拒绝的可选限定工具标识。
     pub(crate) tool_request_rejection_tool_ids: Vec<String>,
+    /// Immutable route key captured once and reported across every retry attempt.
+    /// 仅捕获一次并在每次重试尝试中上报的不可变路由键。
+    pub(crate) route_identity: ProviderRouteIdentity,
 }
 
 /// Prepared one-shot launch data split from a routed provider transport execution request.
@@ -134,6 +137,7 @@ fn prepare_provider_transport_runtime_inputs(
     tool_request_rejection_reason: Option<String>,
     tool_request_rejection_all_tools: bool,
     tool_request_rejection_tool_ids: Vec<String>,
+    route_identity: ProviderRouteIdentity,
 ) -> PreparedProviderTransportRuntimeInputs {
     PreparedProviderTransportRuntimeInputs {
         entry_inputs: prepare_provider_transport_entry_inputs(
@@ -158,6 +162,7 @@ fn prepare_provider_transport_runtime_inputs(
         tool_request_rejection_reason,
         tool_request_rejection_all_tools,
         tool_request_rejection_tool_ids,
+        route_identity,
     }
 }
 
@@ -188,6 +193,7 @@ pub(crate) fn prepare_provider_transport_stream_launch(
         tool_request_rejection_reason,
         tool_request_rejection_all_tools,
         tool_request_rejection_tool_ids,
+        route_identity,
     } = request;
     let runtime_inputs = prepare_provider_transport_runtime_inputs(
         provider_id.as_str(),
@@ -208,6 +214,7 @@ pub(crate) fn prepare_provider_transport_stream_launch(
         tool_request_rejection_reason,
         tool_request_rejection_all_tools,
         tool_request_rejection_tool_ids,
+        route_identity,
     );
 
     PreparedProviderTransportStreamLaunch {

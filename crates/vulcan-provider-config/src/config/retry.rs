@@ -3,6 +3,14 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Hard host ceiling for ordinary transient retries after the initial request.
+/// 初始请求后的普通瞬态重试所使用的宿主硬上限。
+pub const PROVIDER_RETRY_MAX_RETRIES: u32 = 100;
+
+/// Hard host ceiling for rate-limit retries after the initial request.
+/// 初始请求后的限流重试所使用的宿主硬上限。
+pub const PROVIDER_RATE_LIMIT_RETRY_MAX_RETRIES: u32 = 100_000;
+
 /// Stable transcript turn-page size options exposed by the settings page.
 /// 设置页面暴露的稳定转录轮次分页选项集合。
 pub const SESSION_TRANSCRIPT_TURN_PAGE_SIZE_OPTIONS: [usize; 4] = [20, 30, 40, 50];
@@ -105,8 +113,8 @@ impl PersistedProviderRetryConfiguration {
 /// 后台可配置的限流重试调度规则。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PersistedProviderRateLimitRetryConfiguration {
-    /// Maximum retries, where zero means retry until cancellation.
-    /// 最大重试次数，零表示持续重试直至取消。
+    /// Maximum finite retries; legacy zero is normalized to the host hard ceiling.
+    /// 最大有限重试次数；旧版零值会规范化为宿主硬上限。
     #[serde(rename = "maxRetries", default)]
     pub max_retries: u32,
     /// Delay before the first rate-limit retry in milliseconds.
@@ -133,8 +141,8 @@ pub struct PersistedProviderRateLimitRetryConfiguration {
 }
 
 impl Default for PersistedProviderRateLimitRetryConfiguration {
-    /// Builds the cancellation-bound default rate-limit schedule.
-    /// 构建默认的仅由取消终止的限流重试调度规则。
+    /// Builds the finite default rate-limit schedule.
+    /// 构建默认的有限限流重试调度规则。
     ///
     /// # Returns
     /// 返回值
@@ -143,7 +151,7 @@ impl Default for PersistedProviderRateLimitRetryConfiguration {
     /// 返回完整默认限流重试调度规则。
     fn default() -> Self {
         Self {
-            max_retries: 0,
+            max_retries: PROVIDER_RATE_LIMIT_RETRY_MAX_RETRIES,
             initial_delay_ms: default_provider_rate_limit_retry_initial_delay_ms(),
             max_delay_ms: default_provider_rate_limit_retry_max_delay_ms(),
             backoff_factor: default_provider_rate_limit_retry_backoff_factor(),
@@ -156,6 +164,28 @@ impl PersistedProviderRateLimitRetryConfiguration {
     /// 返回当前调度规则是否等于内置默认值。
     pub fn is_default(&self) -> bool {
         self == &Self::default()
+    }
+}
+
+/// Normalizes one persisted rate-limit retry count to the finite host contract.
+/// 将一个持久化限流重试次数规范化到有限宿主契约。
+///
+/// # Parameters
+/// 参数
+///
+/// `configured_max_retries` is the persisted count; zero is the legacy unbounded sentinel.
+/// `configured_max_retries` 是持久化次数；零是旧版无上限哨兵值。
+///
+/// # Returns
+/// 返回值
+///
+/// A positive retry count that never exceeds `PROVIDER_RATE_LIMIT_RETRY_MAX_RETRIES`.
+/// 返回大于零且不超过 `PROVIDER_RATE_LIMIT_RETRY_MAX_RETRIES` 的重试次数。
+pub fn normalize_provider_rate_limit_retry_max_retries(configured_max_retries: u32) -> u32 {
+    if configured_max_retries == 0 {
+        PROVIDER_RATE_LIMIT_RETRY_MAX_RETRIES
+    } else {
+        configured_max_retries.min(PROVIDER_RATE_LIMIT_RETRY_MAX_RETRIES)
     }
 }
 
@@ -223,4 +253,33 @@ fn default_provider_rate_limit_retry_max_delay_ms() -> u64 {
 /// 返回默认限流重试倍数。
 fn default_provider_rate_limit_retry_backoff_factor() -> f64 {
     2.0
+}
+
+#[cfg(test)]
+mod tests {
+    //! Focused tests for finite retry-count normalization.
+    //! 有限重试次数规范化的定向测试。
+
+    use super::*;
+
+    /// Verifies defaults and legacy zero values both produce the finite host ceiling.
+    /// 验证默认值与旧版零值都会产出有限宿主上限。
+    #[test]
+    fn rate_limit_retry_counts_are_always_finite() {
+        let default_schedule = PersistedProviderRateLimitRetryConfiguration::default();
+
+        assert_eq!(
+            default_schedule.max_retries,
+            PROVIDER_RATE_LIMIT_RETRY_MAX_RETRIES
+        );
+        assert_eq!(
+            normalize_provider_rate_limit_retry_max_retries(0),
+            PROVIDER_RATE_LIMIT_RETRY_MAX_RETRIES
+        );
+        assert_eq!(normalize_provider_rate_limit_retry_max_retries(12), 12);
+        assert_eq!(
+            normalize_provider_rate_limit_retry_max_retries(u32::MAX),
+            PROVIDER_RATE_LIMIT_RETRY_MAX_RETRIES
+        );
+    }
 }

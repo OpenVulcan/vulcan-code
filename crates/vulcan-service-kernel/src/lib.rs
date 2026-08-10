@@ -220,6 +220,7 @@ mod plugin_storage;
 mod plugin_ui_events;
 mod project_conversation_services;
 mod project_directories;
+mod provider_manifest_sync;
 mod provider_settings;
 mod provider_usage_migration;
 mod provider_usage_runtime;
@@ -477,6 +478,7 @@ pub fn create_service_bridge_state(
         token_budget_runtime: None,
         mcp_runtime: None,
         cached_mcp_catalog: None,
+        provider_manifest_sync: None,
         live_context_budgets: BTreeMap::new(),
         session_goal_summaries: BTreeMap::new(),
         session_goal_dispatch_versions: BTreeMap::new(),
@@ -514,9 +516,10 @@ pub fn create_service_bridge_state(
 pub fn service_prepare_for_app_shutdown(
     state: &SharedServiceBridgeState,
 ) -> Result<Vec<Uuid>, String> {
-    // taskRuntime and mcpRuntime are cloned under one state observation, then stopped outside the service lock.
-    // taskRuntime 与 mcpRuntime 在同一次状态观察中完成克隆，随后在服务锁外停止。
-    let (task_runtime, mcp_runtime, managed_memory_mesh_runtime) = {
+    // Runtime handles and the provider sync service are cloned under one state observation,
+    // then stopped outside the service lock.
+    // 运行时句柄与供应商同步服务在同一次状态观察中完成克隆，随后在服务锁外停止。
+    let (task_runtime, mcp_runtime, managed_memory_mesh_runtime, provider_manifest_sync) = {
         // guard provides the single authoritative shutdown snapshot of runtime handles.
         // guard 提供运行时句柄的单次权威关闭快照。
         let guard = state
@@ -527,14 +530,19 @@ pub fn service_prepare_for_app_shutdown(
                 Some(Arc::clone(&agent_runtime.task_runtime)),
                 Some(agent_runtime.extension_generation.mcp_runtime()),
                 guard.managed_memory_mesh_runtime.as_ref().map(Arc::clone),
+                guard.provider_manifest_sync.clone(),
             ),
             None => (
                 None,
                 None,
                 guard.managed_memory_mesh_runtime.as_ref().map(Arc::clone),
+                guard.provider_manifest_sync.clone(),
             ),
         }
     };
+    if let Some(provider_manifest_sync) = provider_manifest_sync {
+        provider_manifest_sync.stop_periodic_task()?;
+    }
     ordered_runtime_shutdown(
         || match task_runtime.as_ref() {
             Some(task_runtime) => task_runtime.stop_active_tasks_for_app_shutdown(),

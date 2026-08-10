@@ -3,21 +3,26 @@
 
 use crate::{
     AccountUsageQueryKind, AuthenticationProjection, ConnectionModel, ConnectionModelCatalog,
-    CredentialConnection, CredentialExecutionSecret, ModelDiscoveryKind,
-    PROVIDER_MODEL_CATALOG_MAX_MODELS, PROVIDER_MODEL_DISPLAY_NAME_MAX_BYTES,
-    PROVIDER_MODEL_IDENTIFIER_MAX_BYTES, ProviderDescriptor, SecondaryRouteOption, ServiceEntry,
-    build_alibaba_coding_plan_catalog, build_alibaba_model_studio_catalog,
-    build_alibaba_token_plan_catalog, build_anthropic_model_catalog, build_gemini_model_catalog,
-    build_minimax_model_catalog, enrich_compatible_model_catalog, parse_anthropic_model_page,
-    parse_gemini_model_page, parse_google_code_assist_model_catalog, parse_minimax_model_page,
-    parse_minimax_openai_model_catalog, parse_openai_codex_model_catalog,
+    CredentialConnection, CredentialExecutionSecret, MODEL_DISCOVERY_MAX_RESPONSE_BYTES,
+    ModelDiscoveryKind, PROVIDER_MODEL_CATALOG_MAX_MODELS, PROVIDER_MODEL_DISPLAY_NAME_MAX_BYTES,
+    PROVIDER_MODEL_IDENTIFIER_MAX_BYTES, ProtocolRoute, ProviderDescriptor,
+    ResolvedProviderManifest, SecondaryRouteOption, ServiceEntry, build_anthropic_model_catalog,
+    build_gemini_model_catalog, parse_anthropic_model_page, parse_gemini_model_page,
+    parse_google_code_assist_model_catalog, parse_openai_codex_model_catalog,
     parse_openai_model_catalog, parse_openrouter_complete_model_catalog,
 };
 use async_trait::async_trait;
-use serde::Deserialize;
+use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::Value;
-use std::collections::BTreeSet;
-use vulcan_ai_contract::{AccountUsageAvailability, AccountUsageSnapshot, AccountUsageWindow};
+use std::collections::{BTreeMap, BTreeSet};
+use vulcan_ai_contract::{
+    AccountUsageAvailability, AccountUsageSnapshot, AccountUsageWindow, ModelCapabilities,
+};
+
+/// Discovery schema revision identifying a catalog whose complete authority comes from Manifest.
+/// 标识完整权威来自 Manifest 的目录发现 Schema 修订号。
+pub(crate) const MANIFEST_STATIC_DISCOVERY_SCHEMA_REVISION: &str =
+    "provider-manifest.static-models.v1";
 
 /// Maximum wall time for one provider metadata or account-usage HTTP request.
 /// 单次供应商元数据或账号用量 HTTP 请求的最大墙钟时间。
@@ -27,13 +32,50 @@ const PROVIDER_METADATA_REQUEST_TIMEOUT: std::time::Duration = std::time::Durati
 /// 单次凭据作用域远程模型目录允许接受的最大分页数。
 const MODEL_DISCOVERY_MAX_PAGES: u32 = 1_024;
 
-/// Maximum decoded bytes accepted from one remote model-catalog response page.
-/// 单个远程模型目录响应分页允许接受的最大解码字节数。
-const MODEL_DISCOVERY_MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
-
 /// Maximum decoded bytes accepted from one non-catalog provider metadata response.
 /// 单个非目录供应商元数据响应允许接受的最大解码字节数。
 const PROVIDER_METADATA_MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
+
+/// Reports whether one signed Manifest authorizes a protocol variant for an exact model scope.
+/// 报告一份签名 Manifest 是否为精确模型作用域授权一个协议变体。
+///
+/// # Parameters
+/// 参数
+/// `manifest` owns binding authority; `service_entry_id`, `credential_profile_id`, and
+/// `model_id` identify the exact scope; `protocol_profile_id` is the candidate route.
+/// `manifest` 持有绑定权威；`service_entry_id`、`credential_profile_id` 与 `model_id`
+/// 标识精确作用域；`protocol_profile_id` 是候选路由。
+///
+/// # Returns
+/// 返回值
+/// `true` only when a matching rule or an explicitly allowed default lists the protocol.
+/// 仅当匹配规则或显式允许的默认值列出该协议时返回 `true`。
+fn manifest_protocol_authorizes_model_variant(
+    manifest: &ResolvedProviderManifest,
+    service_entry_id: &str,
+    credential_profile_id: &str,
+    protocol_profile_id: &str,
+    model_id: &str,
+) -> bool {
+    if let Some(rule) =
+        manifest.rule_for_model(service_entry_id, Some(credential_profile_id), model_id)
+    {
+        return rule
+            .supported_protocols
+            .iter()
+            .any(|protocol| protocol == protocol_profile_id);
+    }
+    manifest.unknown_model_policy
+        == crate::provider_manifest::UnknownModelPolicy::DefaultBindingAllowed
+        && manifest
+            .model_defaults_for_entry(service_entry_id)
+            .is_ok_and(|defaults| {
+                defaults
+                    .supported_protocols
+                    .iter()
+                    .any(|protocol| protocol == protocol_profile_id)
+            })
+}
 
 /// Closed failure variants produced while reading a bounded HTTP response body.
 /// 读取有界 HTTP 响应正文时产出的封闭失败变体。
@@ -192,6 +234,25 @@ impl std::error::Error for ModelDiscoveryError {}
 /// 执行凭据作用域的供应商元数据操作。
 #[async_trait]
 pub trait ProviderMetadataClient: Send + Sync {
+    /// Returns the bundled resolved manifest for one provider when available.
+    /// 可用时返回一个供应商的内置已解析清单。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `provider_id` identifies the exact system provider.
+    /// `provider_id` 标识精确系统供应商。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The compiled manifest, or `None` for legacy/custom providers without bundled manifests.
+    /// 返回已编译清单；无内置清单的旧版/自定义供应商返回 `None`。
+    fn bundled_manifest(
+        &self,
+        _provider_id: &str,
+    ) -> Option<std::sync::Arc<ResolvedProviderManifest>> {
+        None
+    }
+
     /// Discovers models visible to one exact credential.
     /// 发现一个精确凭据可见的模型。
     ///
@@ -212,6 +273,7 @@ pub trait ProviderMetadataClient: Send + Sync {
         entry: &ServiceEntry,
         connection: &CredentialConnection,
         secret: &CredentialExecutionSecret,
+        manifest: Option<std::sync::Arc<ResolvedProviderManifest>>,
         generation: u64,
     ) -> Result<ConnectionModelCatalog, ModelDiscoveryError>;
 
@@ -266,6 +328,13 @@ pub struct HttpProviderMetadataClient {
     /// Shared HTTP client.
     /// 共享 HTTP 客户端。
     http: reqwest::Client,
+    /// Single authoritative resolved-provider catalog shared with the runtime; hot
+    /// replacements are immediately visible without a second load or clone (plan §17.6).
+    /// 与运行时共享的唯一权威已解析供应商目录；热替换立即可见，无需二次加载或克隆
+    /// （方案 §17.6）。
+    bundled_manifests: std::sync::Arc<
+        std::sync::RwLock<std::sync::Arc<crate::provider_manifest::ResolvedProviderCatalog>>,
+    >,
 }
 
 /// Resolves the immutable MiniMax registration dimensions derived from one user key.
@@ -294,7 +363,38 @@ impl HttpProviderMetadataClient {
     /// A provider metadata client.
     /// 返回供应商元数据客户端。
     pub fn new(http: reqwest::Client) -> Self {
-        Self { http }
+        Self {
+            http,
+            bundled_manifests: std::sync::Arc::new(std::sync::RwLock::new(std::sync::Arc::new(
+                crate::provider_manifest::ResolvedProviderCatalog::default(),
+            ))),
+        }
+    }
+
+    /// Creates a metadata client sharing one authoritative resolved-provider catalog.
+    /// 创建与调用方共享唯一权威已解析供应商目录的元数据客户端。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `http` is the shared configured reqwest client; `catalog` is the single catalog
+    /// instance also held by the runtime so hot replacements reach discovery immediately.
+    /// `http` 是共享且已配置的 reqwest 客户端；`catalog` 是与运行时持有的同一目录实例，
+    /// 使热替换立即可达发现路径。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A provider metadata client with manifest enrichment enabled.
+    /// 返回启用 Manifest 补全的供应商元数据客户端。
+    pub fn with_bundled_manifests(
+        http: reqwest::Client,
+        catalog: std::sync::Arc<
+            std::sync::RwLock<std::sync::Arc<crate::provider_manifest::ResolvedProviderCatalog>>,
+        >,
+    ) -> Self {
+        Self {
+            http,
+            bundled_manifests: catalog,
+        }
     }
 
     /// Classifies one MiniMax key and probes its exact region without model inference.
@@ -427,18 +527,9 @@ impl ProviderMetadataClient for HttpProviderMetadataClient {
         entry: &ServiceEntry,
         connection: &CredentialConnection,
         secret: &CredentialExecutionSecret,
+        manifest: Option<std::sync::Arc<ResolvedProviderManifest>>,
         generation: u64,
     ) -> Result<ConnectionModelCatalog, ModelDiscoveryError> {
-        let protocol_route = entry
-            .protocol_routes
-            .iter()
-            .find(|route| route.protocol_profile_id == connection.selected_protocol)
-            .ok_or_else(|| {
-                ModelDiscoveryError::failed(format!(
-                    "Protocol `{}` is not registered for service entry `{}`.",
-                    connection.selected_protocol, entry.id
-                ))
-            })?;
         let credential_profile = entry
             .credential_profile(connection.credential_profile_id.as_str())
             .ok_or_else(|| {
@@ -447,178 +538,142 @@ impl ProviderMetadataClient for HttpProviderMetadataClient {
                     connection.credential_profile_id, entry.id
                 ))
             })?;
-        let authentication = protocol_route
-            .resolved_authentication(entry.authentication, credential_profile.authentication);
-        let catalog = match protocol_route.resolved_model_discovery(entry.model_discovery) {
-            ModelDiscoveryKind::Manual => Ok(ConnectionModelCatalog {
-                connection_id: connection.id.clone(),
-                models: Vec::new(),
-                generation,
-                page_count: 0,
-                discovery_schema_revision: String::from("manual.models.v1"),
-            }),
-            ModelDiscoveryKind::ProviderToolsOnly => Err(ModelDiscoveryError::new(
-                ModelDiscoveryFailureKind::Unsupported,
-                format!(
-                    "Provider-tools service entry `{}` does not expose a conversation model catalog.",
-                    entry.id
-                ),
-            )),
-            ModelDiscoveryKind::MiniMaxAnthropic => {
-                discover_minimax_models(
-                    &self.http,
-                    entry,
-                    connection,
-                    authentication,
-                    secret,
-                    generation,
-                )
-                .await
-            }
-            ModelDiscoveryKind::MiniMaxOpenAi => {
-                let url = protocol_route.model_discovery_url(entry, "/v1/models");
-                let body = send_metadata_get_with_authentication(
-                    &self.http,
-                    entry,
-                    authentication,
-                    url.as_str(),
-                    secret,
-                    "model discovery",
-                )
-                .await?;
-                parse_minimax_openai_model_catalog(
-                    connection.id.as_str(),
-                    generation,
-                    body.as_str(),
-                )
-                .map_err(ModelDiscoveryError::invalid_response)
-            }
-            ModelDiscoveryKind::OpenRouter => {
-                let conversation_url = protocol_route.model_discovery_url(entry, "/models/user");
-                let conversation_body = send_metadata_get_with_authentication(
-                    &self.http,
-                    entry,
-                    authentication,
-                    conversation_url.as_str(),
-                    secret,
-                    "account-visible model discovery",
-                )
-                .await?;
-                let embedding_url = protocol_route.model_discovery_url(entry, "/embeddings/models");
-                let embedding_body = send_metadata_get_with_authentication(
-                    &self.http,
-                    entry,
-                    authentication,
-                    embedding_url.as_str(),
-                    secret,
-                    "embedding model discovery",
-                )
-                .await?;
-                let complete_url =
-                    protocol_route.model_discovery_url(entry, "/models?output_modalities=all");
-                let complete_body = send_metadata_get_with_authentication(
-                    &self.http,
-                    entry,
-                    authentication,
-                    complete_url.as_str(),
-                    secret,
-                    "complete model discovery",
-                )
-                .await?;
-                parse_openrouter_complete_model_catalog(
-                    connection.id.as_str(),
-                    generation,
-                    conversation_body.as_str(),
-                    embedding_body.as_str(),
-                    complete_body.as_str(),
-                )
-                .map_err(ModelDiscoveryError::invalid_response)
-            }
-            ModelDiscoveryKind::AlibabaCodingPlanStatic => build_alibaba_coding_plan_catalog(
-                connection.id.as_str(),
-                entry.id.as_str(),
-                generation,
-            )
-            .map_err(ModelDiscoveryError::failed),
-            ModelDiscoveryKind::AlibabaTokenPlanStatic => build_alibaba_token_plan_catalog(
-                connection.id.as_str(),
-                entry.id.as_str(),
-                connection.selected_protocol.as_str(),
-                generation,
-            )
-            .map_err(ModelDiscoveryError::failed),
-            ModelDiscoveryKind::AlibabaModelStudioStatic => build_alibaba_model_studio_catalog(
-                connection.id.as_str(),
-                entry.id.as_str(),
-                connection.selected_protocol.as_str(),
-                generation,
-            )
-            .map_err(ModelDiscoveryError::failed),
-            ModelDiscoveryKind::OpenAi => {
-                let url = protocol_route.model_discovery_url(entry, "/models");
-                let body = send_metadata_get_with_authentication(
-                    &self.http,
-                    entry,
-                    authentication,
-                    url.as_str(),
-                    secret,
-                    "model discovery",
-                )
-                .await?;
-                let mut catalog =
-                    parse_openai_model_catalog(connection.id.as_str(), generation, body.as_str())
-                        .map_err(ModelDiscoveryError::invalid_response)?;
-                enrich_compatible_model_catalog(
-                    provider.id.as_str(),
-                    entry.id.as_str(),
-                    connection.selected_protocol.as_str(),
-                    &mut catalog,
-                );
-                Ok(catalog)
-            }
-            ModelDiscoveryKind::OpenAiCodex => {
-                let url =
-                    protocol_route.model_discovery_url(entry, "/models?client_version=0.144.1");
-                let body = send_metadata_get_with_authentication(
-                    &self.http,
-                    entry,
-                    authentication,
-                    url.as_str(),
-                    secret,
-                    "model discovery",
-                )
-                .await?;
-                parse_openai_codex_model_catalog(connection.id.as_str(), generation, body.as_str())
-                    .map_err(ModelDiscoveryError::invalid_response)
-            }
-            ModelDiscoveryKind::Anthropic => {
-                discover_anthropic_models(&self.http, entry, connection, secret, generation).await
-            }
-            ModelDiscoveryKind::AnthropicCompatible => {
-                // url preserves the reviewed protocol-route catalog path instead of rebuilding `/models`.
-                // url 保留已审核的协议路由目录路径，而不是重新拼接 `/models`。
-                let url = protocol_route.model_discovery_url(entry, "/models");
-                discover_anthropic_compatible_models(
-                    &self.http,
+        // Every route verified by both the service definition and this exact credential
+        // participates in discovery. Routes sharing one discovery signature are grouped and
+        // discovered exactly once; distinct signatures merge per-model protocol variants
+        // (plan §14.2).
+        // 只有服务定义与当前精确凭据共同验证的路由才参与发现。共享同一发现签名的路由
+        // 分组后恰好发现一次；不同签名按模型身份合并协议变体（方案 §14.2）。
+        let mut groups: BTreeMap<String, Vec<&ProtocolRoute>> = BTreeMap::new();
+        for route in entry.protocol_routes.iter().filter(|route| {
+            route.verified
+                && connection
+                    .verified_protocols
+                    .contains(route.protocol_profile_id.as_str())
+        }) {
+            let authentication = route
+                .resolved_authentication(entry.authentication, credential_profile.authentication);
+            let url = route.model_discovery_url(
+                entry,
+                default_discovery_path(route.resolved_model_discovery(entry.model_discovery)),
+            );
+            let signature = crate::discovery_signature::discovery_signature(
+                route.resolved_model_discovery(entry.model_discovery),
+                url.as_str(),
+                connection.credential_profile_id.as_str(),
+                &authentication,
+                &route.request_headers,
+            );
+            groups.entry(signature).or_default().push(route);
+        }
+        if groups.is_empty() {
+            return Err(ModelDiscoveryError::failed(format!(
+                "Service entry `{}` has no verified protocol route for discovery.",
+                entry.id
+            )));
+        }
+
+        let mut merged = ConnectionModelCatalog {
+            connection_id: connection.id.clone(),
+            models: Vec::new(),
+            generation,
+            page_count: 0,
+            discovery_schema_revision: String::new(),
+        };
+        for (signature, routes) in groups {
+            // The shared network result is fetched exactly once per signature; each protocol
+            // route then receives its own capability/evidence enrichment and variant.
+            // 每个签名的共享网络结果只获取一次；随后每条协议路由获得各自的能力/证据补全与变体。
+            let raw = self
+                .discover_for_route(
                     entry,
                     connection,
                     secret,
+                    manifest.as_deref(),
                     generation,
-                    url.as_str(),
+                    routes[0],
                 )
-                .await
+                .await?;
+            if merged.discovery_schema_revision.is_empty() {
+                merged.discovery_schema_revision = raw.discovery_schema_revision.clone();
             }
-            ModelDiscoveryKind::Gemini => {
-                discover_gemini_models(&self.http, entry, connection, secret, generation).await
+            // Raw identities enter the diagnostic inventory independently from executable
+            // protocol variants. This keeps an unmatched system model visible as "awaiting
+            // mapping" without granting it any request route.
+            // 原始身份独立于可执行协议变体进入诊断目录，使未匹配系统模型仍显示为“等待映射”，
+            // 但不会因此获得任何请求路由。
+            for raw_model in &raw.models {
+                if merged
+                    .models
+                    .iter()
+                    .all(|existing| existing.id != raw_model.id)
+                {
+                    let mut identity = raw_model.clone();
+                    identity.protocol_variants.clear();
+                    identity.resolved_protocol_binding = None;
+                    merged.models.push(identity);
+                }
             }
-            ModelDiscoveryKind::GoogleCodeAssist => {
-                discover_google_code_assist_models(
-                    &self.http, entry, connection, secret, generation,
-                )
-                .await
+            for route in routes.iter() {
+                // Enrich the raw shared result independently for this exact protocol route so
+                // protocol-scoped rules and evidence never leak across routes (plan §14.2).
+                // 对这份原始共享结果按当前精确协议路由独立补全，使协议作用域规则与证据
+                // 绝不在路由间泄漏（方案 §14.2）。
+                let mut protocol_catalog = raw.clone();
+                self.enrich_catalog_for_protocol(
+                    manifest.as_deref(),
+                    provider,
+                    entry,
+                    connection.credential_profile_id.as_str(),
+                    route.protocol_profile_id.as_str(),
+                    &mut protocol_catalog,
+                )?;
+                for model in protocol_catalog.models.drain(..) {
+                    if manifest.as_deref().is_some_and(|manifest| {
+                        !manifest_protocol_authorizes_model_variant(
+                            manifest,
+                            entry.id.as_str(),
+                            connection.credential_profile_id.as_str(),
+                            route.protocol_profile_id.as_str(),
+                            model.id.as_str(),
+                        )
+                    }) {
+                        continue;
+                    }
+                    let variant = crate::ProtocolModelVariant {
+                        capabilities: model.capabilities.clone(),
+                        capability_evidence: model.capability_evidence.clone(),
+                        discovery_signature: signature.clone(),
+                        catalog_generation: generation,
+                    };
+                    let protocol_id = route.protocol_profile_id.clone();
+                    match merged
+                        .models
+                        .iter_mut()
+                        .find(|existing| existing.id == model.id)
+                    {
+                        Some(existing) => {
+                            if existing.protocol_variants.is_empty() {
+                                existing.display_name = model.display_name.clone();
+                                existing.capabilities = model.capabilities.clone();
+                                existing.capability_evidence = model.capability_evidence.clone();
+                            }
+                            existing.protocol_variants.insert(protocol_id, variant);
+                        }
+                        None => {
+                            // The first route to cover the model keeps the top-level
+                            // compatibility projection; every route contributes its variant.
+                            // 首个覆盖该模型的路由保留顶层兼容投影；每条路由贡献各自变体。
+                            let mut model = model;
+                            model.protocol_variants.insert(protocol_id, variant);
+                            merged.models.push(model);
+                        }
+                    }
+                }
             }
-        }?;
-        validate_discovered_catalog_bounds(catalog, connection.id.as_str())
+            merged.page_count += raw.page_count;
+        }
+        validate_discovered_catalog_bounds(merged, connection.id.as_str())
     }
 
     async fn query_account_usage(
@@ -701,13 +756,303 @@ impl ProviderMetadataClient for HttpProviderMetadataClient {
         model_id: &str,
         secret: &CredentialExecutionSecret,
     ) -> Result<Vec<SecondaryRouteOption>, String> {
-        if provider.id != "openrouter" {
+        if entry.request_projector != crate::RequestProjectorKind::RoutedCompatible {
             return Err(format!(
-                "Provider `{}` does not register secondary route discovery.",
-                provider.id
+                "Service entry `{}` for provider `{}` does not register secondary route discovery.",
+                entry.id, provider.id
             ));
         }
         query_openrouter_model_endpoints(&self.http, entry, model_id, secret.expose_value()).await
+    }
+
+    fn bundled_manifest(
+        &self,
+        provider_id: &str,
+    ) -> Option<std::sync::Arc<ResolvedProviderManifest>> {
+        self.bundled_manifests
+            .read()
+            .ok()
+            .and_then(|catalog| catalog.manifest_arc(provider_id))
+    }
+}
+
+impl HttpProviderMetadataClient {
+    /// Returns the current catalog generation observed by this client.
+    /// 返回该客户端观察到的当前目录代数。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The generation of the shared catalog at this instant; runtime and discovery client
+    /// must observe the same number after every replacement (plan §R3.8).
+    /// 此刻共享目录的代数；每次替换后运行时与发现客户端必须观察到相同数字（方案 §R3.8）。
+    pub fn catalog_generation(&self) -> u64 {
+        self.bundled_manifests
+            .read()
+            .map(|catalog| catalog.generation)
+            .unwrap_or(0)
+    }
+
+    /// Discovers the raw model catalog through one exact protocol route without enrichment.
+    /// 通过一条精确协议路由发现原始模型目录，不做补全。
+    async fn discover_for_route(
+        &self,
+        entry: &ServiceEntry,
+        connection: &CredentialConnection,
+        secret: &CredentialExecutionSecret,
+        manifest: Option<&ResolvedProviderManifest>,
+        generation: u64,
+        protocol_route: &ProtocolRoute,
+    ) -> Result<ConnectionModelCatalog, ModelDiscoveryError> {
+        let credential_profile = entry
+            .credential_profile(connection.credential_profile_id.as_str())
+            .ok_or_else(|| {
+                ModelDiscoveryError::failed(format!(
+                    "Credential profile `{}` is not registered for service entry `{}`.",
+                    connection.credential_profile_id, entry.id
+                ))
+            })?;
+        let authentication = protocol_route
+            .resolved_authentication(entry.authentication, credential_profile.authentication);
+        let discovery_kind = protocol_route.resolved_model_discovery(entry.model_discovery);
+        let catalog = match discovery_kind {
+            ModelDiscoveryKind::Manual => ConnectionModelCatalog {
+                connection_id: connection.id.clone(),
+                models: Vec::new(),
+                generation,
+                page_count: 0,
+                discovery_schema_revision: String::from("manual.models.v1"),
+            },
+            ModelDiscoveryKind::ProviderToolsOnly => {
+                return Err(ModelDiscoveryError::new(
+                    ModelDiscoveryFailureKind::Unsupported,
+                    format!(
+                        "Provider-tools service entry `{}` does not expose a conversation model catalog.",
+                        entry.id
+                    ),
+                ));
+            }
+            ModelDiscoveryKind::OpenRouter => {
+                let conversation_url = protocol_route.model_discovery_url(entry, "/models/user");
+                let conversation_body = send_metadata_get_with_authentication(
+                    &self.http,
+                    entry,
+                    authentication,
+                    conversation_url.as_str(),
+                    secret,
+                    "account-visible model discovery",
+                )
+                .await?;
+                let embedding_url = protocol_route.model_discovery_url(entry, "/embeddings/models");
+                let embedding_body = send_metadata_get_with_authentication(
+                    &self.http,
+                    entry,
+                    authentication,
+                    embedding_url.as_str(),
+                    secret,
+                    "embedding model discovery",
+                )
+                .await?;
+                let complete_url =
+                    protocol_route.model_discovery_url(entry, "/models?output_modalities=all");
+                let complete_body = send_metadata_get_with_authentication(
+                    &self.http,
+                    entry,
+                    authentication,
+                    complete_url.as_str(),
+                    secret,
+                    "complete model discovery",
+                )
+                .await?;
+                parse_openrouter_complete_model_catalog(
+                    connection.id.as_str(),
+                    generation,
+                    conversation_body.as_str(),
+                    embedding_body.as_str(),
+                    complete_body.as_str(),
+                )
+                .map_err(ModelDiscoveryError::invalid_response)?
+            }
+            ModelDiscoveryKind::ManifestStatic => build_manifest_static_catalog(
+                manifest,
+                connection.id.as_str(),
+                entry.id.as_str(),
+                generation,
+            )?,
+            ModelDiscoveryKind::OpenAi => {
+                let url = protocol_route.model_discovery_url(entry, "/models");
+                let body = send_metadata_get_with_authentication(
+                    &self.http,
+                    entry,
+                    authentication,
+                    url.as_str(),
+                    secret,
+                    "model discovery",
+                )
+                .await?;
+                parse_openai_model_catalog(connection.id.as_str(), generation, body.as_str())
+                    .map_err(ModelDiscoveryError::invalid_response)?
+            }
+            ModelDiscoveryKind::OpenAiCodex => {
+                let url =
+                    protocol_route.model_discovery_url(entry, "/models?client_version=0.144.1");
+                let body = send_metadata_get_with_authentication(
+                    &self.http,
+                    entry,
+                    authentication,
+                    url.as_str(),
+                    secret,
+                    "model discovery",
+                )
+                .await?;
+                parse_openai_codex_model_catalog(connection.id.as_str(), generation, body.as_str())
+                    .map_err(ModelDiscoveryError::invalid_response)?
+            }
+            ModelDiscoveryKind::Anthropic => {
+                discover_anthropic_models(&self.http, entry, connection, secret, generation).await?
+            }
+            ModelDiscoveryKind::AnthropicCompatible => {
+                // url preserves the reviewed protocol-route catalog path instead of rebuilding `/models`.
+                // url 保留已审核的协议路由目录路径，而不是重新拼接 `/models`。
+                let url = protocol_route.model_discovery_url(entry, "/models");
+                discover_anthropic_compatible_models(
+                    &self.http,
+                    entry,
+                    connection,
+                    authentication,
+                    secret,
+                    generation,
+                    url.as_str(),
+                )
+                .await?
+            }
+            ModelDiscoveryKind::Gemini => {
+                discover_gemini_models(&self.http, entry, connection, secret, generation).await?
+            }
+            ModelDiscoveryKind::GoogleCodeAssist => {
+                discover_google_code_assist_models(
+                    &self.http, entry, connection, secret, generation,
+                )
+                .await?
+            }
+        };
+        // Raw network discovery ends here; manifest-driven enrichment is applied per protocol
+        // route by the caller so every route in one signature group receives its own
+        // capability/evidence projection instead of copying the representative route's result
+        // (plan §14.2).
+        // 原始网络发现到此为止；清单驱动补全由调用方按每条协议路由分别应用，使同一签名组
+        // 内每条路由获得各自的能力/证据投影，而不是复制代表路由的结果（方案 §14.2）。
+        Ok(catalog)
+    }
+
+    /// Applies manifest-driven enrichment to one raw discovered catalog for one exact protocol.
+    /// 对一份原始已发现目录按一个精确协议应用清单驱动补全。
+    fn enrich_catalog_for_protocol(
+        &self,
+        manifest: Option<&ResolvedProviderManifest>,
+        provider: &ProviderDescriptor,
+        entry: &ServiceEntry,
+        credential_profile_id: &str,
+        protocol_profile_id: &str,
+        catalog: &mut ConnectionModelCatalog,
+    ) -> Result<(), ModelDiscoveryError> {
+        // Custom providers have no system manifest. Their user-owned manual/discovery
+        // capabilities are resolved later by the custom-provider overlay, so this boundary
+        // must not apply any named-provider compatibility branch.
+        // 自定义供应商没有系统 Manifest。其用户持有的手工/发现能力稍后由自定义供应商
+        // 覆盖解析，因此此边界绝不能应用任何具名供应商兼容分支。
+        let Some(manifest) = manifest else {
+            return Ok(());
+        };
+        crate::discovery::enrich_compatible_model_catalog_with_manifest(
+            provider.id.as_str(),
+            entry.id.as_str(),
+            Some(credential_profile_id),
+            protocol_profile_id,
+            catalog,
+            manifest,
+        );
+        Ok(())
+    }
+}
+
+/// Builds one conservative static catalog exclusively from the active manifest snapshot.
+/// 完全从当前 Manifest 快照构建一份保守静态目录。
+///
+/// # Parameters
+/// 参数
+/// `manifest` is the immutable published snapshot, `connection_id` identifies the credential,
+/// `service_entry_id` selects the exact inventory, and `generation` freezes catalog ownership.
+/// `manifest` 是不可变已发布快照，`connection_id` 标识凭据，`service_entry_id` 选择精确
+/// 清单，`generation` 冻结目录归属代数。
+///
+/// # Returns
+/// 返回值
+/// A manifest-owned catalog whose models have no code-owned capability seeds. Missing manifest
+/// authority or a missing service inventory fails closed; an explicit empty inventory succeeds.
+/// 返回模型不含代码持有能力种子的 Manifest 权威目录。缺少 Manifest 权威或服务清单时
+/// 封闭失败；显式空清单则成功。
+fn build_manifest_static_catalog(
+    manifest: Option<&ResolvedProviderManifest>,
+    connection_id: &str,
+    service_entry_id: &str,
+    generation: u64,
+) -> Result<ConnectionModelCatalog, ModelDiscoveryError> {
+    // active_manifest is the sole execution authority for this non-network catalog.
+    // active_manifest 是此非网络目录的唯一执行权威。
+    let active_manifest = manifest.ok_or_else(|| {
+        ModelDiscoveryError::failed(format!(
+            "Manifest-static discovery for service entry `{service_entry_id}` requires an active provider manifest."
+        ))
+    })?;
+    // declared_models is the exact service-scoped inventory frozen into this snapshot.
+    // declared_models 是冻结到此快照中的精确服务作用域清单。
+    let declared_models = active_manifest
+        .catalog_models
+        .get(service_entry_id)
+        .ok_or_else(|| {
+            ModelDiscoveryError::failed(format!(
+                "Manifest-static discovery has no model inventory for service entry `{service_entry_id}`."
+            ))
+        })?;
+    // models intentionally start without capabilities; the exact protocol rule enriches them later.
+    // models 刻意以无能力状态开始；随后由精确协议规则进行补全。
+    let models = declared_models
+        .iter()
+        .map(|declared| ConnectionModel {
+            id: declared.model_id.clone(),
+            display_name: declared.display_name.clone(),
+            capabilities: ModelCapabilities::default(),
+            capability_evidence: crate::ModelCapabilityEvidence::default(),
+            protocol_variants: BTreeMap::new(),
+            resolved_protocol_binding: None,
+        })
+        .collect();
+    Ok(ConnectionModelCatalog {
+        connection_id: connection_id.to_string(),
+        models,
+        generation,
+        page_count: 1,
+        discovery_schema_revision: String::from(MANIFEST_STATIC_DISCOVERY_SCHEMA_REVISION),
+    })
+}
+
+/// Returns the default discovery path for one discovery kind, used only to build the
+/// signature URL. The exact URL is a grouping key: identical kinds and configurations must
+/// share a signature; distinct discovery behavior must split it.
+/// 返回一种发现契约的默认发现路径，仅用于构建签名 URL。精确 URL 是分组键：
+/// 相同契约与配置必须共享签名；不同发现行为必须拆分签名。
+fn default_discovery_path(kind: ModelDiscoveryKind) -> &'static str {
+    match kind {
+        ModelDiscoveryKind::Manual
+        | ModelDiscoveryKind::ProviderToolsOnly
+        | ModelDiscoveryKind::ManifestStatic => "",
+        ModelDiscoveryKind::Anthropic => "/v1/models",
+        ModelDiscoveryKind::OpenRouter => "/models/user",
+        ModelDiscoveryKind::OpenAi
+        | ModelDiscoveryKind::OpenAiCodex
+        | ModelDiscoveryKind::AnthropicCompatible => "/models",
+        ModelDiscoveryKind::Gemini => "/v1beta/models",
+        ModelDiscoveryKind::GoogleCodeAssist => "/v1/codeassist:fetchAvailableModels",
     }
 }
 
@@ -837,6 +1182,7 @@ async fn send_metadata_get_with_authentication(
     request = match authentication {
         AuthenticationProjection::XApiKey => request.header("x-api-key", secret.expose_value()),
         AuthenticationProjection::BearerAuthorization
+        | AuthenticationProjection::CodingDeviceBearer
         | AuthenticationProjection::OpenAiCodexBearer
         | AuthenticationProjection::GoogleCodeAssistBearer
         | AuthenticationProjection::GoogleGeminiBearer => {
@@ -870,6 +1216,7 @@ async fn send_metadata_get_with_authentication(
         }
         AuthenticationProjection::XApiKey
         | AuthenticationProjection::BearerAuthorization
+        | AuthenticationProjection::CodingDeviceBearer
         | AuthenticationProjection::GoogleApiKey => {}
     }
     let response = request.send().await.map_err(|error| {
@@ -954,6 +1301,34 @@ async fn read_bounded_provider_metadata_body(
         BoundedResponseReadError::Transport(message)
         | BoundedResponseReadError::Invalid(message) => message,
     })
+}
+
+/// Parses one provider metadata response through shared byte, depth, and node-count bounds.
+/// 通过共享字节、深度与节点数量上限解析一份供应商元数据响应。
+///
+/// # Parameters
+/// 参数
+/// `body` is the provider-controlled document and `label` scopes the controlled diagnostic.
+/// `body` 是供应商控制的文档，`label` 限定受控诊断范围。
+///
+/// # Returns
+/// 返回值
+/// The requested closed metadata type or a deterministic size, syntax, shape, depth, or count
+/// failure.
+/// 返回所需封闭元数据类型，或确定性的大小、语法、结构、深度或数量失败。
+fn parse_provider_metadata_json<Response>(body: &str, label: &str) -> Result<Response, String>
+where
+    Response: DeserializeOwned,
+{
+    if body.len() > PROVIDER_METADATA_MAX_RESPONSE_BYTES {
+        return Err(format!(
+            "{label} exceeds the {PROVIDER_METADATA_MAX_RESPONSE_BYTES}-byte metadata boundary."
+        ));
+    }
+    let value: Value =
+        serde_json::from_str(body).map_err(|error| format!("{label} is invalid: {error}"))?;
+    crate::provider_manifest::validate_runtime_json_bounds(&value, label)?;
+    serde_json::from_value(value).map_err(|error| format!("{label} is invalid: {error}"))
 }
 
 /// Reads one decoded HTTP response without allowing content length or compression to bypass limits.
@@ -1296,9 +1671,10 @@ async fn discover_anthropic_models(
 ///
 /// # Parameters
 /// 参数
-/// `http`, `entry`, `connection`, and `secret` define the exact credential request;
-/// `generation` identifies the in-memory revision and `discovery_url` is the reviewed first-page URL.
-/// `http`、`entry`、`connection` 与 `secret` 定义精确凭据请求；
+/// `http`, `entry`, `connection`, `authentication`, and `secret` define the exact credential
+/// request; `generation` identifies the in-memory revision and `discovery_url` is the reviewed
+/// first-page URL.
+/// `http`、`entry`、`connection`、`authentication` 与 `secret` 定义精确凭据请求；
 /// `generation` 标识内存修订，`discovery_url` 是已审核的第一页地址。
 ///
 /// # Returns
@@ -1309,16 +1685,29 @@ async fn discover_anthropic_compatible_models(
     http: &reqwest::Client,
     entry: &ServiceEntry,
     connection: &CredentialConnection,
+    authentication: AuthenticationProjection,
     secret: &CredentialExecutionSecret,
     generation: u64,
     discovery_url: &str,
 ) -> Result<ConnectionModelCatalog, ModelDiscoveryError> {
+    // models accumulates the exact provider order across bounded pages.
+    // models 按有界分页累积供应商返回的精确顺序。
     let mut models = Vec::<ConnectionModel>::new();
+    // model_ids rejects duplicate identities across pages.
+    // model_ids 拒绝跨分页重复的模型身份。
     let mut model_ids = BTreeSet::new();
+    // seen_cursors prevents an upstream cursor cycle.
+    // seen_cursors 防止上游游标形成循环。
     let mut seen_cursors = BTreeSet::new();
+    // after_id owns the next provider-issued pagination cursor.
+    // after_id 持有下一个供应商签发的分页游标。
     let mut after_id = None::<String>;
+    // page_count enforces and records the bounded traversal size.
+    // page_count 强制并记录有界遍历页数。
     let mut page_count = 0_u32;
     loop {
+        // url starts from the manifest-reviewed route authority on every page.
+        // url 在每一页都从 Manifest 已审核的路由权限重新构建。
         let mut url = reqwest::Url::parse(discovery_url).map_err(|_| {
             ModelDiscoveryError::failed("Anthropic-compatible model discovery URL is invalid.")
         })?;
@@ -1326,14 +1715,19 @@ async fn discover_anthropic_compatible_models(
         if let Some(cursor) = after_id.as_deref() {
             url.query_pairs_mut().append_pair("after_id", cursor);
         }
-        let body = send_metadata_get(
+        // body is fetched with the exact service, route, and credential-profile projection.
+        // body 使用精确服务、路由与凭据配置档投影获取。
+        let body = send_metadata_get_with_authentication(
             http,
             entry,
+            authentication,
             url.as_str(),
             secret,
             "Anthropic-compatible model discovery",
         )
         .await?;
+        // page is the provider-neutral Anthropic-compatible envelope.
+        // page 是供应商无关的 Anthropic 兼容响应封装。
         let page = parse_anthropic_model_page(body.as_str(), false)
             .map_err(ModelDiscoveryError::invalid_response)?;
         page_count = page_count.saturating_add(1);
@@ -1351,6 +1745,8 @@ async fn discover_anthropic_compatible_models(
         if !page.has_more {
             break;
         }
+        // next is mandatory whenever the provider reports another page.
+        // next 在供应商报告仍有下一页时必须存在。
         let next = page.last_id.ok_or_else(|| {
             ModelDiscoveryError::invalid_response(
                 "Anthropic-compatible model discovery reported more pages without `last_id`.",
@@ -1482,8 +1878,10 @@ async fn query_openrouter_model_endpoints(
             controlled_error_summary(body.as_str(), secret)
         ));
     }
-    let payload = serde_json::from_str::<OpenRouterModelEndpointsResponse>(&body)
-        .map_err(|error| format!("OpenRouter secondary route response is invalid: {error}"))?;
+    let payload = parse_provider_metadata_json::<OpenRouterModelEndpointsResponse>(
+        body.as_str(),
+        "OpenRouter secondary route response",
+    )?;
     let mut options = payload
         .data
         .endpoints
@@ -1595,8 +1993,8 @@ async fn query_minimax_token_plan(
             controlled_error_summary(body.as_str(), secret)
         ));
     }
-    let response: MiniMaxQuotaResponse = serde_json::from_str(body.as_str())
-        .map_err(|error| format!("MiniMax Token Plan usage JSON is invalid: {error}"))?;
+    let response: MiniMaxQuotaResponse =
+        parse_provider_metadata_json(body.as_str(), "MiniMax Token Plan usage JSON")?;
     if response.base_resp.status_code != 0 {
         return Err(format!(
             "MiniMax Token Plan usage returned business status {}: {}",
@@ -1661,8 +2059,8 @@ async fn query_kimi_coding_plan(
 /// Decodes one exact Kimi Coding Plan usage response into provider-neutral windows.
 /// 将一份精确 Kimi Coding Plan 用量响应解码为供应商无关窗口。
 fn decode_kimi_coding_plan_usage(body: &str) -> Result<AccountUsageSnapshot, String> {
-    let response: KimiUsageResponse = serde_json::from_str(body)
-        .map_err(|error| format!("Kimi Coding Plan usage JSON is invalid: {error}"))?;
+    let response: KimiUsageResponse =
+        parse_provider_metadata_json(body, "Kimi Coding Plan usage JSON")?;
     let plan_name = kimi_membership_plan_name(response.user.membership.level.as_deref())?;
     let mut windows =
         Vec::with_capacity(response.limits.len() + usize::from(response.usage.is_some()));
@@ -1899,8 +2297,8 @@ async fn query_tavily_credits(
             controlled_error_summary(body.as_str(), secret)
         ));
     }
-    let response: TavilyUsageResponse = serde_json::from_str(body.as_str())
-        .map_err(|error| format!("Tavily account usage JSON is invalid: {error}"))?;
+    let response: TavilyUsageResponse =
+        parse_provider_metadata_json(body.as_str(), "Tavily account usage JSON")?;
     let account_plan = tavily_usage_window(
         "tavily-account-plan",
         "Account plan",
@@ -2051,8 +2449,8 @@ async fn query_openrouter_credits(
             controlled_error_summary(body.as_str(), secret)
         ));
     }
-    let response: OpenRouterCreditsResponse = serde_json::from_str(body.as_str())
-        .map_err(|error| format!("OpenRouter account usage JSON is invalid: {error}"))?;
+    let response: OpenRouterCreditsResponse =
+        parse_provider_metadata_json(body.as_str(), "OpenRouter account usage JSON")?;
     let total_credits = response.data.total_credits.to_string();
     let total_usage = response.data.total_usage.to_string();
     let remaining = subtract_non_negative_decimal(total_credits.as_str(), total_usage.as_str())?;
@@ -2123,8 +2521,8 @@ async fn query_deepseek_balance(
 /// One provider-neutral balance snapshot.
 /// 返回一份供应商无关余额快照。
 fn decode_deepseek_balance(body: &str) -> Result<AccountUsageSnapshot, String> {
-    let response: DeepSeekBalanceResponse = serde_json::from_str(body)
-        .map_err(|error| format!("DeepSeek account balance JSON is invalid: {error}"))?;
+    let response: DeepSeekBalanceResponse =
+        parse_provider_metadata_json(body, "DeepSeek account balance JSON")?;
     if response.balance_infos.is_empty() {
         return Err(String::from(
             "DeepSeek account balance omitted its currency balances.",
@@ -2190,90 +2588,6 @@ fn validate_deepseek_decimal(value: &str) -> Result<(), String> {
     normalized_unsigned_decimal_digits(value)
         .map(|_| ())
         .map_err(|_| String::from("DeepSeek account balance contains an invalid decimal value."))
-}
-
-/// Discovers every MiniMax model page through the documented `after_id` cursor.
-/// 通过文档化的 `after_id` 游标发现全部 MiniMax 模型分页。
-///
-/// # Parameters
-/// 参数
-/// `http` is the shared client, `entry` owns the endpoint, `connection` owns the catalog,
-/// `authentication` is the resolved profile projection, `secret` is the exact credential,
-/// and `generation` identifies this in-memory refresh.
-/// `http` 是共享客户端，`entry` 持有端点，`connection` 持有目录，
-/// `authentication` 是已解析的配置档投影，`secret` 是精确凭据，
-/// `generation` 标识本次内存刷新。
-///
-/// # Returns
-/// 返回值
-/// A complete memory-only catalog, or a controlled pagination/HTTP contract error.
-/// 返回完整的纯内存目录，或受控的分页/HTTP 契约错误。
-async fn discover_minimax_models(
-    http: &reqwest::Client,
-    entry: &ServiceEntry,
-    connection: &CredentialConnection,
-    authentication: AuthenticationProjection,
-    secret: &CredentialExecutionSecret,
-    generation: u64,
-) -> Result<ConnectionModelCatalog, ModelDiscoveryError> {
-    let url = format!(
-        "{}/anthropic/v1/models",
-        entry.base_url.trim_end_matches('/')
-    );
-    let mut after_id: Option<String> = None;
-    let mut models = Vec::new();
-    let mut model_ids = BTreeSet::new();
-    let mut seen_cursors = BTreeSet::new();
-    let mut page_count = 0_u32;
-    loop {
-        let mut page_url = reqwest::Url::parse(url.as_str()).map_err(|error| {
-            ModelDiscoveryError::failed(format!("MiniMax model discovery URL is invalid: {error}"))
-        })?;
-        if let Some(cursor) = after_id.as_deref() {
-            page_url.query_pairs_mut().append_pair("after_id", cursor);
-        }
-        let body = send_metadata_get_with_authentication(
-            http,
-            entry,
-            authentication,
-            page_url.as_str(),
-            secret,
-            "MiniMax model discovery",
-        )
-        .await?;
-        let page = parse_minimax_model_page(body.as_str())
-            .map_err(ModelDiscoveryError::invalid_response)?;
-        page_count = page_count.saturating_add(1);
-        append_unique_discovered_models(
-            &mut models,
-            &mut model_ids,
-            page.models,
-            "MiniMax model discovery",
-        )?;
-        validate_pagination_boundary(page_count, page.has_more, "MiniMax model discovery")?;
-        if !page.has_more {
-            break;
-        }
-        let next_cursor = page
-            .last_id
-            .filter(|cursor| !cursor.trim().is_empty())
-            .ok_or_else(|| {
-                ModelDiscoveryError::invalid_response(
-                    "MiniMax model discovery reported `has_more=true` without a `last_id` cursor.",
-                )
-            })?;
-        after_id = Some(register_pagination_cursor(
-            &mut seen_cursors,
-            next_cursor,
-            "MiniMax model discovery",
-        )?);
-    }
-    Ok(build_minimax_model_catalog(
-        connection.id.as_str(),
-        generation,
-        models,
-        page_count,
-    ))
 }
 
 /// Builds an explicit unsupported usage snapshot.
@@ -2446,7 +2760,7 @@ fn current_unix_milliseconds() -> Option<String> {
 fn controlled_error_summary(body: &str, sensitive_value: &str) -> String {
     // payload accepts only structured JSON before any provider text may enter a public diagnostic.
     // payload 只接受结构化 JSON，之后供应商文本才可能进入公开诊断。
-    let Ok(payload) = serde_json::from_str::<Value>(body) else {
+    let Ok(payload) = parse_provider_metadata_json::<Value>(body, "Provider error response") else {
         return String::from("Provider returned an unstructured error response; body omitted.");
     };
     // diagnostics preserves only the explicitly registered common error fields in stable order.
@@ -3033,8 +3347,9 @@ mod tests {
     use super::{
         HttpProviderMetadataClient, MiniMaxQuotaModelRemain, ModelDiscoveryFailureKind,
         ProviderMetadataClient, append_bounded_model_discovery_chunk,
-        append_unique_discovered_models, controlled_error_summary, decode_deepseek_balance,
-        decode_kimi_coding_plan_usage, minimax_key_profile_id, minimax_quota_windows,
+        append_unique_discovered_models, build_manifest_static_catalog, controlled_error_summary,
+        decode_deepseek_balance, decode_kimi_coding_plan_usage, default_discovery_path,
+        manifest_protocol_authorizes_model_variant, minimax_key_profile_id, minimax_quota_windows,
         register_pagination_cursor, resolve_minimax_region, subtract_non_negative_decimal,
         tavily_usage_window, validate_discovered_catalog_bounds, validate_pagination_boundary,
     };
@@ -3042,7 +3357,7 @@ mod tests {
         ConnectionModel, ConnectionModelCatalog, CredentialConnection, CredentialMode,
         CredentialSecretEnvelope, CustomProviderAuthentication, CustomProviderDefinition,
         CustomProviderModelDiscoveryMode, CustomProviderProtocol, ModelCapabilityEvidence,
-        PROVIDER_MODEL_IDENTIFIER_MAX_BYTES,
+        ModelDiscoveryKind, PROVIDER_MODEL_IDENTIFIER_MAX_BYTES,
     };
     use std::collections::{BTreeMap, BTreeSet};
     use tokio::{
@@ -3052,7 +3367,9 @@ mod tests {
         task::JoinHandle,
     };
     use vulcan_ai_contract::ModelCapabilities;
-    use vulcan_ai_protocols::{ANTHROPIC_MESSAGES_PROFILE_ID, OPENAI_CHAT_PROFILE_ID};
+    use vulcan_ai_protocols::{
+        ANTHROPIC_MESSAGES_PROFILE_ID, OPENAI_CHAT_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID,
+    };
 
     /// Starts one local HTTP fixture that captures the request and returns one JSON response.
     /// 启动一个本地 HTTP 夹具，捕获请求并返回一项 JSON 响应。
@@ -3195,10 +3512,13 @@ mod tests {
             id: provider_id.to_string(),
             display_name: String::from("Local Fixture"),
             base_url: base_url.to_string(),
-            protocol: CustomProviderProtocol::OpenAiChat,
+            protocol: Some(CustomProviderProtocol::OpenAiChat),
             authentication: CustomProviderAuthentication::BearerAuthorization,
             model_discovery_mode: CustomProviderModelDiscoveryMode::Standard,
             model_discovery_path: None,
+            protocols: Vec::new(),
+            protocol_routes: Vec::new(),
+            request_headers: BTreeMap::new(),
         }
         .into_descriptor()
         .expect("custom provider fixture should project");
@@ -3242,7 +3562,7 @@ mod tests {
             id: provider_id.to_string(),
             display_name: String::from("Local Anthropic Fixture"),
             base_url: base_url.to_string(),
-            protocol: CustomProviderProtocol::AnthropicMessages,
+            protocol: Some(CustomProviderProtocol::AnthropicMessages),
             authentication: CustomProviderAuthentication::XApiKey,
             model_discovery_mode: if model_discovery_path.is_some() {
                 CustomProviderModelDiscoveryMode::CustomPath
@@ -3250,6 +3570,9 @@ mod tests {
                 CustomProviderModelDiscoveryMode::Standard
             },
             model_discovery_path: model_discovery_path.map(str::to_string),
+            protocols: Vec::new(),
+            protocol_routes: Vec::new(),
+            request_headers: BTreeMap::new(),
         }
         .into_descriptor()
         .expect("custom Anthropic provider fixture should project");
@@ -3306,7 +3629,7 @@ mod tests {
             .execution_secret()
             .expect("test execution secret");
         let result = HttpProviderMetadataClient::new(reqwest::Client::new())
-            .discover_models(&provider, entry, &connection, &secret, 1)
+            .discover_models(&provider, entry, &connection, &secret, None, 1)
             .await;
         let requests = request_receiver
             .await
@@ -3325,6 +3648,8 @@ mod tests {
             display_name: model_id.to_string(),
             capabilities: ModelCapabilities::default(),
             capability_evidence: ModelCapabilityEvidence::default(),
+            protocol_variants: BTreeMap::new(),
+            resolved_protocol_binding: None,
         }
     }
 
@@ -3403,12 +3728,16 @@ mod tests {
                     display_name: String::from("One"),
                     capabilities: ModelCapabilities::default(),
                     capability_evidence: ModelCapabilityEvidence::default(),
+                    protocol_variants: BTreeMap::new(),
+                    resolved_protocol_binding: None,
                 },
                 ConnectionModel {
                     id: String::from("same"),
                     display_name: String::from("Two"),
                     capabilities: ModelCapabilities::default(),
                     capability_evidence: ModelCapabilityEvidence::default(),
+                    protocol_variants: BTreeMap::new(),
+                    resolved_protocol_binding: None,
                 },
             ],
             generation: 1,
@@ -3430,6 +3759,8 @@ mod tests {
                 display_name: String::from("Model"),
                 capabilities: ModelCapabilities::default(),
                 capability_evidence: ModelCapabilityEvidence::default(),
+                protocol_variants: BTreeMap::new(),
+                resolved_protocol_binding: None,
             }],
             generation: 1,
             page_count: 1,
@@ -3540,7 +3871,7 @@ mod tests {
         // catalog is the completed one-page discovery result.
         // catalog 是已完成的单页发现结果。
         let catalog = HttpProviderMetadataClient::new(reqwest::Client::new())
-            .discover_models(&provider, entry, &connection, &secret, 1)
+            .discover_models(&provider, entry, &connection, &secret, None, 1)
             .await
             .expect("custom Anthropic discovery should honor the configured path");
         // requests contains every HTTP request observed by the bounded fixture.
@@ -3647,7 +3978,7 @@ mod tests {
         let client = HttpProviderMetadataClient::new(reqwest::Client::new());
 
         let catalog = client
-            .discover_models(&provider, entry, &connection, &secret, 7)
+            .discover_models(&provider, entry, &connection, &secret, None, 7)
             .await
             .expect("custom model discovery should succeed");
         let request = request_receiver
@@ -3690,7 +4021,7 @@ mod tests {
         let client = HttpProviderMetadataClient::new(reqwest::Client::new());
 
         let error = client
-            .discover_models(&provider, entry, &connection, &secret, 1)
+            .discover_models(&provider, entry, &connection, &secret, None, 1)
             .await
             .expect_err("authentication failure must reject discovery");
         server_task.await.expect("metadata fixture should finish");
@@ -3744,7 +4075,7 @@ mod tests {
                 .execution_secret()
                 .expect("test execution secret");
             let error = HttpProviderMetadataClient::new(reqwest::Client::new())
-                .discover_models(&provider, entry, &connection, &secret, 1)
+                .discover_models(&provider, entry, &connection, &secret, None, 1)
                 .await
                 .expect_err("non-success status must reject discovery");
             server_task.await.expect("metadata fixture should finish");
@@ -3778,6 +4109,7 @@ mod tests {
                 invalid_entry,
                 &invalid_connection,
                 &secret,
+                None,
                 1,
             )
             .await
@@ -3798,7 +4130,14 @@ mod tests {
             .first()
             .expect("custom provider entry");
         let catalog = client
-            .discover_models(&empty_provider, empty_entry, &empty_connection, &secret, 2)
+            .discover_models(
+                &empty_provider,
+                empty_entry,
+                &empty_connection,
+                &secret,
+                None,
+                2,
+            )
             .await
             .expect("empty catalog is a successful observed state");
         empty_server
@@ -3830,7 +4169,7 @@ mod tests {
             .execution_secret()
             .expect("test execution secret");
         let error = HttpProviderMetadataClient::new(reqwest::Client::new())
-            .discover_models(&provider, entry, &connection, &secret, 1)
+            .discover_models(&provider, entry, &connection, &secret, None, 1)
             .await
             .expect_err("closed endpoint must reject discovery");
 
@@ -4049,5 +4388,478 @@ mod tests {
         assert!(window.unlimited);
         assert!(window.total.is_none());
         assert!(window.remaining.is_none());
+    }
+
+    /// Verifies multi-protocol discovery groups identical discovery signatures into one request
+    /// set and fills per-protocol model variants on every merged model.
+    /// 验证多协议发现把相同发现签名分组为一次请求集合，并为每个合并模型填充按协议变体。
+    #[tokio::test]
+    async fn multi_protocol_discovery_merges_shared_signature_into_per_protocol_variants() {
+        let registry = crate::ProviderRegistry::first_batch().expect("provider registry");
+        let provider = registry
+            .provider("openrouter")
+            .cloned()
+            .expect("openrouter provider must register");
+        let mut entry = provider
+            .service_entries
+            .iter()
+            .find(|entry| entry.id == "public-api")
+            .expect("openrouter public-api entry must exist")
+            .clone();
+        let routes = entry
+            .protocol_routes
+            .iter()
+            .filter(|route| route.verified)
+            .map(|route| route.protocol_profile_id.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            routes.len(),
+            3,
+            "openrouter public entry exposes three verified routes"
+        );
+
+        let model_json = r#"{"data":[{"id":"openai/gpt-5.6-sol","name":"OpenAI: GPT-5.6 Sol","context_length":1050000,"supported_parameters":["tools"],"architecture":{"input_modalities":["text","image"],"output_modalities":["text"]},"top_provider":{"max_completion_tokens":128000}}]}"#;
+        let (origin, request_receiver, server_task) = start_metadata_sequence_fixture(vec![
+            ("200 OK", model_json),
+            ("200 OK", r#"{"data":[]}"#),
+            ("200 OK", model_json),
+        ])
+        .await;
+        entry.base_url = origin;
+
+        let connection = CredentialConnection {
+            id: String::from("openrouter-account"),
+            provider_id: String::from("openrouter"),
+            service_entry_id: String::from("public-api"),
+            credential_profile_id: String::from("api-key"),
+            credential_mode: CredentialMode::Token,
+            credential_id: String::from("credential"),
+            display_name: String::from("Account"),
+            secret_reference: String::from("secret"),
+            management_secret_reference: None,
+            service_origin_override: None,
+            verified_protocols: routes.iter().cloned().collect(),
+            selected_protocol: OPENAI_CHAT_PROFILE_ID.to_string(),
+            prompt_cache_by_protocol: BTreeMap::new(),
+            usage_scope_override: None,
+        };
+        let secret = CredentialSecretEnvelope::new_api_key(String::from("test-key"))
+            .expect("test credential envelope")
+            .execution_secret()
+            .expect("test execution secret");
+
+        let catalog = HttpProviderMetadataClient::new(reqwest::Client::new())
+            .discover_models(&provider, &entry, &connection, &secret, None, 7)
+            .await
+            .expect("multi-protocol discovery should merge shared-signature routes");
+        let requests = request_receiver
+            .await
+            .expect("sequence fixture should publish requests");
+        server_task.await.expect("sequence fixture should finish");
+
+        // Three identical-signature routes share exactly one discovery set (three OpenRouter
+        // catalog requests), never one request set per protocol.
+        // 三条相同签名路由恰好共享一次发现集合（三个 OpenRouter 目录请求），绝不按协议各发一次。
+        assert_eq!(
+            requests.len(),
+            3,
+            "shared signature must discover exactly once"
+        );
+
+        let model = catalog
+            .models
+            .iter()
+            .find(|model| model.id == "openai/gpt-5.6-sol")
+            .expect("merged model must exist");
+        assert_eq!(model.protocol_variants.len(), 3);
+        for route in &routes {
+            let variant = model
+                .protocol_variants
+                .get(route)
+                .unwrap_or_else(|| panic!("missing protocol variant for `{route}`"));
+            assert_eq!(variant.catalog_generation, 7);
+            assert_eq!(
+                variant.capabilities.context_limit,
+                Some(1_050_000),
+                "variant must carry the discovered capability for `{route}`"
+            );
+        }
+        // Identical signature means every variant shares one signature hash.
+        // 相同签名意味着每个变体共享一个签名哈希。
+        let signatures = model
+            .protocol_variants
+            .values()
+            .map(|variant| variant.discovery_signature.clone())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            signatures.len(),
+            1,
+            "shared signature group must share one hash"
+        );
+    }
+
+    /// Verifies discovery excludes service routes that the exact credential has not verified.
+    /// 验证发现过程会排除当前精确凭据尚未验证的服务路由。
+    #[tokio::test]
+    async fn discovery_projects_only_credential_verified_protocol_variants() {
+        // registry supplies the signed multi-protocol OpenRouter entry.
+        // registry 提供已签名的多协议 OpenRouter 入口。
+        let registry = crate::ProviderRegistry::first_batch().expect("provider registry");
+        let provider = registry
+            .provider("openrouter")
+            .cloned()
+            .expect("openrouter provider must register");
+        // entry is isolated so its origin can point at the bounded local fixture.
+        // entry 被隔离，以便把服务源指向有界本地夹具。
+        let mut entry = provider
+            .service_entries
+            .iter()
+            .find(|entry| entry.id == "public-api")
+            .expect("openrouter public-api entry must exist")
+            .clone();
+        // modelJson is the one credential-visible model returned by both required catalog calls.
+        // modelJson 是所需目录调用共同返回的唯一凭据可见模型。
+        let model_json = r#"{"data":[{"id":"openai/gpt-5.6-sol","name":"OpenAI: GPT-5.6 Sol","context_length":1050000,"supported_parameters":["tools"],"architecture":{"input_modalities":["text"],"output_modalities":["text"]},"top_provider":{"max_completion_tokens":128000}}]}"#;
+        // fixture serves exactly one shared OpenRouter discovery request set.
+        // fixture 恰好提供一组共享 OpenRouter 发现请求。
+        let (origin, request_receiver, server_task) = start_metadata_sequence_fixture(vec![
+            ("200 OK", model_json),
+            ("200 OK", r#"{"data":[]}"#),
+            ("200 OK", model_json),
+        ])
+        .await;
+        entry.base_url = origin;
+        // connection verifies only Responses even though the service entry exposes three routes.
+        // connection 只验证 Responses，尽管服务入口公开了三条路由。
+        let connection = CredentialConnection {
+            id: String::from("openrouter-responses-only-account"),
+            provider_id: String::from("openrouter"),
+            service_entry_id: String::from("public-api"),
+            credential_profile_id: String::from("api-key"),
+            credential_mode: CredentialMode::Token,
+            credential_id: String::from("credential"),
+            display_name: String::from("Responses-only account"),
+            secret_reference: String::from("secret"),
+            management_secret_reference: None,
+            service_origin_override: None,
+            verified_protocols: BTreeSet::from([String::from(OPENAI_RESPONSES_PROFILE_ID)]),
+            selected_protocol: OPENAI_RESPONSES_PROFILE_ID.to_string(),
+            prompt_cache_by_protocol: BTreeMap::new(),
+            usage_scope_override: None,
+        };
+        // secret is confined to the local fixture request boundary.
+        // secret 被限制在本地夹具请求边界内。
+        let secret = CredentialSecretEnvelope::new_api_key(String::from("test-key"))
+            .expect("test credential envelope")
+            .execution_secret()
+            .expect("test execution secret");
+
+        // catalog must contain no variant for an account-unverified protocol.
+        // catalog 不得包含当前账号未验证协议的任何变体。
+        let catalog = HttpProviderMetadataClient::new(reqwest::Client::new())
+            .discover_models(&provider, &entry, &connection, &secret, None, 8)
+            .await
+            .expect("credential-scoped discovery should succeed");
+        let requests = request_receiver
+            .await
+            .expect("sequence fixture should publish requests");
+        server_task.await.expect("sequence fixture should finish");
+        assert_eq!(requests.len(), 3);
+        let model = catalog
+            .models
+            .iter()
+            .find(|model| model.id == "openai/gpt-5.6-sol")
+            .expect("credential-visible model should exist");
+        assert_eq!(
+            model.protocol_variants.keys().cloned().collect::<Vec<_>>(),
+            vec![String::from(OPENAI_RESPONSES_PROFILE_ID)],
+        );
+    }
+
+    /// Verifies signed supported sets, not route enumeration, authorize discovered variants.
+    /// 验证发现变体由签名支持集合授权，而不是由路由枚举授权。
+    #[test]
+    fn manifest_variant_authorization_is_model_and_policy_scoped() {
+        let manifests = crate::provider_manifest::load_bundled_resolved_catalog();
+        let deepseek = manifests
+            .manifest("deepseek")
+            .expect("DeepSeek manifest must exist");
+        assert!(manifest_protocol_authorizes_model_variant(
+            deepseek,
+            "official-api",
+            "api-key",
+            ANTHROPIC_MESSAGES_PROFILE_ID,
+            "deepseek-v4-pro",
+        ));
+        assert!(!manifest_protocol_authorizes_model_variant(
+            deepseek,
+            "official-api",
+            "api-key",
+            OPENAI_RESPONSES_PROFILE_ID,
+            "deepseek-v4-pro",
+        ));
+
+        let openrouter = manifests
+            .manifest("openrouter")
+            .expect("OpenRouter manifest must exist");
+        assert!(!manifest_protocol_authorizes_model_variant(
+            openrouter,
+            "public-api",
+            "api-key",
+            OPENAI_CHAT_PROFILE_ID,
+            "vendor/unmapped-model",
+        ));
+    }
+
+    /// Verifies distinct discovery signatures discover separately and merge per model identity
+    /// with per-protocol variants carrying their own signatures.
+    /// 验证不同发现签名分别发现并按模型身份合并，按协议变体携带各自签名。
+    #[tokio::test]
+    async fn multi_protocol_discovery_merges_distinct_signatures_separately() {
+        let registry = crate::ProviderRegistry::first_batch().expect("provider registry");
+        let provider = registry
+            .provider("openrouter")
+            .cloned()
+            .expect("openrouter provider must register");
+        let mut entry = provider
+            .service_entries
+            .iter()
+            .find(|entry| entry.id == "public-api")
+            .expect("openrouter public-api entry must exist")
+            .clone();
+        // Split one route onto a distinct discovery signature (OpenAI kind, separate origin).
+        // 把一条路由拆分为不同发现签名（OpenAI 契约、独立源地址）。
+        let model_json = r#"{"data":[{"id":"openai/gpt-5.6-sol","name":"OpenAI: GPT-5.6 Sol","context_length":1050000,"supported_parameters":["tools"],"architecture":{"input_modalities":["text","image"],"output_modalities":["text"]},"top_provider":{"max_completion_tokens":128000}}]}"#;
+        let (openrouter_origin, or_receiver, or_task) = start_metadata_sequence_fixture(vec![
+            ("200 OK", model_json),
+            ("200 OK", r#"{"data":[]}"#),
+            ("200 OK", model_json),
+        ])
+        .await;
+        let (openai_origin, openai_receiver, openai_task) =
+            start_metadata_sequence_fixture(vec![("200 OK", model_json)]).await;
+        entry.base_url = openrouter_origin.clone();
+        let responses_route = entry
+            .protocol_routes
+            .iter_mut()
+            .find(|route| route.protocol_profile_id == "openai-responses.v1")
+            .expect("responses route must exist");
+        responses_route.model_discovery = Some(crate::ModelDiscoveryKind::OpenAi);
+        responses_route.model_discovery_path = Some(String::from("/models"));
+        responses_route.base_url_override = Some(openai_origin.clone());
+
+        let routes = entry
+            .protocol_routes
+            .iter()
+            .filter(|route| route.verified)
+            .map(|route| route.protocol_profile_id.clone())
+            .collect::<Vec<_>>();
+        let connection = CredentialConnection {
+            id: String::from("openrouter-account"),
+            provider_id: String::from("openrouter"),
+            service_entry_id: String::from("public-api"),
+            credential_profile_id: String::from("api-key"),
+            credential_mode: CredentialMode::Token,
+            credential_id: String::from("credential"),
+            display_name: String::from("Account"),
+            secret_reference: String::from("secret"),
+            management_secret_reference: None,
+            service_origin_override: None,
+            verified_protocols: routes.iter().cloned().collect(),
+            selected_protocol: OPENAI_CHAT_PROFILE_ID.to_string(),
+            prompt_cache_by_protocol: BTreeMap::new(),
+            usage_scope_override: None,
+        };
+        let secret = CredentialSecretEnvelope::new_api_key(String::from("test-key"))
+            .expect("test credential envelope")
+            .execution_secret()
+            .expect("test execution secret");
+
+        let catalog = HttpProviderMetadataClient::new(reqwest::Client::new())
+            .discover_models(&provider, &entry, &connection, &secret, None, 9)
+            .await
+            .expect("distinct signatures should discover separately and merge");
+        let or_requests = or_receiver.await.expect("openrouter fixture requests");
+        or_task.await.expect("openrouter fixture should finish");
+        let openai_requests = openai_receiver.await.expect("openai fixture requests");
+        openai_task.await.expect("openai fixture should finish");
+        assert_eq!(or_requests.len(), 3);
+        assert_eq!(openai_requests.len(), 1);
+
+        let model = catalog
+            .models
+            .iter()
+            .find(|model| model.id == "openai/gpt-5.6-sol")
+            .expect("merged model must exist");
+        assert_eq!(model.protocol_variants.len(), 3);
+        // Distinct signatures keep distinct signature hashes on the variants.
+        // 不同签名在变体上保留不同签名哈希。
+        let signatures = model
+            .protocol_variants
+            .values()
+            .map(|variant| variant.discovery_signature.clone())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            signatures.len(),
+            2,
+            "two discovery groups must keep two signatures"
+        );
+    }
+
+    /// Verifies a published manifest inventory can add and remove static models without code changes.
+    /// 验证已发布 Manifest 清单可在不修改代码的情况下增删静态模型。
+    #[test]
+    fn authoritative_manifest_inventory_replaces_static_catalog_membership() {
+        let catalog = crate::provider_manifest::load_bundled_resolved_catalog();
+        let mut manifest = catalog
+            .manifest_arc("alibaba")
+            .expect("Alibaba manifest must exist")
+            .as_ref()
+            .clone();
+        manifest.catalog_models.insert(
+            String::from("coding-plan-cn"),
+            vec![crate::provider_manifest::ManifestCatalogModel {
+                model_id: String::from("future-model-from-json"),
+                display_name: String::from("Future Model From JSON"),
+            }],
+        );
+        let static_catalog =
+            build_manifest_static_catalog(Some(&manifest), "connection", "coding-plan-cn", 7)
+                .expect("manifest static catalog must build");
+
+        assert_eq!(static_catalog.models.len(), 1);
+        assert_eq!(static_catalog.models[0].id, "future-model-from-json");
+        assert_eq!(
+            static_catalog.models[0].display_name,
+            "Future Model From JSON"
+        );
+        assert_eq!(
+            static_catalog.discovery_schema_revision,
+            "provider-manifest.static-models.v1"
+        );
+        assert_eq!(
+            static_catalog.models[0].capabilities,
+            ModelCapabilities::default(),
+            "static discovery must not preserve code-owned capability seeds"
+        );
+    }
+
+    /// Verifies manifest-static discovery fails closed without exact snapshot authority.
+    /// 验证 Manifest 静态发现缺少精确快照权威时封闭失败。
+    #[test]
+    fn manifest_static_catalog_requires_snapshot_and_service_inventory() {
+        // missing_manifest_error proves a system static route cannot silently use binary defaults.
+        // missing_manifest_error 证明系统静态路由不能静默使用二进制默认值。
+        let missing_manifest_error =
+            build_manifest_static_catalog(None, "connection", "coding-plan-cn", 7)
+                .expect_err("missing manifest must fail closed");
+        assert_eq!(
+            missing_manifest_error.kind,
+            ModelDiscoveryFailureKind::Failed
+        );
+
+        // manifest_without_inventory removes the exact entry while preserving all other facts.
+        // manifest_without_inventory 在保留其他事实的同时移除精确入口清单。
+        let catalog = crate::provider_manifest::load_bundled_resolved_catalog();
+        let mut manifest_without_inventory = catalog
+            .manifest_arc("alibaba")
+            .expect("Alibaba manifest must exist")
+            .as_ref()
+            .clone();
+        manifest_without_inventory
+            .catalog_models
+            .remove("coding-plan-cn");
+        // missing_inventory_error proves another entry cannot supply guessed identities.
+        // missing_inventory_error 证明其他入口不能提供猜测身份。
+        let missing_inventory_error = build_manifest_static_catalog(
+            Some(&manifest_without_inventory),
+            "connection",
+            "coding-plan-cn",
+            7,
+        )
+        .expect_err("missing exact service inventory must fail closed");
+        assert_eq!(
+            missing_inventory_error.kind,
+            ModelDiscoveryFailureKind::Failed
+        );
+    }
+
+    /// Verifies MiniMax model discovery is expressed only through provider-neutral manifest rules.
+    /// 验证 MiniMax 模型发现仅通过供应商无关的 Manifest 规则表达。
+    #[test]
+    fn minimax_model_discovery_uses_generic_manifest_contracts() {
+        // catalog is the exact bundled snapshot shipped to the runtime.
+        // catalog 是交付给运行时的精确内置快照。
+        let catalog = crate::provider_manifest::load_bundled_resolved_catalog();
+        // manifest freezes the reviewed MiniMax service and protocol-route declarations.
+        // manifest 冻结已审核的 MiniMax 服务与协议路由声明。
+        let manifest = catalog
+            .manifest_arc("minimax")
+            .expect("MiniMax manifest must exist");
+        assert_eq!(manifest.revision, 10);
+        // expectations bind each region to its exact reviewed discovery origins.
+        // expectations 把每个地区绑定到其精确已审核发现来源。
+        let expectations = [
+            (
+                "global",
+                "https://api.minimax.io/anthropic/v1/models",
+                "https://api.minimax.io/v1/models",
+            ),
+            (
+                "cn",
+                "https://api.minimaxi.com/anthropic/v1/models",
+                "https://api.minimaxi.com/v1/models",
+            ),
+        ];
+        for (service_entry_id, anthropic_url, openai_url) in expectations {
+            // entry is the unique service entry for the reviewed region.
+            // entry 是已审核地区的唯一服务入口。
+            let entry = manifest
+                .descriptor
+                .service_entries
+                .iter()
+                .find(|entry| entry.id == service_entry_id)
+                .expect("MiniMax service entry must exist");
+            assert_eq!(
+                entry.model_discovery,
+                ModelDiscoveryKind::AnthropicCompatible
+            );
+            // anthropic_route owns the provider-neutral compatible discovery declaration.
+            // anthropic_route 持有供应商无关的兼容发现声明。
+            let anthropic_route = entry
+                .protocol_routes
+                .iter()
+                .find(|route| route.protocol_profile_id == ANTHROPIC_MESSAGES_PROFILE_ID)
+                .expect("MiniMax Anthropic route must exist");
+            assert_eq!(
+                anthropic_route.resolved_model_discovery(entry.model_discovery),
+                ModelDiscoveryKind::AnthropicCompatible
+            );
+            assert_eq!(
+                anthropic_route.model_discovery_url(
+                    entry,
+                    default_discovery_path(ModelDiscoveryKind::AnthropicCompatible),
+                ),
+                anthropic_url
+            );
+            // openai_route owns the generic OpenAI discovery override for the same service.
+            // openai_route 持有同一服务的通用 OpenAI 发现覆盖。
+            let openai_route = entry
+                .protocol_routes
+                .iter()
+                .find(|route| route.protocol_profile_id == OPENAI_CHAT_PROFILE_ID)
+                .expect("MiniMax OpenAI route must exist");
+            assert_eq!(
+                openai_route.resolved_model_discovery(entry.model_discovery),
+                ModelDiscoveryKind::OpenAi
+            );
+            assert_eq!(
+                openai_route.model_discovery_url(
+                    entry,
+                    default_discovery_path(ModelDiscoveryKind::OpenAi),
+                ),
+                openai_url
+            );
+        }
     }
 }

@@ -110,9 +110,23 @@ pub struct ProviderPromotion {
     pub disclosure_key: ProviderPromotionDisclosureKey,
 }
 
+/// Identifies one closed credential-onboarding primitive selected by a provider manifest.
+/// 标识由供应商清单选择的封闭凭据接入原语。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CredentialRegistrationKind {
+    /// Persists the submitted credential against the explicitly selected service entry.
+    /// 把提交的凭据持久化到显式选择的服务入口。
+    #[default]
+    Direct,
+    /// Resolves a MiniMax API key to its authoritative regional service entry before persistence.
+    /// 在持久化前把 MiniMax API Key 解析到其权威区域服务入口。
+    MiniMaxRegionalApiKey,
+}
+
 /// Describes one registered provider adapter.
 /// 描述一个已注册供应商适配器。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProviderDescriptor {
     /// Stable provider identifier.
     /// 稳定供应商标识。
@@ -131,6 +145,10 @@ pub struct ProviderDescriptor {
     /// 凭据目录可见性策略。
     #[serde(default)]
     pub credential_directory_visibility: CredentialDirectoryVisibility,
+    /// Closed credential registration primitive selected by the manifest.
+    /// 由清单选择的封闭凭据注册原语。
+    #[serde(default)]
+    pub credential_registration: CredentialRegistrationKind,
     /// Optional public registration and referral metadata.
     /// 可选的公开注册与推广元数据。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -149,30 +167,121 @@ pub struct ProviderRegistry {
     providers: BTreeMap<String, ProviderDescriptor>,
 }
 
+/// Providers that must stay on the legacy descriptor path until their external facts land.
+/// 外部事实到齐前必须停留在旧描述路径的供应商。
+///
+/// APIKEY.FUN stays legacy until the user provides the model-to-protocol mapping (plan stage
+/// 13); cutting over would disable every currently usable model under the zero-guess rule.
+/// APIKEY.FUN 在用户提供模型-协议映射前保持旧路径（方案阶段 13）；
+/// 在零猜测规则下切换会让当前全部可用模型停用。
+const LEGACY_FALLBACK_PROVIDERS: &[&str] = &["apikeyfun"];
+
+/// Reports whether one provider id is on the explicit legacy-fallback allowlist.
+/// 报告一个供应商标识是否位于显式旧版回退允许名单。
+///
+/// Only providers on this allowlist may resolve through the old connection protocol when
+/// their manifest is missing or invalid; every other cut-over system provider must fail
+/// closed so the system resolver never reads the legacy connection protocol.
+/// 只有本允许名单内的供应商在 Manifest 缺失或无效时可以走旧连接协议解析；
+/// 其余已切换的系统供应商必须失败封闭，使系统解析器绝不读取旧连接协议。
+pub fn is_legacy_fallback_provider(provider_id: &str) -> bool {
+    LEGACY_FALLBACK_PROVIDERS.contains(&provider_id)
+}
+
 impl ProviderRegistry {
-    /// Builds the enabled public-provider registry.
-    /// 构建已启用公共供应商注册表。
+    /// Builds the enabled public-provider registry from the single authoritative catalog.
+    /// 从唯一权威目录构建已启用公共供应商注册表。
+    ///
+    /// The catalog is compiled exactly once by the runtime and shared with binding,
+    /// discovery, and execution; the registry derives from it instead of re-loading and
+    /// re-compiling the bundled files (plan §17.6). Providers on the legacy fallback
+    /// allowlist keep their code-owned descriptor; any other missing or invalid manifest
+    /// fails closed so the system resolver never guesses a protocol (plan §13.1).
+    /// 目录由运行时恰好编译一次，并与绑定、发现、执行共享；注册表从目录派生，而不是
+    /// 重新加载并重新编译内置文件（方案 §17.6）。旧版回退允许名单内的供应商保留代码持有
+    /// 描述；其余供应商的清单缺失或无效时失败封闭，使系统解析器绝不猜测协议（方案 §13.1）。
     ///
     /// # Returns
     /// 返回值
     /// A strict registry containing every currently implemented provider.
     /// 返回包含每个当前已实现供应商的严格注册表。
     pub fn first_batch() -> Result<Self, String> {
+        Self::from_catalog(&crate::provider_manifest::try_load_bundled_resolved_catalog()?)
+    }
+
+    /// Builds the registry from one compiled resolved-provider catalog.
+    /// 从一份已编译的已解析供应商目录构建注册表。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `catalog` is the single authoritative compiled manifest set.
+    /// `catalog` 是唯一权威的已编译清单集合。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A strict registry; missing non-allowlist manifests fail closed.
+    /// 返回严格注册表；允许名单之外清单缺失时失败封闭。
+    pub fn from_catalog(
+        catalog: &crate::provider_manifest::ResolvedProviderCatalog,
+    ) -> Result<Self, String> {
         let mut registry = Self::default();
-        registry.register(crate::providers::minimax_descriptor())?;
-        registry.register(crate::providers::kimi_descriptor())?;
-        registry.register(crate::providers::deepseek_descriptor())?;
-        registry.register(crate::providers::alibaba_descriptor())?;
-        registry.register(crate::providers::openrouter_descriptor())?;
-        registry.register(crate::providers::apikeyfun_descriptor())?;
-        registry.register(crate::providers::claudeapi_descriptor())?;
-        registry.register(crate::providers::qiniu_descriptor())?;
-        registry.register(crate::providers::fennoai_descriptor())?;
-        registry.register(crate::providers::code0_descriptor())?;
-        registry.register(crate::providers::tavily_descriptor())?;
-        registry.register(crate::providers::openai_descriptor())?;
-        registry.register(crate::providers::anthropic_descriptor())?;
-        registry.register(crate::providers::google_descriptor())?;
+        // The explicit compatibility allowlist is registered first because APIKEY.FUN must
+        // remain usable even when its placeholder manifest is absent. No other provider may
+        // enter through this code-owned path.
+        // 先注册显式兼容允许名单，因为即使 APIKEY.FUN 的占位清单缺失也必须保持可用；
+        // 其他任何供应商都不得通过这条代码持有路径进入注册表。
+        for provider_id in LEGACY_FALLBACK_PROVIDERS {
+            registry.register(legacy_descriptor_by_id(provider_id)?)?;
+        }
+
+        for (provider_id, resolved) in &catalog.manifests {
+            if resolved.descriptor.kind != ProviderKind::System {
+                continue;
+            }
+            if resolved.descriptor.id != *provider_id {
+                return Err(format!(
+                    "bundled manifest file `{provider_id}` declares provider `{}`",
+                    resolved.descriptor.id
+                ));
+            }
+            if is_legacy_fallback_provider(provider_id) {
+                continue;
+            }
+            registry.register(resolved.descriptor.clone())?;
+        }
+        Ok(registry)
+    }
+
+    /// Builds the registry from caller-provided bundled manifest texts.
+    /// 从调用方提供的内置清单文本构建注册表。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `manifests` maps provider ids to exact manifest JSON documents.
+    /// `manifests` 将供应商 ID 映射到精确清单 JSON 文档。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A registry built entirely from validated bundled manifests.
+    /// 返回完全由已验证内置清单构建的注册表。
+    pub fn from_bundled_manifests(
+        manifests: &std::collections::BTreeMap<String, String>,
+    ) -> Result<Self, String> {
+        let mut registry = Self::default();
+        for (provider_id, text) in manifests {
+            let resolved = crate::provider_manifest::compile_manifest_text(
+                text,
+                crate::provider_manifest::ManifestOwnership::System,
+            )
+            .map_err(|error| format!("bundled manifest for `{provider_id}` failed: {error}"))?;
+            if resolved.descriptor.id != *provider_id {
+                return Err(format!(
+                    "bundled manifest file `{provider_id}` declares provider `{}`",
+                    resolved.descriptor.id
+                ));
+            }
+            registry.register(resolved.descriptor)?;
+        }
         Ok(registry)
     }
 
@@ -191,7 +300,28 @@ impl ProviderRegistry {
     pub fn effective(
         custom_providers: &BTreeMap<String, ProviderDescriptor>,
     ) -> Result<Self, String> {
-        let mut registry = Self::first_batch()?;
+        Self::effective_from_system(Self::first_batch()?, custom_providers)
+    }
+
+    /// Builds the effective registry from one caller-provided system registry and custom providers.
+    /// 从调用方提供的系统注册表与自定义供应商构建有效注册表。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `system` is the system registry derived from the single authoritative catalog;
+    /// `custom_providers` contains user-owned compatibility descriptors keyed by their exact identifier.
+    /// `system` 是从唯一权威目录派生的系统注册表；`custom_providers` 包含按精确标识索引的
+    /// 用户自有兼容供应商描述。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A validated registry containing both ownership classes.
+    /// 返回包含两种所有权类别的已校验注册表。
+    pub fn effective_from_system(
+        system: Self,
+        custom_providers: &BTreeMap<String, ProviderDescriptor>,
+    ) -> Result<Self, String> {
+        let mut registry = system;
         for (provider_id, provider) in custom_providers {
             if provider_id != &provider.id {
                 return Err(format!(
@@ -235,7 +365,7 @@ impl ProviderRegistry {
             ));
         }
         validate_provider_promotion(&provider)?;
-        validate_request_projector_registration(&provider)?;
+        validate_provider_execution_scope(&provider)?;
         self.providers.insert(provider.id.clone(), provider);
         Ok(())
     }
@@ -268,8 +398,8 @@ impl ProviderRegistry {
     }
 }
 
-/// Verifies every provider entry references the one registered projector owned by its definition.
-/// 验证每个供应商入口引用其定义唯一持有的已注册投影器。
+/// Verifies custom providers cannot select system-only execution primitives.
+/// 验证自定义供应商不能选择仅供系统使用的执行原语。
 ///
 /// # Parameters
 /// 参数
@@ -278,32 +408,26 @@ impl ProviderRegistry {
 ///
 /// # Returns
 /// 返回值
-/// Success when every entry matches the closed projector registry.
-/// 每个入口匹配封闭投影器注册表时返回成功。
-fn validate_request_projector_registration(provider: &ProviderDescriptor) -> Result<(), String> {
-    let expected = match provider.kind {
-        ProviderKind::Custom => RequestProjectorKind::Direct,
-        ProviderKind::System => match provider.id.as_str() {
-            "minimax" => RequestProjectorKind::MiniMax,
-            "openrouter" => RequestProjectorKind::OpenRouter,
-            "kimi" => RequestProjectorKind::Kimi,
-            "deepseek" => RequestProjectorKind::DeepSeek,
-            "alibaba" => RequestProjectorKind::Alibaba,
-            "google" => RequestProjectorKind::Google,
-            "tavily" | "openai" | "anthropic" | "apikeyfun" | "claudeapi" | "qiniu" | "fennoai"
-            | "code0" => RequestProjectorKind::Direct,
-            provider_id => {
-                return Err(format!(
-                    "System provider `{provider_id}` has no registered request projector owner."
-                ));
-            }
-        },
-    };
-    for entry in &provider.service_entries {
-        if entry.request_projector != expected {
+/// Success when a custom provider uses direct credential registration and direct request projectors;
+/// system manifests may select any closed registered primitive and are constrained separately by
+/// manifest validation and trust ceilings.
+/// 自定义供应商使用直接凭据注册与直接请求投影器时成功；系统清单可选择任意封闭注册原语，
+/// 并由清单校验与信任上限另行约束。
+fn validate_provider_execution_scope(provider: &ProviderDescriptor) -> Result<(), String> {
+    if provider.kind == ProviderKind::Custom {
+        if provider.credential_registration != CredentialRegistrationKind::Direct {
             return Err(format!(
-                "Provider `{}` entry `{}` declares projector `{:?}` but registry owner is `{:?}`.",
-                provider.id, entry.id, entry.request_projector, expected
+                "Custom provider `{}` must use direct credential registration.",
+                provider.id
+            ));
+        }
+        for entry in &provider.service_entries {
+            if entry.request_projector == RequestProjectorKind::Direct {
+                continue;
+            }
+            return Err(format!(
+                "Custom provider `{}` entry `{}` must use the direct request projector.",
+                provider.id, entry.id
             ));
         }
     }
@@ -393,14 +517,34 @@ fn validate_public_provider_url(provider_id: &str, field: &str, value: &str) -> 
     Ok(())
 }
 
+/// Resolves one explicitly permitted legacy descriptor by provider id.
+/// 按供应商 ID 解析一个被显式允许的旧描述。
+///
+/// # Parameters
+/// 参数
+/// `provider_id` is the exact identifier on the legacy-fallback allowlist.
+/// `provider_id` 是旧版回退允许名单中的精确标识。
+///
+/// # Returns
+/// 返回值
+/// The compatibility descriptor, or an error for every non-allowlisted provider.
+/// 返回兼容描述；任何不在允许名单内的供应商都会返回错误。
+fn legacy_descriptor_by_id(provider_id: &str) -> Result<ProviderDescriptor, String> {
+    let descriptor = match provider_id {
+        "apikeyfun" => crate::providers::apikeyfun_descriptor(),
+        _ => return Err(format!("unknown legacy provider id `{provider_id}`")),
+    };
+    Ok(descriptor)
+}
+
 #[cfg(test)]
 mod tests {
-    //! Strict request-projector registration tests.
-    //! 严格请求投影器注册测试。
+    //! Strict provider execution-scope registration tests.
+    //! 严格供应商执行作用域注册测试。
 
     use super::{
-        CredentialDirectoryVisibility, ProviderCategory, ProviderPartnershipKind,
-        ProviderPromotionDisclosureKey, ProviderRegistry,
+        CredentialDirectoryVisibility, CredentialRegistrationKind, ProviderCategory,
+        ProviderPartnershipKind, ProviderPromotionDisclosureKey, ProviderRegistry,
     };
     use crate::{
         AccountUsageQueryKind, AuthenticationProjection, CustomProviderAuthentication,
@@ -409,17 +553,48 @@ mod tests {
     };
     use std::collections::BTreeMap;
 
-    /// Verifies a mismatched built-in projector is rejected before runtime dispatch.
-    /// 验证不匹配的内置投影器会在运行时分派前被拒绝。
+    /// Verifies a system descriptor may select any registered projector without a provider-id table.
+    /// 验证系统描述符无需供应商 ID 映射表即可选择任意已注册投影器。
     #[test]
-    fn rejects_mismatched_system_projector() {
-        let mut provider = crate::providers::minimax_descriptor();
-        provider.service_entries[0].request_projector = RequestProjectorKind::OpenRouter;
+    fn accepts_manifest_selected_system_projector() {
+        // provider is compiled from the authoritative bundled manifest before the projector mutation.
+        // provider 在投影器变更前从权威内置 Manifest 编译得到。
+        let mut provider = crate::provider_manifest::load_bundled_resolved_catalog()
+            .manifest("minimax")
+            .expect("bundled MiniMax manifest must exist")
+            .descriptor
+            .clone();
+        provider.service_entries[0].request_projector = RequestProjectorKind::RoutedCompatible;
         let mut registry = ProviderRegistry::default();
-        let error = registry
+        registry
             .register(provider)
-            .expect_err("mismatched projector must fail");
-        assert!(error.contains("registry owner"));
+            .expect("closed system projector should be manifest-selected");
+    }
+
+    /// Verifies persisted custom providers cannot activate a system credential-onboarding primitive.
+    /// 验证持久化自定义供应商不能激活系统凭据接入原语。
+    #[test]
+    fn rejects_system_credential_registration_for_custom_provider() {
+        let mut provider = crate::custom_provider::CustomProviderDefinition {
+            id: String::from("custom:credential-scope"),
+            display_name: String::from("Credential scope"),
+            base_url: String::from("https://example.com/v1"),
+            protocol: Some(crate::custom_provider::CustomProviderProtocol::OpenAiChat),
+            authentication:
+                crate::custom_provider::CustomProviderAuthentication::BearerAuthorization,
+            model_discovery_mode: crate::custom_provider::CustomProviderModelDiscoveryMode::Manual,
+            model_discovery_path: None,
+            protocols: Vec::new(),
+            protocol_routes: Vec::new(),
+            request_headers: BTreeMap::new(),
+        }
+        .into_descriptor()
+        .expect("custom provider fixture should compile");
+        provider.credential_registration = CredentialRegistrationKind::MiniMaxRegionalApiKey;
+
+        let error = ProviderRegistry::effective(&BTreeMap::from([(provider.id.clone(), provider)]))
+            .expect_err("custom provider must not activate a system onboarding primitive");
+        assert!(error.contains("direct credential registration"), "{error}");
     }
 
     /// Verifies effective-registry construction revalidates persisted custom-provider security.
@@ -430,10 +605,13 @@ mod tests {
             id: String::from("custom:tampered"),
             display_name: String::from("Tampered"),
             base_url: String::from("https://example.com/v1"),
-            protocol: CustomProviderProtocol::OpenAiChat,
+            protocol: Some(CustomProviderProtocol::OpenAiChat),
             authentication: CustomProviderAuthentication::BearerAuthorization,
             model_discovery_mode: CustomProviderModelDiscoveryMode::Standard,
             model_discovery_path: None,
+            protocols: Vec::new(),
+            protocol_routes: Vec::new(),
+            request_headers: BTreeMap::new(),
         }
         .into_descriptor()
         .expect("custom provider fixture should be valid");

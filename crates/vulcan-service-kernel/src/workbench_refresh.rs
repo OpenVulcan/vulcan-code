@@ -830,39 +830,16 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
     let public_ai_selection = public_ai_runtime
         .zip(public_ai_configuration.as_ref())
         .and_then(|(runtime, configuration)| {
-            selected_runtime_state
-                .and_then(|runtime_state| {
-                    runtime_state
-                        .active_provider_id
-                        .as_deref()
-                        .zip(runtime_state.active_connection_id.as_deref())
-                        .zip(runtime_state.active_model_id.as_deref())
-                })
-                .and_then(|((provider_id, connection_id), model_id)| {
-                    runtime
-                        .resolve_connection_model_selection(
-                            configuration,
-                            connection_id,
-                            provider_id,
-                            model_id,
-                        )
-                        .ok()
-                })
-                .or_else(|| {
-                    selected_runtime_state
-                        .and_then(|runtime_state| {
-                            runtime_state
-                                .active_provider_id
-                                .as_deref()
-                                .zip(runtime_state.active_model_id.as_deref())
-                        })
-                        .and_then(|(provider_id, model_id)| {
-                            runtime
-                                .resolve_model_selection(configuration, provider_id, model_id)
-                                .ok()
-                        })
-                })
-                .or_else(|| runtime.resolve_active_selection(configuration).ok())
+            // selectedLease is authoritative for this workbench owner until explicit reselection.
+            // selectedLease 对当前工作台所有者保持权威，直至显式重新选择。
+            public_ai_workbench_selection(
+                configuration,
+                runtime,
+                Some(workspace.selected_session),
+                selected_runtime_state,
+            )
+            .ok()
+            .flatten()
         });
     let bridged_image_understanding = public_ai_runtime
         .zip(public_ai_configuration.as_ref())

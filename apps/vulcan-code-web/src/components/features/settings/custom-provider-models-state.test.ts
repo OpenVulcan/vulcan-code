@@ -5,12 +5,14 @@ import {
   accountExposesModel,
   accountIncludesModel,
   buildCustomProviderModelRows,
+  mergeCustomModelProtocolPreferences,
   shouldBlockManualModelSubmission,
   shouldReplaceManualModelDrafts,
 } from "@/components/features/settings/custom-provider-models-state"
 import type {
   PublicAiConnection,
   PublicAiCustomModelDefinition,
+  PublicAiCustomModelProtocolPreference,
   PublicAiModel,
   PublicAiSettingsSnapshot,
 } from "@/types"
@@ -25,6 +27,7 @@ function connectionFixture(id: string, displayName: string): PublicAiConnection 
     credential_profile_id: "api-key",
     billing_kind: "pay_as_you_go",
     usage_capability: "unsupported",
+    usage_requires_management_key: false,
     has_management_key: false,
     credential_mode: "token",
     credential_id: `credential-${id}`,
@@ -125,6 +128,7 @@ function snapshotFixture(): PublicAiSettingsSnapshot {
     modelAccessRecords: [
       { providerId: "custom:test", modelId: "shared/chat", enabled: true, defaultEnabled: false },
     ],
+    providerToolTemplateModels: [],
     customModels: {
       "custom:test": { "manual/chat": manualModelFixture("manual/chat") },
     },
@@ -223,5 +227,38 @@ describe("custom provider model state", () => {
     expect(shouldBlockManualModelSubmission(false, true)).toBe(true)
     expect(shouldBlockManualModelSubmission(true, false)).toBe(true)
     expect(shouldBlockManualModelSubmission(false, false)).toBe(false)
+  })
+
+  // Preserves untouched model preferences when one card sends a provider-wide replacement.
+  // 当一个卡片发送供应商级替换时保留未编辑模型的偏好。
+  it("merges one protocol edit into the complete sparse provider preference set", () => {
+    const current = new Map<string, PublicAiCustomModelProtocolPreference>([
+      ["model-a", { mode: "explicit", protocol: "open_ai_responses" }],
+      ["model-b", { mode: "explicit", protocol: "anthropic_messages" } as const],
+      ["model-c", { mode: "auto" } as const],
+    ])
+
+    expect(mergeCustomModelProtocolPreferences(current, [{
+      modelId: "model-a",
+      preference: { mode: "auto" },
+    }])).toEqual([
+      {
+        modelId: "model-b",
+        preference: { mode: "explicit", protocol: "anthropic_messages" },
+      },
+    ])
+    expect(mergeCustomModelProtocolPreferences(current, [{
+      modelId: "model-b",
+      preference: { mode: "explicit", protocol: "gemini_generate_content" },
+    }])).toEqual([
+      {
+        modelId: "model-a",
+        preference: { mode: "explicit", protocol: "open_ai_responses" },
+      },
+      {
+        modelId: "model-b",
+        preference: { mode: "explicit", protocol: "gemini_generate_content" },
+      },
+    ])
   })
 })

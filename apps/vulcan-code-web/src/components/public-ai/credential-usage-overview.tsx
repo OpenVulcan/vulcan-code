@@ -25,15 +25,23 @@ export interface CredentialUsageOverviewProps {
   showQuotaSection?: boolean
 }
 
+// credentialUsageIsNonPlanAccount resolves account presentation from manifest-projected semantics.
+// credentialUsageIsNonPlanAccount 从 Manifest 投影语义解析账号展示方式。
+export function credentialUsageIsNonPlanAccount(
+  credentialProfile: PublicAiCredentialProfile | undefined,
+): boolean {
+  return credentialProfile?.account_usage_query === "deep_seek_balance"
+}
+
 // CredentialUsageOverview renders shared balance, plan, and quota presentation.
 // CredentialUsageOverview 渲染共享的余额、套餐与额度展示。
 export function CredentialUsageOverview(props: CredentialUsageOverviewProps) {
   // t resolves all account-usage copy in the active locale.
   // t 使用当前语言解析全部账号用量文案。
   const { t } = useI18n()
-  // nonPlanAccount identifies providers whose balance account does not represent a subscription plan.
-  // nonPlanAccount 标识余额账号不代表订阅套餐的供应商。
-  const nonPlanAccount = props.connection.provider_id === "deepseek"
+  // nonPlanAccount derives presentation semantics from the manifest-projected credential profile.
+  // nonPlanAccount 从 Manifest 投影的凭据配置档推导展示语义。
+  const nonPlanAccount = credentialUsageIsNonPlanAccount(props.credentialProfile)
   // planName prefers the provider-reported plan unless the provider explicitly has no plan concept.
   // planName 优先使用供应商报告的套餐，除非该供应商明确没有套餐概念。
   const planName = nonPlanAccount
@@ -70,7 +78,7 @@ export function CredentialUsageOverview(props: CredentialUsageOverviewProps) {
               <CredentialUsageSummary
                 credentialProfile={props.credentialProfile}
                 hasManagementKey={props.connection.has_management_key}
-                providerId={props.connection.provider_id}
+                usageRequiresManagementKey={props.connection.usage_requires_management_key}
                 usage={props.usage}
               />
             )}
@@ -101,6 +109,24 @@ export function usageCapabilitySupportsQuotaWindows(
     || capability === "kimi_coding_plan"
 }
 
+// usageCapabilityRequiresManagementKey returns whether one registered usage primitive needs a separate credential.
+// usageCapabilityRequiresManagementKey 返回一个已注册用量原语是否需要独立凭据。
+//
+// Parameters
+// 参数
+// `capability` is the exact manifest-projected account usage primitive.
+// `capability` 是清单投影得到的精确账号用量原语。
+//
+// Returns
+// 返回值
+// True only when the registered primitive requires a credential separate from model inference.
+// 仅当已注册原语需要独立于模型推理的凭据时返回 true。
+export function usageCapabilityRequiresManagementKey(
+  capability: PublicAiCredentialProfile["account_usage_query"],
+): boolean {
+  return capability === "open_router_credits"
+}
+
 // CredentialUsageSummary renders provider-aware compact quota information.
 // CredentialUsageSummary 渲染供应商感知的紧凑额度信息。
 function CredentialUsageSummary(props: {
@@ -110,9 +136,9 @@ function CredentialUsageSummary(props: {
   // hasManagementKey indicates whether an optional balance credential is available.
   // hasManagementKey 表示可选余额查询凭据是否可用。
   hasManagementKey: boolean
-  // providerId identifies the exact provider-specific renderer.
-  // providerId 标识精确的供应商专用渲染器。
-  providerId: string
+  // usageRequiresManagementKey is projected from the manifest-selected usage primitive.
+  // usageRequiresManagementKey 由清单选择的用量原语投影得到。
+  usageRequiresManagementKey: boolean
   // usage is the latest exact account observation.
   // usage 是最新精确账号观测。
   usage?: PublicAiAccountUsage
@@ -123,7 +149,7 @@ function CredentialUsageSummary(props: {
   if (props.credentialProfile?.account_usage_query === "unsupported") {
     return <span className="text-center text-xs text-muted-foreground">{t("composer.accountCard.usageUnsupported")}</span>
   }
-  if (props.providerId === "openrouter" && !props.hasManagementKey) {
+  if (props.usageRequiresManagementKey && !props.hasManagementKey) {
     return <span className="text-center text-xs text-muted-foreground">{t("composer.accountCard.managementKeyRequired")}</span>
   }
   if (!props.usage) {
@@ -141,7 +167,7 @@ function CredentialUsageSummary(props: {
   }
   // rows joins MiniMax rolling and weekly windows into resource buckets.
   // rows 将 MiniMax 滚动周期与周周期组合为资源桶。
-  const rows = props.providerId === "minimax"
+  const rows = props.credentialProfile?.account_usage_query === "mini_max_token_plan"
     ? miniMaxUsageRows(props.usage.quota_windows)
     : []
   if (rows.length > 0) {
@@ -149,10 +175,10 @@ function CredentialUsageSummary(props: {
   }
   // tavilyPlanWindow selects only the account-plan allowance used by the compact Tavily card.
   // tavilyPlanWindow 仅选择 Tavily 紧凑卡片使用的账号套餐额度。
-  const tavilyPlanWindow = props.providerId === "tavily"
+  const tavilyPlanWindow = props.credentialProfile?.account_usage_query === "tavily_credits"
     ? props.usage.quota_windows.find((window) => window.id === "tavily-account-plan")
     : undefined
-  if (props.providerId === "tavily") {
+  if (props.credentialProfile?.account_usage_query === "tavily_credits") {
     return <TavilyUsageSummary window={tavilyPlanWindow} />
   }
   if (props.usage.quota_windows.length === 0) {
@@ -163,7 +189,9 @@ function CredentialUsageSummary(props: {
       {props.usage.quota_windows.slice(0, 3).map((window) => (
         <UsageWindowMetric
           key={window.id}
-          label={props.providerId === "kimi" ? kimiUsageWindowLabel(window, t) : window.display_name}
+          label={props.credentialProfile?.account_usage_query === "kimi_coding_plan"
+            ? kimiUsageWindowLabel(window, t)
+            : window.display_name}
           window={window}
         />
       ))}

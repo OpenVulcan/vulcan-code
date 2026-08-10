@@ -74,8 +74,8 @@ pub(crate) enum ProviderStreamDelta {
         /// One-based retry number, or zero when no retry follows.
         /// 从一开始的重试序号；不继续重试时为零。
         retry_number: u32,
-        /// Configured retry ceiling, or zero when a scheduled rate-limit retry is unbounded.
-        /// 配置的重试上限；已调度的限流重试无次数上限时为零。
+        /// Effective finite retry ceiling, or zero when no retry follows.
+        /// 有效有限重试上限；不继续重试时为零。
         max_retries: u32,
         /// Retry delay in milliseconds, or zero when no retry follows.
         /// 重试延迟毫秒数；不继续重试时为零。

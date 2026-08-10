@@ -27,6 +27,47 @@ pub(crate) enum ProviderTransportTurnStartMode {
 
 /// Owned provider transport execution request used to route one prepared runtime turn into the correct provider-specific adapter.
 /// 用于把一份已准备好的运行时回合路由到正确 Provider 专用适配器的自有 Provider 传输执行请求。
+/// Immutable identity of the resolved provider route that every retry attempt must preserve.
+/// 每次重试尝试都必须保留的已解析 Provider 路由不可变身份。
+///
+/// The identity covers the full frozen route (plan §R4.5): provider, entry, connection,
+/// credential profile, model, protocol, catalog revision, manifest revision, and route
+/// revision. It is captured once before the retry loop and reused as the auditable retry
+/// key while the already-selected adapter is replayed, so no retry re-evaluates runtime state.
+/// 身份覆盖完整冻结路由（方案 §R4.5）：供应商、入口、连接、凭据档、模型、协议、
+/// 目录代数、清单修订号与路由修订号。该身份在重试循环前仅捕获一次，并在重放已选
+/// 适配器时作为可审计重试键复用，因此任何重试都不会重新求值运行时状态。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ProviderRouteIdentity {
+    /// Exact provider identifier.
+    /// 精确供应商标识。
+    pub(crate) provider_id: String,
+    /// Exact service-entry identifier.
+    /// 精确服务入口标识。
+    pub(crate) service_entry_id: String,
+    /// Exact credential connection identifier.
+    /// 精确凭据连接标识。
+    pub(crate) connection_id: String,
+    /// Exact credential profile identifier.
+    /// 精确凭据配置档标识。
+    pub(crate) credential_profile_id: String,
+    /// Exact model identifier.
+    /// 精确模型标识。
+    pub(crate) model_id: String,
+    /// Exact protocol profile the route executes through.
+    /// 路由执行所经过的精确协议 Profile。
+    pub(crate) protocol_profile_id: String,
+    /// Catalog generation the selection was frozen from.
+    /// 选择冻结自的目录代数。
+    pub(crate) catalog_generation: u64,
+    /// Manifest revision the model-level binding resolved from; zero for legacy/custom routes.
+    /// 模型级绑定解析自的清单修订号；旧版/自定义路由为零。
+    pub(crate) manifest_revision: u64,
+    /// Content-addressed route revision of the frozen snapshot.
+    /// 冻结快照的内容寻址路由修订号。
+    pub(crate) route_revision: String,
+}
+
 pub(crate) struct ProviderTransportExecutionRequest {
     /// Canonical provider API family used to group transport routing and shared protocol behavior.
     /// 用于归并传输路由与共享协议行为的规范 Provider 接口族。
@@ -103,6 +144,9 @@ pub(crate) struct ProviderTransportExecutionRequest {
     /// Optional scoped tool ids rejected with the rejection reason.
     /// 使用拒绝原因拒绝的可选限定工具标识。
     pub(crate) tool_request_rejection_tool_ids: Vec<String>,
+    /// Immutable route identity guarded across every retry attempt (plan §13.5.1).
+    /// 每次重试尝试都受守卫的不可变路由身份（方案 §13.5.1）。
+    pub(crate) route_identity: ProviderRouteIdentity,
 }
 
 /// Builds one owned provider transport execution request from already resolved runtime inputs.
@@ -129,6 +173,7 @@ pub(crate) fn build_provider_transport_execution_request(
     tool_request_rejection_reason: Option<String>,
     tool_request_rejection_all_tools: bool,
     tool_request_rejection_tool_ids: Vec<String>,
+    route_identity: ProviderRouteIdentity,
 ) -> ProviderTransportExecutionRequest {
     ProviderTransportExecutionRequest {
         provider_id,
@@ -152,5 +197,6 @@ pub(crate) fn build_provider_transport_execution_request(
         tool_request_rejection_reason,
         tool_request_rejection_all_tools,
         tool_request_rejection_tool_ids,
+        route_identity,
     }
 }

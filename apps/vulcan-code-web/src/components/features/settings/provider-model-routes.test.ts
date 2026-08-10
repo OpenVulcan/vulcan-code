@@ -18,6 +18,7 @@ const providerFixture: PublicAiProviderDescriptor = {
   kind: "system",
   category: "relay",
   credential_directory_visibility: "configured_only",
+  credential_registration: "direct",
   service_entries: [
     {
       id: "default-api",
@@ -52,6 +53,7 @@ function connectionFixture(id: string, serviceEntryId: string): PublicAiConnecti
     credential_profile_id: "api-key",
     billing_kind: "pay_as_you_go",
     usage_capability: "unsupported",
+    usage_requires_management_key: false,
     has_management_key: false,
     credential_mode: "token",
     credential_id: `credential-${id}`,
@@ -100,6 +102,27 @@ function modelAccessFixture(enabled: boolean) {
   }]
 }
 
+// modelRouteFixture supplies one backend-authoritative route record.
+// modelRouteFixture 提供一条后端权威路由记录。
+function modelRouteFixture(
+  connectionId: string,
+  serviceEntryId: string,
+  protocolId = "openai-chat-completions.v1",
+) {
+  return {
+    providerId: providerFixture.id,
+    connectionId,
+    serviceEntryId,
+    modelId: "model-1",
+    protocolId,
+    availableProtocols: [protocolId],
+    bindingSource: "system_manifest" as const,
+    bindingRuleId: "model-1",
+    manifestRevision: 1,
+    executable: true,
+  }
+}
+
 describe("buildProviderModelGroups", () => {
   it("keeps configured service entries separate even when they use the same protocol", () => {
     const defaultConnection = connectionFixture("default-account", "default-api")
@@ -112,6 +135,10 @@ describe("buildProviderModelGroups", () => {
         [fastConnection.id]: catalogFixture(fastConnection.id),
       },
       modelAccessRecords: modelAccessFixture(true),
+      modelRouteRecords: [
+        modelRouteFixture(defaultConnection.id, "default-api"),
+        modelRouteFixture(fastConnection.id, "fast-api"),
+      ],
       modelSupportCatalogs: {
         [defaultConnection.id]: catalogFixture(defaultConnection.id),
         [fastConnection.id]: catalogFixture(fastConnection.id),
@@ -131,6 +158,7 @@ describe("buildProviderModelGroups", () => {
       connections: [defaultConnection],
       catalogs: { [defaultConnection.id]: catalogFixture(defaultConnection.id) },
       modelAccessRecords: modelAccessFixture(true),
+      modelRouteRecords: [modelRouteFixture(defaultConnection.id, "default-api")],
       modelSupportCatalogs: { [defaultConnection.id]: catalogFixture(defaultConnection.id) },
     })
 
@@ -149,6 +177,7 @@ describe("buildProviderModelGroups", () => {
       connections: [connection],
       catalogs: { [connection.id]: disabledCatalog },
       modelAccessRecords: modelAccessFixture(true),
+      modelRouteRecords: [modelRouteFixture(connection.id, "default-api")],
       modelSupportCatalogs: { [connection.id]: catalogFixture(connection.id) },
     })
 
@@ -162,10 +191,93 @@ describe("buildProviderModelGroups", () => {
       connections: [connection],
       catalogs: { [connection.id]: catalogFixture(connection.id) },
       modelAccessRecords: modelAccessFixture(false),
+      modelRouteRecords: [modelRouteFixture(connection.id, "default-api")],
       modelSupportCatalogs: { [connection.id]: catalogFixture(connection.id) },
     })
 
     expect(groups).toHaveLength(0)
+  })
+
+  it("uses the backend model binding when it differs from the connection default", () => {
+    const connection = connectionFixture("responses-model-account", "default-api")
+    const groups = buildProviderModelGroups({
+      providers: [providerFixture],
+      connections: [connection],
+      catalogs: { [connection.id]: catalogFixture(connection.id) },
+      modelAccessRecords: modelAccessFixture(true),
+      modelRouteRecords: [
+        modelRouteFixture(connection.id, "default-api", "openai-responses.v1"),
+      ],
+      modelSupportCatalogs: { [connection.id]: catalogFixture(connection.id) },
+    })
+
+    expect(groups[0]?.models.get("model-1")?.[0]?.protocolId).toBe("openai-responses.v1")
+    expect(groups[0]?.models.get("model-1")?.[0]).toMatchObject({
+      availableProtocols: ["openai-responses.v1"],
+      bindingSource: "system_manifest",
+      bindingRuleId: "model-1",
+      manifestRevision: 1,
+    })
+  })
+
+  // Verifies a backend-blocked route cannot become a model settings execution route.
+  // 验证后端阻止的路由不能变成模型设置中的执行路由。
+  it("excludes backend-blocked model routes", () => {
+    const connection = connectionFixture("blocked-model-account", "default-api")
+    const blockedRecord = {
+      ...modelRouteFixture(connection.id, "default-api"),
+      protocolId: undefined,
+      bindingSource: undefined,
+      executable: false,
+      unavailableReason: "No model-level protocol binding.",
+    }
+    const groups = buildProviderModelGroups({
+      providers: [providerFixture],
+      connections: [connection],
+      catalogs: { [connection.id]: catalogFixture(connection.id) },
+      modelAccessRecords: modelAccessFixture(true),
+      modelRouteRecords: [blockedRecord],
+      modelSupportCatalogs: { [connection.id]: catalogFixture(connection.id) },
+    })
+
+    expect(groups).toHaveLength(0)
+  })
+
+  // Verifies accounts with different binding provenance remain independently explainable.
+  // 验证绑定溯源不同的账号保持独立且可解释。
+  it("does not merge accounts whose rule provenance differs", () => {
+    // firstConnection and secondConnection share one service and protocol but not one rule.
+    // firstConnection 与 secondConnection 共享服务和协议，但不共享规则。
+    const firstConnection = connectionFixture("rule-a-account", "default-api")
+    const secondConnection = connectionFixture("rule-b-account", "default-api")
+    // secondRecord changes only the backend rule identity.
+    // secondRecord 只改变后端规则身份。
+    const secondRecord = {
+      ...modelRouteFixture(secondConnection.id, "default-api"),
+      bindingRuleId: "model-1-credential-b",
+    }
+    const groups = buildProviderModelGroups({
+      providers: [providerFixture],
+      connections: [firstConnection, secondConnection],
+      catalogs: {
+        [firstConnection.id]: catalogFixture(firstConnection.id),
+        [secondConnection.id]: catalogFixture(secondConnection.id),
+      },
+      modelAccessRecords: modelAccessFixture(true),
+      modelRouteRecords: [
+        modelRouteFixture(firstConnection.id, "default-api"),
+        secondRecord,
+      ],
+      modelSupportCatalogs: {
+        [firstConnection.id]: catalogFixture(firstConnection.id),
+        [secondConnection.id]: catalogFixture(secondConnection.id),
+      },
+    })
+
+    expect(groups[0]?.models.get("model-1")).toMatchObject([
+      { accountCount: 1, bindingRuleId: "model-1" },
+      { accountCount: 1, bindingRuleId: "model-1-credential-b" },
+    ])
   })
 })
 

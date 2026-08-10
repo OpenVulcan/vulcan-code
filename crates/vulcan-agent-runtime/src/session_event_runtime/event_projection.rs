@@ -40,14 +40,12 @@ pub fn append_runtime_event_projection_to_state(
             now,
             event,
         )?,
-        RuntimeEventKind::Retrying | RuntimeEventKind::TransportFallback => {
-            append_provider_transport_note_projection_to_state(
-                &mut draft_runtime_state,
-                session_id,
-                now,
-                event,
-            )?
-        }
+        RuntimeEventKind::Retrying => append_provider_transport_note_projection_to_state(
+            &mut draft_runtime_state,
+            session_id,
+            now,
+            event,
+        )?,
         _ => false,
     };
     if projected {
@@ -56,8 +54,8 @@ pub fn append_runtime_event_projection_to_state(
     Ok(projected)
 }
 
-/// Appends one durable display-only note for Provider retry or transport fallback.
-/// 为 Provider 重试或传输回退追加一条持久化的纯显示备注。
+/// Appends one durable display-only note for a same-route Provider retry.
+/// 为同一路由 Provider 重试追加一条持久化的纯显示备注。
 ///
 /// `runtime_state` owns the durable session conversation state.
 /// `runtime_state` 持有持久化会话对话状态。
@@ -75,8 +73,8 @@ fn append_provider_transport_note_projection_to_state(
     now: &str,
     event: &RuntimeEvent,
 ) -> Result<bool, String> {
-    // recordId gives every waiting, retry, or fallback transition its own stable visible history row.
-    // recordId 为每次等待、重试或回退转换提供独立、稳定的可见历史行。
+    // recordId gives every retry transition its own stable visible history row.
+    // recordId 为每次重试转换提供独立、稳定的可见历史行。
     let record_id = build_session_record_message_id(
         session_id,
         now,

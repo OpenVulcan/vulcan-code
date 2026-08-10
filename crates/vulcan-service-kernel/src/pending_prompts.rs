@@ -22,8 +22,9 @@ use vulcan_workspace_store::workspace_store::WorkspaceSnapshot;
 use super::{
     AgentRuntimeBridge, SharedServiceBridgeState, active_reasoning_selection_effort,
     composer_attachment_summary_from_core, current_unix_millis_text, emit_service_event_with_trace,
-    owning_project_id_for_session, parse_reasoning_effort,
+    owning_project_id_for_session, parse_reasoning_effort, public_ai_workbench_selection,
     replace_conversation_scoped_projection_entry, session_has_pending_plan_artifact,
+    session_process_public_ai_selection,
 };
 
 /// Snapshot of pending prompt queue lengths used by service lifecycle diagnostics.
@@ -208,7 +209,12 @@ pub(super) fn enqueue_webui_pending_prompt_from_submission(
         prompt,
         hidden_model_guidance,
         attachments,
-        current_pending_prompt_model_reference(agent_runtime, model_selection)?,
+        current_pending_prompt_model_reference(
+            agent_runtime,
+            session_id,
+            workspace_snapshot.session_runtime_state.get(&session_id),
+            model_selection,
+        )?,
         pending_prompt_runtime_options_from_submission(
             &agent_runtime.provider_configuration,
             reasoning_effort,
@@ -298,6 +304,8 @@ fn enqueue_webui_pending_prompt_panel_entry(
 /// 参数
 /// `agent_runtime` resolves the authoritative public model and credential catalog.
 /// `agent_runtime` 解析权威公共模型与凭据目录。
+/// `session_id` and `runtime_state` identify the queue owner's immutable route lease.
+/// `session_id` 与 `runtime_state` 标识队列所有者的不可变路由租约。
 /// `model_selection` is the optional composer selection that must take precedence over the active session selection.
 /// `model_selection` 是可选的输入区选择，必须优先于当前会话选择。
 ///
@@ -307,42 +315,53 @@ fn enqueue_webui_pending_prompt_panel_entry(
 /// 当前公共选择可用时返回队列模型引用，显式选择无效时返回明确错误。
 fn current_pending_prompt_model_reference(
     agent_runtime: &AgentRuntimeBridge,
+    session_id: SessionId,
+    runtime_state: Option<&SessionRuntimeStateEntry>,
     model_selection: Option<&crate::conversation_submission::SubmissionModelSelection>,
 ) -> Result<Option<PendingPromptModelReference>, String> {
     let configuration = agent_runtime.public_ai_runtime.configuration_snapshot()?;
     let selection = match model_selection {
-        Some(model_selection) => agent_runtime
-            .public_ai_runtime
-            .resolve_connection_model_selection(
-                &configuration,
-                model_selection.connection_id.as_str(),
-                model_selection.provider_id.as_str(),
-                model_selection.model_id.as_str(),
-            )?,
-        None => match agent_runtime
-            .public_ai_runtime
-            .resolve_active_selection(&configuration)
-        {
-            Ok(selection) => selection,
-            Err(_) => return Ok(None),
+        Some(model_selection) => {
+            // matchingLease keeps a queued follow-up on the same frozen route even after its model
+            // disappears from the current hot-updated catalog.
+            // matchingLease 使排队跟进消息在模型从热更新后的当前目录消失时仍使用同一冻结路由。
+            let matching_lease = session_process_public_ai_selection(
+                agent_runtime.public_ai_runtime.as_ref(),
+                session_id,
+                runtime_state,
+            )?
+            .filter(|selection| {
+                selection.route.provider.id == model_selection.provider_id
+                    && selection.route.connection.id == model_selection.connection_id
+                    && selection.model.id == model_selection.model_id
+            });
+            match matching_lease {
+                Some(selection) => selection,
+                None => agent_runtime
+                    .public_ai_runtime
+                    .resolve_connection_model_selection(
+                        &configuration,
+                        model_selection.connection_id.as_str(),
+                        model_selection.provider_id.as_str(),
+                        model_selection.model_id.as_str(),
+                    )?,
+            }
+        }
+        None => match public_ai_workbench_selection(
+            &configuration,
+            agent_runtime.public_ai_runtime.as_ref(),
+            Some(session_id),
+            runtime_state,
+        )? {
+            Some(selection) => selection,
+            None => return Ok(None),
         },
     };
-    let providers = agent_runtime
-        .public_ai_runtime
-        .effective_providers(&configuration)?;
-    let provider = providers
-        .provider(selection.route.provider.id.as_str())
-        .ok_or_else(|| {
-            format!(
-                "Provider `{}` is unavailable while preserving a queued prompt.",
-                selection.route.provider.id
-            )
-        })?;
     Ok(Some(PendingPromptModelReference {
         connection_id: selection.route.connection.id,
         provider_id: selection.route.provider.id,
         model_id: selection.model.id,
-        provider_label: provider.display_name.clone(),
+        provider_label: selection.route.provider.display_name,
         model_name: selection.model.display_name,
     }))
 }

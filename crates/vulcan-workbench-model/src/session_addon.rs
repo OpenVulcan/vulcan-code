@@ -836,6 +836,10 @@ pub struct SessionRuntimeControls {
     /// 最近一次被该会话使用的激活模型标识。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_model_id: Option<String>,
+    /// Persisted non-secret identity of the session's frozen provider route.
+    /// 当前会话冻结供应商路由的持久化非秘密身份。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_route_lease: Option<crate::SessionProviderRouteLeaseIdentity>,
     /// Last reasoning-effort preset selected while this session was active.
     /// 最近一次该会话激活时选择的推理档位预设。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -885,6 +889,7 @@ impl SessionRuntimeControls {
             active_provider_id: runtime_state.active_provider_id.clone(),
             active_connection_id: runtime_state.active_connection_id.clone(),
             active_model_id: runtime_state.active_model_id.clone(),
+            provider_route_lease: runtime_state.provider_route_lease.clone(),
             active_reasoning_effort: runtime_state.active_reasoning_effort,
             active_reasoning_effort_explicit: runtime_state.active_reasoning_effort_explicit,
             active_temperature: runtime_state.active_temperature,
@@ -910,6 +915,7 @@ impl SessionRuntimeControls {
         runtime_state.active_provider_id = self.active_provider_id.clone();
         runtime_state.active_connection_id = self.active_connection_id.clone();
         runtime_state.active_model_id = self.active_model_id.clone();
+        runtime_state.provider_route_lease = self.provider_route_lease.clone();
         runtime_state.active_reasoning_effort = self.active_reasoning_effort;
         runtime_state.active_reasoning_effort_explicit = self.active_reasoning_effort_explicit;
         runtime_state.active_temperature = self.active_temperature;
@@ -933,6 +939,7 @@ impl SessionRuntimeControls {
             || self.active_provider_id.is_some()
             || self.active_connection_id.is_some()
             || self.active_model_id.is_some()
+            || self.provider_route_lease.is_some()
             || self.active_reasoning_effort.is_some()
             || self.active_reasoning_effort_explicit
             || self.active_temperature.is_some()

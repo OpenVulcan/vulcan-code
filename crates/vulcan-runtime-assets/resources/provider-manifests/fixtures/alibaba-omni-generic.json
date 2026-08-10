@@ -1,0 +1,195 @@
+{
+  "schema_version": "provider-manifest-execution-fixture.v1",
+  "fixture_id": "alibaba-omni-generic",
+  "base_manifest": "alibaba.json",
+  "production_target_refs": [
+    "alibaba::model-studio-cn.qwen3.5-omni-plus.media-analyze",
+    "alibaba::model-studio-cn.qwen3.5-omni-flash.media-analyze",
+    "alibaba::model-studio-singapore.qwen3.5-omni-plus.media-analyze",
+    "alibaba::model-studio-singapore.qwen3.5-omni-flash.media-analyze"
+  ],
+  "tool_target": {
+    "target_id": "model-studio-cn.fixture-omni-generic",
+    "description": "Generic Alibaba Omni upload projection and Chat SSE fixture.",
+    "service_entry_id": "model-studio-cn",
+    "credential_profile_ids": ["api-key"],
+    "upstream_target_id": "qwen3.5-omni-plus",
+    "display_name": "Alibaba Omni Generic Fixture",
+    "tool_id": "fixture_alibaba_omni_generic",
+    "capability": "media_analyze",
+    "input_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "task": {"type": "string", "enum": ["describe", "summarize", "question_answer", "extract"]},
+        "instruction": {"type": "string", "minLength": 1},
+        "media_paths": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": {"type": "string", "minLength": 1}
+        }
+      },
+      "required": ["task", "media_paths"]
+    },
+    "output": {
+      "kind": "text",
+      "source_path": "/text",
+      "normalized_result_path": "text"
+    },
+    "execution": {
+      "endpoint_path": "/compatible-mode/v1/chat/completions",
+      "authentication": "bearer_authorization",
+      "adapter": "generic_json",
+      "execution_kind": "conversation_media_analyze"
+    }
+  },
+  "operation": {
+    "operation_id": "fixture.alibaba-omni-generic",
+    "operation": "media_analyze",
+    "carrier": "provider_tool",
+    "input_resources": ["image", "audio"],
+    "output_resources": [],
+    "tool_target_refs": ["model-studio-cn.fixture-omni-generic"],
+    "request_profile_refs": ["fixture.alibaba.omni.request.v1"],
+    "response_profile_refs": [],
+    "upload_channel_refs": ["fixture.inline-media"],
+    "upload_bindings": [
+      {
+        "source_path": "/media_paths",
+        "target_path": "/media",
+        "upload_channel_refs": ["fixture.inline-media"],
+        "mime_types_by_extension": {},
+        "required": true,
+        "remove_source": true,
+        "target_encoding": "resource_descriptor"
+      }
+    ],
+    "timeout_ms": 60000,
+    "idempotent": false
+  },
+  "upload_channels": [
+    {
+      "upload_channel_id": "fixture.inline-media",
+      "description": "Fixture inline image and audio descriptor channel.",
+      "primitive": "inline_data_url",
+      "accepted_mime_types": ["image/png", "audio/mpeg"],
+      "max_bytes": 1024,
+      "max_count": 2,
+      "progress_supported": false,
+      "cancellation_supported": false,
+      "reference_encoding": "response_url"
+    }
+  ],
+  "request_profiles": [
+    {
+      "profile_id": "fixture.alibaba.omni.request.v1",
+      "description": "Build one OpenAI-compatible Omni Chat SSE body from resource descriptors.",
+      "payload": {
+        "profile_id": "fixture.alibaba.omni.request.v1",
+        "revision": 1,
+        "steps": [
+          {
+            "op": "rebuild_json_template",
+            "template": {
+              "model": {"$vulcan_model_id": true},
+              "stream": true,
+              "stream_options": {"include_usage": true},
+              "messages": [
+                {
+                  "role": "user",
+                  "content": {
+                    "$vulcan_array_concat": [
+                      [
+                        {
+                          "type": "text",
+                          "text": "Describe the supplied media faithfully. Distinguish direct observations from uncertainty."
+                        }
+                      ],
+                      {
+                        "$vulcan_map": {
+                          "path": "/media",
+                          "template": {
+                            "$vulcan_if_equals": {
+                              "scope": "item",
+                              "path": "/kind",
+                              "equals": "image",
+                              "then": {
+                                "type": "image_url",
+                                "image_url": {
+                                  "url": {"$vulcan_ref": {"scope": "item", "path": "/reference"}}
+                                }
+                              },
+                              "otherwise": {
+                                "type": "input_audio",
+                                "input_audio": {
+                                  "data": {"$vulcan_ref": {"scope": "item", "path": "/base64_data"}},
+                                  "format": {
+                                    "$vulcan_enum": {
+                                      "scope": "item",
+                                      "path": "/mime_type",
+                                      "mapping": {"audio/mpeg": "mp3"}
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "response_profiles": [],
+  "required_execution_primitives": ["conversation_media_analyze"],
+  "required_upload_primitives": ["inline_data_url"],
+  "required_transformers": ["rebuild_json_template"],
+  "arguments": {
+    "task": "describe",
+    "media_paths": [
+      "data:image/png;base64,AQID",
+      "data:audio/mpeg;base64,BAUG"
+    ]
+  },
+  "interactions": [
+    {
+      "method": "POST",
+      "path": "/compatible-mode/v1/chat/completions",
+      "expected_json_body": {
+        "model": "qwen3.5-omni-plus",
+        "stream": true,
+        "stream_options": {"include_usage": true},
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "Describe the supplied media faithfully. Distinguish direct observations from uncertainty."
+              },
+              {
+                "type": "image_url",
+                "image_url": {"url": "data:image/png;base64,AQID"}
+              },
+              {
+                "type": "input_audio",
+                "input_audio": {"data": "BAUG", "format": "mp3"}
+              }
+            ]
+          }
+        ]
+      },
+      "response_status": 200,
+      "response_content_type": "text/event-stream",
+      "response_text_body": "data: {\"choices\":[{\"delta\":{\"content\":\"visible \"}}]}\n\ndata: {\"choices\":[{\"delta\":{\"content\":[{\"type\":\"text\",\"text\":\"analysis\"}]}}]}\n\ndata: [DONE]\n\n"
+    }
+  ],
+  "expected_output_kind": "text"
+}

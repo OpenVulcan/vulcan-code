@@ -2066,7 +2066,7 @@ fn managed_config_assets_digest(root: &Path) -> Result<String, String> {
 /// Collects regular configuration files while rejecting symlink escapes.
 /// 收集普通配置文件，同时拒绝符号链接逃逸。
 fn collect_managed_config_files(
-    root: &Path,
+    _root: &Path,
     current: &Path,
     files: &mut Vec<PathBuf>,
 ) -> Result<(), String> {
@@ -2085,7 +2085,7 @@ fn collect_managed_config_files(
             ));
         }
         if file_type.is_dir() {
-            collect_managed_config_files(root, &entry_path, files)?;
+            collect_managed_config_files(_root, &entry_path, files)?;
         } else if file_type.is_file()
             && entry_path.file_name().and_then(|name| name.to_str())
                 != Some(MANAGED_RUNTIME_MANIFEST_FILE)
@@ -2326,10 +2326,10 @@ mod tests {
             "source_state_digest": "fixture",
             "build_id": MANAGED_RUNTIME_BUILD_ID,
             "binaries": {
-                binary_path.file_name().unwrap().to_string_lossy(): {
+                binary_path.file_name().expect("fixture binary must have a file name").to_string_lossy(): {
                     "sha256": sha256_file(&binary_path).expect("fixture binary digest")
                 },
-                migrate_binary_path.file_name().unwrap().to_string_lossy(): {
+                migrate_binary_path.file_name().expect("fixture maintenance binary must have a file name").to_string_lossy(): {
                     "sha256": sha256_file(&migrate_binary_path).expect("fixture maintenance digest")
                 }
             },
@@ -2629,6 +2629,8 @@ mod tests {
                     capabilities,
                     capability_evidence: vulcan_provider_adapters::ModelCapabilityEvidence::default(
                     ),
+                    protocol_variants: BTreeMap::new(),
+                    resolved_protocol_binding: None,
                 }],
                 generation: 1,
                 page_count: 1,

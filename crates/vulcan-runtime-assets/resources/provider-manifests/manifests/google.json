@@ -1,0 +1,526 @@
+{
+  "schema_version": "vulcan.provider-manifest.v1",
+  "provider_id": "google",
+  "revision": 7,
+  "published_at": "2026-08-06T00:00:00Z",
+  "engine_contract": {
+    "minimum_manifest_engine": 1,
+    "required_protocol_profiles": [
+      "google.gemini.generate_content",
+      "gemini-interactions.v1",
+      "google.code_assist.generate_content.v1"
+    ],
+    "required_execution_primitives": [],
+    "required_upload_primitives": [],
+    "required_transformers": []
+  },
+  "display": {
+    "name": "Google",
+    "category": "official",
+    "credential_directory_visibility": "configured_only"
+  },
+  "services": [
+    {
+      "service_entry_id": "gemini-api",
+      "display_name": "Gemini API Key",
+      "kind": "conversation",
+      "base_url": "https://generativelanguage.googleapis.com/v1beta",
+      "credential_profiles": [
+        {
+          "credential_profile_id": "api-key",
+          "display_name": "API Key",
+          "credential_mode": "token",
+          "billing_kind": "pay_as_you_go",
+          "account_usage_query": "unsupported",
+          "allowed_usage_scopes": [
+            "interactive_agent",
+            "internal_background",
+            "external_service"
+          ]
+        }
+      ],
+      "default_authentication": "google_api_key",
+      "request_projector": "compatible",
+      "model_catalog": {
+        "source_policy": "manifest_and_discovery",
+        "discovery_kind": "gemini"
+      },
+      "protocol_routes": [
+        {
+          "protocol_profile_id": "google.gemini.generate_content",
+          "usage_profile_refs": [],
+          "request_profile_refs": [],
+          "response_profile_refs": [],
+          "provider_request_id_headers": [],
+          "verified": true
+        },
+        {
+          "protocol_profile_id": "gemini-interactions.v1",
+          "usage_profile_refs": [],
+          "request_profile_refs": [],
+          "response_profile_refs": [],
+          "provider_request_id_headers": [],
+          "verified": true
+        }
+      ]
+    },
+    {
+      "service_entry_id": "gemini-oauth",
+      "display_name": "Gemini OAuth",
+      "kind": "conversation",
+      "base_url": "https://generativelanguage.googleapis.com/v1beta",
+      "credential_profiles": [
+        {
+          "credential_profile_id": "gemini-oauth",
+          "display_name": "Gemini Login",
+          "credential_mode": "auth",
+          "oauth_provider": "google_gemini",
+          "billing_kind": "provider_managed",
+          "account_usage_query": "unsupported",
+          "allowed_usage_scopes": [
+            "interactive_agent"
+          ]
+        }
+      ],
+      "default_authentication": "google_gemini_bearer",
+      "request_projector": "compatible",
+      "model_catalog": {
+        "source_policy": "manifest_and_discovery",
+        "discovery_kind": "gemini"
+      },
+      "protocol_routes": [
+        {
+          "protocol_profile_id": "google.gemini.generate_content",
+          "usage_profile_refs": [],
+          "request_profile_refs": [],
+          "response_profile_refs": [],
+          "provider_request_id_headers": [],
+          "verified": true
+        },
+        {
+          "protocol_profile_id": "gemini-interactions.v1",
+          "usage_profile_refs": [],
+          "request_profile_refs": [],
+          "response_profile_refs": [],
+          "provider_request_id_headers": [],
+          "verified": true
+        }
+      ]
+    },
+    {
+      "service_entry_id": "code-assist",
+      "display_name": "Google Code Assist",
+      "kind": "conversation",
+      "base_url": "https://cloudcode-pa.googleapis.com",
+      "credential_profiles": [
+        {
+          "credential_profile_id": "code-assist-oauth",
+          "display_name": "Code Assist Login",
+          "credential_mode": "auth",
+          "oauth_provider": "google_code_assist",
+          "billing_kind": "provider_managed",
+          "account_usage_query": "unsupported",
+          "allowed_usage_scopes": [
+            "interactive_agent"
+          ]
+        }
+      ],
+      "default_authentication": "google_code_assist_bearer",
+      "request_headers": {
+        "user-agent": "vulcan-code/0.1"
+      },
+      "request_projector": "compatible",
+      "model_catalog": {
+        "source_policy": "manifest_and_discovery",
+        "discovery_kind": "google_code_assist"
+      },
+      "model_defaults_override": {
+        "supported_protocols": ["google.code_assist.generate_content.v1"],
+        "selected_protocol": "google.code_assist.generate_content.v1"
+      },
+      "protocol_routes": [
+        {
+          "protocol_profile_id": "google.code_assist.generate_content.v1",
+          "endpoint_path": "/v1internal:streamGenerateContent?alt=sse",
+          "usage_profile_refs": [],
+          "request_profile_refs": [],
+          "response_profile_refs": [],
+          "provider_request_id_headers": [],
+          "verified": true
+        }
+      ]
+    }
+  ],
+  "model_defaults": {
+    "default_enabled": true,
+    "catalog_membership_policy": "declared_and_discovery",
+    "unknown_model_policy": "default_binding_allowed",
+    "supported_protocols": [
+      "google.gemini.generate_content",
+      "gemini-interactions.v1",
+      "google.code_assist.generate_content.v1"
+    ],
+    "selected_protocol": "google.gemini.generate_content",
+    "capabilities": {
+      "operations": ["conversation_respond"],
+      "evidence_revision": "google.default-capabilities.v1"
+    },
+    "default_usage_profile_refs": [],
+    "default_request_profile_refs": [],
+    "default_response_profile_refs": [],
+    "default_operation_refs": []
+  },
+  "model_rules": [
+    {
+      "rule_id": "reasoning-gemini-3.1-flash-lite-image",
+      "matcher": {
+        "kind": "exact",
+        "value": "gemini-3.1-flash-lite-image"
+      },
+      "supported_protocols": [
+        "google.gemini.generate_content",
+        "gemini-interactions.v1"
+      ],
+      "capabilities": {
+        "operations": ["conversation_respond"],
+        "input_resources": [],
+        "output_resources": [],
+        "tool_calling": "unknown",
+        "parallel_tool_calling": "unknown",
+        "reasoning": "native",
+        "provider_native_tools": [],
+        "reasoning_control": "unknown",
+        "reasoning_efforts": [
+          "minimal",
+          "high"
+        ],
+        "prompt_cache": {
+          "provider_default_behavior": "host-managed prompt cache injection is not available",
+          "supports_managed_explicit": false
+        },
+        "evidence_revision": "google-thinking-docs-2026-07-28"
+      },
+      "scope": {
+        "service_entry_ids": [
+          "gemini-api",
+          "gemini-oauth"
+        ]
+      }
+    },
+    {
+      "rule_id": "reasoning-gemini-3.1-pro",
+      "matcher": {
+        "kind": "prefix",
+        "value": "gemini-3.1-pro"
+      },
+      "supported_protocols": [
+        "google.gemini.generate_content",
+        "gemini-interactions.v1"
+      ],
+      "capabilities": {
+        "operations": ["conversation_respond"],
+        "input_resources": [],
+        "output_resources": [],
+        "tool_calling": "unknown",
+        "parallel_tool_calling": "unknown",
+        "reasoning": "native",
+        "provider_native_tools": [],
+        "reasoning_control": "unknown",
+        "reasoning_efforts": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "prompt_cache": {
+          "provider_default_behavior": "host-managed prompt cache injection is not available",
+          "supports_managed_explicit": false
+        },
+        "evidence_revision": "google-thinking-docs-2026-07-28"
+      },
+      "scope": {
+        "service_entry_ids": [
+          "gemini-api",
+          "gemini-oauth"
+        ]
+      }
+    },
+    {
+      "rule_id": "reasoning-gemini-3-pro",
+      "matcher": {
+        "kind": "prefix",
+        "value": "gemini-3-pro"
+      },
+      "supported_protocols": [
+        "google.gemini.generate_content",
+        "gemini-interactions.v1"
+      ],
+      "capabilities": {
+        "operations": ["conversation_respond"],
+        "input_resources": [],
+        "output_resources": [],
+        "tool_calling": "unknown",
+        "parallel_tool_calling": "unknown",
+        "reasoning": "native",
+        "provider_native_tools": [],
+        "reasoning_control": "unknown",
+        "reasoning_efforts": [
+          "low",
+          "high"
+        ],
+        "prompt_cache": {
+          "provider_default_behavior": "host-managed prompt cache injection is not available",
+          "supports_managed_explicit": false
+        },
+        "evidence_revision": "google-thinking-docs-2026-07-28"
+      },
+      "scope": {
+        "service_entry_ids": [
+          "gemini-api",
+          "gemini-oauth"
+        ]
+      }
+    },
+    {
+      "rule_id": "reasoning-gemini-3.6-flash",
+      "matcher": {
+        "kind": "prefix",
+        "value": "gemini-3.6-flash"
+      },
+      "supported_protocols": [
+        "google.gemini.generate_content",
+        "gemini-interactions.v1"
+      ],
+      "capabilities": {
+        "operations": ["conversation_respond"],
+        "input_resources": [],
+        "output_resources": [],
+        "tool_calling": "unknown",
+        "parallel_tool_calling": "unknown",
+        "reasoning": "native",
+        "provider_native_tools": [],
+        "reasoning_control": "unknown",
+        "reasoning_efforts": [
+          "minimal",
+          "low",
+          "medium",
+          "high"
+        ],
+        "prompt_cache": {
+          "provider_default_behavior": "host-managed prompt cache injection is not available",
+          "supports_managed_explicit": false
+        },
+        "evidence_revision": "google-thinking-docs-2026-07-28"
+      },
+      "scope": {
+        "service_entry_ids": [
+          "gemini-api",
+          "gemini-oauth"
+        ]
+      }
+    },
+    {
+      "rule_id": "reasoning-gemini-3.5-flash",
+      "matcher": {
+        "kind": "prefix",
+        "value": "gemini-3.5-flash"
+      },
+      "supported_protocols": [
+        "google.gemini.generate_content",
+        "gemini-interactions.v1"
+      ],
+      "capabilities": {
+        "operations": ["conversation_respond"],
+        "input_resources": [],
+        "output_resources": [],
+        "tool_calling": "unknown",
+        "parallel_tool_calling": "unknown",
+        "reasoning": "native",
+        "provider_native_tools": [],
+        "reasoning_control": "unknown",
+        "reasoning_efforts": [
+          "minimal",
+          "low",
+          "medium",
+          "high"
+        ],
+        "prompt_cache": {
+          "provider_default_behavior": "host-managed prompt cache injection is not available",
+          "supports_managed_explicit": false
+        },
+        "evidence_revision": "google-thinking-docs-2026-07-28"
+      },
+      "scope": {
+        "service_entry_ids": [
+          "gemini-api",
+          "gemini-oauth"
+        ]
+      }
+    },
+    {
+      "rule_id": "reasoning-gemini-3.1-flash-lite",
+      "matcher": {
+        "kind": "prefix",
+        "value": "gemini-3.1-flash-lite"
+      },
+      "supported_protocols": [
+        "google.gemini.generate_content",
+        "gemini-interactions.v1"
+      ],
+      "capabilities": {
+        "operations": ["conversation_respond"],
+        "input_resources": [],
+        "output_resources": [],
+        "tool_calling": "unknown",
+        "parallel_tool_calling": "unknown",
+        "reasoning": "native",
+        "provider_native_tools": [],
+        "reasoning_control": "unknown",
+        "reasoning_efforts": [
+          "minimal",
+          "low",
+          "medium",
+          "high"
+        ],
+        "prompt_cache": {
+          "provider_default_behavior": "host-managed prompt cache injection is not available",
+          "supports_managed_explicit": false
+        },
+        "evidence_revision": "google-thinking-docs-2026-07-28"
+      },
+      "scope": {
+        "service_entry_ids": [
+          "gemini-api",
+          "gemini-oauth"
+        ]
+      }
+    },
+    {
+      "rule_id": "reasoning-gemini-3-flash",
+      "matcher": {
+        "kind": "prefix",
+        "value": "gemini-3-flash"
+      },
+      "supported_protocols": [
+        "google.gemini.generate_content",
+        "gemini-interactions.v1"
+      ],
+      "capabilities": {
+        "operations": ["conversation_respond"],
+        "input_resources": [],
+        "output_resources": [],
+        "tool_calling": "unknown",
+        "parallel_tool_calling": "unknown",
+        "reasoning": "native",
+        "provider_native_tools": [],
+        "reasoning_control": "unknown",
+        "reasoning_efforts": [
+          "minimal",
+          "low",
+          "medium",
+          "high"
+        ],
+        "prompt_cache": {
+          "provider_default_behavior": "host-managed prompt cache injection is not available",
+          "supports_managed_explicit": false
+        },
+        "evidence_revision": "google-thinking-docs-2026-07-28"
+      },
+      "scope": {
+        "service_entry_ids": [
+          "gemini-api",
+          "gemini-oauth"
+        ]
+      }
+    },
+    {
+      "rule_id": "reasoning-gemini-2.5-pro",
+      "matcher": {
+        "kind": "prefix",
+        "value": "gemini-2.5-pro"
+      },
+      "supported_protocols": [
+        "google.gemini.generate_content",
+        "gemini-interactions.v1"
+      ],
+      "capabilities": {
+        "operations": ["conversation_respond"],
+        "input_resources": [],
+        "output_resources": [],
+        "tool_calling": "unknown",
+        "parallel_tool_calling": "unknown",
+        "reasoning": "native",
+        "provider_native_tools": [],
+        "reasoning_control": "unknown",
+        "reasoning_efforts": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "prompt_cache": {
+          "provider_default_behavior": "host-managed prompt cache injection is not available",
+          "supports_managed_explicit": false
+        },
+        "evidence_revision": "google-thinking-docs-2026-07-28"
+      },
+      "scope": {
+        "service_entry_ids": [
+          "gemini-api",
+          "gemini-oauth"
+        ]
+      }
+    },
+    {
+      "rule_id": "reasoning-gemini-2.5-flash",
+      "matcher": {
+        "kind": "prefix",
+        "value": "gemini-2.5-flash"
+      },
+      "supported_protocols": [
+        "google.gemini.generate_content",
+        "gemini-interactions.v1"
+      ],
+      "capabilities": {
+        "operations": ["conversation_respond"],
+        "input_resources": [],
+        "output_resources": [],
+        "tool_calling": "unknown",
+        "parallel_tool_calling": "unknown",
+        "reasoning": "native",
+        "provider_native_tools": [],
+        "reasoning_control": "unknown",
+        "reasoning_efforts": [
+          "none",
+          "low",
+          "medium",
+          "high"
+        ],
+        "prompt_cache": {
+          "provider_default_behavior": "host-managed prompt cache injection is not available",
+          "supports_managed_explicit": false
+        },
+        "evidence_revision": "google-thinking-docs-2026-07-28"
+      },
+      "scope": {
+        "service_entry_ids": [
+          "gemini-api",
+          "gemini-oauth"
+        ]
+      }
+    }
+  ],
+  "usage_profiles": [],
+  "request_profiles": [],
+  "response_profiles": [],
+  "upload_channels": [],
+  "operations": [],
+  "tool_targets": [],
+  "provenance": {
+    "status": "verified",
+    "sources": [
+      {
+        "url": "builtin:vulcan.reasoning-catalog.2026-08-06",
+        "note": "Legacy reasoning effort rules migrated into manifest model rules; evidence follows the legacy reasoning catalog."
+      }
+    ]
+  }
+}

@@ -14,8 +14,14 @@ dirs.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
+hex = "0.4"
 toml = "0.8"
 vulcan-core.workspace = true
 vulcan-runtime-assets.workspace = true
 vulcan-provider-adapters.workspace = true
 vulcan-vmm.workspace = true
+ed25519-dalek = { version = "2", features = ["fast"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"

@@ -1,0 +1,126 @@
+{
+  "schema_version": "provider-manifest-execution-fixture.v1",
+  "fixture_id": "alibaba-async-cancel-generic",
+  "base_manifest": "alibaba.json",
+  "tool_target": {
+    "target_id": "model-studio-cn.fixture-async-cancel-generic",
+    "description": "Generic Alibaba asynchronous cancellation fixture.",
+    "service_entry_id": "model-studio-cn",
+    "credential_profile_ids": ["api-key"],
+    "upstream_target_id": "wan2.7-t2v",
+    "display_name": "Alibaba Async Cancel Fixture",
+    "tool_id": "fixture_alibaba_async_cancel_generic",
+    "capability": "video_generate",
+    "input_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {"prompt": {"type": "string", "minLength": 1}},
+      "required": ["prompt"]
+    },
+    "output": {
+      "kind": "resources",
+      "source_path": "output.video_url",
+      "normalized_result_path": "resources",
+      "resource_kind": "video",
+      "mime_types": ["video/mp4"],
+      "resource_decoders": [
+        {
+          "source_path": "/output/video_url",
+          "encoding": "public_http_url",
+          "download_host_suffixes": ["example.com"],
+          "resource_kind": "video",
+          "mime_type": "video/mp4",
+          "optional": false,
+          "output_id_prefix": "video"
+        }
+      ]
+    },
+    "execution": {
+      "endpoint_path": "/api/v1/services/aigc/video-generation/video-synthesis",
+      "authentication": "bearer_authorization",
+      "adapter": "generic_json",
+      "execution_kind": "http_json_async_poll",
+      "start_fixed_headers": {"x-dashscope-async": "enable"}
+    }
+  },
+  "operation": {
+    "operation_id": "fixture.alibaba-async-cancel-generic",
+    "operation": "video_generate",
+    "carrier": "provider_tool",
+    "input_resources": [],
+    "output_resources": ["video"],
+    "tool_target_refs": ["model-studio-cn.fixture-async-cancel-generic"],
+    "request_profile_refs": ["alibaba.async.wan-video.request.v1"],
+    "response_profile_refs": ["alibaba.async.task.response.v1"],
+    "upload_channel_refs": [],
+    "upload_bindings": [],
+    "async_execution": {
+      "poll_interval_ms": 250,
+      "max_backoff_ms": 1000,
+      "timeout_ms": 2000,
+      "cancellation_supported": true,
+      "generic_json": {
+        "poll_endpoint_path": "/api/v1/tasks",
+        "poll_method": "get",
+        "cancel_endpoint_path": "/api/v1/tasks",
+        "cancel_method": "post",
+        "cancel_task_id_path_suffix": "cancel",
+        "task_id_pointer": "/output/task_id",
+        "task_id_in_path": true,
+        "start_status_pointer": "/output/task_status",
+        "start_success_statuses": ["PENDING"],
+        "poll_task_id_pointer": "/output/task_id",
+        "status_pointer": "/output/task_status",
+        "queued_statuses": ["PENDING"],
+        "running_statuses": ["RUNNING"],
+        "success_statuses": ["SUCCEEDED"],
+        "failure_statuses": ["FAILED", "UNKNOWN"],
+        "cancelled_statuses": ["CANCELED"],
+        "start_requirements": {
+          "non_empty_string_pointers": ["/request_id"],
+          "empty_or_missing_string_pointers": ["/code"]
+        },
+        "poll_requirements": {"non_empty_string_pointers": ["/request_id"]},
+        "poll_success_requirements": {
+          "empty_or_missing_string_pointers": ["/code"]
+        },
+        "cancel_requirements": {
+          "non_empty_string_pointers": ["/request_id"],
+          "empty_or_missing_string_pointers": ["/code"]
+        }
+      }
+    },
+    "timeout_ms": 2000,
+    "idempotent": false
+  },
+  "upload_channels": [],
+  "required_execution_primitives": ["http_json_async_poll"],
+  "required_upload_primitives": [],
+  "arguments": {"prompt": "cancel this task"},
+  "interactions": [
+    {
+      "method": "POST",
+      "path": "/api/v1/services/aigc/video-generation/video-synthesis",
+      "expected_headers": {"x-dashscope-async": "enable"},
+      "expected_json_body": {
+        "model": "wan2.7-t2v",
+        "input": {"prompt": "cancel this task"},
+        "parameters": {}
+      },
+      "response_status": 200,
+      "response_json_body": {
+        "request_id": "request-start",
+        "code": "",
+        "output": {"task_id": "task/cancel", "task_status": "PENDING"}
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/tasks/task%2Fcancel/cancel",
+      "response_status": 200,
+      "response_json_body": {"request_id": "request-cancel", "code": ""}
+    }
+  ],
+  "cancel_after_start": true,
+  "expected_cancellation": true
+}

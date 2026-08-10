@@ -5,7 +5,7 @@ use crate::{ProviderToolAdapterKind, ProviderToolExecutionResult, ProviderToolTa
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -20,6 +20,30 @@ const PROVIDER_TASK_TERMINAL_RETENTION_MS: u64 = 7 * 24 * 60 * 60 * 1_000;
 /// Maximum number of terminal task records retained after age pruning.
 /// 完成按时长清理后保留的最大任务终态记录数。
 const PROVIDER_TASK_MAXIMUM_TERMINAL_RECORDS: usize = 256;
+/// Maximum total active and terminal task records retained in one recovery snapshot.
+/// 单份恢复快照允许保留的活动与终态任务总记录上限。
+const PROVIDER_TASK_MAXIMUM_RECORDS: usize = 2_048;
+/// Maximum bytes accepted from or written to one recovery snapshot.
+/// 单份恢复快照允许读取或写入的最大字节数。
+const PROVIDER_TASK_SNAPSHOT_MAX_BYTES: u64 = 64 * 1024 * 1024;
+/// Maximum candidate snapshots scanned before startup fails closed.
+/// 启动关闭失败前允许扫描的候选快照文件上限。
+const PROVIDER_TASK_MAXIMUM_SNAPSHOT_FILES: usize = 64;
+/// Maximum total directory entries inspected by one recovery maintenance pass.
+/// 单次恢复维护允许检查的目录总条目上限。
+const PROVIDER_TASK_MAXIMUM_DIRECTORY_ENTRIES: usize = 256;
+/// Maximum characters accepted in one persisted provider-task identity field.
+/// 单个持久供应商任务身份字段允许的最大字符数。
+const PROVIDER_TASK_IDENTITY_MAX_CHARACTERS: usize = 2_048;
+/// Maximum characters accepted in one persisted provider-task diagnostic.
+/// 单个持久供应商任务诊断允许的最大字符数。
+pub(crate) const PROVIDER_TASK_DIAGNOSTIC_MAX_CHARACTERS: usize = 8_192;
+/// Maximum ordered recovery fingerprints retained by one asynchronous task.
+/// 单个异步任务允许保留的有序恢复指纹上限。
+const PROVIDER_TASK_MAXIMUM_RECOVERY_FINGERPRINTS: usize = 256;
+/// Maximum retained consecutive observation failures before the counter saturates.
+/// 连续观测失败计数达到此上限后饱和。
+pub(crate) const PROVIDER_TASK_MAXIMUM_OBSERVATION_FAILURES: u32 = 32;
 
 /// Provider-task phases with explicit uncertain-dispatch and cancellation intent states.
 /// 带显式分派不确定与取消意图状态的供应商任务阶段。
@@ -66,6 +90,26 @@ impl ProviderAsyncTaskPhase {
             Self::Completed | Self::Failed | Self::Cancelled | Self::DispatchOutcomeUnknown
         )
     }
+
+    /// Returns the stable serialized lifecycle phase used by structured telemetry.
+    /// 返回结构化遥测使用的稳定序列化生命周期阶段。
+    ///
+    /// # Returns
+    /// 返回值
+    /// One lowercase snake-case phase identifier matching the durable JSON contract.
+    /// 返回一个与持久 JSON 契约一致的小写蛇形阶段标识。
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Dispatching => "dispatching",
+            Self::Queued => "queued",
+            Self::Running => "running",
+            Self::CancellationRequested => "cancellation_requested",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+            Self::DispatchOutcomeUnknown => "dispatch_outcome_unknown",
+        }
+    }
 }
 
 /// Non-secret recovery data required to normalize a provider task after restart.
@@ -76,18 +120,20 @@ pub enum ProviderAsyncTaskRecoveryContext {
     /// No adapter-specific recovery data is required.
     /// 不需要适配器专属恢复数据。
     None,
-    /// Ordered SHA-256 fingerprints of Fun-ASR provider object locators.
-    /// Fun-ASR 供应商对象定位符的有序 SHA-256 指纹。
-    FunAsr {
+    /// Ordered SHA-256 fingerprints of generic submitted identities.
+    /// 通用已提交身份的有序 SHA-256 指纹。
+    #[serde(rename = "ordered_sha256", alias = "fun_asr")]
+    OrderedSha256 {
         /// Ordered hexadecimal SHA-256 values without retaining signed object URLs.
         /// 不保留签名对象 URL 的有序十六进制 SHA-256 值。
-        source_url_sha256: Vec<String>,
+        #[serde(rename = "fingerprints", alias = "source_url_sha256")]
+        fingerprints: Vec<String>,
     },
 }
 
 /// Immutable non-secret route affinity for one asynchronous provider task.
 /// 单个异步供应商任务的不可变非秘密路由亲和性。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderAsyncTaskRoute {
     /// Exact provider identifier.
@@ -105,6 +151,40 @@ pub struct ProviderAsyncTaskRoute {
     /// Exact registered adapter identity.
     /// 精确已注册适配器身份。
     pub adapter: ProviderToolAdapterKind,
+    /// Manifest revision frozen at task creation; zero only for persisted pre-manifest records.
+    /// 任务创建时冻结的 Manifest 修订号；仅早于 Manifest 的持久化记录为零。
+    #[serde(default)]
+    pub manifest_revision: u64,
+    /// Frozen non-secret target snapshot captured at dispatch; recovery and poll resolve the
+    /// target from this snapshot instead of reading a newer manifest (plan §R9.6). `None`
+    /// only for legacy revision-zero records created before frozen manifest snapshots existed.
+    /// 分派时捕获的冻结非秘密目标快照；恢复与轮询从此快照解析目标，而不读取更新的
+    /// Manifest（方案 §R9.6）。仅在冻结 Manifest 快照存在前创建的旧版零修订记录为 `None`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frozen_target: Option<crate::ProviderToolTarget>,
+    /// Frozen non-secret service entry captured at dispatch; it retains the exact task base URL
+    /// and service contract across manifest hot replacement. `None` is allowed only for legacy
+    /// revision-zero records created before complete task-route snapshots existed.
+    /// 分派时捕获的冻结非秘密服务入口；它在 Manifest 热替换后保留精确任务基础 URL 与服务
+    /// 契约。仅在完整任务路由快照出现前创建的旧版零修订记录允许为 `None`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frozen_service_entry: Option<crate::ServiceEntry>,
+    /// Frozen operation identifier that authorized this asynchronous lifecycle.
+    /// 授权当前异步生命周期的冻结操作标识。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_id: Option<String>,
+    /// Frozen non-secret operation declaration used by generic recovery after hot replacement.
+    /// 热替换后通用恢复使用的冻结非秘密操作声明。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frozen_operation: Option<crate::provider_manifest::OperationDeclaration>,
+    /// Frozen request profiles used to build the asynchronous task start body.
+    /// 用于构建异步任务启动正文的冻结请求 Profile。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub frozen_request_profiles: Vec<crate::provider_manifest::RequestProjectionProfile>,
+    /// Frozen response profiles used for start and every retained poll response.
+    /// 用于启动响应及每次保留轮询响应的冻结响应 Profile。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub frozen_response_profiles: Vec<crate::provider_manifest::ResponseProjectionProfile>,
 }
 
 /// Durable non-secret state for one provider-native asynchronous task.
@@ -141,6 +221,14 @@ pub struct ProviderAsyncTaskRecord {
     /// Absolute task deadline as Unix milliseconds.
     /// Unix 毫秒绝对任务截止时间。
     pub deadline_unix_ms: u64,
+    /// Manifest-authoritative poll interval in milliseconds.
+    /// Manifest 权威声明的轮询间隔（毫秒）。
+    #[serde(default = "default_provider_task_poll_interval_ms")]
+    pub poll_interval_ms: u64,
+    /// Consecutive transient observation failures used only for bounded retry backoff.
+    /// 仅用于有界重试退避的连续瞬时观测失败次数。
+    #[serde(default)]
+    pub consecutive_observation_failures: u32,
     /// Whether the exact adapter has a provider cancellation endpoint.
     /// 精确适配器是否具有供应商取消端点。
     pub cancellation_supported: bool,
@@ -152,6 +240,64 @@ pub struct ProviderAsyncTaskRecord {
     /// 进程内归一化终态结果；完成任务会在重启后重新观测。
     #[serde(default, skip_serializing)]
     pub result: Option<ProviderToolExecutionResult>,
+}
+
+/// Returns the compatibility poll interval for records written before operation metadata existed.
+/// 返回 operation 元数据出现前已写记录使用的兼容轮询间隔。
+fn default_provider_task_poll_interval_ms() -> u64 {
+    15_000
+}
+
+/// Computes the next bounded observation delay from one frozen asynchronous operation.
+/// 根据一条冻结异步操作计算下一次有界观测延迟。
+///
+/// # Parameters
+/// 参数
+/// `record` retains the base poll interval, frozen backoff ceiling, and failure streak.
+/// `record` 保留基础轮询间隔、冻结退避上限与失败连续次数。
+///
+/// # Returns
+/// 返回值
+/// Exponential backoff capped by the exact manifest declaration, or the legacy fixed interval.
+/// 返回由精确 Manifest 声明封顶的指数退避；旧记录返回固定间隔。
+pub(crate) fn provider_task_observation_delay_ms(record: &ProviderAsyncTaskRecord) -> u64 {
+    let maximum_backoff_ms = record
+        .route
+        .frozen_operation
+        .as_ref()
+        .and_then(|operation| operation.async_execution.as_ref())
+        .map_or(record.poll_interval_ms, |declaration| {
+            declaration.max_backoff_ms
+        });
+    let multiplier = 1_u64
+        .checked_shl(record.consecutive_observation_failures.min(63))
+        .unwrap_or(u64::MAX);
+    record
+        .poll_interval_ms
+        .saturating_mul(multiplier)
+        .min(maximum_backoff_ms)
+}
+
+/// Truncates one public provider-task diagnostic on a Unicode scalar boundary.
+/// 在 Unicode 标量边界截断一条公开供应商任务诊断。
+///
+/// # Parameters
+/// 参数
+/// `value` is already stripped of any exact in-memory credential by the caller.
+/// `value` 已由调用方移除任何精确内存凭据。
+///
+/// # Returns
+/// 返回值
+/// A diagnostic that always fits the durable recovery contract.
+/// 返回始终符合持久恢复契约的诊断。
+pub(crate) fn bound_provider_task_diagnostic(value: &str) -> String {
+    if value.chars().count() <= PROVIDER_TASK_DIAGNOSTIC_MAX_CHARACTERS {
+        return value.to_string();
+    }
+    let retained = PROVIDER_TASK_DIAGNOSTIC_MAX_CHARACTERS.saturating_sub(3);
+    let mut bounded = value.chars().take(retained).collect::<String>();
+    bounded.push_str("...");
+    bounded
 }
 
 /// Versioned durable task recovery snapshot.
@@ -246,24 +392,51 @@ impl ProviderTaskRecoveryStore {
         })?;
         let mut loaded = load_latest_snapshot(directory)?;
         prune_terminal_records(&mut loaded.records, current_unix_millis()?, None);
-        {
+        let _mutation_guard = self
+            .mutation_lock
+            .lock()
+            .map_err(|_| String::from("The provider task mutation lock is poisoned."))?;
+        // Previous values make configuration transactional if the initial publication fails.
+        // 若初始发布失败，previous values 使配置操作保持事务性。
+        let previous_records = {
             let mut records = self
                 .records
                 .lock()
                 .map_err(|_| String::from("The provider task recovery lock is poisoned."))?;
-            *records = loaded.records;
+            std::mem::replace(&mut *records, loaded.records)
+        };
+        let previous_revision = {
+            let mut revision = self
+                .revision
+                .lock()
+                .map_err(|_| String::from("The provider task revision lock is poisoned."))?;
+            std::mem::replace(&mut *revision, loaded.revision)
+        };
+        let previous_directory = {
+            let mut configured_directory = self
+                .directory
+                .lock()
+                .map_err(|_| String::from("The provider task directory lock is poisoned."))?;
+            configured_directory.replace(directory.to_path_buf())
+        };
+        if let Err(error) = self.persist() {
+            *self
+                .records
+                .lock()
+                .map_err(|_| String::from("The provider task recovery lock is poisoned."))? =
+                previous_records;
+            *self
+                .revision
+                .lock()
+                .map_err(|_| String::from("The provider task revision lock is poisoned."))? =
+                previous_revision;
+            *self
+                .directory
+                .lock()
+                .map_err(|_| String::from("The provider task directory lock is poisoned."))? =
+                previous_directory;
+            return Err(error);
         }
-        *self
-            .revision
-            .lock()
-            .map_err(|_| String::from("The provider task revision lock is poisoned."))? =
-            loaded.revision;
-        *self
-            .directory
-            .lock()
-            .map_err(|_| String::from("The provider task directory lock is poisoned."))? =
-            Some(directory.to_path_buf());
-        self.persist()?;
         self.snapshot()
     }
 
@@ -318,11 +491,14 @@ impl ProviderTaskRecoveryStore {
     /// Success only after memory and configured durable storage agree.
     /// 仅在内存与已配置持久化存储一致后返回成功。
     pub fn replace(&self, record: ProviderAsyncTaskRecord) -> Result<(), String> {
+        validate_provider_task_record(&record)?;
         let _mutation_guard = self
             .mutation_lock
             .lock()
             .map_err(|_| String::from("The provider task mutation lock is poisoned."))?;
         let execution_id = record.execution_id.clone();
+        let telemetry_record = record.clone();
+        let mut phase_changed = true;
         let previous_records = {
             let mut records = self
                 .records
@@ -330,11 +506,18 @@ impl ProviderTaskRecoveryStore {
                 .map_err(|_| String::from("The provider task recovery lock is poisoned."))?;
             if let Some(current) = records.get(execution_id.as_str()) {
                 validate_provider_task_replacement(current, &record)?;
+                phase_changed = current.phase != record.phase;
             }
             let previous_records = records.clone();
             let now_unix_ms = record.updated_at_unix_ms;
             records.insert(execution_id.clone(), record);
             prune_terminal_records(&mut records, now_unix_ms, Some(execution_id.as_str()));
+            if records.len() > PROVIDER_TASK_MAXIMUM_RECORDS {
+                *records = previous_records;
+                return Err(format!(
+                    "Provider task recovery capacity of {PROVIDER_TASK_MAXIMUM_RECORDS} records is exhausted; active tasks were preserved."
+                ));
+            }
             previous_records
         };
         if let Err(error) = self.persist() {
@@ -344,6 +527,9 @@ impl ProviderTaskRecoveryStore {
                 .map_err(|_| String::from("The provider task recovery lock is poisoned."))?;
             *records = previous_records;
             return Err(error);
+        }
+        if phase_changed {
+            emit_provider_async_task_telemetry(&telemetry_record);
         }
         Ok(())
     }
@@ -386,6 +572,11 @@ impl ProviderTaskRecoveryStore {
         };
         let bytes = serde_json::to_vec_pretty(&snapshot)
             .map_err(|error| format!("Provider task recovery JSON encoding failed: {error}"))?;
+        if bytes.len() as u64 > PROVIDER_TASK_SNAPSHOT_MAX_BYTES {
+            return Err(format!(
+                "Provider task recovery snapshot exceeds the {PROVIDER_TASK_SNAPSHOT_MAX_BYTES} byte limit."
+            ));
+        }
         let identity = Uuid::new_v4();
         let temporary = directory.join(format!(".snapshot-{next_revision:020}-{identity}.tmp"));
         let published = directory.join(format!("snapshot-{next_revision:020}-{identity}.json"));
@@ -394,16 +585,458 @@ impl ProviderTaskRecoveryStore {
             .write(true)
             .open(&temporary)
             .map_err(|error| format!("Provider task recovery temporary file failed: {error}"))?;
-        file.write_all(bytes.as_slice())
-            .and_then(|_| file.sync_all())
-            .map_err(|error| format!("Provider task recovery snapshot write failed: {error}"))?;
+        // writeResult is completed before cleanup so Windows no longer holds the temporary file.
+        // writeResult 在清理前完成，使 Windows 不再持有临时文件。
+        let write_result = file
+            .write_all(bytes.as_slice())
+            .and_then(|_| file.sync_all());
         drop(file);
-        fs::rename(&temporary, &published)
-            .map_err(|error| format!("Provider task recovery publish failed: {error}"))?;
+        if let Err(error) = write_result {
+            let cleanup = fs::remove_file(&temporary);
+            return Err(format!(
+                "Provider task recovery snapshot write failed: {error}; temporary cleanup: {cleanup:?}"
+            ));
+        }
+        if let Err(error) = fs::rename(&temporary, &published) {
+            let cleanup = fs::remove_file(&temporary);
+            return Err(format!(
+                "Provider task recovery publish failed: {error}; temporary cleanup: {cleanup:?}"
+            ));
+        }
         *revision = next_revision;
         cleanup_old_snapshots(&directory, &published);
         Ok(())
     }
+}
+
+/// Builds one non-secret structured event for a manifest-authoritative asynchronous task phase.
+/// 为 Manifest 权威异步任务阶段构建一条非秘密结构化事件。
+///
+/// # Parameters
+/// 参数
+/// `record` is the exact state that already passed durable task validation.
+/// `record` 是已经通过持久任务校验的精确状态。
+///
+/// # Returns
+/// 返回值
+/// A complete event for modern operation-bound records, or `None` for legacy records that never
+/// persisted an operation identity.
+/// 对现代 operation 绑定记录返回完整事件；对从未持久化 operation 身份的旧记录返回 `None`。
+fn provider_async_task_telemetry_event(
+    record: &ProviderAsyncTaskRecord,
+) -> Option<crate::ProviderOperationalTelemetryEvent> {
+    let operation_id = record.route.operation_id.as_ref()?;
+    let mut event = crate::ProviderOperationalTelemetryEvent::new(
+        crate::ProviderOperationalTelemetryEventName::ProviderAsyncTaskStateChanged,
+    );
+    event.provider_id = Some(record.route.provider_id.clone());
+    event.service_entry_id = Some(record.route.service_entry_id.clone());
+    event.connection_id = Some(record.route.connection_id.clone());
+    event.manifest_revision = Some(record.route.manifest_revision);
+    event.operation_id = Some(operation_id.clone());
+    event.tool_target_id = Some(record.route.selection.target_id.clone());
+    event.task_execution_id = Some(record.execution_id.clone());
+    event.task_phase = Some(record.phase.as_str().to_string());
+    event.request_profiles = record
+        .route
+        .frozen_request_profiles
+        .iter()
+        .map(|profile| crate::ProviderOperationalProfileRevision {
+            profile_id: profile.profile_id.clone(),
+            revision: profile.revision,
+        })
+        .collect();
+    event.response_profiles = record
+        .route
+        .frozen_response_profiles
+        .iter()
+        .map(|profile| crate::ProviderOperationalProfileRevision {
+            profile_id: profile.profile_id.clone(),
+            revision: profile.revision,
+        })
+        .collect();
+    event.failure_kind = match record.phase {
+        ProviderAsyncTaskPhase::Failed => Some(String::from("provider_task_failed")),
+        ProviderAsyncTaskPhase::Cancelled => Some(String::from("provider_task_cancelled")),
+        ProviderAsyncTaskPhase::DispatchOutcomeUnknown => {
+            Some(String::from("dispatch_outcome_unknown"))
+        }
+        _ => None,
+    };
+    Some(event)
+}
+
+/// Emits one distinct durable asynchronous task phase after successful state publication.
+/// 在状态成功发布后发出一个不同的持久异步任务阶段。
+///
+/// # Parameters
+/// 参数
+/// `record` is the successfully persisted authoritative task state.
+/// `record` 是已成功持久化的权威任务状态。
+///
+/// # Returns
+/// 返回值
+/// Returns no value because legacy omission or telemetry diagnostics cannot change task outcome.
+/// 不返回值，因为旧记录缺失或遥测诊断不能改变任务结果。
+fn emit_provider_async_task_telemetry(record: &ProviderAsyncTaskRecord) {
+    let Some(event) = provider_async_task_telemetry_event(record) else {
+        return;
+    };
+    if let Err(error) = crate::record_provider_operational_telemetry(event) {
+        eprintln!("[provider-task] structured telemetry was rejected: {error}");
+    }
+}
+
+/// Validates one complete task record before it enters memory or durable recovery state.
+/// 在一条完整任务记录进入内存或持久化恢复状态前进行校验。
+///
+/// # Parameters
+/// 参数
+/// `record` is the complete non-secret task snapshot supplied by creation or recovery.
+/// `record` 是由创建或恢复流程提供的完整非秘密任务快照。
+///
+/// # Returns
+/// 返回值
+/// Success only when identity affinity is self-consistent and every manifest-backed task retains
+/// its complete dispatch-frozen route; otherwise an explicit fail-closed diagnostic.
+/// 仅当身份亲和性自洽且每个 Manifest 驱动任务都保留完整分派冻结路由时成功；否则返回明确的
+/// 封闭失败诊断。
+fn validate_provider_task_record(record: &ProviderAsyncTaskRecord) -> Result<(), String> {
+    validate_provider_task_identity("execution identifier", record.execution_id.as_str())?;
+    if let Some(owner_session_id) = record.owner_session_id.as_deref() {
+        validate_provider_task_identity("owner session identifier", owner_session_id)?;
+    }
+    validate_provider_task_identity("provider identifier", record.route.provider_id.as_str())?;
+    validate_provider_task_identity(
+        "service entry identifier",
+        record.route.service_entry_id.as_str(),
+    )?;
+    validate_provider_task_identity("connection identifier", record.route.connection_id.as_str())?;
+    validate_provider_task_identity(
+        "selected connection identifier",
+        record.route.selection.connection_id.as_str(),
+    )?;
+    validate_provider_task_identity(
+        "selected target identifier",
+        record.route.selection.target_id.as_str(),
+    )?;
+    if let Some(operation_id) = record.route.operation_id.as_deref() {
+        validate_provider_task_identity("operation identifier", operation_id)?;
+    }
+    if let Some(provider_task_id) = record.provider_task_id.as_deref() {
+        validate_provider_task_identity("provider task identifier", provider_task_id)?;
+    }
+    if let Some(error) = record.error.as_deref()
+        && error.chars().count() > PROVIDER_TASK_DIAGNOSTIC_MAX_CHARACTERS
+    {
+        return Err(format!(
+            "Provider task execution `{}` has a diagnostic exceeding the {PROVIDER_TASK_DIAGNOSTIC_MAX_CHARACTERS} character limit.",
+            record.execution_id
+        ));
+    }
+    if record.route.connection_id != record.route.selection.connection_id {
+        return Err(format!(
+            "Provider task execution `{}` has inconsistent connection affinity.",
+            record.execution_id
+        ));
+    }
+    if record.updated_at_unix_ms < record.created_at_unix_ms {
+        return Err(format!(
+            "Provider task execution `{}` has an update timestamp earlier than its creation timestamp.",
+            record.execution_id
+        ));
+    }
+    let lifecycle_duration_ms = record
+        .deadline_unix_ms
+        .checked_sub(record.created_at_unix_ms)
+        .ok_or_else(|| {
+            format!(
+                "Provider task execution `{}` has a deadline earlier than its creation timestamp.",
+                record.execution_id
+            )
+        })?;
+    if !(crate::provider_manifest::MIN_ASYNC_POLL_INTERVAL_MS
+        ..=crate::provider_manifest::MAX_ASYNC_POLL_OR_BACKOFF_MS)
+        .contains(&record.poll_interval_ms)
+        || lifecycle_duration_ms < record.poll_interval_ms
+        || lifecycle_duration_ms > crate::provider_manifest::MAX_ASYNC_TIMEOUT_MS
+    {
+        return Err(format!(
+            "Provider task execution `{}` has an out-of-bounds poll interval or lifecycle deadline.",
+            record.execution_id
+        ));
+    }
+    if record.consecutive_observation_failures > PROVIDER_TASK_MAXIMUM_OBSERVATION_FAILURES
+        || (record.consecutive_observation_failures > 0 && record.error.is_none())
+    {
+        return Err(format!(
+            "Provider task execution `{}` has inconsistent observation failure state.",
+            record.execution_id
+        ));
+    }
+    if matches!(
+        record.phase,
+        ProviderAsyncTaskPhase::Dispatching | ProviderAsyncTaskPhase::DispatchOutcomeUnknown
+    ) && record.provider_task_id.is_some()
+    {
+        return Err(format!(
+            "Provider task execution `{}` cannot retain a provider task identifier in phase `{:?}`.",
+            record.execution_id, record.phase
+        ));
+    }
+    if matches!(
+        record.phase,
+        ProviderAsyncTaskPhase::Queued
+            | ProviderAsyncTaskPhase::Running
+            | ProviderAsyncTaskPhase::CancellationRequested
+            | ProviderAsyncTaskPhase::Completed
+            | ProviderAsyncTaskPhase::Cancelled
+    ) && record.provider_task_id.is_none()
+    {
+        return Err(format!(
+            "Provider task execution `{}` in phase `{:?}` is missing its confirmed provider task identifier.",
+            record.execution_id, record.phase
+        ));
+    }
+    validate_provider_task_recovery_context(record)?;
+    if record.route.manifest_revision > 0 && record.route.frozen_target.is_none() {
+        return Err(format!(
+            "Provider task execution `{}` at manifest revision {} is missing its dispatch-frozen target snapshot.",
+            record.execution_id, record.route.manifest_revision
+        ));
+    }
+    if record.route.manifest_revision > 0 && record.route.frozen_service_entry.is_none() {
+        return Err(format!(
+            "Provider task execution `{}` at manifest revision {} is missing its dispatch-frozen service-entry snapshot.",
+            record.execution_id, record.route.manifest_revision
+        ));
+    }
+    if let Some(frozen_target) = record.route.frozen_target.as_ref()
+        && (frozen_target.provider_id != record.route.provider_id
+            || frozen_target.target_id != record.route.selection.target_id
+            || frozen_target.service_entry_id != record.route.service_entry_id
+            || frozen_target.execution.adapter != record.route.adapter
+            || frozen_target.execution.execution_kind
+                != crate::ProviderToolExecutionKind::HttpJsonAsyncPoll)
+    {
+        return Err(format!(
+            "Provider task execution `{}` has a frozen target that does not match its immutable route affinity.",
+            record.execution_id
+        ));
+    }
+    if let Some(frozen_entry) = record.route.frozen_service_entry.as_ref()
+        && frozen_entry.id != record.route.service_entry_id
+    {
+        return Err(format!(
+            "Provider task execution `{}` has a frozen service entry that does not match its immutable route affinity.",
+            record.execution_id
+        ));
+    }
+    if record.route.manifest_revision > 0 {
+        validate_manifest_backed_provider_task(record)?;
+    } else if let Some(operation) = record.route.frozen_operation.as_ref() {
+        validate_frozen_provider_task_operation(record, operation)?;
+    }
+    Ok(())
+}
+
+/// Validates one bounded non-empty identity retained by durable task recovery.
+/// 校验持久任务恢复保留的一个有界非空身份。
+///
+/// # Parameters
+/// 参数
+/// `label` scopes the diagnostic and `value` is the exact retained identity.
+/// `label` 限定诊断范围，`value` 是精确保留的身份。
+///
+/// # Returns
+/// 返回值
+/// Success only for trimmed, control-free identities within the public persistence bound.
+/// 仅对位于公开持久化边界内、无控制字符且已去除首尾空白的身份返回成功。
+fn validate_provider_task_identity(label: &str, value: &str) -> Result<(), String> {
+    if value.is_empty()
+        || value.trim() != value
+        || value.chars().any(char::is_control)
+        || value.chars().count() > PROVIDER_TASK_IDENTITY_MAX_CHARACTERS
+    {
+        return Err(format!(
+            "Provider task recovery {label} must be non-empty, trimmed, control-free, and within {PROVIDER_TASK_IDENTITY_MAX_CHARACTERS} characters."
+        ));
+    }
+    Ok(())
+}
+
+/// Validates bounded non-secret adapter recovery metadata.
+/// 校验有界且不含秘密的适配器恢复元数据。
+///
+/// # Parameters
+/// 参数
+/// `record` owns the exact recovery context written after task confirmation.
+/// `record` 持有任务确认后写入的精确恢复上下文。
+///
+/// # Returns
+/// 返回值
+/// Success only for a bounded ordered list of canonical lowercase SHA-256 fingerprints.
+/// 仅对有界且由规范小写 SHA-256 指纹组成的有序列表返回成功。
+fn validate_provider_task_recovery_context(record: &ProviderAsyncTaskRecord) -> Result<(), String> {
+    let ProviderAsyncTaskRecoveryContext::OrderedSha256 { fingerprints } = &record.recovery else {
+        return Ok(());
+    };
+    if fingerprints.is_empty()
+        || fingerprints.len() > PROVIDER_TASK_MAXIMUM_RECOVERY_FINGERPRINTS
+        || fingerprints.iter().any(|fingerprint| {
+            fingerprint.len() != 64
+                || !fingerprint
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        })
+    {
+        return Err(format!(
+            "Provider task execution `{}` has invalid ordered SHA-256 recovery fingerprints.",
+            record.execution_id
+        ));
+    }
+    Ok(())
+}
+
+/// Requires every modern manifest-backed task to retain its complete frozen operation contract.
+/// 要求每个现代 Manifest 驱动任务保留完整冻结操作契约。
+///
+/// # Parameters
+/// 参数
+/// `record` is a task whose nonzero manifest revision forbids legacy recovery reconstruction.
+/// `record` 是一条非零 Manifest 修订禁止旧式恢复重建的任务。
+///
+/// # Returns
+/// 返回值
+/// Success only when target, operation, profiles, timing, and cancellation authority are closed.
+/// 仅当目标、操作、Profile、时间与取消权限全部闭合时返回成功。
+fn validate_manifest_backed_provider_task(record: &ProviderAsyncTaskRecord) -> Result<(), String> {
+    let operation_id = record.route.operation_id.as_deref().ok_or_else(|| {
+        format!(
+            "Provider task execution `{}` is missing its frozen operation identifier.",
+            record.execution_id
+        )
+    })?;
+    let operation = record.route.frozen_operation.as_ref().ok_or_else(|| {
+        format!(
+            "Provider task execution `{}` is missing its frozen operation declaration.",
+            record.execution_id
+        )
+    })?;
+    if operation.operation_id != operation_id {
+        return Err(format!(
+            "Provider task execution `{}` has inconsistent frozen operation identity.",
+            record.execution_id
+        ));
+    }
+    let frozen_entry = record.route.frozen_service_entry.as_ref().ok_or_else(|| {
+        format!(
+            "Provider task execution `{}` is missing its frozen service-entry declaration.",
+            record.execution_id
+        )
+    })?;
+    let frozen_target = record.route.frozen_target.as_ref().ok_or_else(|| {
+        format!(
+            "Provider task execution `{}` is missing its frozen target declaration.",
+            record.execution_id
+        )
+    })?;
+    crate::provider_manifest::validate_frozen_async_task_route_contract(
+        record.route.provider_id.as_str(),
+        frozen_entry,
+        frozen_target,
+        operation,
+    )
+    .map_err(|error| {
+        format!(
+            "Provider task execution `{}` has an invalid frozen route contract: {error}",
+            record.execution_id
+        )
+    })?;
+    validate_frozen_provider_task_operation(record, operation)
+}
+
+/// Validates one retained operation against the task route and lifecycle fields.
+/// 根据任务路由与生命周期字段校验一条保留操作。
+///
+/// # Parameters
+/// 参数
+/// `record` owns the durable route and `operation` is its dispatch-frozen declaration.
+/// `record` 持有持久路由，`operation` 是其分派时冻结的声明。
+///
+/// # Returns
+/// 返回值
+/// Success only when the asynchronous operation exactly explains every retained runtime field.
+/// 仅当异步操作可精确解释每个保留运行时字段时返回成功。
+fn validate_frozen_provider_task_operation(
+    record: &ProviderAsyncTaskRecord,
+    operation: &crate::provider_manifest::OperationDeclaration,
+) -> Result<(), String> {
+    if record.route.operation_id.as_deref() != Some(operation.operation_id.as_str())
+        || !operation
+            .tool_target_refs
+            .iter()
+            .any(|target_id| target_id == &record.route.selection.target_id)
+    {
+        return Err(format!(
+            "Provider task execution `{}` has a frozen operation outside its target affinity.",
+            record.execution_id
+        ));
+    }
+    let async_execution = operation.async_execution.as_ref().ok_or_else(|| {
+        format!(
+            "Provider task execution `{}` has no frozen asynchronous lifecycle declaration.",
+            record.execution_id
+        )
+    })?;
+    let maximum_task_deadline_unix_ms = record
+        .created_at_unix_ms
+        .checked_add(async_execution.timeout_ms)
+        .ok_or_else(|| {
+            format!(
+                "Provider task execution `{}` has an overflowing frozen asynchronous deadline.",
+                record.execution_id
+            )
+        })?;
+    if async_execution.generic_json.is_none()
+        || async_execution.poll_interval_ms != record.poll_interval_ms
+        || async_execution.max_backoff_ms < async_execution.poll_interval_ms
+        || async_execution.max_backoff_ms > crate::provider_manifest::MAX_ASYNC_POLL_OR_BACKOFF_MS
+        || async_execution.timeout_ms < async_execution.poll_interval_ms
+        || async_execution.timeout_ms > crate::provider_manifest::MAX_ASYNC_TIMEOUT_MS
+        // The parent operation deadline starts before credential and upload preparation. A task
+        // may therefore retain less than its manifest lifecycle timeout, but it may never extend it.
+        // 父 operation 截止时间早于凭据与上传准备开始。因此任务可保留短于 Manifest 生命周期
+        // 超时的预算，但绝不能延长该预算。
+        || record.deadline_unix_ms > maximum_task_deadline_unix_ms
+        || (record.cancellation_supported && !async_execution.cancellation_supported)
+    {
+        return Err(format!(
+            "Provider task execution `{}` has lifecycle state inconsistent with its frozen operation.",
+            record.execution_id
+        ));
+    }
+    let request_profiles_match = operation.request_profile_refs.len()
+        == record.route.frozen_request_profiles.len()
+        && operation
+            .request_profile_refs
+            .iter()
+            .zip(record.route.frozen_request_profiles.iter())
+            .all(|(profile_id, profile)| profile_id == &profile.profile_id);
+    let response_profiles_match = operation.response_profile_refs.len()
+        == record.route.frozen_response_profiles.len()
+        && operation
+            .response_profile_refs
+            .iter()
+            .zip(record.route.frozen_response_profiles.iter())
+            .all(|(profile_id, profile)| profile_id == &profile.profile_id);
+    if !request_profiles_match || !response_profiles_match {
+        return Err(format!(
+            "Provider task execution `{}` has frozen profiles inconsistent with its operation references.",
+            record.execution_id
+        ));
+    }
+    Ok(())
 }
 
 /// Validates immutable affinity and monotonic lifecycle movement for one task replacement.
@@ -427,6 +1060,7 @@ fn validate_provider_task_replacement(
         || current.route != replacement.route
         || current.created_at_unix_ms != replacement.created_at_unix_ms
         || current.deadline_unix_ms != replacement.deadline_unix_ms
+        || current.poll_interval_ms != replacement.poll_interval_ms
     {
         return Err(format!(
             "Provider task execution `{}` attempted to change immutable recovery affinity.",
@@ -578,34 +1212,92 @@ fn current_unix_millis() -> Result<u64, String> {
 /// Loads the newest complete strict snapshot or an empty version-one state.
 /// 加载最新完整严格快照，或返回空的第一版状态。
 fn load_latest_snapshot(directory: &Path) -> Result<ProviderTaskRecoverySnapshot, String> {
-    let mut snapshots = fs::read_dir(directory)
-        .map_err(|error| format!("Provider task recovery directory read failed: {error}"))?
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| {
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name.starts_with("snapshot-") && name.ends_with(".json"))
-        })
-        .collect::<Vec<_>>();
-    snapshots.sort();
-    let Some(path) = snapshots.pop() else {
+    let entries = fs::read_dir(directory)
+        .map_err(|error| format!("Provider task recovery directory read failed: {error}"))?;
+    let mut snapshots = BTreeMap::new();
+    for (entry_index, entry) in entries.enumerate() {
+        if entry_index >= PROVIDER_TASK_MAXIMUM_DIRECTORY_ENTRIES {
+            return Err(format!(
+                "Provider task recovery directory exceeds the {PROVIDER_TASK_MAXIMUM_DIRECTORY_ENTRIES} entry scan limit."
+            ));
+        }
+        let entry = entry
+            .map_err(|error| format!("Provider task recovery directory entry failed: {error}"))?;
+        let path = entry.path();
+        let Some(file_revision) = provider_task_snapshot_file_revision(&path)? else {
+            continue;
+        };
+        if snapshots.len() >= PROVIDER_TASK_MAXIMUM_SNAPSHOT_FILES {
+            return Err(format!(
+                "Provider task recovery directory exceeds the {PROVIDER_TASK_MAXIMUM_SNAPSHOT_FILES} snapshot-file limit."
+            ));
+        }
+        if snapshots.insert(file_revision, path.clone()).is_some() {
+            return Err(format!(
+                "Provider task recovery directory contains duplicate snapshot revision {file_revision}."
+            ));
+        }
+    }
+    let Some((file_revision, path)) = snapshots.into_iter().next_back() else {
         return Ok(ProviderTaskRecoverySnapshot {
             version: PROVIDER_TASK_RECOVERY_VERSION,
             revision: 0,
             records: BTreeMap::new(),
         });
     };
-    let bytes = fs::read(&path).map_err(|error| {
+    let metadata = fs::symlink_metadata(&path).map_err(|error| {
+        format!(
+            "Provider task recovery snapshot `{}` could not be inspected: {error}",
+            path.display()
+        )
+    })?;
+    if !metadata.file_type().is_file() {
+        return Err(format!(
+            "Provider task recovery snapshot `{}` is not a regular file.",
+            path.display()
+        ));
+    }
+    if metadata.len() > PROVIDER_TASK_SNAPSHOT_MAX_BYTES {
+        return Err(format!(
+            "Provider task recovery snapshot `{}` exceeds the {PROVIDER_TASK_SNAPSHOT_MAX_BYTES} byte limit.",
+            path.display()
+        ));
+    }
+    let file = fs::File::open(&path).map_err(|error| {
+        format!(
+            "Provider task recovery snapshot `{}` could not be opened: {error}",
+            path.display()
+        )
+    })?;
+    let mut limited = file.take(PROVIDER_TASK_SNAPSHOT_MAX_BYTES.saturating_add(1));
+    let mut bytes = Vec::new();
+    limited.read_to_end(&mut bytes).map_err(|error| {
         format!(
             "Provider task recovery snapshot `{}` could not be read: {error}",
             path.display()
         )
     })?;
-    let snapshot: ProviderTaskRecoverySnapshot =
+    if bytes.len() as u64 > PROVIDER_TASK_SNAPSHOT_MAX_BYTES {
+        return Err(format!(
+            "Provider task recovery snapshot `{}` changed while reading and exceeds the {PROVIDER_TASK_SNAPSHOT_MAX_BYTES} byte limit.",
+            path.display()
+        ));
+    }
+    let snapshot_value: serde_json::Value =
         serde_json::from_slice(bytes.as_slice()).map_err(|error| {
             format!(
                 "Provider task recovery snapshot `{}` is invalid: {error}",
+                path.display()
+            )
+        })?;
+    crate::provider_manifest::validate_runtime_json_bounds(
+        &snapshot_value,
+        "Provider task recovery snapshot",
+    )?;
+    let snapshot: ProviderTaskRecoverySnapshot =
+        serde_json::from_value(snapshot_value).map_err(|error| {
+            format!(
+                "Provider task recovery snapshot `{}` has an invalid structure: {error}",
                 path.display()
             )
         })?;
@@ -616,7 +1308,84 @@ fn load_latest_snapshot(directory: &Path) -> Result<ProviderTaskRecoverySnapshot
             path.display()
         ));
     }
+    if snapshot.revision != file_revision {
+        return Err(format!(
+            "Provider task recovery snapshot `{}` declares revision {} but its file name declares revision {file_revision}.",
+            path.display(),
+            snapshot.revision
+        ));
+    }
+    if snapshot.records.len() > PROVIDER_TASK_MAXIMUM_RECORDS {
+        return Err(format!(
+            "Provider task recovery snapshot `{}` exceeds the {PROVIDER_TASK_MAXIMUM_RECORDS} record limit.",
+            path.display()
+        ));
+    }
+    for (execution_id, record) in &snapshot.records {
+        if execution_id != &record.execution_id {
+            return Err(format!(
+                "Provider task recovery snapshot `{}` maps execution `{execution_id}` to record `{}`.",
+                path.display(),
+                record.execution_id
+            ));
+        }
+        validate_provider_task_record(record).map_err(|error| {
+            format!(
+                "Provider task recovery snapshot `{}` contains an invalid record: {error}",
+                path.display()
+            )
+        })?;
+    }
     Ok(snapshot)
+}
+
+/// Parses one exact host-generated provider-task snapshot file identity.
+/// 解析一个精确由宿主生成的供应商任务快照文件身份。
+///
+/// # Parameters
+/// 参数
+/// `path` is one bounded directory entry under the host-owned recovery directory.
+/// `path` 是宿主持有恢复目录下的一条有界目录项。
+///
+/// # Returns
+/// 返回值
+/// `None` for unrelated files, the embedded positive revision for an exact host name, or an
+/// explicit error for a malformed file claiming the reserved snapshot prefix.
+/// 对无关文件返回 `None`，对精确宿主文件名返回其中的正修订号；对冒用保留快照前缀的
+/// 畸形文件返回明确错误。
+fn provider_task_snapshot_file_revision(path: &Path) -> Result<Option<u64>, String> {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return Ok(None);
+    };
+    if !name.starts_with("snapshot-") || !name.ends_with(".json") {
+        return Ok(None);
+    }
+    let identity = name
+        .strip_prefix("snapshot-")
+        .and_then(|name| name.strip_suffix(".json"))
+        .expect("reserved prefix and suffix were checked");
+    let Some((revision_text, uuid_text)) = identity.split_once('-') else {
+        return Err(format!(
+            "Provider task recovery snapshot file `{name}` has an invalid host identity."
+        ));
+    };
+    if revision_text.len() != 20
+        || !revision_text.bytes().all(|byte| byte.is_ascii_digit())
+        || Uuid::parse_str(uuid_text).is_err()
+    {
+        return Err(format!(
+            "Provider task recovery snapshot file `{name}` has an invalid host identity."
+        ));
+    }
+    let revision = revision_text.parse::<u64>().map_err(|_| {
+        format!("Provider task recovery snapshot file `{name}` has an invalid revision.")
+    })?;
+    if revision == 0 {
+        return Err(format!(
+            "Provider task recovery snapshot file `{name}` cannot declare revision zero."
+        ));
+    }
+    Ok(Some(revision))
 }
 
 /// Best-effort removes obsolete snapshots after the authoritative replacement is durable.
@@ -629,7 +1398,13 @@ fn cleanup_old_snapshots(directory: &Path, retained: &Path) {
             return;
         }
     };
-    for entry in entries {
+    for (entry_index, entry) in entries.enumerate() {
+        if entry_index >= PROVIDER_TASK_MAXIMUM_DIRECTORY_ENTRIES {
+            eprintln!(
+                "[provider-task] obsolete recovery cleanup stopped at the {PROVIDER_TASK_MAXIMUM_DIRECTORY_ENTRIES} entry scan limit"
+            );
+            break;
+        }
         let path = match entry {
             Ok(entry) => entry.path(),
             Err(error) => {
@@ -639,11 +1414,17 @@ fn cleanup_old_snapshots(directory: &Path, retained: &Path) {
                 continue;
             }
         };
+        // removable accepts only host-generated published or temporary snapshot names.
+        // removable 仅接受宿主生成的已发布或临时快照名称。
+        let removable = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| {
+                (name.starts_with("snapshot-") && name.ends_with(".json"))
+                    || (name.starts_with(".snapshot-") && name.ends_with(".tmp"))
+            });
         if path != retained
-            && path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name.starts_with("snapshot-") && name.ends_with(".json"))
+            && removable
             && let Err(error) = fs::remove_file(&path)
         {
             eprintln!(
@@ -675,18 +1456,281 @@ mod tests {
                     connection_id: String::from("connection-one"),
                     target_id: String::from("wan2.7-t2v"),
                 },
-                adapter: ProviderToolAdapterKind::AlibabaWanVideoGenerate,
+                adapter: ProviderToolAdapterKind::GenericJson,
+                manifest_revision: 0,
+                frozen_target: None,
+                frozen_service_entry: None,
+                operation_id: None,
+                frozen_operation: None,
+                frozen_request_profiles: vec![crate::provider_manifest::RequestProjectionProfile {
+                    profile_id: String::from("operation.request.v1"),
+                    revision: 3,
+                    steps: Vec::new(),
+                }],
+                frozen_response_profiles: vec![
+                    crate::provider_manifest::ResponseProjectionProfile {
+                        profile_id: String::from("operation.response.v1"),
+                        revision: 4,
+                        steps: Vec::new(),
+                    },
+                ],
             },
             provider_task_id: Some(String::from("task-one")),
             recovery: ProviderAsyncTaskRecoveryContext::None,
             phase: ProviderAsyncTaskPhase::Queued,
             created_at_unix_ms: 1,
             updated_at_unix_ms: 1,
-            deadline_unix_ms: 2,
+            deadline_unix_ms: 60_001,
+            poll_interval_ms: 15_000,
+            consecutive_observation_failures: 0,
             cancellation_supported: true,
             error: None,
             result: None,
         }
+    }
+
+    /// Builds one complete modern manifest-backed asynchronous recovery record.
+    /// 构建一条完整的现代 Manifest 驱动异步恢复记录。
+    fn manifest_record(execution_id: &str) -> ProviderAsyncTaskRecord {
+        let catalog = crate::provider_manifest::load_bundled_resolved_catalog();
+        let manifest = catalog
+            .manifest("alibaba")
+            .expect("bundled Alibaba manifest should exist");
+        let target = manifest
+            .tool_targets
+            .iter()
+            .find(|target| {
+                target.execution.execution_kind
+                    == crate::ProviderToolExecutionKind::HttpJsonAsyncPoll
+            })
+            .cloned()
+            .expect("bundled Alibaba manifest should expose one asynchronous target");
+        let operation = manifest
+            .operations
+            .iter()
+            .find(|operation| {
+                operation
+                    .tool_target_refs
+                    .iter()
+                    .any(|target_id| target_id == &target.target_id)
+            })
+            .cloned()
+            .expect("asynchronous target should have one owning operation");
+        let frozen_service_entry = manifest
+            .descriptor
+            .service_entries
+            .iter()
+            .find(|entry| entry.id == target.service_entry_id)
+            .cloned()
+            .expect("asynchronous target should have one owning service entry");
+        let async_execution = operation
+            .async_execution
+            .as_ref()
+            .expect("asynchronous operation should retain its lifecycle");
+        let task_timeout_ms = async_execution.timeout_ms;
+        let poll_interval_ms = async_execution.poll_interval_ms;
+        let cancellation_supported = async_execution.cancellation_supported;
+        let created_at_unix_ms = 1_000;
+        ProviderAsyncTaskRecord {
+            execution_id: execution_id.to_string(),
+            owner_session_id: Some(String::from("session-modern")),
+            route: ProviderAsyncTaskRoute {
+                provider_id: target.provider_id.clone(),
+                service_entry_id: target.service_entry_id.clone(),
+                connection_id: String::from("connection-modern"),
+                selection: ProviderToolTargetSelection {
+                    connection_id: String::from("connection-modern"),
+                    target_id: target.target_id.clone(),
+                },
+                adapter: target.execution.adapter,
+                manifest_revision: manifest.revision,
+                frozen_target: Some(target),
+                frozen_service_entry: Some(frozen_service_entry),
+                operation_id: Some(operation.operation_id.clone()),
+                frozen_request_profiles: manifest
+                    .request_profiles_for_operation(Some(&operation))
+                    .expect("operation request profiles should resolve"),
+                frozen_response_profiles: manifest
+                    .response_profiles_for_operation(Some(&operation))
+                    .expect("operation response profiles should resolve"),
+                frozen_operation: Some(operation),
+            },
+            provider_task_id: Some(String::from("provider-task-modern")),
+            recovery: ProviderAsyncTaskRecoveryContext::None,
+            phase: ProviderAsyncTaskPhase::Queued,
+            created_at_unix_ms,
+            updated_at_unix_ms: created_at_unix_ms,
+            deadline_unix_ms: created_at_unix_ms + task_timeout_ms,
+            poll_interval_ms,
+            consecutive_observation_failures: 0,
+            cancellation_supported,
+            error: None,
+            result: None,
+        }
+    }
+
+    /// Verifies modern task recovery is explained completely by its frozen operation contract.
+    /// 验证现代任务恢复可由其冻结操作契约完整解释。
+    #[test]
+    fn manifest_task_requires_complete_frozen_lifecycle_contract() {
+        let valid = manifest_record("execution-modern-valid");
+        validate_provider_task_record(&valid).expect("complete modern record should validate");
+
+        let mut missing_operation = valid.clone();
+        missing_operation.execution_id = String::from("execution-modern-missing-operation");
+        missing_operation.route.frozen_operation = None;
+        let error = validate_provider_task_record(&missing_operation)
+            .expect_err("modern recovery without an operation must fail closed");
+        assert!(error.contains("frozen operation declaration"), "{error}");
+
+        let mut missing_service_entry = valid.clone();
+        missing_service_entry.execution_id = String::from("execution-modern-missing-service-entry");
+        missing_service_entry.route.frozen_service_entry = None;
+        let error = validate_provider_task_record(&missing_service_entry)
+            .expect_err("modern recovery without a service entry must fail closed");
+        assert!(error.contains("service-entry snapshot"), "{error}");
+
+        let mut changed_poll = valid.clone();
+        changed_poll.execution_id = String::from("execution-modern-changed-poll");
+        changed_poll.poll_interval_ms += 1;
+        let error = validate_provider_task_record(&changed_poll)
+            .expect_err("poll interval drift must fail closed");
+        assert!(error.contains("lifecycle state"), "{error}");
+
+        let mut shortened_deadline = valid.clone();
+        shortened_deadline.execution_id = String::from("execution-modern-shortened-deadline");
+        shortened_deadline.deadline_unix_ms -= 1;
+        validate_provider_task_record(&shortened_deadline)
+            .expect("credential and upload preparation may consume the parent deadline");
+
+        let mut expanded_deadline = valid.clone();
+        expanded_deadline.execution_id = String::from("execution-modern-expanded-deadline");
+        expanded_deadline.deadline_unix_ms += 1;
+        let error = validate_provider_task_record(&expanded_deadline)
+            .expect_err("persisted task deadline cannot extend the frozen lifecycle");
+        assert!(error.contains("lifecycle state"), "{error}");
+
+        let mut expanded_cancellation = valid;
+        expanded_cancellation.execution_id = String::from("execution-modern-cancellation");
+        if let Some(operation) = expanded_cancellation.route.frozen_operation.as_mut()
+            && let Some(async_execution) = operation.async_execution.as_mut()
+        {
+            async_execution.cancellation_supported = false;
+        }
+        expanded_cancellation.cancellation_supported = true;
+        let error = validate_provider_task_record(&expanded_cancellation)
+            .expect_err("persisted cancellation authority cannot exceed the frozen operation");
+        assert!(error.contains("lifecycle state"), "{error}");
+    }
+
+    /// Verifies durable route corruption cannot bypass Manifest transport and header authority.
+    /// 验证持久路由损坏无法绕过 Manifest 的传输与请求头权限边界。
+    #[test]
+    fn manifest_task_revalidates_frozen_transport_authority() {
+        // hostile_path would reinterpret the concatenated task URL authority without the
+        // same-origin endpoint validator used during Manifest compilation.
+        // hostile_path 若缺少 Manifest 编译时使用的同源端点验证器，会重新解释拼接后任务 URL
+        // 的 authority。
+        let mut hostile_path = manifest_record("execution-modern-hostile-path");
+        let lifecycle = hostile_path
+            .route
+            .frozen_operation
+            .as_mut()
+            .and_then(|operation| operation.async_execution.as_mut())
+            .and_then(|execution| execution.generic_json.as_mut())
+            .expect("modern task should retain a generic lifecycle");
+        lifecycle.poll_endpoint_path = String::from("@credential-exfil.example/task");
+        let error = validate_provider_task_record(&hostile_path)
+            .expect_err("a recovered cross-authority poll path must fail closed");
+        assert!(error.contains("invalid_endpoint_path"), "{error}");
+
+        // insecure_origin proves a system task cannot downgrade its frozen service entry to HTTP.
+        // insecure_origin 证明系统任务不能把冻结服务入口降级为 HTTP。
+        let mut insecure_origin = manifest_record("execution-modern-insecure-origin");
+        insecure_origin
+            .route
+            .frozen_service_entry
+            .as_mut()
+            .expect("modern task should retain its service entry")
+            .base_url = String::from("http://api.example.com");
+        let error = validate_provider_task_record(&insecure_origin)
+            .expect_err("a recovered system HTTP origin must fail closed");
+        assert!(error.contains("invalid_url_scheme"), "{error}");
+
+        // protected_header proves recovered fixed headers receive the same engine-authority check.
+        // protected_header 证明恢复的固定请求头会接受同一引擎权限校验。
+        let mut protected_header = manifest_record("execution-modern-protected-header");
+        protected_header
+            .route
+            .frozen_target
+            .as_mut()
+            .expect("modern task should retain its target")
+            .execution
+            .fixed_headers
+            .insert(
+                String::from("host"),
+                String::from("credential-exfil.example"),
+            );
+        let error = validate_provider_task_record(&protected_header)
+            .expect_err("a recovered engine-owned header must fail closed");
+        assert!(
+            error.contains("invalid_provider_tool_fixed_header_name"),
+            "{error}"
+        );
+    }
+
+    /// Verifies recovery fingerprints and transient observation backoff remain bounded.
+    /// 验证恢复指纹与瞬时观测退避保持有界。
+    #[test]
+    fn recovery_fingerprints_and_observation_backoff_are_bounded() {
+        let mut task = manifest_record("execution-modern-backoff");
+        let base = task.poll_interval_ms;
+        let maximum = task
+            .route
+            .frozen_operation
+            .as_ref()
+            .and_then(|operation| operation.async_execution.as_ref())
+            .map(|declaration| declaration.max_backoff_ms)
+            .expect("modern operation should declare a backoff ceiling");
+        assert_eq!(provider_task_observation_delay_ms(&task), base);
+        task.consecutive_observation_failures = 1;
+        task.error = Some(String::from("transient"));
+        assert_eq!(
+            provider_task_observation_delay_ms(&task),
+            base.saturating_mul(2).min(maximum)
+        );
+        task.consecutive_observation_failures = PROVIDER_TASK_MAXIMUM_OBSERVATION_FAILURES;
+        assert_eq!(provider_task_observation_delay_ms(&task), maximum);
+
+        task.consecutive_observation_failures = 0;
+        task.error = None;
+        task.recovery = ProviderAsyncTaskRecoveryContext::OrderedSha256 {
+            fingerprints: vec!["A".repeat(64)],
+        };
+        let error = validate_provider_task_record(&task)
+            .expect_err("non-canonical recovery fingerprints must fail closed");
+        assert!(error.contains("SHA-256"), "{error}");
+    }
+
+    /// Verifies task telemetry freezes operation, manifest, target, and profile identity without provider task ids.
+    /// 验证任务遥测冻结 operation、Manifest、目标与 Profile 身份，且不包含供应商任务标识。
+    #[test]
+    fn async_task_telemetry_retains_only_frozen_non_secret_identity() {
+        let mut task = record("execution-telemetry");
+        task.route.manifest_revision = 19;
+        task.route.operation_id = Some(String::from("video.generate"));
+        let event = provider_async_task_telemetry_event(&task)
+            .expect("operation-bound task should produce telemetry");
+        event.validate().expect("task event should validate");
+        assert_eq!(event.manifest_revision, Some(19));
+        assert_eq!(event.operation_id.as_deref(), Some("video.generate"));
+        assert_eq!(event.tool_target_id.as_deref(), Some("wan2.7-t2v"));
+        assert_eq!(event.task_phase.as_deref(), Some("queued"));
+        assert_eq!(event.request_profiles[0].revision, 3);
+        assert_eq!(event.response_profiles[0].revision, 4);
+        let serialized = serde_json::to_string(&event).expect("event should serialize");
+        assert!(!serialized.contains("task-one"));
+        assert!(!serialized.contains("session-one"));
     }
 
     /// Verifies a published snapshot reloads without retaining any secret field.
@@ -718,6 +1762,55 @@ mod tests {
         )
         .expect("snapshot should be readable");
         assert!(!document.contains("secret"));
+        assert!(document.contains("operation.request.v1"));
+        assert!(document.contains("operation.response.v1"));
+        fs::remove_dir_all(directory).expect("temporary directory should be removable");
+    }
+
+    /// Verifies nonzero manifest revisions cannot recover through the legacy current-target path.
+    /// 验证非零 Manifest 修订不能通过旧版当前目标路径恢复。
+    #[test]
+    fn manifest_task_without_frozen_target_fails_closed_on_write_and_load() {
+        // invalid_record simulates a structurally valid but cross-generation recovery snapshot.
+        // invalid_record 模拟结构有效但会跨代际恢复的快照。
+        let mut invalid_record = record("execution-missing-frozen-target");
+        invalid_record.route.manifest_revision = 7;
+        // direct_store proves new in-process mutations cannot publish the invalid record.
+        // direct_store 证明新的进程内变更不能发布无效记录。
+        let direct_store = ProviderTaskRecoveryStore::default();
+        let direct_error = direct_store
+            .replace(invalid_record.clone())
+            .expect_err("nonzero revision without frozen target must fail before persistence");
+        assert!(direct_error.contains("dispatch-frozen target"));
+
+        // directory owns one injected durable snapshot used to exercise startup recovery.
+        // directory 持有一份注入的持久化快照，用于验证启动恢复。
+        let directory =
+            std::env::temp_dir().join(format!("vulcan-provider-task-invalid-{}", Uuid::new_v4()));
+        fs::create_dir_all(&directory).expect("temporary directory should create");
+        // snapshot preserves valid JSON and version fields while violating only the frozen route invariant.
+        // snapshot 保持 JSON 与版本字段有效，仅违反冻结路由不变量。
+        let snapshot = ProviderTaskRecoverySnapshot {
+            version: PROVIDER_TASK_RECOVERY_VERSION,
+            revision: 1,
+            records: BTreeMap::from([(invalid_record.execution_id.clone(), invalid_record)]),
+        };
+        // snapshot_path follows the exact production discovery naming contract.
+        // snapshot_path 遵循生产发现使用的精确命名契约。
+        let snapshot_path = directory
+            .join("snapshot-00000000000000000001-00000000-0000-4000-8000-000000000001.json");
+        fs::write(
+            &snapshot_path,
+            serde_json::to_vec_pretty(&snapshot).expect("injected snapshot should encode"),
+        )
+        .expect("injected snapshot should write");
+        // recovered_store must reject the semantic mismatch instead of entering the legacy path.
+        // recovered_store 必须拒绝语义不匹配，而不是进入旧版路径。
+        let recovered_store = ProviderTaskRecoveryStore::default();
+        let recovery_error = recovered_store
+            .configure(&directory)
+            .expect_err("invalid durable snapshot must fail closed");
+        assert!(recovery_error.contains("dispatch-frozen target"));
         fs::remove_dir_all(directory).expect("temporary directory should be removable");
     }
 
@@ -743,6 +1836,10 @@ mod tests {
                 download_url: Some(String::from(
                     "https://example.com/video.mp4?signature=temporary-secret",
                 )),
+                download_policy: Some(crate::ProviderToolResourceDownloadPolicy {
+                    encoding: crate::ProviderToolResourceEncoding::HttpsUrl,
+                    host_suffixes: vec![String::from("example.com")],
+                }),
             }]),
         });
         store
@@ -812,6 +1909,88 @@ mod tests {
                 .lock()
                 .expect("revision lock should be healthy"),
             4
+        );
+        fs::remove_dir_all(directory).expect("temporary directory should be removable");
+    }
+
+    /// Verifies the selected file identity and embedded revision cannot disagree.
+    /// 验证所选文件身份与内嵌修订号不能不一致。
+    #[test]
+    fn recovery_snapshot_file_revision_must_match_document_revision() {
+        let directory =
+            std::env::temp_dir().join(format!("vulcan-provider-task-revision-{}", Uuid::new_v4()));
+        fs::create_dir_all(&directory).expect("temporary directory should create");
+        let snapshot = ProviderTaskRecoverySnapshot {
+            version: PROVIDER_TASK_RECOVERY_VERSION,
+            revision: 2,
+            records: BTreeMap::new(),
+        };
+        let path = directory
+            .join("snapshot-00000000000000000001-00000000-0000-4000-8000-000000000001.json");
+        fs::write(
+            path,
+            serde_json::to_vec_pretty(&snapshot).expect("snapshot should encode"),
+        )
+        .expect("snapshot should write");
+
+        let error = load_latest_snapshot(&directory)
+            .expect_err("file and document revisions must agree exactly");
+        assert!(error.contains("declares revision 2"), "{error}");
+        fs::remove_dir_all(directory).expect("temporary directory should be removable");
+    }
+
+    /// Verifies failed initial publication restores the store's prior in-memory configuration.
+    /// 验证初始发布失败会恢复存储先前的内存配置。
+    #[test]
+    fn recovery_configuration_rolls_back_after_initial_publication_failure() {
+        let store = ProviderTaskRecoveryStore::default();
+        store
+            .replace(record("execution-before-configure"))
+            .expect("unconfigured in-memory record should insert");
+        let directory = std::env::temp_dir().join(format!(
+            "vulcan-provider-task-configure-rollback-{}",
+            Uuid::new_v4()
+        ));
+        fs::create_dir_all(&directory).expect("temporary directory should create");
+        let snapshot = ProviderTaskRecoverySnapshot {
+            version: PROVIDER_TASK_RECOVERY_VERSION,
+            revision: u64::MAX,
+            records: BTreeMap::new(),
+        };
+        let path = directory
+            .join("snapshot-18446744073709551615-00000000-0000-4000-8000-000000000001.json");
+        fs::write(
+            path,
+            serde_json::to_vec_pretty(&snapshot).expect("snapshot should encode"),
+        )
+        .expect("snapshot should write");
+
+        let error = store
+            .configure(&directory)
+            .expect_err("exhausted durable revision must fail publication");
+        assert!(error.contains("revision is exhausted"), "{error}");
+        assert_eq!(
+            store
+                .snapshot()
+                .expect("prior memory state should remain")
+                .into_iter()
+                .map(|record| record.execution_id)
+                .collect::<Vec<_>>(),
+            vec![String::from("execution-before-configure")]
+        );
+        assert_eq!(
+            *store
+                .revision
+                .lock()
+                .expect("revision lock should remain healthy"),
+            0
+        );
+        assert!(
+            store
+                .directory
+                .lock()
+                .expect("directory lock should remain healthy")
+                .is_none()
         );
         fs::remove_dir_all(directory).expect("temporary directory should be removable");
     }
@@ -920,8 +2099,8 @@ mod tests {
             .replace(queued.clone())
             .expect("queued record should be inserted");
         let mut mutated = queued;
-        mutated.recovery = ProviderAsyncTaskRecoveryContext::FunAsr {
-            source_url_sha256: vec![String::from("unexpected")],
+        mutated.recovery = ProviderAsyncTaskRecoveryContext::OrderedSha256 {
+            fingerprints: vec!["a".repeat(64)],
         };
 
         let error = store
@@ -978,5 +2157,74 @@ mod tests {
         prune_terminal_records(&mut records, PROVIDER_TASK_TERMINAL_RETENTION_MS + 2, None);
         assert!(!records.contains_key("expired"));
         assert!(records.contains_key("recent"));
+    }
+
+    /// Verifies oversized or excessively numerous durable snapshot inputs fail before allocation.
+    /// 验证过大或数量过多的持久快照输入在分配前关闭失败。
+    #[test]
+    fn recovery_snapshot_files_and_bytes_are_bounded() {
+        let oversized_directory =
+            std::env::temp_dir().join(format!("vulcan-provider-task-oversized-{}", Uuid::new_v4()));
+        fs::create_dir_all(&oversized_directory).expect("oversized directory should create");
+        let oversized_path = oversized_directory
+            .join("snapshot-00000000000000000001-00000000-0000-4000-8000-000000000001.json");
+        let oversized_file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&oversized_path)
+            .expect("oversized sparse snapshot should create");
+        oversized_file
+            .set_len(PROVIDER_TASK_SNAPSHOT_MAX_BYTES + 1)
+            .expect("oversized sparse snapshot should resize");
+        drop(oversized_file);
+        let oversized_error = load_latest_snapshot(&oversized_directory)
+            .expect_err("oversized snapshot must fail before reading bytes");
+        assert!(oversized_error.contains("byte limit"), "{oversized_error}");
+        fs::remove_dir_all(&oversized_directory)
+            .expect("oversized temporary directory should be removable");
+
+        let crowded_directory =
+            std::env::temp_dir().join(format!("vulcan-provider-task-crowded-{}", Uuid::new_v4()));
+        fs::create_dir_all(&crowded_directory).expect("crowded directory should create");
+        for index in 1..=PROVIDER_TASK_MAXIMUM_SNAPSHOT_FILES + 1 {
+            let path = crowded_directory.join(format!(
+                "snapshot-{index:020}-00000000-0000-4000-8000-000000000001.json"
+            ));
+            fs::write(path, b"{}").expect("candidate snapshot should write");
+        }
+        let crowded_error = load_latest_snapshot(&crowded_directory)
+            .expect_err("too many snapshot files must fail before selecting one");
+        assert!(
+            crowded_error.contains("snapshot-file limit"),
+            "{crowded_error}"
+        );
+        fs::remove_dir_all(&crowded_directory)
+            .expect("crowded temporary directory should be removable");
+    }
+
+    /// Verifies record-cap exhaustion preserves every already active task.
+    /// 验证记录容量耗尽时保留全部既有活动任务。
+    #[test]
+    fn recovery_record_capacity_preserves_active_tasks() {
+        let store = ProviderTaskRecoveryStore::default();
+        {
+            let mut records = store
+                .records
+                .lock()
+                .expect("provider task recovery lock should be healthy");
+            for index in 0..PROVIDER_TASK_MAXIMUM_RECORDS {
+                let task = record(format!("active-{index:04}").as_str());
+                records.insert(task.execution_id.clone(), task);
+            }
+        }
+        let error = store
+            .replace(record("overflow"))
+            .expect_err("a new active task beyond the total cap must fail");
+        assert!(error.contains("capacity"), "{error}");
+        let retained = store
+            .snapshot()
+            .expect("retained tasks should remain readable");
+        assert_eq!(retained.len(), PROVIDER_TASK_MAXIMUM_RECORDS);
+        assert!(retained.iter().all(|task| task.execution_id != "overflow"));
     }
 }

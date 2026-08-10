@@ -207,13 +207,16 @@ pub(crate) async fn maybe_prepare_next_webui_pending_prompt(
     let entry_agent_runtime = agent_runtime_for_pending_prompt(agent_runtime, &entry);
     // Queued media is prepared at the actual dispatch boundary so native provider references cannot expire while waiting.
     // 排队媒体在实际分发边界准备，避免原生供应商引用在等待期间过期。
-    let pending_conversation_id = session_id.to_string();
+    // pendingRuntimeState supplies the exact persisted lease identity captured for this queue owner.
+    // pendingRuntimeState 提供为该队列所有者捕获的精确持久化租约身份。
+    let pending_runtime_state = workspace_snapshot.session_runtime_state.get(&session_id);
     if let Err(error) = prepare_submission_media(
         app,
         state,
         &entry_agent_runtime,
         entry.id.as_str(),
-        Some(pending_conversation_id.as_str()),
+        Some(session_id),
+        pending_runtime_state,
         None,
         entry.attachments.as_slice(),
     )

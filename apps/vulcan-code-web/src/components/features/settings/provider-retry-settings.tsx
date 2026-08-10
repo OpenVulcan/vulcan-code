@@ -18,7 +18,7 @@ const DEFAULT_PROVIDER_RETRY_SETTINGS: ProviderRetrySettingsSummary = {
   respectRetryAfter: true,
   retry429: true,
   rateLimit: {
-    maxRetries: 0,
+    maxRetries: 100_000,
     initialDelayMs: 5_000,
     maxDelayMs: 1_800_000,
     backoffFactorMilli: 2_000,
@@ -56,8 +56,8 @@ interface ProviderRetrySettingsDraft {
   // Whether rate-limit failures may be retried.
   // 是否允许重试限流失败。
   retry429: boolean
-  // Maximum rate-limit retries, where zero is unbounded.
-  // 限流最大重试次数；零表示无次数上限。
+  // Maximum finite rate-limit retries.
+  // 限流最大有限重试次数。
   rateLimitMaxRetries: string
   // Initial rate-limit wait in seconds.
   // 限流首次等待秒数。
@@ -197,9 +197,9 @@ export function ProviderRetrySettingsArea(props: {
             <input checked={draft.retry429} onChange={(event) => setDraft((current) => ({ ...current, retry429: event.currentTarget.checked }))} type="checkbox" />
             {text("自动重试 HTTP 429 与 Anthropic rate_limit_error", "Retry HTTP 429 and Anthropic rate_limit_error")}
           </label>
-          <p>{text("每次限流都会先显示等待记录。最大次数为 0 时持续重试，直到用户主动终止。", "Every rate limit first creates a visible wait record. Set maximum retries to 0 to continue until the user stops the run.")}</p>
+          <p>{text("每次限流都会先显示等待记录，且所有自动重试都受宿主硬上限约束。", "Every rate limit first creates a visible wait record, and all automatic retries remain under the host hard ceiling.")}</p>
           <div className="settings-form-grid two">
-            <ProviderRetryNumberField help={text("0 表示持续重试；最大 100000", "0 means unbounded; maximum 100000")} label={text("最大重试次数", "Maximum retries")} max={100000} min={0} onChange={(value) => setDraft((current) => ({ ...current, rateLimitMaxRetries: value }))} step={1} value={draft.rateLimitMaxRetries} />
+            <ProviderRetryNumberField help={text("1 到 100000 次", "1 to 100000 retries")} label={text("最大重试次数", "Maximum retries")} max={100000} min={1} onChange={(value) => setDraft((current) => ({ ...current, rateLimitMaxRetries: value }))} step={1} value={draft.rateLimitMaxRetries} />
             <ProviderRetryNumberField help={text("0.001 到 1800 秒", "0.001 to 1800 seconds")} label={text("首次等待（秒）", "Initial wait (seconds)")} max={1800} min={0.001} onChange={(value) => setDraft((current) => ({ ...current, rateLimitInitialDelaySeconds: value }))} step={0.001} value={draft.rateLimitInitialDelaySeconds} />
             <ProviderRetryNumberField help={text("不得小于首次等待，硬上限 1800 秒", "Must not be less than the initial wait; hard cap 1800 seconds")} label={text("最大等待（秒）", "Maximum wait (seconds)")} max={1800} min={0.001} onChange={(value) => setDraft((current) => ({ ...current, rateLimitMaxDelaySeconds: value }))} step={0.001} value={draft.rateLimitMaxDelaySeconds} />
             <ProviderRetryNumberField help={text("1 为固定间隔；大于 1 会逐次递增", "1 is fixed; values above 1 grow each retry")} label={text("递增倍数", "Backoff multiplier")} max={8} min={1} onChange={(value) => setDraft((current) => ({ ...current, rateLimitBackoffFactor: value }))} step={0.001} value={draft.rateLimitBackoffFactor} />
@@ -274,7 +274,7 @@ function validateRetrySettingsDraft(draft: ProviderRetrySettingsDraft, text: (zh
   if (!validDelayPair(ordinaryInitialSeconds, ordinaryMaxSeconds, MAX_SAFE_DELAY_SECONDS)) return text("普通重试等待必须大于 0，且最大等待不能小于首次等待。", "Ordinary waits must be positive, and maximum wait cannot be less than initial wait.")
   if (ordinaryFactor == null || ordinaryFactor < 1 || ordinaryFactor > 8) return text("普通重试递增倍数必须位于 1.0 到 8.0。", "Ordinary backoff multiplier must be from 1.0 to 8.0.")
   if (jitterPercent == null || jitterPercent < 0 || jitterPercent > 80) return text("抖动百分比必须是 0 到 80 的整数。", "Jitter percentage must be an integer from 0 to 80.")
-  if (rateLimitMaxRetries == null || rateLimitMaxRetries < 0 || rateLimitMaxRetries > 100000) return text("限流最大重试次数必须是 0 到 100000 的整数。", "Rate-limit maximum retries must be an integer from 0 to 100000.")
+  if (rateLimitMaxRetries == null || rateLimitMaxRetries < 1 || rateLimitMaxRetries > 100000) return text("限流最大重试次数必须是 1 到 100000 的整数。", "Rate-limit maximum retries must be an integer from 1 to 100000.")
   if (!validDelayPair(rateLimitInitialSeconds, rateLimitMaxSeconds, 1800)) return text("限流等待必须大于 0、最大 1800 秒，且最大等待不能小于首次等待。", "Rate-limit waits must be positive, at most 1800 seconds, and maximum wait cannot be less than initial wait.")
   if (rateLimitFactor == null || rateLimitFactor < 1 || rateLimitFactor > 8) return text("限流递增倍数必须位于 1.0 到 8.0。", "Rate-limit backoff multiplier must be from 1.0 to 8.0.")
   return null

@@ -1894,6 +1894,12 @@ export type TranslationKey =
   | "settings.customModels.disableAll"
   | "settings.customModels.enabled"
   | "settings.customModels.disabled"
+  | "settings.customModels.protocolPreference"
+  | "settings.customModels.protocolPreferenceHint"
+  | "settings.customModels.protocolAuto"
+  | "settings.customModels.protocolExplicit"
+  | "settings.customModels.protocolSelect"
+  | "settings.customModels.saveProtocolPreference"
   | "settings.credentialModels.manage"
   | "settings.credentialModels.title"
   | "settings.credentialModels.description"
@@ -1940,6 +1946,21 @@ export type TranslationKey =
   | "settings.customProviders.displayName"
   | "settings.customProviders.baseUrl"
   | "settings.customProviders.protocol"
+  | "settings.customProviders.protocols"
+  | "settings.customProviders.protocolsHint"
+  | "settings.customProviders.protocolCollectionRequired"
+  | "settings.customProviders.protocolCollectionDuplicate"
+  | "settings.customProviders.routeDrafts"
+  | "settings.customProviders.routeDraftsHint"
+  | "settings.customProviders.routeDraftFor"
+  | "settings.customProviders.routeBaseUrl"
+  | "settings.customProviders.routeBaseUrlPlaceholder"
+  | "settings.customProviders.routeEndpointPath"
+  | "settings.customProviders.routeAuthentication"
+  | "settings.customProviders.routeDiscoveryMode"
+  | "settings.customProviders.routeDiscoveryPath"
+  | "settings.customProviders.routeHeaders"
+  | "settings.customProviders.routeInherit"
   | "settings.customProviders.codexCapabilities"
   | "settings.customProviders.codexRemoteCompaction"
   | "settings.customProviders.codexRemoteCompactionHint"
@@ -2210,6 +2231,14 @@ export type TranslationKey =
   | "settings.models.availableCredentials"
   | "settings.models.status"
   | "settings.models.additionalConditions"
+  | "settings.models.routeEffectiveProtocol"
+  | "settings.models.routeAvailableProtocols"
+  | "settings.models.routeBindingSource"
+  | "settings.models.routeBindingRule"
+  | "settings.models.routeManifestRevision"
+  | "settings.models.routeUnresolved"
+  | "settings.models.routeUnavailableReason"
+  | "settings.models.routeNoRule"
   | "settings.models.collapseProviders"
   | "settings.models.expandProviders"
   | "settings.models.searchLabel"
@@ -2304,6 +2333,7 @@ export type TranslationKey =
   | "settings.providerTools.speechTranscribe"
   | "settings.providerTools.videoGenerate"
   | "settings.providerTools.videoEdit"
+  | "settings.providerTools.videoExtend"
   | "settings.providerTools.webSearch"
   | "settings.providerTools.webExtract"
   | "settings.providerTools.loading"
@@ -4484,6 +4514,12 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.customModels.enableAll": "全部启用",
     "settings.customModels.disableAll": "全部禁用",
     "settings.customModels.enabled": "启用",
+    "settings.customModels.protocolPreference": "协议偏好",
+    "settings.customModels.protocolPreferenceHint": "多协议供应商可逐模型固定执行协议；Auto 按固定优先级解析。",
+    "settings.customModels.protocolAuto": "自动",
+    "settings.customModels.protocolExplicit": "显式",
+    "settings.customModels.protocolSelect": "选择协议",
+    "settings.customModels.saveProtocolPreference": "保存协议偏好",
     "settings.customModels.disabled": "关闭",
     "settings.credentialModels.manage": "管理此账号的模型",
     "settings.credentialModels.title": "账号模型",
@@ -4531,6 +4567,21 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.customProviders.displayName": "显示名称",
     "settings.customProviders.baseUrl": "基础 URL",
     "settings.customProviders.protocol": "调用协议",
+    "settings.customProviders.protocols": "启用协议",
+    "settings.customProviders.protocolsHint": "至少选择一个协议；单协议时模型不显示逐模型协议选择，多协议时显示 Auto 与已启用协议。",
+    "settings.customProviders.protocolCollectionRequired": "必须至少启用一个兼容协议。",
+    "settings.customProviders.protocolCollectionDuplicate": "协议集合不能包含重复协议。",
+    "settings.customProviders.routeDrafts": "逐协议路由覆盖",
+    "settings.customProviders.routeDraftsHint": "每个启用协议可独立覆盖基础 URL、端点路径、鉴权、发现与固定请求头；空值继承共享设置。",
+    "settings.customProviders.routeDraftFor": "{protocol} 路由",
+    "settings.customProviders.routeBaseUrl": "路由基础 URL 覆盖",
+    "settings.customProviders.routeBaseUrlPlaceholder": "留空继承共享基础 URL",
+    "settings.customProviders.routeEndpointPath": "路由端点路径",
+    "settings.customProviders.routeAuthentication": "路由鉴权请求头",
+    "settings.customProviders.routeDiscoveryMode": "路由模型目录",
+    "settings.customProviders.routeDiscoveryPath": "路由模型目录路径",
+    "settings.customProviders.routeHeaders": "固定请求头（每行 key: value）",
+    "settings.customProviders.routeInherit": "继承共享设置",
     "settings.customProviders.codexCapabilities": "Codex Responses 能力",
     "settings.customProviders.codexRemoteCompaction": "启用远端上下文压缩",
     "settings.customProviders.codexRemoteCompactionHint": "调用 /responses/compact；仅在未产生语义输出或副作用且可安全重试时回退到本地压缩。",
@@ -4754,7 +4805,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.customModels.saveAdvanced": "保存高级定义",
     "settings.customModels.unsavedAdvanced": "高级定义有尚未保存的修改。",
     "settings.customModels.modelIdRequired": "请输入真实模型 ID。",
-    "settings.customModels.manualDescription": "仅在 /models 不可用或没有返回目标模型时手动添加。系统会先在本地公共库中寻找模板。",
+    "settings.customModels.manualDescription": "可随时手动添加真实模型 ID，不依赖 /models 发现结果。系统会先在本地公共库中寻找能力模板。",
     "settings.customModels.templateChoice": "能力模板",
     "settings.customModels.discardTitle": "放弃未保存的修改？",
     "settings.customModels.discardDescription": "高级模型定义仍有未保存修改。关闭后这些修改将丢失。",
@@ -4801,6 +4852,14 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.models.availableCredentials": "{count} 个可用凭据",
     "settings.models.status": "状态",
     "settings.models.additionalConditions": "{protocol} · 附加条件",
+    "settings.models.routeEffectiveProtocol": "后端生效协议",
+    "settings.models.routeAvailableProtocols": "可用协议",
+    "settings.models.routeBindingSource": "绑定来源",
+    "settings.models.routeBindingRule": "规则 ID",
+    "settings.models.routeManifestRevision": "清单修订",
+    "settings.models.routeUnresolved": "所选账号当前没有后端解析出的可执行协议绑定；该模型在此账号下处于阻塞状态。",
+    "settings.models.routeUnavailableReason": "后端阻塞原因",
+    "settings.models.routeNoRule": "默认绑定",
     "settings.models.collapseProviders": "收起为胶囊",
     "settings.models.expandProviders": "展开供应商分类",
     "settings.models.searchLabel": "搜索模型",
@@ -4895,6 +4954,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.providerTools.speechTranscribe": "语音转写",
     "settings.providerTools.videoGenerate": "视频生成",
     "settings.providerTools.videoEdit": "视频编辑",
+    "settings.providerTools.videoExtend": "视频续长",
     "settings.providerTools.webSearch": "网页搜索",
     "settings.providerTools.webExtract": "网页抓取",
     "settings.providerTools.loading": "正在读取能力目标…",
@@ -7072,6 +7132,12 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.customModels.enableAll": "Enable all",
     "settings.customModels.disableAll": "Disable all",
     "settings.customModels.enabled": "Enabled",
+    "settings.customModels.protocolPreference": "Protocol preference",
+    "settings.customModels.protocolPreferenceHint": "Multi-protocol providers may pin one execution protocol per model; Auto resolves by fixed priority.",
+    "settings.customModels.protocolAuto": "Auto",
+    "settings.customModels.protocolExplicit": "Explicit",
+    "settings.customModels.protocolSelect": "Select protocol",
+    "settings.customModels.saveProtocolPreference": "Save protocol preference",
     "settings.customModels.disabled": "Disabled",
     "settings.credentialModels.manage": "Manage models for this account",
     "settings.credentialModels.title": "Account models",
@@ -7119,6 +7185,21 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.customProviders.displayName": "Display name",
     "settings.customProviders.baseUrl": "Base URL",
     "settings.customProviders.protocol": "Calling protocol",
+    "settings.customProviders.protocols": "Enabled protocols",
+    "settings.customProviders.protocolsHint": "Enable at least one protocol; single-protocol providers hide per-model protocol selection, while multi-protocol providers show Auto and the enabled protocols.",
+    "settings.customProviders.protocolCollectionRequired": "At least one compatible protocol must be enabled.",
+    "settings.customProviders.protocolCollectionDuplicate": "The protocol collection must not contain duplicates.",
+    "settings.customProviders.routeDrafts": "Per-protocol route overrides",
+    "settings.customProviders.routeDraftsHint": "Each enabled protocol can override its base URL, endpoint path, authentication, discovery, and fixed headers independently; empty values inherit the shared settings.",
+    "settings.customProviders.routeDraftFor": "{protocol} route",
+    "settings.customProviders.routeBaseUrl": "Route base URL override",
+    "settings.customProviders.routeBaseUrlPlaceholder": "Leave empty to inherit the shared base URL",
+    "settings.customProviders.routeEndpointPath": "Route endpoint path",
+    "settings.customProviders.routeAuthentication": "Route authentication header",
+    "settings.customProviders.routeDiscoveryMode": "Route model catalog",
+    "settings.customProviders.routeDiscoveryPath": "Route model catalog path",
+    "settings.customProviders.routeHeaders": "Fixed request headers (one key: value per line)",
+    "settings.customProviders.routeInherit": "Inherit shared settings",
     "settings.customProviders.codexCapabilities": "Codex Responses capabilities",
     "settings.customProviders.codexRemoteCompaction": "Enable remote context compaction",
     "settings.customProviders.codexRemoteCompactionHint": "Uses /responses/compact and falls back to local compaction on safe failures.",
@@ -7342,7 +7423,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.customModels.saveAdvanced": "Save advanced definition",
     "settings.customModels.unsavedAdvanced": "The advanced definition has unsaved changes.",
     "settings.customModels.modelIdRequired": "Enter the real model ID.",
-    "settings.customModels.manualDescription": "Add a model manually only when /models is unavailable or omits it. The local common library is checked first.",
+    "settings.customModels.manualDescription": "Add any real model ID manually without depending on /models discovery. The local common library is checked for a capability template first.",
     "settings.customModels.templateChoice": "Capability template",
     "settings.customModels.discardTitle": "Discard unsaved changes?",
     "settings.customModels.discardDescription": "The advanced model definition still has unsaved changes. Closing now will discard them.",
@@ -7389,6 +7470,14 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.models.availableCredentials": "{count} available credentials",
     "settings.models.status": "Status",
     "settings.models.additionalConditions": "{protocol} · Additional conditions",
+    "settings.models.routeEffectiveProtocol": "Backend effective protocol",
+    "settings.models.routeAvailableProtocols": "Available protocols",
+    "settings.models.routeBindingSource": "Binding source",
+    "settings.models.routeBindingRule": "Rule ID",
+    "settings.models.routeManifestRevision": "Manifest revision",
+    "settings.models.routeUnresolved": "The selected account has no backend-resolved executable protocol binding; this model is blocked for that account.",
+    "settings.models.routeUnavailableReason": "Backend blocking reason",
+    "settings.models.routeNoRule": "default binding",
     "settings.models.collapseProviders": "Collapse to pill",
     "settings.models.expandProviders": "Expand provider categories",
     "settings.models.searchLabel": "Search models",
@@ -7483,6 +7572,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.providerTools.speechTranscribe": "Speech transcription",
     "settings.providerTools.videoGenerate": "Video generation",
     "settings.providerTools.videoEdit": "Video editing",
+    "settings.providerTools.videoExtend": "Video extension",
     "settings.providerTools.webSearch": "Web search",
     "settings.providerTools.webExtract": "Web extraction",
     "settings.providerTools.loading": "Loading capability targets…",

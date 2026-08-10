@@ -1,0 +1,131 @@
+{
+  "schema_version": "provider-manifest-execution-fixture.v1",
+  "fixture_id": "minimax-search-generic",
+  "base_manifest": "minimax.json",
+  "production_target_refs": [
+    "minimax::global:coding-plan-search",
+    "minimax::cn:coding-plan-search"
+  ],
+  "tool_target": {
+    "target_id": "global:fixture-search-generic",
+    "description": "Generic JSON MiniMax Coding Plan search wire-contract fixture.",
+    "service_entry_id": "global",
+    "credential_profile_ids": ["token-plan-key"],
+    "upstream_target_id": "coding-plan-search",
+    "display_name": "MiniMax Search Generic Fixture",
+    "tool_id": "fixture_minimax_search_generic",
+    "capability": "web_search",
+    "input_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "query": {"type": "string", "minLength": 1},
+        "max_results": {"type": "integer", "minimum": 1, "maximum": 10, "default": 10}
+      },
+      "required": ["query"]
+    },
+    "output": {
+      "kind": "search",
+      "source_path": "/results",
+      "normalized_result_path": "search",
+      "resource_kind": null,
+      "mime_types": []
+    },
+    "execution": {
+      "endpoint_path": "/v1/coding_plan/search",
+      "authentication": "bearer_authorization",
+      "adapter": "generic_json",
+      "execution_kind": "http_json_sync"
+    }
+  },
+  "operation": {
+    "operation_id": "fixture.minimax-search-generic",
+    "operation": "web_search",
+    "carrier": "provider_tool",
+    "input_resources": [],
+    "output_resources": [],
+    "tool_target_refs": ["global:fixture-search-generic"],
+    "request_profile_refs": ["fixture.minimax-search.request.v1"],
+    "response_profile_refs": ["fixture.minimax-search.response.v1"],
+    "upload_channel_refs": [],
+    "upload_bindings": [],
+    "timeout_ms": 60000,
+    "idempotent": false
+  },
+  "upload_channels": [],
+  "request_profiles": [
+    {
+      "profile_id": "fixture.minimax-search.request.v1",
+      "description": "Build the MiniMax search body with a bounded template.",
+      "payload": {
+        "profile_id": "fixture.minimax-search.request.v1",
+        "revision": 1,
+        "steps": [
+          {
+            "op": "rebuild_json_template",
+            "template": {"q": {"$vulcan_ref": {"path": "/query"}}}
+          }
+        ]
+      }
+    }
+  ],
+  "response_profiles": [
+    {
+      "profile_id": "fixture.minimax-search.response.v1",
+      "description": "Normalize MiniMax search rows with a bounded array template.",
+      "payload": {
+        "profile_id": "fixture.minimax-search.response.v1",
+        "revision": 1,
+        "steps": [
+          {
+            "op": "rebuild_json_template",
+            "template": {
+              "$vulcan_if_equals": {
+                "path": "/base_resp/status_code",
+                "equals": 0,
+                "then": {
+                  "results": {
+                    "$vulcan_map": {
+                      "path": "/organic",
+                      "template": {
+                        "title": {"$vulcan_ref": {"scope": "item", "path": "/title"}},
+                        "url": {"$vulcan_ref": {"scope": "item", "path": "/link"}},
+                        "content": {"$vulcan_ref": {"scope": "item", "path": "/snippet"}}
+                      }
+                    }
+                  }
+                },
+                "otherwise": {
+                  "error": {
+                    "code": {"$vulcan_ref": {"path": "/base_resp/status_code"}},
+                    "message": {"$vulcan_ref": {"path": "/base_resp/status_msg"}}
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "required_execution_primitives": ["http_json_sync"],
+  "required_upload_primitives": [],
+  "required_transformers": ["rebuild_json_template"],
+  "arguments": {"query": "configuration routing", "max_results": 1},
+  "interactions": [
+    {
+      "method": "POST",
+      "path": "/v1/coding_plan/search",
+      "expected_json_body": {"q": "configuration routing"},
+      "response_status": 200,
+      "response_json_body": {
+        "base_resp": {"status_code": 0, "status_msg": "ok"},
+        "organic": [
+          {"title": "First", "link": "https://example.com/first", "snippet": "first result"},
+          {"title": "Second", "link": "https://example.com/second", "snippet": "second result"}
+        ]
+      }
+    }
+  ],
+  "expected_output_kind": "search"
+}

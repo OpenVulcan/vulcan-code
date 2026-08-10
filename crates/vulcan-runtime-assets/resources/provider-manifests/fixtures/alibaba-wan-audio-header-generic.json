@@ -1,0 +1,165 @@
+{
+  "schema_version": "provider-manifest-execution-fixture.v1",
+  "fixture_id": "alibaba-wan-audio-header-generic",
+  "base_manifest": "alibaba.json",
+  "tool_target": {
+    "target_id": "model-studio-cn.fixture-wan-audio-header-generic",
+    "description": "Generic Wan audio upload and conditional start-header fixture.",
+    "service_entry_id": "model-studio-cn",
+    "credential_profile_ids": ["api-key"],
+    "upstream_target_id": "wan2.7-t2v",
+    "display_name": "Alibaba Wan Audio Header Fixture",
+    "tool_id": "fixture_alibaba_wan_audio_header_generic",
+    "capability": "video_generate",
+    "input_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "prompt": {"type": "string", "minLength": 1},
+        "audio_path": {"type": "string", "minLength": 1}
+      },
+      "required": ["prompt", "audio_path"]
+    },
+    "output": {
+      "kind": "resources",
+      "source_path": "output.video_url",
+      "normalized_result_path": "resources",
+      "resource_kind": "video",
+      "mime_types": ["video/mp4"],
+      "resource_decoders": [
+        {
+          "source_path": "/output/video_url",
+          "encoding": "public_http_url",
+          "download_host_suffixes": ["example.com"],
+          "resource_kind": "video",
+          "mime_type": "video/mp4",
+          "optional": false,
+          "output_id_prefix": "video"
+        }
+      ]
+    },
+    "execution": {
+      "endpoint_path": "/api/v1/services/aigc/video-generation/video-synthesis",
+      "authentication": "bearer_authorization",
+      "adapter": "generic_json",
+      "execution_kind": "http_json_async_poll",
+      "start_fixed_headers": {"x-dashscope-async": "enable"},
+      "start_conditional_headers": [
+        {
+          "name": "x-dashscope-ossresource-resolve",
+          "value": "enable",
+          "when_any": [{"pointer_pattern": "/audio_source"}]
+        }
+      ]
+    }
+  },
+  "operation": {
+    "operation_id": "fixture.alibaba-wan-audio-header-generic",
+    "operation": "video_generate",
+    "carrier": "provider_tool",
+    "input_resources": ["audio"],
+    "output_resources": ["video"],
+    "tool_target_refs": ["model-studio-cn.fixture-wan-audio-header-generic"],
+    "request_profile_refs": ["alibaba.async.wan-video.request.v1"],
+    "response_profile_refs": ["alibaba.async.task.response.v1"],
+    "upload_channel_refs": ["fixture.remote-audio"],
+    "upload_bindings": [
+      {
+        "source_path": "/audio_path",
+        "target_path": "/audio_source",
+        "upload_channel_refs": ["fixture.remote-audio"],
+        "mime_types_by_extension": {"mp3": "audio/mpeg"},
+        "required": true,
+        "remove_source": true
+      }
+    ],
+    "async_execution": {
+      "poll_interval_ms": 250,
+      "max_backoff_ms": 1000,
+      "timeout_ms": 2000,
+      "cancellation_supported": false,
+      "generic_json": {
+        "poll_endpoint_path": "/api/v1/tasks",
+        "poll_method": "get",
+        "task_id_pointer": "/output/task_id",
+        "task_id_in_path": true,
+        "start_status_pointer": "/output/task_status",
+        "start_success_statuses": ["PENDING"],
+        "poll_task_id_pointer": "/output/task_id",
+        "status_pointer": "/output/task_status",
+        "queued_statuses": ["PENDING"],
+        "running_statuses": ["RUNNING"],
+        "success_statuses": ["SUCCEEDED"],
+        "failure_statuses": ["FAILED", "UNKNOWN"],
+        "cancelled_statuses": ["CANCELED"],
+        "start_requirements": {
+          "non_empty_string_pointers": ["/request_id"],
+          "empty_or_missing_string_pointers": ["/code"]
+        },
+        "poll_requirements": {"non_empty_string_pointers": ["/request_id"]},
+        "poll_success_requirements": {"empty_or_missing_string_pointers": ["/code"]}
+      }
+    },
+    "timeout_ms": 2000,
+    "idempotent": false
+  },
+  "upload_channels": [
+    {
+      "upload_channel_id": "fixture.remote-audio",
+      "description": "Fixture-only reviewed remote audio passthrough.",
+      "primitive": "remote_url_passthrough",
+      "remote_url_host_suffixes": ["example.com"],
+      "accepted_mime_types": ["audio/mpeg"],
+      "max_bytes": 1024,
+      "max_count": 1,
+      "progress_supported": false,
+      "cancellation_supported": false,
+      "reference_encoding": "response_url"
+    }
+  ],
+  "required_execution_primitives": ["http_json_async_poll"],
+  "required_upload_primitives": ["remote_url_passthrough"],
+  "arguments": {
+    "prompt": "animate to music",
+    "audio_path": "https://example.com/music.mp3"
+  },
+  "interactions": [
+    {
+      "method": "POST",
+      "path": "/api/v1/services/aigc/video-generation/video-synthesis",
+      "expected_headers": {
+        "x-dashscope-async": "enable",
+        "x-dashscope-ossresource-resolve": "enable"
+      },
+      "expected_json_body": {
+        "model": "wan2.7-t2v",
+        "input": {
+          "prompt": "animate to music",
+          "audio_url": "https://example.com/music.mp3"
+        },
+        "parameters": {}
+      },
+      "response_status": 200,
+      "response_json_body": {
+        "request_id": "request-start",
+        "code": "",
+        "output": {"task_id": "task-audio", "task_status": "PENDING"}
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tasks/task-audio",
+      "response_status": 200,
+      "response_json_body": {
+        "request_id": "request-poll",
+        "code": "",
+        "output": {
+          "task_id": "task-audio",
+          "task_status": "SUCCEEDED",
+          "video_url": "https://example.com/audio-driven.mp4"
+        }
+      }
+    }
+  ],
+  "expected_output_kind": "resources"
+}

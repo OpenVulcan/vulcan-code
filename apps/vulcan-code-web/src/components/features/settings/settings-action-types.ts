@@ -42,8 +42,8 @@ export interface ProviderRetrySettingsSaveRequest {
   // Dedicated rate-limit scheduling values.
   // 专用限流调度值。
   rateLimit: {
-    // Maximum retries, where zero means retry until cancellation.
-    // 最大重试次数；零表示持续重试直至取消。
+    // Maximum finite rate-limit retries.
+    // 最大有限限流重试次数。
     maxRetries: number
     // Delay before the first rate-limit retry in milliseconds.
     // 第一次限流重试前的等待毫秒数。

@@ -54,6 +54,24 @@ pub(crate) struct ProviderRequestTelemetryContext {
     /// Canonical API family that defines whether Provider input already excludes cached tokens.
     /// 定义 Provider 输入是否已经排除缓存 Token 的规范接口族。
     protocol_profile_id: String,
+    /// Manifest revision frozen at execution preparation.
+    /// 执行准备时冻结的 Manifest 修订号。
+    manifest_revision: u64,
+    /// Runtime manifest generation frozen at execution preparation.
+    /// 执行准备时冻结的运行时 Manifest 代际。
+    manifest_generation: u64,
+    /// Stable source of the exact model-level protocol binding.
+    /// 精确模型级协议绑定的稳定来源。
+    binding_source: String,
+    /// Exact rule that produced the model binding, absent for provider defaults.
+    /// 产生模型绑定的精确规则；供应商默认绑定时为空。
+    binding_rule_id: Option<String>,
+    /// Ordered request projection profile identities frozen with the route.
+    /// 与路由一起冻结的有序请求投影 Profile 身份。
+    request_profiles: Vec<vulcan_provider_adapters::ProviderOperationalProfileRevision>,
+    /// Ordered response projection profile identities frozen with the route.
+    /// 与路由一起冻结的有序响应投影 Profile 身份。
+    response_profiles: Vec<vulcan_provider_adapters::ProviderOperationalProfileRevision>,
     /// Content-addressed revision of the exact frozen execution route.
     /// 精确冻结执行路由的内容寻址修订号。
     route_revision: String,
@@ -128,6 +146,62 @@ impl ProviderRequestTelemetryContext {
                     Some(endpoint_display_name.clone()),
                 ),
             };
+        // frozenSelection is the unique authority for manifest generation, binding provenance,
+        // and projection-profile revisions; telemetry never re-resolves the active catalog.
+        // frozenSelection 是 Manifest 代际、绑定来源与投影 Profile 修订的唯一权威；
+        // 遥测绝不重新解析活动目录。
+        let frozen_selection = preparation.model_blueprint.frozen_selection.as_ref();
+        let protocol_binding =
+            frozen_selection.and_then(|selection| selection.protocol_binding.as_ref());
+        let binding_source = protocol_binding
+            .map(|binding| match binding.source {
+                vulcan_provider_adapters::ModelProtocolBindingSource::SystemManifest => {
+                    "system_manifest"
+                }
+                vulcan_provider_adapters::ModelProtocolBindingSource::CustomUser => "custom_user",
+                vulcan_provider_adapters::ModelProtocolBindingSource::CustomAutoDefault => {
+                    "custom_auto_default"
+                }
+                vulcan_provider_adapters::ModelProtocolBindingSource::MigratedCustomLegacy => {
+                    "migrated_custom_legacy"
+                }
+            })
+            .unwrap_or("connection_default")
+            .to_string();
+        let binding_rule_id = protocol_binding
+            .map(|binding| binding.rule_id.as_str())
+            .filter(|rule_id| !rule_id.is_empty())
+            .map(str::to_string);
+        let request_profiles = frozen_selection
+            .map(|selection| {
+                selection
+                    .route
+                    .request_projection_profiles
+                    .iter()
+                    .map(
+                        |profile| vulcan_provider_adapters::ProviderOperationalProfileRevision {
+                            profile_id: profile.profile_id.clone(),
+                            revision: profile.revision,
+                        },
+                    )
+                    .collect()
+            })
+            .unwrap_or_default();
+        let response_profiles = frozen_selection
+            .map(|selection| {
+                selection
+                    .route
+                    .response_projection_profiles
+                    .iter()
+                    .map(
+                        |profile| vulcan_provider_adapters::ProviderOperationalProfileRevision {
+                            profile_id: profile.profile_id.clone(),
+                            revision: profile.revision,
+                        },
+                    )
+                    .collect()
+            })
+            .unwrap_or_default();
         Self {
             execution_id: Uuid::new_v4().to_string(),
             session_id: preparation.session_id,
@@ -137,6 +211,14 @@ impl ProviderRequestTelemetryContext {
             connection_id: preparation.model_blueprint.connection_id.clone(),
             model_name: preparation.model_blueprint.model_name.clone(),
             protocol_profile_id: preparation.model_blueprint.protocol_profile_id.clone(),
+            manifest_revision: preparation.model_blueprint.manifest_revision,
+            manifest_generation: frozen_selection
+                .map(|selection| selection.manifest_generation)
+                .unwrap_or(0),
+            binding_source,
+            binding_rule_id,
+            request_profiles,
+            response_profiles,
             route_revision: preparation.model_blueprint.route_revision.clone(),
             secondary_route_id,
             secondary_provider_name,
@@ -160,6 +242,22 @@ impl ProviderRequestTelemetryContext {
             service_entry_id: String::from("public-api"),
             model_name: String::from("Mock Model"),
             protocol_profile_id: String::from(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
+            manifest_revision: 1,
+            manifest_generation: 2,
+            binding_source: String::from("system_manifest"),
+            binding_rule_id: Some(String::from("mock-rule")),
+            request_profiles: vec![
+                vulcan_provider_adapters::ProviderOperationalProfileRevision {
+                    profile_id: String::from("request.mock"),
+                    revision: 3,
+                },
+            ],
+            response_profiles: vec![
+                vulcan_provider_adapters::ProviderOperationalProfileRevision {
+                    profile_id: String::from("response.mock"),
+                    revision: 4,
+                },
+            ],
             route_revision: String::from("sha256:test-route"),
             secondary_route_id: None,
             secondary_provider_name: None,
@@ -836,6 +934,24 @@ struct ProviderTelemetryIdentityPayload<'a> {
     /// Exact protocol profile identifier.
     /// 精确协议 Profile 标识。
     protocol_profile_id: &'a str,
+    /// Manifest revision frozen for the request.
+    /// 请求冻结的 Manifest 修订号。
+    manifest_revision: u64,
+    /// Runtime manifest generation frozen for the request.
+    /// 请求冻结的运行时 Manifest 代际。
+    manifest_generation: u64,
+    /// Stable source of the exact model protocol binding.
+    /// 精确模型协议绑定的稳定来源。
+    binding_source: &'a str,
+    /// Exact binding rule, absent for provider defaults.
+    /// 精确绑定规则；供应商默认绑定时为空。
+    binding_rule_id: Option<&'a str>,
+    /// Ordered request projection profile identities.
+    /// 有序请求投影 Profile 身份。
+    request_profiles: &'a [vulcan_provider_adapters::ProviderOperationalProfileRevision],
+    /// Ordered response projection profile identities.
+    /// 有序响应投影 Profile 身份。
+    response_profiles: &'a [vulcan_provider_adapters::ProviderOperationalProfileRevision],
     /// Content-addressed revision of the exact frozen route.
     /// 精确冻结路由的内容寻址修订号。
     route_revision: &'a str,
@@ -898,6 +1014,12 @@ fn identity_payload<'a>(
         service_entry_id: &context.service_entry_id,
         connection_id: &context.connection_id,
         protocol_profile_id: &context.protocol_profile_id,
+        manifest_revision: context.manifest_revision,
+        manifest_generation: context.manifest_generation,
+        binding_source: &context.binding_source,
+        binding_rule_id: context.binding_rule_id.as_deref(),
+        request_profiles: &context.request_profiles,
+        response_profiles: &context.response_profiles,
         route_revision: &context.route_revision,
         secondary_route_id: context.secondary_route_id.as_deref(),
         secondary_provider_name: context.secondary_provider_name.as_deref(),
@@ -1339,8 +1461,8 @@ struct RetryingPayload<'a> {
     /// One-based retry number.
     /// 从一开始的重试序号。
     retry_number: u32,
-    /// Configured retry ceiling, or zero for cancellation-bound rate-limit retries.
-    /// 已配置的重试上限；仅由取消终止的限流重试为零。
+    /// Effective finite retry ceiling.
+    /// 有效有限重试上限。
     max_retries: u32,
     /// Retry wait duration.
     /// 重试等待时长。
@@ -1424,6 +1546,22 @@ mod tests {
             service_entry_id: String::from("public-api"),
             model_name: String::from("Model Name"),
             protocol_profile_id: String::from(vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID),
+            manifest_revision: 17,
+            manifest_generation: 23,
+            binding_source: String::from("system_manifest"),
+            binding_rule_id: Some(String::from("claude-exact")),
+            request_profiles: vec![
+                vulcan_provider_adapters::ProviderOperationalProfileRevision {
+                    profile_id: String::from("request.anthropic"),
+                    revision: 5,
+                },
+            ],
+            response_profiles: vec![
+                vulcan_provider_adapters::ProviderOperationalProfileRevision {
+                    profile_id: String::from("response.anthropic"),
+                    revision: 6,
+                },
+            ],
             route_revision: String::from("sha256:test-route"),
             secondary_route_id: Some(String::from("route-1")),
             secondary_provider_name: Some(String::from("DeepInfra")),
@@ -1473,6 +1611,20 @@ mod tests {
             started[0].payload["protocol_profile_id"],
             vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID
         );
+        assert_eq!(started[0].payload["manifest_revision"], 17);
+        assert_eq!(started[0].payload["manifest_generation"], 23);
+        assert_eq!(started[0].payload["binding_source"], "system_manifest");
+        assert_eq!(started[0].payload["binding_rule_id"], "claude-exact");
+        assert_eq!(
+            started[0].payload["request_profiles"][0]["profile_id"],
+            "request.anthropic"
+        );
+        assert_eq!(started[0].payload["request_profiles"][0]["revision"], 5);
+        assert_eq!(
+            started[0].payload["response_profiles"][0]["profile_id"],
+            "response.anthropic"
+        );
+        assert_eq!(started[0].payload["response_profiles"][0]["revision"], 6);
         assert_eq!(started[0].payload["route_revision"], "sha256:test-route");
         assert_eq!(started[0].payload["secondary_route_id"], "route-1");
         assert_eq!(started[0].payload["secondary_provider_name"], "DeepInfra");
@@ -1515,6 +1667,36 @@ mod tests {
             })
         );
         assert!(tracker.complete_success(None).is_none());
+    }
+
+    /// Verifies every physical request receives a unique trace while retaining one frozen route.
+    /// 验证每次物理请求获得唯一追踪身份，同时保留同一份冻结路由。
+    #[test]
+    fn physical_requests_receive_unique_trace_ids_with_exact_frozen_route_identity() {
+        // firstTracker owns the first independent physical request lifecycle.
+        // firstTracker 持有第一条独立物理请求生命周期。
+        let mut first_tracker = test_tracker();
+        // secondTracker owns the second independent physical request lifecycle.
+        // secondTracker 持有第二条独立物理请求生命周期。
+        let mut second_tracker = test_tracker();
+        // firstStarted and secondStarted retain the emitted immutable start facts.
+        // firstStarted 与 secondStarted 保留发出的不可变启动事实。
+        let first_started = first_tracker.start_request(&test_request_snapshot());
+        let second_started = second_tracker.start_request(&test_request_snapshot());
+
+        assert_ne!(
+            first_started[0].payload["request_id"], second_started[0].payload["request_id"],
+            "physical requests must never share one trace identity"
+        );
+        for events in [&first_started, &second_started] {
+            assert_eq!(events[0].payload["manifest_revision"], 17);
+            assert_eq!(events[0].payload["manifest_generation"], 23);
+            assert_eq!(events[0].payload["binding_source"], "system_manifest");
+            assert_eq!(events[0].payload["binding_rule_id"], "claude-exact");
+            assert_eq!(events[0].payload["route_revision"], "sha256:test-route");
+            assert_eq!(events[0].payload["request_profiles"][0]["revision"], 5);
+            assert_eq!(events[0].payload["response_profiles"][0]["revision"], 6);
+        }
     }
 
     /// Verifies absent provider accounting remains unknown instead of becoming fabricated zero usage.

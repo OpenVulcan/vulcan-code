@@ -39,6 +39,36 @@ use vulcan_vmm::VmmConfigLayer;
 
 /// Verifies request-scoped agent routing makes preparation use the requested agent instead of the global active worker.
 /// 验证请求级代理路由会让执行准备使用指定代理，而不是全局激活的默认工作代理。
+/// Adds one protocol variant for each protocol id to every model of one catalog.
+/// 给一个目录的每个模型按协议 ID 各添加一个协议变体。
+///
+/// # Parameters
+/// 参数
+/// `protocol_profile_ids` are the exact protocols the models bind to; every model receives
+/// a variant for each id so system-manifest bindings can prove their exact variant before
+/// execution (plan §R5.1).
+/// `protocol_profile_ids` 是模型绑定的精确协议；每个模型为每个 ID 获得一个变体，
+/// 使系统清单绑定能够在执行前证明其精确变体（方案 §R5.1）。
+fn with_protocol_variants(
+    mut catalog: vulcan_provider_adapters::ConnectionModelCatalog,
+    protocol_profile_ids: &[&str],
+) -> vulcan_provider_adapters::ConnectionModelCatalog {
+    for model in &mut catalog.models {
+        for protocol_profile_id in protocol_profile_ids {
+            model.protocol_variants.insert(
+                (*protocol_profile_id).to_string(),
+                vulcan_provider_adapters::ProtocolModelVariant {
+                    capabilities: model.capabilities.clone(),
+                    capability_evidence: Default::default(),
+                    discovery_signature: String::from("test-signature"),
+                    catalog_generation: catalog.generation,
+                },
+            );
+        }
+    }
+    catalog
+}
+
 #[test]
 fn prepare_execution_uses_request_execution_agent_override() {
     let config = test_provider_config();
@@ -604,7 +634,7 @@ fn test_runtime_foundation(config: &ProviderConfigurationFile) -> RuntimeFoundat
     let mut public_configuration = vulcan_provider_adapters::PersistedAiConfiguration {
         active: Some(vulcan_provider_adapters::ActiveAiModelSelection {
             provider_id: String::from("openrouter"),
-            model_id: String::from("vendor/model"),
+            model_id: String::from("openai/gpt-5.6-sol"),
             connection_id: connection_id.clone(),
         }),
         ..vulcan_provider_adapters::PersistedAiConfiguration::default()
@@ -622,28 +652,33 @@ fn test_runtime_foundation(config: &ProviderConfigurationFile) -> RuntimeFoundat
             secret_reference: String::from("secret-a"),
             management_secret_reference: None,
             service_origin_override: None,
-            verified_protocols: std::collections::BTreeSet::from([String::from(
-                vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID,
-            )]),
+            verified_protocols: std::collections::BTreeSet::from([
+                String::from(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
+                String::from(vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID),
+            ]),
             selected_protocol: String::from(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
             prompt_cache_by_protocol: BTreeMap::new(),
             usage_scope_override: None,
         },
     );
-    public_configuration.set_model_enabled("openrouter", "vendor/model", true);
+    public_configuration.set_model_enabled("openrouter", "openai/gpt-5.6-sol", true);
     runtime
-        .replace_configuration(public_configuration)
+        .replace_configuration(public_configuration.clone())
         .expect("test public AI configuration should install");
     runtime
-        .replace_catalog(
+        .stage_source_catalog_for_testing(with_protocol_variants(
             vulcan_provider_adapters::parse_openrouter_model_catalog(
                 connection_id.as_str(),
                 1,
-                r#"{"data":[{"id":"vendor/model","name":"Model","context_length":8192,"supported_parameters":["tools"],"architecture":{"input_modalities":["text"],"output_modalities":["text"]},"top_provider":{"max_completion_tokens":4096}}]}"#,
+                r#"{"data":[{"id":"openai/gpt-5.6-sol","name":"Model","context_length":8192,"supported_parameters":["tools"],"architecture":{"input_modalities":["text"],"output_modalities":["text"]},"top_provider":{"max_completion_tokens":4096}}]}"#,
             )
             .expect("test public AI model catalog should parse"),
-        )
-        .expect("test public AI model catalog should install");
+            &[vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID],
+        ))
+        .expect("test public AI source catalog should stage");
+    runtime
+        .reapply_model_catalog_overlays(&public_configuration)
+        .expect("test public AI generation should publish");
     foundation.install_public_ai_runtime(Arc::new(runtime));
     foundation
 }
@@ -717,6 +752,7 @@ fn test_execution_preparation_request() -> ExecutionPreparationRequest {
         provider_id_override: None,
         model_id_override: None,
         connection_id_override: None,
+        provider_route_lease_identity: None,
         provider_tool_selections_override: Default::default(),
         subagent_prompt_context: None,
         task_session_store_root: None,

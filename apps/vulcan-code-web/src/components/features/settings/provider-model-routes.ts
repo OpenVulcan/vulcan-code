@@ -1,5 +1,6 @@
 import type {
   PublicAiModel,
+  PublicAiModelRouteRecord,
   PublicAiProviderDescriptor,
   PublicAiSettingsSnapshot,
 } from "@/types"
@@ -10,6 +11,18 @@ export interface PublicModelProtocolRoute {
   // Number of credential accounts exposing this exact service-entry protocol route.
   // 暴露此精确服务入口协议路由的凭据账号数量。
   accountCount: number
+  // Protocol variants available to every credential aggregated into this exact route.
+  // 聚合到此精确路由中的每个凭据都可用的协议变体。
+  availableProtocols: string[]
+  // Stable backend binding-source identifier.
+  // 稳定的后端绑定来源标识。
+  bindingSource: NonNullable<PublicAiModelRouteRecord["bindingSource"]>
+  // Stable manifest rule identifier when present.
+  // 存在时的稳定 Manifest 规则标识。
+  bindingRuleId?: string
+  // Activated manifest revision owning this binding.
+  // 持有此绑定的已激活 Manifest 修订。
+  manifestRevision: number
   // Credential-discovered model snapshot used for exact capability controls.
   // 用于精确能力控件的凭据发现模型快照。
   model: PublicAiModel
@@ -52,7 +65,7 @@ export function compactServiceEntryName(displayName: string): string {
 export function buildProviderModelGroups(
   snapshot: Pick<
     PublicAiSettingsSnapshot,
-    "providers" | "connections" | "catalogs" | "modelAccessRecords" | "modelSupportCatalogs"
+    "providers" | "connections" | "catalogs" | "modelAccessRecords" | "modelSupportCatalogs" | "modelRouteRecords"
   >,
 ): PublicProviderModels[] {
   // providerEnabledModelIds is the authoritative provider-level allow-set projected by the backend.
@@ -68,50 +81,80 @@ export function buildProviderModelGroups(
     enabledModelIds.add(record.modelId)
     providerEnabledModelIds.set(record.providerId, enabledModelIds)
   }
+  // connectionsById resolves only display/catalog ownership; protocol authority comes from
+  // backend modelRouteRecords.
+  // connectionsById 只解析显示与目录所有权；协议权威来自后端 modelRouteRecords。
+  const connectionsById = new Map(snapshot.connections.map((connection) => [connection.id, connection]))
   return snapshot.providers
     .map((provider) => {
       const models = new Map<string, PublicModelProtocolRoute[]>()
       // enabledModelIds closes this user-facing list to provider-enabled models only.
       // enabledModelIds 将此用户列表封闭为仅包含供应商已启用模型。
       const enabledModelIds = providerEnabledModelIds.get(provider.id) ?? new Set<string>()
-      for (const connection of snapshot.connections) {
-        if (connection.provider_id !== provider.id) {
+      for (const record of snapshot.modelRouteRecords ?? []) {
+        if (
+          record.providerId !== provider.id
+          || !record.executable
+          || !record.protocolId
+          || !record.bindingSource
+        ) {
+          continue
+        }
+        const connection = connectionsById.get(record.connectionId)
+        if (
+          !connection
+          || connection.provider_id !== record.providerId
+          || connection.service_entry_id !== record.serviceEntryId
+        ) {
           continue
         }
         const effectiveCatalog = snapshot.catalogs[connection.id]
         const supportCatalog = snapshot.modelSupportCatalogs[connection.id] ?? effectiveCatalog
         const serviceEntry = provider.service_entries.find(
-          (entry) => entry.id === connection.service_entry_id,
+          (entry) => entry.id === record.serviceEntryId,
         )
         if (!effectiveCatalog || !supportCatalog || !serviceEntry) {
+          continue
+        }
+        const effectiveModel = effectiveCatalog.models.find((model) => model.id === record.modelId)
+        if (!effectiveModel || !enabledModelIds.has(effectiveModel.id)) {
           continue
         }
         const supportModelsById = new Map(
           supportCatalog.models.map((model) => [model.id, model]),
         )
-        for (const effectiveModel of effectiveCatalog.models) {
-          if (!enabledModelIds.has(effectiveModel.id)) {
-            continue
-          }
-          const model = supportModelsById.get(effectiveModel.id) ?? effectiveModel
-          const routes = models.get(model.id) ?? []
-          const existing = routes.find((route) => (
-            route.serviceEntryId === connection.service_entry_id
-            && route.protocolId === connection.selected_protocol
+        const model = supportModelsById.get(effectiveModel.id) ?? effectiveModel
+        const routes = models.get(model.id) ?? []
+        // availableProtocols is a canonical set so route aggregation never depends on DTO order.
+        // availableProtocols 是规范集合，确保路由聚合绝不依赖 DTO 顺序。
+        const availableProtocols = [...new Set(record.availableProtocols)].sort()
+        const existing = routes.find((route) => (
+          route.serviceEntryId === record.serviceEntryId
+          && route.protocolId === record.protocolId
+          && route.bindingSource === record.bindingSource
+          && route.bindingRuleId === record.bindingRuleId
+          && route.manifestRevision === record.manifestRevision
+          && route.availableProtocols.length === availableProtocols.length
+          && route.availableProtocols.every((protocolId, index) => (
+            protocolId === availableProtocols[index]
           ))
-          if (existing) {
-            existing.accountCount += 1
-          } else {
-            routes.push({
-              accountCount: 1,
-              model,
-              protocolId: connection.selected_protocol,
-              serviceEntryId: serviceEntry.id,
-              serviceEntryName: serviceEntry.display_name,
-            })
-          }
-          models.set(model.id, routes)
+        ))
+        if (existing) {
+          existing.accountCount += 1
+        } else {
+          routes.push({
+            accountCount: 1,
+            availableProtocols,
+            bindingSource: record.bindingSource,
+            bindingRuleId: record.bindingRuleId,
+            manifestRevision: record.manifestRevision,
+            model,
+            protocolId: record.protocolId,
+            serviceEntryId: serviceEntry.id,
+            serviceEntryName: serviceEntry.display_name,
+          })
         }
+        models.set(model.id, routes)
       }
       return { provider, models }
     })

@@ -18,30 +18,33 @@ use vulcan_ai_contract::{
 };
 use vulcan_context::ContextWindowPolicyOverrides;
 use vulcan_provider_adapters::{
-    AccountUsageQueryKind, ActiveAiModelSelection, CatalogDiscoveryState, CatalogDiscoveryStatus,
-    CommonModelTemplateSuggestion, ConnectionModelAccessPolicy, ConnectionModelCatalog,
-    CredentialBillingKind, CredentialConnection, CredentialMode, CredentialSecretEnvelope,
-    CredentialSecretResolver, CredentialSecretStore, CustomModelDefinition,
-    CustomModelTemplateDecision, CustomProviderAuthentication, CustomProviderDefinition,
-    CustomProviderModelDefaults, CustomProviderModelDiscoveryMode, CustomProviderProtocol,
+    AccountUsageQueryKind, ActiveAiModelSelection, AvailableProviderToolTarget,
+    CatalogDiscoveryState, CatalogDiscoveryStatus, CommonModelTemplateSuggestion,
+    ConnectionModelAccessPolicy, ConnectionModelCatalog, CredentialBillingKind,
+    CredentialConnection, CredentialMode, CredentialSecretEnvelope, CredentialSecretResolver,
+    CredentialSecretStore, CustomModelDefinition, CustomModelProtocolPreference,
+    CustomModelTemplateDecision, CustomProtocolRoute, CustomProviderAuthentication,
+    CustomProviderDefinition, CustomProviderManifestFailure, CustomProviderModelDefaults,
+    CustomProviderModelDiscoveryMode, CustomProviderProtocol, DeclaredProviderToolTemplateModel,
     InferenceProfile, InferenceRouteBinding, InferenceRouteConfiguration, InternalModelOverrides,
     ModelCapabilityOverrides, ModelDiscoveryKind, ModelExecutionOverrides,
     OAuthAuthorizationChallenge, OAuthClientConfiguration, OAuthTransactionPhase,
     OAuthTransactionSnapshot, PersistedAiConfiguration, ProviderDescriptor, ProviderKind,
     ProviderRegistry, ProviderToolCapabilityKind, ProviderToolExecutionResult, ProviderToolTarget,
-    ProviderToolTargetSelection, PublicAiRuntime, ResponsesRemoteCompactionPolicy,
-    ResponsesRouteFeatures, ResponsesWebsocketPolicy, ServiceEntryKind,
-    registered_native_action_binding_id,
+    ProviderToolTargetSelection, PublicAiRuntime, PublicAiRuntimeSettingsCatalogSnapshot,
+    ResponsesRemoteCompactionPolicy, ResponsesRouteFeatures, ResponsesWebsocketPolicy,
+    ServiceEntry, ServiceEntryKind, StagedConnectionCatalogObservation,
+    registered_native_action_binding_id, validate_custom_provider_identifier,
 };
 use vulcan_service_api::{ServiceEventEmitter, WorkbenchSnapshot};
 
 use crate::{
     SharedServiceBridgeState, begin_public_ai_configuration_transaction,
     configured_inference::{VMM_CONSUMER_PROFILE_ID, model_supports_disabled_reasoning},
-    emit_workbench_event, mutate_public_ai_configuration,
-    mutate_public_ai_configuration_in_transaction,
-    mutate_public_ai_configuration_with_commit_in_transaction,
-    public_ai_provider_rows_for_selection, shell_host_from_state,
+    emit_workbench_event, mutate_public_ai_configuration_in_transaction,
+    public_ai_provider_rows_for_selection, public_ai_workbench_selection,
+    public_ai_workbench_selection_after_route_revocation, session_process_public_ai_selection,
+    shell_host_from_state,
 };
 
 /// Stable LLM purpose key used by the library-owned configured-inference profile.
@@ -86,6 +89,9 @@ pub(super) struct PublicAiSettingsSnapshot {
     /// Account support catalogs after membership and capability resolution but before access switches.
     /// 解析成员关系与能力后、应用访问开关前的账号支持目录。
     model_support_catalogs: BTreeMap<String, ConnectionModelCatalog>,
+    /// Backend-resolved effective protocol routes for browser model settings.
+    /// 后端为浏览器模型设置解析出的生效协议路由。
+    model_route_records: Vec<PublicAiModelRouteRecord>,
     /// Closed process-local discovery status per credential connection.
     /// 每个凭据连接的封闭进程内发现状态。
     catalog_statuses: BTreeMap<String, CatalogDiscoveryStatus>,
@@ -101,9 +107,21 @@ pub(super) struct PublicAiSettingsSnapshot {
     /// Effective model access records derived from runtime catalogs and persisted choices.
     /// 从运行时目录与持久化选择派生的有效模型访问记录。
     model_access_records: Vec<PublicAiModelAccessRecord>,
+    /// Signed provider-tool template models kept visible even while provider-disabled.
+    /// 即使在供应商级关闭时仍保持可见的签名供应商工具模板模型。
+    provider_tool_template_models: Vec<DeclaredProviderToolTemplateModel>,
     /// User-owned custom models grouped by provider without credential duplication.
     /// 按供应商分组且不复制凭据的用户自有自定义模型。
     custom_models: BTreeMap<String, BTreeMap<String, CustomModelDefinition>>,
+    /// Bounded standalone custom-provider failures isolated during startup hydration.
+    /// 启动补水期间隔离的有界独立自定义供应商失败。
+    custom_provider_manifest_failures: Vec<CustomProviderManifestFailure>,
+    /// Total isolated custom-provider count before the snapshot list bound.
+    /// 快照列表上限前的隔离自定义供应商总数。
+    custom_provider_manifest_failure_total_count: u64,
+    /// Whether additional isolated-provider diagnostics were omitted.
+    /// 是否省略了额外隔离供应商诊断。
+    custom_provider_manifest_failures_truncated: bool,
     /// Capability defaults grouped by custom provider identifier.
     /// 按自定义供应商标识分组的能力默认值。
     custom_provider_model_defaults: BTreeMap<String, CustomProviderModelDefaults>,
@@ -113,6 +131,12 @@ pub(super) struct PublicAiSettingsSnapshot {
     /// Custom providers whose removal warning must include backend-owned model or route customizations.
     /// 移除提示必须包含后端模型或路由自定义项的自定义供应商。
     providers_with_model_customizations: BTreeSet<String>,
+    /// Persisted per-model protocol preferences as explicit records without composite keys.
+    /// 以显式记录形式（无组合键）呈现的持久化逐模型协议偏好。
+    custom_model_protocol_preference_records: Vec<PublicAiCustomModelProtocolPreferenceRecord>,
+    /// Process-local system manifest revisions keyed by provider for the UI revision marker.
+    /// 按供应商索引的进程内系统清单修订号（供 UI 修订标记）。
+    provider_manifest_revisions: BTreeMap<String, u64>,
     /// Explicit template decisions without browser-side composite-key parsing.
     /// 不需要浏览器解析组合键的显式模板决策记录。
     custom_model_template_decision_records: Vec<PublicAiCustomModelTemplateDecisionRecord>,
@@ -153,6 +177,22 @@ pub(super) struct PublicAiSettingsSnapshot {
     /// Persisted operation-specific internal model defaults.
     /// 持久化的操作专属内部模型默认值。
     internal_model_overrides: BTreeMap<String, InternalModelOverrides>,
+}
+
+/// Browser-facing per-model protocol preference without composite-key parsing.
+/// 面向浏览器的逐模型协议偏好记录（无组合键解析）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct PublicAiCustomModelProtocolPreferenceRecord {
+    /// Exact custom provider identifier.
+    /// 精确自定义供应商标识。
+    provider_id: String,
+    /// Exact upstream model identifier.
+    /// 精确上游模型标识。
+    model_id: String,
+    /// Auto or explicit protocol preference.
+    /// 自动或显式协议偏好。
+    preference: CustomModelProtocolPreference,
 }
 
 /// Browser-facing reviewed template decision for one custom-provider model.
@@ -354,6 +394,9 @@ pub(super) struct PublicAiConnectionSnapshot {
     /// Exact usage-query capability declared by the selected credential profile.
     /// 所选凭据配置档声明的精确用量查询能力。
     usage_capability: AccountUsageQueryKind,
+    /// Whether usage refresh requires the optional provider-management credential.
+    /// 用量刷新是否需要可选的供应商管理凭据。
+    usage_requires_management_key: bool,
     /// Whether this connection has an optional provider-management credential.
     /// 此连接是否具有可选的供应商管理凭据。
     has_management_key: bool,
@@ -389,19 +432,20 @@ impl PublicAiConnectionSnapshot {
     ///
     /// # Parameters
     /// 参数
-    /// `runtime` owns the strict provider registry and `connection` is the persisted connection.
-    /// `runtime` 持有严格供应商注册表，`connection` 是持久化连接。
+    /// `providers` is the registry captured with the settings generation; `configuration` owns
+    /// pending-validation state; and `connection` is the persisted connection being redacted.
+    /// `providers` 是与设置代际共同捕获的注册表；`configuration` 持有待验证状态；
+    /// `connection` 是待脱敏的持久化连接。
     ///
     /// # Returns
     /// 返回值
     /// A complete browser-safe snapshot with resolved credential semantics.
     /// 返回带已解析凭据语义的完整浏览器安全快照。
     fn new(
-        runtime: &PublicAiRuntime,
+        providers: &ProviderRegistry,
         configuration: &PersistedAiConfiguration,
         connection: &CredentialConnection,
     ) -> Result<Self, String> {
-        let providers = runtime.effective_providers(configuration)?;
         let provider = providers
             .provider(connection.provider_id.as_str())
             .ok_or_else(|| format!("Provider `{}` is not registered.", connection.provider_id))?;
@@ -430,6 +474,9 @@ impl PublicAiConnectionSnapshot {
             credential_profile_id: connection.credential_profile_id.clone(),
             billing_kind: credential_profile.billing_kind,
             usage_capability: credential_profile.account_usage_query,
+            usage_requires_management_key: credential_profile
+                .account_usage_query
+                .requires_management_credential(),
             has_management_key: connection.management_secret_reference.is_some(),
             service_origin_override: connection.service_origin_override.clone(),
             credential_mode: connection.credential_mode,
@@ -442,6 +489,50 @@ impl PublicAiConnectionSnapshot {
                 .connection_is_pending_validation(connection.id.as_str()),
         })
     }
+}
+
+/// Browser-facing model route status resolved entirely by the backend.
+/// 完全由后端解析的面向浏览器模型路由状态。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct PublicAiModelRouteRecord {
+    /// Exact provider identifier.
+    /// 精确供应商标识。
+    provider_id: String,
+    /// Exact credential connection identifier.
+    /// 精确凭据连接标识。
+    connection_id: String,
+    /// Exact service-entry identifier.
+    /// 精确服务入口标识。
+    service_entry_id: String,
+    /// Exact upstream model identifier.
+    /// 精确上游模型标识。
+    model_id: String,
+    /// Effective protocol frozen in the model binding or explicit legacy boundary, when executable.
+    /// 可执行时冻结在模型绑定或显式旧版边界中的生效协议。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    protocol_id: Option<String>,
+    /// Protocol variants available in this exact effective account catalog.
+    /// 此精确生效账号目录中可用的协议变体。
+    available_protocols: Vec<String>,
+    /// Stable source identifier of the frozen binding, when one exists.
+    /// 存在冻结绑定时的稳定来源标识。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    binding_source: Option<String>,
+    /// Stable rule identifier when a manifest rule produced the binding.
+    /// Manifest 规则生成绑定时的稳定规则标识。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    binding_rule_id: Option<String>,
+    /// Activated provider-manifest revision that owns the binding.
+    /// 持有绑定的已激活供应商 Manifest 修订。
+    manifest_revision: u64,
+    /// Whether request execution can consume this exact account/model route.
+    /// 请求执行是否可消费此精确账号/模型路由。
+    executable: bool,
+    /// Stable backend-owned diagnostic when the route is not executable.
+    /// 路由不可执行时由后端持有的稳定诊断。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    unavailable_reason: Option<String>,
 }
 
 /// Browser-facing exact model override record.
@@ -521,9 +612,6 @@ pub(super) struct PublicAiConnectionAddRequest {
     /// User-visible credential label.
     /// 用户可见凭据标签。
     display_name: String,
-    /// Selected verified protocol profile.
-    /// 选定的已验证协议 Profile。
-    selected_protocol: String,
     /// Secret entered by the user.
     /// 用户输入的秘密。
     secret: String,
@@ -555,9 +643,6 @@ pub(super) struct PublicAiConnectionUpdateRequest {
     /// Selected credential mode.
     /// 选定凭据方式。
     credential_mode: CredentialMode,
-    /// Selected verified protocol profile.
-    /// 选定的已验证协议 Profile。
-    selected_protocol: String,
     /// Optional replacement secret.
     /// 可选替换秘密。
     secret: Option<String>,
@@ -912,6 +997,18 @@ pub(super) struct PublicAiCustomProviderSaveRequest {
     /// 自定义路径模式使用的同源相对发现路径。
     #[serde(default)]
     model_discovery_path: Option<String>,
+    /// Enabled compatible protocol collection; an empty collection keeps the legacy single protocol.
+    /// 启用的兼容协议集合；空集合保持旧版单协议语义。
+    #[serde(default)]
+    protocols: Vec<CustomProviderProtocol>,
+    /// Per-protocol route overrides with route-specific base URL, path, discovery, and headers.
+    /// 带路由专属基础 URL、路径、发现与请求头的逐协议路由覆盖。
+    #[serde(default)]
+    protocol_routes: Vec<CustomProtocolRoute>,
+    /// Bounded non-sensitive fixed request headers shared by every route.
+    /// 全部路由共享的有界非敏感固定请求头。
+    #[serde(default)]
+    request_headers: BTreeMap<String, String>,
     /// Allows an explicitly confirmed manual fallback after unsupported, invalid, or empty discovery.
     /// 允许在目录不受支持、格式无效或为空后使用已明确确认的手工回退。
     #[serde(default)]
@@ -1012,6 +1109,32 @@ pub(super) struct PublicAiCustomModelsSaveRequest {
     /// 与替换模型集合一同提交的显式已审查模板决策。
     #[serde(default)]
     template_decisions: Vec<PublicAiCustomModelTemplateDecisionBatchItem>,
+}
+
+/// One per-model protocol preference item for a custom provider.
+/// 一个自定义供应商的逐模型协议偏好条目。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct PublicAiCustomModelProtocolPreferenceItem {
+    /// Exact upstream model identifier.
+    /// 精确上游模型标识。
+    model_id: String,
+    /// Auto or explicit protocol preference for this model.
+    /// 该模型的自动或显式协议偏好。
+    preference: CustomModelProtocolPreference,
+}
+
+/// Replaces the per-model protocol preferences for one custom provider.
+/// 替换一个自定义供应商的逐模型协议偏好。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct PublicAiCustomModelProtocolPreferencesSaveRequest {
+    /// Exact custom provider identifier.
+    /// 精确自定义供应商标识。
+    provider_id: String,
+    /// Complete replacement preference set.
+    /// 完整替换偏好集合。
+    preferences: Vec<PublicAiCustomModelProtocolPreferenceItem>,
 }
 
 /// Saves or restores the direct provider-wide model settings for one custom provider.
@@ -1195,8 +1318,8 @@ struct PreparedCustomProviderCandidate {
     /// Optional temporary connection used only when a metadata request has credential material.
     /// 仅在元数据请求具有凭据材料时使用的可选临时连接。
     validation_connection: Option<CredentialConnection>,
-    /// New candidate-owned secret created only for first-provider setup.
-    /// 仅在首次供应商设置时创建且由候选项拥有的新秘密。
+    /// New candidate-owned secret kept in memory until the non-cancellable commit boundary.
+    /// 在不可取消提交边界前始终只由候选项保存在内存中的新秘密。
     temporary_secret: Option<CredentialSecretEnvelope>,
     /// Whether the request edits one existing provider.
     /// 请求是否编辑一个现有供应商。
@@ -1237,11 +1360,20 @@ struct CustomProviderCandidateObservation {
 
 /// Records the exact durable state allowed by one credential-specific provider observation.
 /// 记录一次凭据级供应商观测所允许的精确持久化状态。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 struct CustomProviderConnectionValidationOutcome {
     /// Whether the migrated credential must remain unavailable until a later successful validation.
     /// 迁移后的凭据是否必须保持不可用，直到后续验证成功。
     pending_validation: bool,
+    /// Raw source catalog observed through the candidate contract and remapped to the durable connection.
+    /// 通过候选契约观测并重映射到持久连接的原始来源目录。
+    catalog: Option<ConnectionModelCatalog>,
+    /// Exact typed discovery state produced by the candidate observation.
+    /// 候选观测产生的精确类型化发现状态。
+    status: CatalogDiscoveryStatus,
+    /// Controlled discovery diagnostic retained when the accepted observation was non-ready.
+    /// 接受的观测并非就绪时保留的受控发现诊断。
+    refresh_error: Option<String>,
 }
 
 /// Builds one strict candidate and its temporary credential connection.
@@ -1266,17 +1398,35 @@ fn prepare_custom_provider_candidate(
         .provider_id
         .clone()
         .unwrap_or_else(|| format!("custom:{}", uuid::Uuid::new_v4().simple()));
+    // protocols stays authoritative when declared; an empty collection keeps the legacy
+    // single-protocol request shape for older clients.
+    // protocols 在声明时保持权威；空集合保留旧版单协议请求形态以兼容旧客户端。
+    let protocols = if request.protocols.is_empty() {
+        vec![request.protocol]
+    } else {
+        request.protocols.clone()
+    };
     let mut descriptor = CustomProviderDefinition {
         id: provider_id.clone(),
         display_name: request.display_name.clone(),
         base_url: request.base_url.clone(),
-        protocol: request.protocol,
+        protocol: None,
+        protocols,
         authentication: request.authentication,
         model_discovery_mode: request.model_discovery_mode,
         model_discovery_path: request.model_discovery_path.clone(),
+        protocol_routes: request.protocol_routes.clone(),
+        request_headers: request.request_headers.clone(),
     }
     .into_descriptor()?;
-    if request.protocol != CustomProviderProtocol::OpenAiCodexResponses
+    let declares_codex = descriptor
+        .service_entries
+        .iter()
+        .flat_map(|entry| entry.protocol_routes.iter())
+        .any(|route| {
+            route.protocol_profile_id == CustomProviderProtocol::OpenAiCodexResponses.profile_id()
+        });
+    if !declares_codex
         && (request.remote_compaction_policy != ResponsesRemoteCompactionPolicy::Disabled
             || request.websocket_policy != ResponsesWebsocketPolicy::Disabled)
     {
@@ -1284,17 +1434,21 @@ fn prepare_custom_provider_candidate(
             "Responses capability policies require the Codex Responses protocol.",
         ));
     }
-    let route_features = (request.protocol == CustomProviderProtocol::OpenAiCodexResponses)
-        .then_some(ResponsesRouteFeatures {
-            remote_compaction: request.remote_compaction_policy,
-            websocket: request.websocket_policy,
-        });
-    let descriptor_route = descriptor
-        .service_entries
-        .first_mut()
-        .and_then(|entry| entry.protocol_routes.first_mut())
-        .ok_or_else(|| String::from("Custom provider must declare one protocol route."))?;
-    descriptor_route.responses_features = route_features;
+    let route_features = declares_codex.then_some(ResponsesRouteFeatures {
+        remote_compaction: request.remote_compaction_policy,
+        websocket: request.websocket_policy,
+    });
+    if let Some(features) = route_features {
+        for entry in &mut descriptor.service_entries {
+            for route in &mut entry.protocol_routes {
+                if route.protocol_profile_id
+                    == CustomProviderProtocol::OpenAiCodexResponses.profile_id()
+                {
+                    route.responses_features = Some(features);
+                }
+            }
+        }
+    }
     let entry = descriptor
         .service_entries
         .first()
@@ -1313,7 +1467,11 @@ fn prepare_custom_provider_candidate(
         service_entry_id: entry.id.clone(),
         credential_profile_id: profile.id.clone(),
         selected_protocol: route.protocol_profile_id.clone(),
-        verified_protocols: BTreeSet::from([route.protocol_profile_id.clone()]),
+        verified_protocols: entry
+            .protocol_routes
+            .iter()
+            .map(|route| route.protocol_profile_id.clone())
+            .collect(),
     };
     let temporary_connection_id = format!("connection_{}", uuid::Uuid::new_v4().simple());
     let (validation_connection, temporary_secret) = if updating_existing {
@@ -1508,62 +1666,91 @@ fn custom_provider_connection_contract_changed(
     // 规范化移除显式且只影响执行的 Responses 能力。
     let existing_entries = existing.service_entries.clone();
     let mut candidate_entries = candidate.descriptor.service_entries.clone();
-    // existing_responses_features is the sole field proven by ProtocolRoute to control request
-    // execution rather than endpoint discovery or credential projection.
-    // existing_responses_features 是 ProtocolRoute 已证明只控制请求执行、而不控制端点发现或
-    // 凭据投影的唯一字段。
-    let existing_responses_features = existing_entries
-        .first()
-        .and_then(|entry| entry.protocol_routes.first())
-        .map(|route| route.responses_features)
-        .ok_or_else(|| {
-            format!(
-                "Custom provider `{}` has no persisted protocol route.",
-                candidate.provider_id
-            )
-        })?;
-    let candidate_route = candidate_entries
-        .first_mut()
-        .and_then(|entry| entry.protocol_routes.first_mut())
-        .ok_or_else(|| String::from("Custom provider candidate has no protocol route."))?;
-    candidate_route.responses_features = existing_responses_features;
+    // Responses capability switches are the sole fields proven by ProtocolRoute to control
+    // request execution rather than endpoint discovery or credential projection. Every
+    // candidate route is normalized to the persisted route with the same protocol profile;
+    // routes for newly added protocols keep their own features because there is no persisted
+    // authority to inherit (plan §R6.9 removes the first-route authority).
+    // Responses 能力开关是 ProtocolRoute 已证明只控制请求执行、而不控制端点发现或凭据投影
+    // 的唯一字段。每条候选路由按相同协议配置档归一化为持久化路由的值；新增协议的路由
+    // 保留自身能力，因为没有可继承的持久化权威（方案 §R6.9 移除首路由权威）。
+    let existing_features_by_protocol = existing_entries
+        .iter()
+        .flat_map(|entry| entry.protocol_routes.iter())
+        .map(|route| (route.protocol_profile_id.as_str(), route.responses_features))
+        .collect::<BTreeMap<_, _>>();
+    for entry in &mut candidate_entries {
+        for route in &mut entry.protocol_routes {
+            if let Some(existing_features) = existing_features_by_protocol
+                .get(route.protocol_profile_id.as_str())
+                .copied()
+            {
+                route.responses_features = existing_features;
+            }
+        }
+    }
     Ok(existing_entries != candidate_entries)
 }
 
-/// Reports whether an edited custom provider selects a different single protocol.
-/// 报告被编辑的自定义供应商是否选择了不同的唯一协议。
+/// Reports whether an edited custom provider changes its enabled protocol set.
+/// 报告被编辑的自定义供应商是否改变其启用协议集合。
 ///
 /// # Parameters
 /// 参数
-/// `current` owns the durable descriptor and `candidate` contains the selected target route.
-/// `current` 持有持久化描述符，`candidate` 包含选定的目标路由。
+/// `current` owns the durable descriptor and `candidate` contains the newly selected routes.
+/// `current` 持有持久化描述符，`candidate` 包含新选择的路由。
 ///
 /// # Returns
 /// 返回值
-/// `true` only when an existing provider changes its exact protocol profile.
-/// 仅当现有供应商改变精确协议配置档时返回 `true`。
-fn custom_provider_protocol_changed(
+/// The exact set of protocol profile identifiers removed by the edit; an empty set means the
+/// enabled protocol set was not reduced (creation, cosmetics, or additions only).
+/// 返回编辑移除的精确协议配置档标识集合；空集合表示启用协议集合未被缩减
+/// （新建、展示性修改或仅新增协议）。
+fn custom_provider_removed_protocols(
     current: &PersistedAiConfiguration,
     candidate: &PreparedCustomProviderCandidate,
-) -> Result<bool, String> {
+) -> Result<BTreeSet<String>, String> {
     if !candidate.updating_existing {
-        return Ok(false);
+        return Ok(BTreeSet::new());
     }
-    // existing_protocol is read from the same strict one-entry, one-route descriptor contract.
-    // existing_protocol 从同一严格单入口、单路由描述符契约中读取。
-    let existing_protocol = current
+    // existing_protocols is the full enabled protocol set of the persisted descriptor; the
+    // single-route authority is removed for multi-protocol providers (plan §R6.9).
+    // existing_protocols 是持久化描述符的完整启用协议集合；多协议供应商不再使用
+    // 单路由权威（方案 §R6.9）。
+    let existing_protocols = current
         .custom_providers
         .get(candidate.provider_id.as_str())
-        .and_then(|provider| provider.service_entries.first())
-        .and_then(|entry| entry.protocol_routes.first())
-        .map(|route| route.protocol_profile_id.as_str())
+        .map(|provider| {
+            provider
+                .service_entries
+                .iter()
+                .flat_map(|entry| entry.protocol_routes.iter())
+                .map(|route| route.protocol_profile_id.clone())
+                .collect::<BTreeSet<_>>()
+        })
         .ok_or_else(|| {
             format!(
-                "Custom provider `{}` has no persisted protocol route.",
+                "Custom provider `{}` is not configured.",
                 candidate.provider_id
             )
         })?;
-    Ok(existing_protocol != candidate.connection_target.selected_protocol)
+    if existing_protocols.is_empty() {
+        return Err(format!(
+            "Custom provider `{}` has no persisted protocol route.",
+            candidate.provider_id
+        ));
+    }
+    let candidate_protocols = candidate
+        .descriptor
+        .service_entries
+        .iter()
+        .flat_map(|entry| entry.protocol_routes.iter())
+        .map(|route| route.protocol_profile_id.clone())
+        .collect::<BTreeSet<_>>();
+    Ok(existing_protocols
+        .difference(&candidate_protocols)
+        .cloned()
+        .collect())
 }
 
 /// Builds one isolated validation candidate for every credential owned by an edited provider.
@@ -1665,29 +1852,14 @@ async fn validate_custom_provider_edit_connections(
         // validation_configuration 将此凭据绑定到新描述符，且不修改持久化状态。
         let validation_configuration =
             custom_provider_validation_configuration(runtime, current, &validation_candidate)?;
-        // observation_result is paired with mandatory temporary-catalog cleanup below.
-        // observation_result 与下方强制临时目录清理配对。
-        let observation_result = observe_custom_provider_candidate(
+        // observation is isolated from both the main runtime and the durable credential store.
+        // observation 与主运行时及持久凭据仓库完全隔离。
+        let observation = observe_custom_provider_candidate(
             runtime,
             &validation_configuration,
             &validation_candidate,
         )
-        .await;
-        // cleanup_result proves no temporary edit artifact survives before the next credential.
-        // cleanup_result 确保进入下一份凭据前不残留任何临时编辑工件。
-        let cleanup_result =
-            cleanup_custom_provider_candidate(runtime, &validation_candidate).await;
-        // observation converts transport failure plus cleanup status into one actionable atomic error.
-        // observation 将传输失败与清理状态合并为一条可操作的原子错误。
-        let observation = match observation_result {
-            Ok(observation) => {
-                cleanup_result?;
-                observation
-            }
-            Err(error) => {
-                return Err(compensated_operation_error(error, cleanup_result, Ok(())));
-            }
-        };
+        .await?;
         if !custom_provider_observation_is_accepted(
             observation.status.state,
             allow_manual_fallback,
@@ -1704,14 +1876,27 @@ async fn validate_custom_provider_edit_connections(
                 "Custom provider credential `{source_connection_id}` cannot migrate to the selected protocol: {diagnostic}"
             ));
         }
+        // pendingValidation freezes the explicit user-approved availability state before the
+        // observation fields are moved into the durable-connection outcome.
+        // pendingValidation 在观测字段移入持久连接结果前冻结用户明确批准的可用性状态。
+        let pending_validation = custom_provider_save_requires_pending_validation(
+            observation.status.state,
+            allow_manual_fallback,
+            allow_pending_validation,
+        );
+        // catalog remaps the temporary validation identity to the existing durable credential.
+        // catalog 把临时验证身份重映射到既有持久凭据。
+        let catalog = observation.catalog.map(|mut catalog| {
+            catalog.connection_id.clone_from(&source_connection_id);
+            catalog
+        });
         outcomes.insert(
             source_connection_id,
             CustomProviderConnectionValidationOutcome {
-                pending_validation: custom_provider_save_requires_pending_validation(
-                    observation.status.state,
-                    allow_manual_fallback,
-                    allow_pending_validation,
-                ),
+                pending_validation,
+                catalog,
+                status: observation.status,
+                refresh_error: observation.refresh_error,
             },
         );
     }
@@ -1753,7 +1938,6 @@ fn migrate_custom_provider_connections(
             // _validation_outcome 证明此精确凭据已在迁移前完成观测。
             let _validation_outcome = validation_outcomes
                 .get(connection.id.as_str())
-                .copied()
                 .ok_or_else(|| {
                     format!(
                         "Custom provider credential `{}` has no validation outcome for the protocol migration.",
@@ -1800,20 +1984,23 @@ fn migrate_custom_provider_connections(
     Ok(())
 }
 
-/// Migrates one dependent conversation inference route to a custom provider's new single protocol.
-/// 将一条依赖的会话推理路由迁移到自定义供应商的新唯一协议。
+/// Migrates one dependent conversation inference route without inventing a model protocol.
+/// 在不虚构模型协议的前提下迁移一条依赖的会话推理路由。
 ///
 /// # Parameters
 /// 参数
 /// `route` is one persisted internal route, `provider_id` and `connection_ids` define ownership,
-/// and `target` supplies the new service-entry and protocol identities.
+/// and `target` supplies the new service-entry and enabled protocol identities.
 /// `route` 是一条持久化内部路由，`provider_id` 与 `connection_ids` 定义归属，`target`
-/// 提供新的服务入口与协议身份。
+/// 提供新的服务入口与启用协议身份。
 ///
 /// # Returns
 /// 返回值
-/// Success after an owned protocol route is rewritten, or an explicit error for an invalid binding.
-/// 改写归属协议路由后返回成功；绑定无效时返回明确错误。
+/// Success after updating the service identity. A unique protocol is migrated exactly; a
+/// multi-protocol target preserves the old exact binding so any drift fails closed and remains
+/// visible through route diagnostics until the user re-selects the model.
+/// 更新服务身份后返回成功。唯一协议会被精确迁移；多协议目标保留旧精确绑定，使任何漂移
+/// 失败封闭并通过路由诊断保持可见，直到用户重新选择模型。
 fn migrate_custom_provider_inference_route(
     route: &mut InferenceRouteConfiguration,
     provider_id: &str,
@@ -1840,7 +2027,13 @@ fn migrate_custom_provider_inference_route(
         ));
     };
     route.service_entry_id = target.service_entry_id.clone();
-    *protocol_profile_id = target.selected_protocol.clone();
+    // A unique target protocol is a proven model binding. With multiple protocols, the
+    // connection default cannot prove this model's binding and must not rewrite the route.
+    // 唯一目标协议能够证明模型绑定。存在多个协议时，连接默认值无法证明该模型绑定，
+    // 因此不得改写路由。
+    if target.verified_protocols.len() == 1 {
+        *protocol_profile_id = target.selected_protocol.clone();
+    }
     Ok(())
 }
 
@@ -1849,8 +2042,9 @@ fn migrate_custom_provider_inference_route(
 ///
 /// # Parameters
 /// 参数
-/// `runtime` owns process-local catalogs, `validation` is isolated, and `candidate` owns the temporary secret.
-/// `runtime` 持有进程内目录，`validation` 是隔离配置，`candidate` 持有临时秘密。
+/// `runtime` supplies an isolated observer, `validation` is the candidate configuration, and
+/// `candidate` optionally supplies one in-memory temporary secret.
+/// `runtime` 提供隔离观测器，`validation` 是候选配置，`candidate` 可选提供一份内存临时秘密。
 ///
 /// # Returns
 /// 返回值
@@ -1869,72 +2063,22 @@ async fn observe_custom_provider_candidate(
             candidate.provider_id
         )
     })?;
-    let secret_store = runtime.credential_secret_store();
-    if let Some(secret) = candidate.temporary_secret.as_ref() {
-        CredentialSecretStore::create_secret(
-            secret_store.as_ref(),
-            validation_connection.secret_reference.as_str(),
-            secret,
+    // observation lives only inside the adapter-owned isolated runtime; cancellation therefore
+    // drops the temporary secret and every catalog projection without compensation work.
+    // observation 仅存在于适配器持有的隔离运行时中；因此取消会直接丢弃临时秘密与全部目录投影，
+    // 无需补偿操作。
+    let observation = runtime
+        .observe_connection_catalog_candidate(
+            validation,
+            validation_connection.id.as_str(),
+            candidate.temporary_secret.as_ref(),
         )
         .await?;
-    }
-    let refresh_error = runtime
-        .refresh_connection_catalog(validation, validation_connection.id.as_str())
-        .await
-        .err();
-    let status = runtime
-        .catalog_status_snapshot()?
-        .remove(validation_connection.id.as_str())
-        .ok_or_else(|| {
-            refresh_error.clone().unwrap_or_else(|| {
-                String::from("Custom provider discovery did not publish a typed status.")
-            })
-        })?;
-    let catalog = runtime
-        .source_catalog_snapshot()?
-        .remove(validation_connection.id.as_str());
     Ok(CustomProviderCandidateObservation {
-        status,
-        catalog,
-        refresh_error,
+        status: observation.status,
+        catalog: observation.catalog,
+        refresh_error: observation.refresh_error,
     })
-}
-
-/// Removes every process-local and secure-store artifact owned by one temporary candidate.
-/// 移除一个临时候选项拥有的全部进程内与安全存储工件。
-///
-/// # Parameters
-/// 参数
-/// `runtime` owns candidate catalogs and `candidate` identifies the exact secret and connection.
-/// `runtime` 持有候选目录，`candidate` 标识精确秘密与连接。
-///
-/// # Returns
-/// 返回值
-/// Returns success only when both cleanup operations succeed.
-/// 仅当两项清理操作都成功时返回成功。
-async fn cleanup_custom_provider_candidate(
-    runtime: &PublicAiRuntime,
-    candidate: &PreparedCustomProviderCandidate,
-) -> Result<(), String> {
-    // validation_connection is absent only when no temporary runtime or secure-store artifact could have been created.
-    // validation_connection 仅在不可能创建临时运行时或安全存储工件时缺失。
-    let Some(validation_connection) = candidate.validation_connection.as_ref() else {
-        return Ok(());
-    };
-    let secret_store = runtime.credential_secret_store();
-    let secret_cleanup = if candidate.temporary_secret.is_some() {
-        CredentialSecretStore::delete_secret(
-            secret_store.as_ref(),
-            validation_connection.secret_reference.as_str(),
-        )
-        .await
-    } else {
-        Ok(())
-    };
-    combine_results(
-        secret_cleanup,
-        runtime.remove_connection_catalog(validation_connection.id.as_str()),
-    )
 }
 
 /// Reports whether one closed discovery state supports an explicit manual-model fallback.
@@ -2012,8 +2156,8 @@ fn custom_provider_observation_is_accepted(
 ///
 /// # Returns
 /// 返回值
-/// Returns typed discovery status and raw model facts after guaranteed temporary cleanup.
-/// 在保证清理临时状态后返回类型化发现状态与原始模型事实。
+/// Returns typed discovery status and raw model facts from a state-free isolated observation.
+/// 从不产生状态的隔离观测返回类型化发现状态与原始模型事实。
 pub(super) async fn service_probe_public_ai_custom_provider(
     state: SharedServiceBridgeState,
     request: PublicAiCustomProviderSaveRequest,
@@ -2023,11 +2167,7 @@ pub(super) async fn service_probe_public_ai_custom_provider(
     let validation =
         custom_provider_validation_configuration(runtime.as_ref(), &current, &candidate)?;
     let observation =
-        observe_custom_provider_candidate(runtime.as_ref(), &validation, &candidate).await;
-    let cleanup = cleanup_custom_provider_candidate(runtime.as_ref(), &candidate).await;
-    let observation =
-        observation.map_err(|error| compensated_operation_error(error, cleanup.clone(), Ok(())))?;
-    cleanup?;
+        observe_custom_provider_candidate(runtime.as_ref(), &validation, &candidate).await?;
     Ok(PublicAiCustomProviderProbeResult {
         manual_fallback_available: manual_fallback_available(observation.status.state),
         pending_save_available: pending_validation_available(observation.status.state),
@@ -2050,24 +2190,25 @@ pub(super) async fn service_save_public_ai_custom_provider(
     // connection_contract_changed 防止仅修改供应商展示信息时强制重新验证账号。
     let connection_contract_changed =
         custom_provider_connection_contract_changed(&current_configuration, &candidate)?;
-    // protocol_changed scopes destructive cleanup to an actual user-selected protocol transition.
-    // protocol_changed 将破坏性清理限定到用户实际选择的协议切换。
-    let protocol_changed = custom_provider_protocol_changed(&current_configuration, &candidate)?;
-    // inactive_protocol_override_count identifies route settings that the target protocol cannot expose.
-    // inactive_protocol_override_count 标识目标协议无法公开的路由设置。
-    let inactive_protocol_override_count = if protocol_changed {
-        current_configuration.inactive_provider_model_override_count(
-            candidate.provider_id.as_str(),
-            candidate.connection_target.selected_protocol.as_str(),
-        )
-    } else {
-        0
-    };
+    // removed_protocols scopes destructive cleanup to the actual protocols the edit deletes;
+    // additions never invalidate existing settings (plan §R6.8).
+    // removed_protocols 把破坏性清理限定到编辑实际删除的协议；新增协议绝不让既有设置失效
+    // （方案 §R6.8）。
+    let removed_protocols = custom_provider_removed_protocols(&current_configuration, &candidate)?;
+    // inactive_protocol_override_count identifies route settings owned by the removed protocols.
+    // inactive_protocol_override_count 标识被移除协议拥有的路由设置。
+    let inactive_protocol_override_count = current_configuration
+        .removed_protocol_model_override_count(candidate.provider_id.as_str(), &removed_protocols);
     if inactive_protocol_override_count > 0 && !request.confirm_inactive_protocol_override_deletion
     {
         return Err(format!(
-            "Switching custom provider `{}` to protocol `{}` would deactivate {inactive_protocol_override_count} protocol-scoped model setting(s). Explicit confirmation is required to delete those incompatible settings.",
-            candidate.provider_id, candidate.connection_target.selected_protocol
+            "Removing protocol(s) `{}` from custom provider `{}` would deactivate {inactive_protocol_override_count} protocol-scoped model setting(s). Explicit confirmation is required to delete those incompatible settings.",
+            removed_protocols
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", "),
+            candidate.provider_id
         ));
     }
     // edit_validation_outcomes remains empty for creation and complete for every existing credential during edits.
@@ -2084,10 +2225,12 @@ pub(super) async fn service_save_public_ai_custom_provider(
     } else {
         BTreeMap::new()
     };
-    // save_as_pending belongs only to the single newly created credential.
-    // save_as_pending 仅属于新建供应商时的单一凭据。
-    let save_as_pending = if candidate.updating_existing {
-        false
+    // newProviderObservation belongs only to the single newly created credential and remains
+    // process-local until the non-cancellable commit section adopts it.
+    // newProviderObservation 仅属于新建供应商时的单一凭据，并在不可取消提交区段接管前
+    // 始终只存在于进程内。
+    let (save_as_pending, new_provider_observation) = if candidate.updating_existing {
+        (false, None)
     } else {
         // validation_configuration isolates the new provider and its not-yet-durable credential.
         // validation_configuration 隔离新供应商及其尚未持久化的凭据。
@@ -2098,19 +2241,12 @@ pub(super) async fn service_save_public_ai_custom_provider(
         )?;
         // observation retains the new connection catalog for immediate durable adoption on success.
         // observation 在成功时保留新连接目录，以供持久化状态立即接管。
-        let observation = match observe_custom_provider_candidate(
+        let observation = observe_custom_provider_candidate(
             runtime.as_ref(),
             &validation_configuration,
             &candidate,
         )
-        .await
-        {
-            Ok(observation) => observation,
-            Err(error) => {
-                let cleanup = cleanup_custom_provider_candidate(runtime.as_ref(), &candidate).await;
-                return Err(compensated_operation_error(error, cleanup, Ok(())));
-            }
-        };
+        .await?;
         if !custom_provider_observation_is_accepted(
             observation.status.state,
             request.allow_manual_fallback,
@@ -2129,126 +2265,307 @@ pub(super) async fn service_save_public_ai_custom_provider(
                         "The provider model catalog was not validated."
                     }
                 });
-            let cleanup = cleanup_custom_provider_candidate(runtime.as_ref(), &candidate).await;
-            return Err(compensated_operation_error(
-                format!(
-                    "Custom provider validation requires an explicit supported action: {diagnostic}"
-                ),
-                cleanup,
-                Ok(()),
+            return Err(format!(
+                "Custom provider validation requires an explicit supported action: {diagnostic}"
             ));
         }
-        custom_provider_save_requires_pending_validation(
-            observation.status.state,
-            request.allow_manual_fallback,
-            request.allow_pending_validation,
+        (
+            custom_provider_save_requires_pending_validation(
+                observation.status.state,
+                request.allow_manual_fallback,
+                request.allow_pending_validation,
+            ),
+            Some(observation),
         )
     };
 
-    let provider_id = candidate.provider_id.clone();
-    let updating_existing = candidate.updating_existing;
-    let descriptor = candidate.descriptor.clone();
-    let validation_connection = candidate.validation_connection.clone();
-    let connection_target = candidate.connection_target.clone();
-    let persist_result = mutate_public_ai_configuration_in_transaction(
-        &state,
-        "保存自定义供应商失败",
-        |configuration| {
-            configuration
-                .custom_providers
-                .insert(provider_id.clone(), descriptor.clone());
-            // effective_providers validates every connection against the newly selected single protocol.
-            // effective_providers 根据新选择的唯一协议校验每一条连接。
-            let effective_providers = runtime.effective_providers(configuration)?;
-            if !updating_existing {
-                // connection is guaranteed by new-provider preparation and becomes durable only in this branch.
-                // connection 由新供应商准备流程保证存在，并且仅在此分支转为持久状态。
-                let connection = validation_connection.clone().ok_or_else(|| {
-                    String::from("A new custom provider requires its first credential connection.")
-                })?;
-                configuration
-                    .connection_graph
-                    .add_connection(&effective_providers, connection.clone())?;
-                configuration
-                    .set_connection_pending_validation(connection.id.as_str(), save_as_pending)?;
-            } else if connection_contract_changed {
-                migrate_custom_provider_connections(
-                    &effective_providers,
-                    configuration,
-                    provider_id.as_str(),
-                    &connection_target,
-                    &edit_validation_outcomes,
-                )?;
+    // commitTask owns the transaction once validation is complete. Dropping the caller's Future
+    // detaches the JoinHandle but cannot interrupt secret creation, durable activation, or exact
+    // compensation between those two boundaries.
+    // commitTask 在验证完成后持有事务。丢弃调用方 Future 只会分离 JoinHandle，无法中断秘密创建、
+    // 持久激活或两者边界之间的精确补偿。
+    let commit_task = tokio::spawn(async move {
+        // transaction remains held through every catalog, credential, configuration, and
+        // Workbench projection owned by this save.
+        // transaction 在本次保存持有的全部目录、凭据、配置与工作台投影完成前保持持有。
+        let transaction = transaction;
+        // providerId freezes the exact custom-provider identity moved into persistence.
+        // providerId 冻结移入持久化流程的精确自定义供应商身份。
+        let provider_id = candidate.provider_id.clone();
+        // updatingExisting selects the closed create-versus-edit transaction path.
+        // updatingExisting 选择封闭的新建或编辑事务路径。
+        let updating_existing = candidate.updating_existing;
+        // descriptor is the complete candidate provider contract.
+        // descriptor 是完整的候选供应商契约。
+        let descriptor = candidate.descriptor.clone();
+        // validationConnection becomes durable only for a new provider.
+        // validationConnection 仅在新供应商路径转为持久状态。
+        let validation_connection = candidate.validation_connection.clone();
+        // connectionTarget owns the route identity applied to every edited credential.
+        // connectionTarget 持有应用到每份已编辑凭据的路由身份。
+        let connection_target = candidate.connection_target.clone();
+        // stagedObservations is complete before the first runtime staging write.
+        // stagedObservations 在首次运行时暂存写入前已经完整。
+        let mut staged_observations = Vec::new();
+        if let Some(observation) = new_provider_observation {
+            let connection = validation_connection.as_ref().ok_or_else(|| {
+                String::from("A new custom provider requires its first credential connection.")
+            })?;
+            staged_observations.push(StagedConnectionCatalogObservation {
+                connection_id: connection.id.clone(),
+                catalog: observation.catalog,
+                status: observation.status,
+                refresh_error: observation.refresh_error,
+            });
+        }
+        for (connection_id, outcome) in &edit_validation_outcomes {
+            staged_observations.push(StagedConnectionCatalogObservation {
+                connection_id: connection_id.clone(),
+                catalog: outcome.catalog.clone(),
+                status: outcome.status.clone(),
+                refresh_error: outcome.refresh_error.clone(),
+            });
+        }
+        // runtimeBeforeImage is the exact pre-save image for staging, configuration, and final
+        // publication compensation.
+        // runtimeBeforeImage 是暂存、配置与最终发布补偿共同使用的精确保存前镜像。
+        let runtime_before_image = runtime.capture_activation_snapshot()?;
+        // stagingBeforeImage is present only when this save mutates staged catalog observations.
+        // stagingBeforeImage 仅在本次保存修改暂存目录观测时存在。
+        let staging_before_image = if staged_observations.is_empty() {
+            None
+        } else {
+            Some(runtime_before_image.clone())
+        };
+        // stagingAfterImage is produced by the atomic batch itself, so no fallible read can occur
+        // after its first shared assignment.
+        // stagingAfterImage 由原子批次自身产生，因此首次共享赋值后不会再发生可失败读取。
+        let staging_after_image = if let Some(before_image) = staging_before_image.as_ref() {
+            Some(runtime.stage_connection_catalog_observations_if_current(
+                before_image,
+                &staged_observations,
+            )?)
+        } else {
+            None
+        };
+        // createdSecretReference is present only after a new provider's validated in-memory key
+        // has crossed the durable credential boundary.
+        // createdSecretReference 仅在新供应商的已验证内存 Key 越过持久凭据边界后存在。
+        let created_secret_reference = if updating_existing {
+            None
+        } else {
+            let connection = validation_connection.as_ref().ok_or_else(|| {
+                String::from("A new custom provider requires its first credential connection.")
+            })?;
+            let secret = candidate.temporary_secret.as_ref().ok_or_else(|| {
+                String::from("A new custom provider requires one validated credential secret.")
+            })?;
+            let secret_store = runtime.credential_secret_store();
+            if let Err(primary) = CredentialSecretStore::create_secret(
+                secret_store.as_ref(),
+                connection.secret_reference.as_str(),
+                secret,
+            )
+            .await
+            {
+                // stagingRestore is safe because the atomic batch returned its exact CAS image.
+                // stagingRestore 是安全的，因为原子批次返回了其精确 CAS 镜像。
+                let staging_restore = match (&staging_before_image, &staging_after_image) {
+                    (Some(before), Some(after)) => {
+                        runtime.restore_activation_snapshot(before, after)
+                    }
+                    (None, None) => Ok(()),
+                    _ => Err(String::from(
+                        "Custom provider staging compensation lost one activation image.",
+                    )),
+                };
+                return Err(compensated_operation_error(
+                    primary,
+                    Ok(()),
+                    staging_restore,
+                ));
             }
-            if updating_existing && connection_contract_changed {
-                for (connection_id, outcome) in &edit_validation_outcomes {
+            Some(connection.secret_reference.clone())
+        };
+
+        let persist_result = mutate_public_ai_configuration_in_transaction(
+            &state,
+            "保存自定义供应商失败",
+            |configuration| {
+                configuration
+                    .custom_providers
+                    .insert(provider_id.clone(), descriptor.clone());
+                // effective_providers validates every connection against the newly selected single protocol.
+                // effective_providers 根据新选择的唯一协议校验每一条连接。
+                let effective_providers = runtime.effective_providers(configuration)?;
+                if !updating_existing {
+                    // connection is guaranteed by new-provider preparation and becomes durable only in this branch.
+                    // connection 由新供应商准备流程保证存在，并且仅在此分支转为持久状态。
+                    let connection = validation_connection.clone().ok_or_else(|| {
+                        String::from(
+                            "A new custom provider requires its first credential connection.",
+                        )
+                    })?;
+                    configuration
+                        .connection_graph
+                        .add_connection(&effective_providers, connection.clone())?;
                     configuration.set_connection_pending_validation(
-                        connection_id.as_str(),
-                        outcome.pending_validation,
+                        connection.id.as_str(),
+                        save_as_pending,
+                    )?;
+                } else if connection_contract_changed {
+                    migrate_custom_provider_connections(
+                        &effective_providers,
+                        configuration,
+                        provider_id.as_str(),
+                        &connection_target,
+                        &edit_validation_outcomes,
                     )?;
                 }
-            }
-            if protocol_changed {
-                configuration.remove_inactive_provider_model_overrides(
-                    provider_id.as_str(),
-                    connection_target.selected_protocol.as_str(),
-                );
-            }
-            Ok(())
-        },
-    );
-    let mut configuration = match persist_result {
-        Ok(configuration) => configuration,
-        Err(error) => {
-            // Existing-provider artifacts were already removed before persistence; new-provider
-            // artifacts must still be compensated when their first durable write fails.
-            // 既有供应商工件已在持久化前移除；新供应商首次持久化失败时仍需补偿其临时工件。
-            let cleanup = if updating_existing {
+                if updating_existing && connection_contract_changed {
+                    for (connection_id, outcome) in &edit_validation_outcomes {
+                        configuration.set_connection_pending_validation(
+                            connection_id.as_str(),
+                            outcome.pending_validation,
+                        )?;
+                    }
+                }
+                if !removed_protocols.is_empty() {
+                    // Cascade cleanup is scoped to the removed protocol set: overrides owned by
+                    // removed protocols are deleted. Explicit model preferences that point at a
+                    // removed protocol are intentionally retained so binding resolution keeps
+                    // failing closed (ExplicitProtocolDisabled) and the model stays blocked until
+                    // the user re-selects; silently dropping the preference would fall back to
+                    // Auto (plan §R6.8).
+                    // 级联清理限定到被删除协议集合：被删协议拥有的覆盖被删除。指向被删协议的
+                    // 显式模型偏好被刻意保留，使绑定解析持续失败封闭（ExplicitProtocolDisabled）
+                    // 且模型保持 blocked 直到用户重选；静默删除偏好会回退到 Auto（方案 §R6.8）。
+                    configuration.remove_removed_protocol_model_overrides(
+                        provider_id.as_str(),
+                        &removed_protocols,
+                    );
+                }
+                if connection_contract_changed || !updating_existing {
+                    // candidateCatalogs uses the validated staged sources without publishing them;
+                    // the active selection is reconciled inside this single durable image.
+                    // candidateCatalogs 使用已验证暂存来源而不发布；活动选择会在同一份持久镜像内协调。
+                    let candidate_catalogs =
+                        runtime.preview_staged_model_catalog_overlays(configuration)?;
+                    ensure_active_model_selection(
+                        runtime.as_ref(),
+                        configuration,
+                        &candidate_catalogs,
+                    )?;
+                }
                 Ok(())
-            } else {
-                cleanup_custom_provider_candidate(runtime.as_ref(), &candidate).await
-            };
-            return Err(compensated_operation_error(error, cleanup, Ok(())));
+            },
+        );
+        let configuration = match persist_result {
+            Ok(configuration) => configuration,
+            Err(error) => {
+                // secretCleanup removes only the UUID-scoped secret created by this exact task.
+                // secretCleanup 仅移除由当前精确任务创建的 UUID 作用域秘密。
+                let secret_cleanup =
+                    if let Some(secret_reference) = created_secret_reference.as_deref() {
+                        CredentialSecretStore::delete_secret(
+                            runtime.credential_secret_store().as_ref(),
+                            secret_reference,
+                        )
+                        .await
+                    } else {
+                        Ok(())
+                    };
+                // stagingRestore returns every staged source to its exact before-image because
+                // the candidate never crossed the durable activation boundary.
+                // stagingRestore 把每项暂存来源恢复到精确前镜像，因为候选从未越过持久激活边界。
+                let staging_restore = match (&staging_before_image, &staging_after_image) {
+                    (Some(before), Some(after)) => {
+                        runtime.restore_activation_snapshot(before, after)
+                    }
+                    (None, None) => Ok(()),
+                    _ => Err(String::from(
+                        "Custom provider staging compensation lost one activation image.",
+                    )),
+                };
+                return Err(compensated_operation_error(
+                    error,
+                    secret_cleanup,
+                    staging_restore,
+                ));
+            }
+        };
+        // candidateSnapshot is built before Workbench publication so no fallible response
+        // projection remains after browser-visible state changes.
+        // candidateSnapshot 在工作台发布前构建，确保浏览器可见状态改变后不再存在可失败响应投影。
+        let candidate_snapshot =
+            build_public_ai_settings_snapshot(runtime.as_ref(), &configuration);
+        // publicationResult commits the browser projection only after the response snapshot is complete.
+        // publicationResult 仅在响应快照完整后提交浏览器投影。
+        let publication_result = candidate_snapshot.and_then(|snapshot| {
+            publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)
+                .map(|_| snapshot)
+        });
+        match publication_result {
+            Ok(snapshot) => {
+                drop(transaction);
+                Ok(snapshot)
+            }
+            Err(primary) => {
+                // configurationRestore returns the durable custom manifests and central document
+                // to the exact pre-save snapshot before the runtime maps are restored exactly.
+                // configurationRestore 在精确恢复运行时映射前，把持久自定义清单与中央文档恢复到
+                // 保存前快照。
+                let configuration_restore = mutate_public_ai_configuration_in_transaction(
+                    &state,
+                    "恢复自定义供应商保存前配置失败",
+                    |configuration| {
+                        *configuration = current_configuration.clone();
+                        Ok(())
+                    },
+                )
+                .map(|_| ());
+                // runtimeRestore uses the current post-compensation image as the CAS compare side;
+                // a concurrent catalog mutation is reported instead of being overwritten.
+                // runtimeRestore 使用当前补偿后镜像作为 CAS 比较端；并发目录变更会被报告，
+                // 而不会遭到覆盖。
+                let runtime_restore =
+                    runtime
+                        .capture_activation_snapshot()
+                        .and_then(|current_image| {
+                            runtime
+                                .restore_activation_snapshot(&runtime_before_image, &current_image)
+                        });
+                // stateRestore combines durable/configuration and exact runtime restoration into
+                // one deterministic compensation result.
+                // stateRestore 把持久配置恢复与精确运行时恢复组合为一个确定性补偿结果。
+                let state_restore = match (configuration_restore, runtime_restore) {
+                    (Ok(()), Ok(())) => Ok(()),
+                    (configuration, runtime) => Err(format!(
+                        "Custom provider save state restoration was incomplete: configuration={configuration:?}; runtime={runtime:?}"
+                    )),
+                };
+                // secretCleanup removes only the UUID-scoped secret introduced by this candidate.
+                // secretCleanup 仅移除由当前候选引入的 UUID 作用域秘密。
+                let secret_cleanup =
+                    if let Some(secret_reference) = created_secret_reference.as_deref() {
+                        CredentialSecretStore::delete_secret(
+                            runtime.credential_secret_store().as_ref(),
+                            secret_reference,
+                        )
+                        .await
+                    } else {
+                        Ok(())
+                    };
+                let compensated =
+                    compensated_operation_error(primary, secret_cleanup, state_restore);
+                drop(transaction);
+                Err(compensated)
+            }
         }
-    };
-
-    if updating_existing && connection_contract_changed {
-        let existing_connection_ids = configuration
-            .connection_graph
-            .connections
-            .values()
-            .filter(|existing_connection| existing_connection.provider_id == provider_id)
-            .map(|existing_connection| existing_connection.id.clone())
-            .collect::<Vec<_>>();
-        for existing_connection_id in existing_connection_ids {
-            runtime.remove_connection_catalog(existing_connection_id.as_str())?;
-            // The provider edit is already durable; each refresh publishes its own typed status and
-            // a failed remote directory must not roll the descriptor back.
-            // 供应商编辑已经持久化；每次刷新都会发布自己的类型化状态，远程目录失败不得回滚描述。
-            let _refresh_result = runtime
-                .refresh_connection_catalog(&configuration, existing_connection_id.as_str())
-                .await;
-        }
-        // refreshed_catalogs is authoritative for deciding whether the persisted global model survived the protocol switch.
-        // refreshed_catalogs 是判断持久化全局模型是否在协议切换后仍存在的权威目录。
-        let refreshed_catalogs = runtime.catalog_snapshot()?;
-        if configuration.active.as_ref().is_some_and(|selection| {
-            !model_selection_is_available(&configuration, &refreshed_catalogs, selection)
-        }) {
-            configuration = mutate_public_ai_configuration_in_transaction(
-                &state,
-                "协调供应商协议切换后的默认模型失败",
-                |configuration| {
-                    ensure_active_model_selection(configuration, &refreshed_catalogs);
-                    Ok(())
-                },
-            )?;
-        }
-    }
-
-    drop(transaction);
-    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
-    build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
+    });
+    commit_task
+        .await
+        .map_err(|error| format!("Custom provider commit task failed: {error}"))?
 }
 
 /// Executes one explicit minimal model request and releases a pending credential only on success.
@@ -2361,8 +2678,11 @@ pub(super) async fn service_validate_public_ai_custom_model(
 
     let provider_id = request.provider_id.clone();
     let connection_id = request.connection_id.clone();
-    let configuration = mutate_public_ai_configuration_in_transaction(
+    let (_configuration, ()) = mutate_public_ai_configuration_and_publish_in_transaction(
+        &app,
         &state,
+        runtime.as_ref(),
+        &current_configuration,
         "保存自定义模型验证结果失败",
         |configuration| {
             let current_connection = configuration
@@ -2387,9 +2707,9 @@ pub(super) async fn service_validate_public_ai_custom_model(
                 .or_insert_with(|| connection_id.clone());
             Ok(())
         },
+        |_configuration| Ok(()),
     )?;
     drop(transaction);
-    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
     Ok(PublicAiCustomModelValidationResult {
         provider_id: request.provider_id,
         connection_id: request.connection_id,
@@ -2420,7 +2740,11 @@ pub(super) async fn service_remove_public_ai_custom_provider(
     let provider_id = request.provider_id;
     let transaction = begin_public_ai_configuration_transaction().await;
     let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
-    validate_custom_provider_identity(&current_configuration, provider_id.as_str())?;
+    // isolatedProvider is identified by the exact standalone-reference/descriptor difference,
+    // allowing the explicit repair action even though no invalid descriptor entered the registry.
+    // isolatedProvider 由精确的独立引用与描述符差集识别，因此即使无效描述符未进入注册表，
+    // 显式修复动作仍可执行。
+    validate_removable_custom_provider_identity(&current_configuration, provider_id.as_str())?;
     let provider_connections = current_configuration
         .connection_graph
         .connections
@@ -2435,6 +2759,9 @@ pub(super) async fn service_remove_public_ai_custom_provider(
         ));
     }
     let catalogs = runtime.catalog_snapshot()?;
+    // runtimeBeforeImage owns every catalog, usage, status, and cache field removed below.
+    // runtimeBeforeImage 持有下方将删除的全部目录、用量、状态与缓存字段。
+    let runtime_before_image = runtime.capture_activation_snapshot()?;
     let secret_store = runtime.credential_secret_store();
     let deleted_secrets = if provider_connections.is_empty() {
         BTreeMap::new()
@@ -2445,6 +2772,8 @@ pub(super) async fn service_remove_public_ai_custom_provider(
         &state,
         "移除自定义供应商失败",
         |configuration| {
+            let was_isolated =
+                configuration.custom_provider_manifest_is_isolated(provider_id.as_str());
             // Removing the provider default first lets every provider connection be detached without a fake replacement.
             // 先移除供应商默认连接，确保后续逐个解绑连接时不需要伪造替代默认连接。
             configuration
@@ -2457,17 +2786,26 @@ pub(super) async fn service_remove_public_ai_custom_provider(
             }
             // Confirmed provider removal owns the complete cleanup of model settings and internal routes.
             // 已确认的供应商移除负责完整清理模型设置与内部路由。
-            configuration.remove_provider_owned_model_settings(provider_id.as_str());
-            let removed = configuration
-                .custom_providers
-                .remove(provider_id.as_str())
-                .ok_or_else(|| format!("Custom provider `{provider_id}` is not configured."))?;
-            if removed.kind != ProviderKind::Custom {
-                return Err(format!(
-                    "Provider `{provider_id}` is not a user-defined provider."
-                ));
+            // Custom-provider removal must clear both model settings and hydrated standalone
+            // manifest ownership before this exact candidate is installed in the runtime.
+            // 自定义供应商移除必须在该精确候选安装到运行时前，同时清理模型设置与已补水
+            // 独立 Manifest 所有权。
+            let removed = configuration.remove_custom_provider_owned_state(provider_id.as_str());
+            match removed {
+                Some(removed) if removed.kind != ProviderKind::Custom => {
+                    return Err(format!(
+                        "Provider `{provider_id}` is not a user-defined provider."
+                    ));
+                }
+                Some(_) => {}
+                None if was_isolated => {}
+                None => {
+                    return Err(format!(
+                        "Custom provider `{provider_id}` is not configured."
+                    ));
+                }
             }
-            ensure_active_model_selection(configuration, &catalogs);
+            ensure_active_model_selection(runtime.as_ref(), configuration, &catalogs)?;
             Ok(())
         },
     );
@@ -2476,16 +2814,73 @@ pub(super) async fn service_remove_public_ai_custom_provider(
         Err(error) => {
             let restore =
                 restore_provider_credential_secrets(secret_store.as_ref(), &deleted_secrets).await;
-            return Err(compensated_operation_error(error, restore, Ok(())));
+            let activation_restore = restore_public_ai_configuration_activation_in_transaction(
+                &state,
+                runtime.as_ref(),
+                &current_configuration,
+                &runtime_before_image,
+                "恢复自定义供应商移除前配置失败",
+            );
+            return Err(compensated_operation_error(
+                error,
+                restore,
+                activation_restore,
+            ));
         }
     };
-    drop(transaction);
-    for connection in &provider_connections {
-        runtime.remove_connection_catalog(connection.id.as_str())?;
-        runtime.remove_connection_usage(connection.id.as_str())?;
+    // fallback is the exact post-removal global selection applied to revoked sessions.
+    // fallback 是应用于已撤销会话的精确移除后全局选择。
+    let fallback = configuration.active.clone();
+    let publication_result = (|| {
+        for connection in &provider_connections {
+            runtime.remove_connection_catalog(connection.id.as_str())?;
+            runtime.remove_connection_usage(connection.id.as_str())?;
+        }
+        // snapshot completes every fallible response projection before Service state changes.
+        // snapshot 在 Service 状态改变前完成全部可失败响应投影。
+        let snapshot = build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)?;
+        publish_public_ai_workbench_with_session_reconciliation_and_commit(
+            &app,
+            &state,
+            runtime.as_ref(),
+            &configuration,
+            |workspace| {
+                Ok(reconcile_explicitly_revoked_session_model_selections(
+                    workspace,
+                    fallback.as_ref(),
+                    |_session_id, runtime_state| {
+                        runtime_state.active_provider_id.as_deref() == Some(provider_id.as_str())
+                    },
+                ))
+            },
+            "custom_provider_removed",
+            || Ok(()),
+        )?;
+        Ok::<_, String>(snapshot)
+    })();
+    match publication_result {
+        Ok(snapshot) => {
+            drop(transaction);
+            Ok(snapshot)
+        }
+        Err(primary) => {
+            let secret_restore =
+                restore_provider_credential_secrets(secret_store.as_ref(), &deleted_secrets).await;
+            let activation_restore = restore_public_ai_configuration_activation_in_transaction(
+                &state,
+                runtime.as_ref(),
+                &current_configuration,
+                &runtime_before_image,
+                "恢复自定义供应商移除前配置失败",
+            );
+            drop(transaction);
+            Err(compensated_operation_error(
+                primary,
+                secret_restore,
+                activation_restore,
+            ))
+        }
     }
-    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
-    build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
 }
 
 /// Replaces the user-owned model definitions for one custom provider.
@@ -2642,8 +3037,11 @@ pub(super) async fn service_save_public_ai_custom_models(
         ));
     }
 
-    let configuration = mutate_public_ai_configuration_in_transaction(
+    let (_configuration, snapshot) = mutate_public_ai_configuration_and_publish_in_transaction(
+        &app,
         &state,
+        runtime.as_ref(),
+        &current_configuration,
         "保存自定义模型失败",
         |configuration| {
             apply_custom_model_replacement(
@@ -2655,11 +3053,91 @@ pub(super) async fn service_save_public_ai_custom_models(
             );
             Ok(())
         },
+        |configuration| build_public_ai_settings_snapshot(runtime.as_ref(), configuration),
     )?;
-    runtime.reapply_model_catalog_overlays(&configuration)?;
     drop(transaction);
-    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
-    build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
+    Ok(snapshot)
+}
+
+/// Replaces the per-model protocol preferences for one custom provider.
+/// 替换一个自定义供应商的逐模型协议偏好。
+///
+/// # Parameters
+/// 参数
+/// `app` publishes the refreshed workbench, `state` owns persisted configuration and runtime
+/// catalogs, and `request` carries the complete replacement preference set.
+/// `app` 发布刷新的工作台，`state` 持有持久化配置与运行时目录，`request` 携带完整替换偏好集合。
+///
+/// # Returns
+/// 返回值
+/// Returns the rebuilt browser snapshot after validation and persistence.
+/// 校验并持久化后返回重建的浏览器快照。
+pub(super) async fn service_save_public_ai_custom_model_protocol_preferences(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    request: PublicAiCustomModelProtocolPreferencesSaveRequest,
+) -> Result<PublicAiSettingsSnapshot, String> {
+    validate_non_empty("providerId", request.provider_id.as_str())?;
+    let transaction = begin_public_ai_configuration_transaction().await;
+    let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
+    let provider = current_configuration
+        .custom_providers
+        .get(request.provider_id.as_str())
+        .ok_or_else(|| {
+            format!(
+                "Custom provider `{}` is not configured.",
+                request.provider_id
+            )
+        })?;
+    if provider.kind != ProviderKind::Custom {
+        return Err(format!(
+            "Provider `{}` is not a user-defined provider.",
+            request.provider_id
+        ));
+    }
+    // enabled_protocols is the authoritative set every explicit preference must reference.
+    // enabled_protocols 是每个显式偏好必须引用的权威协议集合。
+    let enabled_protocols = provider
+        .service_entries
+        .iter()
+        .flat_map(|entry| entry.protocol_routes.iter())
+        .map(|route| route.protocol_profile_id.clone())
+        .collect::<BTreeSet<_>>();
+    if enabled_protocols.is_empty() {
+        return Err(String::from(
+            "Custom provider must declare at least one enabled protocol before saving model preferences.",
+        ));
+    }
+    let preferences = validate_custom_model_protocol_preferences(
+        request.provider_id.as_str(),
+        &enabled_protocols,
+        &request.preferences,
+    )?;
+    let provider_id = request.provider_id;
+    let (_configuration, snapshot) = mutate_public_ai_configuration_and_publish_in_transaction(
+        &app,
+        &state,
+        runtime.as_ref(),
+        &current_configuration,
+        "保存自定义模型协议偏好失败",
+        |configuration| {
+            let provider_model_prefix = format!("{}:{provider_id}:", provider_id.len());
+            configuration
+                .custom_model_protocol_preferences
+                .retain(|key, _| !key.starts_with(provider_model_prefix.as_str()));
+            configuration
+                .custom_model_protocol_preferences
+                .extend(preferences.clone());
+            Ok(())
+        },
+        |configuration| build_public_ai_settings_snapshot(runtime.as_ref(), configuration),
+    )?;
+    // Rebuilding the catalogs re-freezes every custom protocol binding at the activation
+    // boundary so the saved preferences take effect without a manual refresh (plan §13.6).
+    // 重建目录会在激活边界重新冻结全部自定义协议绑定，使已保存偏好无需手动刷新即生效
+    // （方案 §13.6）。
+    drop(transaction);
+    Ok(snapshot)
 }
 
 /// Applies one complete custom-model replacement to a candidate or durable configuration.
@@ -2735,8 +3213,11 @@ pub(super) async fn service_save_public_ai_custom_provider_model_defaults(
     );
     candidate_configuration.validate_context_window_policy_layers()?;
     runtime.validate_model_catalog_overlays(&candidate_configuration)?;
-    let configuration = mutate_public_ai_configuration_in_transaction(
+    let (_configuration, snapshot) = mutate_public_ai_configuration_and_publish_in_transaction(
+        &app,
         &state,
+        runtime.as_ref(),
+        &current_configuration,
         "保存自定义供应商模型默认值失败",
         |configuration| {
             replace_custom_provider_model_defaults(
@@ -2746,11 +3227,10 @@ pub(super) async fn service_save_public_ai_custom_provider_model_defaults(
             );
             Ok(())
         },
+        |configuration| build_public_ai_settings_snapshot(runtime.as_ref(), configuration),
     )?;
-    runtime.reapply_model_catalog_overlays(&configuration)?;
     drop(transaction);
-    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
-    build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
+    Ok(snapshot)
 }
 
 /// Replaces or removes one explicit custom-provider model-settings layer.
@@ -2867,8 +3347,11 @@ pub(super) async fn service_save_public_ai_custom_model_template_decision(
             .remove(key.as_str());
     }
     runtime.validate_model_catalog_overlays(&candidate_configuration)?;
-    let configuration = mutate_public_ai_configuration_in_transaction(
+    let (_configuration, snapshot) = mutate_public_ai_configuration_and_publish_in_transaction(
+        &app,
         &state,
+        runtime.as_ref(),
+        &current_configuration,
         "保存自定义模型模板决策失败",
         |configuration| {
             if let Some(decision) = decision.clone() {
@@ -2882,11 +3365,10 @@ pub(super) async fn service_save_public_ai_custom_model_template_decision(
             }
             Ok(())
         },
+        |configuration| build_public_ai_settings_snapshot(runtime.as_ref(), configuration),
     )?;
-    runtime.reapply_model_catalog_overlays(&configuration)?;
     drop(transaction);
-    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
-    build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
+    Ok(snapshot)
 }
 
 /// Atomically saves a bounded set of explicit template decisions and rebuilds catalogs once.
@@ -2954,8 +3436,11 @@ pub(super) async fn service_save_public_ai_custom_model_template_decisions_batch
             .insert(key.clone(), decision.clone());
     }
     runtime.validate_model_catalog_overlays(&candidate_configuration)?;
-    let configuration = mutate_public_ai_configuration_in_transaction(
+    let (_configuration, snapshot) = mutate_public_ai_configuration_and_publish_in_transaction(
+        &app,
         &state,
+        runtime.as_ref(),
+        &current_configuration,
         "批量保存自定义模型模板决策失败",
         |configuration| {
             for (key, decision) in decisions.clone() {
@@ -2965,11 +3450,10 @@ pub(super) async fn service_save_public_ai_custom_model_template_decisions_batch
             }
             Ok(())
         },
+        |configuration| build_public_ai_settings_snapshot(runtime.as_ref(), configuration),
     )?;
-    runtime.reapply_model_catalog_overlays(&configuration)?;
     drop(transaction);
-    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
-    build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
+    Ok(snapshot)
 }
 
 /// Saves one per-account manual-model availability difference and rebuilds effective catalogs.
@@ -3025,8 +3509,11 @@ pub(super) async fn service_save_public_ai_custom_model_connection_availability(
             .remove(key.as_str());
     }
     runtime.validate_model_catalog_overlays(&candidate_configuration)?;
-    let configuration = mutate_public_ai_configuration_in_transaction(
+    let (_configuration, snapshot) = mutate_public_ai_configuration_and_publish_in_transaction(
+        &app,
         &state,
+        runtime.as_ref(),
+        &current_configuration,
         "保存自定义模型账号可用性失败",
         |configuration| {
             if let Some(enabled) = enabled {
@@ -3040,11 +3527,10 @@ pub(super) async fn service_save_public_ai_custom_model_connection_availability(
             }
             Ok(())
         },
+        |configuration| build_public_ai_settings_snapshot(runtime.as_ref(), configuration),
     )?;
-    runtime.reapply_model_catalog_overlays(&configuration)?;
     drop(transaction);
-    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
-    build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
+    Ok(snapshot)
 }
 
 /// Rejects account membership choices that would reopen a provider-disabled custom model.
@@ -3107,27 +3593,46 @@ fn connection_supports_model(
 ///
 /// # Parameters
 /// 参数
-/// `configuration` is mutated in place, `connection_id` and `provider_id` identify the exact
-/// account route, `enabled` is the requested account default, and `support_catalog` is the
-/// account's provider-resolved model membership before account access policies.
-/// `configuration` 会被原地修改，`connection_id` 与 `provider_id` 标识精确账号路由，`enabled`
-/// 是请求的账号默认值，`support_catalog` 是应用账号访问策略前解析出的供应商模型成员关系。
+/// `runtime` owns manifest defaults; `configuration` is mutated in place; `connection_id` and
+/// `provider_id` identify the exact account route; `enabled` is the requested account default;
+/// `support_catalog` is the account's provider-resolved membership before access policies.
+/// `runtime` 持有清单默认值；`configuration` 会被原地修改；`connection_id` 与 `provider_id`
+/// 标识精确账号路由；`enabled` 是请求的账号默认值；`support_catalog` 是应用访问策略前的成员关系。
 fn set_connection_models_enabled_respecting_provider_access(
+    runtime: &PublicAiRuntime,
     configuration: &mut PersistedAiConfiguration,
     connection_id: &str,
     provider_id: &str,
     enabled: bool,
     support_catalog: &ConnectionModelCatalog,
-) {
+) -> Result<(), String> {
+    // connection_provider_id validates the exact caller scope before mutating sparse access state.
+    // connection_provider_id 在修改稀疏访问状态前校验精确调用方作用域。
+    let connection_provider_id = configuration
+        .connection_graph
+        .connections
+        .get(connection_id)
+        .map(|connection| connection.provider_id.as_str())
+        .ok_or_else(|| format!("Credential connection `{connection_id}` is not configured."))?;
+    if connection_provider_id != provider_id {
+        return Err(format!(
+            "Credential connection `{connection_id}` does not belong to provider `{provider_id}`."
+        ));
+    }
     configuration.set_connection_models_enabled(connection_id, enabled);
     if !enabled {
-        return;
+        return Ok(());
     }
     for model in &support_catalog.models {
-        if !configuration.model_is_enabled(provider_id, model.id.as_str()) {
+        if !runtime.model_is_enabled_for_connection(
+            configuration,
+            connection_id,
+            model.id.as_str(),
+        )? {
             configuration.set_connection_model_enabled(connection_id, model.id.as_str(), false);
         }
     }
+    Ok(())
 }
 
 /// Saves one credential-scoped model access decision and repairs affected active sessions.
@@ -3163,8 +3668,11 @@ pub(super) async fn service_save_public_ai_connection_model_enabled(
         ));
     }
     if request.enabled
-        && !current_configuration
-            .model_is_enabled(connection.provider_id.as_str(), request.model_id.as_str())
+        && !runtime.model_is_enabled_for_connection(
+            &current_configuration,
+            request.connection_id.as_str(),
+            request.model_id.as_str(),
+        )?
     {
         return Err(format!(
             "Provider `{}` has disabled model `{}`; enable the provider model before enabling it for a credential connection.",
@@ -3189,11 +3697,12 @@ pub(super) async fn service_save_public_ai_connection_model_enabled(
             });
     let replacement = if active_was_disabled {
         preferred_replacement_model_selection(
+            runtime.as_ref(),
             &candidate_configuration,
             &candidate_catalogs,
             connection.provider_id.as_str(),
             request.model_id.as_str(),
-        )
+        )?
     } else {
         None
     };
@@ -3202,34 +3711,34 @@ pub(super) async fn service_save_public_ai_connection_model_enabled(
     }
     runtime.validate_model_catalog_overlays(&candidate_configuration)?;
 
-    let active_selection = candidate_configuration.active.clone();
-    let configuration = mutate_public_ai_configuration_in_transaction(
-        &state,
-        "保存凭据模型启用状态失败",
-        |configuration| {
-            configuration.set_connection_model_enabled(
-                request.connection_id.as_str(),
-                request.model_id.as_str(),
-                request.enabled,
-            );
-            if active_was_disabled {
-                configuration.active = active_selection.clone();
-            }
-            Ok(())
-        },
-    )?;
-    runtime.reapply_model_catalog_overlays(&configuration)?;
-    if !request.enabled {
-        reconcile_disabled_connection_sessions(
+    let (_configuration, snapshot) =
+        mutate_public_ai_configuration_and_publish_sessions_in_transaction(
+            &app,
             &state,
-            request.connection_id.as_str(),
-            Some(request.model_id.as_str()),
-            replacement.as_ref(),
+            runtime.as_ref(),
+            &current_configuration,
+            "保存凭据模型启用状态失败",
+            |configuration| {
+                *configuration = candidate_configuration.clone();
+                Ok(())
+            },
+            |configuration| build_public_ai_settings_snapshot(runtime.as_ref(), configuration),
+            |workspace| {
+                Ok(if request.enabled {
+                    BTreeSet::new()
+                } else {
+                    reconcile_disabled_connection_sessions(
+                        workspace,
+                        request.connection_id.as_str(),
+                        Some(request.model_id.as_str()),
+                        replacement.as_ref(),
+                    )
+                })
+            },
+            "connection_model_access_revoked",
         )?;
-    }
     drop(transaction);
-    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
-    build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
+    Ok(snapshot)
 }
 
 /// Saves one account-wide inherited model access state and repairs affected active sessions.
@@ -3273,12 +3782,13 @@ pub(super) async fn service_save_public_ai_connection_models_enabled(
 
     let mut candidate_configuration = current_configuration.clone();
     set_connection_models_enabled_respecting_provider_access(
+        runtime.as_ref(),
         &mut candidate_configuration,
         request.connection_id.as_str(),
         connection.provider_id.as_str(),
         request.enabled,
         &support_catalog,
-    );
+    )?;
     let candidate_catalogs = runtime.resolved_model_catalog_snapshot(&candidate_configuration)?;
     let active_was_disabled = !request.enabled
         && candidate_configuration
@@ -3292,11 +3802,12 @@ pub(super) async fn service_save_public_ai_connection_models_enabled(
             .map(|selection| selection.model_id.clone())
             .unwrap_or_default();
         preferred_replacement_model_selection(
+            runtime.as_ref(),
             &candidate_configuration,
             &candidate_catalogs,
             connection.provider_id.as_str(),
             active_model_id.as_str(),
-        )
+        )?
     } else {
         None
     };
@@ -3305,36 +3816,34 @@ pub(super) async fn service_save_public_ai_connection_models_enabled(
     }
     runtime.validate_model_catalog_overlays(&candidate_configuration)?;
 
-    let active_selection = candidate_configuration.active.clone();
-    let configuration = mutate_public_ai_configuration_in_transaction(
-        &state,
-        "批量保存凭据模型启用状态失败",
-        |configuration| {
-            set_connection_models_enabled_respecting_provider_access(
-                configuration,
-                request.connection_id.as_str(),
-                connection.provider_id.as_str(),
-                request.enabled,
-                &support_catalog,
-            );
-            if active_was_disabled {
-                configuration.active = active_selection.clone();
-            }
-            Ok(())
-        },
-    )?;
-    runtime.reapply_model_catalog_overlays(&configuration)?;
-    if !request.enabled {
-        reconcile_disabled_connection_sessions(
+    let (_configuration, snapshot) =
+        mutate_public_ai_configuration_and_publish_sessions_in_transaction(
+            &app,
             &state,
-            request.connection_id.as_str(),
-            None,
-            replacement.as_ref(),
+            runtime.as_ref(),
+            &current_configuration,
+            "批量保存凭据模型启用状态失败",
+            |configuration| {
+                *configuration = candidate_configuration.clone();
+                Ok(())
+            },
+            |configuration| build_public_ai_settings_snapshot(runtime.as_ref(), configuration),
+            |workspace| {
+                Ok(if request.enabled {
+                    BTreeSet::new()
+                } else {
+                    reconcile_disabled_connection_sessions(
+                        workspace,
+                        request.connection_id.as_str(),
+                        None,
+                        replacement.as_ref(),
+                    )
+                })
+            },
+            "connection_model_access_revoked",
         )?;
-    }
     drop(transaction);
-    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
-    build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
+    Ok(snapshot)
 }
 
 /// Saves or clears one user-owned model capability difference.
@@ -3365,7 +3874,7 @@ pub(super) async fn service_save_public_ai_model_capability_overrides(
     let transaction = begin_public_ai_configuration_transaction().await;
     let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
     if overrides.is_some()
-        && !runtime.provider_model_is_supported(
+        && !runtime.provider_conversation_model_is_supported(
             &current_configuration,
             request.provider_id.as_str(),
             request.model_id.as_str(),
@@ -3388,8 +3897,11 @@ pub(super) async fn service_save_public_ai_model_capability_overrides(
         request.provider_id.as_str(),
         request.model_id.as_str(),
     );
-    let configuration = mutate_public_ai_configuration_in_transaction(
+    let (_configuration, snapshot) = mutate_public_ai_configuration_and_publish_in_transaction(
+        &app,
         &state,
+        runtime.as_ref(),
+        &current_configuration,
         "保存模型能力覆盖失败",
         |configuration| {
             if let Some(overrides) = overrides.clone() {
@@ -3403,11 +3915,10 @@ pub(super) async fn service_save_public_ai_model_capability_overrides(
             }
             Ok(())
         },
+        |configuration| build_public_ai_settings_snapshot(runtime.as_ref(), configuration),
     )?;
-    runtime.reapply_model_catalog_overlays(&configuration)?;
     drop(transaction);
-    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
-    build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
+    Ok(snapshot)
 }
 
 /// Saves one provider-wide sparse capability layer or restores inherited defaults.
@@ -3429,8 +3940,11 @@ pub(super) async fn service_save_public_ai_provider_capability_overrides(
         )?;
     }
     let provider_id = request.provider_id.clone();
-    let configuration = mutate_public_ai_configuration_in_transaction(
+    let (_configuration, snapshot) = mutate_public_ai_configuration_and_publish_in_transaction(
+        &app,
         &state,
+        runtime.as_ref(),
+        &current_configuration,
         "保存供应商能力覆盖失败",
         |configuration| {
             if let Some(overrides) = overrides.clone() {
@@ -3444,11 +3958,10 @@ pub(super) async fn service_save_public_ai_provider_capability_overrides(
             }
             Ok(())
         },
+        |configuration| build_public_ai_settings_snapshot(runtime.as_ref(), configuration),
     )?;
-    runtime.reapply_model_catalog_overlays(&configuration)?;
     drop(transaction);
-    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
-    build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
+    Ok(snapshot)
 }
 
 /// Finds removed custom models still owned by active or internal inference routes.
@@ -3568,9 +4081,6 @@ pub(super) struct PublicAiOAuthCommitRequest {
     /// User-visible credential label.
     /// 用户可见凭据标签。
     display_name: String,
-    /// Selected verified protocol profile.
-    /// 选定的已验证协议 Profile。
-    selected_protocol: String,
     /// Existing connection replaced by this authorization, when reauthorizing.
     /// 重新授权时由此次授权替换的现有连接。
     #[serde(default)]
@@ -3717,6 +4227,9 @@ pub(super) async fn service_commit_public_ai_oauth_connection(
     if let Some(connection_id) = request.connection_id.as_deref() {
         let transaction = begin_public_ai_configuration_transaction().await;
         let (_, current_configuration) = public_ai_runtime_and_configuration(&state)?;
+        // runtimeBeforeImage captures every catalog/status/cache field before OAuth validation.
+        // runtimeBeforeImage 在 OAuth 校验前捕获全部目录、状态与缓存字段。
+        let runtime_before_image = runtime.capture_activation_snapshot()?;
         let current = current_configuration
             .connection_graph
             .connections
@@ -3764,7 +4277,6 @@ pub(super) async fn service_commit_public_ai_oauth_connection(
             service_entry_id: request.service_entry_id.clone(),
             credential_profile_id: request.credential_profile_id.clone(),
             credential_mode: CredentialMode::Auth,
-            selected_protocol: request.selected_protocol.clone(),
             secret: None,
             management_key: None,
             remove_management_key: false,
@@ -3797,10 +4309,8 @@ pub(super) async fn service_commit_public_ai_oauth_connection(
                 &replacement,
             )
             .await;
-            let restore_result = runtime
-                .refresh_connection_catalog(&current_configuration, connection_id.as_str())
-                .await
-                .map(|_| ());
+            let restore_result =
+                restore_public_ai_runtime_activation(runtime.as_ref(), &runtime_before_image);
             return Err(compensated_operation_error(
                 format!(
                     "OAuth credential validation failed before the connection was updated: {error}"
@@ -3827,10 +4337,13 @@ pub(super) async fn service_commit_public_ai_oauth_connection(
                     &replacement,
                 )
                 .await;
-                let restore_result = runtime
-                    .refresh_connection_catalog(&current_configuration, connection_id.as_str())
-                    .await
-                    .map(|_| ());
+                let restore_result = restore_public_ai_configuration_activation_in_transaction(
+                    &state,
+                    runtime.as_ref(),
+                    &current_configuration,
+                    &runtime_before_image,
+                    "恢复 OAuth 重新授权前配置失败",
+                );
                 return Err(compensated_operation_error(
                     error,
                     rollback_result,
@@ -3838,9 +4351,43 @@ pub(super) async fn service_commit_public_ai_oauth_connection(
                 ));
             }
         };
-        drop(transaction);
-        publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
-        return build_public_ai_settings_snapshot(runtime.as_ref(), &configuration);
+        // publicationResult prepares the complete response before exposing reauthorization.
+        // publicationResult 在公开重新授权结果前准备完整响应。
+        let publication_result =
+            build_public_ai_settings_snapshot(runtime.as_ref(), &configuration).and_then(
+                |snapshot| {
+                    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)
+                        .map(|_| snapshot)
+                },
+            );
+        return match publication_result {
+            Ok(snapshot) => {
+                drop(transaction);
+                Ok(snapshot)
+            }
+            Err(primary) => {
+                let secret_restore = rollback_oauth_reauthorization_secret(
+                    secret_store.as_ref(),
+                    current.secret_reference.as_str(),
+                    previous.as_ref(),
+                    &replacement,
+                )
+                .await;
+                let activation_restore = restore_public_ai_configuration_activation_in_transaction(
+                    &state,
+                    runtime.as_ref(),
+                    &current_configuration,
+                    &runtime_before_image,
+                    "恢复 OAuth 重新授权前配置失败",
+                );
+                drop(transaction);
+                Err(compensated_operation_error(
+                    primary,
+                    secret_restore,
+                    activation_restore,
+                ))
+            }
+        };
     }
     let secret = CredentialSecretEnvelope::new(material)?;
     add_public_ai_connection_with_secret(
@@ -3851,7 +4398,6 @@ pub(super) async fn service_commit_public_ai_oauth_connection(
         request.credential_profile_id,
         CredentialMode::Auth,
         request.display_name,
-        request.selected_protocol,
         secret,
         None,
         None,
@@ -3888,8 +4434,17 @@ pub(super) async fn service_add_public_ai_connection(
             "Renewable account authorization must be created through the Auth login flow.",
         ));
     }
-    let (service_entry_id, credential_profile_id) = if request.provider_id == "minimax" {
-        let (runtime, _) = public_ai_runtime_and_configuration(&state)?;
+    let (runtime, configuration) = public_ai_runtime_and_configuration(&state)?;
+    // credential_registration is the manifest-selected onboarding primitive, independent of provider identity.
+    // credential_registration 是清单选择的接入原语，与供应商身份无关。
+    let credential_registration = runtime
+        .effective_providers(&configuration)?
+        .provider(request.provider_id.as_str())
+        .ok_or_else(|| format!("Provider `{}` is not registered.", request.provider_id))?
+        .credential_registration;
+    let (service_entry_id, credential_profile_id) = if credential_registration
+        == vulcan_provider_adapters::CredentialRegistrationKind::MiniMaxRegionalApiKey
+    {
         let registration = runtime
             .metadata_client()
             .register_minimax_key(request.secret.as_str())
@@ -3918,7 +4473,6 @@ pub(super) async fn service_add_public_ai_connection(
         credential_profile_id,
         request.credential_mode,
         request.display_name,
-        request.selected_protocol,
         secret,
         request.management_key,
         request.service_origin_override,
@@ -3936,20 +4490,10 @@ async fn add_public_ai_connection_with_secret(
     credential_profile_id: String,
     credential_mode: CredentialMode,
     display_name: String,
-    selected_protocol: String,
     secret: CredentialSecretEnvelope,
     management_key: Option<String>,
     service_origin_override: Option<String>,
 ) -> Result<PublicAiSettingsSnapshot, String> {
-    if provider_id != "openrouter"
-        && management_key
-            .as_deref()
-            .is_some_and(|value| !value.trim().is_empty())
-    {
-        return Err(String::from(
-            "Provider management keys are currently supported only for OpenRouter.",
-        ));
-    }
     if secret.credential_mode() != credential_mode {
         return Err(String::from(
             "Credential secret mode does not match the requested connection mode.",
@@ -3960,6 +4504,9 @@ async fn add_public_ai_connection_with_secret(
     // 事务覆盖目录发现与持久化，避免并发目录同步发布基于旧配置快照构建的覆盖结果。
     let transaction = begin_public_ai_configuration_transaction().await;
     let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
+    // runtimeBeforeImage captures every discovery, usage, status, and cache field before validation.
+    // runtimeBeforeImage 在校验前捕获全部发现、用量、状态与缓存字段。
+    let runtime_before_image = runtime.capture_activation_snapshot()?;
     let connection_id = format!("connection_{}", uuid::Uuid::new_v4().simple());
     let credential_id = format!("credential_{}", uuid::Uuid::new_v4().simple());
     let secret_reference = format!("ai_secret_{}", uuid::Uuid::new_v4().simple());
@@ -3968,12 +4515,6 @@ async fn add_public_ai_connection_with_secret(
         .filter(|value| !value.trim().is_empty())
         .map(|_| format!("ai_management_secret_{}", uuid::Uuid::new_v4().simple()));
     let providers = runtime.effective_providers(&current_configuration)?;
-    let service_origin_override =
-        vulcan_provider_adapters::normalize_connection_service_origin_override(
-            provider_id.as_str(),
-            service_entry_id.as_str(),
-            service_origin_override.as_deref(),
-        )?;
     let provider = providers
         .provider(provider_id.as_str())
         .ok_or_else(|| format!("Provider `{provider_id}` is not registered."))?;
@@ -3987,6 +4528,11 @@ async fn add_public_ai_connection_with_secret(
                 service_entry_id, provider_id
             )
         })?;
+    let service_origin_override =
+        vulcan_provider_adapters::normalize_connection_service_origin_override(
+            entry,
+            service_origin_override.as_deref(),
+        )?;
     let credential_profile = entry
         .credential_profile(credential_profile_id.as_str())
         .ok_or_else(|| {
@@ -3994,7 +4540,23 @@ async fn add_public_ai_connection_with_secret(
                 "Credential profile `{credential_profile_id}` is not registered for service entry `{service_entry_id}`."
             )
         })?;
+    if management_key
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty())
+        && !credential_profile
+            .account_usage_query
+            .requires_management_credential()
+    {
+        return Err(String::from(
+            "A management key requires a credential profile whose usage primitive declares a separate management credential.",
+        ));
+    }
     let service_entry_kind = entry.kind;
+    // selected_protocol is a persisted compatibility anchor derived exclusively from the
+    // manifest route order. It is never accepted from the user and never owns model execution.
+    // selected_protocol 是完全由 Manifest 路由顺序推导的持久化兼容锚点；它不接受用户输入，
+    // 也不拥有模型执行权威。
+    let selected_protocol = connection_protocol_anchor(entry)?;
     if credential_profile.credential_mode != credential_mode {
         return Err(format!(
             "Credential profile `{credential_profile_id}` does not support credential mode `{credential_mode:?}`."
@@ -4059,7 +4621,7 @@ async fn add_public_ai_connection_with_secret(
             return Err(compensated_operation_error(error, cleanup, Ok(())));
         }
     }
-    let mut validation_configuration = current_configuration;
+    let mut validation_configuration = current_configuration.clone();
     if let Err(error) = validation_configuration
         .connection_graph
         .add_connection(&providers, connection.clone())
@@ -4085,7 +4647,8 @@ async fn add_public_ai_connection_with_secret(
     )
     .await
     {
-        let catalog_cleanup = runtime.remove_connection_catalog(connection_id.as_str());
+        let runtime_restore =
+            restore_public_ai_runtime_activation(runtime.as_ref(), &runtime_before_image);
         let secret_cleanup = delete_connection_secrets(
             secret_store.as_ref(),
             secret_reference.as_str(),
@@ -4095,7 +4658,7 @@ async fn add_public_ai_connection_with_secret(
         return Err(compensated_operation_error(
             format!("Credential validation failed before the connection was saved: {error}"),
             secret_cleanup,
-            catalog_cleanup,
+            runtime_restore,
         ));
     }
     if management_secret_reference.is_some() {
@@ -4105,10 +4668,8 @@ async fn add_public_ai_connection_with_secret(
         {
             Ok(usage) => usage,
             Err(error) => {
-                let catalog_cleanup = combine_results(
-                    runtime.remove_connection_catalog(connection_id.as_str()),
-                    runtime.remove_connection_usage(connection_id.as_str()),
-                );
+                let runtime_restore =
+                    restore_public_ai_runtime_activation(runtime.as_ref(), &runtime_before_image);
                 let secret_cleanup = delete_connection_secrets(
                     secret_store.as_ref(),
                     secret_reference.as_str(),
@@ -4118,15 +4679,13 @@ async fn add_public_ai_connection_with_secret(
                 return Err(compensated_operation_error(
                     error,
                     secret_cleanup,
-                    catalog_cleanup,
+                    runtime_restore,
                 ));
             }
         };
         if usage.availability != AccountUsageAvailability::Supported {
-            let catalog_cleanup = combine_results(
-                runtime.remove_connection_catalog(connection_id.as_str()),
-                runtime.remove_connection_usage(connection_id.as_str()),
-            );
+            let runtime_restore =
+                restore_public_ai_runtime_activation(runtime.as_ref(), &runtime_before_image);
             let secret_cleanup = delete_connection_secrets(
                 secret_store.as_ref(),
                 secret_reference.as_str(),
@@ -4134,11 +4693,11 @@ async fn add_public_ai_connection_with_secret(
             )
             .await;
             return Err(compensated_operation_error(
-                usage.refresh_message.unwrap_or_else(|| {
-                    String::from("OpenRouter management key validation failed.")
-                }),
+                usage
+                    .refresh_message
+                    .unwrap_or_else(|| String::from("Provider management key validation failed.")),
                 secret_cleanup,
-                catalog_cleanup,
+                runtime_restore,
             ));
         }
     }
@@ -4155,26 +4714,60 @@ async fn add_public_ai_connection_with_secret(
     let configuration = match add_result {
         Ok(configuration) => configuration,
         Err(error) => {
-            let catalog_cleanup = combine_results(
-                runtime.remove_connection_catalog(connection_id.as_str()),
-                runtime.remove_connection_usage(connection_id.as_str()),
-            );
             let secret_cleanup = delete_connection_secrets(
                 secret_store.as_ref(),
                 secret_reference.as_str(),
                 management_secret_reference.as_deref(),
             )
             .await;
+            let activation_restore = restore_public_ai_configuration_activation_in_transaction(
+                &state,
+                runtime.as_ref(),
+                &current_configuration,
+                &runtime_before_image,
+                "恢复公共 AI 连接新增前配置失败",
+            );
             return Err(compensated_operation_error(
                 error,
                 secret_cleanup,
-                catalog_cleanup,
+                activation_restore,
             ));
         }
     };
-    drop(transaction);
-    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
-    build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
+    // publicationResult prepares the response before exposing the new connection in Workbench.
+    // publicationResult 在工作台暴露新连接前准备响应。
+    let publication_result = build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
+        .and_then(|snapshot| {
+            publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)
+                .map(|_| snapshot)
+        });
+    match publication_result {
+        Ok(snapshot) => {
+            drop(transaction);
+            Ok(snapshot)
+        }
+        Err(primary) => {
+            let secret_cleanup = delete_connection_secrets(
+                secret_store.as_ref(),
+                secret_reference.as_str(),
+                management_secret_reference.as_deref(),
+            )
+            .await;
+            let activation_restore = restore_public_ai_configuration_activation_in_transaction(
+                &state,
+                runtime.as_ref(),
+                &current_configuration,
+                &runtime_before_image,
+                "恢复公共 AI 连接新增前配置失败",
+            );
+            drop(transaction);
+            Err(compensated_operation_error(
+                primary,
+                secret_cleanup,
+                activation_restore,
+            ))
+        }
+    }
 }
 
 /// Updates one connection and refreshes only when its connection identity changes.
@@ -4242,6 +4835,28 @@ fn registered_service_entry_kind(
     provider_id: &str,
     service_entry_id: &str,
 ) -> Result<ServiceEntryKind, String> {
+    Ok(registered_service_entry(runtime, configuration, provider_id, service_entry_id)?.kind)
+}
+
+/// Resolves one exact manifest-projected service entry for settings validation.
+/// 为设置校验解析一个精确的 Manifest 投影服务入口。
+///
+/// # Parameters
+/// 参数
+/// `runtime` and `configuration` provide the published registry, while the identifiers select
+/// one exact provider product.
+/// `runtime` 与 `configuration` 提供已发布注册表，两个标识选择一个精确供应商产品。
+///
+/// # Returns
+/// 返回值
+/// A cloned service entry suitable for use across asynchronous settings mutations.
+/// 返回一份可跨异步设置变更使用的服务入口克隆。
+fn registered_service_entry(
+    runtime: &PublicAiRuntime,
+    configuration: &PersistedAiConfiguration,
+    provider_id: &str,
+    service_entry_id: &str,
+) -> Result<ServiceEntry, String> {
     let providers = runtime.effective_providers(configuration)?;
     let provider = providers
         .provider(provider_id)
@@ -4250,10 +4865,72 @@ fn registered_service_entry_kind(
         .service_entries
         .iter()
         .find(|entry| entry.id == service_entry_id)
-        .map(|entry| entry.kind)
+        .cloned()
         .ok_or_else(|| {
             format!(
                 "Service entry `{service_entry_id}` is not registered for provider `{provider_id}`."
+            )
+        })
+}
+
+/// Derives the non-authoritative connection protocol anchor from one manifest service entry.
+/// 从一个 Manifest 服务入口推导不具执行权威的连接协议锚点。
+///
+/// # Parameters
+/// 参数
+/// `entry` is the exact manifest-projected service entry selected for the credential.
+/// `entry` 是该凭据选择的精确 Manifest 投影服务入口。
+///
+/// # Returns
+/// 返回值
+/// The first verified route in declared order for conversation entries, an empty anchor for
+/// provider-tool entries, or an explicit error when a conversation entry has no verified route.
+/// 对话入口返回声明顺序中的第一条已验证路由，供应商工具入口返回空锚点；对话入口没有
+/// 已验证路由时返回显式错误。
+fn connection_protocol_anchor(entry: &ServiceEntry) -> Result<String, String> {
+    if entry.kind == ServiceEntryKind::ProviderTools {
+        return Ok(String::new());
+    }
+    entry
+        .protocol_routes
+        .iter()
+        .find(|route| route.verified)
+        .map(|route| route.protocol_profile_id.clone())
+        .ok_or_else(|| {
+            format!(
+                "Conversation service entry `{}` does not declare a verified protocol route.",
+                entry.id
+            )
+        })
+}
+
+/// Resolves one exact manifest-projected credential profile for settings validation.
+/// 为设置校验解析一个精确的 Manifest 投影凭据配置档。
+///
+/// # Parameters
+/// 参数
+/// `runtime` and `configuration` provide the published registry; the three identifiers select
+/// one exact provider product and credential contract.
+/// `runtime` 与 `configuration` 提供已发布注册表；三个标识选择一个精确供应商产品与凭据契约。
+///
+/// # Returns
+/// 返回值
+/// A cloned credential profile suitable for use across asynchronous settings mutations.
+/// 返回一份可跨异步设置变更使用的凭据配置档克隆。
+fn registered_credential_profile(
+    runtime: &PublicAiRuntime,
+    configuration: &PersistedAiConfiguration,
+    provider_id: &str,
+    service_entry_id: &str,
+    credential_profile_id: &str,
+) -> Result<vulcan_provider_adapters::CredentialProfile, String> {
+    let entry = registered_service_entry(runtime, configuration, provider_id, service_entry_id)?;
+    entry
+        .credential_profile(credential_profile_id)
+        .cloned()
+        .ok_or_else(|| {
+            format!(
+                "Credential profile `{credential_profile_id}` is not registered for service entry `{service_entry_id}`."
             )
         })
 }
@@ -4273,6 +4950,9 @@ pub(super) async fn service_update_public_ai_connection(
     )?;
     let transaction = begin_public_ai_configuration_transaction().await;
     let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
+    // runtimeBeforeImage freezes every catalog, status, usage, and cache field before validation.
+    // runtimeBeforeImage 在校验前冻结全部目录、状态、用量与缓存字段。
+    let runtime_before_image = runtime.capture_activation_snapshot()?;
     let current = current_configuration
         .connection_graph
         .connections
@@ -4284,14 +4964,15 @@ pub(super) async fn service_update_public_ai_connection(
             "A management key cannot be replaced and removed in the same request.",
         ));
     }
-    if current.provider_id != "openrouter"
-        && (request.management_key.is_some() || request.remove_management_key)
-    {
-        return Err(String::from(
-            "Provider management keys are currently supported only for OpenRouter.",
-        ));
-    }
-    if current.provider_id == "minimax"
+    // credential_registration freezes the current provider's manifest-selected onboarding behavior.
+    // credential_registration 冻结当前供应商由清单选择的接入行为。
+    let credential_registration = runtime
+        .effective_providers(&current_configuration)?
+        .provider(current.provider_id.as_str())
+        .ok_or_else(|| format!("Provider `{}` is not registered.", current.provider_id))?
+        .credential_registration;
+    if credential_registration
+        == vulcan_provider_adapters::CredentialRegistrationKind::MiniMaxRegionalApiKey
         && let Some(secret) = request.secret.as_deref()
     {
         let registration = runtime
@@ -4302,18 +4983,53 @@ pub(super) async fn service_update_public_ai_connection(
         request.credential_profile_id = registration.credential_profile_id;
         request.credential_mode = CredentialMode::Token;
     }
-    request.service_origin_override =
-        vulcan_provider_adapters::normalize_connection_service_origin_override(
-            current.provider_id.as_str(),
-            request.service_entry_id.as_str(),
-            request.service_origin_override.as_deref(),
-        )?;
-    let current_entry_kind = registered_service_entry_kind(
+    let current_profile = registered_credential_profile(
         runtime.as_ref(),
         &current_configuration,
         current.provider_id.as_str(),
         current.service_entry_id.as_str(),
+        current.credential_profile_id.as_str(),
     )?;
+    let target_profile = registered_credential_profile(
+        runtime.as_ref(),
+        &current_configuration,
+        current.provider_id.as_str(),
+        request.service_entry_id.as_str(),
+        request.credential_profile_id.as_str(),
+    )?;
+    if request.management_key.is_some()
+        && !target_profile
+            .account_usage_query
+            .requires_management_credential()
+    {
+        return Err(String::from(
+            "A management key requires a credential profile whose usage primitive declares a separate management credential.",
+        ));
+    }
+    if request.remove_management_key
+        && !current_profile
+            .account_usage_query
+            .requires_management_credential()
+    {
+        return Err(String::from(
+            "The current credential profile does not support a management key.",
+        ));
+    }
+    let target_entry = registered_service_entry(
+        runtime.as_ref(),
+        &current_configuration,
+        current.provider_id.as_str(),
+        request.service_entry_id.as_str(),
+    )?;
+    request.service_origin_override =
+        vulcan_provider_adapters::normalize_connection_service_origin_override(
+            &target_entry,
+            request.service_origin_override.as_deref(),
+        )?;
+    // target_protocol_anchor normalizes legacy connection metadata from the manifest rather
+    // than treating a browser field as protocol-routing authority.
+    // target_protocol_anchor 从 Manifest 规范化旧连接元数据，而不是把浏览器字段当作协议路由权威。
+    let target_protocol_anchor = connection_protocol_anchor(&target_entry)?;
     let target_entry_kind = registered_service_entry_kind(
         runtime.as_ref(),
         &current_configuration,
@@ -4333,7 +5049,7 @@ pub(super) async fn service_update_public_ai_connection(
     let identity_changed = current.service_entry_id != request.service_entry_id
         || current.credential_profile_id != request.credential_profile_id
         || current.credential_mode != request.credential_mode
-        || current.selected_protocol != request.selected_protocol
+        || current.selected_protocol != target_protocol_anchor
         || current.service_origin_override != request.service_origin_override
         || request.secret.is_some();
     let secret_store = runtime.credential_secret_store();
@@ -4421,13 +5137,8 @@ pub(super) async fn service_update_public_ai_connection(
         .await;
         let management_rollback =
             rollback_management_secret_mutation(secret_store.as_ref(), &management_mutation).await;
-        let restore_result = validate_connection_credential(
-            runtime.as_ref(),
-            &current_configuration,
-            connection_id.as_str(),
-            current_entry_kind,
-        )
-        .await;
+        let restore_result =
+            restore_public_ai_runtime_activation(runtime.as_ref(), &runtime_before_image);
         return Err(compensated_operation_error(
             format!("Credential validation failed before the connection was updated: {error}"),
             combine_results(rollback_result, management_rollback),
@@ -4440,11 +5151,11 @@ pub(super) async fn service_update_public_ai_connection(
             .await;
         let validation_error = match usage {
             Ok(snapshot) if snapshot.availability == AccountUsageAvailability::Supported => None,
-            Ok(snapshot) => {
-                Some(snapshot.refresh_message.unwrap_or_else(|| {
-                    String::from("OpenRouter management key validation failed.")
-                }))
-            }
+            Ok(snapshot) => Some(
+                snapshot
+                    .refresh_message
+                    .unwrap_or_else(|| String::from("Provider management key validation failed.")),
+            ),
             Err(error) => Some(error),
         };
         if let Some(error) = validation_error {
@@ -4457,11 +5168,12 @@ pub(super) async fn service_update_public_ai_connection(
             let management_rollback =
                 rollback_management_secret_mutation(secret_store.as_ref(), &management_mutation)
                     .await;
-            let cache_cleanup = runtime.remove_connection_usage(connection_id.as_str());
+            let runtime_restore =
+                restore_public_ai_runtime_activation(runtime.as_ref(), &runtime_before_image);
             return Err(compensated_operation_error(
                 error,
                 combine_results(primary_rollback, management_rollback),
-                cache_cleanup,
+                runtime_restore,
             ));
         }
     }
@@ -4485,27 +5197,60 @@ pub(super) async fn service_update_public_ai_connection(
             let management_rollback =
                 rollback_management_secret_mutation(secret_store.as_ref(), &management_mutation)
                     .await;
-            let cache_cleanup = runtime.remove_connection_usage(connection_id.as_str());
-            let restore_result = validate_connection_credential(
+            let restore_result = restore_public_ai_configuration_activation_in_transaction(
+                &state,
                 runtime.as_ref(),
                 &current_configuration,
-                connection_id.as_str(),
-                current_entry_kind,
-            )
-            .await;
+                &runtime_before_image,
+                "恢复公共 AI 连接更新前配置失败",
+            );
             return Err(compensated_operation_error(
                 error,
                 combine_results(rollback_result, management_rollback),
-                combine_results(cache_cleanup, restore_result),
+                restore_result,
             ));
         }
     };
-    drop(transaction);
-    if management_mutation.removes_key() {
-        runtime.remove_connection_usage(connection_id.as_str())?;
+    // publicationResult completes runtime cleanup and response projection before Workbench swap.
+    // publicationResult 在工作台交换前完成运行时清理与响应投影。
+    let publication_result = (|| {
+        if management_mutation.removes_key() {
+            runtime.remove_connection_usage(connection_id.as_str())?;
+        }
+        let snapshot = build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)?;
+        publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
+        Ok::<_, String>(snapshot)
+    })();
+    match publication_result {
+        Ok(snapshot) => {
+            drop(transaction);
+            Ok(snapshot)
+        }
+        Err(primary) => {
+            let primary_rollback = rollback_replaced_secret(
+                secret_store.as_ref(),
+                current.secret_reference.as_str(),
+                replaced_secret.as_ref(),
+            )
+            .await;
+            let management_rollback =
+                rollback_management_secret_mutation(secret_store.as_ref(), &management_mutation)
+                    .await;
+            let activation_restore = restore_public_ai_configuration_activation_in_transaction(
+                &state,
+                runtime.as_ref(),
+                &current_configuration,
+                &runtime_before_image,
+                "恢复公共 AI 连接更新前配置失败",
+            );
+            drop(transaction);
+            Err(compensated_operation_error(
+                primary,
+                combine_results(primary_rollback, management_rollback),
+                activation_restore,
+            ))
+        }
     }
-    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
-    build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
 }
 
 /// Applies one validated connection edit to an isolated configuration snapshot.
@@ -4553,11 +5298,10 @@ fn apply_connection_update(
     candidate.service_entry_id = request.service_entry_id.clone();
     candidate.credential_profile_id = request.credential_profile_id.clone();
     candidate.credential_mode = request.credential_mode;
-    candidate.selected_protocol = request.selected_protocol.clone();
+    candidate.selected_protocol = connection_protocol_anchor(entry)?;
     candidate.service_origin_override =
         vulcan_provider_adapters::normalize_connection_service_origin_override(
-            candidate.provider_id.as_str(),
-            request.service_entry_id.as_str(),
+            entry,
             request.service_origin_override.as_deref(),
         )?;
     candidate.verified_protocols = entry
@@ -4780,6 +5524,43 @@ async fn delete_connection_secrets(
     Ok(())
 }
 
+/// Restores one connection's exact primary and optional management secret before-images.
+/// 恢复一个连接的精确主秘密与可选管理秘密前镜像。
+///
+/// # Parameters
+/// 参数
+/// `secret_store` owns durable secret state; `primary_reference` and `primary_secret` identify the
+/// required credential; `management_secret` optionally supplies the exact secondary reference and
+/// envelope.
+/// `secret_store` 持有持久秘密状态；`primary_reference` 与 `primary_secret` 标识必需凭据；
+/// `management_secret` 可选提供精确次级引用与信封。
+///
+/// # Returns
+/// 返回值
+/// Success only when every supplied secret was restored; otherwise all restoration failures are
+/// preserved.
+/// 仅当全部已提供秘密均恢复时返回成功，否则保留所有恢复失败。
+async fn restore_connection_secrets(
+    secret_store: &dyn CredentialSecretStore,
+    primary_reference: &str,
+    primary_secret: &CredentialSecretEnvelope,
+    management_secret: Option<(&str, &CredentialSecretEnvelope)>,
+) -> Result<(), String> {
+    // primaryRestore returns the required credential to its exact revision and material.
+    // primaryRestore 将必需凭据恢复到精确修订与材料。
+    let primary_restore =
+        CredentialSecretStore::restore_secret(secret_store, primary_reference, primary_secret)
+            .await;
+    // managementRestore independently restores the declared secondary credential when present.
+    // managementRestore 在存在时独立恢复已声明的次级凭据。
+    let management_restore = if let Some((reference, secret)) = management_secret {
+        CredentialSecretStore::restore_secret(secret_store, reference, secret).await
+    } else {
+        Ok(())
+    };
+    combine_results(primary_restore, management_restore)
+}
+
 /// Combines two independent rollback results without hiding either failure.
 /// 合并两个独立回滚结果且不隐藏任何失败。
 fn combine_results(first: Result<(), String>, second: Result<(), String>) -> Result<(), String> {
@@ -4819,6 +5600,253 @@ fn compensated_operation_error(
         primary
     } else {
         format!("{primary} Compensation diagnostics: {}.", errors.join("; "))
+    }
+}
+
+/// Restores one exact persisted/runtime configuration image after pre-publication failure.
+/// 在发布前失败后恢复一份精确的持久化/运行时配置镜像。
+///
+/// # Parameters
+/// 参数
+/// `state` resolves persistence, `runtime` owns the current activation, `before_configuration`
+/// and `before_runtime` are the exact paired before-images, and `restore_error_context` labels
+/// a failed durable compensation.
+/// `state` 解析持久化，`runtime` 持有当前激活；`before_configuration` 与 `before_runtime`
+/// 是精确配对的前镜像；`restore_error_context` 标记持久补偿失败。
+///
+/// # Returns
+/// 返回值
+/// Success only when both the durable configuration and every runtime catalog field return to
+/// their exact before-image; otherwise one deterministic uncertainty diagnostic.
+/// 仅当持久配置与全部运行时目录字段均返回精确前镜像时成功；否则返回确定性不确定状态诊断。
+fn restore_public_ai_configuration_activation_in_transaction(
+    state: &SharedServiceBridgeState,
+    runtime: &PublicAiRuntime,
+    before_configuration: &PersistedAiConfiguration,
+    before_runtime: &vulcan_provider_adapters::ProviderRuntimeActivationSnapshot,
+    restore_error_context: &str,
+) -> Result<(), String> {
+    // configurationRestore returns the standalone custom manifests and central document to the
+    // exact durable before-image before the runtime maps are restored exactly.
+    // configurationRestore 在精确恢复运行时映射前，把独立自定义清单与中央文档恢复到
+    // 精确持久前镜像。
+    let configuration_restore = mutate_public_ai_configuration_in_transaction(
+        state,
+        restore_error_context,
+        |configuration| {
+            *configuration = before_configuration.clone();
+            Ok(())
+        },
+    )
+    .map(|_| ());
+    // runtimeRestore uses the post-compensation image as the CAS compare side so an unrelated
+    // mutation is surfaced instead of overwritten.
+    // runtimeRestore 使用补偿后的镜像作为 CAS 比较端，使无关变更被显式报告而不是遭到覆盖。
+    let runtime_restore = runtime
+        .capture_activation_snapshot()
+        .and_then(|current_runtime| {
+            runtime.restore_activation_snapshot(before_runtime, &current_runtime)
+        });
+    match (configuration_restore, runtime_restore) {
+        (Ok(()), Ok(())) => Ok(()),
+        (configuration, runtime) => Err(format!(
+            "Public AI configuration activation restoration was incomplete: configuration={configuration:?}; runtime={runtime:?}"
+        )),
+    }
+}
+
+/// Restores one exact runtime-only activation image through compare-and-swap.
+/// 通过比较交换恢复一份精确的仅运行时激活镜像。
+///
+/// # Parameters
+/// 参数
+/// `runtime` owns the current generation and `before_runtime` is the exact image captured before a
+/// validation, discovery, or usage side effect that did not yet persist configuration.
+/// `runtime` 持有当前代际，`before_runtime` 是在尚未持久化配置的校验、发现或用量副作用前
+/// 捕获的精确镜像。
+///
+/// # Returns
+/// 返回值
+/// Success after exact restoration, or an explicit snapshot/CAS failure without overwriting
+/// unrelated state.
+/// 精确恢复后返回成功；若快照或比较交换失败则显式报错，且不覆盖无关状态。
+fn restore_public_ai_runtime_activation(
+    runtime: &PublicAiRuntime,
+    before_runtime: &vulcan_provider_adapters::ProviderRuntimeActivationSnapshot,
+) -> Result<(), String> {
+    // currentRuntime is the exact compare side that prevents blind restoration.
+    // currentRuntime 是防止盲目恢复的精确比较端。
+    let current_runtime = runtime.capture_activation_snapshot()?;
+    runtime
+        .restore_activation_snapshot(before_runtime, &current_runtime)
+        .map(|_| ())
+}
+
+/// Mutates configuration and atomically publishes its Workbench/response projection or restores it.
+/// 变更配置并原子发布配套工作台/响应投影，失败时恢复原状。
+///
+/// # Parameters
+/// 参数
+/// `app`, `state`, and `runtime` own the publication boundary; `before_configuration` is the
+/// exact durable baseline; `save_error_context` labels the forward write; `mutate` builds the
+/// candidate; `prepare_output` completes every fallible response projection before Workbench
+/// state changes.
+/// `app`、`state` 与 `runtime` 持有发布边界；`before_configuration` 是精确持久基线；
+/// `save_error_context` 标记正向写入；`mutate` 构建候选；`prepare_output` 在工作台状态改变前
+/// 完成全部可失败响应投影。
+///
+/// # Returns
+/// 返回值
+/// The installed configuration and prepared response only after Workbench publication succeeds;
+/// any later failure restores the paired durable/runtime before-image.
+/// 仅在工作台发布成功后返回已安装配置与预备响应；任何后续失败都会恢复配对的持久/运行时前镜像。
+fn mutate_public_ai_configuration_and_publish_in_transaction<Mutation, PrepareOutput, Output>(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    runtime: &PublicAiRuntime,
+    before_configuration: &PersistedAiConfiguration,
+    save_error_context: &str,
+    mutate: Mutation,
+    prepare_output: PrepareOutput,
+) -> Result<(PersistedAiConfiguration, Output), String>
+where
+    Mutation: FnOnce(&mut PersistedAiConfiguration) -> Result<(), String>,
+    PrepareOutput: FnOnce(&PersistedAiConfiguration) -> Result<Output, String>,
+{
+    mutate_public_ai_configuration_and_publish_using_in_transaction(
+        state,
+        runtime,
+        before_configuration,
+        save_error_context,
+        mutate,
+        prepare_output,
+        |configuration| publish_public_ai_workbench(app, state, runtime, configuration).map(|_| ()),
+    )
+}
+
+/// Mutates configuration and atomically publishes explicit session-route revocations.
+/// 修改配置并原子发布显式会话路由撤销。
+///
+/// # Parameters
+/// 参数
+/// `app`, `state`, `runtime`, and `before_configuration` own the activation boundary;
+/// `save_error_context` labels persistence; `mutate` builds the candidate; `prepare_output`
+/// completes the response; `reconcile_sessions` updates a detached workspace and returns exact
+/// lease owners to revoke; `persistence_reason` labels session-state persistence.
+/// `app`、`state`、`runtime` 与 `before_configuration` 持有激活边界；`save_error_context` 标记
+/// 持久化；`mutate` 构建候选；`prepare_output` 完成响应；`reconcile_sessions` 更新独立工作区并
+/// 返回要撤销租约的精确所有者；`persistence_reason` 标记会话状态持久化。
+///
+/// # Returns
+/// 返回值
+/// The installed configuration and prepared output only after configuration, leases, workspace,
+/// and Workbench commit together; any failure restores configuration/runtime and leases.
+/// 仅当配置、租约、工作区与工作台共同提交后返回已安装配置及预备输出；任何失败都会恢复
+/// 配置、运行时与租约。
+fn mutate_public_ai_configuration_and_publish_sessions_in_transaction<
+    Mutation,
+    PrepareOutput,
+    ReconcileSessions,
+    Output,
+>(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    runtime: &PublicAiRuntime,
+    before_configuration: &PersistedAiConfiguration,
+    save_error_context: &str,
+    mutate: Mutation,
+    prepare_output: PrepareOutput,
+    reconcile_sessions: ReconcileSessions,
+    persistence_reason: &'static str,
+) -> Result<(PersistedAiConfiguration, Output), String>
+where
+    Mutation: FnOnce(&mut PersistedAiConfiguration) -> Result<(), String>,
+    PrepareOutput: FnOnce(&PersistedAiConfiguration) -> Result<Output, String>,
+    ReconcileSessions: FnOnce(
+        &mut vulcan_workspace_store::workspace_store::WorkspaceSnapshot,
+    ) -> Result<BTreeSet<crate::SessionId>, String>,
+{
+    mutate_public_ai_configuration_and_publish_using_in_transaction(
+        state,
+        runtime,
+        before_configuration,
+        save_error_context,
+        mutate,
+        prepare_output,
+        |configuration| {
+            publish_public_ai_workbench_with_session_reconciliation_and_commit(
+                app,
+                state,
+                runtime,
+                configuration,
+                reconcile_sessions,
+                persistence_reason,
+                || Ok(()),
+            )
+            .map(|_| ())
+        },
+    )
+}
+
+/// Executes one reversible configuration activation with a caller-selected publication boundary.
+/// 使用调用方选择的发布边界执行一次可逆配置激活。
+///
+/// # Parameters
+/// 参数
+/// `state`, `runtime`, and `before_configuration` identify the exact before-image;
+/// `save_error_context` labels persistence; `mutate` builds the candidate; `prepare_output`
+/// completes the response; `publish` atomically commits the browser/session projection.
+/// `state`、`runtime` 与 `before_configuration` 标识精确前镜像；`save_error_context` 标记持久化；
+/// `mutate` 构建候选；`prepare_output` 完成响应；`publish` 原子提交浏览器与会话投影。
+///
+/// # Returns
+/// 返回值
+/// The installed configuration and output after publication, or a compensated error.
+/// 发布后返回已安装配置与输出，失败则返回已补偿错误。
+fn mutate_public_ai_configuration_and_publish_using_in_transaction<
+    Mutation,
+    PrepareOutput,
+    Publish,
+    Output,
+>(
+    state: &SharedServiceBridgeState,
+    runtime: &PublicAiRuntime,
+    before_configuration: &PersistedAiConfiguration,
+    save_error_context: &str,
+    mutate: Mutation,
+    prepare_output: PrepareOutput,
+    publish: Publish,
+) -> Result<(PersistedAiConfiguration, Output), String>
+where
+    Mutation: FnOnce(&mut PersistedAiConfiguration) -> Result<(), String>,
+    PrepareOutput: FnOnce(&PersistedAiConfiguration) -> Result<Output, String>,
+    Publish: FnOnce(&PersistedAiConfiguration) -> Result<(), String>,
+{
+    // runtimeBeforeImage pairs every catalog/status/cache field with the durable baseline.
+    // runtimeBeforeImage 把每个目录、状态与缓存字段同持久基线配对。
+    let runtime_before_image = runtime.capture_activation_snapshot()?;
+    // configuration crosses the durable/runtime activation boundary before any browser state.
+    // configuration 在任何浏览器状态前越过持久/运行时激活边界。
+    let configuration =
+        mutate_public_ai_configuration_in_transaction(state, save_error_context, mutate)?;
+    // publicationResult prepares the complete RPC result before the atomic Workbench swap.
+    // publicationResult 在原子工作台交换前准备完整 RPC 结果。
+    let publication_result =
+        prepare_output(&configuration).and_then(|output| publish(&configuration).map(|_| output));
+    match publication_result {
+        Ok(output) => Ok((configuration, output)),
+        Err(primary) => {
+            // restoration owns every configuration/runtime field changed after the before-image.
+            // restoration 持有前镜像后发生变更的全部配置/运行时字段。
+            let restoration = restore_public_ai_configuration_activation_in_transaction(
+                state,
+                runtime,
+                before_configuration,
+                &runtime_before_image,
+                "恢复公共 AI 配置发布前状态失败",
+            );
+            Err(compensated_operation_error(primary, restoration, Ok(())))
+        }
     }
 }
 
@@ -4895,9 +5923,19 @@ pub(super) async fn service_save_public_ai_default_connection(
     state: SharedServiceBridgeState,
     request: PublicAiDefaultConnectionSaveRequest,
 ) -> Result<PublicAiSettingsSnapshot, String> {
-    let (runtime, _) = public_ai_runtime_and_configuration(&state)?;
-    let configuration = mutate_public_ai_configuration(
+    // transaction retains writer ownership through durable, runtime, Workbench, and response publication.
+    // transaction 在持久、运行时、工作台与响应发布全程保留写入所有权。
+    let transaction = begin_public_ai_configuration_transaction().await;
+    // currentConfiguration is the exact paired before-image for rollback.
+    // currentConfiguration 是用于回滚的精确配对前镜像。
+    let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
+    // snapshot is prepared and published inside the same compensating activation transaction.
+    // snapshot 在同一补偿激活事务内完成预备与发布。
+    let (_configuration, snapshot) = mutate_public_ai_configuration_and_publish_in_transaction(
+        &app,
         &state,
+        runtime.as_ref(),
+        &current_configuration,
         "保存公共 AI 默认账号失败",
         |configuration| {
             let connection = configuration
@@ -4926,10 +5964,10 @@ pub(super) async fn service_save_public_ai_default_connection(
                 .insert(request.provider_id, request.connection_id);
             Ok(())
         },
-    )
-    .await?;
-    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
-    build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
+        |configuration| build_public_ai_settings_snapshot(runtime.as_ref(), configuration),
+    )?;
+    drop(transaction);
+    Ok(snapshot)
 }
 
 /// Removes one public AI credential connection and its secret.
@@ -4943,6 +5981,9 @@ pub(super) async fn service_remove_public_ai_connection(
     let transaction = begin_public_ai_configuration_transaction().await;
     let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
     let catalogs = runtime.catalog_snapshot()?;
+    // runtimeBeforeImage owns every runtime field removed after durable configuration activation.
+    // runtimeBeforeImage 持有持久配置激活后将删除的每个运行时字段。
+    let runtime_before_image = runtime.capture_activation_snapshot()?;
     let removed = current_configuration
         .connection_graph
         .connections
@@ -4984,35 +6025,95 @@ pub(super) async fn service_remove_public_ai_connection(
                 connection_id.as_str(),
                 request.replacement_default_connection_id.as_deref(),
             )?;
-            ensure_active_model_selection(configuration, &catalogs);
+            ensure_active_model_selection(runtime.as_ref(), configuration, &catalogs)?;
             Ok(())
         },
     );
     let configuration = match remove_result {
         Ok(configuration) => configuration,
         Err(error) => {
-            let _ = CredentialSecretStore::restore_secret(
+            let secret_restore = restore_connection_secrets(
                 secret_store.as_ref(),
                 removed.secret_reference.as_str(),
                 &removed_secret,
+                removed
+                    .management_secret_reference
+                    .as_deref()
+                    .zip(removed_management_secret.as_ref()),
             )
             .await;
-            if let (Some(reference), Some(secret)) = (
-                removed.management_secret_reference.as_deref(),
-                removed_management_secret.as_ref(),
-            ) {
-                let _ =
-                    CredentialSecretStore::restore_secret(secret_store.as_ref(), reference, secret)
-                        .await;
-            }
-            return Err(error);
+            let activation_restore = restore_public_ai_configuration_activation_in_transaction(
+                &state,
+                runtime.as_ref(),
+                &current_configuration,
+                &runtime_before_image,
+                "恢复公共 AI 连接移除前配置失败",
+            );
+            return Err(compensated_operation_error(
+                error,
+                secret_restore,
+                activation_restore,
+            ));
         }
     };
-    drop(transaction);
-    runtime.remove_connection_catalog(connection_id.as_str())?;
-    runtime.remove_connection_usage(connection_id.as_str())?;
-    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
-    build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
+    // fallback is the exact post-removal global selection used for every revoked owner.
+    // fallback 是用于每个被撤销所有者的精确移除后全局选择。
+    let fallback = configuration.active.clone();
+    let publication_result = (|| {
+        runtime.remove_connection_catalog(connection_id.as_str())?;
+        runtime.remove_connection_usage(connection_id.as_str())?;
+        // snapshot finishes the complete RPC projection before browser-visible state changes.
+        // snapshot 在浏览器可见状态改变前完成完整 RPC 投影。
+        let snapshot = build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)?;
+        publish_public_ai_workbench_with_session_reconciliation_and_commit(
+            &app,
+            &state,
+            runtime.as_ref(),
+            &configuration,
+            |workspace| {
+                Ok(reconcile_disabled_connection_sessions(
+                    workspace,
+                    connection_id.as_str(),
+                    None,
+                    fallback.as_ref(),
+                ))
+            },
+            "connection_removed",
+            || Ok(()),
+        )?;
+        Ok::<_, String>(snapshot)
+    })();
+    match publication_result {
+        Ok(snapshot) => {
+            drop(transaction);
+            Ok(snapshot)
+        }
+        Err(primary) => {
+            let secret_restore = restore_connection_secrets(
+                secret_store.as_ref(),
+                removed.secret_reference.as_str(),
+                &removed_secret,
+                removed
+                    .management_secret_reference
+                    .as_deref()
+                    .zip(removed_management_secret.as_ref()),
+            )
+            .await;
+            let activation_restore = restore_public_ai_configuration_activation_in_transaction(
+                &state,
+                runtime.as_ref(),
+                &current_configuration,
+                &runtime_before_image,
+                "恢复公共 AI 连接移除前配置失败",
+            );
+            drop(transaction);
+            Err(compensated_operation_error(
+                primary,
+                secret_restore,
+                activation_restore,
+            ))
+        }
+    }
 }
 
 /// Refreshes one connection's declared runtime metadata on demand.
@@ -5027,6 +6128,9 @@ pub(super) async fn service_sync_public_ai_connection(
     // 手动同步与覆盖配置变更共用配置事务，避免远程响应以过期用户设置替换较新的内存投影。
     let transaction = begin_public_ai_configuration_transaction().await;
     let (runtime, configuration) = public_ai_runtime_and_configuration(&state)?;
+    // runtimeBeforeImage restores an unpublished refresh candidate without discarding a published observation.
+    // runtimeBeforeImage 恢复未发布的刷新候选，但不会丢弃已发布观测。
+    let runtime_before_image = runtime.capture_activation_snapshot()?;
     let connection = configuration
         .connection_graph
         .connections
@@ -5045,10 +6149,870 @@ pub(super) async fn service_sync_public_ai_connection(
         entry_kind,
     )
     .await;
+    // activation_result publishes either the refreshed source or the existing/manual fallback
+    // as one immutable generation even when remote discovery itself reports a controlled failure.
+    // activation_result 即使远程发现返回受控失败，也会把刷新来源或现有/手工回退作为一个
+    // 不可变代际发布。
+    let activation_result = runtime.reapply_model_catalog_overlays(&configuration);
+    if let Err(primary) = activation_result {
+        let runtime_restore =
+            restore_public_ai_runtime_activation(runtime.as_ref(), &runtime_before_image);
+        drop(transaction);
+        return Err(compensated_operation_error(
+            primary,
+            runtime_restore,
+            Ok(()),
+        ));
+    }
+    // publicationResult makes a successful catalog or controlled failure observation visible as
+    // one complete generation before the RPC reports its discovery outcome.
+    // publicationResult 在 RPC 报告发现结果前，把成功目录或受控失败观测作为一个完整代际公开。
+    let publication_result = build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
+        .and_then(|snapshot| {
+            publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)
+                .map(|_| snapshot)
+        });
+    let snapshot = match publication_result {
+        Ok(snapshot) => snapshot,
+        Err(primary) => {
+            let runtime_restore =
+                restore_public_ai_runtime_activation(runtime.as_ref(), &runtime_before_image);
+            drop(transaction);
+            return Err(compensated_operation_error(
+                primary,
+                runtime_restore,
+                Ok(()),
+            ));
+        }
+    };
     drop(transaction);
     refresh_result?;
-    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
-    build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
+    Ok(snapshot)
+}
+
+/// Runs the production provider-manifest sync call chain for every system provider.
+/// 为每个系统供应商执行生产清单同步调用链。
+///
+/// The sync service remains unconfigured until the external confirmation gate opens; the
+/// production call chain exists and reports `not_configured` without guessing any remote
+/// endpoint (plan §7.2/§17.3).
+/// 同步服务在外部确认门开启前保持未配置；生产调用链存在并报告 `not_configured`，
+/// 绝不猜测任何远端端点（方案 §7.2/§17.3）。
+/// Activates every affected connection catalog and captures the exact published runtime image.
+/// 激活每个受影响连接目录并捕获精确的已发布运行时镜像。
+///
+/// # Parameters
+/// 参数
+/// `provider_ids` contains only providers whose manifest generation was newly activated.
+/// `provider_ids` 只包含清单代际刚完成激活的供应商。
+///
+/// # Returns
+/// 返回值
+/// The exact post-activation image used as compensation's compare-and-swap guard.
+/// 返回作为补偿比较交换护栏的精确激活后镜像。
+async fn activate_synced_provider_catalogs(
+    runtime: &PublicAiRuntime,
+    configuration: &PersistedAiConfiguration,
+    provider_ids: &std::collections::BTreeSet<String>,
+    transaction: &vulcan_provider_adapters::ProviderCatalogActivationTransaction,
+) -> Result<vulcan_provider_adapters::ProviderRuntimeActivationSnapshot, String> {
+    // connectionIds is the complete deterministic projection set for the affected providers.
+    // connectionIds 是受影响供应商的完整确定性投影集合。
+    let connection_ids = configuration
+        .connection_graph
+        .connections
+        .values()
+        .filter(|connection| provider_ids.contains(&connection.provider_id))
+        .map(|connection| connection.id.clone())
+        .collect::<Vec<_>>();
+    runtime
+        .activate_staged_manifest_catalogs_in_transaction(
+            configuration,
+            &connection_ids,
+            transaction,
+        )
+        .await
+}
+
+/// Closed result of a failed provider projection publication transaction.
+/// 供应商投影发布事务失败后的封闭结果。
+#[derive(Debug)]
+enum ProviderProjectionPublicationFailure {
+    /// Every disk, staged-manifest, runtime, and Workbench before-image was restored exactly.
+    /// 每份磁盘、暂存 Manifest、运行时与工作台前镜像均已精确恢复。
+    Compensated(String),
+    /// At least one compensation failed, so continuing could publish from an uncertain authority.
+    /// 至少一项补偿失败，继续执行可能从状态不确定的权威发布。
+    Uncertain(String),
+}
+
+/// Restores one staged provider activation when its asynchronous publication future is cancelled.
+/// 在异步发布 Future 被取消时恢复一次已暂存供应商激活。
+struct StagedProviderActivationCancellationGuard<'a> {
+    /// Service owning the durable Manifest transaction and compensation methods.
+    /// 持有持久化 Manifest 事务与补偿方法的服务。
+    service: &'a crate::provider_manifest_sync::ProviderManifestSyncService,
+    /// Runtime owning the staged manifest catalog that must match the durable before-image.
+    /// 持有必须与持久化前镜像一致的暂存 Manifest 目录的运行时。
+    runtime: &'a PublicAiRuntime,
+    /// Reports identifying the staged activation for provider-scoped telemetry.
+    /// 标识已暂存激活并用于逐供应商遥测的报告。
+    reports: &'a [crate::provider_manifest_sync::ProviderSyncReport],
+    /// Exact provider-scoped before-images restored on cancellation.
+    /// 在取消时恢复的精确逐供应商前镜像。
+    snapshots: &'a [crate::provider_manifest_sync::ProviderManifestActivationSnapshot],
+    /// Armed state retained only while an asynchronous cancellation point can still be crossed.
+    /// 仅在仍可能越过异步取消点时保持的启用状态。
+    armed: bool,
+}
+
+impl<'a> StagedProviderActivationCancellationGuard<'a> {
+    /// Arms cancellation compensation for one exact staged activation set.
+    /// 为一组精确已暂存激活启用取消补偿。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `service`, `runtime`, `reports`, and `snapshots` are the complete transaction authority.
+    /// `service`、`runtime`、`reports` 与 `snapshots` 构成完整事务权威。
+    ///
+    /// # Returns
+    /// 返回值
+    /// An armed guard that restores before-images if dropped before `disarm`.
+    /// 返回一个已启用护栏；若在 `disarm` 前被丢弃则恢复前镜像。
+    fn new(
+        service: &'a crate::provider_manifest_sync::ProviderManifestSyncService,
+        runtime: &'a PublicAiRuntime,
+        reports: &'a [crate::provider_manifest_sync::ProviderSyncReport],
+        snapshots: &'a [crate::provider_manifest_sync::ProviderManifestActivationSnapshot],
+    ) -> Self {
+        Self {
+            service,
+            runtime,
+            reports,
+            snapshots,
+            armed: true,
+        }
+    }
+
+    /// Disarms automatic compensation after execution has left every asynchronous cancellation point.
+    /// 在执行离开全部异步取消点后停用自动补偿。
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for StagedProviderActivationCancellationGuard<'_> {
+    /// Restores staged disk/runtime ownership on asynchronous cancellation.
+    /// 在异步取消时恢复已暂存磁盘与运行时所有权。
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        // restoreResult is intentionally best-effort in Drop; an incomplete runtime restore keeps
+        // the Applying journal for deterministic startup recovery and the process remains fail-closed.
+        // restoreResult 在 Drop 中有意采用尽力恢复；运行时恢复不完整时会保留 Applying 日志，
+        // 供启动确定性恢复，且当前进程保持失败关闭。
+        let restore_result = self
+            .service
+            .restore_activation_snapshots(self.runtime, self.snapshots);
+        if restore_result.is_ok() {
+            self.service.record_compensated_rollback_events(
+                self.runtime,
+                self.reports,
+                "activation_cancelled",
+            );
+        }
+    }
+}
+
+/// Validates and extracts every exact Manifest activation before-image required for publication.
+/// 校验并提取发布所需的每份精确 Manifest 激活前镜像。
+///
+/// # Parameters
+/// 参数
+/// `reports` are provider-scoped activation outcomes and `provider_ids` is the exact projection set.
+/// `reports` 是逐供应商激活结果，`provider_ids` 是精确投影集合。
+///
+/// # Returns
+/// 返回值
+/// The complete ordered before-image list, or an uncertain contract failure that forbids publication.
+/// 返回完整有序前镜像列表；若契约状态不确定则返回禁止发布的失败。
+fn required_provider_activation_snapshots(
+    reports: &[crate::provider_manifest_sync::ProviderSyncReport],
+    provider_ids: &std::collections::BTreeSet<String>,
+) -> Result<
+    Vec<crate::provider_manifest_sync::ProviderManifestActivationSnapshot>,
+    ProviderProjectionPublicationFailure,
+> {
+    let report_provider_ids = reports
+        .iter()
+        .map(|report| report.provider_id.clone())
+        .collect::<std::collections::BTreeSet<_>>();
+    if reports.is_empty()
+        || report_provider_ids.len() != reports.len()
+        || &report_provider_ids != provider_ids
+    {
+        return Err(ProviderProjectionPublicationFailure::Uncertain(
+            String::from("Provider activation reports do not match the exact projection set."),
+        ));
+    }
+    reports
+        .iter()
+        .map(|report| {
+            if report.outcome != "activated" {
+                return Err(ProviderProjectionPublicationFailure::Uncertain(
+                    String::from("Provider projection received a non-activation report."),
+                ));
+            }
+            let snapshot = report.activation_snapshot.clone().ok_or_else(|| {
+                ProviderProjectionPublicationFailure::Uncertain(String::from(
+                    "Provider activation report is missing its exact before-image.",
+                ))
+            })?;
+            if snapshot.provider_id != report.provider_id {
+                return Err(ProviderProjectionPublicationFailure::Uncertain(
+                    String::from(
+                        "Provider activation before-image identity does not match its report.",
+                    ),
+                ));
+            }
+            Ok(snapshot)
+        })
+        .collect()
+}
+
+/// Restores staged Manifest ownership before any runtime generation was published.
+/// 在任何运行时代际发布前恢复已暂存 Manifest 的所有权。
+///
+/// # Parameters
+/// 参数
+/// `service` and `runtime` own the durable and staged layers; `reports` identify telemetry;
+/// `snapshots` are exact before-images; and `primary` is the preparation failure.
+/// `service` 与 `runtime` 持有持久层和暂存层；`reports` 标识遥测；`snapshots` 是精确前镜像；
+/// `primary` 是准备阶段失败。
+///
+/// # Returns
+/// 返回值
+/// A compensated provider-local failure only when every before-image is restored, otherwise uncertain.
+/// 仅当每份前镜像都恢复时返回逐供应商已补偿失败，否则返回状态不确定。
+fn compensate_unpublished_provider_activation(
+    service: &crate::provider_manifest_sync::ProviderManifestSyncService,
+    runtime: &PublicAiRuntime,
+    reports: &[crate::provider_manifest_sync::ProviderSyncReport],
+    snapshots: &[crate::provider_manifest_sync::ProviderManifestActivationSnapshot],
+    primary: String,
+) -> ProviderProjectionPublicationFailure {
+    let manifest_restore = service.restore_activation_snapshots(runtime, snapshots);
+    if manifest_restore.is_ok() {
+        service.record_compensated_rollback_events(
+            runtime,
+            reports,
+            "activation_publication_failed",
+        );
+        ProviderProjectionPublicationFailure::Compensated(primary)
+    } else {
+        ProviderProjectionPublicationFailure::Uncertain(format!(
+            "{primary}; Manifest activation before-image restore: {manifest_restore:?}"
+        ))
+    }
+}
+
+/// Publishes post-sync projections or restores every exact activation before-image on failure.
+/// 发布同步后投影，或在失败时恢复每份精确激活前镜像。
+///
+/// # Parameters
+/// 参数
+/// `service` owns the durable store, `reports` retain per-activation before-images, and
+/// `provider_ids` is the exact projection set.
+/// `service` 持有持久存储，`reports` 保留逐激活前镜像，`provider_ids` 是精确投影集合。
+///
+/// # Returns
+/// 返回值
+/// Success only after the new generation is fully visible; failures distinguish an exact
+/// provider-local compensation from an uncertain shared state that must stop the batch.
+/// 仅当新代际完全可见后返回成功；失败会区分精确逐供应商补偿与必须中止批次的共享状态不确定。
+async fn publish_synced_provider_projections_or_restore(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    runtime: &PublicAiRuntime,
+    service: &crate::provider_manifest_sync::ProviderManifestSyncService,
+    reports: &[crate::provider_manifest_sync::ProviderSyncReport],
+    provider_ids: &std::collections::BTreeSet<String>,
+) -> Result<(), ProviderProjectionPublicationFailure> {
+    let manifest_snapshots = required_provider_activation_snapshots(reports, provider_ids)?;
+    // cancellationGuard owns exact compensation across every following asynchronous wait.
+    // cancellationGuard 在后续每个异步等待点期间持有精确补偿责任。
+    let mut cancellation_guard = StagedProviderActivationCancellationGuard::new(
+        service,
+        runtime,
+        reports,
+        &manifest_snapshots,
+    );
+    // configurationTransaction prevents settings writes from crossing configuration capture,
+    // publication, or compensation for this exact provider activation.
+    // configurationTransaction 防止设置写入穿越当前精确供应商激活的配置捕获、发布或补偿。
+    let _configuration_transaction = begin_public_ai_configuration_transaction().await;
+    // configuration is captured only after the provider before-images are proven complete.
+    // configuration 仅在供应商前镜像被证明完整后捕获。
+    let configuration = match runtime.configuration_snapshot() {
+        Ok(configuration) => configuration,
+        Err(primary) => {
+            // No asynchronous cancellation point remains before explicit compensation completes.
+            // 显式补偿完成前已不存在异步取消点。
+            cancellation_guard.disarm();
+            return Err(compensate_unpublished_provider_activation(
+                service,
+                runtime,
+                reports,
+                &manifest_snapshots,
+                format!("Provider configuration snapshot failed before projection: {primary}"),
+            ));
+        }
+    };
+    // catalogTransaction remains owned until success or every compensation/republish step ends.
+    // catalogTransaction 持续持有到成功或全部补偿/重新发布步骤结束。
+    let catalog_transaction = runtime.begin_catalog_activation_transaction().await;
+    // runtimeBeforeImage is the single exact catalog/generation snapshot before batch publication.
+    // runtimeBeforeImage 是批量发布前唯一的精确目录与代际快照。
+    let runtime_before_image = match runtime.capture_activation_snapshot() {
+        Ok(snapshot) => snapshot,
+        Err(primary) => {
+            // Explicit synchronous compensation owns all remaining work for this failure.
+            // 本次失败的全部剩余工作由显式同步补偿持有。
+            cancellation_guard.disarm();
+            return Err(compensate_unpublished_provider_activation(
+                service,
+                runtime,
+                reports,
+                &manifest_snapshots,
+                format!("Provider runtime before-image capture failed: {primary}"),
+            ));
+        }
+    };
+    // publication includes durable last-checked bookkeeping so an `activated` report is never
+    // returned before its operator-visible success state exists.
+    // publication 包含持久化最近检查簿记，使 `activated` 报告绝不会在操作员可见成功状态
+    // 存在前返回。
+    // runtimeAfterImage exists only after the isolated activation crossed its single publication
+    // boundary. A preparation conflict leaves the main runtime untouched and therefore needs no
+    // runtime compensation.
+    // runtimeAfterImage 仅在隔离激活越过唯一发布边界后存在；准备冲突不会触碰主运行时，
+    // 因而无需运行时补偿。
+    // activationResult is the final asynchronous cancellation boundary in this transaction.
+    // activationResult 是本事务中的最后一个异步取消边界。
+    let activation_result = activate_synced_provider_catalogs(
+        runtime,
+        &configuration,
+        provider_ids,
+        &catalog_transaction,
+    )
+    .await;
+    cancellation_guard.disarm();
+    let (runtime_after_image, publication) = match activation_result {
+        Ok(after_image) => {
+            // publication keeps browser state unchanged while check-state persistence and journal
+            // commit remain fallible. Once that closure succeeds, the Workbench swap is infallible.
+            // publication 在检查状态持久化与日志提交仍可失败时保持浏览器状态不变；闭包成功后，
+            // 工作台交换不再失败。
+            let publication = publish_public_ai_workbench_with_commit(
+                app,
+                state,
+                runtime,
+                &configuration,
+                || {
+                    // Check state remains inside the Applying before-image until it is durable;
+                    // only then may the journal cross its commit boundary.
+                    // 检查状态在持久化完成前始终处于 Applying 前镜像保护内；之后日志才可越过提交边界。
+                    service.record_sync_check_reports(reports)?;
+                    service.commit_activation_snapshots(&manifest_snapshots)
+                },
+            )
+            .map(|_| ());
+            (Some(after_image), publication)
+        }
+        Err(error) => (None, Err(error)),
+    };
+    match publication {
+        Ok(()) => {
+            service.record_committed_activation_events(runtime, reports);
+            Ok(())
+        }
+        Err(primary) => {
+            let manifest_restore =
+                service.restore_activation_snapshots(runtime, &manifest_snapshots);
+            let runtime_restore = runtime_after_image.as_ref().map_or(Ok(()), |after_image| {
+                runtime.restore_activation_snapshot(&runtime_before_image, after_image)
+            });
+            let workbench_republish = match (&runtime_restore, runtime_after_image.is_some()) {
+                (Ok(()), true) => {
+                    publish_public_ai_workbench(app, state, runtime, &configuration).map(|_| ())
+                }
+                (Ok(()), false) => Ok(()),
+                (Err(_), _) => Err(String::from(
+                    "Old-generation Workbench projection was not republished because runtime compensation failed.",
+                )),
+            };
+            let compensation_complete =
+                manifest_restore.is_ok() && runtime_restore.is_ok() && workbench_republish.is_ok();
+            if compensation_complete {
+                service.record_compensated_rollback_events(
+                    runtime,
+                    reports,
+                    "activation_publication_failed",
+                );
+            }
+            let diagnostic = format!(
+                "Provider manifest projection publication failed: {primary}; manifest compensation: {manifest_restore:?}; runtime compensation: {runtime_restore:?}; old-generation Workbench republication: {workbench_republish:?}"
+            );
+            if compensation_complete {
+                Err(ProviderProjectionPublicationFailure::Compensated(
+                    diagnostic,
+                ))
+            } else {
+                Err(ProviderProjectionPublicationFailure::Uncertain(diagnostic))
+            }
+        }
+    }
+}
+
+/// Converts one fully compensated activation into a provider-local rejected sync report.
+/// 把一次已完整补偿的激活转换为逐供应商拒绝同步报告。
+///
+/// # Parameters
+/// 参数
+/// `report` is the staged activation identity and `diagnostic` is the local compensation detail.
+/// `report` 是已暂存激活身份，`diagnostic` 是本地补偿详情。
+///
+/// # Returns
+/// 返回值
+/// A serializable rejection with no retained before-image and one bounded public diagnostic.
+/// 返回不再保留前镜像且仅含一条有界公开诊断的可序列化拒绝结果。
+fn compensated_provider_projection_report(
+    mut report: crate::provider_manifest_sync::ProviderSyncReport,
+    diagnostic: &str,
+) -> crate::provider_manifest_sync::ProviderSyncReport {
+    report.outcome = "rejected";
+    report.failure_kind = Some(String::from("activation_publication_failed"));
+    report.failure_message =
+        Some(crate::provider_manifest_sync::bounded_public_manifest_diagnostic(diagnostic));
+    report.activation_snapshot = None;
+    report
+}
+
+/// Finalizes one provider sync report as an isolated activation and check-state transaction.
+/// 将一份供应商同步报告作为隔离的激活与检查状态事务完成。
+///
+/// # Parameters
+/// 参数
+/// `app` and `state` own the visible projection, `runtime` owns the immutable generation,
+/// `service` owns durable Manifest layers, and `report` is the exact provider-scoped outcome.
+/// `app` 与 `state` 持有可见投影，`runtime` 持有不可变代际，`service` 持有持久 Manifest 层，
+/// `report` 是精确的逐供应商结果。
+///
+/// # Returns
+/// 返回值
+/// The same report only after its activation or non-activation check state is durably finalized.
+/// 仅在对应激活或非激活检查状态持久完成后返回同一报告。
+async fn finalize_provider_sync_report(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    runtime: &PublicAiRuntime,
+    service: &crate::provider_manifest_sync::ProviderManifestSyncService,
+    mut report: crate::provider_manifest_sync::ProviderSyncReport,
+) -> Result<crate::provider_manifest_sync::ProviderSyncReport, String> {
+    if report.outcome != "activated" {
+        if let Err(error) = service.record_sync_check_reports(std::slice::from_ref(&report)) {
+            // primaryFailureKind preserves a candidate rejection when one already exists; a
+            // successful remote outcome instead becomes an explicit check-state rejection.
+            // primaryFailureKind 在候选已被拒绝时保留其分类；成功远端结果则转为明确的
+            // check-state 拒绝。
+            let primary_failure_kind = report
+                .failure_kind
+                .clone()
+                .unwrap_or_else(|| String::from("check_state_publication_failed"));
+            report.outcome = "rejected";
+            report.failure_kind = Some(primary_failure_kind);
+            report.failure_message = Some(
+                crate::provider_manifest_sync::bounded_public_manifest_diagnostic(error.as_str()),
+            );
+            report.activation_snapshot = None;
+        }
+        return Ok(report);
+    }
+
+    // providerIds deliberately contains one member so failure compensation cannot roll back an
+    // unrelated provider that already committed earlier in the shared Index batch.
+    // providerIds 有意只包含一个成员，使失败补偿不会回滚共享 Index 批次中较早提交的无关供应商。
+    let provider_ids = std::collections::BTreeSet::from([report.provider_id.clone()]);
+    // publicationResult owns the complete provider-scoped activation transaction.
+    // publicationResult 持有完整的逐供应商激活事务。
+    let publication_result = publish_synced_provider_projections_or_restore(
+        app,
+        state,
+        runtime,
+        service,
+        std::slice::from_ref(&report),
+        &provider_ids,
+    )
+    .await;
+    match publication_result {
+        Ok(()) => Ok(report),
+        Err(ProviderProjectionPublicationFailure::Compensated(primary)) => {
+            // rejectedReport closes this provider transaction without suppressing later providers
+            // from the same authenticated Index snapshot (plan §17.4).
+            // rejectedReport 封闭当前供应商事务，同时不压制同一认证 Index 快照中的后续
+            // 供应商（方案 §17.4）。
+            report = compensated_provider_projection_report(report, primary.as_str());
+            if service
+                .record_sync_check_reports(std::slice::from_ref(&report))
+                .is_err()
+            {
+                report.failure_message = Some(String::from(
+                    "Activation publication was rolled back, and its check-state update could not be persisted.",
+                ));
+            }
+            Ok(report)
+        }
+        Err(ProviderProjectionPublicationFailure::Uncertain(primary)) => {
+            // failureState is best-effort observability after an uncertain compensation; the
+            // batch must stop regardless because catalog authority can no longer be proven.
+            // failureState 是补偿状态不确定后的尽力可观测性；无论其结果如何都必须中止批次，
+            // 因为目录权威已无法证明。
+            let failure_state = service.record_sync_check_failures(
+                std::slice::from_ref(&report.provider_id),
+                "activation_publication_failed",
+            );
+            let primary =
+                crate::provider_manifest_sync::bounded_public_manifest_diagnostic(primary.as_str());
+            if failure_state.is_err() {
+                Err(format!(
+                    "{primary} Check-state publication also failed after compensation became uncertain."
+                ))
+            } else {
+                Err(primary)
+            }
+        }
+    }
+}
+
+/// Bounds and redacts one internal failure before it crosses a Provider Manifest RPC boundary.
+/// 在内部失败越过 Provider Manifest RPC 边界前进行有界化与脱敏。
+///
+/// # Parameters
+/// 参数
+/// `error` is the exact internal diagnostic, which may contain local paths or oversized text.
+/// `error` 是可能包含本地路径或超长文本的精确内部诊断。
+///
+/// # Returns
+/// 返回值
+/// A UTF-8-safe public diagnostic that retains no detected local path or secret assignment.
+/// 返回 UTF-8 安全的公开诊断，且不保留检测到的本地路径或秘密赋值。
+fn bounded_provider_manifest_rpc_error(error: String) -> String {
+    crate::provider_manifest_sync::bounded_public_manifest_diagnostic(error.as_str())
+}
+
+pub(super) async fn service_sync_provider_manifests(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+) -> Result<Vec<crate::provider_manifest_sync::ProviderSyncReport>, String> {
+    let (runtime, _initial_configuration) =
+        public_ai_runtime_and_configuration(&state).map_err(bounded_provider_manifest_rpc_error)?;
+    // The injected sync service is reused instead of constructing an empty-key/None-URL
+    // service per RPC call (plan §R7.13).
+    // 复用注入的同步服务，而不是每次 RPC 调用构造空密钥/None URL 的服务（方案 §R7.13）。
+    let service = {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("Failed to lock service state: {error}"))?;
+        guard
+            .provider_manifest_sync
+            .clone()
+            .ok_or_else(|| String::from("Provider manifest sync service is not ready."))?
+    };
+    // Keep the single-writer guard through projection/compensation; releasing it after the
+    // download would allow another trigger to replace the staged manifest before this call
+    // publishes its matching catalogs and report.
+    // 持有单写者守卫直到投影/补偿完成；若下载后立即释放，另一个触发器可能在本次调用
+    // 发布匹配目录与报告前替换暂存清单。
+    let _activation_guard = service.begin_activation_transaction().await;
+    // providers includes every identity pinned by the trusted bundled index, including a
+    // provider-local failed baseline that still requires periodic recovery checks.
+    // providers 包含可信内置 Index 固定的全部身份，包括仍需周期恢复检查的逐供应商失败基线。
+    let providers = runtime
+        .system_manifest_provider_ids()
+        .map_err(bounded_provider_manifest_rpc_error)?
+        .into_iter()
+        .collect::<Vec<_>>();
+    // syncAllWithReportHandler fetches the signed Index exactly once, but completes each provider
+    // before the next candidate is staged. This preserves both shared-index efficiency and the
+    // independent transaction requirement (plan §17.4/§R7.7).
+    // syncAllWithReportHandler 只获取一次签名 Index，但会在暂存下一候选前完成当前供应商；
+    // 这样同时保留共享 Index 效率与独立事务要求（方案 §17.4/§R7.7）。
+    // reportsResult retains top-level Index/network failures long enough to persist a classified
+    // last-checked failure for every targeted provider.
+    // reportsResult 保留顶层 Index/网络失败，以便为每个目标供应商持久化分类最近检查失败。
+    let reports = match service
+        .sync_all_with_report_handler(runtime.as_ref(), &providers, |report| {
+            // Each future owns stable clones so it can await configuration and projection locks
+            // without borrowing the synchronization loop's stack frame.
+            // 每个 Future 持有稳定克隆，因此可等待配置与投影锁，而不借用同步循环栈帧。
+            let app = app.clone();
+            let state = state.clone();
+            let runtime = Arc::clone(&runtime);
+            let service = service.clone();
+            async move {
+                finalize_provider_sync_report(&app, &state, runtime.as_ref(), &service, report)
+                    .await
+            }
+        })
+        .await
+    {
+        Ok(reports) => reports,
+        Err(crate::provider_manifest_sync::ProviderSyncBatchFailure::Remote(primary)) => {
+            // checkStateResult is independent observability compensation and never hides primary.
+            // checkStateResult 是独立可观测性补偿且绝不隐藏主错误。
+            let check_state_result =
+                service.record_sync_check_failures(&providers, "index_check_failed");
+            let primary =
+                crate::provider_manifest_sync::bounded_public_manifest_diagnostic(primary.as_str());
+            return if check_state_result.is_err() {
+                Err(format!(
+                    "Provider manifest synchronization failed: {primary} Check-state publication also failed."
+                ))
+            } else {
+                Err(format!(
+                    "Provider manifest synchronization failed: {primary}"
+                ))
+            };
+        }
+        Err(crate::provider_manifest_sync::ProviderSyncBatchFailure::Projection(primary)) => {
+            // The provider handler already attempted exact compensation and provider-scoped
+            // failed-check publication; previously committed providers remain active.
+            // 逐供应商处理器已经尝试精确补偿与供应商级失败检查发布；此前已提交供应商保持活动。
+            return Err(
+                crate::provider_manifest_sync::bounded_public_manifest_diagnostic(primary.as_str()),
+            );
+        }
+    };
+    Ok(reports)
+}
+
+/// Returns the typed status snapshot for every system provider manifest (plan §R10).
+/// 返回全部系统供应商清单的 typed 状态快照（方案 §R10）。
+///
+/// # Returns
+/// 返回值
+/// A typed `Vec<ProviderManifestStatus>` instead of a temporary JSON value.
+/// 返回 typed `Vec<ProviderManifestStatus>`，而不是临时 JSON 值。
+pub(super) async fn service_get_provider_manifest_status(
+    state: SharedServiceBridgeState,
+) -> Result<Vec<crate::provider_manifest_sync::ProviderManifestStatus>, String> {
+    let (runtime, _configuration) =
+        public_ai_runtime_and_configuration(&state).map_err(bounded_provider_manifest_rpc_error)?;
+    let service = {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("Failed to lock service state: {error}"))?;
+        guard
+            .provider_manifest_sync
+            .clone()
+            .ok_or_else(|| String::from("Provider manifest sync service is not ready."))?
+    };
+    // activationGuard prevents the status reader from mixing store layers with a runtime
+    // generation while synchronization or rollback is between their publication steps.
+    // activationGuard 防止状态读取者在同步或回滚的发布步骤之间混合存储层与运行时代际。
+    let _activation_guard = service.begin_activation_transaction().await;
+    // configurationGuard closes the independent race where a settings transaction installs a
+    // new configuration before publishing its matching model-catalog generation.
+    // configurationGuard 关闭设置事务先安装新配置、后发布配对模型目录代际的独立竞争窗口。
+    let _configuration_guard = begin_public_ai_configuration_transaction().await;
+    service
+        .provider_manifest_status_all(runtime.as_ref())
+        .map_err(bounded_provider_manifest_rpc_error)
+}
+
+/// Previews one signed provider manifest candidate without mutating any local layer or state.
+/// 预览一个签名供应商 Manifest 候选，且不修改任何本地层或状态。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the immutable runtime and configured sync service; `provider_id` is exact.
+/// `state` 持有不可变运行时与已配置同步服务；`provider_id` 为精确标识。
+///
+/// # Returns
+/// 返回值
+/// A verified typed semantic diff, or a controlled signed-index/network failure.
+/// 返回已验证的类型化语义差异，或受控签名 Index/网络失败。
+pub(super) async fn service_preview_provider_manifest(
+    state: SharedServiceBridgeState,
+    provider_id: String,
+) -> Result<crate::provider_manifest_sync::ProviderManifestCandidatePreview, String> {
+    // runtime is the single immutable comparison authority captured for this preview.
+    // runtime 是为本次预览捕获的唯一不可变比较权威。
+    let (runtime, _configuration) =
+        public_ai_runtime_and_configuration(&state).map_err(bounded_provider_manifest_rpc_error)?;
+    crate::provider_manifest_sync::require_trusted_system_manifest_provider(
+        runtime.as_ref(),
+        provider_id.as_str(),
+    )
+    .map_err(bounded_provider_manifest_rpc_error)?;
+    // service reuses the exact production trust store and secure HTTP client.
+    // service 复用精确的生产信任存储与安全 HTTP 客户端。
+    let service = {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("Failed to lock service state: {error}"))?;
+        guard
+            .provider_manifest_sync
+            .clone()
+            .ok_or_else(|| String::from("Provider manifest sync service is not ready."))?
+    };
+    // baseline is captured while both writers are excluded, then the guards are released before
+    // remote I/O so a slow preview cannot block activation or settings changes.
+    // baseline 在排除两类写者时捕获，随后在远端 I/O 前释放守卫，避免慢速预览阻塞激活或设置变更。
+    let baseline = {
+        let _activation_guard = service.begin_activation_transaction().await;
+        let _configuration_guard = begin_public_ai_configuration_transaction().await;
+        service
+            .capture_preview_baseline(runtime.as_ref(), provider_id.as_str())
+            .map_err(|error| {
+                crate::provider_manifest_sync::bounded_public_manifest_diagnostic(error.as_str())
+            })?
+    };
+    service
+        .preview_provider_manifest(baseline, provider_id.as_str())
+        .await
+        .map_err(|error| {
+            crate::provider_manifest_sync::bounded_public_manifest_diagnostic(error.as_str())
+        })
+}
+
+/// Rolls back one provider's active manifest to its previous layer (plan §R10).
+/// 把一个供应商的 active 清单回滚到 previous 层（方案 §R10）。
+///
+/// # Returns
+/// 返回值
+/// A typed rollback report with the restored revision.
+/// 返回带恢复修订号的 typed 回滚报告。
+pub(super) async fn service_rollback_provider_manifest(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    provider_id: String,
+) -> Result<crate::provider_manifest_sync::ProviderRollbackReport, String> {
+    let (runtime, _initial_configuration) =
+        public_ai_runtime_and_configuration(&state).map_err(bounded_provider_manifest_rpc_error)?;
+    crate::provider_manifest_sync::require_trusted_system_manifest_provider(
+        runtime.as_ref(),
+        provider_id.as_str(),
+    )
+    .map_err(bounded_provider_manifest_rpc_error)?;
+    let service = {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("Failed to lock service state: {error}"))?;
+        guard
+            .provider_manifest_sync
+            .clone()
+            .ok_or_else(|| String::from("Provider manifest sync service is not ready."))?
+    };
+    let _activation_guard = service.begin_activation_transaction().await;
+    // configuration_transaction serializes rollback publication with every settings mutation.
+    // configuration_transaction 把回滚发布与每次设置修改串行化。
+    let configuration_transaction = begin_public_ai_configuration_transaction().await;
+    // configuration is the latest durable/runtime snapshot at the rollback activation boundary.
+    // configuration 是回滚激活边界上的最新持久化与运行时快照。
+    let configuration = runtime
+        .configuration_snapshot()
+        .map_err(bounded_provider_manifest_rpc_error)?;
+    let report = service
+        .rollback_provider_manifest(runtime.as_ref(), &provider_id)
+        .map_err(|error| {
+            crate::provider_manifest_sync::bounded_public_manifest_diagnostic(error.as_str())
+        })?;
+    let result = service
+        .finalize_rollback_projection(
+            runtime.as_ref(),
+            &configuration,
+            report,
+            |commit| {
+                publish_public_ai_workbench_with_commit(
+                    &app,
+                    &state,
+                    runtime.as_ref(),
+                    &configuration,
+                    commit,
+                )
+                .map(|_| ())
+            },
+            || {
+                publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)
+                    .map(|_| ())
+            },
+        )
+        .await;
+    drop(configuration_transaction);
+    result.map_err(|error| {
+        crate::provider_manifest_sync::bounded_public_manifest_diagnostic(error.as_str())
+    })
+}
+
+/// Synchronizes exactly one provider through the reviewed production flow (plan §R10).
+/// 通过已审核生产流程同步精确一个供应商（方案 §R10）。
+///
+/// # Returns
+/// 返回值
+/// A typed sync report scoped to the requested provider.
+/// 返回限定到所请求供应商的 typed 同步报告。
+pub(super) async fn service_sync_provider_manifest(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    provider_id: String,
+) -> Result<crate::provider_manifest_sync::ProviderSyncReport, String> {
+    let (runtime, _initial_configuration) =
+        public_ai_runtime_and_configuration(&state).map_err(bounded_provider_manifest_rpc_error)?;
+    crate::provider_manifest_sync::require_trusted_system_manifest_provider(
+        runtime.as_ref(),
+        provider_id.as_str(),
+    )
+    .map_err(bounded_provider_manifest_rpc_error)?;
+    let service = {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("Failed to lock service state: {error}"))?;
+        guard
+            .provider_manifest_sync
+            .clone()
+            .ok_or_else(|| String::from("Provider manifest sync service is not ready."))?
+    };
+    let _activation_guard = service.begin_activation_transaction().await;
+    // providerIds retains the exact single target for classified top-level failure bookkeeping.
+    // providerIds 保留用于分类顶层失败簿记的精确单一目标。
+    let provider_ids = vec![provider_id.clone()];
+    // report records a checked failure even when Index verification or network I/O returns Err.
+    // report 即使 Index 校验或网络 I/O 返回 Err 也会记录已检查失败。
+    let report = match service.sync_one(runtime.as_ref(), &provider_id).await {
+        Ok(report) => report,
+        Err(primary) => {
+            // failureState persists only a stable classification, never the URL-bearing diagnostic.
+            // failureState 仅持久化稳定分类，绝不持久化可能含 URL 的诊断。
+            let failure_state =
+                service.record_sync_check_failures(&provider_ids, "index_check_failed");
+            let primary =
+                crate::provider_manifest_sync::bounded_public_manifest_diagnostic(primary.as_str());
+            return if failure_state.is_err() {
+                Err(format!(
+                    "Provider manifest synchronization failed: {primary} Check-state publication also failed."
+                ))
+            } else {
+                Err(format!(
+                    "Provider manifest synchronization failed: {primary}"
+                ))
+            };
+        }
+    };
+    finalize_provider_sync_report(&app, &state, runtime.as_ref(), &service, report)
+        .await
+        .map_err(bounded_provider_manifest_rpc_error)
 }
 
 /// Queries usage for one exact connection without caching it on disk.
@@ -5075,18 +7039,28 @@ pub(super) async fn service_save_public_ai_usage_refresh_settings(
             "Account usage refresh interval must be between 30 and 86400 seconds.",
         ));
     }
-    let (runtime, _) = public_ai_runtime_and_configuration(&state)?;
-    let configuration = mutate_public_ai_configuration(
+    // transaction keeps the settings writer serialized through Workbench publication.
+    // transaction 让设置写入方在工作台发布完成前保持串行化。
+    let transaction = begin_public_ai_configuration_transaction().await;
+    // currentConfiguration is the exact paired before-image for compensation.
+    // currentConfiguration 是用于补偿的精确配对前镜像。
+    let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
+    // snapshot is prepared before the atomic browser-visible state swap.
+    // snapshot 在浏览器可见状态原子交换前完成预备。
+    let (_configuration, snapshot) = mutate_public_ai_configuration_and_publish_in_transaction(
+        &app,
         &state,
+        runtime.as_ref(),
+        &current_configuration,
         "保存账号用量刷新间隔失败",
         |configuration| {
             configuration.usage_refresh_interval_seconds = request.interval_seconds;
             Ok(())
         },
-    )
-    .await?;
-    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
-    build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
+        |configuration| build_public_ai_settings_snapshot(runtime.as_ref(), configuration),
+    )?;
+    drop(transaction);
+    Ok(snapshot)
 }
 
 /// Imports and atomically persists one cc-switch pricing document.
@@ -5114,10 +7088,18 @@ pub(super) async fn service_import_public_ai_cc_switch_pricing(
     }
     let source_id = request.source_id;
     let json = request.json;
-    let (runtime, _) = public_ai_runtime_and_configuration(&state)?;
+    // transaction serializes the imported price image through Workbench publication.
+    // transaction 把导入价格镜像串行化到工作台发布完成。
+    let transaction = begin_public_ai_configuration_transaction().await;
+    // currentConfiguration is the exact paired before-image for compensation.
+    // currentConfiguration 是用于补偿的精确配对前镜像。
+    let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
     let mut imported_count = 0usize;
-    let configuration = mutate_public_ai_configuration(
+    let (_configuration, ()) = mutate_public_ai_configuration_and_publish_in_transaction(
+        &app,
         &state,
+        runtime.as_ref(),
+        &current_configuration,
         "导入 cc-switch 模型价格失败",
         |configuration| {
             imported_count = configuration
@@ -5125,9 +7107,9 @@ pub(super) async fn service_import_public_ai_cc_switch_pricing(
                 .import_cc_switch_model_pricing_json(source_id.as_str(), json.as_str())?;
             Ok(())
         },
-    )
-    .await?;
-    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
+        |_configuration| Ok(()),
+    )?;
+    drop(transaction);
     Ok(imported_count)
 }
 
@@ -5139,16 +7121,22 @@ pub(super) async fn service_save_public_ai_context_window_policy_overrides(
     request: PublicAiContextWindowPolicyOverridesSaveRequest,
 ) -> Result<PublicAiSettingsSnapshot, String> {
     request.overrides.validate()?;
-    let (runtime, _) = public_ai_runtime_and_configuration(&state)?;
+    // transaction retains ownership through the paired runtime and Workbench publication.
+    // transaction 在配对运行时与工作台发布全程保留所有权。
+    let transaction = begin_public_ai_configuration_transaction().await;
+    let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
     let overrides = request.overrides;
-    let configuration = mutate_public_ai_configuration(
+    let (_configuration, snapshot) = mutate_public_ai_configuration_and_publish_in_transaction(
+        &app,
         &state,
+        runtime.as_ref(),
+        &current_configuration,
         "保存系统级上下文窗口策略失败",
         |configuration| configuration.set_context_window_policy_overrides(overrides),
-    )
-    .await?;
-    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
-    build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
+        |configuration| build_public_ai_settings_snapshot(runtime.as_ref(), configuration),
+    )?;
+    drop(transaction);
+    Ok(snapshot)
 }
 
 /// Selects one model and remembers its exact account.
@@ -5169,6 +7157,9 @@ pub(super) async fn service_select_public_ai_model(
                 .map_err(|error| format!("Invalid conversation id `{value}`: {error}"))
         })
         .transpose()?;
+    // transaction serializes validation, durable preferences, lease revocation, and publication.
+    // transaction 串行化校验、持久偏好、租约撤销与发布。
+    let transaction = begin_public_ai_configuration_transaction().await;
     if let Some(session_id) = conversation_id {
         let guard = state
             .lock()
@@ -5205,9 +7196,11 @@ pub(super) async fn service_select_public_ai_model(
             request.connection_id
         ));
     }
-    if !current_configuration
-        .model_is_enabled(request.provider_id.as_str(), request.model_id.as_str())
-    {
+    if !runtime.model_is_enabled_for_connection(
+        &current_configuration,
+        request.connection_id.as_str(),
+        request.model_id.as_str(),
+    )? {
         return Err(format!(
             "Provider `{}` model `{}` is disabled.",
             request.provider_id, request.model_id
@@ -5230,10 +7223,17 @@ pub(super) async fn service_select_public_ai_model(
             request.connection_id, request.model_id
         ));
     }
-    let _transaction = begin_public_ai_configuration_transaction().await;
-    let (configuration, persistence_context) =
-        mutate_public_ai_configuration_with_commit_in_transaction(
+    let selected_fallback = ActiveAiModelSelection {
+        provider_id: request.provider_id.clone(),
+        model_id: request.model_id.clone(),
+        connection_id: request.connection_id.clone(),
+    };
+    let (_configuration, snapshot) =
+        mutate_public_ai_configuration_and_publish_sessions_in_transaction(
+            &app,
             &state,
+            runtime.as_ref(),
+            &current_configuration,
             "选择公共 AI 模型失败",
             |configuration| {
                 configuration.connection_graph.remember_model_connection(
@@ -5258,54 +7258,30 @@ pub(super) async fn service_select_public_ai_model(
                 }
                 Ok(())
             },
-            |guard, configuration| {
-                // Commit the session model before publishing a workbench snapshot so a follow-up request cannot observe the old route.
-                // 在发布工作台快照前先提交会话模型，避免后续请求观察到旧路由。
-                let persistence_context = if let Some(session_id) = conversation_id {
-                    let workspace = guard
-                        .workspace_snapshot
-                        .as_mut()
-                        .ok_or_else(|| String::from("Workspace is not initialized."))?;
+            |configuration| build_public_ai_settings_snapshot(runtime.as_ref(), configuration),
+            |workspace| {
+                if let Some(session_id) = conversation_id {
                     let runtime_state = workspace
                         .session_runtime_state
                         .get_mut(&session_id)
                         .ok_or_else(|| {
                             format!("Conversation `{session_id}` has no runtime state.")
                         })?;
-                    runtime_state.active_provider_id = Some(request.provider_id.clone());
-                    runtime_state.active_connection_id = Some(request.connection_id.clone());
-                    runtime_state.active_model_id = Some(request.model_id.clone());
+                    runtime_state.active_provider_id = Some(selected_fallback.provider_id.clone());
+                    runtime_state.active_connection_id =
+                        Some(selected_fallback.connection_id.clone());
+                    runtime_state.active_model_id = Some(selected_fallback.model_id.clone());
+                    runtime_state.provider_route_lease = None;
                     runtime_state.updated_at = crate::current_unix_millis_text();
-                    let controller_runtime = guard.controller_runtime.clone();
-                    let workspace_snapshot = guard.workspace_snapshot.clone();
-                    Some((controller_runtime, session_id, workspace_snapshot))
+                    Ok(BTreeSet::from([session_id]))
                 } else {
-                    None
-                };
-                Ok::<_, String>((configuration.clone(), persistence_context))
+                    Ok(BTreeSet::new())
+                }
             },
+            "model_selection",
         )?;
-    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
-    if let Some((Some(controller_runtime), session_id, Some(workspace_snapshot))) =
-        persistence_context
-        && let Some(addon_state) = crate::session_addon_state_from_workspace_snapshot(
-            &workspace_snapshot,
-            session_id,
-            &[crate::SessionAddonNamespace::RuntimeControls],
-        )
-    {
-        crate::spawn_workspace_session_addon_state_persist_task(
-            app.clone(),
-            state.clone(),
-            controller_runtime,
-            workspace_snapshot,
-            session_id,
-            addon_state,
-            vec![crate::SessionAddonNamespace::RuntimeControls],
-            Some(String::from("model_selection")),
-        );
-    }
-    build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
+    drop(transaction);
+    Ok(snapshot)
 }
 
 /// Saves one provider-model-protocol override set after validating every matching account route.
@@ -5341,8 +7317,11 @@ pub(super) async fn service_save_public_ai_model_overrides(
             overrides,
         )?;
     }
-    let configuration = mutate_public_ai_configuration_in_transaction(
+    let (_configuration, snapshot) = mutate_public_ai_configuration_and_publish_in_transaction(
+        &app,
         &state,
+        runtime.as_ref(),
+        &current_configuration,
         "保存公共 AI 模型覆盖失败",
         |configuration| {
             if let Some(overrides) = overrides.clone() {
@@ -5352,10 +7331,10 @@ pub(super) async fn service_save_public_ai_model_overrides(
             }
             Ok(())
         },
+        |configuration| build_public_ai_settings_snapshot(runtime.as_ref(), configuration),
     )?;
     drop(transaction);
-    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
-    build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
+    Ok(snapshot)
 }
 
 /// Saves one provider-model access choice and reconciles invalid active selections.
@@ -5365,71 +7344,122 @@ pub(super) async fn service_save_public_ai_model_enabled(
     state: SharedServiceBridgeState,
     request: PublicAiModelEnabledSaveRequest,
 ) -> Result<PublicAiSettingsSnapshot, String> {
-    let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
-    let catalogs = runtime.catalog_snapshot()?;
-    if !runtime.provider_model_is_supported(
-        &current_configuration,
-        request.provider_id.as_str(),
-        request.model_id.as_str(),
-    )? {
+    let (runtime, _) = public_ai_runtime_and_configuration(&state)?;
+    // transaction keeps manifest publication, support validation, persistence, and response projection ordered.
+    // transaction 让 Manifest 发布、支持校验、持久化与响应投影保持有序。
+    let _transaction = begin_public_ai_configuration_transaction().await;
+    // current_configuration is re-read only after transaction serialization.
+    // current_configuration 仅在事务串行化后重新读取。
+    let current_configuration = runtime.configuration_snapshot()?;
+    // settings_catalog captures conversation and provider-tool model membership from one generation.
+    // settings_catalog 从同一代际捕获对话与供应商工具模型成员关系。
+    let settings_catalog = runtime.settings_catalog_snapshot(&current_configuration)?;
+    // model_supported accepts manual, conversation-catalog, or signed template declarations exactly.
+    // model_supported 精确接受手工、对话目录或签名模板声明。
+    let model_supported = current_configuration
+        .custom_model(request.provider_id.as_str(), request.model_id.as_str())
+        .is_some()
+        || current_configuration
+            .connection_graph
+            .connections
+            .values()
+            .filter(|connection| connection.provider_id == request.provider_id)
+            .any(|connection| {
+                settings_catalog
+                    .model_support_catalogs
+                    .get(connection.id.as_str())
+                    .is_some_and(|catalog| {
+                        catalog
+                            .models
+                            .iter()
+                            .any(|model| model.id == request.model_id)
+                    })
+            })
+        || settings_catalog
+            .provider_tool_template_models
+            .iter()
+            .any(|model| {
+                model.provider_id == request.provider_id && model.model_id == request.model_id
+            });
+    if !model_supported {
         return Err(format!(
             "Provider `{}` does not support model `{}`.",
             request.provider_id, request.model_id
         ));
     }
-    let configuration = mutate_public_ai_configuration(
-        &state,
-        "保存公共 AI 模型启用状态失败",
-        |configuration| {
-            if request.restore {
-                configuration
-                    .restore_model_enabled(request.provider_id.as_str(), request.model_id.as_str());
-            } else {
-                configuration.set_model_enabled(
-                    request.provider_id.as_str(),
-                    request.model_id.as_str(),
-                    request.enabled,
-                );
-            }
-            if !configuration
-                .model_is_enabled(request.provider_id.as_str(), request.model_id.as_str())
-                && configuration.active.as_ref().is_some_and(|selection| {
-                    selection.provider_id == request.provider_id
-                        && selection.model_id == request.model_id
-                })
-            {
-                configuration.active = first_enabled_model_selection(configuration, &catalogs);
-            }
-            Ok(())
-        },
-    )
-    .await?;
-    if !request.enabled {
-        let fallback = first_enabled_model_selection(&configuration, &catalogs);
-        let mut guard = state
-            .lock()
-            .map_err(|error| format!("Failed to lock service state: {error}"))?;
-        if let Some(workspace) = guard.workspace_snapshot.as_mut() {
-            for runtime_state in workspace.session_runtime_state.values_mut() {
-                if runtime_state.active_provider_id.as_deref() == Some(request.provider_id.as_str())
-                    && runtime_state.active_model_id.as_deref() == Some(request.model_id.as_str())
-                {
-                    runtime_state.active_provider_id = fallback
-                        .as_ref()
-                        .map(|selection| selection.provider_id.clone());
-                    runtime_state.active_connection_id = fallback
-                        .as_ref()
-                        .map(|selection| selection.connection_id.clone());
-                    runtime_state.active_model_id = fallback
-                        .as_ref()
-                        .map(|selection| selection.model_id.clone());
-                    runtime_state.updated_at = crate::current_unix_millis_text();
-                }
-            }
-        }
+    // catalogs retains the same generation used for support validation and fallback selection.
+    // catalogs 保留用于支持校验与回退选择的同一代际。
+    let catalogs = settings_catalog.catalogs;
+    // candidateConfiguration freezes restore/default semantics before any durable activation.
+    // candidateConfiguration 在任何持久激活前冻结恢复与默认值语义。
+    let mut candidate_configuration = current_configuration.clone();
+    if request.restore {
+        candidate_configuration
+            .restore_model_enabled(request.provider_id.as_str(), request.model_id.as_str());
+    } else {
+        candidate_configuration.set_model_enabled(
+            request.provider_id.as_str(),
+            request.model_id.as_str(),
+            request.enabled,
+        );
     }
-    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
-    build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
+    // modelEffectivelyDisabled follows the resolved manifest default after a restore request.
+    // modelEffectivelyDisabled 在恢复请求后遵循已解析 Manifest 默认值。
+    let model_effectively_disabled = !runtime.model_is_enabled(
+        &candidate_configuration,
+        request.provider_id.as_str(),
+        request.model_id.as_str(),
+    );
+    // fallback is one deterministic enabled route and never probes another protocol.
+    // fallback 是一个确定性的已启用路由，绝不探测其他协议。
+    let fallback = if model_effectively_disabled {
+        first_enabled_model_selection(runtime.as_ref(), &candidate_configuration, &catalogs)?
+    } else {
+        None
+    };
+    let active_model_is_disabled =
+        candidate_configuration
+            .active
+            .as_ref()
+            .is_some_and(|selection| {
+                selection.provider_id == request.provider_id
+                    && selection.model_id == request.model_id
+                    && model_effectively_disabled
+            });
+    if active_model_is_disabled {
+        candidate_configuration.active = fallback.clone();
+    }
+    let (_configuration, snapshot) =
+        mutate_public_ai_configuration_and_publish_sessions_in_transaction(
+            &app,
+            &state,
+            runtime.as_ref(),
+            &current_configuration,
+            "保存公共 AI 模型启用状态失败",
+            |configuration| {
+                *configuration = candidate_configuration.clone();
+                Ok(())
+            },
+            |configuration| build_public_ai_settings_snapshot(runtime.as_ref(), configuration),
+            |workspace| {
+                Ok(if model_effectively_disabled {
+                    reconcile_explicitly_revoked_session_model_selections(
+                        workspace,
+                        fallback.as_ref(),
+                        |_session_id, runtime_state| {
+                            runtime_state.active_provider_id.as_deref()
+                                == Some(request.provider_id.as_str())
+                                && runtime_state.active_model_id.as_deref()
+                                    == Some(request.model_id.as_str())
+                        },
+                    )
+                } else {
+                    BTreeSet::new()
+                })
+            },
+            "provider_model_access_revoked",
+        )?;
+    Ok(snapshot)
 }
 
 /// Saves one provider-wide model access state and reconciles every affected active selection.
@@ -5449,83 +7479,108 @@ pub(super) async fn service_save_public_ai_provider_models_enabled(
     state: SharedServiceBridgeState,
     request: PublicAiProviderModelsEnabledSaveRequest,
 ) -> Result<PublicAiSettingsSnapshot, String> {
-    let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
-    let catalogs = runtime.catalog_snapshot()?;
-    // support_configuration removes account visibility so provider-wide switches remain reversible.
-    // support_configuration 移除账号可见性，使供应商范围开关始终可逆。
-    let mut support_configuration = current_configuration.clone();
-    support_configuration
-        .connection_model_access_policies
-        .clear();
-    let support_catalogs = runtime.resolved_model_catalog_snapshot(&support_configuration)?;
-    let mut model_ids = support_configuration
+    let (runtime, _) = public_ai_runtime_and_configuration(&state)?;
+    // transaction keeps manifest publication, model enumeration, persistence, and response projection ordered.
+    // transaction 让 Manifest 发布、模型枚举、持久化与响应投影保持有序。
+    let _transaction = begin_public_ai_configuration_transaction().await;
+    // current_configuration is re-read only after transaction serialization.
+    // current_configuration 仅在事务串行化后重新读取。
+    let current_configuration = runtime.configuration_snapshot()?;
+    // settings_catalog contains effective and access-independent inventories from one generation.
+    // settings_catalog 包含来自同一代际的有效目录与独立于访问开关的目录。
+    let settings_catalog = runtime.settings_catalog_snapshot(&current_configuration)?;
+    // model_ids is the complete provider-owned conversation and template management union.
+    // model_ids 是供应商持有的完整对话与模板管理并集。
+    let mut model_ids = current_configuration
         .connection_graph
         .connections
         .values()
         .filter(|connection| connection.provider_id == request.provider_id)
-        .filter_map(|connection| support_catalogs.get(connection.id.as_str()))
+        .filter_map(|connection| {
+            settings_catalog
+                .model_support_catalogs
+                .get(connection.id.as_str())
+        })
         .flat_map(|catalog| catalog.models.iter().map(|model| model.id.clone()))
         .collect::<BTreeSet<_>>();
-    if let Some(manual_models) = support_configuration
+    if let Some(manual_models) = current_configuration
         .custom_models
         .get(request.provider_id.as_str())
     {
         model_ids.extend(manual_models.keys().cloned());
     }
+    // Template-only media models participate in the same provider-wide publication switch.
+    // 仅模板媒体模型参与相同的供应商范围发布开关。
+    model_ids.extend(
+        settings_catalog
+            .provider_tool_template_models
+            .iter()
+            .filter(|model| model.provider_id == request.provider_id)
+            .map(|model| model.model_id.clone()),
+    );
     if model_ids.is_empty() {
         return Err(format!(
             "Provider `{}` does not expose synchronized models.",
             request.provider_id
         ));
     }
-    let configuration = mutate_public_ai_configuration(
-        &state,
-        "批量保存公共 AI 模型启用状态失败",
-        |configuration| {
-            for model_id in &model_ids {
-                configuration.set_model_enabled(
-                    request.provider_id.as_str(),
-                    model_id.as_str(),
-                    request.enabled,
-                );
-            }
-            if !request.enabled
-                && configuration
-                    .active
-                    .as_ref()
-                    .is_some_and(|selection| selection.provider_id == request.provider_id)
-            {
-                configuration.active = first_enabled_model_selection(configuration, &catalogs);
-            }
-            Ok(())
-        },
-    )
-    .await?;
-    if !request.enabled {
-        let fallback = first_enabled_model_selection(&configuration, &catalogs);
-        let mut guard = state
-            .lock()
-            .map_err(|error| format!("Failed to lock service state: {error}"))?;
-        if let Some(workspace) = guard.workspace_snapshot.as_mut() {
-            for runtime_state in workspace.session_runtime_state.values_mut() {
-                if runtime_state.active_provider_id.as_deref() == Some(request.provider_id.as_str())
-                {
-                    runtime_state.active_provider_id = fallback
-                        .as_ref()
-                        .map(|selection| selection.provider_id.clone());
-                    runtime_state.active_connection_id = fallback
-                        .as_ref()
-                        .map(|selection| selection.connection_id.clone());
-                    runtime_state.active_model_id = fallback
-                        .as_ref()
-                        .map(|selection| selection.model_id.clone());
-                    runtime_state.updated_at = crate::current_unix_millis_text();
-                }
-            }
-        }
+    // catalogs retains the same effective generation for fallback selection after the mutation.
+    // catalogs 为变更后的回退选择保留同一有效代际。
+    let catalogs = settings_catalog.catalogs;
+    // candidateConfiguration owns the complete provider-wide access change before activation.
+    // candidateConfiguration 在激活前持有完整供应商范围访问变更。
+    let mut candidate_configuration = current_configuration.clone();
+    for model_id in &model_ids {
+        candidate_configuration.set_model_enabled(
+            request.provider_id.as_str(),
+            model_id.as_str(),
+            request.enabled,
+        );
     }
-    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
-    build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
+    // fallback is computed once from the exact post-mutation configuration and catalog generation.
+    // fallback 从精确的修改后配置与目录代际中只计算一次。
+    let fallback = if request.enabled {
+        None
+    } else {
+        first_enabled_model_selection(runtime.as_ref(), &candidate_configuration, &catalogs)?
+    };
+    if !request.enabled
+        && candidate_configuration
+            .active
+            .as_ref()
+            .is_some_and(|selection| selection.provider_id == request.provider_id)
+    {
+        candidate_configuration.active = fallback.clone();
+    }
+    let (_configuration, snapshot) =
+        mutate_public_ai_configuration_and_publish_sessions_in_transaction(
+            &app,
+            &state,
+            runtime.as_ref(),
+            &current_configuration,
+            "批量保存公共 AI 模型启用状态失败",
+            |configuration| {
+                *configuration = candidate_configuration.clone();
+                Ok(())
+            },
+            |configuration| build_public_ai_settings_snapshot(runtime.as_ref(), configuration),
+            |workspace| {
+                Ok(if request.enabled {
+                    BTreeSet::new()
+                } else {
+                    reconcile_explicitly_revoked_session_model_selections(
+                        workspace,
+                        fallback.as_ref(),
+                        |_session_id, runtime_state| {
+                            runtime_state.active_provider_id.as_deref()
+                                == Some(request.provider_id.as_str())
+                        },
+                    )
+                })
+            },
+            "provider_model_access_revoked",
+        )?;
+    Ok(snapshot)
 }
 
 /// Saves one internal model operation switch without changing conversation availability.
@@ -5556,6 +7611,9 @@ pub(super) async fn service_save_public_ai_internal_model_enabled(
             request.operation.as_str()
         ));
     }
+    // transaction serializes validation, activation, and Workbench publication.
+    // transaction 串行化校验、激活与工作台发布。
+    let transaction = begin_public_ai_configuration_transaction().await;
     let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
     let providers = runtime.effective_providers(&current_configuration)?;
     let catalogs = runtime.catalog_snapshot()?;
@@ -5575,8 +7633,11 @@ pub(super) async fn service_save_public_ai_internal_model_enabled(
             request.operation.as_str()
         ));
     }
-    let configuration = mutate_public_ai_configuration(
+    let (_configuration, snapshot) = mutate_public_ai_configuration_and_publish_in_transaction(
+        &app,
         &state,
+        runtime.as_ref(),
+        &current_configuration,
         "保存内部推理模型启用状态失败",
         |configuration| {
             configuration.set_internal_model_enabled(
@@ -5587,10 +7648,10 @@ pub(super) async fn service_save_public_ai_internal_model_enabled(
             );
             Ok(())
         },
-    )
-    .await?;
-    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
-    build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
+        |configuration| build_public_ai_settings_snapshot(runtime.as_ref(), configuration),
+    )?;
+    drop(transaction);
+    Ok(snapshot)
 }
 
 /// Saves operation-scoped internal defaults after validating every exact runtime route.
@@ -5621,6 +7682,9 @@ pub(super) async fn service_save_public_ai_internal_model_overrides(
             request.operation.as_str()
         ));
     }
+    // transaction serializes validation, activation, and Workbench publication.
+    // transaction 串行化校验、激活与工作台发布。
+    let transaction = begin_public_ai_configuration_transaction().await;
     let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
     let providers = runtime.effective_providers(&current_configuration)?;
     let catalogs = runtime.catalog_snapshot()?;
@@ -5648,8 +7712,11 @@ pub(super) async fn service_save_public_ai_internal_model_overrides(
             &request.overrides,
         )?;
     }
-    let configuration = mutate_public_ai_configuration(
+    let (_configuration, snapshot) = mutate_public_ai_configuration_and_publish_in_transaction(
+        &app,
         &state,
+        runtime.as_ref(),
+        &current_configuration,
         "保存内部推理模型覆盖失败",
         |configuration| {
             let key = PersistedAiConfiguration::internal_model_operation_key(
@@ -5666,10 +7733,10 @@ pub(super) async fn service_save_public_ai_internal_model_overrides(
             }
             Ok(())
         },
-    )
-    .await?;
-    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
-    build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
+        |configuration| build_public_ai_settings_snapshot(runtime.as_ref(), configuration),
+    )?;
+    drop(transaction);
+    Ok(snapshot)
 }
 
 /// Saves or clears one exact route in a consumer-isolated inference profile.
@@ -5711,6 +7778,9 @@ pub(super) async fn service_save_public_ai_inference_route(
             ));
         }
     }
+    // transaction serializes validation, activation, and Workbench publication.
+    // transaction 串行化校验、激活与工作台发布。
+    let transaction = begin_public_ai_configuration_transaction().await;
     let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
     if let Some(route) = request.route.as_ref() {
         if route.operation != request.operation {
@@ -5730,8 +7800,13 @@ pub(super) async fn service_save_public_ai_inference_route(
             &selection.model.capabilities,
         )?;
     }
-    let configuration =
-        mutate_public_ai_configuration(&state, "保存内部推理路由失败", |configuration| {
+    let (_configuration, snapshot) = mutate_public_ai_configuration_and_publish_in_transaction(
+        &app,
+        &state,
+        runtime.as_ref(),
+        &current_configuration,
+        "保存内部推理路由失败",
+        |configuration| {
             if let Some(route) = request.route.as_ref() {
                 // Persist capability enablement and route binding in one configuration mutation.
                 // 在一次配置变更中同时持久化能力启用与路由绑定。
@@ -5766,10 +7841,11 @@ pub(super) async fn service_save_public_ai_inference_route(
                 }
             }
             Ok(())
-        })
-        .await?;
-    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
-    build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
+        },
+        |configuration| build_public_ai_settings_snapshot(runtime.as_ref(), configuration),
+    )?;
+    drop(transaction);
+    Ok(snapshot)
 }
 
 /// Enables the exact internal operation owned by one selected inference route.
@@ -6357,6 +8433,9 @@ pub(super) async fn service_save_public_ai_provider_tool_selection(
     state: SharedServiceBridgeState,
     request: PublicAiProviderToolSelectionSaveRequest,
 ) -> Result<PublicAiSettingsSnapshot, String> {
+    // transaction serializes target validation through Workbench publication.
+    // transaction 把目标校验串行化到工作台发布完成。
+    let transaction = begin_public_ai_configuration_transaction().await;
     let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
     if let Some(selection) = request.selection.as_ref() {
         let available = runtime.available_provider_tool_targets(&current_configuration)?;
@@ -6372,8 +8451,11 @@ pub(super) async fn service_save_public_ai_provider_tool_selection(
             ));
         }
     }
-    let configuration = mutate_public_ai_configuration(
+    let (_configuration, snapshot) = mutate_public_ai_configuration_and_publish_in_transaction(
+        &app,
         &state,
+        runtime.as_ref(),
+        &current_configuration,
         "保存公共 AI 工具目标失败",
         |configuration| {
             if let Some(selection) = request.selection.clone() {
@@ -6387,10 +8469,10 @@ pub(super) async fn service_save_public_ai_provider_tool_selection(
             }
             Ok(())
         },
-    )
-    .await?;
-    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
-    build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
+        |configuration| build_public_ai_settings_snapshot(runtime.as_ref(), configuration),
+    )?;
+    drop(transaction);
+    Ok(snapshot)
 }
 
 /// Runs one real search or extraction diagnostic through the selected row without changing defaults.
@@ -6437,6 +8519,9 @@ pub(super) async fn service_save_public_ai_provider_tool_capability_enabled(
     state: SharedServiceBridgeState,
     request: PublicAiProviderToolCapabilityEnabledSaveRequest,
 ) -> Result<PublicAiSettingsSnapshot, String> {
+    // transaction serializes capability validation through Workbench publication.
+    // transaction 把能力校验串行化到工作台发布完成。
+    let transaction = begin_public_ai_configuration_transaction().await;
     let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
     let available = runtime.available_provider_tool_targets(&current_configuration)?;
     if request.enabled
@@ -6449,8 +8534,11 @@ pub(super) async fn service_save_public_ai_provider_tool_capability_enabled(
             request.capability
         ));
     }
-    let configuration = mutate_public_ai_configuration(
+    let (_configuration, snapshot) = mutate_public_ai_configuration_and_publish_in_transaction(
+        &app,
         &state,
+        runtime.as_ref(),
+        &current_configuration,
         "保存公共 AI 工具能力启用状态失败",
         |configuration| {
             if request.enabled {
@@ -6464,15 +8552,15 @@ pub(super) async fn service_save_public_ai_provider_tool_capability_enabled(
             }
             Ok(())
         },
-    )
-    .await?;
-    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
-    build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
+        |configuration| build_public_ai_settings_snapshot(runtime.as_ref(), configuration),
+    )?;
+    drop(transaction);
+    Ok(snapshot)
 }
 
 /// Returns the effective single-select provider tool configuration for one session.
 /// 返回单个会话生效的供应商工具单选配置。
-pub(super) fn service_public_ai_session_provider_tool_selections(
+pub(super) async fn service_public_ai_session_provider_tool_selections(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     conversation_id: String,
@@ -6480,129 +8568,192 @@ pub(super) fn service_public_ai_session_provider_tool_selections(
     let session_id = conversation_id
         .parse::<crate::SessionId>()
         .map_err(|error| format!("Invalid conversation id `{conversation_id}`: {error}"))?;
+    // transaction freezes provider-tool defaults through optional lazy-state publication.
+    // transaction 在可选惰性状态发布期间冻结供应商工具默认值。
+    let transaction = begin_public_ai_configuration_transaction().await;
     let (runtime, configuration) = public_ai_runtime_and_configuration(&state)?;
-    let (enabled_capabilities, selections, persistence_context) = {
-        let mut guard = state
+    // preview determines whether the authoritative session row requires any lazy migration.
+    // preview 判断权威会话行是否需要任何惰性迁移。
+    let (preview, requires_publication) = {
+        let guard = state
             .lock()
             .map_err(|error| format!("Failed to lock service state: {error}"))?;
         let workspace = guard
             .workspace_snapshot
-            .as_mut()
+            .as_ref()
             .ok_or_else(|| String::from("Workspace is not initialized."))?;
-        let runtime_state = workspace
-            .session_runtime_state
-            .get_mut(&session_id)
-            .ok_or_else(|| format!("Conversation `{session_id}` has no runtime state."))?;
-        let mut state_changed = false;
-        if runtime_state.provider_tool_settings_initialized {
-            if !runtime_state.provider_tool_selections_overridden {
-                let next_selections = configuration
-                    .provider_tool_selections
-                    .iter()
-                    .map(|(capability, selection)| {
-                        (
-                            provider_tool_capability_key(*capability),
-                            vulcan_workbench_model::SessionProviderToolTargetSelection {
-                                connection_id: selection.connection_id.clone(),
-                                target_id: selection.target_id.clone(),
-                            },
-                        )
-                    })
-                    .collect();
-                let next_enabled_capabilities = configuration
-                    .provider_tool_enabled_capabilities
-                    .iter()
-                    .map(|capability| provider_tool_capability_key(*capability))
-                    .collect();
-                if runtime_state.provider_tool_selections != next_selections
-                    || runtime_state.provider_tool_enabled_capabilities != next_enabled_capabilities
-                {
-                    runtime_state.provider_tool_selections = next_selections;
-                    runtime_state.provider_tool_enabled_capabilities = next_enabled_capabilities;
-                    state_changed = true;
-                }
-            }
-        } else {
-            if runtime_state.provider_tool_selections_overridden {
-                let next_enabled_capabilities = runtime_state
-                    .provider_tool_selections
-                    .keys()
-                    .cloned()
-                    .collect();
-                if runtime_state.provider_tool_enabled_capabilities != next_enabled_capabilities {
-                    runtime_state.provider_tool_enabled_capabilities = next_enabled_capabilities;
-                }
-            } else {
-                runtime_state.provider_tool_selections = configuration
-                    .provider_tool_selections
-                    .iter()
-                    .map(|(capability, selection)| {
-                        (
-                            provider_tool_capability_key(*capability),
-                            vulcan_workbench_model::SessionProviderToolTargetSelection {
-                                connection_id: selection.connection_id.clone(),
-                                target_id: selection.target_id.clone(),
-                            },
-                        )
-                    })
-                    .collect();
-                runtime_state.provider_tool_enabled_capabilities = configuration
-                    .provider_tool_enabled_capabilities
-                    .iter()
-                    .map(|capability| provider_tool_capability_key(*capability))
-                    .collect();
-            }
-            runtime_state.provider_tool_settings_initialized = true;
-            state_changed = true;
-        }
-        if state_changed {
-            runtime_state.updated_at = crate::current_unix_millis_text();
-        }
-        let enabled_capabilities =
-            session_provider_tool_enabled_capabilities_from_runtime(runtime_state)?;
-        let selections = session_provider_tool_selections_from_runtime(runtime_state)?;
-        let persistence_context = state_changed.then(|| {
-            (
-                guard.controller_runtime.clone(),
-                guard.workspace_snapshot.clone(),
-            )
-        });
-        (enabled_capabilities, selections, persistence_context)
-    };
-    if let Some((Some(controller_runtime), Some(workspace_snapshot))) = persistence_context
-        && let Some(addon_state) = crate::session_addon_state_from_workspace_snapshot(
-            &workspace_snapshot,
-            session_id,
-            &[crate::SessionAddonNamespace::RuntimeControls],
+        let mut planned_runtime_state =
+            workspace
+                .session_runtime_state
+                .get(&session_id)
+                .cloned()
+                .ok_or_else(|| format!("Conversation `{session_id}` has no runtime state."))?;
+        let (enabled_capabilities, selections, state_changed) =
+            reconcile_session_provider_tool_settings(&mut planned_runtime_state, &configuration)?;
+        let conflicts = provider_tool_session_conflicts(
+            runtime.as_ref(),
+            &configuration,
+            &enabled_capabilities,
+            &selections,
+        )?;
+        (
+            PublicAiSessionProviderToolSettingsSnapshot {
+                enabled_capabilities,
+                selections,
+                conflicts,
+            },
+            state_changed,
         )
-    {
-        crate::spawn_workspace_session_addon_state_persist_task(
-            app,
-            state,
-            controller_runtime,
-            workspace_snapshot,
-            session_id,
-            addon_state,
-            vec![crate::SessionAddonNamespace::RuntimeControls],
-            Some(String::from("provider_tool_settings_initialize")),
-        );
+    };
+    if !requires_publication {
+        drop(transaction);
+        return Ok(preview);
     }
-    let conflicts = provider_tool_session_conflicts(
+    // committedSnapshot is written only by the detached reconciliation that wins publication.
+    // committedSnapshot 仅由赢得发布的独立协调写入。
+    let committed_snapshot = std::cell::RefCell::new(None);
+    publish_public_ai_workbench_with_workspace_reconciliation_and_commit(
+        &app,
+        &state,
         runtime.as_ref(),
         &configuration,
-        &enabled_capabilities,
-        &selections,
+        |workspace| {
+            let runtime_state = workspace
+                .session_runtime_state
+                .get_mut(&session_id)
+                .ok_or_else(|| format!("Conversation `{session_id}` has no runtime state."))?;
+            let (enabled_capabilities, selections, state_changed) =
+                reconcile_session_provider_tool_settings(runtime_state, &configuration)?;
+            let conflicts = provider_tool_session_conflicts(
+                runtime.as_ref(),
+                &configuration,
+                &enabled_capabilities,
+                &selections,
+            )?;
+            committed_snapshot.replace(Some(PublicAiSessionProviderToolSettingsSnapshot {
+                enabled_capabilities,
+                selections,
+                conflicts,
+            }));
+            Ok(PublicAiWorkspaceReconciliation::workspace_only(
+                state_changed.then_some(session_id).into_iter().collect(),
+            ))
+        },
+        "provider_tool_settings_initialize",
+        || Ok(()),
     )?;
-    Ok(PublicAiSessionProviderToolSettingsSnapshot {
-        enabled_capabilities,
-        selections,
-        conflicts,
+    drop(transaction);
+    committed_snapshot.into_inner().ok_or_else(|| {
+        String::from("Provider tool session settings publication produced no committed snapshot.")
     })
+}
+
+/// Reconciles one session's persisted provider-tool fields against current global defaults.
+/// 根据当前全局默认值协调一个会话的持久供应商工具字段。
+///
+/// # Parameters
+/// 参数
+/// `runtime_state` is a detached or authoritative session row; `configuration` owns the current
+/// default selections and enabled capability set.
+/// `runtime_state` 是独立或权威会话行；`configuration` 持有当前默认选择与已启用能力集合。
+///
+/// # Returns
+/// 返回值
+/// The normalized enabled capabilities, target selections, and whether persisted fields changed.
+/// 返回规范化的已启用能力、目标选择，以及持久字段是否发生变化。
+fn reconcile_session_provider_tool_settings(
+    runtime_state: &mut vulcan_workbench_model::SessionRuntimeStateEntry,
+    configuration: &PersistedAiConfiguration,
+) -> Result<
+    (
+        BTreeSet<ProviderToolCapabilityKind>,
+        BTreeMap<ProviderToolCapabilityKind, ProviderToolTargetSelection>,
+        bool,
+    ),
+    String,
+> {
+    // stateChanged controls both durable persistence and Workbench publication.
+    // stateChanged 同时控制持久化与工作台发布。
+    let mut state_changed = false;
+    if runtime_state.provider_tool_settings_initialized {
+        if !runtime_state.provider_tool_selections_overridden {
+            // nextSelections mirrors the exact current global target defaults.
+            // nextSelections 镜像精确的当前全局目标默认值。
+            let next_selections = configuration
+                .provider_tool_selections
+                .iter()
+                .map(|(capability, selection)| {
+                    (
+                        provider_tool_capability_key(*capability),
+                        vulcan_workbench_model::SessionProviderToolTargetSelection {
+                            connection_id: selection.connection_id.clone(),
+                            target_id: selection.target_id.clone(),
+                        },
+                    )
+                })
+                .collect();
+            // nextEnabledCapabilities mirrors the exact current global enabled defaults.
+            // nextEnabledCapabilities 镜像精确的当前全局启用默认值。
+            let next_enabled_capabilities = configuration
+                .provider_tool_enabled_capabilities
+                .iter()
+                .map(|capability| provider_tool_capability_key(*capability))
+                .collect();
+            if runtime_state.provider_tool_selections != next_selections
+                || runtime_state.provider_tool_enabled_capabilities != next_enabled_capabilities
+            {
+                runtime_state.provider_tool_selections = next_selections;
+                runtime_state.provider_tool_enabled_capabilities = next_enabled_capabilities;
+                state_changed = true;
+            }
+        }
+    } else {
+        if runtime_state.provider_tool_selections_overridden {
+            // nextEnabledCapabilities migrates the legacy implicit enabled-set representation.
+            // nextEnabledCapabilities 迁移旧版隐式启用集合表示。
+            let next_enabled_capabilities = runtime_state
+                .provider_tool_selections
+                .keys()
+                .cloned()
+                .collect();
+            if runtime_state.provider_tool_enabled_capabilities != next_enabled_capabilities {
+                runtime_state.provider_tool_enabled_capabilities = next_enabled_capabilities;
+            }
+        } else {
+            runtime_state.provider_tool_selections = configuration
+                .provider_tool_selections
+                .iter()
+                .map(|(capability, selection)| {
+                    (
+                        provider_tool_capability_key(*capability),
+                        vulcan_workbench_model::SessionProviderToolTargetSelection {
+                            connection_id: selection.connection_id.clone(),
+                            target_id: selection.target_id.clone(),
+                        },
+                    )
+                })
+                .collect();
+            runtime_state.provider_tool_enabled_capabilities = configuration
+                .provider_tool_enabled_capabilities
+                .iter()
+                .map(|capability| provider_tool_capability_key(*capability))
+                .collect();
+        }
+        runtime_state.provider_tool_settings_initialized = true;
+        state_changed = true;
+    }
+    if state_changed {
+        runtime_state.updated_at = crate::current_unix_millis_text();
+    }
+    let enabled_capabilities =
+        session_provider_tool_enabled_capabilities_from_runtime(runtime_state)?;
+    let selections = session_provider_tool_selections_from_runtime(runtime_state)?;
+    Ok((enabled_capabilities, selections, state_changed))
 }
 
 /// Saves the complete single-select provider tool configuration for one session.
 /// 保存单个会话完整的供应商工具单选配置。
-pub(super) fn service_save_public_ai_session_provider_tool_selections(
+pub(super) async fn service_save_public_ai_session_provider_tool_selections(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     request: PublicAiSessionProviderToolSelectionsSaveRequest,
@@ -6616,6 +8767,9 @@ pub(super) fn service_save_public_ai_session_provider_tool_selections(
                 request.conversation_id
             )
         })?;
+    // transaction keeps target validation and detached workspace publication on one generation.
+    // transaction 让目标校验与独立工作区发布保持在同一代际。
+    let transaction = begin_public_ai_configuration_transaction().await;
     let (runtime, configuration) = public_ai_runtime_and_configuration(&state)?;
     validate_provider_tool_session_settings(
         runtime.as_ref(),
@@ -6623,68 +8777,53 @@ pub(super) fn service_save_public_ai_session_provider_tool_selections(
         &request.enabled_capabilities,
         &request.selections,
     )?;
-    let persistence_context = {
-        let mut guard = state
-            .lock()
-            .map_err(|error| format!("Failed to lock service state: {error}"))?;
-        let workspace = guard
-            .workspace_snapshot
-            .as_mut()
-            .ok_or_else(|| String::from("Workspace is not initialized."))?;
-        let runtime_state = workspace
-            .session_runtime_state
-            .get_mut(&session_id)
-            .ok_or_else(|| format!("Conversation `{session_id}` has no runtime state."))?;
-        runtime_state.provider_tool_selections = request
-            .selections
-            .iter()
-            .map(|(capability, selection)| {
-                (
-                    provider_tool_capability_key(*capability),
-                    vulcan_workbench_model::SessionProviderToolTargetSelection {
-                        connection_id: selection.connection_id.clone(),
-                        target_id: selection.target_id.clone(),
-                    },
-                )
-            })
-            .collect();
-        runtime_state.provider_tool_enabled_capabilities = request
-            .enabled_capabilities
-            .iter()
-            .map(|capability| provider_tool_capability_key(*capability))
-            .collect();
-        runtime_state.provider_tool_settings_initialized = true;
-        runtime_state.provider_tool_selections_overridden = true;
-        runtime_state.updated_at = crate::current_unix_millis_text();
-        (
-            guard.controller_runtime.clone(),
-            guard.workspace_snapshot.clone(),
-        )
-    };
-    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
-    if let (Some(controller_runtime), Some(workspace_snapshot)) = persistence_context
-        && let Some(addon_state) = crate::session_addon_state_from_workspace_snapshot(
-            &workspace_snapshot,
-            session_id,
-            &[crate::SessionAddonNamespace::RuntimeControls],
-        )
-    {
-        crate::spawn_workspace_session_addon_state_persist_task(
-            app,
-            state,
-            controller_runtime,
-            workspace_snapshot,
-            session_id,
-            addon_state,
-            vec![crate::SessionAddonNamespace::RuntimeControls],
-            Some(String::from("provider_tool_settings")),
-        );
-    }
-    Ok(PublicAiSessionProviderToolSettingsSnapshot {
+    // snapshot is complete before any browser-visible or authoritative workspace assignment.
+    // snapshot 在任何浏览器可见或权威工作区赋值前保持完整。
+    let snapshot = PublicAiSessionProviderToolSettingsSnapshot {
         enabled_capabilities: request.enabled_capabilities,
         selections: request.selections,
         conflicts: Vec::new(),
-    })
+    };
+    publish_public_ai_workbench_with_workspace_reconciliation_and_commit(
+        &app,
+        &state,
+        runtime.as_ref(),
+        &configuration,
+        |workspace| {
+            let runtime_state = workspace
+                .session_runtime_state
+                .get_mut(&session_id)
+                .ok_or_else(|| format!("Conversation `{session_id}` has no runtime state."))?;
+            runtime_state.provider_tool_selections = snapshot
+                .selections
+                .iter()
+                .map(|(capability, selection)| {
+                    (
+                        provider_tool_capability_key(*capability),
+                        vulcan_workbench_model::SessionProviderToolTargetSelection {
+                            connection_id: selection.connection_id.clone(),
+                            target_id: selection.target_id.clone(),
+                        },
+                    )
+                })
+                .collect();
+            runtime_state.provider_tool_enabled_capabilities = snapshot
+                .enabled_capabilities
+                .iter()
+                .map(|capability| provider_tool_capability_key(*capability))
+                .collect();
+            runtime_state.provider_tool_settings_initialized = true;
+            runtime_state.provider_tool_selections_overridden = true;
+            runtime_state.updated_at = crate::current_unix_millis_text();
+            Ok(PublicAiWorkspaceReconciliation::workspace_only(
+                BTreeSet::from([session_id]),
+            ))
+        },
+        "provider_tool_settings",
+        || Ok(()),
+    )?;
+    drop(transaction);
+    Ok(snapshot)
 }
 
 /// Validates one complete session provider tool snapshot before persistence or dispatch.
@@ -6753,13 +8892,23 @@ fn provider_tool_session_conflicts(
 
 /// Filters historical selections to targets that still exist and remain enabled.
 /// 将历史选择过滤为仍存在且保持启用的当前目标。
+///
+/// # Parameters
+/// 参数
+/// `available` is the target inventory captured with the settings generation; `selections` owns
+/// the persisted capability choices to validate against that exact inventory.
+/// `available` 是与设置代际共同捕获的目标目录；`selections` 持有要针对该精确目录校验的
+/// 持久化能力选择。
+///
+/// # Returns
+/// 返回值
+/// Only exact connection/target/capability triples present in the supplied inventory.
+/// 仅返回传入目录中存在的精确连接、目标与能力三元组。
 fn filter_current_provider_tool_selections(
-    runtime: &PublicAiRuntime,
-    configuration: &PersistedAiConfiguration,
+    available: &[AvailableProviderToolTarget],
     selections: &BTreeMap<ProviderToolCapabilityKind, ProviderToolTargetSelection>,
-) -> Result<BTreeMap<ProviderToolCapabilityKind, ProviderToolTargetSelection>, String> {
-    let available = runtime.available_provider_tool_targets(configuration)?;
-    Ok(selections
+) -> BTreeMap<ProviderToolCapabilityKind, ProviderToolTargetSelection> {
+    selections
         .iter()
         .filter(|(capability, selection)| {
             available.iter().any(|candidate| {
@@ -6769,7 +8918,7 @@ fn filter_current_provider_tool_selections(
             })
         })
         .map(|(capability, selection)| (*capability, selection.clone()))
-        .collect())
+        .collect()
 }
 
 /// Converts one runtime-state selection map into the provider contract.
@@ -6892,32 +9041,39 @@ pub(crate) fn public_ai_session_has_image_understanding_bridge(
 ///
 /// # Returns
 /// 返回值
-/// `true` only when the exact connection, provider, enabled state, and text conversation model remain available.
-/// 仅当精确连接、供应商、启用状态及文本会话模型仍可用时返回 `true`。
+/// `true` only when the exact connection, provider, scoped enabled state, and text conversation
+/// model remain available; runtime snapshot failures are returned explicitly.
+/// 仅当精确连接、供应商、作用域启用状态及文本会话模型仍可用时返回 `true`；运行时快照失败会显式返回。
 fn model_selection_is_available(
+    runtime: &PublicAiRuntime,
     configuration: &PersistedAiConfiguration,
     catalogs: &BTreeMap<String, ConnectionModelCatalog>,
     selection: &ActiveAiModelSelection,
-) -> bool {
+) -> Result<bool, String> {
     let Some(connection) = configuration
         .connection_graph
         .connections
         .get(selection.connection_id.as_str())
     else {
-        return false;
+        return Ok(false);
     };
     if connection.provider_id != selection.provider_id
         || configuration.connection_is_pending_validation(selection.connection_id.as_str())
-        || !configuration
-            .model_is_enabled(selection.provider_id.as_str(), selection.model_id.as_str())
         || !configuration.connection_model_is_enabled(
             selection.connection_id.as_str(),
             selection.model_id.as_str(),
         )
     {
-        return false;
+        return Ok(false);
     }
-    catalogs
+    if !runtime.model_is_enabled_for_connection(
+        configuration,
+        selection.connection_id.as_str(),
+        selection.model_id.as_str(),
+    )? {
+        return Ok(false);
+    }
+    Ok(catalogs
         .get(selection.connection_id.as_str())
         .is_some_and(|catalog| {
             catalog.models.iter().any(|model| {
@@ -6926,40 +9082,45 @@ fn model_selection_is_available(
                         &model.capabilities,
                     )
             })
-        })
+        }))
 }
 
 /// Resolves the persisted active model or the first stable enabled model as a fallback.
 /// 解析持久化当前模型；若其失效，则回退到稳定排序的首个启用模型。
 fn preferred_fallback_model_selection(
+    runtime: &PublicAiRuntime,
     configuration: &PersistedAiConfiguration,
     catalogs: &BTreeMap<String, ConnectionModelCatalog>,
-) -> Option<ActiveAiModelSelection> {
-    configuration
-        .active
-        .as_ref()
-        .filter(|selection| model_selection_is_available(configuration, catalogs, selection))
-        .cloned()
-        .or_else(|| first_enabled_model_selection(configuration, catalogs))
+) -> Result<Option<ActiveAiModelSelection>, String> {
+    if let Some(selection) = configuration.active.as_ref()
+        && model_selection_is_available(runtime, configuration, catalogs, selection)?
+    {
+        return Ok(Some(selection.clone()));
+    }
+    first_enabled_model_selection(runtime, configuration, catalogs)
 }
 
 /// Replaces an invalid persisted global selection with the default or first available model.
 /// 将失效的持久化全局模型选择替换为默认模型或首个可用模型。
 fn ensure_active_model_selection(
+    runtime: &PublicAiRuntime,
     configuration: &mut PersistedAiConfiguration,
     catalogs: &BTreeMap<String, ConnectionModelCatalog>,
-) {
-    if configuration
-        .active
-        .as_ref()
-        .is_some_and(|selection| !model_selection_is_available(configuration, catalogs, selection))
-    {
-        configuration.active = first_enabled_model_selection(configuration, catalogs);
+) -> Result<(), String> {
+    let active_is_unavailable = match configuration.active.as_ref() {
+        Some(selection) => {
+            !model_selection_is_available(runtime, configuration, catalogs, selection)?
+        }
+        None => false,
+    };
+    if active_is_unavailable {
+        configuration.active = first_enabled_model_selection(runtime, configuration, catalogs)?;
     }
+    Ok(())
 }
 
-/// Reconciles every explicitly selected session model with the current connection catalogs.
-/// 将所有显式选择的会话模型与当前连接目录重新协调。
+/// Plans reconciliation of every explicitly selected session model without publishing mutations.
+/// 规划所有显式选择会话模型的协调结果，但不发布任何变更。
 ///
 /// # Parameters
 /// 参数
@@ -6969,20 +9130,53 @@ fn ensure_active_model_selection(
 ///
 /// # Returns
 /// 返回值
-/// Session identifiers whose runtime controls changed and therefore require persistence.
-/// 返回运行态控制发生变化、因此需要持久化的会话标识集合。
-fn reconcile_missing_session_model_selections(
-    workspace: &mut vulcan_workspace_store::workspace_store::WorkspaceSnapshot,
+/// A detached workspace candidate plus session identifiers whose runtime controls changed.
+/// 返回独立工作区候选，以及运行态控制发生变化的会话标识集合。
+fn plan_reconciled_session_model_selections(
+    workspace: &vulcan_workspace_store::workspace_store::WorkspaceSnapshot,
+    runtime: &PublicAiRuntime,
     configuration: &PersistedAiConfiguration,
     catalogs: &BTreeMap<String, ConnectionModelCatalog>,
-) -> BTreeSet<crate::SessionId> {
-    let fallback = preferred_fallback_model_selection(configuration, catalogs);
+) -> Result<
+    (
+        vulcan_workspace_store::workspace_store::WorkspaceSnapshot,
+        BTreeSet<crate::SessionId>,
+    ),
+    String,
+> {
+    // nextWorkspace isolates all fallible reconciliation from the caller-owned authoritative image.
+    // nextWorkspace 把全部可失败协调与调用方持有的权威镜像隔离。
+    let mut next_workspace = workspace.clone();
+    // fallback is resolved once from the exact configuration/catalog pair used by this plan.
+    // fallback 从本次规划使用的精确配置/目录组合中只解析一次。
+    let fallback = preferred_fallback_model_selection(runtime, configuration, catalogs)?;
+    // changedSessionIds records the exact runtime-control rows replaced in the candidate.
+    // changedSessionIds 记录候选中被替换的精确运行态控制行。
     let mut changed_session_ids = BTreeSet::new();
+    // reconcileStates applies the same closed transition to active and archived runtime stores.
+    // reconcileStates 对活动与归档运行态存储应用同一封闭转换。
     let mut reconcile_states = |states: &mut BTreeMap<
         crate::SessionId,
         vulcan_workbench_model::SessionRuntimeStateEntry,
-    >| {
+    >|
+     -> Result<(), String> {
         for (session_id, runtime_state) in states.iter_mut() {
+            // An established process-local route remains authoritative for its owning session even
+            // when a hot Manifest removes that model from the current catalog. Only explicit
+            // reselection or access revocation clears the lease.
+            // 已建立的进程内路由对所属会话保持权威，即使热更新 Manifest 从当前目录移除该模型；
+            // 只有显式重新选择或访问权限撤销才清除租约。
+            if session_process_public_ai_selection(runtime, *session_id, Some(runtime_state))?
+                .is_some()
+                || runtime_state.provider_route_lease.is_some()
+            {
+                // A persisted lease without a process-local snapshot is the expected restart
+                // state. Execution must either rebuild the exact identity or fail closed; catalog
+                // reconciliation must not erase the evidence by silently choosing a fallback.
+                // 只有持久化租约而没有进程内快照是正常的重启状态。执行必须重建完全相同的
+                // 身份或显式失败；目录协调不能通过静默选择回退项来擦除该证据。
+                continue;
+            }
             let has_explicit_selection = runtime_state.active_provider_id.is_some()
                 || runtime_state.active_connection_id.is_some()
                 || runtime_state.active_model_id.is_some();
@@ -7003,9 +9197,13 @@ fn reconcile_missing_session_model_selections(
                 }
                 _ => None,
             };
-            if current_selection.as_ref().is_some_and(|selection| {
-                model_selection_is_available(configuration, catalogs, selection)
-            }) {
+            let current_is_available = match current_selection.as_ref() {
+                Some(selection) => {
+                    model_selection_is_available(runtime, configuration, catalogs, selection)?
+                }
+                None => false,
+            };
+            if current_is_available {
                 continue;
             }
 
@@ -7027,13 +9225,54 @@ fn reconcile_missing_session_model_selections(
             runtime_state.active_provider_id = next_provider_id;
             runtime_state.active_connection_id = next_connection_id;
             runtime_state.active_model_id = next_model_id;
+            runtime_state.provider_route_lease = None;
             runtime_state.updated_at = crate::current_unix_millis_text();
             changed_session_ids.insert(*session_id);
         }
+        Ok(())
     };
-    reconcile_states(&mut workspace.session_runtime_state);
-    reconcile_states(&mut workspace.archived_session_runtime_state);
-    changed_session_ids
+    reconcile_states(&mut next_workspace.session_runtime_state)?;
+    reconcile_states(&mut next_workspace.archived_session_runtime_state)?;
+    Ok((next_workspace, changed_session_ids))
+}
+
+/// Reconciles every explicitly selected session model with the current connection catalogs.
+/// 将所有显式选择的会话模型与当前连接目录重新协调。
+///
+/// # Parameters
+/// 参数
+/// `workspace` owns active and archived session runtime selections; `configuration` and `catalogs`
+/// define the authoritative fallback candidates.
+/// `workspace` 持有活动及归档会话运行态选择；`configuration` 与 `catalogs` 定义权威回退候选。
+///
+/// # Returns
+/// 返回值
+/// Session identifiers whose runtime controls changed and therefore require persistence. Any
+/// planning or lease-lock failure leaves the caller's workspace unchanged.
+/// 返回运行态控制发生变化、因此需要持久化的会话标识集合；规划或租约锁失败时，调用方工作区
+/// 保持不变。
+#[cfg(test)]
+pub(crate) fn reconcile_missing_session_model_selections(
+    workspace: &mut vulcan_workspace_store::workspace_store::WorkspaceSnapshot,
+    runtime: &PublicAiRuntime,
+    configuration: &PersistedAiConfiguration,
+    catalogs: &BTreeMap<String, ConnectionModelCatalog>,
+) -> Result<BTreeSet<crate::SessionId>, String> {
+    // plannedWorkspace is detached until every fallible lease operation succeeds.
+    // plannedWorkspace 在全部可失败租约操作成功前保持独立。
+    let (planned_workspace, changed_session_ids) =
+        plan_reconciled_session_model_selections(workspace, runtime, configuration, catalogs)?;
+    // leaseScopeIds materializes stable strings for one exact absence/exclusion transaction.
+    // leaseScopeIds 为一次精确的缺失校验/排除事务物化稳定字符串。
+    let lease_scope_ids = changed_session_ids
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    // leaseGuard prevents a concurrent turn from installing a route between planning and commit.
+    // leaseGuard 防止并发回合在规划与提交之间安装路由。
+    let _lease_guard = runtime.acquire_session_selection_lease_absence_guard(&lease_scope_ids)?;
+    *workspace = planned_workspace;
+    Ok(changed_session_ids)
 }
 
 /// Selects the first stable enabled provider-model-account tuple from runtime catalogs.
@@ -7046,53 +9285,46 @@ fn reconcile_missing_session_model_selections(
 ///
 /// # Returns
 /// 返回值
-/// The lexicographically first enabled tuple, or `None` when no model remains.
-/// 返回按字典序排列的首个启用组合；没有剩余模型时返回 `None`。
+/// The lexicographically first enabled tuple, `None` when no model remains, or an explicit runtime
+/// snapshot error.
+/// 返回按字典序排列的首个启用组合、没有剩余模型时返回 `None`，或显式运行时快照错误。
 fn first_enabled_model_selection(
+    runtime: &PublicAiRuntime,
     configuration: &PersistedAiConfiguration,
     catalogs: &BTreeMap<String, ConnectionModelCatalog>,
-) -> Option<ActiveAiModelSelection> {
-    let mut candidates = configuration
-        .connection_graph
-        .connections
-        .values()
-        .filter(|connection| {
-            !configuration.connection_is_pending_validation(connection.id.as_str())
-        })
-        .flat_map(|connection| {
-            catalogs
-                .get(connection.id.as_str())
-                .into_iter()
-                .flat_map(|catalog| {
-                    catalog
-                        .models
-                        .iter()
-                        .filter(|model| {
-                            configuration.model_is_enabled(
-                                connection.provider_id.as_str(),
-                                model.id.as_str(),
-                            ) && configuration.connection_model_is_enabled(
-                                connection.id.as_str(),
-                                model.id.as_str(),
-                            ) && vulcan_provider_adapters::model_supports_text_conversation(
-                                &model.capabilities,
-                            )
-                        })
-                        .map(|model| ActiveAiModelSelection {
-                            provider_id: connection.provider_id.clone(),
-                            model_id: model.id.clone(),
-                            connection_id: connection.id.clone(),
-                        })
-                })
-        })
-        .collect::<Vec<_>>();
+) -> Result<Option<ActiveAiModelSelection>, String> {
+    let mut candidates = Vec::new();
+    for connection in configuration.connection_graph.connections.values() {
+        if configuration.connection_is_pending_validation(connection.id.as_str()) {
+            continue;
+        }
+        let Some(catalog) = catalogs.get(connection.id.as_str()) else {
+            continue;
+        };
+        for model in &catalog.models {
+            if runtime.model_is_enabled_for_connection(
+                configuration,
+                connection.id.as_str(),
+                model.id.as_str(),
+            )? && configuration
+                .connection_model_is_enabled(connection.id.as_str(), model.id.as_str())
+                && vulcan_provider_adapters::model_supports_text_conversation(&model.capabilities)
+            {
+                candidates.push(ActiveAiModelSelection {
+                    provider_id: connection.provider_id.clone(),
+                    model_id: model.id.clone(),
+                    connection_id: connection.id.clone(),
+                });
+            }
+        }
+    }
     candidates.sort_by(|left, right| {
         left.provider_id
             .cmp(&right.provider_id)
             .then_with(|| left.model_id.cmp(&right.model_id))
             .then_with(|| left.connection_id.cmp(&right.connection_id))
     });
-    candidates.into_iter().next()
+    Ok(candidates.into_iter().next())
 }
 
 /// Selects an enabled replacement while preferring the same provider and model on another account.
@@ -7106,48 +9338,54 @@ fn first_enabled_model_selection(
 ///
 /// # Returns
 /// 返回值
-/// The first same-model account, otherwise the stable global fallback.
-/// 返回首个同模型账号，否则返回稳定的全局降级项。
+/// The first same-model account, otherwise the stable global fallback; scoped runtime failures are
+/// returned explicitly.
+/// 返回首个同模型账号，否则返回稳定的全局降级项；作用域运行时失败会显式返回。
 fn preferred_replacement_model_selection(
+    runtime: &PublicAiRuntime,
     configuration: &PersistedAiConfiguration,
     catalogs: &BTreeMap<String, ConnectionModelCatalog>,
     provider_id: &str,
     model_id: &str,
-) -> Option<ActiveAiModelSelection> {
-    let mut same_model_candidates = configuration
+) -> Result<Option<ActiveAiModelSelection>, String> {
+    let mut same_model_candidates = Vec::new();
+    for connection in configuration
         .connection_graph
         .connections
         .values()
         .filter(|connection| connection.provider_id == provider_id)
-        .filter(|connection| {
-            !configuration.connection_is_pending_validation(connection.id.as_str())
-        })
-        .filter_map(|connection| {
-            catalogs
-                .get(connection.id.as_str())
-                .filter(|catalog| {
-                    catalog.models.iter().any(|model| {
-                        model.id == model_id
-                            && configuration.model_is_enabled(provider_id, model_id)
-                            && configuration
-                                .connection_model_is_enabled(connection.id.as_str(), model_id)
-                            && vulcan_provider_adapters::model_supports_text_conversation(
-                                &model.capabilities,
-                            )
-                    })
-                })
-                .map(|_| ActiveAiModelSelection {
-                    provider_id: provider_id.to_string(),
-                    model_id: model_id.to_string(),
-                    connection_id: connection.id.clone(),
-                })
-        })
-        .collect::<Vec<_>>();
+    {
+        if configuration.connection_is_pending_validation(connection.id.as_str())
+            || !runtime.model_is_enabled_for_connection(
+                configuration,
+                connection.id.as_str(),
+                model_id,
+            )?
+            || !configuration.connection_model_is_enabled(connection.id.as_str(), model_id)
+        {
+            continue;
+        }
+        let supports_model = catalogs.get(connection.id.as_str()).is_some_and(|catalog| {
+            catalog.models.iter().any(|model| {
+                model.id == model_id
+                    && vulcan_provider_adapters::model_supports_text_conversation(
+                        &model.capabilities,
+                    )
+            })
+        });
+        if supports_model {
+            same_model_candidates.push(ActiveAiModelSelection {
+                provider_id: provider_id.to_string(),
+                model_id: model_id.to_string(),
+                connection_id: connection.id.clone(),
+            });
+        }
+    }
     same_model_candidates.sort_by(|left, right| left.connection_id.cmp(&right.connection_id));
-    same_model_candidates
-        .into_iter()
-        .next()
-        .or_else(|| first_enabled_model_selection(configuration, catalogs))
+    if let Some(selection) = same_model_candidates.into_iter().next() {
+        return Ok(Some(selection));
+    }
+    first_enabled_model_selection(runtime, configuration, catalogs)
 }
 
 /// Reconciles loaded session selections after one credential model becomes unavailable.
@@ -7155,36 +9393,83 @@ fn preferred_replacement_model_selection(
 ///
 /// # Parameters
 /// 参数
-/// `state` owns loaded session runtime state; `connection_id` selects the affected account;
+/// `workspace` is the detached loaded-session candidate; `connection_id` selects the affected account;
 /// `model_id` narrows one model when present; `fallback` is the resolved replacement.
-/// `state` 持有已加载会话运行状态；`connection_id` 选择受影响账号；存在 `model_id` 时收窄到一个模型；
+/// `workspace` 是独立的已加载会话候选；`connection_id` 选择受影响账号；存在 `model_id` 时收窄到一个模型；
 /// `fallback` 是已解析替代项。
+///
+/// # Returns
+/// 返回值
+/// The complete active and archived session set whose exact connection route was revoked.
+/// 返回精确连接路由已被撤销的完整活动与归档会话集合。
 fn reconcile_disabled_connection_sessions(
-    state: &SharedServiceBridgeState,
+    workspace: &mut vulcan_workspace_store::workspace_store::WorkspaceSnapshot,
     connection_id: &str,
     model_id: Option<&str>,
     fallback: Option<&ActiveAiModelSelection>,
-) -> Result<(), String> {
-    let mut guard = state
-        .lock()
-        .map_err(|error| format!("Failed to lock service state: {error}"))?;
-    let Some(workspace) = guard.workspace_snapshot.as_mut() else {
-        return Ok(());
-    };
-    for runtime_state in workspace.session_runtime_state.values_mut() {
-        let exact_connection = runtime_state.active_connection_id.as_deref() == Some(connection_id);
-        let exact_model = model_id
-            .is_none_or(|model_id| runtime_state.active_model_id.as_deref() == Some(model_id));
-        if !exact_connection || !exact_model {
-            continue;
+) -> BTreeSet<crate::SessionId> {
+    reconcile_explicitly_revoked_session_model_selections(
+        workspace,
+        fallback,
+        |_session_id, runtime_state| {
+            let exact_connection =
+                runtime_state.active_connection_id.as_deref() == Some(connection_id);
+            let exact_model = model_id
+                .is_none_or(|model_id| runtime_state.active_model_id.as_deref() == Some(model_id));
+            exact_connection && exact_model
+        },
+    )
+}
+
+/// Reconciles every explicitly revoked active or archived session to one deterministic fallback.
+/// 将每个被显式撤销的活动或归档会话协调到一个确定性回退选择。
+///
+/// # Parameters
+/// 参数
+/// `workspace` is the detached candidate; `fallback` is the exact replacement without protocol
+/// probing; `matches` identifies the complete set whose current route authority was revoked.
+/// `workspace` 是独立候选；`fallback` 是不进行协议探测的精确替代选择；`matches` 标识当前
+/// 路由权威已被撤销的完整会话集合。
+///
+/// # Returns
+/// 返回值
+/// The exact active and archived session identifiers whose persisted route and lease identity were
+/// replaced.
+/// 返回持久路由与租约身份已被替换的精确活动及归档会话标识集合。
+fn reconcile_explicitly_revoked_session_model_selections<Matches>(
+    workspace: &mut vulcan_workspace_store::workspace_store::WorkspaceSnapshot,
+    fallback: Option<&ActiveAiModelSelection>,
+    matches: Matches,
+) -> BTreeSet<crate::SessionId>
+where
+    Matches: Fn(crate::SessionId, &vulcan_workbench_model::SessionRuntimeStateEntry) -> bool,
+{
+    // changedSessionIds records the complete lease-revocation and persistence scope.
+    // changedSessionIds 记录完整租约撤销与持久化范围。
+    let mut changed_session_ids = BTreeSet::new();
+    // reconcileStates applies the same closed transition to active and archived stores.
+    // reconcileStates 对活动与归档存储应用相同的封闭转换。
+    let mut reconcile_states = |states: &mut BTreeMap<
+        crate::SessionId,
+        vulcan_workbench_model::SessionRuntimeStateEntry,
+    >| {
+        for (session_id, runtime_state) in states.iter_mut() {
+            if !matches(*session_id, runtime_state) {
+                continue;
+            }
+            runtime_state.active_provider_id =
+                fallback.map(|selection| selection.provider_id.clone());
+            runtime_state.active_connection_id =
+                fallback.map(|selection| selection.connection_id.clone());
+            runtime_state.active_model_id = fallback.map(|selection| selection.model_id.clone());
+            runtime_state.provider_route_lease = None;
+            runtime_state.updated_at = crate::current_unix_millis_text();
+            changed_session_ids.insert(*session_id);
         }
-        runtime_state.active_provider_id = fallback.map(|selection| selection.provider_id.clone());
-        runtime_state.active_connection_id =
-            fallback.map(|selection| selection.connection_id.clone());
-        runtime_state.active_model_id = fallback.map(|selection| selection.model_id.clone());
-        runtime_state.updated_at = crate::current_unix_millis_text();
-    }
-    Ok(())
+    };
+    reconcile_states(&mut workspace.session_runtime_state);
+    reconcile_states(&mut workspace.archived_session_runtime_state);
+    changed_session_ids
 }
 
 /// Clones the shared runtime and authoritative public AI configuration.
@@ -7225,8 +9510,8 @@ pub(crate) fn public_ai_available_model_selectors(
     runtime.available_model_selectors(&configuration)
 }
 
-/// Resolves one account's closed model-directory kind from its exact registry route.
-/// 从账号的精确注册路由解析封闭模型目录类型。
+/// Resolves one account's closed model-directory kind from its credential-verified routes.
+/// 从账号经凭据验证的路由解析封闭模型目录类型。
 ///
 /// # Parameters
 /// 参数
@@ -7235,8 +9520,10 @@ pub(crate) fn public_ai_available_model_selectors(
 ///
 /// # Returns
 /// 返回值
-/// A browser-safe directory kind. Incomplete legacy routes are isolated as unavailable.
-/// 返回浏览器安全的目录类型；不完整的历史路由会被隔离为不可用。
+/// A browser-safe aggregate kind. Any remote route makes the account synchronizable; otherwise
+/// fixed identity outranks manual identity. Incomplete legacy routes are unavailable.
+/// 返回浏览器安全的聚合类型。任一远端路由都会使账号可同步；否则固定身份优先于手工身份。
+/// 不完整的历史路由返回不可用。
 fn connection_model_directory_kind(
     providers: &ProviderRegistry,
     connection: &CredentialConnection,
@@ -7251,28 +9538,40 @@ fn connection_model_directory_kind(
     else {
         return PublicAiModelDirectoryKind::Unavailable;
     };
-    let Some(route) = entry
-        .protocol_routes
-        .iter()
-        .find(|route| route.protocol_profile_id == connection.selected_protocol)
-    else {
-        return PublicAiModelDirectoryKind::Unavailable;
-    };
-    match route.resolved_model_discovery(entry.model_discovery) {
-        ModelDiscoveryKind::Manual => PublicAiModelDirectoryKind::Manual,
-        ModelDiscoveryKind::ProviderToolsOnly => PublicAiModelDirectoryKind::Unavailable,
-        ModelDiscoveryKind::AlibabaCodingPlanStatic
-        | ModelDiscoveryKind::AlibabaTokenPlanStatic
-        | ModelDiscoveryKind::AlibabaModelStudioStatic => PublicAiModelDirectoryKind::Fixed,
-        ModelDiscoveryKind::MiniMaxAnthropic
-        | ModelDiscoveryKind::MiniMaxOpenAi
-        | ModelDiscoveryKind::OpenRouter
-        | ModelDiscoveryKind::OpenAi
-        | ModelDiscoveryKind::OpenAiCodex
-        | ModelDiscoveryKind::Anthropic
-        | ModelDiscoveryKind::AnthropicCompatible
-        | ModelDiscoveryKind::Gemini
-        | ModelDiscoveryKind::GoogleCodeAssist => PublicAiModelDirectoryKind::Dynamic,
+    // hasDynamic, hasFixed, and hasManual summarize route-owned discovery contracts without
+    // promoting the deprecated connection protocol to model-directory authority.
+    // hasDynamic、hasFixed 与 hasManual 汇总路由持有的发现契约，不会把已废弃连接协议
+    // 提升为模型目录权威。
+    let mut has_dynamic = false;
+    let mut has_fixed = false;
+    let mut has_manual = false;
+    for route in entry.protocol_routes.iter().filter(|route| {
+        route.verified
+            && connection
+                .verified_protocols
+                .contains(route.protocol_profile_id.as_str())
+    }) {
+        match route.resolved_model_discovery(entry.model_discovery) {
+            ModelDiscoveryKind::Manual => has_manual = true,
+            ModelDiscoveryKind::ManifestStatic => has_fixed = true,
+            ModelDiscoveryKind::OpenRouter
+            | ModelDiscoveryKind::OpenAi
+            | ModelDiscoveryKind::OpenAiCodex
+            | ModelDiscoveryKind::Anthropic
+            | ModelDiscoveryKind::AnthropicCompatible
+            | ModelDiscoveryKind::Gemini
+            | ModelDiscoveryKind::GoogleCodeAssist => has_dynamic = true,
+            ModelDiscoveryKind::ProviderToolsOnly => {}
+        }
+    }
+    if has_dynamic {
+        PublicAiModelDirectoryKind::Dynamic
+    } else if has_fixed {
+        PublicAiModelDirectoryKind::Fixed
+    } else if has_manual {
+        PublicAiModelDirectoryKind::Manual
+    } else {
+        PublicAiModelDirectoryKind::Unavailable
     }
 }
 
@@ -7309,24 +9608,275 @@ fn build_connection_model_access_policy_records(
         .collect()
 }
 
+/// Returns the only protocol authority accepted for one frozen catalog model.
+/// 返回一个冻结目录模型唯一可接受的协议权威。
+///
+/// # Parameters
+/// 参数
+/// `connection` owns the legacy compatibility protocol; `model` owns the immutable model binding.
+/// `connection` 持有旧版兼容协议；`model` 持有不可变模型绑定。
+///
+/// # Returns
+/// 返回值
+/// The frozen model protocol, or the connection protocol only for the explicit legacy allowlist.
+/// 返回冻结的模型协议；只有显式旧版允许名单才返回连接协议。
+fn effective_catalog_model_protocol_id<'a>(
+    connection: &'a CredentialConnection,
+    model: &'a vulcan_provider_adapters::ConnectionModel,
+) -> Option<&'a str> {
+    model
+        .resolved_protocol_binding
+        .as_ref()
+        .map(|binding| binding.protocol_profile_id.as_str())
+        .or_else(|| {
+            vulcan_provider_adapters::is_legacy_fallback_provider(connection.provider_id.as_str())
+                .then_some(connection.selected_protocol.as_str())
+        })
+}
+
+/// Returns the stable browser-facing identifier for one frozen model-binding source.
+/// 返回一个冻结模型绑定来源的稳定浏览器标识。
+///
+/// # Parameters
+/// 参数
+/// `source` is the exact backend binding-source enum retained by the effective catalog.
+/// `source` 是生效目录保留的精确后端绑定来源枚举。
+///
+/// # Returns
+/// 返回值
+/// A closed non-secret identifier suitable for settings UI and diagnostics.
+/// 返回适用于设置界面与诊断的封闭非秘密标识。
+fn public_ai_model_binding_source_id(
+    source: vulcan_provider_adapters::ModelProtocolBindingSource,
+) -> &'static str {
+    match source {
+        vulcan_provider_adapters::ModelProtocolBindingSource::SystemManifest => "system_manifest",
+        vulcan_provider_adapters::ModelProtocolBindingSource::CustomUser => "custom_user",
+        vulcan_provider_adapters::ModelProtocolBindingSource::CustomAutoDefault => {
+            "custom_auto_default"
+        }
+        vulcan_provider_adapters::ModelProtocolBindingSource::MigratedCustomLegacy => {
+            "migrated_custom_legacy"
+        }
+    }
+}
+
+/// Explains why one custom-provider model has no frozen protocol binding.
+/// 解释一个自定义供应商模型为何没有冻结协议绑定。
+///
+/// # Parameters
+/// 参数
+/// The configuration owns the exact preference, providers owns activated protocol routes,
+/// the connection identifies the service entry, and the model owns observed protocol variants.
+/// configuration 持有精确偏好，providers 持有已激活协议路由，connection 标识服务入口，
+/// model 持有已观测协议变体。
+///
+/// # Returns
+/// 返回值
+/// A stable backend-owned diagnostic derived from the authoritative custom binding resolver.
+/// 返回由权威自定义绑定解析器派生的稳定后端诊断。
+fn custom_model_route_unavailable_reason(
+    configuration: &PersistedAiConfiguration,
+    providers: &ProviderRegistry,
+    connection: &CredentialConnection,
+    model: &vulcan_provider_adapters::ConnectionModel,
+    manifest_revision: u64,
+) -> String {
+    let Some(provider) = providers.provider(connection.provider_id.as_str()) else {
+        return format!(
+            "Provider '{}' is absent from the activated provider generation.",
+            connection.provider_id
+        );
+    };
+    let Some(entry) = provider
+        .service_entries
+        .iter()
+        .find(|entry| entry.id == connection.service_entry_id)
+    else {
+        return format!(
+            "Service entry '{}' is absent from the activated provider '{}'.",
+            connection.service_entry_id, connection.provider_id
+        );
+    };
+    let enabled_protocols = entry
+        .protocol_routes
+        .iter()
+        .map(|route| route.protocol_profile_id.as_str())
+        .collect::<Vec<_>>();
+    let available_protocols = model
+        .protocol_variants
+        .keys()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    let preference_key = PersistedAiConfiguration::provider_model_key(
+        connection.provider_id.as_str(),
+        model.id.as_str(),
+    );
+    let explicit_protocol = configuration
+        .custom_model_protocol_preferences
+        .get(preference_key.as_str())
+        .and_then(|preference| (*preference).explicit_protocol())
+        .map(|protocol| protocol.profile_id());
+    match vulcan_provider_adapters::resolve_custom_model_protocol_binding(
+        enabled_protocols.as_slice(),
+        available_protocols.as_slice(),
+        model.id.as_str(),
+        manifest_revision,
+        explicit_protocol,
+    ) {
+        Ok(binding) => format!(
+            "Model '{}' resolves to protocol '{}', but the activated support catalog has no frozen binding; reactivate the provider catalog.",
+            model.id, binding.protocol_profile_id
+        ),
+        Err(error) => error.to_string(),
+    }
+}
+
+/// Builds backend-owned protocol status records for every support-catalog model.
+/// 为支持目录中的每个模型构建由后端持有的协议状态记录。
+///
+/// # Parameters
+/// 参数
+/// The configuration owns exact connection identities and preferences; providers, catalogs,
+/// and manifest revisions are frozen at the same runtime publication boundary.
+/// configuration 持有精确连接身份与偏好；providers、catalogs 与 manifest revisions
+/// 冻结在同一运行时发布边界。
+///
+/// # Returns
+/// 返回值
+/// Stable per-connection model statuses, including blocked models and their backend diagnostics.
+/// 返回稳定的逐连接模型状态，包含被阻止模型及其后端诊断。
+fn build_public_ai_model_route_records(
+    configuration: &PersistedAiConfiguration,
+    providers: &ProviderRegistry,
+    catalogs: &BTreeMap<String, ConnectionModelCatalog>,
+    manifest_revisions: &BTreeMap<String, u64>,
+) -> Vec<PublicAiModelRouteRecord> {
+    let mut records = Vec::new();
+    for (connection_id, catalog) in catalogs {
+        let Some(connection) = configuration
+            .connection_graph
+            .connections
+            .get(connection_id.as_str())
+        else {
+            continue;
+        };
+        for model in &catalog.models {
+            // protocolId consumes the frozen model-level binding. The connection field is used
+            // only for the explicitly isolated legacy provider whose cutover awaits user facts.
+            // protocolId 消费冻结的模型级绑定。连接字段仅用于显式隔离、等待用户事实后切换的
+            // 旧版供应商。
+            let protocol_id =
+                effective_catalog_model_protocol_id(connection, model).map(str::to_string);
+            // binding is the immutable backend authority for source, rule, and revision facts.
+            // binding 是来源、规则与修订事实的不可变后端权威。
+            let binding = model.resolved_protocol_binding.as_ref();
+            // bindingSource identifies the explicit APIKEY.FUN compatibility boundary separately.
+            // bindingSource 单独标识显式 APIKEY.FUN 兼容边界。
+            let binding_source = binding
+                .map(|binding| public_ai_model_binding_source_id(binding.source))
+                .map(str::to_string)
+                .or_else(|| {
+                    vulcan_provider_adapters::is_legacy_fallback_provider(
+                        connection.provider_id.as_str(),
+                    )
+                    .then(|| String::from("connection_default"))
+                });
+            let manifest_revision = binding
+                .map(|binding| binding.manifest_revision)
+                .or_else(|| {
+                    manifest_revisions
+                        .get(connection.provider_id.as_str())
+                        .copied()
+                })
+                .unwrap_or_default();
+            // unavailableReason is computed from the same captured provider/catalog generation.
+            // unavailableReason 从同一捕获供应商/目录代际计算。
+            let unavailable_reason = match protocol_id.as_deref() {
+                Some(bound_protocol)
+                    if binding.is_some()
+                        && !model.protocol_variants.contains_key(bound_protocol) =>
+                {
+                    Some(format!(
+                        "Model '{}' has no capability variant for its bound protocol '{}'; execution is blocked.",
+                        model.id, bound_protocol
+                    ))
+                }
+                Some(_) => None,
+                None if configuration
+                    .custom_providers
+                    .contains_key(connection.provider_id.as_str()) =>
+                {
+                    Some(custom_model_route_unavailable_reason(
+                        configuration,
+                        providers,
+                        connection,
+                        model,
+                        manifest_revision,
+                    ))
+                }
+                None => Some(format!(
+                    "Model '{}' has no protocol binding frozen in the activated provider generation.",
+                    model.id
+                )),
+            };
+            let executable = protocol_id.is_some() && unavailable_reason.is_none();
+            records.push(PublicAiModelRouteRecord {
+                provider_id: connection.provider_id.clone(),
+                connection_id: connection.id.clone(),
+                service_entry_id: connection.service_entry_id.clone(),
+                model_id: model.id.clone(),
+                protocol_id,
+                available_protocols: model.protocol_variants.keys().cloned().collect(),
+                binding_source,
+                binding_rule_id: binding
+                    .map(|binding| binding.rule_id.clone())
+                    .filter(|rule_id| !rule_id.is_empty()),
+                manifest_revision,
+                executable,
+                unavailable_reason,
+            });
+        }
+    }
+    records.sort_by(|left, right| {
+        left.provider_id
+            .cmp(&right.provider_id)
+            .then_with(|| left.connection_id.cmp(&right.connection_id))
+            .then_with(|| left.model_id.cmp(&right.model_id))
+    });
+    records
+}
+
 /// Builds a redacted browser snapshot from persisted and process-local state.
 /// 从持久化状态与进程内状态构建脱敏浏览器快照。
 fn build_public_ai_settings_snapshot(
     runtime: &PublicAiRuntime,
     configuration: &PersistedAiConfiguration,
 ) -> Result<PublicAiSettingsSnapshot, String> {
+    // persistedConfiguration retains the repair authority and bounded failure diagnostics.
+    // persistedConfiguration 保留修复权威与有界失败诊断。
+    let persisted_configuration = configuration;
     // Build the browser-facing catalog from immutable discovery data plus persisted overlays.
     // 从不可变发现数据与持久化覆盖构建面向浏览器的有效目录。
     // This keeps capability edits visible after reloads and prevents a stale process snapshot
     // from making the conversation selector report reasoning as unsupported.
     // 这样可确保刷新后能力编辑仍然生效，避免旧进程快照把思考能力误报为不支持。
-    let catalogs = runtime.resolved_model_catalog_snapshot(configuration)?;
-    let providers = runtime.effective_providers(configuration)?;
-    let mut support_configuration = configuration.clone();
-    support_configuration
-        .connection_model_access_policies
-        .clear();
-    let model_support_catalogs = runtime.resolved_model_catalog_snapshot(&support_configuration)?;
+    // settings_catalog_snapshot keeps every catalog, template, target, and revision on one generation.
+    // settings_catalog_snapshot 让全部目录、模板、目标与修订号处于同一代际。
+    let PublicAiRuntimeSettingsCatalogSnapshot {
+        runtime_configuration,
+        providers,
+        catalogs,
+        model_support_catalogs,
+        source_catalogs,
+        manifest_revisions,
+        provider_tool_template_models,
+        model_default_enabled_by_key,
+        available_provider_tool_targets,
+    } = runtime.settings_catalog_snapshot(persisted_configuration)?;
+    // configuration is the executable projection captured with the catalog generation above.
+    // configuration 是与上述目录代际共同捕获的可执行投影。
+    let configuration = &runtime_configuration;
     let mut model_override_records_by_key = BTreeMap::new();
     let mut model_access_records_by_key = BTreeMap::new();
     let mut custom_model_template_decision_records_by_key = BTreeMap::new();
@@ -7383,24 +9933,28 @@ fn build_public_ai_settings_snapshot(
                 connection.provider_id.as_str(),
                 model.id.as_str(),
             );
+            // default_enabled is frozen with the same settings catalog generation as this model.
+            // default_enabled 与该模型的设置目录代际共同冻结。
+            let default_enabled = model_default_enabled_by_key
+                .get(access_key.as_str())
+                .copied()
+                .ok_or_else(|| {
+                    format!(
+                        "The settings generation has no model access default for provider `{}` model `{}`.",
+                        connection.provider_id, model.id
+                    )
+                })?;
             model_access_records_by_key
                 .entry(access_key.clone())
-                .or_insert_with(|| PublicAiModelAccessRecord {
+                .or_insert(PublicAiModelAccessRecord {
                     provider_id: connection.provider_id.clone(),
                     model_id: model.id.clone(),
-                    enabled: configuration
-                        .model_is_enabled(connection.provider_id.as_str(), model.id.as_str()),
-                    default_enabled: configuration
-                        .custom_model(connection.provider_id.as_str(), model.id.as_str())
-                        .map_or_else(
-                            || {
-                                vulcan_provider_adapters::default_model_enabled(
-                                    connection.provider_id.as_str(),
-                                    model.id.as_str(),
-                                )
-                            },
-                            |definition| definition.enabled,
-                        ),
+                    enabled: configuration.model_is_enabled_with_default(
+                        connection.provider_id.as_str(),
+                        model.id.as_str(),
+                        default_enabled,
+                    ),
+                    default_enabled,
                     customized: configuration
                         .model_enabled_overrides
                         .contains_key(access_key.as_str()),
@@ -7434,7 +9988,45 @@ fn build_public_ai_settings_snapshot(
             }
         }
     }
+    for model in &provider_tool_template_models {
+        // access_key shares one provider/model access choice across eligible credential accounts.
+        // access_key 在合格凭据账号之间共享同一个供应商/模型访问选择。
+        let access_key = PersistedAiConfiguration::provider_model_key(
+            model.provider_id.as_str(),
+            model.model_id.as_str(),
+        );
+        // default_enabled is the template model default captured with its declaring generation.
+        // default_enabled 是与模板模型声明代际共同捕获的默认值。
+        let default_enabled = model_default_enabled_by_key
+            .get(access_key.as_str())
+            .copied()
+            .ok_or_else(|| {
+                format!(
+                    "The settings generation has no model access default for provider `{}` model `{}`.",
+                    model.provider_id, model.model_id
+                )
+            })?;
+        model_access_records_by_key
+            .entry(access_key.clone())
+            .or_insert(PublicAiModelAccessRecord {
+                provider_id: model.provider_id.clone(),
+                model_id: model.model_id.clone(),
+                enabled: configuration.model_is_enabled_with_default(
+                    model.provider_id.as_str(),
+                    model.model_id.as_str(),
+                    default_enabled,
+                ),
+                default_enabled,
+                customized: configuration
+                    .model_enabled_overrides
+                    .contains_key(access_key.as_str()),
+            });
+    }
+    // model_override_records projects protocol-scoped execution differences for the browser.
+    // model_override_records 向浏览器投影协议作用域执行差异。
     let model_override_records = model_override_records_by_key.into_values().collect();
+    // model_access_records now contains conversation, manual, and provider-tool template models.
+    // model_access_records 现在包含对话、手工与供应商工具模板模型。
     let model_access_records = model_access_records_by_key.into_values().collect();
     for (provider_id, models) in &configuration.custom_models {
         for model_id in models.keys() {
@@ -7481,18 +10073,26 @@ fn build_public_ai_settings_snapshot(
                 })
         })
         .collect();
-    let available_provider_tool_targets = runtime.available_provider_tool_targets(configuration)?;
     let provider_tool_selections = filter_current_provider_tool_selections(
-        runtime,
-        configuration,
+        &available_provider_tool_targets,
         &configuration.provider_tool_selections,
-    )?;
+    );
     let internal_inference_candidates =
         build_internal_inference_candidates(configuration, &providers, &catalogs)?;
     let inference_route_diagnostics =
         build_internal_inference_route_diagnostics(runtime, configuration);
     let connection_model_access_policy_records =
         build_connection_model_access_policy_records(&providers, configuration);
+    // modelRouteRecords projects every access-independent support model, including blocked
+    // bindings, so WebUI never needs a second protocol resolver or a guessed failure reason.
+    // modelRouteRecords 投影每个独立于访问开关的支持模型（包括被阻止的绑定），使 WebUI
+    // 永远不需要第二套协议解析器或猜测失败原因。
+    let model_route_records = build_public_ai_model_route_records(
+        configuration,
+        &providers,
+        &model_support_catalogs,
+        &manifest_revisions,
+    );
     // providers_with_model_customizations lets WebUI disclose cascade cleanup that is not fully countable in the browser snapshot.
     // providers_with_model_customizations 让 WebUI 提示浏览器快照无法完整计数的级联清理内容。
     let providers_with_model_customizations = configuration
@@ -7501,19 +10101,45 @@ fn build_public_ai_settings_snapshot(
         .filter(|provider_id| configuration.provider_has_model_customizations(provider_id))
         .cloned()
         .collect();
+    // runtimeConnectionIds bounds every process-local observation to the same healthy connection
+    // graph used by this snapshot.
+    // runtimeConnectionIds 使每项进程内观测都限定在本快照使用的同一健康连接图内。
+    let runtime_connection_ids = configuration
+        .connection_graph
+        .connections
+        .keys()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let usage_cache = runtime
+        .usage_cache_snapshot()?
+        .into_iter()
+        .filter(|(connection_id, _)| runtime_connection_ids.contains(connection_id.as_str()))
+        .collect();
+    let catalog_statuses = runtime
+        .catalog_status_snapshot()?
+        .into_iter()
+        .filter(|(connection_id, _)| runtime_connection_ids.contains(connection_id.as_str()))
+        .collect();
+    let catalog_errors = runtime
+        .catalog_error_snapshot()?
+        .into_iter()
+        .filter(|(connection_id, _)| runtime_connection_ids.contains(connection_id.as_str()))
+        .collect();
     Ok(PublicAiSettingsSnapshot {
         context_window_policy_overrides: configuration.context_window_policy_overrides,
         provider_context_window_policy_overrides: configuration
             .provider_context_window_policy_overrides
             .clone(),
         usage_refresh_interval_seconds: configuration.usage_refresh_interval_seconds,
-        usage_cache: runtime.usage_cache_snapshot()?,
+        usage_cache,
         providers: providers.providers().into_iter().cloned().collect(),
         connections: configuration
             .connection_graph
             .connections
             .values()
-            .map(|connection| PublicAiConnectionSnapshot::new(runtime, configuration, connection))
+            .map(|connection| {
+                PublicAiConnectionSnapshot::new(&providers, configuration, connection)
+            })
             .collect::<Result<Vec<_>, _>>()?,
         provider_defaults: configuration
             .connection_graph
@@ -7522,17 +10148,40 @@ fn build_public_ai_settings_snapshot(
             .clone(),
         active: configuration.active.clone(),
         catalogs,
-        source_catalogs: runtime.source_catalog_snapshot()?,
+        source_catalogs,
         model_support_catalogs,
-        catalog_statuses: runtime.catalog_status_snapshot()?,
-        catalog_errors: runtime.catalog_error_snapshot()?,
+        model_route_records,
+        catalog_statuses,
+        catalog_errors,
         model_overrides: configuration.model_overrides.clone(),
         model_override_records,
         model_access_records,
+        provider_tool_template_models,
         custom_models: configuration.custom_models.clone(),
+        custom_provider_manifest_failures: persisted_configuration
+            .custom_provider_manifest_failures
+            .clone(),
+        custom_provider_manifest_failure_total_count: persisted_configuration
+            .custom_provider_manifest_failure_total_count,
+        custom_provider_manifest_failures_truncated: persisted_configuration
+            .custom_provider_manifest_failures_truncated,
         custom_provider_model_defaults: configuration.custom_provider_model_defaults.clone(),
         custom_provider_system_model_defaults: CustomProviderModelDefaults::default(),
         providers_with_model_customizations,
+        custom_model_protocol_preference_records: configuration
+            .custom_model_protocol_preferences
+            .iter()
+            .filter_map(|(key, preference)| {
+                let (provider_id, model_id) =
+                    PersistedAiConfiguration::provider_model_key_parts(key.as_str())?;
+                Some(PublicAiCustomModelProtocolPreferenceRecord {
+                    provider_id: provider_id.to_string(),
+                    model_id: model_id.to_string(),
+                    preference: *preference,
+                })
+            })
+            .collect(),
+        provider_manifest_revisions: manifest_revisions,
         custom_model_template_decision_records,
         custom_model_connection_availability_records,
         connection_model_access_policy_records,
@@ -7724,15 +10373,25 @@ fn build_internal_inference_candidates(
                 })
             {
                 let binding = match operation {
-                    AiOperation::ConversationRespond => InferenceRouteBinding::Protocol {
-                        protocol_profile_id: connection.selected_protocol.clone(),
-                    },
+                    AiOperation::ConversationRespond => {
+                        // Internal LLM consumers must persist the same frozen model binding used
+                        // by interactive execution; the connection protocol is never a second
+                        // resolver outside the explicit legacy allowlist.
+                        // 内部 LLM 消费方必须持久化交互执行所使用的同一冻结模型绑定；显式旧版
+                        // 允许名单之外，连接协议绝不能成为第二套解析器。
+                        let Some(protocol_profile_id) =
+                            effective_catalog_model_protocol_id(connection, model)
+                        else {
+                            continue;
+                        };
+                        InferenceRouteBinding::Protocol {
+                            protocol_profile_id: protocol_profile_id.to_string(),
+                        }
+                    }
                     AiOperation::EmbeddingCreate | AiOperation::RerankDocuments => {
-                        let Some(action_binding_id) = registered_native_action_binding_id(
-                            connection.provider_id.as_str(),
-                            connection.service_entry_id.as_str(),
-                            operation,
-                        ) else {
+                        let Some(action_binding_id) =
+                            registered_native_action_binding_id(entry, operation)
+                        else {
                             continue;
                         };
                         InferenceRouteBinding::Action {
@@ -7855,6 +10514,9 @@ pub(super) async fn sync_knowledge_inference_profile(
     embedding_route: Option<InferenceRouteConfiguration>,
 ) -> Result<(), String> {
     validate_non_empty("consumerProfileId", consumer_profile_id)?;
+    // transaction serializes route validation through profile and Workbench publication.
+    // transaction 把路由校验串行化到配置档与工作台发布完成。
+    let transaction = begin_public_ai_configuration_transaction().await;
     let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
     let mut validation_configuration = current_configuration.clone();
     for route in [curation_route.as_ref(), embedding_route.as_ref()]
@@ -7879,8 +10541,11 @@ pub(super) async fn sync_knowledge_inference_profile(
             &selection.model.capabilities,
         )?;
     }
-    let configuration = mutate_public_ai_configuration(
+    let (_configuration, ()) = mutate_public_ai_configuration_and_publish_in_transaction(
+        &app,
         &state,
+        runtime.as_ref(),
+        &current_configuration,
         "保存资料库独立模型配置失败",
         |configuration| {
             let profile = configuration
@@ -7897,9 +10562,9 @@ pub(super) async fn sync_knowledge_inference_profile(
             profile.embedding = embedding_route.clone();
             Ok(())
         },
-    )
-    .await?;
-    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
+        |_configuration| Ok(()),
+    )?;
+    drop(transaction);
     Ok(())
 }
 
@@ -7911,17 +10576,23 @@ pub(super) async fn remove_knowledge_inference_profile(
     consumer_profile_id: &str,
 ) -> Result<(), String> {
     validate_non_empty("consumerProfileId", consumer_profile_id)?;
-    let (runtime, _) = public_ai_runtime_and_configuration(&state)?;
-    let configuration = mutate_public_ai_configuration(
+    // transaction serializes profile removal through Workbench publication.
+    // transaction 把配置档删除串行化到工作台发布完成。
+    let transaction = begin_public_ai_configuration_transaction().await;
+    let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
+    let (_configuration, ()) = mutate_public_ai_configuration_and_publish_in_transaction(
+        &app,
         &state,
+        runtime.as_ref(),
+        &current_configuration,
         "删除资料库独立模型配置失败",
         |configuration| {
             configuration.inference_profiles.remove(consumer_profile_id);
             Ok(())
         },
-    )
-    .await?;
-    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
+        |_configuration| Ok(()),
+    )?;
+    drop(transaction);
     Ok(())
 }
 
@@ -8232,20 +10903,324 @@ pub(crate) fn publish_public_ai_workbench(
     runtime: &PublicAiRuntime,
     configuration: &PersistedAiConfiguration,
 ) -> Result<WorkbenchSnapshot, String> {
+    publish_public_ai_workbench_with_commit(app, state, runtime, configuration, || Ok(()))
+}
+
+/// Publishes one public AI Workbench candidate after a caller-owned pre-publication commit.
+/// 在调用方持有的发布前提交成功后发布一份公共 AI 工作台候选。
+///
+/// # Parameters
+/// 参数
+/// `app`, `state`, `runtime`, and `configuration` identify the exact projection; `commit` performs
+/// any final fallible durable transition while browser-visible state is still unchanged.
+/// `app`、`state`、`runtime` 与 `configuration` 标识精确投影；`commit` 在浏览器可见状态仍未
+/// 改变时执行最终可失败持久转换。
+///
+/// # Returns
+/// 返回值
+/// The atomically installed Workbench snapshot, or an error that leaves Service state unchanged.
+/// 返回原子安装的工作台快照，或使 Service 状态保持不变的错误。
+fn publish_public_ai_workbench_with_commit<Commit>(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    runtime: &PublicAiRuntime,
+    configuration: &PersistedAiConfiguration,
+    commit: Commit,
+) -> Result<WorkbenchSnapshot, String>
+where
+    Commit: FnOnce() -> Result<(), String>,
+{
+    publish_public_ai_workbench_with_session_reconciliation_and_commit(
+        app,
+        state,
+        runtime,
+        configuration,
+        |_workspace| Ok(BTreeSet::new()),
+        "missing_model_fallback",
+        commit,
+    )
+}
+
+/// One detached workspace reconciliation split by persistence and route-lease ownership.
+/// 一份按持久化与路由租约所有权拆分的独立工作区协调结果。
+#[derive(Default)]
+struct PublicAiWorkspaceReconciliation {
+    /// Every session runtime row changed by the detached plan.
+    /// 独立规划修改的每个会话运行态行。
+    changed_session_ids: BTreeSet<crate::SessionId>,
+    /// Changed sessions whose process-local model route leases must be revoked.
+    /// 已修改且必须撤销进程内模型路由租约的会话。
+    revoked_session_ids: BTreeSet<crate::SessionId>,
+}
+
+impl PublicAiWorkspaceReconciliation {
+    /// Creates a reconciliation whose every changed row is an explicit route revocation.
+    /// 创建一份每个已修改行均属于显式路由撤销的协调结果。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `session_ids` is the exact changed and revoked owner set.
+    /// `session_ids` 是精确的已修改与已撤销所有者集合。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A reconciliation with identical changed and revoked sets.
+    /// 返回已修改与已撤销集合完全相同的协调结果。
+    fn route_revocations(session_ids: BTreeSet<crate::SessionId>) -> Self {
+        Self {
+            changed_session_ids: session_ids.clone(),
+            revoked_session_ids: session_ids,
+        }
+    }
+
+    /// Creates a workspace-only reconciliation that preserves model route leases.
+    /// 创建一份保留模型路由租约的仅工作区协调结果。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `session_ids` identifies runtime rows that require persistence only.
+    /// `session_ids` 标识仅需持久化的运行态行。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A reconciliation with changed rows and no revoked route owners.
+    /// 返回包含已修改行但不包含已撤销路由所有者的协调结果。
+    fn workspace_only(session_ids: BTreeSet<crate::SessionId>) -> Self {
+        Self {
+            changed_session_ids: session_ids,
+            revoked_session_ids: BTreeSet::new(),
+        }
+    }
+}
+
+/// Publishes one Workbench candidate with explicit session-route reconciliation.
+/// 通过显式会话路由协调发布一份工作台候选。
+///
+/// # Parameters
+/// 参数
+/// `app`, `state`, `runtime`, and `configuration` identify the exact projection;
+/// `reconcile_sessions` changes a detached workspace and returns leases that must be revoked;
+/// `persistence_reason` labels durable session-state persistence; `commit` performs the final
+/// fallible external transition before browser-visible state changes.
+/// `app`、`state`、`runtime` 与 `configuration` 标识精确投影；`reconcile_sessions` 修改独立
+/// 工作区并返回必须撤销租约的会话；`persistence_reason` 标记持久会话状态写入；`commit`
+/// 在浏览器可见状态改变前执行最终可失败外部转换。
+///
+/// # Returns
+/// 返回值
+/// The atomically installed Workbench snapshot, or an error that restores revoked leases and
+/// leaves Service state unchanged.
+/// 返回原子安装的工作台快照；失败时恢复已撤销租约并保持 Service 状态不变。
+fn publish_public_ai_workbench_with_session_reconciliation_and_commit<ReconcileSessions, Commit>(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    runtime: &PublicAiRuntime,
+    configuration: &PersistedAiConfiguration,
+    reconcile_sessions: ReconcileSessions,
+    persistence_reason: &'static str,
+    commit: Commit,
+) -> Result<WorkbenchSnapshot, String>
+where
+    ReconcileSessions: FnOnce(
+        &mut vulcan_workspace_store::workspace_store::WorkspaceSnapshot,
+    ) -> Result<BTreeSet<crate::SessionId>, String>,
+    Commit: FnOnce() -> Result<(), String>,
+{
+    publish_public_ai_workbench_with_workspace_reconciliation_and_commit(
+        app,
+        state,
+        runtime,
+        configuration,
+        |workspace| {
+            reconcile_sessions(workspace).map(PublicAiWorkspaceReconciliation::route_revocations)
+        },
+        persistence_reason,
+        commit,
+    )
+}
+
+/// Publishes one Workbench candidate from a detached general workspace reconciliation.
+/// 从一份独立的通用工作区协调结果发布工作台候选。
+///
+/// # Parameters
+/// 参数
+/// `app`, `state`, `runtime`, and `configuration` identify the projection; `reconcile_workspace`
+/// returns separately tracked changed and route-revoked sessions; `persistence_reason` labels
+/// durable session rows; `commit` performs the final fallible external transition.
+/// `app`、`state`、`runtime` 与 `configuration` 标识投影；`reconcile_workspace` 分别返回已修改
+/// 与路由已撤销会话；`persistence_reason` 标记持久会话行；`commit` 执行最终可失败外部转换。
+///
+/// # Returns
+/// 返回值
+/// The atomically installed Workbench snapshot, or an error with Service state and revoked leases
+/// restored.
+/// 返回原子安装的工作台快照；失败时恢复 Service 状态与已撤销租约。
+fn publish_public_ai_workbench_with_workspace_reconciliation_and_commit<
+    ReconcileWorkspace,
+    Commit,
+>(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    runtime: &PublicAiRuntime,
+    configuration: &PersistedAiConfiguration,
+    reconcile_workspace: ReconcileWorkspace,
+    persistence_reason: &'static str,
+    commit: Commit,
+) -> Result<WorkbenchSnapshot, String>
+where
+    ReconcileWorkspace: FnOnce(
+        &mut vulcan_workspace_store::workspace_store::WorkspaceSnapshot,
+    ) -> Result<PublicAiWorkspaceReconciliation, String>,
+    Commit: FnOnce() -> Result<(), String>,
+{
+    // catalogs freezes the exact runtime model image used by the whole candidate projection.
+    // catalogs 冻结整个候选投影使用的精确运行时模型镜像。
     let catalogs = runtime.catalog_snapshot()?;
     let (workbench, persistence_context) = {
+        // guard excludes every concurrent Service state writer while the detached candidate is
+        // prepared and committed.
+        // guard 在独立候选准备与提交期间排除全部并发 Service 状态写入方。
         let mut guard = state
             .lock()
             .map_err(|error| format!("Failed to lock service state: {error}"))?;
-        let changed_session_ids = guard
-            .workspace_snapshot
-            .as_mut()
-            .map(|workspace| {
-                reconcile_missing_session_model_selections(workspace, configuration, &catalogs)
-            })
-            .unwrap_or_default();
-        // Persist session fallback changes after releasing the service-state mutex.
-        // 释放服务状态互斥锁后再持久化会话回退变更。
+        // plannedWorkspace and changedSessionIds remain detached until every fallible projection
+        // and lease-exclusion check has succeeded.
+        // plannedWorkspace 与 changedSessionIds 在全部可失败投影及租约排除检查成功前保持独立。
+        let (planned_workspace, revoked_session_ids, changed_session_ids) =
+            if let Some(workspace) = guard.workspace_snapshot.as_ref() {
+                // forcedWorkspace applies explicit access revocation before catalog-only fallback.
+                // forcedWorkspace 在仅目录回退前应用显式访问撤销。
+                let mut forced_workspace = workspace.clone();
+                let explicit_reconciliation = reconcile_workspace(&mut forced_workspace)?;
+                let revoked_session_ids = explicit_reconciliation.revoked_session_ids;
+                let (planned_workspace, catalog_changed_session_ids) =
+                    plan_reconciled_session_model_selections(
+                        &forced_workspace,
+                        runtime,
+                        configuration,
+                        &catalogs,
+                    )?;
+                let mut changed_session_ids = explicit_reconciliation.changed_session_ids;
+                changed_session_ids.extend(catalog_changed_session_ids);
+                (
+                    Some(planned_workspace),
+                    revoked_session_ids,
+                    changed_session_ids,
+                )
+            } else {
+                (None, BTreeSet::new(), BTreeSet::new())
+            };
+        // selectedSessionId and selectedRuntimeState identify the same candidate workbench owner
+        // for the shared lease-aware projection helper.
+        // selectedSessionId 与 selectedRuntimeState 为共享租约感知投影辅助函数标识同一候选工作台所有者。
+        let selected_session_id = planned_workspace
+            .as_ref()
+            .map(|workspace| workspace.selected_session);
+        let selected_runtime_state = planned_workspace.as_ref().and_then(|workspace| {
+            workspace
+                .session_runtime_state
+                .get(&workspace.selected_session)
+        });
+        // effectiveSelection prefers the immutable process-local session lease before current catalogs.
+        // effectiveSelection 在当前目录之前优先采用进程内不可变会话租约。
+        let effective_selection = if selected_session_id
+            .is_some_and(|session_id| revoked_session_ids.contains(&session_id))
+        {
+            public_ai_workbench_selection_after_route_revocation(
+                configuration,
+                runtime,
+                selected_runtime_state,
+            )?
+        } else {
+            public_ai_workbench_selection(
+                configuration,
+                runtime,
+                selected_session_id,
+                selected_runtime_state,
+            )?
+        };
+        // bridgedImageUnderstanding freezes the exact attachment bridge result for this candidate.
+        // bridgedImageUnderstanding 冻结当前候选的精确附件桥接结果。
+        let bridged_image_understanding = public_ai_session_has_image_understanding_bridge(
+            runtime,
+            configuration,
+            selected_runtime_state,
+        )?;
+        // rows is the complete provider projection derived from the same immutable selection.
+        // rows 是从同一不可变选择派生的完整供应商投影。
+        let rows = public_ai_provider_rows_for_selection(
+            configuration,
+            runtime,
+            effective_selection.as_ref(),
+        )?;
+        // plannedWorkbench isolates all browser-visible mutations until the final commit boundary.
+        // plannedWorkbench 把全部浏览器可见变更隔离到最终提交边界。
+        let mut planned_workbench = guard.workbench.clone();
+        planned_workbench.providers = rows;
+        if let Some(provider_configuration) = guard
+            .agent_runtime
+            .as_ref()
+            .map(|agent_runtime| agent_runtime.provider_configuration.clone())
+        {
+            planned_workbench.reasoning_selection = crate::reasoning_selection(
+                &provider_configuration,
+                effective_selection
+                    .as_ref()
+                    .map(|selection| &selection.model.capabilities),
+            );
+            planned_workbench.composer_attachment_capabilities =
+                crate::composer_attachment_capabilities(
+                    effective_selection
+                        .as_ref()
+                        .map(|selection| &selection.model.capabilities),
+                    bridged_image_understanding,
+                );
+        }
+        // leaseScopeIds materializes the exact sessions proven unleased during planning.
+        // leaseScopeIds 物化规划期间被证明未租用的精确会话。
+        let revoked_lease_scope_ids = revoked_session_ids
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        // requiredAbsentLeaseScopeIds contains catalog-only changes whose leases must remain absent.
+        // requiredAbsentLeaseScopeIds 包含租约必须保持缺失的仅目录变更。
+        let required_absent_lease_scope_ids = changed_session_ids
+            .difference(&revoked_session_ids)
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        // leaseGuard atomically removes explicit revocations and excludes every concurrent writer.
+        // leaseGuard 原子移除显式撤销，并排除全部并发写入方。
+        let lease_guard =
+            if revoked_lease_scope_ids.is_empty() && required_absent_lease_scope_ids.is_empty() {
+                None
+            } else {
+                Some(
+                    runtime.acquire_session_selection_lease_reconciliation_guard(
+                        &revoked_lease_scope_ids,
+                        &required_absent_lease_scope_ids,
+                    )?,
+                )
+            };
+        // commit is the last fallible external transition and runs while Service state and lease
+        // admission remain excluded. A failure therefore leaves the browser before-image intact.
+        // commit 是最后一个可失败外部转换，并在 Service 状态与租约准入均被排除时运行；
+        // 因此失败会让浏览器前镜像保持完整。
+        commit()?;
+        // A published provider projection is a new authoritative snapshot and must outrank the
+        // previous WebUI revision. No fallible operation remains after these assignments.
+        // 已发布的供应商投影是新的权威快照，必须以更高版本覆盖 WebUI 中的旧快照；
+        // 以下赋值之后不再存在可失败操作。
+        guard.workspace_snapshot = planned_workspace;
+        guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+        planned_workbench.revision = guard.workbench_generation;
+        guard.workbench = planned_workbench;
+        // Committing after both assignments makes lease deletion inseparable from state publication.
+        // 在两项赋值之后提交，使租约删除与状态发布不可分割。
+        if let Some(lease_guard) = lease_guard {
+            lease_guard.commit();
+        }
+        // persistenceContext captures only the exact committed session rows after the state swap.
+        // persistenceContext 只在状态交换后捕获精确的已提交会话行。
         let persistence_context = if changed_session_ids.is_empty() {
             None
         } else {
@@ -8255,94 +11230,6 @@ pub(crate) fn publish_public_ai_workbench(
                 changed_session_ids,
             ))
         };
-        // effective_selection prefers the selected conversation model, then degrades to the global default.
-        // effective_selection 优先使用当前会话模型，失效时再降级到全局默认。
-        let effective_selection = guard
-            .workspace_snapshot
-            .as_ref()
-            .and_then(|workspace| {
-                workspace
-                    .session_runtime_state
-                    .get(&workspace.selected_session)
-            })
-            .and_then(|runtime_state| {
-                runtime_state
-                    .active_provider_id
-                    .as_deref()
-                    .zip(runtime_state.active_connection_id.as_deref())
-                    .zip(runtime_state.active_model_id.as_deref())
-            })
-            .and_then(|((provider_id, connection_id), model_id)| {
-                runtime
-                    .resolve_connection_model_selection(
-                        configuration,
-                        connection_id,
-                        provider_id,
-                        model_id,
-                    )
-                    .ok()
-            })
-            .or_else(|| {
-                guard
-                    .workspace_snapshot
-                    .as_ref()
-                    .and_then(|workspace| {
-                        workspace
-                            .session_runtime_state
-                            .get(&workspace.selected_session)
-                    })
-                    .and_then(|runtime_state| {
-                        runtime_state
-                            .active_provider_id
-                            .as_deref()
-                            .zip(runtime_state.active_model_id.as_deref())
-                    })
-                    .and_then(|(provider_id, model_id)| {
-                        runtime
-                            .resolve_model_selection(configuration, provider_id, model_id)
-                            .ok()
-                    })
-            })
-            .or_else(|| runtime.resolve_active_selection(configuration).ok());
-        let selected_runtime_state = guard.workspace_snapshot.as_ref().and_then(|workspace| {
-            workspace
-                .session_runtime_state
-                .get(&workspace.selected_session)
-        });
-        let bridged_image_understanding = public_ai_session_has_image_understanding_bridge(
-            runtime,
-            configuration,
-            selected_runtime_state,
-        )?;
-        let rows = public_ai_provider_rows_for_selection(
-            configuration,
-            runtime,
-            effective_selection.as_ref(),
-        )?;
-        guard.workbench.providers = rows;
-        if let Some(provider_configuration) = guard
-            .agent_runtime
-            .as_ref()
-            .map(|agent_runtime| agent_runtime.provider_configuration.clone())
-        {
-            guard.workbench.reasoning_selection = crate::reasoning_selection(
-                &provider_configuration,
-                effective_selection
-                    .as_ref()
-                    .map(|selection| &selection.model.capabilities),
-            );
-            guard.workbench.composer_attachment_capabilities =
-                crate::composer_attachment_capabilities(
-                    effective_selection
-                        .as_ref()
-                        .map(|selection| &selection.model.capabilities),
-                    bridged_image_understanding,
-                );
-        }
-        // A published provider projection is a new authoritative snapshot and must outrank the previous WebUI revision.
-        // 已发布的供应商投影是新的权威快照，必须以更高版本覆盖 WebUI 中的旧快照。
-        guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
-        guard.workbench.revision = guard.workbench_generation;
         (guard.workbench.clone(), persistence_context)
     };
     if let Some((Some(controller_runtime), Some(workspace_snapshot), session_ids)) =
@@ -8362,7 +11249,7 @@ pub(crate) fn publish_public_ai_workbench(
                     session_id,
                     addon_state,
                     vec![crate::SessionAddonNamespace::RuntimeControls],
-                    Some(String::from("missing_model_fallback")),
+                    Some(String::from(persistence_reason)),
                 );
             }
         }
@@ -8495,6 +11382,31 @@ fn validate_custom_provider_identity(
     Ok(())
 }
 
+/// Validates one custom-provider removal target, including an isolated standalone reference.
+/// 校验一个自定义供应商删除目标，包括已隔离的独立引用。
+///
+/// # Parameters
+/// 参数
+/// `configuration` owns the exact reference and hydrated descriptor sets; `provider_id` is the
+/// requested deletion identity.
+/// `configuration` 持有精确引用集与已补水描述符集；`provider_id` 是请求删除的身份。
+///
+/// # Returns
+/// 返回值
+/// `true` for an exact isolated reference, `false` for a healthy custom provider, or an error.
+/// 精确隔离引用返回 `true`，健康自定义供应商返回 `false`，否则返回错误。
+fn validate_removable_custom_provider_identity(
+    configuration: &PersistedAiConfiguration,
+    provider_id: &str,
+) -> Result<bool, String> {
+    validate_custom_provider_identifier(provider_id)?;
+    let isolated = configuration.custom_provider_manifest_is_isolated(provider_id);
+    if !isolated {
+        validate_custom_provider_identity(configuration, provider_id)?;
+    }
+    Ok(isolated)
+}
+
 /// Validates that one custom-provider model exists in a current catalog or manual declaration.
 /// 校验一个自定义供应商模型存在于当前目录或手工声明中。
 fn validate_custom_provider_model_exists(
@@ -8552,9 +11464,442 @@ fn validate_non_empty(field: &str, value: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Validates and keys one complete per-model protocol preference set.
+/// 校验并建键一组完整的逐模型协议偏好。
+///
+/// # Parameters
+/// 参数
+/// `provider_id` labels the exact custom provider, `enabled_protocols` is its authoritative
+/// enabled protocol set, and `preferences` is the complete replacement set.
+/// `provider_id` 标识精确自定义供应商，`enabled_protocols` 是其权威启用协议集合，
+/// `preferences` 是完整替换集合。
+///
+/// # Returns
+/// 返回值
+/// A collision-resistant provider-model keyed map, or one actionable validation message.
+/// 返回抗冲突的供应商模型组合键映射，或一条可操作的校验消息。
+fn validate_custom_model_protocol_preferences(
+    provider_id: &str,
+    enabled_protocols: &BTreeSet<String>,
+    preferences: &[PublicAiCustomModelProtocolPreferenceItem],
+) -> Result<BTreeMap<String, CustomModelProtocolPreference>, String> {
+    let mut keyed = BTreeMap::new();
+    for item in preferences {
+        validate_non_empty("preferences[].modelId", item.model_id.as_str())?;
+        if let Some(protocol) = item.preference.explicit_protocol()
+            && !enabled_protocols.contains(protocol.profile_id())
+        {
+            return Err(format!(
+                "Model `{}` selects protocol `{}` which is not enabled for provider `{}`.",
+                item.model_id,
+                protocol.profile_id(),
+                provider_id
+            ));
+        }
+        let key = PersistedAiConfiguration::provider_model_key(provider_id, item.model_id.as_str());
+        if keyed.insert(key, item.preference).is_some() {
+            return Err(format!(
+                "Custom provider `{provider_id}` contains duplicate preference for model `{}`.",
+                item.model_id
+            ));
+        }
+    }
+    Ok(keyed)
+}
+
 #[cfg(test)]
 mod inference_settings_route_tests {
     use super::*;
+
+    /// Verifies manifest RPCs accept only identities pinned by the trusted bundled index.
+    /// 验证 Manifest RPC 仅接受可信内置 Index 固定的身份。
+    #[test]
+    fn manifest_rpc_identity_guard_rejects_unknown_and_oversized_values() {
+        // runtime supplies the exact trusted system identity set used by production RPCs.
+        // runtime 提供生产 RPC 使用的精确可信系统身份集合。
+        let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
+        crate::provider_manifest_sync::require_trusted_system_manifest_provider(
+            &runtime,
+            "openrouter",
+        )
+        .expect("known bundled provider must pass");
+        let unknown = "x"
+            .repeat(vulcan_provider_adapters::provider_manifest::MAX_PROVIDER_IDENTIFIER_LEN + 1);
+        let error = crate::provider_manifest_sync::require_trusted_system_manifest_provider(
+            &runtime,
+            unknown.as_str(),
+        )
+        .expect_err("unknown oversized identity must fail before any store operation");
+        assert!(!error.contains(unknown.as_str()));
+        assert!(error.contains("trusted system provider identifier"));
+    }
+
+    /// Verifies exact compensation becomes a provider-local rejection instead of a batch error.
+    /// 验证精确补偿会成为逐供应商拒绝，而不是批次错误。
+    #[test]
+    fn compensated_projection_becomes_bounded_provider_rejection() {
+        // report represents the staged activation before its Workbench projection fails.
+        // report 表示工作台投影失败前的暂存激活。
+        let report = crate::provider_manifest_sync::ProviderSyncReport {
+            provider_id: String::from("deepseek"),
+            outcome: "activated",
+            revision: 7,
+            failure_kind: None,
+            failure_message: None,
+            activation_snapshot: None,
+        };
+        let rejected = compensated_provider_projection_report(
+            report,
+            "failed to republish C:\\Users\\operator\\workbench.json",
+        );
+        assert_eq!(rejected.outcome, "rejected");
+        assert_eq!(
+            rejected.failure_kind.as_deref(),
+            Some("activation_publication_failed")
+        );
+        assert_eq!(
+            rejected.failure_message.as_deref(),
+            Some("<redacted-local-path>")
+        );
+        assert!(rejected.activation_snapshot.is_none());
+    }
+
+    /// Verifies projection cannot start without the exact activation before-image contract.
+    /// 验证缺少精确激活前镜像契约时不得开始投影。
+    #[test]
+    fn provider_projection_rejects_missing_activation_before_image() {
+        // report deliberately violates the internal activated-report contract.
+        // report 有意违反内部 activated 报告契约。
+        let report = crate::provider_manifest_sync::ProviderSyncReport {
+            provider_id: String::from("deepseek"),
+            outcome: "activated",
+            revision: 7,
+            failure_kind: None,
+            failure_message: None,
+            activation_snapshot: None,
+        };
+        let provider_ids = std::collections::BTreeSet::from([String::from("deepseek")]);
+        let error =
+            required_provider_activation_snapshots(std::slice::from_ref(&report), &provider_ids)
+                .expect_err("missing exact before-image must fail closed");
+        assert!(matches!(
+            error,
+            ProviderProjectionPublicationFailure::Uncertain(message)
+                if message.contains("missing its exact before-image")
+        ));
+    }
+
+    /// Verifies dropping an armed publication guard restores disk and staged runtime ownership.
+    /// 验证丢弃已启用发布护栏会恢复磁盘与暂存运行时所有权。
+    #[test]
+    fn cancelled_provider_publication_restores_staged_before_images() {
+        use sha2::Digest;
+
+        // directory owns the exact durable transaction inspected after cancellation.
+        // directory 持有取消后检查的精确持久化事务。
+        let directory = tempfile::tempdir().expect("temp dir should create");
+        // service owns compensation for the staged file transaction.
+        // service 持有已暂存文件事务的补偿责任。
+        let service = crate::provider_manifest_sync::ProviderManifestSyncService::new(
+            directory.path(),
+            reqwest::Client::new(),
+            Vec::new(),
+            None,
+        );
+        // runtime owns the immutable bundled baseline and mutable staging catalog.
+        // runtime 持有不可变内置基线与可变暂存目录。
+        let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
+        // bundled_revision is the exact runtime identity before staging.
+        // bundled_revision 是暂存前的精确运行时身份。
+        let bundled_revision = runtime
+            .system_manifest("deepseek")
+            .expect("bundled DeepSeek manifest should exist")
+            .revision;
+        // candidate_value starts from the trusted bundled document and changes only revision.
+        // candidate_value 从可信内置文档开始，并且只修改修订号。
+        let mut candidate_value = serde_json::from_str::<serde_json::Value>(
+            std::fs::read_to_string(
+                vulcan_runtime_assets::resolve_bundled_provider_manifests_directory()
+                    .join("deepseek.json"),
+            )
+            .expect("bundled DeepSeek document should read")
+            .as_str(),
+        )
+        .expect("bundled DeepSeek document should parse");
+        // candidate_revision is strictly newer than the bundled authority.
+        // candidate_revision 严格晚于内置权威。
+        let candidate_revision = bundled_revision + 1;
+        candidate_value["revision"] = serde_json::json!(candidate_revision);
+        // candidate_bytes are the exact durable candidate payload.
+        // candidate_bytes 是精确持久化候选载荷。
+        let candidate_bytes =
+            serde_json::to_vec(&candidate_value).expect("candidate should encode");
+        // digest pins the exact candidate byte identity.
+        // digest 固定精确候选字节身份。
+        let digest = sha2::Sha256::digest(&candidate_bytes);
+        // entry is the authenticated remote pin consumed by staged activation.
+        // entry 是已暂存激活消费的认证远端固定项。
+        let entry = vulcan_provider_config::manifest_sync::RemoteProviderEntry {
+            provider_id: String::from("deepseek"),
+            revision: candidate_revision,
+            relative_url: String::from("/deepseek.json"),
+            sha256: digest.iter().map(|byte| format!("{byte:02x}")).collect(),
+            bytes: candidate_bytes.len() as u64,
+            minimum_engine_contract: 1,
+        };
+        // outcome retains the file before-image and compiled staged manifest.
+        // outcome 保留文件前镜像与已编译暂存 Manifest。
+        let outcome = vulcan_provider_config::manifest_sync::stage_synced_provider_activation(
+            &vulcan_provider_config::manifest_store::ManifestStoreLayout::new(directory.path()),
+            &entry,
+            &candidate_bytes,
+            None,
+            None,
+            None,
+        )
+        .expect("candidate should stage");
+        // activation_parts are the exact ownership transition required by the guard.
+        // activation_parts 是护栏所需的精确所有权转换。
+        let (manifest, store_snapshot) = match outcome {
+            vulcan_provider_config::manifest_sync::SyncOutcome::Activated {
+                manifest,
+                store_snapshot,
+                ..
+            } => (manifest, store_snapshot),
+            _ => panic!("expected staged activation"),
+        };
+        // staged_manifest_mutation is the runtime CAS before/after image.
+        // staged_manifest_mutation 是运行时 CAS 前后镜像。
+        let staged_manifest_mutation = runtime
+            .replace_system_manifest_transactional("deepseek", manifest)
+            .expect("runtime manifest should stage");
+        // reports and snapshots form the complete cancellation transaction.
+        // reports 与 snapshots 构成完整取消事务。
+        let snapshots = vec![
+            crate::provider_manifest_sync::ProviderManifestActivationSnapshot {
+                provider_id: String::from("deepseek"),
+                store: store_snapshot,
+                staged_manifest_mutation,
+            },
+        ];
+        let reports = vec![crate::provider_manifest_sync::ProviderSyncReport {
+            provider_id: String::from("deepseek"),
+            outcome: "activated",
+            revision: candidate_revision,
+            failure_kind: None,
+            failure_message: None,
+            activation_snapshot: Some(snapshots[0].clone()),
+        }];
+
+        {
+            // guard emulates an RPC Future dropped at an asynchronous projection boundary.
+            // guard 模拟在异步投影边界被丢弃的 RPC Future。
+            let _guard = StagedProviderActivationCancellationGuard::new(
+                &service, &runtime, &reports, &snapshots,
+            );
+        }
+
+        // store proves both the Active before-image and Applying journal were restored/cleared.
+        // store 证明 Active 前镜像与 Applying 日志均已恢复/清除。
+        let store =
+            vulcan_provider_config::manifest_store::ManifestStoreLayout::new(directory.path());
+        assert_eq!(
+            store.read_active("deepseek").expect("active should read"),
+            None
+        );
+        assert!(
+            !store
+                .recover_system_transaction("deepseek")
+                .expect("journal probe should succeed")
+        );
+        assert_eq!(
+            runtime
+                .system_manifest("deepseek")
+                .expect("restored DeepSeek manifest should exist")
+                .revision,
+            bundled_revision
+        );
+    }
+
+    /// Verifies browser settings retain diagnostics without projecting an isolated provider account.
+    /// 验证浏览器设置会保留诊断，同时不投影已隔离供应商账号。
+    #[test]
+    fn settings_snapshot_excludes_isolated_custom_provider_connection() {
+        let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
+        let provider_id = "custom:isolated-settings";
+        let connection_id = "isolated-settings-account";
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration
+            .custom_provider_file_refs
+            .insert(provider_id.to_string());
+        configuration.connection_graph.connections.insert(
+            connection_id.to_string(),
+            CredentialConnection {
+                id: connection_id.to_string(),
+                provider_id: provider_id.to_string(),
+                service_entry_id: String::from("default"),
+                credential_profile_id: String::from("api-key"),
+                credential_mode: CredentialMode::Token,
+                credential_id: String::from("isolated-settings-credential"),
+                display_name: String::from("Isolated Settings Account"),
+                secret_reference: String::from("isolated-settings-secret"),
+                management_secret_reference: None,
+                service_origin_override: None,
+                verified_protocols: BTreeSet::from([String::from(
+                    vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID,
+                )]),
+                selected_protocol: String::from(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
+                prompt_cache_by_protocol: BTreeMap::new(),
+                usage_scope_override: None,
+            },
+        );
+        configuration.custom_provider_manifest_failures = vec![CustomProviderManifestFailure {
+            provider_id: provider_id.to_string(),
+            message: String::from("invalid standalone document"),
+        }];
+        configuration.custom_provider_manifest_failure_total_count = 1;
+
+        let snapshot = build_public_ai_settings_snapshot(&runtime, &configuration)
+            .expect("healthy settings snapshot should remain available");
+
+        assert!(snapshot.connections.is_empty());
+        assert!(snapshot.catalogs.is_empty());
+        assert_eq!(snapshot.custom_provider_manifest_failure_total_count, 1);
+        assert_eq!(
+            snapshot.custom_provider_manifest_failures[0].provider_id,
+            provider_id
+        );
+        assert!(
+            configuration
+                .connection_graph
+                .connections
+                .contains_key(connection_id),
+            "the persisted repair authority must remain unchanged"
+        );
+    }
+
+    /// Verifies removal accepts an exact isolated custom reference but never a system namespace.
+    /// 验证删除接受精确隔离自定义引用，但绝不接受系统命名空间。
+    #[test]
+    fn isolated_custom_provider_removal_identity_is_namespace_safe() {
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration
+            .custom_provider_file_refs
+            .insert(String::from("custom:isolated-removal"));
+        configuration
+            .custom_provider_file_refs
+            .insert(String::from("openai"));
+
+        assert_eq!(
+            validate_removable_custom_provider_identity(&configuration, "custom:isolated-removal"),
+            Ok(true)
+        );
+        let error = validate_removable_custom_provider_identity(&configuration, "openai")
+            .expect_err("system provider identity must never enter custom removal");
+        assert!(error.contains("custom:"), "{error}");
+    }
+
+    /// Verifies connection mutation RPCs never accept a user-selected protocol authority.
+    /// 验证连接变更 RPC 绝不接受用户选择的协议权威。
+    #[test]
+    fn connection_requests_reject_user_selected_protocol() {
+        // requests are the exact browser payloads after connection-level protocol selection was removed.
+        // requests 是移除连接级协议选择后的精确浏览器载荷。
+        let requests = [
+            (
+                "add",
+                serde_json::json!({
+                    "providerId": "openrouter",
+                    "serviceEntryId": "public-api",
+                    "credentialProfileId": "api-key",
+                    "credentialMode": "token",
+                    "displayName": "Primary",
+                    "secret": "test-secret"
+                }),
+            ),
+            (
+                "update",
+                serde_json::json!({
+                    "connectionId": "connection",
+                    "displayName": "Primary",
+                    "serviceEntryId": "public-api",
+                    "credentialProfileId": "api-key",
+                    "credentialMode": "token"
+                }),
+            ),
+            (
+                "oauth",
+                serde_json::json!({
+                    "transactionId": "transaction",
+                    "providerId": "openai",
+                    "serviceEntryId": "codex-subscription",
+                    "credentialProfileId": "chatgpt-oauth",
+                    "displayName": "Subscription"
+                }),
+            ),
+        ];
+
+        for (kind, request) in requests {
+            let accepted = match kind {
+                "add" => serde_json::from_value::<PublicAiConnectionAddRequest>(request.clone())
+                    .map(|_| ()),
+                "update" => {
+                    serde_json::from_value::<PublicAiConnectionUpdateRequest>(request.clone())
+                        .map(|_| ())
+                }
+                "oauth" => serde_json::from_value::<PublicAiOAuthCommitRequest>(request.clone())
+                    .map(|_| ()),
+                _ => unreachable!("closed request fixture kind"),
+            };
+            accepted.unwrap_or_else(|error| panic!("{kind} request should deserialize: {error}"));
+
+            let mut forbidden = request;
+            forbidden["selectedProtocol"] =
+                serde_json::Value::String(String::from("openai-chat-completions.v1"));
+            let rejected = match kind {
+                "add" => {
+                    serde_json::from_value::<PublicAiConnectionAddRequest>(forbidden).map(|_| ())
+                }
+                "update" => {
+                    serde_json::from_value::<PublicAiConnectionUpdateRequest>(forbidden).map(|_| ())
+                }
+                "oauth" => {
+                    serde_json::from_value::<PublicAiOAuthCommitRequest>(forbidden).map(|_| ())
+                }
+                _ => unreachable!("closed request fixture kind"),
+            };
+            let error = rejected.expect_err("selectedProtocol must be rejected");
+            assert!(error.to_string().contains("selectedProtocol"));
+        }
+    }
+
+    /// Verifies the persisted connection anchor follows declared Manifest route order.
+    /// 验证持久化连接锚点遵循 Manifest 声明的路由顺序。
+    #[test]
+    fn connection_protocol_anchor_uses_manifest_order() {
+        // entry is the exact bundled OpenRouter service contract, including route ordering.
+        // entry 是精确的内置 OpenRouter 服务契约，包含路由顺序。
+        let catalog = vulcan_provider_adapters::load_bundled_resolved_catalog();
+        let entry = catalog
+            .manifest("openrouter")
+            .and_then(|manifest| {
+                manifest
+                    .descriptor
+                    .service_entries
+                    .iter()
+                    .find(|entry| entry.id == "public-api")
+            })
+            .expect("OpenRouter public entry should exist");
+        let expected = entry
+            .protocol_routes
+            .iter()
+            .find(|route| route.verified)
+            .expect("OpenRouter should declare a verified route")
+            .protocol_profile_id
+            .clone();
+
+        assert_eq!(connection_protocol_anchor(entry), Ok(expected));
+    }
 
     /// Builds one exact internal inference route for settings-boundary regression tests.
     /// 为设置边界回归测试构建一条精确内部推理路由。
@@ -8630,6 +11975,9 @@ mod inference_settings_route_tests {
                 ..ModelCapabilityOverrides::default()
             },
         );
+        runtime
+            .replace_configuration(configuration.clone())
+            .expect("capability overrides should cross the settings activation boundary");
 
         // snapshot must expose the record directly instead of depending on a visible connection model.
         // snapshot 必须直接公开该记录，而不是依赖可见的连接模型。
@@ -8642,6 +11990,330 @@ mod inference_settings_route_tests {
         assert_eq!(record.model_id, "private/chat");
         assert_eq!(record.overrides.context_limit, Some(16_384));
         assert_eq!(record.overrides.output_limit, Some(4_096));
+    }
+
+    /// Verifies disabled provider-tool template models remain manageable in one coherent settings snapshot.
+    /// 验证关闭的供应商工具模板模型在一份一致设置快照中仍可管理。
+    #[test]
+    fn settings_snapshot_keeps_disabled_provider_tool_template_models_manageable() {
+        // runtime supplies the bundled Alibaba template catalog without network access.
+        // runtime 在不访问网络的情况下提供内置阿里云模板目录。
+        let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
+        // configuration owns one eligible Model Studio credential and one explicit model closure.
+        // configuration 持有一个合格百炼凭据与一个显式模型关闭选择。
+        let mut configuration = PersistedAiConfiguration::default();
+        // connection binds the exact service and credential profile that own the reviewed templates.
+        // connection 绑定拥有已审核模板的精确服务与凭据配置档。
+        let connection = CredentialConnection {
+            id: String::from("alibaba-template-account"),
+            provider_id: String::from("alibaba"),
+            service_entry_id: String::from("model-studio-cn"),
+            credential_profile_id: String::from("api-key"),
+            credential_mode: CredentialMode::Token,
+            credential_id: String::from("alibaba-template-credential"),
+            display_name: String::from("Alibaba template account"),
+            secret_reference: String::from("alibaba-template-secret"),
+            management_secret_reference: None,
+            service_origin_override: None,
+            verified_protocols: BTreeSet::from([String::from("openai-responses.v1")]),
+            selected_protocol: String::from("openai-responses.v1"),
+            prompt_cache_by_protocol: BTreeMap::new(),
+            usage_scope_override: None,
+        };
+        configuration
+            .connection_graph
+            .add_connection(
+                &runtime
+                    .providers()
+                    .expect("provider registry should resolve"),
+                connection,
+            )
+            .expect("Alibaba template connection should register");
+        configuration.set_model_enabled("alibaba", "qwen-image-2.0-pro", false);
+        runtime
+            .replace_configuration(configuration.clone())
+            .expect("template access should cross the settings activation boundary");
+
+        // snapshot must project declarations, access state, and executable targets from one generation.
+        // snapshot 必须从同一代际投影声明、访问状态与可执行目标。
+        let snapshot = build_public_ai_settings_snapshot(&runtime, &configuration)
+            .expect("settings snapshot should build");
+        assert!(snapshot.provider_tool_template_models.iter().any(|model| {
+            model.provider_id == "alibaba" && model.model_id == "qwen-image-2.0-pro"
+        }));
+        // access is the exact provider-level state rendered by the management dialog.
+        // access 是管理弹窗渲染的精确供应商级状态。
+        let access = snapshot
+            .model_access_records
+            .iter()
+            .find(|record| {
+                record.provider_id == "alibaba" && record.model_id == "qwen-image-2.0-pro"
+            })
+            .expect("template model access record should exist");
+        assert!(!access.enabled);
+        assert!(access.default_enabled);
+        assert!(access.customized);
+        assert!(
+            snapshot
+                .provider_tool_targets
+                .iter()
+                .all(|available| { available.target.upstream_target_id != "qwen-image-2.0-pro" })
+        );
+    }
+
+    /// Verifies internal conversation candidates consume the frozen model binding.
+    /// 验证内部对话候选消费冻结的模型绑定。
+    #[test]
+    fn internal_conversation_candidate_uses_model_protocol_binding() {
+        // runtime supplies the signed OpenRouter registry without external network access.
+        // runtime 在不访问外部网络的情况下提供已签名 OpenRouter 注册表。
+        let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
+        // connection deliberately retains Chat as its discovery compatibility protocol.
+        // connection 刻意保留 Chat 作为发现兼容协议。
+        let connection = CredentialConnection {
+            id: String::from("openrouter-model-binding-account"),
+            provider_id: String::from("openrouter"),
+            service_entry_id: String::from("public-api"),
+            credential_profile_id: String::from("api-key"),
+            credential_mode: CredentialMode::Token,
+            credential_id: String::from("openrouter-model-binding-credential"),
+            display_name: String::from("OpenRouter model binding account"),
+            secret_reference: String::from("openrouter-model-binding-secret"),
+            management_secret_reference: None,
+            service_origin_override: None,
+            verified_protocols: BTreeSet::from([
+                String::from(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
+                String::from(vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID),
+            ]),
+            selected_protocol: String::from(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
+            prompt_cache_by_protocol: BTreeMap::new(),
+            usage_scope_override: None,
+        };
+        // capabilities expose one internal conversation operation through the frozen variant.
+        // capabilities 通过冻结变体公开一项内部对话操作。
+        let capabilities = ModelCapabilities {
+            operations: vec![AiOperation::ConversationRespond],
+            ..ModelCapabilities::default()
+        };
+        // model binds Responses even though the credential-level compatibility field is Chat.
+        // model 在凭据级兼容字段为 Chat 时仍绑定 Responses。
+        let model = vulcan_provider_adapters::ConnectionModel {
+            id: String::from("openai/gpt-model-bound-to-responses"),
+            display_name: String::from("Responses-bound model"),
+            capabilities: capabilities.clone(),
+            capability_evidence: vulcan_provider_adapters::ModelCapabilityEvidence::default(),
+            protocol_variants: BTreeMap::from([(
+                String::from(vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID),
+                vulcan_provider_adapters::ProtocolModelVariant {
+                    capabilities,
+                    capability_evidence: vulcan_provider_adapters::ModelCapabilityEvidence::default(
+                    ),
+                    discovery_signature: String::from("responses-bound-model-test"),
+                    catalog_generation: 7,
+                },
+            )]),
+            resolved_protocol_binding: Some(vulcan_provider_adapters::ModelProtocolBinding {
+                protocol_profile_id: String::from(vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID),
+                source: vulcan_provider_adapters::ModelProtocolBindingSource::SystemManifest,
+                manifest_revision: 2,
+                rule_id: String::from("responses-bound-model-rule"),
+            }),
+        };
+        // configuration owns the exact credential identity used by the catalog.
+        // configuration 持有目录使用的精确凭据身份。
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration
+            .connection_graph
+            .add_connection(
+                &runtime
+                    .providers()
+                    .expect("provider registry should resolve"),
+                connection.clone(),
+            )
+            .expect("OpenRouter connection should register");
+        // catalogs contains the coherent frozen account snapshot under review.
+        // catalogs 包含本次检查的一致冻结账号快照。
+        let catalogs = BTreeMap::from([(
+            connection.id.clone(),
+            ConnectionModelCatalog {
+                connection_id: connection.id,
+                models: vec![model],
+                generation: 7,
+                page_count: 1,
+                discovery_schema_revision: String::from("model-binding-test-v1"),
+            },
+        )]);
+
+        // candidates must persist Responses and must never inherit the Chat connection field.
+        // candidates 必须持久化 Responses，且绝不能继承连接上的 Chat 字段。
+        let candidates = build_internal_inference_candidates(
+            &configuration,
+            &runtime
+                .providers()
+                .expect("provider registry should resolve"),
+            &catalogs,
+        )
+        .expect("internal candidates should build");
+        let candidate = candidates
+            .iter()
+            .find(|candidate| candidate.route.operation == AiOperation::ConversationRespond)
+            .expect("conversation candidate should exist");
+        assert_eq!(
+            candidate.route.binding,
+            InferenceRouteBinding::Protocol {
+                protocol_profile_id: String::from(vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID,),
+            }
+        );
+        // route_records must expose the same frozen protocol authority and its complete provenance.
+        // route_records 必须公开同一冻结协议权威及其完整溯源。
+        let route_records = build_public_ai_model_route_records(
+            &configuration,
+            &runtime
+                .providers()
+                .expect("provider registry should resolve"),
+            &catalogs,
+            &BTreeMap::from([(String::from("openrouter"), 2)]),
+        );
+        assert_eq!(route_records.len(), 1);
+        // route_record is the exact settings DTO row for the tested account and model.
+        // route_record 是测试账号与模型对应的精确设置 DTO 行。
+        let route_record = &route_records[0];
+        assert_eq!(
+            route_record.protocol_id,
+            Some(String::from(
+                vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID
+            ))
+        );
+        assert_eq!(
+            route_record.available_protocols,
+            vec![String::from(
+                vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID
+            )]
+        );
+        assert_eq!(
+            route_record.binding_source.as_deref(),
+            Some("system_manifest")
+        );
+        assert_eq!(
+            route_record.binding_rule_id.as_deref(),
+            Some("responses-bound-model-rule")
+        );
+        assert_eq!(route_record.manifest_revision, 2);
+        assert!(route_record.executable);
+        assert!(route_record.unavailable_reason.is_none());
+    }
+
+    /// Verifies blocked custom models remain visible with an exact backend-owned reason.
+    /// 验证被阻止的自定义模型仍保持可见，并携带精确的后端原因。
+    #[test]
+    fn custom_model_route_status_exposes_model_specific_protocol_block() {
+        let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
+        let provider_id = String::from("custom:model-route-status");
+        let descriptor = CustomProviderDefinition {
+            id: provider_id.clone(),
+            display_name: String::from("Model Route Status"),
+            base_url: String::from("https://model-route-status.example.test/v1"),
+            protocol: None,
+            authentication: CustomProviderAuthentication::BearerAuthorization,
+            model_discovery_mode: CustomProviderModelDiscoveryMode::Standard,
+            model_discovery_path: None,
+            protocols: vec![
+                CustomProviderProtocol::OpenAiResponses,
+                CustomProviderProtocol::AnthropicMessages,
+            ],
+            protocol_routes: Vec::new(),
+            request_headers: BTreeMap::new(),
+        }
+        .into_descriptor()
+        .expect("multi-protocol custom provider should compile");
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration
+            .custom_providers
+            .insert(provider_id.clone(), descriptor);
+        let connection = CredentialConnection {
+            id: String::from("model-route-status-account"),
+            provider_id: provider_id.clone(),
+            service_entry_id: String::from("default"),
+            credential_profile_id: String::from("api-key"),
+            credential_mode: CredentialMode::Token,
+            credential_id: String::from("model-route-status-credential"),
+            display_name: String::from("Model Route Status Account"),
+            secret_reference: String::from("model-route-status-secret"),
+            management_secret_reference: None,
+            service_origin_override: None,
+            verified_protocols: BTreeSet::from([
+                String::from(vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID),
+                String::from(vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID),
+            ]),
+            selected_protocol: String::from(vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID),
+            prompt_cache_by_protocol: BTreeMap::new(),
+            usage_scope_override: None,
+        };
+        let providers = runtime
+            .effective_providers(&configuration)
+            .expect("effective custom providers should resolve");
+        configuration
+            .connection_graph
+            .add_connection(&providers, connection.clone())
+            .expect("custom connection should register");
+        let model_id = String::from("anthropic-only/model");
+        configuration.custom_model_protocol_preferences.insert(
+            PersistedAiConfiguration::provider_model_key(provider_id.as_str(), model_id.as_str()),
+            CustomModelProtocolPreference::Explicit {
+                protocol: CustomProviderProtocol::OpenAiResponses,
+            },
+        );
+        let model = vulcan_provider_adapters::ConnectionModel {
+            id: model_id.clone(),
+            display_name: String::from("Anthropic-only Model"),
+            capabilities: ModelCapabilities::default(),
+            capability_evidence: vulcan_provider_adapters::ModelCapabilityEvidence::default(),
+            protocol_variants: BTreeMap::from([(
+                String::from(vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID),
+                vulcan_provider_adapters::ProtocolModelVariant {
+                    capabilities: ModelCapabilities::default(),
+                    capability_evidence: vulcan_provider_adapters::ModelCapabilityEvidence::default(
+                    ),
+                    discovery_signature: String::from("anthropic-only-route-status"),
+                    catalog_generation: 1,
+                },
+            )]),
+            resolved_protocol_binding: None,
+        };
+        let catalogs = BTreeMap::from([(
+            connection.id.clone(),
+            ConnectionModelCatalog {
+                connection_id: connection.id,
+                models: vec![model],
+                generation: 1,
+                page_count: 1,
+                discovery_schema_revision: String::from("custom-route-status-v1"),
+            },
+        )]);
+
+        let records = build_public_ai_model_route_records(
+            &configuration,
+            &providers,
+            &catalogs,
+            &BTreeMap::from([(provider_id, 0)]),
+        );
+        assert_eq!(records.len(), 1);
+        let record = &records[0];
+        assert!(!record.executable);
+        assert!(record.protocol_id.is_none());
+        assert!(record.binding_source.is_none());
+        assert_eq!(
+            record.available_protocols,
+            vec![String::from(
+                vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID
+            )]
+        );
+        assert!(
+            record
+                .unavailable_reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("unavailable for this model"))
+        );
     }
 
     /// Verifies missing models in active and archived sessions fall back to the preferred model.
@@ -8695,6 +12367,8 @@ mod inference_settings_route_tests {
                     capabilities: conversation_capabilities.clone(),
                     capability_evidence: vulcan_provider_adapters::ModelCapabilityEvidence::default(
                     ),
+                    protocol_variants: BTreeMap::new(),
+                    resolved_protocol_binding: None,
                 },
                 vulcan_provider_adapters::ConnectionModel {
                     id: first_model_id.clone(),
@@ -8702,6 +12376,8 @@ mod inference_settings_route_tests {
                     capabilities: conversation_capabilities,
                     capability_evidence: vulcan_provider_adapters::ModelCapabilityEvidence::default(
                     ),
+                    protocol_variants: BTreeMap::new(),
+                    resolved_protocol_binding: None,
                 },
             ],
             generation: 1,
@@ -8761,8 +12437,14 @@ mod inference_settings_route_tests {
 
         // changed_session_ids must include both visible and archived sessions after reconciliation.
         // changed_session_ids 必须在协调后同时包含可见与归档会话。
-        let changed_session_ids =
-            reconcile_missing_session_model_selections(&mut workspace, &configuration, &catalogs);
+        let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
+        let changed_session_ids = reconcile_missing_session_model_selections(
+            &mut workspace,
+            &runtime,
+            &configuration,
+            &catalogs,
+        )
+        .expect("session reconciliation should clear route leases");
         assert_eq!(
             changed_session_ids,
             BTreeSet::from([active_session_id, archived_session_id])
@@ -8786,14 +12468,48 @@ mod inference_settings_route_tests {
             );
         }
 
+        // revokedStates reset both stores to one explicitly disabled credential route.
+        // revokedStates 将两类存储重置到同一条被显式禁用的凭据路由。
+        for runtime_state in workspace
+            .session_runtime_state
+            .values_mut()
+            .chain(workspace.archived_session_runtime_state.values_mut())
+        {
+            runtime_state.active_provider_id = Some(String::from("revoked-provider"));
+            runtime_state.active_connection_id = Some(String::from("revoked-connection"));
+            runtime_state.active_model_id = Some(String::from("revoked-model"));
+        }
+        // revokedSessionIds proves explicit access revocation covers active and archived owners.
+        // revokedSessionIds 证明显式访问撤销会覆盖活动与归档所有者。
+        let revoked_session_ids = reconcile_disabled_connection_sessions(
+            &mut workspace,
+            "revoked-connection",
+            None,
+            configuration.active.as_ref(),
+        );
+        assert_eq!(
+            revoked_session_ids,
+            BTreeSet::from([active_session_id, archived_session_id])
+        );
+        for runtime_state in workspace
+            .session_runtime_state
+            .values()
+            .chain(workspace.archived_session_runtime_state.values())
+        {
+            assert_eq!(
+                runtime_state.active_connection_id.as_deref(),
+                Some("fallback-connection")
+            );
+        }
+
         configuration.active = None;
         assert_eq!(
-            preferred_fallback_model_selection(&configuration, &catalogs),
-            Some(ActiveAiModelSelection {
+            preferred_fallback_model_selection(&runtime, &configuration, &catalogs),
+            Ok(Some(ActiveAiModelSelection {
                 provider_id,
                 model_id: first_model_id,
                 connection_id,
-            })
+            }))
         );
     }
 
@@ -8947,6 +12663,50 @@ mod inference_settings_route_tests {
         );
     }
 
+    /// Verifies lazy session provider-tool migration is deterministic and idempotent.
+    /// 验证惰性会话供应商工具迁移具备确定性与幂等性。
+    #[test]
+    fn session_provider_tool_settings_reconciliation_is_idempotent() {
+        // configuration owns one exact global capability and model-account default.
+        // configuration 持有一项精确的全局能力与模型账号默认值。
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration
+            .provider_tool_enabled_capabilities
+            .insert(ProviderToolCapabilityKind::WebSearch);
+        configuration.provider_tool_selections.insert(
+            ProviderToolCapabilityKind::WebSearch,
+            ProviderToolTargetSelection {
+                connection_id: String::from("search-connection"),
+                target_id: String::from("search-model"),
+            },
+        );
+        // runtimeState starts in the legacy uninitialized representation.
+        // runtimeState 从旧版未初始化表示开始。
+        let mut runtime_state = vulcan_workbench_model::SessionRuntimeStateEntry::default();
+        // firstReconciliation must materialize the global defaults exactly once.
+        // firstReconciliation 必须且仅须一次物化全局默认值。
+        let (enabled_capabilities, selections, first_changed) =
+            reconcile_session_provider_tool_settings(&mut runtime_state, &configuration)
+                .expect("legacy session settings should reconcile");
+        assert!(first_changed);
+        assert_eq!(
+            enabled_capabilities,
+            BTreeSet::from([ProviderToolCapabilityKind::WebSearch])
+        );
+        assert_eq!(
+            selections
+                .get(&ProviderToolCapabilityKind::WebSearch)
+                .map(|selection| selection.connection_id.as_str()),
+            Some("search-connection")
+        );
+        // secondChanged proves an identical generation performs no authoritative state write.
+        // secondChanged 证明相同代际不会再次执行权威状态写入。
+        let (_enabled_capabilities, _selections, second_changed) =
+            reconcile_session_provider_tool_settings(&mut runtime_state, &configuration)
+                .expect("initialized session settings should remain readable");
+        assert!(!second_changed);
+    }
+
     /// Verifies explicit Codex capability switches survive the custom-provider candidate projection.
     /// 验证显式 Codex 能力开关可完整通过自定义供应商候选投影。
     #[test]
@@ -8966,6 +12726,9 @@ mod inference_settings_route_tests {
             validation_connection_id: None,
             model_discovery_mode: CustomProviderModelDiscoveryMode::Manual,
             model_discovery_path: None,
+            protocols: Vec::new(),
+            protocol_routes: Vec::new(),
+            request_headers: BTreeMap::new(),
             allow_manual_fallback: false,
             allow_pending_validation: false,
             confirm_inactive_protocol_override_deletion: false,
@@ -9004,10 +12767,13 @@ mod inference_settings_route_tests {
             id: provider_id.clone(),
             display_name: String::from("Codex Proxy"),
             base_url: String::from("https://proxy.example.test/v1"),
-            protocol: CustomProviderProtocol::OpenAiCodexResponses,
+            protocol: Some(CustomProviderProtocol::OpenAiCodexResponses),
             authentication: CustomProviderAuthentication::BearerAuthorization,
             model_discovery_mode: CustomProviderModelDiscoveryMode::Manual,
             model_discovery_path: None,
+            protocols: Vec::new(),
+            protocol_routes: Vec::new(),
+            request_headers: BTreeMap::new(),
         }
         .into_descriptor()
         .expect("default Codex provider should compile");
@@ -9032,6 +12798,9 @@ mod inference_settings_route_tests {
             validation_connection_id: None,
             model_discovery_mode: CustomProviderModelDiscoveryMode::Manual,
             model_discovery_path: None,
+            protocols: Vec::new(),
+            protocol_routes: Vec::new(),
+            request_headers: BTreeMap::new(),
             allow_manual_fallback: false,
             allow_pending_validation: false,
             confirm_inactive_protocol_override_deletion: false,
@@ -9060,10 +12829,13 @@ mod inference_settings_route_tests {
             id: provider_id.clone(),
             display_name: String::from("Test Provider"),
             base_url: String::from("https://old.example.test/v1"),
-            protocol: CustomProviderProtocol::OpenAiResponses,
+            protocol: Some(CustomProviderProtocol::OpenAiResponses),
             authentication: CustomProviderAuthentication::BearerAuthorization,
             model_discovery_mode: CustomProviderModelDiscoveryMode::Standard,
             model_discovery_path: None,
+            protocols: Vec::new(),
+            protocol_routes: Vec::new(),
+            request_headers: BTreeMap::new(),
         }
         .into_descriptor()
         .expect("custom provider fixture should compile");
@@ -9116,6 +12888,9 @@ mod inference_settings_route_tests {
             validation_connection_id: Some(existing.id.clone()),
             model_discovery_mode: CustomProviderModelDiscoveryMode::Standard,
             model_discovery_path: None,
+            protocols: Vec::new(),
+            protocol_routes: Vec::new(),
+            request_headers: BTreeMap::new(),
             allow_manual_fallback: false,
             allow_pending_validation: false,
             confirm_inactive_protocol_override_deletion: false,
@@ -9161,6 +12936,9 @@ mod inference_settings_route_tests {
             validation_connection_id: Some(existing.id.clone()),
             model_discovery_mode: CustomProviderModelDiscoveryMode::Standard,
             model_discovery_path: None,
+            protocols: Vec::new(),
+            protocol_routes: Vec::new(),
+            request_headers: BTreeMap::new(),
             allow_manual_fallback: false,
             allow_pending_validation: false,
             confirm_inactive_protocol_override_deletion: false,
@@ -9273,12 +13051,32 @@ mod inference_settings_route_tests {
                 existing.id.clone(),
                 CustomProviderConnectionValidationOutcome {
                     pending_validation: false,
+                    catalog: None,
+                    status: CatalogDiscoveryStatus {
+                        state: CatalogDiscoveryState::Ready,
+                        failure_kind: None,
+                        message: None,
+                        model_count: 1,
+                        generation: 1,
+                        observed_at_ms: 1,
+                    },
+                    refresh_error: None,
                 },
             ),
             (
                 sibling.id.clone(),
                 CustomProviderConnectionValidationOutcome {
                     pending_validation: true,
+                    catalog: None,
+                    status: CatalogDiscoveryStatus {
+                        state: CatalogDiscoveryState::Ready,
+                        failure_kind: None,
+                        message: None,
+                        model_count: 1,
+                        generation: 1,
+                        observed_at_ms: 1,
+                    },
+                    refresh_error: None,
                 },
             ),
         ]);
@@ -9515,5 +13313,430 @@ mod inference_settings_route_tests {
             connection_model_directory_kind(&providers, &connection),
             PublicAiModelDirectoryKind::Unavailable
         );
+    }
+
+    /// Verifies account synchronization remains available when any protocol route is remote.
+    /// 验证任一协议路由为远端发现时账号同步仍保持可用。
+    #[test]
+    fn multi_protocol_directory_kind_aggregates_route_discovery() {
+        // provider declares a manual first route and a remote second route.
+        // provider 声明一条手工首路由与一条远端次路由。
+        let provider = vulcan_provider_adapters::CustomProviderDefinition {
+            id: String::from("custom:mixed-directory"),
+            display_name: String::from("Mixed Directory"),
+            base_url: String::from("https://mixed-directory.example.test/v1"),
+            protocol: None,
+            protocols: vec![
+                CustomProviderProtocol::OpenAiResponses,
+                CustomProviderProtocol::OpenAiChat,
+            ],
+            authentication: CustomProviderAuthentication::BearerAuthorization,
+            model_discovery_mode: CustomProviderModelDiscoveryMode::Manual,
+            model_discovery_path: None,
+            protocol_routes: vec![vulcan_provider_adapters::CustomProtocolRoute {
+                protocol: CustomProviderProtocol::OpenAiChat,
+                base_url: None,
+                endpoint_path: None,
+                authentication: None,
+                model_discovery_mode: Some(CustomProviderModelDiscoveryMode::Standard),
+                model_discovery_path: None,
+                request_headers: BTreeMap::new(),
+            }],
+            request_headers: BTreeMap::new(),
+        }
+        .into_descriptor()
+        .expect("mixed directory provider should project");
+        // entry supplies the exact generated service and credential identifiers.
+        // entry 提供精确生成的服务与凭据标识。
+        let entry = provider
+            .service_entries
+            .first()
+            .expect("custom provider should expose one entry");
+        let profile = entry
+            .credential_profiles
+            .first()
+            .expect("custom provider should expose one credential profile");
+        // connection deliberately selects the manual compatibility route first.
+        // connection 刻意首先选择手工兼容路由。
+        let connection = CredentialConnection {
+            id: String::from("mixed-directory-account"),
+            provider_id: provider.id.clone(),
+            service_entry_id: entry.id.clone(),
+            credential_profile_id: profile.id.clone(),
+            credential_mode: profile.credential_mode,
+            credential_id: String::from("mixed-directory-credential"),
+            display_name: String::from("Mixed directory account"),
+            secret_reference: String::from("mixed-directory-secret"),
+            management_secret_reference: None,
+            service_origin_override: None,
+            verified_protocols: BTreeSet::from([
+                String::from(vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID),
+                String::from(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
+            ]),
+            selected_protocol: String::from(vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID),
+            prompt_cache_by_protocol: BTreeMap::new(),
+            usage_scope_override: None,
+        };
+        // providers is the exact effective registry consumed by the browser projection.
+        // providers 是浏览器投影消费的精确有效注册表。
+        let providers =
+            ProviderRegistry::effective(&BTreeMap::from([(provider.id.clone(), provider)]))
+                .expect("mixed directory registry should build");
+
+        assert_eq!(
+            connection_model_directory_kind(&providers, &connection),
+            PublicAiModelDirectoryKind::Dynamic,
+        );
+    }
+
+    /// Verifies multi-protocol migration never replaces a model binding with the connection default.
+    /// 验证多协议迁移绝不会用连接默认值替换模型绑定。
+    #[test]
+    fn multi_protocol_migration_preserves_exact_internal_route_binding() {
+        // target exposes Responses first while retaining Chat as another enabled protocol.
+        // target 首选 Responses，同时保留 Chat 作为另一项启用协议。
+        let target = CustomProviderConnectionTarget {
+            service_entry_id: String::from("custom-entry-v2"),
+            credential_profile_id: String::from("api-key"),
+            selected_protocol: String::from(vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID),
+            verified_protocols: BTreeSet::from([
+                String::from(vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID),
+                String::from(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
+            ]),
+        };
+        // route represents a model explicitly bound to Chat before the provider edit.
+        // route 表示供应商编辑前显式绑定到 Chat 的模型。
+        let mut route = InferenceRouteConfiguration {
+            provider_id: String::from("custom:multi-route"),
+            service_entry_id: String::from("custom-entry-v1"),
+            connection_id: String::from("custom-account"),
+            model_id: String::from("chat-only-model"),
+            binding: InferenceRouteBinding::Protocol {
+                protocol_profile_id: String::from(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
+            },
+            operation: AiOperation::ConversationRespond,
+            usage_scope: InferenceUsageScope::ExternalService,
+        };
+        // owned_connections scopes migration to the exact provider account.
+        // owned_connections 将迁移限定到精确供应商账号。
+        let owned_connections = BTreeSet::from([String::from("custom-account")]);
+
+        migrate_custom_provider_inference_route(
+            &mut route,
+            "custom:multi-route",
+            &owned_connections,
+            &target,
+        )
+        .expect("multi-protocol route migration should remain structurally valid");
+
+        assert_eq!(route.service_entry_id, "custom-entry-v2");
+        assert_eq!(
+            route.binding,
+            InferenceRouteBinding::Protocol {
+                protocol_profile_id: String::from(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID,),
+            },
+            "the connection default must not replace an exact model route"
+        );
+    }
+
+    /// Verifies a multi-protocol custom provider projects one verified route per protocol.
+    /// 验证多协议自定义供应商为每个协议投影一条已验证路由。
+    #[test]
+    fn multi_protocol_custom_provider_projects_one_route_per_protocol() {
+        let request = PublicAiCustomProviderSaveRequest {
+            provider_id: None,
+            display_name: String::from("Multi Protocol"),
+            base_url: String::from("https://multi.example.test/v1"),
+            protocol: CustomProviderProtocol::OpenAiChat,
+            remote_compaction_policy: ResponsesRemoteCompactionPolicy::Disabled,
+            websocket_policy: ResponsesWebsocketPolicy::Disabled,
+            authentication: CustomProviderAuthentication::BearerAuthorization,
+            credential_display_name: Some(String::from("Account")),
+            secret: Some(String::from("secret")),
+            validation_connection_id: None,
+            model_discovery_mode: CustomProviderModelDiscoveryMode::Standard,
+            model_discovery_path: None,
+            protocols: vec![
+                CustomProviderProtocol::OpenAiResponses,
+                CustomProviderProtocol::AnthropicMessages,
+                CustomProviderProtocol::OpenAiChat,
+            ],
+            protocol_routes: Vec::new(),
+            request_headers: BTreeMap::new(),
+            allow_manual_fallback: false,
+            allow_pending_validation: false,
+            confirm_inactive_protocol_override_deletion: false,
+        };
+        let candidate =
+            prepare_custom_provider_candidate(&request, &PersistedAiConfiguration::default())
+                .expect("multi-protocol candidate should compile");
+        let entry = &candidate.descriptor.service_entries[0];
+        assert_eq!(entry.protocol_routes.len(), 3);
+        assert_eq!(
+            candidate.connection_target.verified_protocols.len(),
+            3,
+            "every enabled protocol must stay verified for the connection"
+        );
+        assert_eq!(
+            candidate.connection_target.selected_protocol,
+            entry.protocol_routes[0].protocol_profile_id
+        );
+    }
+
+    /// Verifies removing one protocol reports exactly that protocol and preserves the rest.
+    /// 验证删除一个协议时精确报告该协议，并完整保留其余协议。
+    #[test]
+    fn removed_protocols_reports_only_the_deleted_protocol() {
+        let mut current = PersistedAiConfiguration::default();
+        let request = PublicAiCustomProviderSaveRequest {
+            provider_id: Some(String::from("custom:multi")),
+            display_name: String::from("Multi Protocol"),
+            base_url: String::from("https://multi.example.test/v1"),
+            protocol: CustomProviderProtocol::OpenAiChat,
+            remote_compaction_policy: ResponsesRemoteCompactionPolicy::Disabled,
+            websocket_policy: ResponsesWebsocketPolicy::Disabled,
+            authentication: CustomProviderAuthentication::BearerAuthorization,
+            credential_display_name: None,
+            secret: None,
+            validation_connection_id: None,
+            model_discovery_mode: CustomProviderModelDiscoveryMode::Standard,
+            model_discovery_path: None,
+            protocols: vec![
+                CustomProviderProtocol::OpenAiResponses,
+                CustomProviderProtocol::AnthropicMessages,
+            ],
+            protocol_routes: Vec::new(),
+            request_headers: BTreeMap::new(),
+            allow_manual_fallback: false,
+            allow_pending_validation: false,
+            confirm_inactive_protocol_override_deletion: false,
+        };
+        let candidate =
+            prepare_custom_provider_candidate(&request, &PersistedAiConfiguration::default())
+                .expect("candidate should compile");
+        // existing_descriptor carries the full three-protocol set before the edit drops Chat.
+        // existing_descriptor 在编辑删除 Chat 前携带完整三协议集合。
+        let existing_descriptor = CustomProviderDefinition {
+            id: String::from("custom:multi"),
+            display_name: String::from("Multi Protocol"),
+            base_url: String::from("https://multi.example.test/v1"),
+            protocol: None,
+            protocols: vec![
+                CustomProviderProtocol::OpenAiResponses,
+                CustomProviderProtocol::AnthropicMessages,
+                CustomProviderProtocol::OpenAiChat,
+            ],
+            authentication: CustomProviderAuthentication::BearerAuthorization,
+            model_discovery_mode: CustomProviderModelDiscoveryMode::Standard,
+            model_discovery_path: None,
+            protocol_routes: Vec::new(),
+            request_headers: BTreeMap::new(),
+        }
+        .into_descriptor()
+        .expect("existing descriptor should compile");
+        current
+            .custom_providers
+            .insert(String::from("custom:multi"), existing_descriptor);
+
+        let removed = custom_provider_removed_protocols(&current, &candidate)
+            .expect("removed protocols should resolve");
+        assert_eq!(
+            removed,
+            BTreeSet::from([String::from("openai-chat-completions.v1")]),
+            "only Chat is removed; Responses and Anthropic survive"
+        );
+        // A cosmetic edit with the same protocol set removes nothing.
+        // 协议集合不变的展示性编辑不删除任何协议。
+        let cosmetic = current.clone();
+        let mut unchanged_candidate = candidate;
+        unchanged_candidate.descriptor = current.custom_providers["custom:multi"].clone();
+        let removed = custom_provider_removed_protocols(&cosmetic, &unchanged_candidate)
+            .expect("unchanged protocol set should resolve");
+        assert!(removed.is_empty());
+    }
+
+    /// Verifies the connection contract comparison normalizes every route, not only the first.
+    /// 验证连接契约比较会归一化每一条路由，而不只是第一条。
+    #[test]
+    fn connection_contract_comparison_normalizes_every_route() {
+        let mut current = PersistedAiConfiguration::default();
+        let existing_descriptor = CustomProviderDefinition {
+            id: String::from("custom:multi"),
+            display_name: String::from("Multi Protocol"),
+            base_url: String::from("https://multi.example.test/v1"),
+            protocol: None,
+            protocols: vec![
+                CustomProviderProtocol::OpenAiResponses,
+                CustomProviderProtocol::OpenAiChat,
+            ],
+            authentication: CustomProviderAuthentication::BearerAuthorization,
+            model_discovery_mode: CustomProviderModelDiscoveryMode::Standard,
+            model_discovery_path: None,
+            protocol_routes: Vec::new(),
+            request_headers: BTreeMap::new(),
+        }
+        .into_descriptor()
+        .expect("existing descriptor should compile");
+        current
+            .custom_providers
+            .insert(String::from("custom:multi"), existing_descriptor.clone());
+        // candidate keeps every credential-facing route identical but carries an explicit
+        // execution-only Codex-style Responses feature on the second route.
+        // candidate 保持全部面向凭据的路由一致，但第二条路由携带显式且只影响执行的
+        // Responses 能力开关。
+        let mut candidate_descriptor = existing_descriptor.clone();
+        if let Some(route) = candidate_descriptor.service_entries[0]
+            .protocol_routes
+            .iter_mut()
+            .find(|route| route.protocol_profile_id == "openai-chat-completions.v1")
+        {
+            route.responses_features = Some(vulcan_provider_adapters::ResponsesRouteFeatures {
+                remote_compaction: vulcan_provider_adapters::ResponsesRemoteCompactionPolicy::EnabledWithLocalFallback,
+                websocket: vulcan_provider_adapters::ResponsesWebsocketPolicy::Disabled,
+            });
+        }
+        let candidate = PreparedCustomProviderCandidate {
+            provider_id: String::from("custom:multi"),
+            updating_existing: true,
+            descriptor: candidate_descriptor,
+            validation_connection: None,
+            temporary_secret: None,
+            connection_target: CustomProviderConnectionTarget {
+                service_entry_id: String::from("default"),
+                credential_profile_id: String::from("api-key"),
+                selected_protocol: String::from("openai-responses.v1"),
+                verified_protocols: BTreeSet::from([
+                    String::from("openai-responses.v1"),
+                    String::from("openai-chat-completions.v1"),
+                ]),
+            },
+        };
+        let changed = custom_provider_connection_contract_changed(&current, &candidate)
+            .expect("contract comparison should resolve");
+        assert!(
+            !changed,
+            "execution-only Responses features must not count as a credential contract change on any route"
+        );
+    }
+
+    /// Verifies bounded non-sensitive fixed headers survive prepare and registry revalidation.
+    /// 验证有界非敏感固定请求头可通过保存与注册表重验。
+    #[test]
+    fn bounded_fixed_headers_survive_prepare_and_registry_revalidation() {
+        let request = PublicAiCustomProviderSaveRequest {
+            provider_id: None,
+            display_name: String::from("Header Provider"),
+            base_url: String::from("https://headers.example.test/v1"),
+            protocol: CustomProviderProtocol::OpenAiChat,
+            remote_compaction_policy: ResponsesRemoteCompactionPolicy::Disabled,
+            websocket_policy: ResponsesWebsocketPolicy::Disabled,
+            authentication: CustomProviderAuthentication::BearerAuthorization,
+            credential_display_name: Some(String::from("Account")),
+            secret: Some(String::from("secret")),
+            validation_connection_id: None,
+            model_discovery_mode: CustomProviderModelDiscoveryMode::Manual,
+            model_discovery_path: None,
+            protocols: vec![CustomProviderProtocol::OpenAiChat],
+            protocol_routes: Vec::new(),
+            request_headers: BTreeMap::from([
+                (String::from("accept"), String::from("application/json")),
+                (String::from("x-provider-version"), String::from("2026-08")),
+            ]),
+            allow_manual_fallback: false,
+            allow_pending_validation: false,
+            confirm_inactive_protocol_override_deletion: false,
+        };
+        let candidate =
+            prepare_custom_provider_candidate(&request, &PersistedAiConfiguration::default())
+                .expect("bounded fixed headers should survive prepare");
+        // Runtime revalidation must accept the same headers after a reload.
+        // 运行时重验必须在重载后仍接受相同的请求头。
+        ProviderRegistry::effective(&BTreeMap::from([(
+            candidate.descriptor.id.clone(),
+            candidate.descriptor.clone(),
+        )]))
+        .expect("registry revalidation must accept bounded fixed headers");
+    }
+
+    /// Verifies secret-header injection is rejected at the Service save boundary.
+    /// 验证服务保存边界拒绝 Secret 请求头注入。
+    #[test]
+    fn secret_fixed_headers_are_rejected_at_service_save_boundary() {
+        for forbidden in ["authorization", "x-api-key", "cookie", "host"] {
+            let request = PublicAiCustomProviderSaveRequest {
+                provider_id: None,
+                display_name: String::from("Unsafe Header"),
+                base_url: String::from("https://unsafe.example.test/v1"),
+                protocol: CustomProviderProtocol::OpenAiChat,
+                remote_compaction_policy: ResponsesRemoteCompactionPolicy::Disabled,
+                websocket_policy: ResponsesWebsocketPolicy::Disabled,
+                authentication: CustomProviderAuthentication::BearerAuthorization,
+                credential_display_name: Some(String::from("Account")),
+                secret: Some(String::from("secret")),
+                validation_connection_id: None,
+                model_discovery_mode: CustomProviderModelDiscoveryMode::Manual,
+                model_discovery_path: None,
+                protocols: vec![CustomProviderProtocol::OpenAiChat],
+                protocol_routes: Vec::new(),
+                request_headers: BTreeMap::from([(
+                    String::from(forbidden),
+                    String::from("private"),
+                )]),
+                allow_manual_fallback: false,
+                allow_pending_validation: false,
+                confirm_inactive_protocol_override_deletion: false,
+            };
+            let error =
+                prepare_custom_provider_candidate(&request, &PersistedAiConfiguration::default())
+                    .map(|_| ())
+                    .expect_err("secret fixed headers must fail at the save boundary");
+            assert!(
+                error.contains("request headers"),
+                "unexpected rejection message: {error}"
+            );
+        }
+    }
+
+    /// Verifies explicit preferences must reference an enabled protocol and keys are unique.
+    /// 验证显式偏好必须引用启用协议，且建键必须唯一。
+    #[test]
+    fn explicit_preferences_require_enabled_protocols() {
+        let enabled = BTreeSet::from([
+            String::from("openai-responses.v1"),
+            String::from("anthropic-messages.v1"),
+        ]);
+        let items = vec![PublicAiCustomModelProtocolPreferenceItem {
+            model_id: String::from("model-a"),
+            preference: CustomModelProtocolPreference::Explicit {
+                protocol: CustomProviderProtocol::AnthropicMessages,
+            },
+        }];
+        let keyed = validate_custom_model_protocol_preferences("custom:test", &enabled, &items)
+            .expect("explicit protocol inside the enabled set must save");
+        assert_eq!(keyed.len(), 1);
+
+        let items = vec![PublicAiCustomModelProtocolPreferenceItem {
+            model_id: String::from("model-b"),
+            preference: CustomModelProtocolPreference::Explicit {
+                protocol: CustomProviderProtocol::GeminiGenerateContent,
+            },
+        }];
+        let error = validate_custom_model_protocol_preferences("custom:test", &enabled, &items)
+            .expect_err("explicit protocol outside the enabled set must be rejected");
+        assert!(error.contains("not enabled"), "unexpected error: {error}");
+
+        let items = vec![
+            PublicAiCustomModelProtocolPreferenceItem {
+                model_id: String::from("model-c"),
+                preference: CustomModelProtocolPreference::Auto,
+            },
+            PublicAiCustomModelProtocolPreferenceItem {
+                model_id: String::from("model-c"),
+                preference: CustomModelProtocolPreference::Auto,
+            },
+        ];
+        let error = validate_custom_model_protocol_preferences("custom:test", &enabled, &items)
+            .expect_err("duplicate preferences must be rejected");
+        assert!(error.contains("duplicate"), "unexpected error: {error}");
     }
 }

@@ -118,6 +118,7 @@ fn session_addon_state_write_does_not_rewrite_segmented_state_document() {
             active_reasoning_effort: None,
             active_reasoning_effort_explicit: false,
             active_temperature: None,
+            provider_route_lease: None,
             provider_tool_selections: Default::default(),
             provider_tool_enabled_capabilities: Default::default(),
             provider_tool_settings_initialized: false,

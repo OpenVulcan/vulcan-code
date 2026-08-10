@@ -355,6 +355,12 @@ pub struct ServiceBridgeState {
     /// Cached MCP catalog captured during startup or explicit refresh.
     /// 启动或显式刷新时捕获的 MCP 目录缓存。
     pub(crate) cached_mcp_catalog: Option<TauriMcpRuntimeCatalog>,
+    /// Long-lived injected provider-manifest sync service; RPCs reuse this instance instead of
+    /// constructing empty-key/None-URL services per call (plan §R7.13).
+    /// 长生命周期注入的供应商清单同步服务；RPC 复用该实例，而不是每次调用构造空密钥/
+    /// None URL 的服务（方案 §R7.13）。
+    pub(crate) provider_manifest_sync:
+        Option<crate::provider_manifest_sync::ProviderManifestSyncService>,
     /// Latest context-budget snapshots keyed by session id.
     /// 按会话标识索引的最近上下文预算快照。
     pub(crate) live_context_budgets: BTreeMap<SessionId, ContextBudgetSnapshot>,

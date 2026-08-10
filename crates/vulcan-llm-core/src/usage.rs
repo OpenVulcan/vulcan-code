@@ -109,6 +109,7 @@ pub enum UsageValueEncoding {
 /// Binds one normalized field to explicit provider JSON Pointer aliases.
 /// 将一个归一化字段绑定到显式供应商 JSON Pointer 别名。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct UsageFieldBinding {
     /// Normalized destination field.
     /// 归一化目标字段。
@@ -143,6 +144,7 @@ pub enum UsageDerivation {
 /// Freezes the usage extraction contract selected by one resolved route.
 /// 冻结一条已解析路由选定的用量提取契约。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct UsageExtractionProfile {
     /// Stable profile identifier.
     /// 稳定的 Profile 标识。
@@ -323,13 +325,14 @@ pub fn standard_usage_profiles(protocol: crate::UpstreamProtocol) -> Vec<UsageEx
     }
 }
 
-/// Builds Alibaba Responses profiles with the documented `usage.x_details` billing partitions.
-/// 构建带文档化 `usage.x_details` 计费分区的阿里云 Responses Profile。
+/// Rebuilds the historical Alibaba Responses profiles as a migration-test oracle.
+/// 作为迁移测试对照重建历史阿里云 Responses Profile。
 ///
 /// # Returns
 /// 返回值
-/// Exact JSON, SSE, and WebSocket profiles selected only by Alibaba provider routes.
-/// 仅由阿里云供应商路由选择的精确 JSON、SSE 与 WebSocket Profile。
+/// Historical JSON, SSE, and WebSocket profiles for comparing manifest-owned definitions.
+/// 返回用于对比 Manifest 权威定义的历史 JSON、SSE 与 WebSocket Profile。
+#[cfg(any(test, feature = "provider-migration-oracles"))]
 pub fn alibaba_responses_usage_profiles() -> Vec<UsageExtractionProfile> {
     responses_usage_profiles()
         .into_iter()
@@ -445,13 +448,14 @@ fn interactions_usage_profiles() -> Vec<UsageExtractionProfile> {
     ]
 }
 
-/// Builds the explicit DeepSeek Chat usage profiles with cache-hit and cache-miss fields.
-/// 构建包含缓存命中与缓存未命中字段的显式 DeepSeek Chat 用量 Profile。
+/// Rebuilds the historical DeepSeek Chat profiles as a migration-test oracle.
+/// 作为迁移测试对照重建历史 DeepSeek Chat Profile。
 ///
 /// # Returns
 /// 返回值
-/// Non-streaming and SSE profiles that do not infer fields from the model name or URL.
-/// 返回不依据模型名或 URL 推断字段的非流式与 SSE Profile。
+/// Historical non-streaming and SSE profiles for comparing manifest-owned definitions.
+/// 返回用于对比 Manifest 权威定义的历史非流式与 SSE Profile。
+#[cfg(any(test, feature = "provider-migration-oracles"))]
 pub fn deepseek_chat_usage_profiles() -> Vec<UsageExtractionProfile> {
     let bindings = vec![
         token_binding(UsageField::InputTokens, "/usage/prompt_tokens"),
@@ -605,8 +609,9 @@ fn chat_usage_profiles() -> Vec<UsageExtractionProfile> {
     ]
 }
 
-/// Builds OpenRouter Chat profiles with the documented provider-reported USD cost field.
-/// 构建带有文档化供应商上报美元成本字段的 OpenRouter Chat Profile。
+/// Rebuilds the historical OpenRouter Chat profiles as a migration-test oracle.
+/// 作为迁移测试对照重建历史 OpenRouter Chat Profile。
+#[cfg(any(test, feature = "provider-migration-oracles"))]
 pub fn openrouter_chat_usage_profiles() -> Vec<UsageExtractionProfile> {
     // profiles reuse only standard Chat token fields before adding the provider-owned cost extension.
     // profiles 仅复用标准 Chat Token 字段，随后再加入供应商自有成本扩展。
@@ -961,6 +966,22 @@ impl UsageObservation {
     }
 }
 
+/// Maximum provider event identities retained by one physical usage attempt.
+/// 单次物理用量尝试允许保留的最大供应商事件身份数量。
+const USAGE_ACCUMULATOR_MAX_EVENT_IDS: usize = 4_096;
+
+/// Maximum UTF-8 bytes accepted for one provider usage event identity.
+/// 单个供应商用量事件身份允许接受的最大 UTF-8 字节数。
+const USAGE_ACCUMULATOR_EVENT_ID_MAX_BYTES: usize = 1_024;
+
+/// Maximum distinct validation flags retained by one physical usage attempt.
+/// 单次物理用量尝试允许保留的最大不同校验标记数量。
+const USAGE_ACCUMULATOR_MAX_VALIDATION_FLAGS: usize = 256;
+
+/// Maximum UTF-8 bytes accepted for one accumulated validation flag.
+/// 单条累计校验标记允许接受的最大 UTF-8 字节数。
+const USAGE_ACCUMULATOR_VALIDATION_FLAG_MAX_BYTES: usize = 1_024;
+
 /// Accumulates one physical attempt's usage with duplicate and terminal guards.
 /// 在重复与终态守卫下累计一次物理 attempt 的用量。
 #[derive(Debug, Clone, Default)]
@@ -1000,11 +1021,23 @@ impl UsageAccumulator {
         event_id: Option<&str>,
         mut observation: UsageObservation,
     ) -> Result<bool, LlmCoreError> {
-        if let Some(event_id) = event_id
-            && !self.seen_event_ids.insert(event_id.to_string())
-        {
-            return Ok(false);
+        if let Some(event_id) = event_id {
+            if event_id.is_empty() || event_id.len() > USAGE_ACCUMULATOR_EVENT_ID_MAX_BYTES {
+                return Err(LlmCoreError::new(format!(
+                    "Usage event identity must contain 1..={USAGE_ACCUMULATOR_EVENT_ID_MAX_BYTES} UTF-8 bytes."
+                )));
+            }
+            if self.seen_event_ids.contains(event_id) {
+                return Ok(false);
+            }
+            if self.seen_event_ids.len() >= USAGE_ACCUMULATOR_MAX_EVENT_IDS {
+                return Err(LlmCoreError::new(format!(
+                    "Usage event identity history exceeds the {USAGE_ACCUMULATOR_MAX_EVENT_IDS}-event limit."
+                )));
+            }
         }
+        // canonical freezes the pre-enrichment observation for terminal idempotency checks.
+        // canonical 为终态幂等检查冻结富化前的观测。
         let canonical = serde_json::to_string(&observation).map_err(|error| {
             LlmCoreError::new(format!(
                 "Usage observation could not be canonicalized: {error}"
@@ -1027,11 +1060,38 @@ impl UsageAccumulator {
             );
         }
         observation.enrich_usage();
+        // new_validation_flags contains only distinct, bounded findings not already retained.
+        // new_validation_flags 只包含尚未保留的不同且有界校验发现。
+        let mut new_validation_flags = Vec::new();
+        for flag in &observation.validation_flags {
+            if flag.is_empty() || flag.len() > USAGE_ACCUMULATOR_VALIDATION_FLAG_MAX_BYTES {
+                return Err(LlmCoreError::new(format!(
+                    "Usage validation flag must contain 1..={USAGE_ACCUMULATOR_VALIDATION_FLAG_MAX_BYTES} UTF-8 bytes."
+                )));
+            }
+            if self.validation_flags.contains(flag) || new_validation_flags.contains(flag) {
+                continue;
+            }
+            if self
+                .validation_flags
+                .len()
+                .saturating_add(new_validation_flags.len())
+                >= USAGE_ACCUMULATOR_MAX_VALIDATION_FLAGS
+            {
+                return Err(LlmCoreError::new(format!(
+                    "Usage validation flags exceed the {USAGE_ACCUMULATOR_MAX_VALIDATION_FLAGS}-item limit."
+                )));
+            }
+            new_validation_flags.push(flag.clone());
+        }
         self.usage.merge_update(observation.usage.clone());
         self.source_paths.extend(observation.source_paths);
-        self.validation_flags.extend(observation.validation_flags);
+        self.validation_flags.extend(new_validation_flags);
         if matches!(observation.usage.update_kind, UsageUpdateKind::Final) {
             self.terminal_observation = Some(canonical);
+        }
+        if let Some(event_id) = event_id {
+            self.seen_event_ids.insert(event_id.to_string());
         }
         Ok(true)
     }
@@ -1618,6 +1678,92 @@ mod tests {
                 .expect("duplicate event should be idempotent")
         );
         assert!(accumulator.is_final());
+    }
+
+    /// Verifies one physical attempt cannot retain an unbounded provider event-id history.
+    /// 验证单次物理尝试无法保留无界供应商事件 ID 历史。
+    #[test]
+    fn accumulator_rejects_event_id_history_beyond_the_explicit_limit() {
+        // observation is a non-terminal snapshot that may legitimately repeat with unique ids.
+        // observation 是可携带不同 ID 合法重复的非终态快照。
+        let observation = UsageObservation {
+            profile_id: String::from("fixture.snapshot.v1"),
+            profile_revision: 1,
+            usage: RequestUsage::default(),
+            source_paths: BTreeMap::new(),
+            response_model: None,
+            response_id: None,
+            validation_flags: Vec::new(),
+        };
+        // accumulator retains exactly the reviewed number of unique provider identities.
+        // accumulator 精确保留已审核数量的不同供应商身份。
+        let mut accumulator = UsageAccumulator::default();
+        for index in 0..USAGE_ACCUMULATOR_MAX_EVENT_IDS {
+            // event_id is a bounded deterministic identity unique within this physical attempt.
+            // event_id 是当前物理尝试内有界且确定的唯一身份。
+            let event_id = format!("event-{index}");
+            assert!(
+                accumulator
+                    .apply(Some(event_id.as_str()), observation.clone())
+                    .expect("event identity within the limit should apply")
+            );
+        }
+
+        // error proves the next distinct identity fails instead of growing the retained set.
+        // error 证明下一个不同身份会失败，而不是继续扩大保留集合。
+        let error = accumulator
+            .apply(Some("event-overflow"), observation)
+            .expect_err("event identity history beyond the limit must fail closed");
+        assert!(error.message.contains("4096-event limit"));
+    }
+
+    /// Verifies accumulated validation findings are distinct, bounded, and never grow forever.
+    /// 验证累计校验发现保持不同、有界且绝不会无限增长。
+    #[test]
+    fn accumulator_rejects_validation_flags_beyond_the_explicit_limit() {
+        // accumulator receives one distinct provider validation finding per snapshot.
+        // accumulator 每个快照接收一条不同的供应商校验发现。
+        let mut accumulator = UsageAccumulator::default();
+        for index in 0..USAGE_ACCUMULATOR_MAX_VALIDATION_FLAGS {
+            // observation carries one bounded finding and no provider event identity.
+            // observation 携带一条有界发现且不携带供应商事件身份。
+            let observation = UsageObservation {
+                profile_id: String::from("fixture.snapshot.v1"),
+                profile_revision: 1,
+                usage: RequestUsage::default(),
+                source_paths: BTreeMap::new(),
+                response_model: None,
+                response_id: None,
+                validation_flags: vec![format!("validation-{index}")],
+            };
+            assert!(
+                accumulator
+                    .apply(None, observation)
+                    .expect("validation finding within the limit should apply")
+            );
+        }
+        // overflow carries the first distinct finding outside the retained capacity.
+        // overflow 携带首条超出保留容量的不同发现。
+        let overflow = UsageObservation {
+            profile_id: String::from("fixture.snapshot.v1"),
+            profile_revision: 1,
+            usage: RequestUsage::default(),
+            source_paths: BTreeMap::new(),
+            response_model: None,
+            response_id: None,
+            validation_flags: vec![String::from("validation-overflow")],
+        };
+
+        // error proves the accumulator rejects overflow without mutating the accepted history.
+        // error 证明累加器拒绝溢出，且不改变已接受历史。
+        let error = accumulator
+            .apply(None, overflow)
+            .expect_err("validation findings beyond the limit must fail closed");
+        assert!(error.message.contains("256-item limit"));
+        assert_eq!(
+            accumulator.validation_flags().len(),
+            USAGE_ACCUMULATOR_MAX_VALIDATION_FLAGS
+        );
     }
 
     /// Ignores nullable usage placeholders emitted by intermediate streaming chunks.

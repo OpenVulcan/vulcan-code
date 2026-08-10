@@ -18,7 +18,15 @@ const snapshotFixture = {
   modelAccessRecords: [
     { providerId: "native", modelId: "enabled", enabled: true, defaultEnabled: true },
     { providerId: "native", modelId: "disabled", enabled: false, defaultEnabled: true },
+    { providerId: "native", modelId: "media-only", enabled: false, defaultEnabled: false },
   ],
+  providerToolTemplateModels: [{
+    providerId: "native",
+    connectionId: "account",
+    serviceEntryId: "media",
+    modelId: "media-only",
+    displayName: "Media Only",
+  }],
   customModels: {},
 } as unknown as PublicAiSettingsSnapshot
 
@@ -29,9 +37,11 @@ describe("buildProviderModelAccessRows", () => {
       displayName: row.displayName,
       enabled: row.enabled,
       defaultEnabled: row.defaultEnabled,
+      providerToolOnly: row.providerToolOnly,
     }))).toEqual([
-      { id: "disabled", displayName: "Disabled", enabled: false, defaultEnabled: true },
-      { id: "enabled", displayName: "Enabled", enabled: true, defaultEnabled: true },
+      { id: "disabled", displayName: "Disabled", enabled: false, defaultEnabled: true, providerToolOnly: false },
+      { id: "enabled", displayName: "Enabled", enabled: true, defaultEnabled: true, providerToolOnly: false },
+      { id: "media-only", displayName: "Media Only", enabled: false, defaultEnabled: false, providerToolOnly: true },
     ])
   })
 })

@@ -5,12 +5,15 @@ use crate::OAuthProviderKind;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
-use vulcan_ai_contract::{InferenceUsageScope, ModelCapabilities, PromptCachePolicy};
+use vulcan_ai_contract::{
+    AiOperation, InferenceUsageScope, ModelCapabilities, PromptCachePolicy, RerankTruncation,
+    ResourceKind,
+};
 use vulcan_llm_core::UsageExtractionProfile;
 
 /// Identifies one credential acquisition mode.
 /// 标识一种凭据获取方式。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CredentialMode {
     /// Renewable account authorization.
@@ -18,12 +21,13 @@ pub enum CredentialMode {
     Auth,
     /// User-managed API token.
     /// 用户管理的 API Token。
+    #[default]
     Token,
 }
 
 /// Identifies the billing semantics attached to one credential profile.
 /// 标识一个凭据配置档关联的计费语义。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CredentialBillingKind {
     /// Provider-metered pay-as-you-go billing.
@@ -34,6 +38,7 @@ pub enum CredentialBillingKind {
     TokenPlan,
     /// Provider-specific billing without a stronger local classification.
     /// 未在本地进一步分类的供应商专属计费。
+    #[default]
     ProviderManaged,
 }
 
@@ -68,6 +73,10 @@ pub struct CredentialProfile {
     /// Token 凭据声明时要求的字面 Key 前缀。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key_prefix: Option<String>,
+    /// Optional declared credential role consumed by upload and secret projection guards.
+    /// 可选声明凭据角色，供上传与秘密投影守卫消费。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_role: Option<String>,
     /// Usage scopes permitted by the exact provider product contract.
     /// 精确供应商产品契约允许的使用场景。
     pub allowed_usage_scopes: BTreeSet<InferenceUsageScope>,
@@ -75,7 +84,7 @@ pub struct CredentialProfile {
 
 /// Describes one provider service entry.
 /// 描述一个供应商服务入口。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ServiceEntry {
     /// Stable entry identifier.
     /// 稳定入口标识。
@@ -100,6 +109,14 @@ pub struct ServiceEntry {
     /// 为此入口每个请求添加的可信非秘密请求头。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub request_headers: BTreeMap<String, String>,
+    /// Optional credential-scoped service-origin override contract.
+    /// 可选的凭据作用域服务源地址覆盖契约。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_origin_override_policy: Option<ServiceOriginOverridePolicy>,
+    /// Closed native inference actions selected by this service entry.
+    /// 此服务入口选择的封闭原生推理动作。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub native_inference_bindings: Vec<NativeInferenceBinding>,
     /// Exact model-discovery implementation for this entry.
     /// 此入口使用的精确模型发现实现。
     pub model_discovery: ModelDiscoveryKind,
@@ -114,6 +131,73 @@ pub struct ServiceEntry {
     pub allowed_usage_scopes: BTreeSet<InferenceUsageScope>,
 }
 
+/// Declares the bounded host and path contract for one credential-scoped service origin.
+/// 声明一个凭据作用域服务源地址的有界主机与路径契约。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ServiceOriginOverridePolicy {
+    /// Required DNS suffix following the single workspace label.
+    /// 单一工作区标签之后必须匹配的 DNS 后缀。
+    pub host_suffix: String,
+    /// Accepted input paths that normalize back to the canonical HTTPS origin.
+    /// 可被规范化回标准 HTTPS 源地址的输入路径。
+    pub allowed_input_paths: BTreeSet<String>,
+    /// Protocol-profile-specific path appended to the canonical origin at execution time.
+    /// 执行时按协议配置追加到标准源地址的路径。
+    pub protocol_base_paths: BTreeMap<String, String>,
+    /// Non-secret example shown by the connection editor.
+    /// 连接编辑器展示的非敏感示例。
+    pub example_origin: String,
+}
+
+/// Declares one manifest-selected native embedding or rerank execution binding.
+/// 声明一个由 Manifest 选择的原生向量或重排执行绑定。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NativeInferenceBinding {
+    /// Provider-neutral operation owned by this binding.
+    /// 此绑定持有的供应商无关操作。
+    pub operation: AiOperation,
+    /// Stable action binding persisted in internal inference routes.
+    /// 持久化到内部推理路由的稳定动作绑定标识。
+    pub binding_id: String,
+    /// Relative JSON endpoint appended to the selected API root.
+    /// 追加到所选 API 根地址的相对 JSON 端点。
+    pub endpoint_path: String,
+    /// Closed request/response projection primitive.
+    /// 封闭的请求与响应投影原语。
+    pub projection: NativeInferenceProjectionKind,
+    /// Optional origin-relative API root used instead of the conversation protocol root.
+    /// 可选的源地址相对 API 根路径，用于替代对话协议根路径。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_origin_base_path: Option<String>,
+    /// Whether execution requires a configured credential-scoped service origin.
+    /// 执行是否要求已配置凭据作用域服务源地址。
+    #[serde(default)]
+    pub requires_service_origin_override: bool,
+    /// Exact rerank truncation contract when this is a rerank binding.
+    /// 当此绑定用于重排时的精确截断契约。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rerank_truncation: Option<RerankTruncation>,
+    /// Reviewed provider-reported aliases keyed by the public requested model id.
+    /// 按公开请求模型标识索引的已审核供应商回报别名。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub response_model_aliases: BTreeMap<String, BTreeSet<String>>,
+}
+
+/// Selects one closed provider-neutral native inference wire projection.
+/// 选择一个封闭且供应商无关的原生推理 Wire 投影。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NativeInferenceProjectionKind {
+    /// Plain compatible JSON without an upstream routing policy.
+    /// 不携带上游路由策略的普通兼容 JSON。
+    Compatible,
+    /// Compatible JSON with explicit no-fallback secondary routing.
+    /// 携带显式禁止降级二级路由的兼容 JSON。
+    RoutedCompatible,
+}
+
 /// Identifies one closed provider request projector implementation.
 /// 标识一个封闭的供应商请求投影器实现。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -122,24 +206,12 @@ pub enum RequestProjectorKind {
     /// No provider-only mutation beyond the selected wire protocol.
     /// 除所选 Wire 协议外不执行供应商专属变更。
     Direct,
-    /// MiniMax regional API and Token Plan projection.
-    /// MiniMax 区域 API 与 Token Plan 投影。
-    MiniMax,
-    /// OpenRouter routing and reasoning projection.
-    /// OpenRouter 路由与思考投影。
-    OpenRouter,
-    /// Kimi public API and Coding Plan projection.
-    /// Kimi 开放平台与 Coding Plan 投影。
-    Kimi,
-    /// DeepSeek official API projection.
-    /// DeepSeek 官方 API 投影。
-    DeepSeek,
-    /// Alibaba Token Plan and Model Studio projection.
-    /// 阿里云 Token Plan 与百炼投影。
-    Alibaba,
-    /// Google public API and Code Assist projection.
-    /// Google 公共 API 与 Code Assist 投影。
-    Google,
+    /// Compatible JSON whose provider differences are declared by frozen request Profiles.
+    /// 供应商差异由冻结请求 Profile 声明的兼容 JSON。
+    Compatible,
+    /// Compatible JSON with an explicit no-fallback secondary-route primitive.
+    /// 带显式禁止降级二级路由原语的兼容 JSON。
+    RoutedCompatible,
 }
 
 /// Identifies the execution surface owned by one service entry.
@@ -234,24 +306,12 @@ pub enum ModelDiscoveryKind {
     /// No conversation-model discovery exists for provider-tools-only entries.
     /// 仅供应商工具入口不存在对话模型发现。
     ProviderToolsOnly,
-    /// MiniMax Anthropic-compatible paginated models.
-    /// MiniMax Anthropic 兼容分页模型。
-    MiniMaxAnthropic,
-    /// MiniMax OpenAI-compatible model list.
-    /// MiniMax OpenAI 兼容模型列表。
-    MiniMaxOpenAi,
     /// OpenRouter public model catalog.
     /// OpenRouter 公共模型目录。
     OpenRouter,
-    /// Alibaba Coding Plan code-owned static catalog.
-    /// 阿里云 Coding Plan 代码持有的静态目录。
-    AlibabaCodingPlanStatic,
-    /// Alibaba Token Plan product-scoped static catalog.
-    /// 阿里云 Token Plan 产品作用域静态目录。
-    AlibabaTokenPlanStatic,
-    /// Alibaba Model Studio region-scoped static catalog.
-    /// 阿里云百炼 Model Studio 区域作用域静态目录。
-    AlibabaModelStudioStatic,
+    /// Manifest-owned static catalog without a remote catalog request.
+    /// 不请求远程目录、完全由 Manifest 持有的静态目录。
+    ManifestStatic,
     /// OpenAI public models endpoint.
     /// OpenAI 公共模型端点。
     OpenAi,
@@ -283,6 +343,9 @@ pub enum AuthenticationProjection {
     /// Sends the resolved value through `Authorization: Bearer`.
     /// 通过 `Authorization: Bearer` 发送解析值。
     BearerAuthorization,
+    /// Sends bearer authorization plus the registered coding-device identity headers.
+    /// 发送 Bearer 授权以及已注册的编程设备身份请求头。
+    CodingDeviceBearer,
     /// Sends Codex bearer authorization and its verified account identity.
     /// 发送 Codex Bearer 授权及其已验证账号身份。
     OpenAiCodexBearer,
@@ -299,11 +362,12 @@ pub enum AuthenticationProjection {
 
 /// Identifies one registered account-usage query implementation.
 /// 标识一个已注册账号用量查询实现。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AccountUsageQueryKind {
     /// Account usage is not exposed by this entry.
     /// 此入口不公开账号用量。
+    #[default]
     Unsupported,
     /// MiniMax Token Plan quota endpoint.
     /// MiniMax Token Plan 配额端点。
@@ -320,6 +384,19 @@ pub enum AccountUsageQueryKind {
     /// Kimi Coding Plan membership and rolling usage endpoint.
     /// Kimi Coding Plan 会员与滚动用量端点。
     KimiCodingPlan,
+}
+
+impl AccountUsageQueryKind {
+    /// Reports whether this usage primitive requires a separate provider-management credential.
+    /// 报告当前用量原语是否需要独立的供应商管理凭据。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` only for primitives whose registered transport cannot use the inference secret.
+    /// 仅当已注册传输不能使用推理密钥时返回 `true`。
+    pub fn requires_management_credential(self) -> bool {
+        matches!(self, Self::OpenRouterCredits)
+    }
 }
 
 /// Selects whether one Responses route may use the standalone remote compact endpoint.
@@ -357,6 +434,7 @@ pub enum ResponsesWebsocketPolicy {
 /// Carries explicit optional capabilities for one OpenAI Responses route.
 /// 承载一条 OpenAI Responses 路由的显式可选能力。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct ResponsesRouteFeatures {
     /// Standalone remote compaction selection.
     /// 独立远端压缩选择。
@@ -368,9 +446,56 @@ pub struct ResponsesRouteFeatures {
     pub websocket: ResponsesWebsocketPolicy,
 }
 
+/// Defines which source representations one input resource kind may use on a frozen route.
+/// 定义冻结路由上的一种输入资源允许使用哪些来源表示形式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResourceReferencePolicy {
+    /// Local paths and remote URLs are both accepted.
+    /// 同时接受本地路径与远程 URL。
+    #[default]
+    Any,
+    /// Only host-resolved local resources are accepted before request materialization.
+    /// 请求物化前只接受由宿主解析的本地资源。
+    LocalOnly,
+    /// Only pre-existing remote URLs are accepted.
+    /// 只接受预先存在的远程 URL。
+    RemoteOnly,
+}
+
+/// Constrains one input resource kind for an immutable protocol route snapshot.
+/// 约束不可变协议路由快照中的一种输入资源。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InputResourceConstraint {
+    /// Resource kind governed by this constraint.
+    /// 当前约束管辖的资源类别。
+    pub resource_kind: ResourceKind,
+    /// Accepted MIME types; an empty list means every MIME type accepted by the projector.
+    /// 接受的 MIME 类型；空列表表示接受投影器支持的全部 MIME 类型。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub accepted_mime_types: Vec<String>,
+    /// Optional maximum local payload size in bytes.
+    /// 可选的本地载荷最大字节数。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_bytes: Option<u64>,
+    /// Optional maximum number of resources of this kind in one message.
+    /// 可选的单条消息内该类资源最大数量。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_count: Option<u64>,
+    /// Allowed source representation before the host materializes the request.
+    /// 宿主物化请求前允许的来源表示形式。
+    #[serde(default)]
+    pub reference_policy: ResourceReferencePolicy,
+    /// Ordered manifest upload channels used to materialize local resources for this route.
+    /// 为当前路由物化本地资源时使用的有序 Manifest 上传通道。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub upload_channel_refs: Vec<String>,
+}
+
 /// Describes one verified protocol route.
 /// 描述一条已验证协议路由。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProtocolRoute {
     /// Stable protocol profile identifier.
     /// 稳定协议 Profile 标识。
@@ -407,10 +532,22 @@ pub struct ProtocolRoute {
     /// 可选的用户声明 Responses 传输与压缩能力。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub responses_features: Option<ResponsesRouteFeatures>,
+    /// Manifest-driven input resource constraints frozen with this route.
+    /// 随当前路由冻结的清单驱动输入资源约束。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub input_resource_constraints: Vec<InputResourceConstraint>,
     /// Versioned raw usage extraction profiles frozen with this route.
     /// 随当前路由冻结的版本化原始用量提取 Profile。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub usage_extraction_profiles: Vec<UsageExtractionProfile>,
+    /// Ordered request-projection profile payloads frozen from the route default refs.
+    /// 从路由默认引用冻结的有序请求投影 Profile 载荷。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub request_projection_profiles: Vec<crate::provider_manifest::RequestProjectionProfile>,
+    /// Ordered response-projection profile payloads frozen from the route default refs.
+    /// 从路由默认引用冻结的有序响应投影 Profile 载荷。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub response_projection_profiles: Vec<crate::provider_manifest::ResponseProjectionProfile>,
     /// Ordered response-header names that may carry the upstream provider request identifier.
     /// 可承载上游供应商请求标识的有序响应头名称。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -575,8 +712,14 @@ pub struct CredentialConnection {
     /// Verified protocol profile identifiers.
     /// 已验证协议 Profile 标识。
     pub verified_protocols: BTreeSet<String>,
-    /// Currently selected protocol profile.
-    /// 当前选定协议 Profile。
+    /// Manifest-derived compatibility protocol anchor.
+    /// Manifest 推导的兼容协议锚点。
+    ///
+    /// This field is retained only for persisted-configuration shape and rollback compatibility.
+    /// New writes derive it from the service entry's declared route order. Discovery and execution
+    /// must never consult it as protocol authority (plan §12.2).
+    /// 本字段仅为持久化配置形状与版本回滚兼容而保留。新写入值从服务入口声明的路由顺序
+    /// 推导；发现与执行绝不能把它作为协议权威（方案 §12.2）。
     pub selected_protocol: String,
     /// Protocol-scoped prompt-cache settings.
     /// 协议作用域的提示词缓存设置。
@@ -617,6 +760,41 @@ pub struct ConnectionModel {
     /// 直接从当前凭据模型目录捕获的字段存在性证据。
     #[serde(default)]
     pub capability_evidence: ModelCapabilityEvidence,
+    /// Per-protocol capability variants discovered from each distinct protocol route.
+    /// Each variant keeps its own capability evidence and discovery signature; the top-level
+    /// `capabilities` field is only a read-only compatibility projection of the effective
+    /// binding's variant and is never an execution authority for protocol guessing.
+    /// 每个不同协议路由发现的按协议能力变体。每个变体保留自己的能力证据与发现签名；
+    /// 顶层 `capabilities` 字段只是有效 binding 所指变体的只读兼容投影，绝不是协议猜测的执行权威。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub protocol_variants: BTreeMap<String, ProtocolModelVariant>,
+    /// Protocol binding frozen at the catalog activation boundary for manifest-backed system
+    /// providers and custom providers. Explicit legacy catalogs and blocked models have no
+    /// binding and expose an empty non-executable compatibility projection (plan §13.1/§13.6).
+    /// Manifest 驱动的系统供应商与自定义供应商都在目录激活边界冻结协议绑定。显式旧版目录和
+    /// 被阻止模型没有绑定，并暴露空的不可执行兼容投影（方案 §13.1/§13.6）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_protocol_binding: Option<crate::provider_manifest::ModelProtocolBinding>,
+}
+
+/// One protocol-scoped capability snapshot with its own discovery evidence.
+/// 一份带独立发现证据的协议作用域能力快照。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProtocolModelVariant {
+    /// Capabilities observed through the exact protocol route.
+    /// 通过精确协议路由观测到的能力。
+    pub capabilities: ModelCapabilities,
+    /// Field-presence evidence captured through the exact protocol route.
+    /// 通过精确协议路由捕获的字段存在性证据。
+    #[serde(default)]
+    pub capability_evidence: ModelCapabilityEvidence,
+    /// Stable hash of the discovery signature that produced this variant.
+    /// 产生此变体的发现签名稳定哈希。
+    pub discovery_signature: String,
+    /// Catalog generation that observed this variant.
+    /// 观测到此变体的目录代次。
+    pub catalog_generation: u64,
 }
 
 /// Records which basic capability fields were explicitly declared by one model directory.
@@ -697,6 +875,9 @@ pub enum ProviderToolCapabilityKind {
     /// Edits an existing video.
     /// 编辑现有视频。
     VideoEdit,
+    /// Extends the duration of an existing video.
+    /// 延长现有视频的时长。
+    VideoExtend,
     /// Synthesizes speech.
     /// 合成语音。
     SpeechSynthesize,
@@ -758,9 +939,84 @@ pub enum ProviderToolOutputKind {
     Composite,
 }
 
+/// Identifies one closed resource carrier decoded from provider JSON.
+/// 标识一种从供应商 JSON 解码的封闭资源载体。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderToolResourceEncoding {
+    /// Absolute credential-free HTTPS URL.
+    /// 不含凭据的绝对 HTTPS 地址。
+    HttpsUrl,
+    /// Absolute credential-free HTTP or HTTPS URL for explicitly reviewed public artifacts.
+    /// 用于已明确审核公共产物的不含凭据绝对 HTTP 或 HTTPS 地址。
+    PublicHttpUrl,
+    /// RFC-style Data URL with an explicit MIME type and Base64 payload.
+    /// 带显式 MIME 类型与 Base64 载荷的 RFC 风格 Data URL。
+    DataUrl,
+    /// Raw standard-Base64 bytes stored in one JSON string.
+    /// 存放在单个 JSON 字符串中的原始标准 Base64 字节。
+    Base64,
+    /// Raw hexadecimal bytes stored in one JSON string.
+    /// 存放在单个 JSON 字符串中的原始十六进制字节。
+    Hex,
+}
+
+/// Declares one bounded provider-response resource extractor.
+/// 声明一个有界的供应商响应资源提取器。
+///
+/// # Contract
+/// 契约
+/// `source_path` is an absolute JSON Pointer and may resolve to one string or an array of strings.
+/// Exactly one MIME authority is used: `mime_type`, an explicit request-value mapping, or the MIME
+/// embedded in a Data URL. Raw byte carriers require a byte ceiling.
+/// `source_path` 是绝对 JSON Pointer，可解析为一个字符串或字符串数组。MIME 权威只能来自
+/// `mime_type`、显式请求值映射或 Data URL 内嵌 MIME；原始字节载体必须声明字节上限。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderToolResourceDecoder {
+    /// Exact response JSON Pointer containing one resource or an ordered resource array.
+    /// 包含一个资源或有序资源数组的精确响应 JSON Pointer。
+    pub source_path: String,
+    /// Closed carrier encoding used to decode every selected value.
+    /// 用于解码每个选中值的封闭载体编码。
+    pub encoding: ProviderToolResourceEncoding,
+    /// Exact hosts or dot-prefixed DNS suffixes authorized for URL download carriers.
+    /// URL 下载载体获准使用的精确宿主或点前缀 DNS 后缀。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub download_host_suffixes: Vec<String>,
+    /// Exact normalized resource kind, such as image, audio, video, or file.
+    /// 精确的归一化资源类别，例如 image、audio、video 或 file。
+    pub resource_kind: String,
+    /// Optional fixed MIME type for URL or raw-byte carriers.
+    /// URL 或原始字节载体使用的可选固定 MIME 类型。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mime_type: Option<String>,
+    /// Optional canonical request JSON Pointer selecting a MIME mapping entry.
+    /// 用于选择 MIME 映射项的可选规范请求 JSON Pointer。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mime_type_request_path: Option<String>,
+    /// Exact request scalar-to-MIME mapping used with `mime_type_request_path`.
+    /// 与 `mime_type_request_path` 配套使用的精确请求标量到 MIME 映射。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub mime_types_by_request_value: BTreeMap<String, String>,
+    /// Whether an absent, null, empty string, or empty array source is allowed.
+    /// 是否允许来源缺失、为 null、空字符串或空数组。
+    #[serde(default)]
+    pub optional: bool,
+    /// Maximum decoded byte count for Data URL, Base64, or hexadecimal carriers.
+    /// Data URL、Base64 或十六进制载体允许的最大解码字节数。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_bytes: Option<u64>,
+    /// Stable output identifier prefix; defaults to `resource` when omitted.
+    /// 稳定输出标识前缀；省略时默认为 `resource`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_id_prefix: Option<String>,
+}
+
 /// Describes how one provider-native response is normalized for model output and tool cards.
 /// 描述如何将一个供应商原生响应归一化为模型输出与工具卡片数据。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProviderToolOutputContract {
     /// Closed normalized output kind.
     /// 封闭的归一化输出类别。
@@ -779,6 +1035,10 @@ pub struct ProviderToolOutputContract {
     /// 供应商响应允许的可选精确 MIME 类型。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mime_types: Vec<String>,
+    /// Optional ordered resource decoders for mixed carriers and request-selected MIME values.
+    /// 用于混合载体与请求选择 MIME 的可选有序资源解码器。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resource_decoders: Vec<ProviderToolResourceDecoder>,
 }
 
 /// Declares one exact AI-visible tool contract owned by a provider model or service.
@@ -797,9 +1057,33 @@ pub struct ProviderToolContract {
     /// Exact model-native JSON Schema registered for this selected target.
     /// 为当前选定目标注册的精确模型原生 JSON Schema。
     pub input_schema: Value,
+    /// Host-only bounded product assertions applied after JSON Schema defaults.
+    /// 在 JSON Schema 默认值之后应用的仅宿主可见有界乘积断言。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub input_numeric_product_ranges: Vec<ProviderToolNumericProductRange>,
     /// Closed provider-response normalization contract.
     /// 封闭的供应商响应归一化契约。
     pub output: ProviderToolOutputContract,
+}
+
+/// One host-only inclusive product range over two integer input fields.
+/// 一条针对两个整数输入字段的仅宿主可见闭区间乘积约束。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderToolNumericProductRange {
+    /// Exact root-level JSON Pointer paths for the two integer factors.
+    /// 两个整数因子的精确根级 JSON Pointer 路径。
+    pub factor_paths: [String; 2],
+    /// Inclusive minimum product.
+    /// 乘积闭区间下限。
+    pub minimum: u64,
+    /// Inclusive maximum product.
+    /// 乘积闭区间上限。
+    pub maximum: u64,
+    /// Whether either factor requires the other factor to be present.
+    /// 任一因子存在时是否要求另一个因子同时存在。
+    #[serde(default)]
+    pub require_all_or_none: bool,
 }
 
 /// Identifies one closed provider-native tool request/response adapter.
@@ -807,74 +1091,15 @@ pub struct ProviderToolContract {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderToolAdapterKind {
-    /// MiniMax synchronous image generation.
-    /// MiniMax 同步图片生成。
-    MiniMaxImageGenerate,
-    /// MiniMax Coding Plan image understanding.
-    /// MiniMax Coding Plan 图片理解。
-    MiniMaxCodingPlanVision,
-    /// MiniMax synchronous speech synthesis.
-    /// MiniMax 同步语音合成。
-    MiniMaxSpeechSynthesize,
-    /// MiniMax synchronous music generation.
-    /// MiniMax 同步音乐生成。
-    MiniMaxMusicGenerate,
-    /// MiniMax asynchronous video generation with host polling.
-    /// MiniMax 异步视频生成与宿主轮询。
-    MiniMaxVideoGenerate,
-    /// MiniMax Coding Plan structured web search.
-    /// MiniMax Coding Plan 结构化网页搜索。
-    MiniMaxCodingPlanSearch,
-    /// Alibaba Model Studio MCP WebSearch.
-    /// 阿里云百炼 Model Studio MCP 网页搜索。
-    AlibabaModelStudioSearch,
-    /// Alibaba synchronous Qwen image generation.
-    /// 阿里云同步 Qwen 图片生成。
-    AlibabaQwenImageGenerate,
-    /// Alibaba synchronous Qwen image editing.
-    /// 阿里云同步 Qwen 图片编辑。
-    AlibabaQwenImageEdit,
-    /// Alibaba synchronous Wan image generation.
-    /// 阿里云同步 Wan 图片生成。
-    AlibabaWanImageGenerate,
-    /// Alibaba synchronous CosyVoice speech synthesis.
-    /// 阿里云同步 CosyVoice 语音合成。
-    AlibabaCosyVoiceSynthesize,
-    /// Alibaba synchronous Qwen3 speech synthesis.
-    /// 阿里云同步 Qwen3 语音合成。
-    AlibabaQwenSpeechSynthesize,
-    /// Alibaba synchronous Qwen3 speech transcription.
-    /// 阿里云同步 Qwen3 语音转录。
-    AlibabaQwenSpeechTranscribe,
-    /// Alibaba asynchronous Fun-ASR transcription with host polling.
-    /// 阿里云异步 Fun-ASR 转录与宿主轮询。
-    AlibabaFunAsrTranscribe,
-    /// Alibaba Qwen Omni media analysis through the verified Chat carrier.
-    /// 阿里云 Qwen Omni 通过已验证 Chat 载体执行媒体分析。
-    AlibabaQwenOmniMediaAnalyze,
-    /// Alibaba asynchronous HappyHorse video generation with host polling.
-    /// 阿里云异步 HappyHorse 视频生成与宿主轮询。
-    AlibabaHappyHorseVideoGenerate,
-    /// Alibaba asynchronous HappyHorse video editing with host polling.
-    /// 阿里云异步 HappyHorse 视频编辑与宿主轮询。
-    AlibabaHappyHorseVideoEdit,
-    /// Alibaba Wan 2.7 asynchronous video generation with host polling.
-    /// 阿里云 Wan 2.7 异步视频生成与宿主轮询。
-    AlibabaWanVideoGenerate,
-    /// Alibaba synchronous Fun-Music generation.
-    /// 阿里云同步 Fun-Music 音乐生成。
-    AlibabaFunMusicGenerate,
-    /// Tavily structured web search.
-    /// Tavily 结构化网页搜索。
-    TavilySearch,
-    /// Tavily structured web extraction.
-    /// Tavily 结构化网页提取。
-    TavilyExtract,
+    /// Manifest-complete generic JSON request/response codec.
+    /// Manifest 完整定义的通用 JSON 请求/响应编解码器。
+    GenericJson,
 }
 
 /// Describes the exact execution route for one provider-native tool target.
 /// 描述一个供应商原生工具目标的精确执行路由。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProviderToolExecutionContract {
     /// Optional exact native API origin when it differs from the conversation protocol root.
     /// 当原生 API 源与会话协议根地址不同时使用的可选精确源地址。
@@ -889,6 +1114,96 @@ pub struct ProviderToolExecutionContract {
     /// Closed request and response adapter implementation.
     /// 封闭的请求与响应适配器实现。
     pub adapter: ProviderToolAdapterKind,
+    /// Generic execution family driving the transport primitive (plan §16.2).
+    /// 驱动传输原语的通用执行族（方案 §16.2）。
+    pub execution_kind: ProviderToolExecutionKind,
+    /// Exact non-sensitive fixed headers required by this target.
+    /// 当前目标要求的精确非敏感固定请求头。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub fixed_headers: BTreeMap<String, String>,
+    /// Exact non-sensitive headers used only by asynchronous task creation.
+    /// 仅用于异步任务创建的精确非敏感请求头。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub start_fixed_headers: BTreeMap<String, String>,
+    /// Bounded non-sensitive start headers enabled by canonical argument predicates.
+    /// 由规范参数断言启用的有界非敏感启动请求头。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub start_conditional_headers: Vec<ProviderToolConditionalHeader>,
+    /// Optional closed Streamable HTTP MCP call contract for the MCP execution family.
+    /// MCP 执行族使用的可选封闭 Streamable HTTP MCP 调用契约。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp_http_call: Option<ProviderToolMcpHttpCallContract>,
+}
+
+/// Declares one bounded Streamable HTTP MCP call and embedded text-JSON aggregation contract.
+/// 声明一条有界 Streamable HTTP MCP 调用与嵌入文本 JSON 聚合契约。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderToolMcpHttpCallContract {
+    /// Exact MCP protocol revision sent during initialization.
+    /// 初始化时发送的精确 MCP 协议修订版。
+    pub protocol_version: String,
+    /// JSON Pointer selecting an array from each non-empty MCP text content block.
+    /// 从每个非空 MCP 文本内容块选择数组的 JSON Pointer。
+    pub content_json_array_pointer: String,
+    /// Maximum MCP content blocks accepted from one tools/call result.
+    /// 单次 tools/call 结果允许的最大 MCP 内容块数量。
+    pub max_content_blocks: u16,
+    /// Maximum aggregated embedded JSON items accepted across all content blocks.
+    /// 所有内容块合计允许的最大嵌入 JSON 条目数量。
+    pub max_items: u16,
+}
+
+/// One non-sensitive start header guarded by a bounded OR predicate set.
+/// 一项由有界 OR 断言集合保护的非敏感启动请求头。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderToolConditionalHeader {
+    /// Exact HTTP header name.
+    /// 精确 HTTP 请求头名称。
+    pub name: String,
+    /// Exact non-sensitive HTTP header value.
+    /// 精确非敏感 HTTP 请求头值。
+    pub value: String,
+    /// Predicates evaluated with OR semantics against post-upload canonical arguments.
+    /// 针对上传后规范参数以 OR 语义求值的断言。
+    pub when_any: Vec<ProviderToolArgumentPredicate>,
+}
+
+/// One bounded canonical-argument predicate with optional exact scalar comparison.
+/// 一项带可选精确标量比较的有界规范参数断言。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderToolArgumentPredicate {
+    /// Absolute JSON Pointer pattern whose `*` segment ranges over array items.
+    /// 使用 `*` 段遍历数组项的绝对 JSON Pointer 模式。
+    pub pointer_pattern: String,
+    /// Optional exact scalar value; omission tests only for a non-empty present value.
+    /// 可选精确标量值；省略时仅测试非空存在值。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub equals: Option<Value>,
+}
+
+/// Closed generic execution family that replaces provider-named adapters (plan §16.2).
+/// 替代供应商命名适配器的封闭通用执行族（方案 §16.2）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderToolExecutionKind {
+    /// Synchronous JSON request/response execution.
+    /// 同步 JSON 请求/响应执行。
+    HttpJsonSync,
+    /// Synchronous binary request or response execution.
+    /// 同步二进制请求或响应执行。
+    HttpBinarySync,
+    /// Conversation-carrier media analysis with the verified protocol encoder.
+    /// 使用已验证协议编码器的会话载体媒体分析。
+    ConversationMediaAnalyze,
+    /// Asynchronous start/poll/cancel task execution.
+    /// 异步启动/轮询/取消任务执行。
+    HttpJsonAsyncPoll,
+    /// Stateful Streamable HTTP MCP initialization, notification, and one tool call.
+    /// 有状态 Streamable HTTP MCP 初始化、通知与单次工具调用。
+    McpHttpCall,
 }
 
 /// Describes one provider tool target without merging it with other model contracts.
@@ -1035,6 +1350,15 @@ pub struct SecondaryRouteOption {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Verifies credential separation is owned by the registered usage primitive.
+    /// 验证凭据分离语义由已注册用量原语拥有。
+    #[test]
+    fn account_usage_primitive_declares_management_credential_requirement() {
+        assert!(AccountUsageQueryKind::OpenRouterCredits.requires_management_credential());
+        assert!(!AccountUsageQueryKind::MiniMaxTokenPlan.requires_management_credential());
+        assert!(!AccountUsageQueryKind::Unsupported.requires_management_credential());
+    }
 
     /// Verifies the retired preferred-with-fallback value remains explicitly unverified.
     /// 验证已退役的优先 WS 并允许回退值仍保持显式未验证语义。

@@ -41,8 +41,8 @@ use vulcan_core::types::{
     ProviderTurnResponse as CoreProviderTurnResponse, ProviderUsageSnapshot,
 };
 use vulcan_provider_adapters::{
-    CredentialExecutionSecret, ProviderExecutionClient, ProviderExecutionRoute,
-    ResolvedPublicAiExecution,
+    CredentialExecutionSecret, InputResourceConstraint, ProviderExecutionClient,
+    ProviderExecutionRoute, ResolvedPublicAiExecution, ResourceReferencePolicy,
 };
 use vulcan_tools_manager::{
     VulcanToolSchemaProjectionContext, project_tool_parameters_schema,
@@ -75,13 +75,6 @@ fn resolved_public_output_token_limit(
         .map(|maximum| requested_limit.min(maximum))
         .unwrap_or(requested_limit)
 }
-/// MiniMax M3 maximum local image payload size documented for one request resource.
-/// MiniMax M3 针对单个请求资源文档化的本地图像载荷上限。
-const MINIMAX_M3_IMAGE_BYTE_LIMIT: u64 = 10_000_000;
-/// MiniMax M3 maximum local video payload size documented for one request resource.
-/// MiniMax M3 针对单个请求资源文档化的本地视频载荷上限。
-const MINIMAX_M3_VIDEO_BYTE_LIMIT: u64 = 50_000_000;
-
 /// Executes one public-contract provider run through the existing host controller.
 /// 通过现有宿主控制器执行一次公共契约 Provider 运行。
 ///
@@ -1469,6 +1462,31 @@ async fn resolve_public_message_resources(
     model_resource_kinds: &[ResourceKind],
     client: &ProviderExecutionClient,
 ) -> Result<(), VulcanCoreError> {
+    for constraint in &route.protocol_route.input_resource_constraints {
+        let resource_count = message
+            .content
+            .iter()
+            .filter(|item| {
+                matches!(
+                    item,
+                    ContentItem::Resource { resource }
+                        if resource.kind == constraint.resource_kind
+                )
+            })
+            .count() as u64;
+        if let Some(max_count) = constraint.max_count
+            && resource_count > max_count
+        {
+            return Err(provider_failure(
+                route.provider.id.as_str(),
+                format!(
+                    "Message contains {resource_count} {:?} resources and exceeds the frozen route limit of {max_count}.",
+                    constraint.resource_kind
+                )
+                .as_str(),
+            ));
+        }
+    }
     for item in &mut message.content {
         let ContentItem::Resource { resource } = item else {
             continue;
@@ -1493,17 +1511,8 @@ async fn resolve_public_message_resources(
                 format!("Resource `{}` is missing its MIME type.", resource.id).as_str(),
             )
         })?;
-        if let Some(prepared_url) = client.prepared_media_url(
-            route,
-            model_id,
-            std::path::Path::new(local_path),
-            resource.kind,
-            media_type,
-        ) {
-            resource.url = Some(prepared_url);
-            continue;
-        }
-        if let Some(byte_limit) = minimax_local_resource_byte_limit(route, model_id, resource) {
+        let constraint = input_resource_constraint(route, resource.kind);
+        if let Some(byte_limit) = constraint.and_then(|constraint| constraint.max_bytes) {
             let metadata = tokio::fs::metadata(local_path).await.map_err(|error| {
                 provider_failure(
                     route.provider.id.as_str(),
@@ -1518,7 +1527,7 @@ async fn resolve_public_message_resources(
                 return Err(provider_failure(
                     route.provider.id.as_str(),
                     format!(
-                        "Resource `{}` is {} bytes and exceeds the MiniMax M3 limit of {byte_limit} bytes.",
+                        "Resource `{}` is {} bytes and exceeds the frozen route limit of {byte_limit} bytes.",
                         resource.id,
                         metadata.len()
                     )
@@ -1526,19 +1535,32 @@ async fn resolve_public_message_resources(
                 ));
             }
         }
+        if let Some(prepared_url) = client
+            .prepared_media_url(
+                route,
+                model_id,
+                std::path::Path::new(local_path),
+                resource.kind,
+                media_type,
+            )
+            .await
+        {
+            resource.url = Some(prepared_url);
+            continue;
+        }
         let bytes = tokio::fs::read(local_path).await.map_err(|error| {
             provider_failure(
                 route.provider.id.as_str(),
                 format!("Resource `{}` could not be read: {error}", resource.id).as_str(),
             )
         })?;
-        if let Some(byte_limit) = minimax_local_resource_byte_limit(route, model_id, resource)
+        if let Some(byte_limit) = constraint.and_then(|constraint| constraint.max_bytes)
             && u64::try_from(bytes.len()).unwrap_or(u64::MAX) > byte_limit
         {
             return Err(provider_failure(
                 route.provider.id.as_str(),
                 format!(
-                    "Resource `{}` changed while reading and now exceeds the MiniMax M3 limit of {byte_limit} bytes.",
+                    "Resource `{}` changed while reading and now exceeds the frozen route limit of {byte_limit} bytes.",
                     resource.id
                 )
                 .as_str(),
@@ -1611,68 +1633,92 @@ fn validate_resource_projection(
             .as_str(),
         ));
     }
-    if resource.kind == ResourceKind::Audio && resource.url.is_some() {
-        return Err(provider_failure(
+    if let Some(constraint) = input_resource_constraint(route, resource.kind) {
+        validate_frozen_input_resource_constraint(
             route.provider.id.as_str(),
-            "OpenRouter audio input requires a local Base64 payload and does not accept URLs.",
-        ));
+            constraint,
+            resource,
+        )?;
     }
-    if resource.kind == ResourceKind::File
-        && resource.media_type.as_deref() != Some("application/pdf")
-    {
+    Ok(())
+}
+
+/// Validates one resource against one frozen manifest constraint without provider-specific logic.
+/// 使用单条冻结清单约束校验资源，不包含供应商专属逻辑。
+///
+/// # Parameters
+/// 参数
+/// `provider_id` labels controlled failures, `constraint` is the immutable manifest value,
+/// and `resource` is the canonical request resource.
+/// `provider_id` 标记受控失败，`constraint` 是不可变清单值，`resource` 是规范请求资源。
+///
+/// # Returns
+/// 返回值
+/// Success when source representation and MIME type are both admitted; a pre-dispatch failure otherwise.
+/// 来源表示与 MIME 类型均获准时返回成功，否则返回分派前失败。
+fn validate_frozen_input_resource_constraint(
+    provider_id: &str,
+    constraint: &InputResourceConstraint,
+    resource: &ResourceReference,
+) -> Result<(), VulcanCoreError> {
+    let reference_allowed = match constraint.reference_policy {
+        ResourceReferencePolicy::Any => true,
+        ResourceReferencePolicy::LocalOnly => {
+            resource.local_path.is_some() && resource.url.is_none()
+        }
+        ResourceReferencePolicy::RemoteOnly => {
+            resource.url.is_some() && resource.local_path.is_none()
+        }
+    };
+    if !reference_allowed {
         return Err(provider_failure(
-            route.provider.id.as_str(),
-            "The registered OpenRouter file projector currently accepts PDF resources only.",
-        ));
-    }
-    if route.provider.id == "minimax"
-        && model_id == "MiniMax-M3"
-        && resource.kind == ResourceKind::Video
-        && !matches!(
-            resource.media_type.as_deref(),
-            Some(
-                "video/mp4"
-                    | "video/x-msvideo"
-                    | "video/quicktime"
-                    | "video/mov"
-                    | "video/x-matroska"
+            provider_id,
+            format!(
+                "Resource `{}` violates the frozen {:?} reference policy for {:?} input.",
+                resource.id, constraint.reference_policy, resource.kind
             )
-        )
+            .as_str(),
+        ));
+    }
+    if !constraint.accepted_mime_types.is_empty()
+        && !resource
+            .media_type
+            .as_ref()
+            .is_some_and(|media_type| constraint.accepted_mime_types.contains(media_type))
     {
         return Err(provider_failure(
-            route.provider.id.as_str(),
-            "MiniMax M3 video input accepts MP4, AVI, MOV, and MKV MIME types only.",
+            provider_id,
+            format!(
+                "Resource `{}` MIME type is not accepted by the frozen {:?} input constraint.",
+                resource.id, resource.kind
+            )
+            .as_str(),
         ));
     }
     Ok(())
 }
 
-/// Returns the exact MiniMax local-resource byte limit for a supported M3 resource.
-/// 返回受支持 M3 资源的精确 MiniMax 本地资源字节上限。
+/// Returns the frozen constraint for one resource kind on the selected route.
+/// 返回所选路由上一种资源类别的冻结约束。
 ///
 /// # Parameters
 /// 参数
-/// `route` and `model_id` identify the exact provider/model contract; `resource` supplies
-/// the resource kind.
-/// `route` 与 `model_id` 标识精确供应商/模型契约；`resource` 提供资源类别。
+/// `route` is the immutable execution route and `resource_kind` selects one closed kind.
+/// `route` 是不可变执行路由，`resource_kind` 选择一种封闭类别。
 ///
 /// # Returns
 /// 返回值
-/// A documented byte limit for MiniMax M3 image/video input, otherwise no host limit.
-/// 对 MiniMax M3 图像/视频输入返回文档化字节限制，否则不返回宿主限制。
-fn minimax_local_resource_byte_limit(
+/// The exact frozen constraint, or `None` when the route accepts the projector baseline.
+/// 返回精确冻结约束；路由接受投影器基线时返回 `None`。
+fn input_resource_constraint(
     route: &ProviderExecutionRoute,
-    model_id: &str,
-    resource: &ResourceReference,
-) -> Option<u64> {
-    if route.provider.id != "minimax" || model_id != "MiniMax-M3" {
-        return None;
-    }
-    match resource.kind {
-        ResourceKind::Image => Some(MINIMAX_M3_IMAGE_BYTE_LIMIT),
-        ResourceKind::Video => Some(MINIMAX_M3_VIDEO_BYTE_LIMIT),
-        _ => None,
-    }
+    resource_kind: ResourceKind,
+) -> Option<&InputResourceConstraint> {
+    route
+        .protocol_route
+        .input_resource_constraints
+        .iter()
+        .find(|constraint| constraint.resource_kind == resource_kind)
 }
 
 /// Converts one canonical controller message into the public contract.
@@ -2555,5 +2601,72 @@ mod tests {
         assert_eq!(value["upstream_message"], "upstream detail | key=value");
         assert_eq!(value["request_id"], "req-123");
         assert_eq!(value["message"], error.message);
+    }
+
+    /// Verifies frozen manifest constraints enforce source and MIME rules for any provider id.
+    /// 验证冻结清单约束会针对任意供应商标识执行来源与 MIME 规则。
+    #[test]
+    fn frozen_resource_constraints_are_provider_neutral() {
+        // localOnly is a generic route rule and contains no provider identity.
+        // localOnly 是不含供应商身份的通用路由规则。
+        let local_only = InputResourceConstraint {
+            resource_kind: ResourceKind::Audio,
+            accepted_mime_types: Vec::new(),
+            max_bytes: None,
+            max_count: None,
+            reference_policy: ResourceReferencePolicy::LocalOnly,
+            upload_channel_refs: Vec::new(),
+        };
+        // remoteAudio intentionally violates the generic local-only policy.
+        // remoteAudio 刻意违反通用的仅本地策略。
+        let remote_audio = ResourceReference {
+            id: String::from("audio-1"),
+            kind: ResourceKind::Audio,
+            media_type: Some(String::from("audio/mpeg")),
+            source_kind: vulcan_ai_contract::ResourceSourceKind::RemoteUrl,
+            file_name: None,
+            image_detail: None,
+            local_path: None,
+            url: Some(String::from("https://media.example/audio.mp3")),
+        };
+        assert!(
+            validate_frozen_input_resource_constraint(
+                "custom:constraint-fixture",
+                &local_only,
+                &remote_audio,
+            )
+            .is_err()
+        );
+
+        // pdfOnly proves MIME admission comes entirely from frozen manifest data.
+        // pdfOnly 证明 MIME 准入完全来自冻结清单数据。
+        let pdf_only = InputResourceConstraint {
+            resource_kind: ResourceKind::File,
+            accepted_mime_types: vec![String::from("application/pdf")],
+            max_bytes: None,
+            max_count: None,
+            reference_policy: ResourceReferencePolicy::Any,
+            upload_channel_refs: Vec::new(),
+        };
+        // textFile uses an otherwise valid remote representation with the wrong MIME type.
+        // textFile 使用其他方面有效但 MIME 类型错误的远程表示。
+        let text_file = ResourceReference {
+            id: String::from("file-1"),
+            kind: ResourceKind::File,
+            media_type: Some(String::from("text/plain")),
+            source_kind: vulcan_ai_contract::ResourceSourceKind::RemoteUrl,
+            file_name: None,
+            image_detail: None,
+            local_path: None,
+            url: Some(String::from("https://media.example/file.txt")),
+        };
+        assert!(
+            validate_frozen_input_resource_constraint(
+                "custom:constraint-fixture",
+                &pdf_only,
+                &text_file,
+            )
+            .is_err()
+        );
     }
 }

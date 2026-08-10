@@ -920,6 +920,7 @@ mod tests {
             token_budget_runtime: None,
             mcp_runtime: None,
             cached_mcp_catalog: None,
+            provider_manifest_sync: None,
             live_context_budgets: BTreeMap::new(),
             session_goal_summaries: BTreeMap::new(),
             session_goal_dispatch_versions: BTreeMap::new(),

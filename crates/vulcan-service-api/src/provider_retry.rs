@@ -60,8 +60,8 @@ impl Default for ProviderRetrySettingsSummary {
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderRateLimitRetrySettingsSummary {
-    /// Maximum retry count, where zero means retry until user cancellation.
-    /// 最大重试次数；零表示持续重试直至用户取消。
+    /// Maximum finite retry count after host normalization.
+    /// 宿主规范化后的最大有限重试次数。
     pub max_retries: u32,
     /// Delay before the first rate-limit retry in milliseconds.
     /// 第一次限流重试前的等待毫秒数。
@@ -75,11 +75,11 @@ pub struct ProviderRateLimitRetrySettingsSummary {
 }
 
 impl Default for ProviderRateLimitRetrySettingsSummary {
-    /// Builds the default cancellation-bound rate-limit schedule.
-    /// 构建默认的仅由取消终止的限流调度规则。
+    /// Builds the default finite rate-limit schedule.
+    /// 构建默认的有限限流调度规则。
     fn default() -> Self {
         Self {
-            max_retries: 0,
+            max_retries: 100_000,
             initial_delay_ms: 5_000,
             max_delay_ms: 1_800_000,
             backoff_factor_milli: 2_000,

@@ -70,6 +70,8 @@ fn compaction_target_rejects_stale_exact_connection() {
     // result 必须保留精确失效连接边界，而不能进入模型级路由选择。
     let result = resolve_prompt_compaction_model_target(
         &runtime,
+        "session-stale-connection",
+        None,
         Some("custom:test"),
         Some("removed-connection"),
         Some("gpt-test"),
@@ -126,6 +128,17 @@ fn compaction_launch_request_preserves_session_model_target() {
         provider_id: String::from("custom:test"),
         connection_id: String::from("connection-test"),
         model_id: String::from("gpt-test"),
+        provider_route_lease_identity: vulcan_workbench_model::SessionProviderRouteLeaseIdentity {
+            schema_version: 1,
+            provider_id: String::from("custom:test"),
+            connection_id: String::from("connection-test"),
+            model_id: String::from("gpt-test"),
+            protocol_profile_id: String::from("openai-responses.v1"),
+            manifest_revision: 7,
+            manifest_generation: 11,
+            catalog_revision: String::from("catalog-test"),
+            route_revision: String::from("route-test"),
+        },
         remote_compaction_enabled: true,
     };
 
@@ -149,6 +162,13 @@ fn compaction_launch_request_preserves_session_model_target() {
         Some("connection-test")
     );
     assert_eq!(request.model_id_override.as_deref(), Some("gpt-test"));
+    assert_eq!(
+        request
+            .provider_route_lease_identity
+            .as_ref()
+            .map(|identity| identity.route_revision.as_str()),
+        Some("route-test")
+    );
     assert_eq!(request.execution_agent_id.as_deref(), Some("agent-test"));
 }
 

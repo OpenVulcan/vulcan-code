@@ -45,6 +45,9 @@ export interface ProviderModelAccessRow {
   // Complete effective model snapshot used by the shared capability editor.
   // 供共享能力编辑器使用的完整有效模型快照。
   model: PublicAiModel
+  // Whether this identity exists only in the signed provider-tool template catalog.
+  // 此身份是否仅存在于签名供应商工具模板目录。
+  providerToolOnly: boolean
   // Whether this model owns an explicit capability layer.
   // 此模型是否拥有明确的能力层。
   capabilityCustomized: boolean
@@ -100,6 +103,35 @@ export function buildProviderModelAccessRows(
       capabilities: model.capabilities,
     })
   }
+  // providerToolOnlyModelIds distinguishes media/tool declarations from conversation models.
+  // providerToolOnlyModelIds 区分媒体/工具声明与对话模型。
+  const providerToolOnlyModelIds = new Set<string>()
+  for (const declaration of snapshot.providerToolTemplateModels) {
+    if (declaration.providerId !== providerId || supportedModels.has(declaration.modelId)) {
+      continue
+    }
+    providerToolOnlyModelIds.add(declaration.modelId)
+    supportedModels.set(declaration.modelId, {
+      id: declaration.modelId,
+      display_name: declaration.displayName,
+      capabilities: {
+        operations: [],
+        input_resources: [],
+        output_resources: [],
+        evidence_revision: "provider-tool-template.v1",
+        reasoning: "unsupported",
+        reasoning_control: "unsupported",
+        reasoning_efforts: [],
+        tool_calling: "unsupported",
+        prompt_cache: {
+          provider_default_behavior: "Provider-tool template models do not use conversation prompt caching.",
+          supports_managed_explicit: false,
+          supported_ttl_options: [],
+        },
+        model_parameters: [],
+      },
+    })
+  }
   // accessByModel is the backend-projected provider publication contract.
   // accessByModel 是后端投影的供应商发布契约。
   const accessByModel = new Map(
@@ -121,6 +153,7 @@ export function buildProviderModelAccessRows(
       enabled: access?.enabled ?? true,
       id,
       model,
+      providerToolOnly: providerToolOnlyModelIds.has(id),
       capabilityCustomized: capability !== undefined,
       capabilityOverrides: capability?.overrides,
       customized: access?.customized ?? false,
@@ -180,7 +213,7 @@ export function ProviderModelAccessDialog(props: ProviderModelAccessDialogProps)
   // enabledCount summarizes the provider publication boundary.
   // enabledCount 汇总供应商发布边界。
   const enabledCount = rows.filter((row) => row.enabled).length
-  const providerDefaultModel = rows[0]?.model ?? null
+  const providerDefaultModel = rows.find((row) => !row.providerToolOnly)?.model ?? null
   const providerCapabilityOverrides = props.provider
     ? props.snapshot?.providerCapabilityOverrides?.[props.provider.id]
     : undefined
@@ -332,9 +365,15 @@ export function ProviderModelAccessDialog(props: ProviderModelAccessDialogProps)
                   <Badge variant={row.customized ? "secondary" : "outline"} title="模型访问层">
                     {row.customized ? "访问自定义" : "访问继承"}
                   </Badge>
-                  <Badge variant={row.capabilityCustomized ? "secondary" : "outline"} title="模型能力层">
-                    {row.capabilityCustomized ? "能力自定义" : "能力继承"}
-                  </Badge>
+                  {row.providerToolOnly ? (
+                    <Badge variant="outline" title="签名供应商工具模板目录">
+                      工具模型
+                    </Badge>
+                  ) : (
+                    <Badge variant={row.capabilityCustomized ? "secondary" : "outline"} title="模型能力层">
+                      {row.capabilityCustomized ? "能力自定义" : "能力继承"}
+                    </Badge>
+                  )}
                   <Badge variant={row.enabled ? "secondary" : "outline"}>
                     {t(row.enabled ? "settings.customModels.enabled" : "settings.customModels.disabled")}
                   </Badge>
@@ -349,16 +388,18 @@ export function ProviderModelAccessDialog(props: ProviderModelAccessDialogProps)
                       {t("settings.modelCapabilities.restore")}
                     </Button>
                   ) : null}
-                  <Button
-                    aria-label={`${t("settings.modelCapabilities.title")} ${row.displayName}`}
-                    disabled={busyKey !== null}
-                    onClick={() => setEditingCapabilityModel(row)}
-                    size="icon"
-                    type="button"
-                    variant="ghost"
-                  >
-                    <SlidersHorizontal aria-hidden="true" className="size-4" />
-                  </Button>
+                  {row.providerToolOnly ? null : (
+                    <Button
+                      aria-label={`${t("settings.modelCapabilities.title")} ${row.displayName}`}
+                      disabled={busyKey !== null}
+                      onClick={() => setEditingCapabilityModel(row)}
+                      size="icon"
+                      type="button"
+                      variant="ghost"
+                    >
+                      <SlidersHorizontal aria-hidden="true" className="size-4" />
+                    </Button>
+                  )}
                   <Switch
                     aria-label={`${row.displayName} · ${t("settings.customModels.enabled")}`}
                     checked={row.enabled}

@@ -41,6 +41,15 @@ export interface PublicAiCredentialProfile {
 export interface PublicAiProtocolRoute {
   protocol_profile_id: string;
   endpoint_path?: string;
+  // Optional protocol-specific base URL; absent inherits the entry base URL.
+  // 可选协议专属基础 URL；缺省时继承入口基础 URL。
+  base_url_override?: string;
+  // Optional route-specific API-key projection; absent inherits the entry projection.
+  // 可选路由专属 API Key 投影；缺省时继承入口投影。
+  authentication?: string;
+  // Bounded non-sensitive fixed request headers scoped only to this route.
+  // 仅作用于当前路由的有界非敏感固定请求头。
+  request_headers?: Record<string, string>;
   model_discovery?: PublicAiModelDiscoveryKind;
   model_discovery_path?: string;
   responses_features?: {
@@ -55,12 +64,8 @@ export interface PublicAiProtocolRoute {
 export type PublicAiModelDiscoveryKind =
   | "manual"
   | "provider_tools_only"
-  | "mini_max_anthropic"
-  | "mini_max_open_ai"
   | "open_router"
-  | "alibaba_coding_plan_static"
-  | "alibaba_token_plan_static"
-  | "alibaba_model_studio_static"
+  | "manifest_static"
   | "open_ai"
   | "open_ai_codex"
   | "anthropic"
@@ -77,8 +82,18 @@ export interface PublicAiServiceEntry {
   base_url: string;
   credential_profiles: PublicAiCredentialProfile[];
   authentication: string;
+  service_origin_override_policy?: PublicAiServiceOriginOverridePolicy;
   model_discovery: PublicAiModelDiscoveryKind;
   protocol_routes: PublicAiProtocolRoute[];
+}
+
+// PublicAiServiceOriginOverridePolicy projects one manifest-owned connection-origin contract.
+// PublicAiServiceOriginOverridePolicy 投影一个由 Manifest 持有的连接源地址契约。
+export interface PublicAiServiceOriginOverridePolicy {
+  host_suffix: string;
+  allowed_input_paths: string[];
+  protocol_base_paths: Record<string, string>;
+  example_origin: string;
 }
 
 // PublicAiProviderCategory identifies the provider's user-facing business relationship.
@@ -118,6 +133,9 @@ export interface PublicAiProviderDescriptor {
   kind: "system" | "custom";
   category: PublicAiProviderCategory;
   credential_directory_visibility: PublicAiCredentialDirectoryVisibility;
+  // Closed credential onboarding primitive selected by the provider manifest.
+  // 由供应商清单选择的封闭凭据接入原语。
+  credential_registration: "direct" | "mini_max_regional_api_key";
   promotion?: PublicAiProviderPromotion;
   service_entries: PublicAiServiceEntry[];
 }
@@ -140,6 +158,36 @@ export type PublicAiResponsesRemoteCompactionPolicy =
 // PublicAiCustomProviderModelDiscoveryMode 选择自动、自定义路径或手工发现。
 export type PublicAiCustomProviderModelDiscoveryMode = "standard" | "custom_path" | "manual";
 
+// PublicAiCustomProviderProtocolPreference selects Auto or an explicit protocol for one custom model.
+// PublicAiCustomModelProtocolPreference 为一个自定义模型选择 Auto 或显式协议。
+export type PublicAiCustomModelProtocolPreference =
+  | { mode: "auto" }
+  | { mode: "explicit"; protocol: PublicAiCustomProviderProtocol };
+
+// PublicAiCustomProviderProtocolRoute overrides one protocol route with its own base URL,
+// endpoint path, authentication, discovery, and fixed headers.
+// PublicAiCustomProviderProtocolRoute 以专属基础 URL、端点路径、鉴权、发现与固定请求头
+// 覆盖一条协议路由。
+export interface PublicAiCustomProviderProtocolRoute {
+  protocol: PublicAiCustomProviderProtocol;
+  baseUrl?: string;
+  endpointPath?: string;
+  // Route-level API-key projection; omitted inherits the shared provider projection.
+  // 路由级 API Key 投影；省略时继承供应商共享投影。
+  authentication?: "bearer_authorization" | "google_api_key" | "x_api_key";
+  modelDiscoveryMode?: PublicAiCustomProviderModelDiscoveryMode;
+  modelDiscoveryPath?: string;
+  requestHeaders?: Record<string, string>;
+}
+
+// PublicAiCustomModelProtocolPreferenceRecord exposes one persisted choice without composite keys.
+// PublicAiCustomModelProtocolPreferenceRecord 以无组合键形式暴露一条持久化选择。
+export interface PublicAiCustomModelProtocolPreferenceRecord {
+  providerId: string;
+  modelId: string;
+  preference: PublicAiCustomModelProtocolPreference;
+}
+
 // PublicAiResponsesWebsocketPolicy controls one explicit Codex Responses WebSocket route.
 // PublicAiResponsesWebsocketPolicy 控制一条显式 Codex Responses WebSocket 路由。
 export type PublicAiResponsesWebsocketPolicy = "disabled" | "verified" | "unverified_override";
@@ -151,6 +199,16 @@ export interface PublicAiCustomProviderSaveRequest {
   displayName: string;
   baseUrl: string;
   protocol: PublicAiCustomProviderProtocol;
+  // The authoritative enabled protocol collection; an empty collection keeps the legacy
+  // single-protocol request shape for older clients.
+  // 权威的启用协议集合；空集合保留旧版单协议请求形态以兼容旧客户端。
+  protocols?: PublicAiCustomProviderProtocol[];
+  // Per-protocol route overrides; each protocol may appear at most once.
+  // 逐协议路由覆盖；每个协议最多出现一次。
+  protocolRoutes?: PublicAiCustomProviderProtocolRoute[];
+  // Bounded non-sensitive fixed request headers shared by every protocol route.
+  // 全部协议路由共享的有界非敏感固定请求头。
+  requestHeaders?: Record<string, string>;
   remoteCompactionPolicy: PublicAiResponsesRemoteCompactionPolicy;
   websocketPolicy: PublicAiResponsesWebsocketPolicy;
   authentication: "bearer_authorization" | "google_api_key" | "x_api_key";
@@ -366,6 +424,9 @@ export interface PublicAiConnection {
     | "tavily_credits"
     | "deep_seek_balance"
     | "kimi_coding_plan";
+  // Whether usage refresh needs a separate provider-management credential.
+  // 用量刷新是否需要独立的供应商管理凭据。
+  usage_requires_management_key: boolean;
   has_management_key: boolean;
   service_origin_override?: string;
   credential_mode: CredentialMode;
@@ -516,6 +577,44 @@ export interface PublicAiConnectionCatalog {
   discovery_schema_revision: string;
 }
 
+// PublicAiModelRouteRecord carries one backend-resolved model protocol route status.
+// PublicAiModelRouteRecord 承载一条由后端解析的模型协议路由状态。
+export interface PublicAiModelRouteRecord {
+  // Exact provider identifier.
+  // 精确供应商标识。
+  providerId: string;
+  // Exact credential connection identifier.
+  // 精确凭据连接标识。
+  connectionId: string;
+  // Exact service-entry identifier.
+  // 精确服务入口标识。
+  serviceEntryId: string;
+  // Exact upstream model identifier.
+  // 精确上游模型标识。
+  modelId: string;
+  // Backend-authoritative effective protocol identifier when a binding exists.
+  // 存在绑定时由后端权威给出的生效协议标识。
+  protocolId?: string;
+  // Protocol variants available in this exact account catalog.
+  // 此精确账号目录中可用的协议变体。
+  availableProtocols: string[];
+  // Stable backend binding-source identifier when a binding exists.
+  // 存在绑定时的稳定后端绑定来源标识。
+  bindingSource?: "system_manifest" | "custom_user" | "custom_auto_default" | "migrated_custom_legacy" | "connection_default";
+  // Stable manifest rule identifier when present.
+  // 存在时的稳定 Manifest 规则标识。
+  bindingRuleId?: string;
+  // Activated provider-manifest revision owning the binding.
+  // 持有绑定的已激活供应商 Manifest 修订。
+  manifestRevision: number;
+  // Whether request execution can consume this exact account/model route.
+  // 请求执行是否可消费此精确账号/模型路由。
+  executable: boolean;
+  // Stable backend-owned diagnostic when the route is not executable.
+  // 路由不可执行时由后端持有的稳定诊断。
+  unavailableReason?: string;
+}
+
 // PublicAiActiveSelection identifies one exact model and account.
 // PublicAiActiveSelection 标识一个精确模型与账号。
 export interface PublicAiActiveSelection {
@@ -570,6 +669,7 @@ export type PublicAiProviderToolCapabilityKind =
   | "image_edit"
   | "video_generate"
   | "video_edit"
+  | "video_extend"
   | "speech_synthesize"
   | "speech_transcribe"
   | "music_generate"
@@ -686,6 +786,26 @@ export interface PublicAiProviderToolTargetSnapshot {
   connectionId: string;
   connectionDisplayName: string;
   target: PublicAiProviderToolTarget;
+}
+
+// PublicAiProviderToolTemplateModel keeps one signed media/tool model manageable while disabled.
+// PublicAiProviderToolTemplateModel 让一个签名媒体/工具模型在关闭时仍可管理。
+export interface PublicAiProviderToolTemplateModel {
+  // Exact owning provider identifier.
+  // 精确所属供应商标识。
+  providerId: string;
+  // Exact configured credential connection identifier.
+  // 精确已配置凭据连接标识。
+  connectionId: string;
+  // Exact regional or product service entry identifier.
+  // 精确区域或产品服务入口标识。
+  serviceEntryId: string;
+  // Exact upstream media or provider-tool model identifier.
+  // 精确上游媒体或供应商工具模型标识。
+  modelId: string;
+  // User-visible signed catalog name.
+  // 用户可见的签名目录名称。
+  displayName: string;
 }
 
 // PublicAiProviderToolTargetSelection stores the one selected target for one capability.
@@ -907,12 +1027,30 @@ export interface PublicAiSettingsSnapshot {
   catalogs: Record<string, PublicAiConnectionCatalog>;
   sourceCatalogs: Record<string, PublicAiConnectionCatalog>;
   modelSupportCatalogs: Record<string, PublicAiConnectionCatalog>;
+  // modelRouteRecords prevents browser-side model protocol resolution.
+  // modelRouteRecords 防止浏览器侧自行解析模型协议。
+  modelRouteRecords?: PublicAiModelRouteRecord[];
   catalogStatuses: Record<string, PublicAiCatalogDiscoveryStatus>;
   catalogErrors: Record<string, string>;
   modelOverrides: Record<string, PublicAiModelOverrides>;
   modelOverrideRecords: PublicAiModelOverrideRecord[];
   modelAccessRecords: PublicAiModelAccessRecord[];
+  // providerToolTemplateModels is the enablement-independent signed media/tool inventory.
+  // providerToolTemplateModels 是独立于启用状态的签名媒体/工具目录。
+  providerToolTemplateModels: PublicAiProviderToolTemplateModel[];
   customModels?: Record<string, Record<string, PublicAiCustomModelDefinition>>;
+  // customProviderManifestFailures exposes bounded startup-isolation diagnostics without source bytes.
+  // customProviderManifestFailures 暴露有界启动隔离诊断，不包含源字节。
+  customProviderManifestFailures?: Array<{
+    providerId: string;
+    message: string;
+  }>;
+  // customProviderManifestFailureTotalCount preserves the true count before list truncation.
+  // customProviderManifestFailureTotalCount 保留列表截断前的真实数量。
+  customProviderManifestFailureTotalCount?: number;
+  // customProviderManifestFailuresTruncated reports omitted isolation diagnostics.
+  // customProviderManifestFailuresTruncated 报告被省略的隔离诊断。
+  customProviderManifestFailuresTruncated?: boolean;
   customProviderModelDefaults?: Record<string, PublicAiCustomProviderModelDefaults>;
   // customProviderSystemModelDefaults is the backend-owned baseline shown before any provider override.
   // customProviderSystemModelDefaults 是尚无供应商覆盖时展示的后端持有基线。
@@ -920,6 +1058,12 @@ export interface PublicAiSettingsSnapshot {
   // providersWithModelCustomizations identifies providers whose removal warning must include owned settings.
   // providersWithModelCustomizations 标识移除提示必须包含专属设置的供应商。
   providersWithModelCustomizations?: string[];
+  // customModelProtocolPreferenceRecords stores persisted per-model protocol choices explicitly.
+  // customModelProtocolPreferenceRecords 以显式记录保存持久化逐模型协议选择。
+  customModelProtocolPreferenceRecords?: PublicAiCustomModelProtocolPreferenceRecord[];
+  // providerManifestRevisions exposes process-local system manifest revisions for UI markers.
+  // providerManifestRevisions 暴露进程内系统清单修订号供 UI 标记使用。
+  providerManifestRevisions?: Record<string, number>;
   customModelTemplateDecisionRecords?: PublicAiCustomModelTemplateDecisionRecord[];
   customModelConnectionAvailabilityRecords?: PublicAiCustomModelConnectionAvailabilityRecord[];
   connectionModelAccessPolicyRecords: PublicAiConnectionModelAccessPolicyRecord[];
@@ -1002,7 +1146,6 @@ export interface PublicAiConnectionAddRequest {
   credentialProfileId: string;
   credentialMode: CredentialMode;
   displayName: string;
-  selectedProtocol: string;
   secret: string;
   managementKey?: string;
   serviceOriginOverride?: string;
@@ -1016,7 +1159,6 @@ export interface PublicAiConnectionUpdateRequest {
   serviceEntryId: string;
   credentialProfileId: string;
   credentialMode: CredentialMode;
-  selectedProtocol: string;
   secret?: string;
   managementKey?: string;
   removeManagementKey?: boolean;
@@ -1080,8 +1222,372 @@ export interface PublicAiOAuthCommitRequest {
   serviceEntryId: string;
   credentialProfileId: string;
   displayName: string;
-  selectedProtocol: string;
   // Existing connection replaced by this authorization.
   // 由此次授权替换的现有连接。
   connectionId?: string;
+}
+
+// ManifestActiveLayer identifies which layer the runtime currently binds for one provider.
+// ManifestActiveLayer 标识一个供应商运行时当前绑定的层。
+export type ManifestActiveLayer = "bundled" | "active" | "custom" | "previous";
+
+// ManifestProvenanceStatus is the closed verification state declared by one manifest.
+// ManifestProvenanceStatus 是一份 Manifest 声明的封闭验证状态。
+export type ManifestProvenanceStatus = "example_only" | "verified" | "migrated";
+
+// ManifestLayerStatus exposes one immutable layer revision and content hash.
+// ManifestLayerStatus 暴露一个不可变层的修订与内容摘要。
+export interface ManifestLayerStatus {
+  revision: number;
+  sha256: string;
+}
+
+// ManifestModelBindingChangeBaselineStatus identifies the authenticated layer used for active binding deltas.
+// ManifestModelBindingChangeBaselineStatus 标识 active 绑定差异使用的已认证层。
+export interface ManifestModelBindingChangeBaselineStatus {
+  layer: ManifestActiveLayer;
+  revision: number;
+  sha256: string;
+}
+
+// ManifestActiveStatus exposes the active layer identity currently bound in the runtime.
+// ManifestActiveStatus 暴露运行时当前绑定的 active 层身份。
+export interface ManifestActiveStatus {
+  revision: number;
+  layer: ManifestActiveLayer;
+  sha256?: string;
+  minimum_manifest_engine: number;
+  provenance_status: ManifestProvenanceStatus;
+  evidence_source_count: number;
+}
+
+// ManifestSyncStateView exposes bounded sync bookkeeping for one provider.
+// ManifestSyncStateView 暴露一个供应商的有界同步簿记。
+export interface ManifestSyncStateView {
+  revision: number;
+  sha256: string;
+  etag?: string;
+  index_etag?: string;
+  last_modified?: string;
+  synced_at_unix_ms: number;
+  last_error_kind?: string;
+}
+
+// ManifestCheckOutcome is the closed result of one configured remote check.
+// ManifestCheckOutcome 是一次已配置远端检查的封闭结果。
+export type ManifestCheckOutcome = "not_pinned" | "up_to_date" | "activated" | "rejected" | "failed";
+
+// ManifestCheckStateView separates the latest check from the latest full activation.
+// ManifestCheckStateView 区分最近检查与最近完整激活。
+export interface ManifestCheckStateView {
+  checked_at_unix_ms: number;
+  last_successful_at_unix_ms?: number;
+  outcome: ManifestCheckOutcome;
+  last_error_kind?: string;
+}
+
+// ProviderOperationalTelemetryEventName is the closed lifecycle vocabulary for non-secret provider diagnostics.
+// ProviderOperationalTelemetryEventName 是非秘密供应商诊断使用的封闭生命周期词汇。
+export type ProviderOperationalTelemetryEventName =
+  | "manifest_index_check_started"
+  | "manifest_index_check_not_modified"
+  | "manifest_index_check_failed"
+  | "manifest_index_check_completed"
+  | "provider_candidate_downloaded"
+  | "provider_candidate_rejected"
+  | "provider_candidate_staged"
+  | "provider_manifest_activated"
+  | "provider_manifest_post_activation_rolled_back"
+  | "provider_manifest_fallback_selected"
+  | "provider_manifest_isolated"
+  | "provider_upload_started"
+  | "provider_upload_completed"
+  | "provider_upload_failed"
+  | "provider_upload_cancelled"
+  | "provider_async_task_state_changed";
+
+// ProviderOperationalProfileRevision is one immutable profile identity without payload bodies.
+// ProviderOperationalProfileRevision 是一条不含载荷正文的不可变 Profile 身份。
+export interface ProviderOperationalProfileRevision {
+  profile_id: string;
+  revision: number;
+}
+
+// ProviderOperationalTelemetryEvent is one bounded, non-secret structured lifecycle event.
+// ProviderOperationalTelemetryEvent 是一条有界、非秘密的结构化生命周期事件。
+export interface ProviderOperationalTelemetryEvent {
+  schema_version: number;
+  event_id: string;
+  event_name: ProviderOperationalTelemetryEventName;
+  occurred_at_unix_ms: number;
+  provider_id?: string;
+  service_entry_id?: string;
+  connection_id?: string;
+  model_id?: string;
+  protocol_profile_id?: string;
+  route_revision?: string;
+  manifest_revision?: number;
+  manifest_generation?: number;
+  manifest_sha256?: string;
+  manifest_source?: string;
+  binding_source?: string;
+  binding_rule_id?: string;
+  request_profiles?: ProviderOperationalProfileRevision[];
+  response_profiles?: ProviderOperationalProfileRevision[];
+  operation_id?: string;
+  upload_channel_id?: string;
+  tool_target_id?: string;
+  task_execution_id?: string;
+  task_phase?: string;
+  failure_kind?: string;
+  failure_path?: string;
+}
+
+// QuarantineSummary exposes one classified quarantined candidate.
+// QuarantineSummary 暴露一条分类隔离候选。
+export interface QuarantineSummary {
+  revision: number;
+  failure_kind: string;
+  quarantined_at_unix_ms: number;
+}
+
+// ManifestFieldSourceKind identifies the exact inheritance layer that produced one value.
+// ManifestFieldSourceKind 标识产生一个值的精确继承层。
+export type ManifestFieldSourceKind =
+  | "provider_defaults"
+  | "service_entry_override"
+  | "model_rule_exact"
+  | "model_rule_prefix";
+
+// ManifestFieldOrigin preserves one lower-precedence value replaced by the winner.
+// ManifestFieldOrigin 保留一个被最终胜者替换的低优先级值来源。
+export interface ManifestFieldOrigin {
+  source: ManifestFieldSourceKind;
+  rule_id?: string;
+  manifest_revision: number;
+  evidence_revision?: string;
+}
+
+// ManifestFieldProvenance explains the winner and every deterministic overridden origin.
+// ManifestFieldProvenance 解释最终胜者及每个确定性被覆盖来源。
+export interface ManifestFieldProvenance extends ManifestFieldOrigin {
+  overridden_sources?: ManifestFieldOrigin[];
+}
+
+// ManifestRuleProvenance exposes one rule's exact evidence reference and verification state.
+// ManifestRuleProvenance 暴露一条规则的精确证据引用与验证状态。
+export interface ManifestRuleProvenance {
+  source: "model_rule_exact" | "model_rule_prefix";
+  rule_id: string;
+  manifest_revision: number;
+  provenance_ref?: string;
+  provenance_status: ManifestProvenanceStatus;
+}
+
+// ManifestModelRuleStatus exposes one effective model rule without secrets.
+// ManifestModelRuleStatus 公开一条不含秘密的有效模型规则。
+export interface ManifestModelRuleStatus {
+  rule_id: string;
+  service_entry_id: string;
+  credential_profile_ids: string[];
+  matcher: { kind: "exact" | "prefix"; value: string };
+  supported_protocols: string[];
+  selected_protocol?: string;
+  default_enabled: boolean;
+  model_parameter_ids: string[];
+  usage_profile_refs: string[];
+  request_profile_refs: string[];
+  response_profile_refs: string[];
+  operation_refs: string[];
+  input_resource_constraint_count: number;
+  field_provenance: Record<string, ManifestFieldProvenance>;
+  capability_provenance: Record<string, ManifestFieldProvenance>;
+  provenance: ManifestRuleProvenance;
+}
+
+// ManifestModelSourceStatus is the closed backend-owned model inventory source.
+// ManifestModelSourceStatus 是由后端持有的封闭模型目录来源。
+export type ManifestModelSourceStatus = "manifest" | "discovery" | "manual" | "merged";
+
+// ManifestModelBindingStatus is one concrete backend-resolved connection/model/profile binding.
+// ManifestModelBindingStatus 是一条具体的后端解析连接/模型/配置档绑定。
+export interface ManifestModelBindingStatus {
+  connection_id?: string;
+  service_entry_id: string;
+  credential_profile_id?: string;
+  model_id: string;
+  display_name: string;
+  model_source: ManifestModelSourceStatus;
+  model_source_layers: ManifestModelSourceStatus[];
+  supported_protocols: string[];
+  available_protocols: string[];
+  effective_protocol?: string;
+  binding_source?: string;
+  binding_rule_id?: string;
+  manifest_revision: number;
+  operation_refs: string[];
+  capabilities?: PublicAiModelCapabilities;
+  capability_evidence?: PublicAiModelCapabilityEvidence;
+  capability_provenance: Record<string, ManifestFieldProvenance>;
+  catalog_observed: boolean;
+  catalog_enabled: boolean;
+  executable: boolean;
+  unavailable_reason?: string;
+}
+
+// ManifestOperationCarrier is the closed execution carrier selected by a manifest operation.
+// ManifestOperationCarrier 是 Manifest operation 选择的封闭执行载体。
+export type ManifestOperationCarrier = "conversation_protocol" | "provider_tool" | "native_action" | "unsupported";
+
+// ManifestOperationMatchingModelStatus identifies one concrete model matched by an operation.
+// ManifestOperationMatchingModelStatus 标识一条 operation 匹配的具体模型。
+export interface ManifestOperationMatchingModelStatus {
+  service_entry_id: string;
+  model_id: string;
+}
+
+// ManifestOperationStatus exposes one operation's closed profile, upload, and tool bindings.
+// ManifestOperationStatus 公开一个 operation 的封闭 Profile、上传与工具绑定。
+export interface ManifestOperationStatus {
+  operation_id: string;
+  operation: string;
+  carrier: ManifestOperationCarrier;
+  input_resources: PublicAiResourceKind[];
+  output_resources: PublicAiResourceKind[];
+  input_mime_types: string[];
+  output_mime_types: string[];
+  request_profile_refs: string[];
+  response_profile_refs: string[];
+  upload_channel_refs: string[];
+  tool_target_refs: string[];
+  tool_target_template_refs: string[];
+  asynchronous: boolean;
+  poll_interval_ms?: number;
+  max_backoff_ms?: number;
+  cancellation_supported: boolean;
+  timeout_ms?: number;
+  matching_models: ManifestOperationMatchingModelStatus[];
+  matching_model_total_count: number;
+  matching_models_truncated: boolean;
+}
+
+// ManifestToolTargetTemplateInstanceStatus exposes one data-only model binding instantiated from immutable authority.
+// ManifestToolTargetTemplateInstanceStatus 公开一条从不可变权限实例化的纯数据模型绑定。
+export interface ManifestToolTargetTemplateInstanceStatus {
+  target_id: string;
+  template_id: string;
+  service_entry_id: string;
+  model_id: string;
+  model_display_name: string;
+}
+
+// ManifestDeclarationProvenance identifies one active executable declaration's source.
+// ManifestDeclarationProvenance 标识一项生效可执行声明的来源。
+export interface ManifestDeclarationProvenance {
+  provider_id: string;
+  declaration_kind: string;
+  declaration_id: string;
+  source_layer: ManifestActiveLayer;
+  manifest_revision: number;
+  sha256?: string;
+}
+
+// ProviderManifestCriticalErrorStatus is one bounded provider-local operator diagnostic.
+// ProviderManifestCriticalErrorStatus 是一条有界的逐供应商运维诊断。
+export interface ProviderManifestCriticalErrorStatus {
+  failure_kind: string;
+  message: string;
+}
+
+// ProviderManifestStatus is the typed per-provider manifest status snapshot (plan §R10).
+// ProviderManifestStatus 是 typed 逐供应商清单状态快照（方案 §R10）。
+export interface ProviderManifestStatus {
+  provider_id: string;
+  status_error?: ProviderManifestCriticalErrorStatus;
+  critical_error?: ProviderManifestCriticalErrorStatus;
+  bundled_failure?: ProviderManifestCriticalErrorStatus;
+  bundled?: ManifestLayerStatus;
+  active?: ManifestActiveStatus;
+  previous?: ManifestLayerStatus;
+  sync_state?: ManifestSyncStateView;
+  sync_check_state?: ManifestCheckStateView;
+  recent_telemetry_events: ProviderOperationalTelemetryEvent[];
+  recent_telemetry_total_count: number;
+  recent_telemetry_events_truncated: boolean;
+  quarantine: QuarantineSummary[];
+  sync_configured: boolean;
+  legacy_binding_pending: boolean;
+  model_rules: ManifestModelRuleStatus[];
+  model_bindings: ManifestModelBindingStatus[];
+  model_binding_total_count: number;
+  model_bindings_truncated: boolean;
+  active_model_binding_change_baseline?: ManifestModelBindingChangeBaselineStatus;
+  active_model_binding_changes: ProviderManifestModelBindingDelta[];
+  active_model_binding_change_total_count: number;
+  active_model_binding_changes_truncated: boolean;
+  operations: ManifestOperationStatus[];
+  tool_target_template_instances: ManifestToolTargetTemplateInstanceStatus[];
+  declaration_provenance: Record<string, ManifestDeclarationProvenance>;
+}
+
+// ProviderManifestPreviewOutcome is the closed result of one read-only candidate preview.
+// ProviderManifestPreviewOutcome 是一次只读候选预览的封闭结果。
+export type ProviderManifestPreviewOutcome = "not_configured" | "not_pinned" | "up_to_date" | "candidate" | "rejected";
+
+// ProviderManifestChangeKind classifies one semantic candidate delta.
+// ProviderManifestChangeKind 分类一条语义候选差异。
+export type ProviderManifestChangeKind = "added" | "removed" | "changed";
+
+// ProviderManifestModelBindingDelta compares one exact model/profile binding.
+// ProviderManifestModelBindingDelta 对比一条精确模型/配置档绑定。
+export interface ProviderManifestModelBindingDelta {
+  change: ProviderManifestChangeKind;
+  current?: ManifestModelBindingStatus;
+  candidate?: ManifestModelBindingStatus;
+}
+
+// ProviderManifestOperationDelta compares one semantic operation contract.
+// ProviderManifestOperationDelta 对比一份语义 operation 契约。
+export interface ProviderManifestOperationDelta {
+  change: ProviderManifestChangeKind;
+  current?: ManifestOperationStatus;
+  candidate?: ManifestOperationStatus;
+}
+
+// ProviderManifestCandidatePreview is a verified read-only semantic diff with bounded details.
+// ProviderManifestCandidatePreview 是带有界详情的已验证只读语义差异。
+export interface ProviderManifestCandidatePreview {
+  provider_id: string;
+  outcome: ProviderManifestPreviewOutcome;
+  current_revision?: number;
+  candidate_revision?: number;
+  candidate_sha256?: string;
+  executable: boolean;
+  failure_kind?: string;
+  failure_message?: string;
+  model_binding_changes: ProviderManifestModelBindingDelta[];
+  model_binding_change_total_count: number;
+  model_binding_changes_truncated: boolean;
+  operation_changes: ProviderManifestOperationDelta[];
+  operation_change_total_count: number;
+  operation_changes_truncated: boolean;
+}
+
+// ProviderSyncReport is the typed outcome of one provider manifest sync (plan §R10).
+// ProviderSyncReport 是一次供应商清单同步的 typed 结果（方案 §R10）。
+export interface ProviderSyncReport {
+  provider_id: string;
+  outcome: "not_configured" | "up_to_date" | "activated" | "rejected" | "not_pinned";
+  revision: number;
+  failure_kind?: string;
+  // failure_message retains one bounded and redacted provider-scoped public diagnostic.
+  // failure_message 保留一条有界脱敏的逐供应商公开诊断。
+  failure_message?: string;
+}
+
+// ProviderRollbackReport is the typed outcome of one explicit local rollback (plan §R10).
+// ProviderRollbackReport 是一次显式本地回滚的 typed 结果（方案 §R10）。
+export interface ProviderRollbackReport {
+  provider_id: string;
+  restored_revision: number;
 }

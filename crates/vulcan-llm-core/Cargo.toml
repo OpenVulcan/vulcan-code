@@ -6,6 +6,11 @@ authors.workspace = true
 license.workspace = true
 description = "Responses-first LLM conversion, reasoning projection, usage parsing, and billing primitives."
 
+[features]
+# Exposes historical provider usage-profile builders only to migration tests.
+# 仅向迁移测试暴露历史供应商用量 Profile 构造器。
+provider-migration-oracles = []
+
 [dependencies]
 base64 = "0.22.1"
 futures-util = "0.3.31"

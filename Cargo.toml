@@ -38,6 +38,7 @@ members = [
     "crates/vulcan-llm-core",
     "crates/vulcan-provider-adapters",
     "crates/vulcan-hello",
+    "crates/vulcan-provider-manifest-cli",
 ]
 exclude = [
 ]
@@ -70,6 +71,7 @@ vulcan-service-host = { path = "crates/vulcan-service-host" }
 vulcan-service-kernel = { path = "crates/vulcan-service-kernel" }
 vulcan-service-runtime = { path = "crates/vulcan-service-runtime" }
 vulcan-provider-config = { path = "crates/vulcan-provider-config" }
+vulcan-provider-manifest-cli = { path = "crates/vulcan-provider-manifest-cli" }
 vulcan-context = { path = "crates/vulcan-context" }
 vulcan-context-injection = { path = "crates/vulcan-context-injection" }
 vulcan-hooks = { path = "crates/vulcan-hooks" }

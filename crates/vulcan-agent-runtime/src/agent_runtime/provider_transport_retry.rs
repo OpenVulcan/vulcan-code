@@ -2,7 +2,10 @@
 //! 宿主控制 Provider 传输使用的重试策略与可重试性分类。
 
 use crate::agent_runtime::provider_stream::ProviderStreamDelta;
-use crate::provider_config::PersistedProviderRetryConfiguration;
+use crate::provider_config::{
+    PROVIDER_RETRY_MAX_RETRIES, PersistedProviderRetryConfiguration,
+    normalize_provider_rate_limit_retry_max_retries,
+};
 use std::time::Duration;
 use vulcan_ai_contract::{AiErrorCategory, AiExecutionError, DispatchOutcome};
 use vulcan_core::types::CoreError as VulcanCoreError;
@@ -36,11 +39,11 @@ pub struct ProviderRetryPolicy {
     /// Whether provider retry-after hints should be honored.
     /// 是否遵守 Provider 的 retry-after 提示。
     respect_retry_after: bool,
-    /// Whether HTTP 429 failures may be retried.
-    /// 是否允许重试 HTTP 429 失败。
+    /// Whether a statusless typed rate-limit failure may be retried; observed HTTP 4xx is terminal.
+    /// 是否允许重试不带状态码的强类型限流失败；已观察到的 HTTP 4xx 保持终态。
     retry_429: bool,
-    /// Maximum rate-limit retry count, where zero means cancellation-bound retrying.
-    /// 最大限流重试次数；零表示仅由取消终止。
+    /// Maximum finite rate-limit retry count after legacy-value normalization.
+    /// 旧值规范化后的最大有限限流重试次数。
     rate_limit_max_retries: u32,
     /// Initial delay before the first rate-limit retry.
     /// 第一次限流重试前的初始等待时间。
@@ -66,7 +69,7 @@ impl ProviderRetryPolicy {
             .min(MAX_RATE_LIMIT_RETRY_DELAY.as_millis() as u64);
         Self {
             enabled: config.enabled,
-            max_retries: config.max_retries.min(100),
+            max_retries: config.max_retries.min(PROVIDER_RETRY_MAX_RETRIES),
             initial_delay: Duration::from_millis(config.initial_delay_ms.max(1)),
             max_delay: Duration::from_millis(
                 config.max_delay_ms.max(config.initial_delay_ms.max(1)),
@@ -79,7 +82,9 @@ impl ProviderRetryPolicy {
             jitter_percent: config.jitter_percent.min(80),
             respect_retry_after: config.respect_retry_after,
             retry_429: config.retry_429,
-            rate_limit_max_retries: config.rate_limit.max_retries,
+            rate_limit_max_retries: normalize_provider_rate_limit_retry_max_retries(
+                config.rate_limit.max_retries,
+            ),
             rate_limit_initial_delay: Duration::from_millis(rate_limit_initial_ms),
             rate_limit_max_delay: Duration::from_millis(
                 config
@@ -115,15 +120,20 @@ impl ProviderRetryPolicy {
         }
     }
 
-    /// Returns the configured bounded retry budget for ordinary transient failures.
-    /// 返回普通瞬态失败所使用的已配置有界重试预算。
+    /// Classifies one failed attempt and returns the next retry decision when retry is still allowed.
+    /// 对一次失败尝试进行分类，并在仍允许重试时返回下一次重试决策。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `error` is the typed transport failure, `completed_retries` counts already executed
+    /// retries, and `unsafe_delta_seen` reports whether replay could duplicate semantic output.
+    /// `error` 是强类型传输失败，`completed_retries` 统计已执行重试，`unsafe_delta_seen`
+    /// 报告重放是否可能复制语义输出。
     ///
     /// # Returns
     /// 返回值
-    /// Zero when automatic retry is disabled, otherwise the validated maximum retry count.
-    /// 自动重试关闭时返回零，否则返回已校验的最大重试次数。
-    /// Classifies one failed attempt and returns the next retry decision when retry is still allowed.
-    /// 对一次失败尝试进行分类，并在仍允许重试时返回下一次重试决策。
+    /// A bounded same-route retry decision only when replay remains safe; otherwise `None`.
+    /// 仅在重放仍安全时返回有界同路由重试决策，否则返回 `None`。
     pub(crate) fn next_retry(
         &self,
         error: &VulcanCoreError,
@@ -147,8 +157,7 @@ impl ProviderRetryPolicy {
         } else {
             self.max_retries
         };
-        let unbounded = is_rate_limit && retry_limit == 0;
-        if !unbounded && completed_retries >= retry_limit {
+        if completed_retries >= retry_limit {
             return None;
         }
         // retryNumber saturates only after the representable telemetry range is exhausted.
@@ -168,7 +177,7 @@ impl ProviderRetryPolicy {
         Some(ProviderRetryDecision {
             retry_number,
             max_retries: retry_limit,
-            unbounded,
+            unbounded: false,
             delay,
             reason: classification.reason,
         })
@@ -185,8 +194,8 @@ impl ProviderRetryPolicy {
     ///
     /// # Returns
     /// 返回值
-    /// A bounded or cancellation-bound decision only when transparent replay is proven safe.
-    /// 仅在透明重放已被证明安全时返回有界或取消约束的决策。
+    /// A count-bounded decision only when transparent replay is proven safe.
+    /// 仅在透明重放已被证明安全时返回有次数上限的决策。
     pub fn next_structured_retry(
         &self,
         error: &AiExecutionError,
@@ -202,8 +211,7 @@ impl ProviderRetryPolicy {
         } else {
             self.max_retries
         };
-        let unbounded = is_rate_limit && retry_limit == 0;
-        if !unbounded && completed_retries >= retry_limit {
+        if completed_retries >= retry_limit {
             return None;
         }
         let retry_number = completed_retries.saturating_add(1);
@@ -226,7 +234,7 @@ impl ProviderRetryPolicy {
         Some(ProviderRetryDecision {
             retry_number,
             max_retries: retry_limit,
-            unbounded,
+            unbounded: false,
             delay,
             reason: classification.reason,
         })
@@ -277,11 +285,11 @@ pub struct ProviderRetryDecision {
     /// 1-based retry number that will be executed next.
     /// 即将执行的从 1 开始的重试序号。
     pub retry_number: u32,
-    /// Configured retry limit, or zero for an unbounded rate-limit retry.
-    /// 已配置的重试上限；无次数上限的限流重试为零。
+    /// Effective finite retry limit after host normalization.
+    /// 宿主规范化后的有效有限重试上限。
     pub max_retries: u32,
-    /// Whether this retry continues without a count limit until cancellation.
-    /// 本次重试是否会在取消前不受次数上限限制地持续执行。
+    /// Legacy transcript compatibility flag; new runtime decisions always set it to false.
+    /// 旧转录兼容标志；新的运行时决策始终将其设为 false。
     pub unbounded: bool,
     /// Delay before the next retry.
     /// 下一次重试前的等待时间。
@@ -321,7 +329,9 @@ pub(crate) fn provider_delta_makes_retry_unsafe(delta: &ProviderStreamDelta) -> 
         delta,
         ProviderStreamDelta::Thinking(_)
             | ProviderStreamDelta::Output(_)
+            | ProviderStreamDelta::ToolRequestFragment(_)
             | ProviderStreamDelta::RuntimeEvent(_)
+            | ProviderStreamDelta::UsageUpdated(_)
             | ProviderStreamDelta::FinalConversationState(_, _)
     )
 }
@@ -369,6 +379,20 @@ fn classify_structured_retry_reason(
     error: &AiExecutionError,
     retry_429: bool,
 ) -> Option<ProviderRetryClassification> {
+    // An observed 4xx response is an authoritative request/application rejection. It remains
+    // terminal even when an adapter supplied an overly broad retryable category or overload
+    // marker (original plan §13.5).
+    // 已观察到的 4xx 响应是权威的请求/应用拒绝。即使适配器错误提供了宽泛可重试类别或过载
+    // 标记，它仍保持终态（原始方案 §13.5）。
+    if error
+        .http_status
+        .is_some_and(|status| (400..=499).contains(&status))
+    {
+        return None;
+    }
+    if structured_error_is_deterministic_terminal(error) {
+        return None;
+    }
     // The official Codex overload code and message are authoritative when an older adapter
     // accidentally leaves the generic retryable bit unset.
     // 旧适配器误将通用 retryable 标志置空时，官方 Codex 过载代码和消息仍是权威依据。
@@ -410,6 +434,44 @@ fn classify_structured_retry_reason(
     }
 }
 
+/// Reports whether typed category/subcategory facts prove a deterministic terminal failure.
+/// 报告强类型类别/子类别事实是否证明一项确定性终态失败。
+///
+/// # Parameters
+/// 参数
+/// `error` is the normalized provider failure; display text is intentionally ignored.
+/// `error` 是归一化供应商失败；展示文本被有意忽略。
+///
+/// # Returns
+/// 返回值
+/// `true` for request, policy, schema, unsupported-feature, or decoder/protocol failures.
+/// 对请求、策略、Schema、不支持能力或解码/协议失败返回 `true`。
+fn structured_error_is_deterministic_terminal(error: &AiExecutionError) -> bool {
+    if matches!(
+        error.category,
+        AiErrorCategory::Authentication
+            | AiErrorCategory::PermissionDenied
+            | AiErrorCategory::PaymentRequired
+            | AiErrorCategory::InvalidRequest
+            | AiErrorCategory::ContextLengthExceeded
+            | AiErrorCategory::ContentPolicy
+            | AiErrorCategory::Cancelled
+    ) {
+        return true;
+    }
+    error.subcategory.as_deref().is_some_and(|subcategory| {
+        matches!(
+            subcategory,
+            "route_validation"
+                | "protocol_conversion"
+                | "response_content_type"
+                | "schema"
+                | "unsupported_feature"
+                | "decoder"
+        )
+    })
+}
+
 /// Recognizes only the registered Codex overload markers that are safe to replay before semantic output.
 /// 仅识别已注册且在语义输出前可安全重放的 Codex 过载标记。
 fn structured_error_is_known_overload(error: &AiExecutionError) -> bool {
@@ -438,19 +500,13 @@ fn structured_error_is_known_overload(error: &AiExecutionError) -> bool {
 /// 对已注册的可重试状态返回限流或瞬态分类。
 fn classify_structured_http_status(
     status: Option<u16>,
-    retry_429: bool,
+    _retry_429: bool,
 ) -> Option<ProviderRetryClassification> {
     match status {
-        Some(429) if retry_429 => Some(ProviderRetryClassification {
-            category: ProviderRetryCategory::RateLimit,
-            reason: String::from("Provider rate limit"),
+        Some(status @ (500 | 502 | 503 | 504 | 529)) => Some(ProviderRetryClassification {
+            category: ProviderRetryCategory::Transient,
+            reason: format!("Provider HTTP {status}"),
         }),
-        Some(status @ (408 | 425 | 500 | 502 | 503 | 504 | 529)) => {
-            Some(ProviderRetryClassification {
-                category: ProviderRetryCategory::Transient,
-                reason: format!("Provider HTTP {status}"),
-            })
-        }
         _ => None,
     }
 }
@@ -481,6 +537,9 @@ fn classify_legacy_retry_reason(
         return None;
     }
     if contains_non_retryable_marker(&lower) {
+        return None;
+    }
+    if (400..=499).any(|status| contains_status(&lower, status)) {
         return None;
     }
     if retry_429 && (contains_status(&lower, 429) || contains_provider_rate_limit_marker(&lower)) {
@@ -521,6 +580,11 @@ fn contains_non_retryable_marker(lower: &str) -> bool {
         "context overflow",
         "上下文",
         "schema",
+        "decoder",
+        "decode error",
+        "解码",
+        "unsupported",
+        "not supported",
         "invalid request",
         "bad request",
         "unauthorized",
@@ -543,7 +607,6 @@ fn contains_non_retryable_marker(lower: &str) -> bool {
 fn contains_transport_marker(lower: &str) -> bool {
     [
         "请求发送失败",
-        "sse 解码失败",
         "timeout",
         "timed out",
         "connection reset",
@@ -600,6 +663,7 @@ mod tests {
 
     use super::{ProviderRetryPolicy, provider_delta_makes_retry_unsafe};
     use crate::agent_runtime::provider_stream::ProviderStreamDelta;
+    use crate::agent_runtime::tool_request_stream::ToolRequestFragment;
     use crate::provider_config::{
         PersistedProviderRateLimitRetryConfiguration, PersistedProviderRetryConfiguration,
     };
@@ -607,7 +671,9 @@ mod tests {
     use vulcan_ai_contract::{
         AiErrorCategory, AiExecutionError, DispatchOutcome, RetryAfterHint, RetryAfterSource,
     };
-    use vulcan_core::types::CoreError as VulcanCoreError;
+    use vulcan_core::types::{
+        CoreError as VulcanCoreError, ProviderUsageSnapshot as CoreProviderUsageSnapshot,
+    };
 
     /// Builds a deterministic retry policy for assertions.
     /// 构建便于断言的确定性重试策略。
@@ -706,11 +772,11 @@ mod tests {
     fn honors_retry_after_hint_when_present() {
         let decision = policy()
             .next_retry(
-                &provider_error("HTTP 429 Too Many Requests | retry_after_ms=2500"),
+                &provider_error("type=rate_limit_error | retry_after_ms=2500"),
                 0,
                 false,
             )
-            .expect("429 with retry-after should be retryable");
+            .expect("a statusless rate limit with retry-after should be retryable");
 
         assert_eq!(decision.delay, Duration::from_millis(2_500));
     }
@@ -749,6 +815,56 @@ mod tests {
                 )
                 .is_none()
         );
+    }
+
+    /// Verifies exact 4xx and deterministic protocol categories remain terminal despite bad flags.
+    /// 验证精确 4xx 与确定性协议类别即使携带错误标志也保持终态。
+    #[test]
+    fn structured_4xx_and_protocol_failures_are_terminal() {
+        let mut four_hundred =
+            structured_provider_error(AiErrorCategory::ProviderUnavailable, true);
+        let VulcanCoreError::ProviderFailure {
+            details: Some(details),
+            ..
+        } = &mut four_hundred
+        else {
+            panic!("structured error expected");
+        };
+        details.http_status = Some(400);
+        details.upstream_code = Some(String::from("server_is_overloaded"));
+        assert!(policy().next_retry(&four_hundred, 0, false).is_none());
+
+        let mut decoder = structured_provider_error(AiErrorCategory::InvalidRequest, true);
+        let VulcanCoreError::ProviderFailure {
+            details: Some(details),
+            ..
+        } = &mut decoder
+        else {
+            panic!("structured error expected");
+        };
+        details.subcategory = Some(String::from("protocol_conversion"));
+        details.stage = String::from("response_stream");
+        details.upstream_code = Some(String::from("slow_down"));
+        assert!(policy().next_retry(&decoder, 0, false).is_none());
+    }
+
+    /// Verifies legacy schema, unsupported-feature, and decoder diagnostics never retry.
+    /// 验证旧兼容 Schema、不支持能力与解码诊断绝不重试。
+    #[test]
+    fn legacy_deterministic_failures_are_terminal() {
+        for message in [
+            "HTTP 429 Too Many Requests",
+            "Provider schema validation failed",
+            "Provider feature is unsupported",
+            "SSE 解码失败: invalid event payload",
+        ] {
+            assert!(
+                policy()
+                    .next_retry(&provider_error(message), 0, false)
+                    .is_none(),
+                "deterministic failure must be terminal: {message}"
+            );
+        }
     }
 
     /// Verifies typed retry-after milliseconds flow directly into scheduling.
@@ -894,10 +1010,10 @@ mod tests {
         );
     }
 
-    /// Verifies a zero rate-limit ceiling remains cancellation-bound on the typed path.
-    /// 验证限流次数上限为零时，强类型路径仍由取消操作约束。
+    /// Verifies a legacy zero rate-limit ceiling becomes the finite host ceiling on the typed path.
+    /// 验证旧版零限流次数上限会在强类型路径转换为有限宿主上限。
     #[test]
-    fn structured_retry_entrypoint_keeps_rate_limits_unbounded() {
+    fn structured_retry_entrypoint_bounds_legacy_zero_rate_limits() {
         let error = structured_provider_error(AiErrorCategory::RateLimited, true);
         let VulcanCoreError::ProviderFailure {
             details: Some(details),
@@ -909,11 +1025,16 @@ mod tests {
 
         let decision = policy()
             .next_structured_retry(details.as_ref(), 50)
-            .expect("typed rate-limit retry should remain active");
+            .expect("typed rate-limit retry should remain inside the finite host budget");
 
         assert_eq!(decision.retry_number, 51);
-        assert!(decision.unbounded);
-        assert_eq!(decision.max_retries, 0);
+        assert!(!decision.unbounded);
+        assert_eq!(decision.max_retries, 100_000);
+        assert!(
+            policy()
+                .next_structured_retry(details.as_ref(), 100_000)
+                .is_none()
+        );
     }
 
     /// Verifies Anthropic-compatible structured rate-limit errors remain retryable when the proxy omits HTTP 429 from the formatted message.
@@ -932,18 +1053,18 @@ mod tests {
 
         assert_eq!(decision.retry_number, 1);
         assert_eq!(decision.reason, "Provider rate limit");
-        assert!(decision.unbounded);
-        assert_eq!(decision.max_retries, 0);
+        assert!(!decision.unbounded);
+        assert_eq!(decision.max_retries, 100_000);
     }
 
-    /// Verifies rate-limit retries continue after the ordinary retry ceiling and eventually cap at 1800 seconds.
-    /// 验证限流重试超过普通次数上限后仍会继续，并最终封顶在 1800 秒。
+    /// Verifies rate-limit retries use their finite host ceiling and cap each wait at 1800 seconds.
+    /// 验证限流重试使用有限宿主次数上限，并把每次等待封顶在 1800 秒。
     #[test]
-    fn rate_limit_retries_are_unbounded_and_cap_delay_at_thirty_minutes() {
+    fn rate_limit_retries_use_host_ceiling_and_cap_delay_at_thirty_minutes() {
         // exhaustedDecision proves the sixth retry is still scheduled after the configured ceiling of three.
         // exhaustedDecision 证明在配置上限三次之后，第六次重试仍会被调度。
         let exhausted_decision = policy()
-            .next_retry(&provider_error("HTTP 429 Too Many Requests"), 5, false)
+            .next_retry(&provider_error("type=rate_limit_error"), 5, false)
             .expect("rate-limit retries should ignore the ordinary retry ceiling");
         // cappedDecision proves long-running retries retain the stream while respecting the wait ceiling.
         // cappedDecision 证明长期重试会保持流存活，同时遵守等待上限。
@@ -952,9 +1073,14 @@ mod tests {
             .expect("rate-limit retries should remain active");
 
         assert_eq!(exhausted_decision.retry_number, 6);
-        assert!(exhausted_decision.unbounded);
-        assert_eq!(exhausted_decision.max_retries, 0);
+        assert!(!exhausted_decision.unbounded);
+        assert_eq!(exhausted_decision.max_retries, 100_000);
         assert_eq!(capped_decision.delay, Duration::from_secs(1_800));
+        assert!(
+            policy()
+                .next_retry(&provider_error("type=rate_limit_error"), 100_000, false,)
+                .is_none()
+        );
     }
 
     /// Verifies ordinary transient failures still stop at the configured retry count.
@@ -989,7 +1115,7 @@ mod tests {
         // secondDecision verifies the configured fixed interval on the last allowed retry.
         // secondDecision 验证最后一次允许重试仍采用配置的固定间隔。
         let second_decision = configured_policy
-            .next_retry(&provider_error("HTTP 429 Too Many Requests"), 1, false)
+            .next_retry(&provider_error("type=rate_limit_error"), 1, false)
             .expect("second configured retry should be allowed");
 
         assert_eq!(second_decision.retry_number, 2);
@@ -998,7 +1124,7 @@ mod tests {
         assert_eq!(second_decision.delay, Duration::from_secs(7));
         assert!(
             configured_policy
-                .next_retry(&provider_error("HTTP 429 Too Many Requests"), 2, false)
+                .next_retry(&provider_error("type=rate_limit_error"), 2, false)
                 .is_none()
         );
     }
@@ -1025,6 +1151,24 @@ mod tests {
     fn marks_visible_model_output_as_retry_unsafe() {
         assert!(provider_delta_makes_retry_unsafe(
             &ProviderStreamDelta::Output(String::from("hello"))
+        ));
+    }
+
+    /// Verifies model tool fragments and observed billing usage both prohibit transparent replay.
+    /// 验证模型工具碎片与已观察到的计费用量都会禁止透明重放。
+    #[test]
+    fn marks_tool_fragments_and_usage_as_retry_unsafe() {
+        let tool_fragment =
+            ProviderStreamDelta::ToolRequestFragment(ToolRequestFragment::ArgumentsDelta {
+                request_stream_id: String::from("request-1"),
+                delta: String::from("{}"),
+            });
+        assert!(provider_delta_makes_retry_unsafe(&tool_fragment));
+        assert!(provider_delta_makes_retry_unsafe(
+            &ProviderStreamDelta::UsageUpdated(CoreProviderUsageSnapshot {
+                total_tokens: Some(1),
+                ..CoreProviderUsageSnapshot::default()
+            })
         ));
     }
 }

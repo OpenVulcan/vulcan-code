@@ -105,6 +105,15 @@ pub(crate) async fn service_archive_conversation(
     .await;
     invalidate_webui_session_lifecycle_persist_versions(&state, session_id)?;
     archive_result?;
+    if let Some(runtime) = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?
+        .agent_runtime
+        .as_ref()
+        .map(|runtime| runtime.public_ai_runtime.clone())
+    {
+        runtime.clear_session_selection_leases(session_id.to_string().as_str())?;
+    }
     // refresh_result updates retained lifecycle state while stale writers remain behind the gate.
     // refresh_result 在过期写入者仍被闸门阻挡时更新保留生命周期状态。
     let refresh_result = refresh_workbench_snapshot(state.clone()).await;

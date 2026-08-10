@@ -1,35 +1,74 @@
 //! Strict credential-scoped model discovery.
 //! 严格的凭据作用域模型发现。
 
+#[cfg(test)]
+use crate::reasoning_catalog::{FixedReasoningProvider, fixed_reasoning_capabilities};
 use crate::{
     ConnectionModel, ConnectionModelCatalog, ModelCapabilityEvidence,
-    reasoning_catalog::{FixedReasoningProvider, fixed_reasoning_capabilities},
+    provider_manifest::ResolvedProviderManifest,
 };
-use serde::Deserialize;
+use serde::{Deserialize, de::DeserializeOwned};
+use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
+#[cfg(test)]
+use vulcan_ai_contract::NativeToolKind;
 use vulcan_ai_contract::{
     AiOperation, CapabilitySupport, DistanceMetric, EmbeddingCapabilities, EmbeddingEncoding,
     EmbeddingNormalization, EmbeddingOutputKind, EmbeddingTask, ModelCapabilities,
-    ModelParameterDefault, ModelParameterDefinition, ModelParameterSchema, NativeToolKind,
-    PromptCacheCapability, ReasoningControlMode, ReasoningEffort, RerankCapabilities,
-    RerankScoreSemantics, RerankTruncation, ResourceKind,
+    ModelParameterDefault, ModelParameterDefinition, ModelParameterSchema, PromptCacheCapability,
+    ReasoningControlMode, ReasoningEffort, RerankCapabilities, RerankScoreSemantics,
+    RerankTruncation, ResourceKind,
 };
+#[cfg(test)]
+use vulcan_ai_protocols::ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID;
 use vulcan_ai_protocols::{
-    ANTHROPIC_MESSAGES_PROFILE_ID, ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID, OPENAI_CHAT_PROFILE_ID,
-    OPENAI_RESPONSES_PROFILE_ID,
+    ANTHROPIC_MESSAGES_PROFILE_ID, OPENAI_CHAT_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID,
 };
 
 /// Stable public parameter identifier for sampling temperature.
 /// 采样温度的稳定公共参数标识。
 pub const SAMPLING_TEMPERATURE_PARAMETER_ID: &str = "sampling.temperature";
 
-/// Stable OpenRouter parameter identifier for a direct reasoning-token budget.
-/// OpenRouter 直接推理 Token 预算的稳定参数标识。
-pub const OPENROUTER_REASONING_MAX_TOKENS_PARAMETER_ID: &str = "reasoning.max_tokens";
+/// Stable provider-neutral parameter identifier for a direct reasoning-token budget.
+/// 直接推理 Token 预算的稳定供应商无关参数标识。
+pub const REASONING_MAX_TOKENS_PARAMETER_ID: &str = "reasoning.max_tokens";
 
-/// Stable MiniMax parameter identifier for OpenAI-compatible reasoning separation.
-/// MiniMax OpenAI 兼容推理分离的稳定参数标识。
+/// Stable MiniMax migration-oracle parameter identifier used only by co-located tests.
+/// 仅供同位测试使用的 MiniMax 迁移对照参数稳定标识。
+#[cfg(test)]
 pub const MINIMAX_REASONING_SPLIT_PARAMETER_ID: &str = "minimax.reasoning_split";
+
+/// Maximum UTF-8 bytes accepted from one model-discovery response page.
+/// 单个模型发现响应分页允许接受的最大 UTF-8 字节数。
+pub(crate) const MODEL_DISCOVERY_MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
+
+/// Parses one model-discovery response through shared byte, depth, and node-count bounds.
+/// 通过共享字节、深度与节点数量上限解析一个模型发现响应。
+///
+/// # Parameters
+/// 参数
+/// `body` is the provider-controlled JSON page and `label` scopes the controlled diagnostic.
+/// `body` 是供应商控制的 JSON 分页，`label` 限定受控诊断范围。
+///
+/// # Returns
+/// 返回值
+/// The requested closed response type or a deterministic size, syntax, shape, depth, or count
+/// failure.
+/// 返回所需封闭响应类型，或确定性的大小、语法、结构、深度或数量失败。
+fn parse_discovery_json<Response>(body: &str, label: &str) -> Result<Response, String>
+where
+    Response: DeserializeOwned,
+{
+    if body.len() > MODEL_DISCOVERY_MAX_RESPONSE_BYTES {
+        return Err(format!(
+            "{label} exceeds the {MODEL_DISCOVERY_MAX_RESPONSE_BYTES}-byte catalog boundary."
+        ));
+    }
+    let value: Value =
+        serde_json::from_str(body).map_err(|error| format!("{label} is invalid: {error}"))?;
+    crate::provider_manifest::validate_runtime_json_bounds(&value, label)?;
+    serde_json::from_value(value).map_err(|error| format!("{label} is invalid: {error}"))
+}
 
 /// Parses a MiniMax Anthropic-compatible model list without inferred fields.
 /// 在不推测字段的情况下解析 MiniMax Anthropic 兼容模型列表。
@@ -44,6 +83,7 @@ pub const MINIMAX_REASONING_SPLIT_PARAMETER_ID: &str = "minimax.reasoning_split"
 /// 返回值
 /// A connection-scoped in-memory catalog or a controlled contract error.
 /// 返回连接作用域内存目录或受控契约错误。
+#[cfg(test)]
 pub fn parse_minimax_model_catalog(
     connection_id: &str,
     generation: u64,
@@ -70,21 +110,19 @@ pub fn parse_minimax_model_catalog(
 /// 返回值
 /// Parsed models plus the authoritative `has_more` and `last_id` cursor fields.
 /// 返回解析后的模型以及权威的 `has_more` 和 `last_id` 游标字段。
+#[cfg(test)]
 pub(crate) fn parse_minimax_model_page(body: &str) -> Result<MiniMaxModelPage, String> {
-    let response: MiniMaxModelList = serde_json::from_str(body)
-        .map_err(|error| format!("MiniMax model list is invalid: {error}"))?;
+    let response: MiniMaxModelList = parse_discovery_json(body, "MiniMax model list")?;
     let models = response
         .data
         .into_iter()
-        .map(|model| {
-            let capabilities =
-                minimax_text_capabilities(model.id.as_str(), ANTHROPIC_MESSAGES_PROFILE_ID);
-            ConnectionModel {
-                id: model.id,
-                display_name: model.display_name,
-                capabilities,
-                capability_evidence: ModelCapabilityEvidence::default(),
-            }
+        .map(|model| ConnectionModel {
+            id: model.id,
+            display_name: model.display_name,
+            capabilities: conservative_discovered_text_capabilities("minimax.anthropic.models.v1"),
+            capability_evidence: ModelCapabilityEvidence::default(),
+            protocol_variants: BTreeMap::new(),
+            resolved_protocol_binding: None,
         })
         .collect();
     Ok(MiniMaxModelPage {
@@ -108,21 +146,23 @@ pub(crate) fn parse_minimax_model_page(body: &str) -> Result<MiniMaxModelPage, S
 /// 返回值
 /// A protocol-scoped MiniMax catalog with OpenAI-compatible parameter declarations.
 /// 返回带 OpenAI 兼容参数声明的协议作用域 MiniMax 目录。
+#[cfg(test)]
 pub fn parse_minimax_openai_model_catalog(
     connection_id: &str,
     generation: u64,
     body: &str,
 ) -> Result<ConnectionModelCatalog, String> {
-    let response: OpenAiModelList = serde_json::from_str(body)
-        .map_err(|error| format!("MiniMax OpenAI model list is invalid: {error}"))?;
+    let response: OpenAiModelList = parse_discovery_json(body, "MiniMax OpenAI model list")?;
     let models = response
         .data
         .into_iter()
         .map(|model| ConnectionModel {
             display_name: model.id.clone(),
-            capabilities: minimax_text_capabilities(model.id.as_str(), OPENAI_CHAT_PROFILE_ID),
+            capabilities: conservative_discovered_text_capabilities("minimax.openai.models.v1"),
             id: model.id,
             capability_evidence: ModelCapabilityEvidence::default(),
+            protocol_variants: BTreeMap::new(),
+            resolved_protocol_binding: None,
         })
         .collect::<Vec<_>>();
     validate_model_catalog_identities(models.as_slice(), "MiniMax OpenAI model list")?;
@@ -183,6 +223,7 @@ fn validate_model_catalog_identities(
 /// 返回值
 /// A process-memory-only model catalog.
 /// 返回一个仅存在于进程内存中的模型目录。
+#[cfg(test)]
 pub(crate) fn build_minimax_model_catalog(
     connection_id: &str,
     generation: u64,
@@ -216,13 +257,13 @@ pub fn parse_openrouter_model_catalog(
     generation: u64,
     body: &str,
 ) -> Result<ConnectionModelCatalog, String> {
-    let response: OpenRouterModelList = serde_json::from_str(body)
-        .map_err(|error| format!("OpenRouter model list is invalid: {error}"))?;
+    let response: OpenRouterModelList = parse_discovery_json(body, "OpenRouter model list")?;
     let models = response
         .data
         .into_iter()
         .map(|model| {
             let capabilities = openrouter_reported_capabilities(&model);
+            let capability_evidence = openrouter_capability_evidence(&model);
             // display_name removes OpenRouter's catalog publisher prefix while preserving the exact routing id.
             // display_name 移除 OpenRouter 目录中的发布商前缀，同时保留精确路由 ID。
             let display_name =
@@ -231,7 +272,9 @@ pub fn parse_openrouter_model_catalog(
                 display_name,
                 id: model.id,
                 capabilities,
-                capability_evidence: ModelCapabilityEvidence::default(),
+                capability_evidence,
+                protocol_variants: BTreeMap::new(),
+                resolved_protocol_binding: None,
             }
         })
         .collect::<Vec<_>>();
@@ -268,10 +311,10 @@ pub fn parse_openrouter_complete_model_catalog(
 ) -> Result<ConnectionModelCatalog, String> {
     let conversation =
         parse_openrouter_model_catalog(connection_id, generation, conversation_body)?;
-    let embedding_response: OpenRouterModelList = serde_json::from_str(embedding_body)
-        .map_err(|error| format!("OpenRouter embedding model list is invalid: {error}"))?;
-    let complete_response: OpenRouterModelList = serde_json::from_str(complete_body)
-        .map_err(|error| format!("OpenRouter complete model list is invalid: {error}"))?;
+    let embedding_response: OpenRouterModelList =
+        parse_discovery_json(embedding_body, "OpenRouter embedding model list")?;
+    let complete_response: OpenRouterModelList =
+        parse_discovery_json(complete_body, "OpenRouter complete model list")?;
 
     let mut models = conversation
         .models
@@ -287,6 +330,8 @@ pub fn parse_openrouter_complete_model_catalog(
         })?;
         if !architecture
             .output_modalities
+            .as_deref()
+            .unwrap_or_default()
             .iter()
             .any(|modality| modality == "embeddings")
         {
@@ -305,6 +350,8 @@ pub fn parse_openrouter_complete_model_catalog(
         let is_rerank = model.architecture.as_ref().is_some_and(|architecture| {
             architecture
                 .output_modalities
+                .as_deref()
+                .unwrap_or_default()
                 .iter()
                 .any(|modality| modality == "rerank")
         });
@@ -343,6 +390,7 @@ fn merge_openrouter_specialized_model(
     source: &OpenRouterModelEntry,
     specialized: ModelCapabilities,
 ) {
+    let source_evidence = openrouter_capability_evidence(source);
     let model = models
         .entry(source.id.clone())
         .or_insert_with(|| ConnectionModel {
@@ -350,6 +398,8 @@ fn merge_openrouter_specialized_model(
             display_name: openrouter_model_display_name(source.name.as_deref(), source.id.as_str()),
             capabilities: ModelCapabilities::default(),
             capability_evidence: ModelCapabilityEvidence::default(),
+            protocol_variants: BTreeMap::new(),
+            resolved_protocol_binding: None,
         });
     for operation in specialized.operations {
         if !model.capabilities.operations.contains(&operation) {
@@ -372,6 +422,40 @@ fn merge_openrouter_specialized_model(
         model.capabilities.rerank = specialized.rerank;
     }
     model.capabilities.evidence_revision = String::from("openrouter-complete-catalog-api-2026-07");
+    merge_model_capability_evidence(&mut model.capability_evidence, source_evidence);
+}
+
+/// Merges explicit model-directory evidence without turning omission into a negative declaration.
+/// 合并模型目录的显式证据，且不会把字段缺失误解为否定声明。
+///
+/// # Parameters
+/// 参数
+/// `target` contains evidence already observed for the exact model identity and `source` contains
+/// evidence from one additional atomic OpenRouter catalog response.
+/// `target` 包含同一精确模型身份已观测的证据，`source` 包含另一份 OpenRouter 原子目录响应的证据。
+///
+/// # Returns
+/// 返回值
+/// This function updates `target` in place and returns no value.
+/// 此函数原地更新 `target`，不返回值。
+fn merge_model_capability_evidence(
+    target: &mut ModelCapabilityEvidence,
+    source: ModelCapabilityEvidence,
+) {
+    if source.context_limit_declared {
+        target.context_limit_declared = true;
+    }
+    if source.output_limit_declared {
+        target.output_limit_declared = true;
+    }
+    if source.input_modalities_declared {
+        target.input_modalities_declared = true;
+        target.supports_text_input = source.supports_text_input;
+    }
+    if source.output_modalities_declared {
+        target.output_modalities_declared = true;
+        target.supports_text_output = source.supports_text_output;
+    }
 }
 
 /// Builds the conservative contract proven by OpenRouter's dedicated embedding catalog.
@@ -458,6 +542,7 @@ fn openrouter_rerank_capabilities(model: &OpenRouterModelEntry) -> ModelCapabili
 /// 返回值
 /// The exact reviewed catalog or an explicit unsupported-entry error.
 /// 返回精确的已审核目录，或明确的不支持入口错误。
+#[cfg(test)]
 pub fn build_alibaba_coding_plan_catalog(
     connection_id: &str,
     service_entry_id: &str,
@@ -513,7 +598,12 @@ pub fn build_alibaba_coding_plan_catalog(
                     ..ModelCapabilities::default()
                 },
                 capability_evidence: ModelCapabilityEvidence::default(),
+                protocol_variants: BTreeMap::new(),
+                resolved_protocol_binding: None,
             };
+            // These Coding Plan identities fall outside the migrated model-studio rule scope, so
+            // the legacy reasoning table remains the live contract for this entry.
+            // 这些 Coding Plan 身份不在已迁移的 model-studio 规则作用域内，旧版思考表仍是该入口的现行契约。
             enrich_alibaba_model(service_entry_id, &mut model);
             model
         })
@@ -529,6 +619,7 @@ pub fn build_alibaba_coding_plan_catalog(
 
 /// Describes one reviewed Alibaba conversation offering without provider discovery guesses.
 /// 描述一项不含供应商发现猜测的已审核阿里云会话产品。
+#[cfg(test)]
 #[derive(Clone, Copy)]
 struct AlibabaStaticConversationModel {
     /// Exact upstream model identifier.
@@ -563,6 +654,7 @@ struct AlibabaStaticConversationModel {
 /// 返回值
 /// A product- and protocol-scoped static catalog or an explicit unsupported-product error.
 /// 返回产品与协议作用域静态目录，或明确不支持产品错误。
+#[cfg(test)]
 pub fn build_alibaba_token_plan_catalog(
     connection_id: &str,
     service_entry_id: &str,
@@ -775,6 +867,7 @@ pub fn build_alibaba_token_plan_catalog(
 /// 返回值
 /// A reviewed regional catalog including conversation, embedding, and rerank operations.
 /// 返回包含会话、向量与重排操作的已审核区域目录。
+#[cfg(test)]
 pub fn build_alibaba_model_studio_catalog(
     connection_id: &str,
     service_entry_id: &str,
@@ -959,23 +1052,29 @@ pub fn build_alibaba_model_studio_catalog(
         ("text-embedding-v3", "Text Embedding V3"),
         ("qwen3-rerank", "Qwen3 Rerank"),
     ] {
-        let mut model = ConnectionModel {
+        let model = ConnectionModel {
             id: id.to_string(),
             display_name: display_name.to_string(),
             capabilities: ModelCapabilities::default(),
             capability_evidence: ModelCapabilityEvidence::default(),
+            protocol_variants: BTreeMap::new(),
+            resolved_protocol_binding: None,
         };
-        enrich_alibaba_model(service_entry_id, &mut model);
+        // The bundled manifest rules carry these reviewed embedding/rerank contracts.
+        // 已审核向量/重排契约由内置清单规则承载。
         catalog.models.push(model);
     }
     if service_entry_id == "model-studio-cn" {
-        let mut model = ConnectionModel {
+        let model = ConnectionModel {
             id: String::from("qwen3.7-text-embedding"),
             display_name: String::from("Qwen3.7 Text Embedding"),
             capabilities: ModelCapabilities::default(),
             capability_evidence: ModelCapabilityEvidence::default(),
+            protocol_variants: BTreeMap::new(),
+            resolved_protocol_binding: None,
         };
-        enrich_alibaba_model(service_entry_id, &mut model);
+        // The bundled manifest rules carry these reviewed embedding/rerank contracts.
+        // 已审核向量/重排契约由内置清单规则承载。
         catalog.models.push(model);
     }
     Ok(catalog)
@@ -993,6 +1092,7 @@ pub fn build_alibaba_model_studio_catalog(
 /// 返回值
 /// One immutable static definition.
 /// 返回一项不可变静态定义。
+#[cfg(test)]
 const fn alibaba_static_model(
     id: &'static str,
     display_name: &'static str,
@@ -1023,6 +1123,7 @@ const fn alibaba_static_model(
 /// 返回值
 /// A static model definition without an invented context or output limit.
 /// 返回不虚构上下文或输出上限的静态模型定义。
+#[cfg(test)]
 const fn alibaba_static_model_without_verified_context(
     id: &'static str,
     display_name: &'static str,
@@ -1051,6 +1152,7 @@ const fn alibaba_static_model_without_verified_context(
 /// 返回值
 /// A deterministic catalog whose Responses subset is kept separate from Chat.
 /// 返回将 Responses 子集与 Chat 分离的确定性目录。
+#[cfg(test)]
 fn build_alibaba_static_conversation_catalog(
     connection_id: &str,
     service_entry_id: &str,
@@ -1104,6 +1206,8 @@ fn build_alibaba_static_conversation_catalog(
                     ..ModelCapabilities::default()
                 },
                 capability_evidence: ModelCapabilityEvidence::default(),
+                protocol_variants: BTreeMap::new(),
+                resolved_protocol_binding: None,
             };
             if responses_harness {
                 model.capabilities.tool_calling = CapabilitySupport::Unsupported;
@@ -1174,8 +1278,7 @@ pub fn parse_openai_model_catalog(
     generation: u64,
     body: &str,
 ) -> Result<ConnectionModelCatalog, String> {
-    let response: OpenAiModelList = serde_json::from_str(body)
-        .map_err(|error| format!("OpenAI model list is invalid: {error}"))?;
+    let response: OpenAiModelList = parse_discovery_json(body, "OpenAI model list")?;
     let models = response
         .data
         .into_iter()
@@ -1232,6 +1335,8 @@ pub fn parse_openai_model_catalog(
                 id: model.id,
                 capabilities,
                 capability_evidence,
+                protocol_variants: BTreeMap::new(),
+                resolved_protocol_binding: None,
             }
         })
         .collect::<Vec<_>>();
@@ -1245,8 +1350,8 @@ pub fn parse_openai_model_catalog(
     })
 }
 
-/// Applies code-owned capabilities to models returned by one compatible provider.
-/// 为某个兼容供应商返回的模型应用代码持有的能力契约。
+/// Applies the code-owned migration oracle to one compatible catalog in tests.
+/// 在测试中把代码持有的迁移对照基线应用到一个兼容目录。
 ///
 /// # Parameters
 /// 参数
@@ -1254,7 +1359,8 @@ pub fn parse_openai_model_catalog(
 /// `catalog` is the already parsed credential-visible model list.
 /// `provider_id`、`service_entry_id` 与 `protocol_id` 标识精确路由；
 /// `catalog` 是已解析且对当前凭据可见的模型列表。
-pub fn enrich_compatible_model_catalog(
+#[cfg(test)]
+pub fn enrich_compatible_model_catalog_for_migration_oracle(
     provider_id: &str,
     service_entry_id: &str,
     protocol_id: &str,
@@ -1262,18 +1368,295 @@ pub fn enrich_compatible_model_catalog(
 ) {
     for model in &mut catalog.models {
         if !provider_id.starts_with("custom:") {
-            crate::apply_common_model_capability_defaults(
+            let discovered = model.capabilities.clone();
+            if !crate::apply_common_model_capability_defaults(
                 model.id.as_str(),
                 &mut model.capabilities,
+            ) {
+                model.capabilities = discovered;
+            }
+        }
+        apply_migration_oracle_model_capabilities(
+            provider_id,
+            service_entry_id,
+            protocol_id,
+            model,
+        );
+    }
+}
+
+/// Enriches a discovered catalog with manifest-declared model rules first.
+/// 先用 Manifest 声明的模型规则补全已发现目录。
+///
+/// Models that match a manifest rule receive its inherited and protocol-scoped capability
+/// templates. An unmatched model receives the exact entry default only when
+/// `default_binding_allowed`; explicit discovery limits/modalities remain bounded evidence.
+/// 命中 Manifest 规则的模型获得其继承与协议作用域能力模板。未命中模型仅在
+/// `default_binding_allowed` 下获得精确入口默认值；明确发现到的限制与模态仍作为有界证据保留。
+pub fn enrich_compatible_model_catalog_with_manifest(
+    provider_id: &str,
+    service_entry_id: &str,
+    credential_profile_id: Option<&str>,
+    protocol_id: &str,
+    catalog: &mut ConnectionModelCatalog,
+    resolved: &ResolvedProviderManifest,
+) {
+    for model in &mut catalog.models {
+        if !provider_id.starts_with("custom:") {
+            let discovered = model.capabilities.clone();
+            if !crate::apply_common_model_capability_defaults(
+                model.id.as_str(),
+                &mut model.capabilities,
+            ) {
+                model.capabilities = discovered;
+            }
+        }
+        let matched = apply_manifest_model_rule(
+            resolved,
+            service_entry_id,
+            credential_profile_id,
+            protocol_id,
+            model,
+        );
+        if !matched
+            && resolved.unknown_model_policy
+                == crate::provider_manifest::UnknownModelPolicy::DefaultBindingAllowed
+            && let Ok(defaults) = resolved.model_defaults_for_entry(service_entry_id)
+            && let Some(default_capabilities) = defaults.capabilities.as_ref()
+        {
+            apply_manifest_default_capabilities_with_discovery_evidence(
+                model,
+                default_capabilities,
             );
         }
-        match provider_id {
-            "openai" => enrich_openai_model(model),
-            "kimi" => enrich_kimi_model(service_entry_id, protocol_id, model),
-            "deepseek" => enrich_deepseek_model(protocol_id, model),
-            "alibaba" => enrich_alibaba_model(service_entry_id, model),
-            _ => {}
+    }
+}
+
+/// Applies a signed default capability snapshot while retaining explicitly declared discovery evidence.
+/// 应用签名默认能力快照，同时保留发现结果中明确声明的证据。
+///
+/// # Parameters
+/// 参数
+/// `model` owns the raw discovery capabilities and presence evidence; `defaults` is the complete
+/// compiled capability authority for the exact service entry.
+/// `model` 持有原始发现能力与存在性证据；`defaults` 是精确服务入口的完整已编译能力权威。
+fn apply_manifest_default_capabilities_with_discovery_evidence(
+    model: &mut ConnectionModel,
+    defaults: &ModelCapabilities,
+) {
+    let discovered = model.capabilities.clone();
+    let evidence = &model.capability_evidence;
+    let mut capabilities = defaults.clone();
+    if evidence.context_limit_declared {
+        capabilities.context_limit = discovered.context_limit;
+    }
+    if evidence.output_limit_declared {
+        capabilities.output_limit = discovered.output_limit;
+    }
+    if evidence.input_modalities_declared {
+        capabilities.input_resources = discovered.input_resources;
+    }
+    if evidence.output_modalities_declared {
+        capabilities.output_resources = discovered.output_resources;
+    }
+    // Explicit non-text evidence may narrow a signed conversation default, but discovery never
+    // grants an operation omitted by the signed snapshot.
+    // 明确的非文本证据可以收紧签名会话默认值，但发现结果绝不会授予签名快照未声明的操作。
+    if evidence.supports_text_input == Some(false) || evidence.supports_text_output == Some(false) {
+        capabilities
+            .operations
+            .retain(|operation| *operation != AiOperation::ConversationRespond);
+    }
+    capabilities.evidence_revision = format!(
+        "{}+discovery:{}",
+        capabilities.evidence_revision, discovered.evidence_revision
+    );
+    model.capabilities = capabilities;
+}
+
+/// Applies one manifest model rule to a discovered model.
+/// 将一条 Manifest 模型规则应用到已发现模型。
+///
+/// # Returns
+/// 返回值
+/// `true` when a rule matched and its templates were applied; `false` when no rule covers
+/// the model in the exact service entry.
+/// 命中规则并应用其模板时返回 `true`；精确服务入口内无规则覆盖该模型时返回 `false`。
+pub fn apply_manifest_model_rule(
+    resolved: &ResolvedProviderManifest,
+    service_entry_id: &str,
+    credential_profile_id: Option<&str>,
+    protocol_id: &str,
+    model: &mut ConnectionModel,
+) -> bool {
+    let Some(instance) =
+        resolved.rule_for_model(service_entry_id, credential_profile_id, model.id.as_str())
+    else {
+        return false;
+    };
+    if let Some(display_name) = &instance.display_name {
+        model.display_name = display_name.clone();
+    }
+    // Protocol-independent templates form the base; protocol-scoped templates override them.
+    // 协议无关模板构成基座；协议作用域模板在其上覆盖。
+    if let Some(template) = &instance.capabilities {
+        apply_resolved_capability_template(
+            &mut model.capabilities,
+            template,
+            &instance.capability_provenance,
+            None,
+        );
+    }
+    if let Some(template) = instance.protocol_capabilities.get(protocol_id) {
+        apply_resolved_capability_template(
+            &mut model.capabilities,
+            template,
+            &instance.capability_provenance,
+            Some(protocol_id),
+        );
+    }
+    // Model parameters are merged by stable id when the rule declares them; parameters with
+    // an explicit protocol allowlist apply only to that protocol.
+    // 规则声明模型参数时按稳定 ID 合并；带显式协议白名单的参数仅作用于该协议。
+    for parameter in &instance.model_parameters {
+        let applies = parameter.protocol_ids.is_empty()
+            || parameter.protocol_ids.iter().any(|id| id == protocol_id);
+        if !applies {
+            continue;
         }
+        if let Some(existing) = model
+            .capabilities
+            .model_parameters
+            .iter_mut()
+            .find(|existing| existing.id == parameter.id)
+        {
+            // A model-rule declaration is higher-precedence authority than discovery or
+            // provider defaults for the same stable parameter identity (plan §14.3/§15.2).
+            // 对同一稳定参数身份，模型规则声明的优先级高于发现结果或供应商默认
+            // （方案 §14.3/§15.2）。
+            *existing = parameter.clone();
+        } else {
+            model.capabilities.model_parameters.push(parameter.clone());
+        }
+    }
+    model.capabilities.evidence_revision = format!(
+        "manifest:{}.{}:{}",
+        resolved.descriptor.id, instance.rule_id, resolved.revision
+    );
+    true
+}
+
+/// Builds the provider-neutral baseline for an identity-only text discovery response.
+/// 为仅含身份的文本发现响应构建供应商无关基线。
+///
+/// # Parameters
+/// 参数
+/// `evidence_revision` identifies the exact upstream response schema.
+/// `evidence_revision` 标识精确的上游响应 Schema。
+///
+/// # Returns
+/// 返回值
+/// Conversation membership only; every vendor/model difference must come from a manifest rule.
+/// 仅返回会话成员关系；全部供应商/模型差异必须来自 Manifest 规则。
+#[cfg(test)]
+fn conservative_discovered_text_capabilities(evidence_revision: &str) -> ModelCapabilities {
+    ModelCapabilities {
+        operations: vec![AiOperation::ConversationRespond],
+        evidence_revision: evidence_revision.to_string(),
+        ..ModelCapabilities::default()
+    }
+}
+
+/// Applies one compiled manifest capability template with its exact presence map.
+/// 使用精确 presence 映射应用一个已编译 Manifest 能力模板。
+///
+/// # Parameters
+/// 参数
+/// `target` is the discovery evidence, `template` is the compiled value, `provenance` records
+/// every field actually declared by inheritance, and `protocol_id` selects protocol-scoped keys.
+/// `target` 是发现证据，`template` 是编译值，`provenance` 记录继承后实际声明的每个字段，
+/// `protocol_id` 选择协议作用域键。
+///
+/// Explicit empty lists and explicit `null` values are authoritative. Omitted fields never
+/// overwrite discovery evidence, even when their compiled Rust default is empty or unknown.
+/// 显式空列表与显式 `null` 具有权威性；省略字段绝不覆盖发现证据，即使其 Rust 编译默认值
+/// 为空或未知。
+fn apply_resolved_capability_template(
+    target: &mut ModelCapabilities,
+    template: &ModelCapabilities,
+    provenance: &BTreeMap<String, crate::provider_manifest::ResolvedFieldProvenance>,
+    protocol_id: Option<&str>,
+) {
+    let field_key = |field: &str| match protocol_id {
+        Some(protocol_id) => format!("protocol.{protocol_id}.{field}"),
+        None => field.to_string(),
+    };
+    let declared = |field: &str| provenance.contains_key(field_key(field).as_str());
+    if declared("operations") {
+        target.operations = template.operations.clone();
+    }
+    if declared("input_resources") {
+        target.input_resources = template.input_resources.clone();
+    }
+    if declared("output_resources") {
+        target.output_resources = template.output_resources.clone();
+    }
+    if declared("embedding") {
+        target.embedding = template.embedding.clone();
+    }
+    if declared("rerank") {
+        target.rerank = template.rerank.clone();
+    }
+    if declared("tool_calling") {
+        target.tool_calling = template.tool_calling;
+    }
+    if declared("parallel_tool_calling") {
+        target.parallel_tool_calling = template.parallel_tool_calling;
+    }
+    if declared("reasoning") {
+        target.reasoning = template.reasoning;
+    }
+    if declared("provider_native_tools") {
+        target.provider_native_tools = template.provider_native_tools.clone();
+    }
+    if declared("reasoning_control") {
+        target.reasoning_control = template.reasoning_control;
+    }
+    if declared("reasoning_efforts") {
+        target.reasoning_efforts = template.reasoning_efforts.clone();
+    }
+    if declared("context_limit") {
+        target.context_limit = template.context_limit;
+    }
+    if declared("output_limit") {
+        target.output_limit = template.output_limit;
+    }
+    if declared("prompt_cache") {
+        target.prompt_cache = template.prompt_cache.clone();
+    }
+    if declared("model_parameters") {
+        target.model_parameters = template.model_parameters.clone();
+    }
+    if declared("evidence_revision") {
+        target.evidence_revision = template.evidence_revision.clone();
+    }
+}
+
+/// Applies the code-owned migration oracle branch for one model in tests.
+/// 在测试中为单个模型应用代码持有的迁移对照分支。
+#[cfg(test)]
+fn apply_migration_oracle_model_capabilities(
+    provider_id: &str,
+    service_entry_id: &str,
+    protocol_id: &str,
+    model: &mut ConnectionModel,
+) {
+    match provider_id {
+        "openai" => enrich_openai_model(model),
+        "kimi" => enrich_kimi_model(service_entry_id, protocol_id, model),
+        "deepseek" => enrich_deepseek_model(protocol_id, model),
+        "alibaba" => enrich_alibaba_model(service_entry_id, model),
+        _ => {}
     }
 }
 
@@ -1284,6 +1667,7 @@ pub fn enrich_compatible_model_catalog(
 /// 参数
 /// `model` is one model parsed from the official OpenAI catalog.
 /// `model` 是从 OpenAI 官方目录解析出的一个模型。
+#[cfg(test)]
 fn enrich_openai_model(model: &mut ConnectionModel) {
     let reasoning = fixed_reasoning_capabilities(FixedReasoningProvider::OpenAi, model.id.as_str());
     model.capabilities.reasoning = reasoning.support;
@@ -1302,6 +1686,7 @@ fn enrich_openai_model(model: &mut ConnectionModel) {
 /// 参数
 /// `service_entry_id` and `protocol_id` identify the product route; `model` is mutated in place.
 /// `service_entry_id` 与 `protocol_id` 标识产品路由；`model` 会被原位更新。
+#[cfg(test)]
 fn enrich_kimi_model(service_entry_id: &str, protocol_id: &str, model: &mut ConnectionModel) {
     let (
         display_name,
@@ -1470,33 +1855,6 @@ fn enrich_kimi_model(service_entry_id: &str, protocol_id: &str, model: &mut Conn
     model.capabilities.evidence_revision = format!("model-core.kimi.2026-07-29.{protocol_id}");
 }
 
-/// Resolves whether one known Kimi Coding Plan model remains exposed for an observed membership.
-/// 根据已观测会员等级解析一个已知 Kimi Coding Plan 模型是否继续暴露。
-///
-/// # Parameters
-/// 参数
-/// `plan_name` is the normalized membership name from the usage endpoint; `model_id` is the
-/// exact provider model identifier.
-/// `plan_name` 是用量端点返回的规范化会员名称；`model_id` 是供应商精确模型标识。
-///
-/// # Returns
-/// 返回值
-/// `true` when the model is allowed by the requested product matrix, or when no confirmed plan is
-/// available. Unknown model identifiers remain visible until the provider publishes a closed rule.
-/// 当模型符合产品矩阵，或尚未获得已确认套餐时返回 `true`。在供应商发布封闭规则前，未知模型标识继续保留。
-pub(crate) fn kimi_coding_plan_model_is_available(plan_name: Option<&str>, model_id: &str) -> bool {
-    let Some(plan_name) = plan_name.map(str::trim).filter(|value| !value.is_empty()) else {
-        return true;
-    };
-    match model_id {
-        "k3" => matches!(plan_name, "Allegretto" | "Allegro"),
-        "k3-256k" => matches!(plan_name, "Moderato" | "Allegretto" | "Allegro"),
-        "kimi-for-coding" => matches!(plan_name, "Andante" | "Moderato" | "Allegretto" | "Allegro"),
-        "kimi-for-coding-highspeed" => matches!(plan_name, "Allegretto" | "Allegro"),
-        _ => true,
-    }
-}
-
 /// Applies the exact current DeepSeek official text-model capability contract.
 /// 应用当前 DeepSeek 官方文本模型的精确能力契约。
 ///
@@ -1504,6 +1862,7 @@ pub(crate) fn kimi_coding_plan_model_is_available(plan_name: Option<&str>, model
 /// 参数
 /// `protocol_id` identifies the exact compatible interface and `model` is mutated only when known.
 /// `protocol_id` 标识精确兼容接口，`model` 仅在身份已知时原位更新。
+#[cfg(test)]
 fn enrich_deepseek_model(protocol_id: &str, model: &mut ConnectionModel) {
     model.capabilities.provider_native_tools = match protocol_id {
         ANTHROPIC_MESSAGES_PROFILE_ID | OPENAI_RESPONSES_PROFILE_ID => {
@@ -1547,6 +1906,7 @@ fn enrich_deepseek_model(protocol_id: &str, model: &mut ConnectionModel) {
 /// 返回值
 /// A provider-default temperature definition for supported interfaces, otherwise an empty list.
 /// 对受支持接口返回使用供应商默认值的温度定义，否则返回空列表。
+#[cfg(test)]
 fn deepseek_model_parameters(model_id: &str, protocol_id: &str) -> Vec<ModelParameterDefinition> {
     if !matches!(
         protocol_id,
@@ -1566,7 +1926,7 @@ fn deepseek_model_parameters(model_id: &str, protocol_id: &str) -> Vec<ModelPara
             exclusive_minimum: None,
             exclusive_maximum: None,
         },
-        default: ModelParameterDefault::ProviderDefault,
+        default: ModelParameterDefault::ProviderDefault {},
         protocol_ids: vec![protocol_id.to_string()],
         model_ids: vec![model_id.to_string()],
         dependent_required: Vec::new(),
@@ -1582,6 +1942,7 @@ fn deepseek_model_parameters(model_id: &str, protocol_id: &str) -> Vec<ModelPara
 /// 参数
 /// `model` is one provider-returned model whose unknown identities remain conservative.
 /// `model` 是供应商返回的单个模型，未知身份保持保守能力。
+#[cfg(test)]
 fn enrich_alibaba_model(service_entry_id: &str, model: &mut ConnectionModel) {
     if matches!(
         service_entry_id,
@@ -1706,6 +2067,7 @@ fn enrich_alibaba_model(service_entry_id: &str, model: &mut ConnectionModel) {
 /// 返回值
 /// This function mutates the model capability snapshot in place and returns no value.
 /// 此函数原地修改模型能力快照且不返回值。
+#[cfg(test)]
 fn apply_alibaba_embedding_capabilities(
     model: &mut ConnectionModel,
     dimensions: &[u32],
@@ -1756,8 +2118,7 @@ pub fn parse_openai_codex_model_catalog(
     generation: u64,
     body: &str,
 ) -> Result<ConnectionModelCatalog, String> {
-    let response = serde_json::from_str::<OpenAiCodexModelList>(body)
-        .map_err(|error| format!("OpenAI Codex model list is invalid: {error}"))?;
+    let response = parse_discovery_json::<OpenAiCodexModelList>(body, "OpenAI Codex model list")?;
     let models = response
         .models
         .into_iter()
@@ -1782,6 +2143,8 @@ pub fn parse_openai_codex_model_catalog(
                 ..ModelCapabilities::default()
             },
             capability_evidence: ModelCapabilityEvidence::default(),
+            protocol_variants: BTreeMap::new(),
+            resolved_protocol_binding: None,
         })
         .collect();
     Ok(ConnectionModelCatalog {
@@ -1809,25 +2172,19 @@ pub(crate) fn parse_anthropic_model_page(
     body: &str,
     official_anthropic: bool,
 ) -> Result<AnthropicModelPage, String> {
-    let response: AnthropicModelList = serde_json::from_str(body)
-        .map_err(|error| format!("Anthropic model list is invalid: {error}"))?;
+    let response: AnthropicModelList = parse_discovery_json(body, "Anthropic model list")?;
     let models = response
         .data
         .into_iter()
         .map(|model| {
             let (reasoning_support, reasoning_efforts, evidence_revision) = if official_anthropic {
-                let reasoning = fixed_reasoning_capabilities(
-                    FixedReasoningProvider::Anthropic,
-                    model.id.as_str(),
-                );
+                // Manifest model rules carry the reviewed reasoning efforts; unresolved models
+                // stay conservative with the discovery revision.
+                // 已审核思考档位由清单模型规则承载；未解析模型保持保守并使用发现修订号。
                 (
-                    reasoning.support,
-                    reasoning.efforts,
-                    if reasoning.support == CapabilitySupport::Unknown {
-                        String::from("anthropic.models.v1")
-                    } else {
-                        reasoning.evidence_revision.to_string()
-                    },
+                    CapabilitySupport::Unknown,
+                    Vec::new(),
+                    String::from("anthropic.models.v1"),
                 )
             } else {
                 (
@@ -1852,6 +2209,8 @@ pub(crate) fn parse_anthropic_model_page(
                     ..ModelCapabilities::default()
                 },
                 capability_evidence: ModelCapabilityEvidence::default(),
+                protocol_variants: BTreeMap::new(),
+                resolved_protocol_binding: None,
             }
         })
         .collect();
@@ -1905,8 +2264,7 @@ pub(crate) fn build_anthropic_model_catalog(
 /// Parsed models plus the authoritative next-page token.
 /// 返回解析后的模型及权威下一页 Token。
 pub(crate) fn parse_gemini_model_page(body: &str) -> Result<GeminiModelPage, String> {
-    let response: GeminiModelList = serde_json::from_str(body)
-        .map_err(|error| format!("Gemini model list is invalid: {error}"))?;
+    let response: GeminiModelList = parse_discovery_json(body, "Gemini model list")?;
     let models = response
         .models
         .into_iter()
@@ -1925,8 +2283,9 @@ pub(crate) fn parse_gemini_model_page(body: &str) -> Result<GeminiModelPage, Str
                 .strip_prefix("models/")
                 .unwrap_or(model.name.as_str())
                 .to_string();
-            let reasoning =
-                fixed_reasoning_capabilities(FixedReasoningProvider::Google, model_id.as_str());
+            // Manifest model rules carry the reviewed reasoning efforts; unresolved models stay
+            // conservative with the discovery revision.
+            // 已审核思考档位由清单模型规则承载；未解析模型保持保守并使用发现修订号。
             ConnectionModel {
                 id: model_id,
                 display_name: model.display_name,
@@ -1934,16 +2293,14 @@ pub(crate) fn parse_gemini_model_page(body: &str) -> Result<GeminiModelPage, Str
                     operations,
                     context_limit: model.input_token_limit,
                     output_limit: model.output_token_limit,
-                    reasoning: reasoning.support,
-                    reasoning_efforts: reasoning.efforts,
-                    evidence_revision: if reasoning.support == CapabilitySupport::Unknown {
-                        String::from("gemini.models.v1beta")
-                    } else {
-                        reasoning.evidence_revision.to_string()
-                    },
+                    reasoning: CapabilitySupport::Unknown,
+                    reasoning_efforts: Vec::new(),
+                    evidence_revision: String::from("gemini.models.v1beta"),
                     ..ModelCapabilities::default()
                 },
                 capability_evidence: ModelCapabilityEvidence::default(),
+                protocol_variants: BTreeMap::new(),
+                resolved_protocol_binding: None,
             }
         })
         .collect();
@@ -2001,14 +2358,15 @@ pub fn parse_google_code_assist_model_catalog(
     generation: u64,
     body: &str,
 ) -> Result<ConnectionModelCatalog, String> {
-    let response = serde_json::from_str::<GoogleCodeAssistModelList>(body)
-        .map_err(|error| format!("Google Code Assist model list is invalid: {error}"))?;
+    let response =
+        parse_discovery_json::<GoogleCodeAssistModelList>(body, "Google Code Assist model list")?;
     let models = response
         .models
         .into_iter()
         .map(|(id, model)| {
-            let reasoning =
-                fixed_reasoning_capabilities(FixedReasoningProvider::Google, id.as_str());
+            // Manifest model rules carry the reviewed reasoning efforts; unresolved models stay
+            // conservative with the discovery revision.
+            // 已审核思考档位由清单模型规则承载；未解析模型保持保守并使用发现修订号。
             ConnectionModel {
                 display_name: model.display_name.unwrap_or_else(|| id.clone()),
                 id,
@@ -2016,16 +2374,16 @@ pub fn parse_google_code_assist_model_catalog(
                     operations: vec![AiOperation::ConversationRespond],
                     context_limit: model.max_tokens,
                     output_limit: model.max_output_tokens,
-                    reasoning: reasoning.support,
-                    reasoning_efforts: reasoning.efforts,
-                    evidence_revision: if reasoning.support == CapabilitySupport::Unknown {
-                        String::from("google-code-assist.fetch-available-models.v1internal")
-                    } else {
-                        reasoning.evidence_revision.to_string()
-                    },
+                    reasoning: CapabilitySupport::Unknown,
+                    reasoning_efforts: Vec::new(),
+                    evidence_revision: String::from(
+                        "google-code-assist.fetch-available-models.v1internal",
+                    ),
                     ..ModelCapabilities::default()
                 },
                 capability_evidence: ModelCapabilityEvidence::default(),
+                protocol_variants: BTreeMap::new(),
+                resolved_protocol_binding: None,
             }
         })
         .collect();
@@ -2054,129 +2412,6 @@ pub fn parse_google_code_assist_model_catalog(
 /// 返回值
 /// A model-specific capability set; unknown identities receive a conservative contract.
 /// 返回模型专属能力集合；未知身份获得保守契约。
-fn minimax_text_capabilities(model_id: &str, protocol_id: &str) -> ModelCapabilities {
-    let model_family = minimax_model_family(model_id);
-    let reasoning_contract =
-        fixed_reasoning_capabilities(FixedReasoningProvider::MiniMax, model_id);
-    let (input_resources, reasoning, context_limit, prompt_cache) = match model_family {
-        MiniMaxTextModelFamily::M3 => (
-            Vec::new(),
-            CapabilitySupport::Native,
-            Some(1_000_000),
-            provider_default_prompt_cache(
-                "MiniMax M3 caching follows the provider default for this compatible route.",
-            ),
-        ),
-        MiniMaxTextModelFamily::M2 => (
-            Vec::new(),
-            CapabilitySupport::Native,
-            Some(204_800),
-            minimax_m2_prompt_cache(protocol_id),
-        ),
-        MiniMaxTextModelFamily::Unknown => (
-            Vec::new(),
-            CapabilitySupport::Unknown,
-            None,
-            provider_default_prompt_cache(
-                "This newly discovered MiniMax model has no verified explicit cache contract.",
-            ),
-        ),
-    };
-    let verified_model = model_family != MiniMaxTextModelFamily::Unknown;
-    let reasoning_support = if reasoning_contract.support == CapabilitySupport::Unknown {
-        reasoning
-    } else {
-        reasoning_contract.support
-    };
-    let reasoning_control =
-        reasoning_control_mode(reasoning_support, reasoning_contract.efforts.as_slice());
-    ModelCapabilities {
-        operations: vec![AiOperation::ConversationRespond],
-        input_resources,
-        output_resources: Vec::new(),
-        embedding: None,
-        rerank: None,
-        tool_calling: if verified_model {
-            CapabilitySupport::Native
-        } else {
-            CapabilitySupport::Unknown
-        },
-        parallel_tool_calling: CapabilitySupport::Unknown,
-        reasoning: reasoning_support,
-        provider_native_tools: Vec::new(),
-        reasoning_control,
-        reasoning_efforts: reasoning_contract.efforts,
-        context_limit,
-        // MiniMax documents a combined context limit, not a separate output maximum.
-        // MiniMax 文档给出的是输入输出合计上下文限制，而不是独立输出上限。
-        output_limit: None,
-        prompt_cache,
-        model_parameters: if verified_model {
-            minimax_model_parameters(model_id, protocol_id)
-        } else {
-            Vec::new()
-        },
-        evidence_revision: reasoning_contract.evidence_revision.to_string(),
-    }
-}
-
-/// Identifies the closed MiniMax text-model families with verified capability differences.
-/// 标识具有已验证能力差异的封闭 MiniMax 文本模型族。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum MiniMaxTextModelFamily {
-    /// MiniMax M3 multimodal family.
-    /// MiniMax M3 多模态模型族。
-    M3,
-    /// MiniMax M2 text-only family.
-    /// MiniMax M2 纯文本模型族。
-    M2,
-    /// Newly discovered identity without a verified local capability contract.
-    /// 尚无本地已验证能力契约的新发现身份。
-    Unknown,
-}
-
-/// Resolves one exact MiniMax model identity into its verified family.
-/// 把一个精确 MiniMax 模型身份解析为已验证模型族。
-fn minimax_model_family(model_id: &str) -> MiniMaxTextModelFamily {
-    match model_id {
-        "MiniMax-M3" => MiniMaxTextModelFamily::M3,
-        "MiniMax-M2"
-        | "MiniMax-M2.1"
-        | "MiniMax-M2.1-highspeed"
-        | "MiniMax-M2.5"
-        | "MiniMax-M2.5-highspeed"
-        | "MiniMax-M2.7"
-        | "MiniMax-M2.7-highspeed" => MiniMaxTextModelFamily::M2,
-        _ => MiniMaxTextModelFamily::Unknown,
-    }
-}
-
-/// Builds the verified M2 explicit prompt-cache capability.
-/// 构建已验证的 M2 显式提示词缓存能力。
-fn minimax_m2_prompt_cache(protocol_id: &str) -> PromptCacheCapability {
-    if protocol_id == OPENAI_CHAT_PROFILE_ID {
-        return provider_default_prompt_cache(
-            "MiniMax OpenAI-compatible prompt caching is automatic and does not accept host-injected cache markers.",
-        );
-    }
-    PromptCacheCapability {
-        provider_default_behavior: String::from(
-            "MiniMax automatic caching is used without host-injected cache controls.",
-        ),
-        supports_managed_explicit: true,
-        supported_ttl_options: vec![vulcan_ai_contract::PromptCacheTtlOption {
-            id: String::from("5m"),
-            display_name: String::from("5 minutes"),
-            description: Some(String::from(
-                "MiniMax explicit Anthropic-compatible cache lifetime.",
-            )),
-        }],
-        profile_default_ttl_option_id: Some(String::from("5m")),
-        minimum_cacheable_tokens: Some(512),
-        maximum_breakpoints: Some(4),
-    }
-}
-
 /// Builds the protocol-wide cache capability documented for every active Claude model.
 /// 构建所有活跃 Claude 模型均已文档化支持的协议级缓存能力。
 fn anthropic_prompt_cache() -> PromptCacheCapability {
@@ -2205,70 +2440,6 @@ fn anthropic_prompt_cache() -> PromptCacheCapability {
 
 /// Builds a provider-default-only cache capability.
 /// 构建仅支持供应商默认行为的缓存能力。
-fn provider_default_prompt_cache(description: &str) -> PromptCacheCapability {
-    PromptCacheCapability {
-        provider_default_behavior: description.to_string(),
-        supports_managed_explicit: false,
-        supported_ttl_options: Vec::new(),
-        profile_default_ttl_option_id: None,
-        minimum_cacheable_tokens: None,
-        maximum_breakpoints: None,
-    }
-}
-
-/// Builds verified MiniMax model parameters for one exact compatible protocol.
-/// 为一个精确兼容协议构建已验证的 MiniMax 模型参数。
-///
-/// # Parameters
-/// 参数
-/// `model_id` is the exact discovered model and `protocol_id` is the selected route.
-/// `model_id` 是精确发现的模型，`protocol_id` 是所选路由。
-///
-/// # Returns
-/// 返回值
-/// Closed parameter declarations valid for the selected protocol.
-/// 返回适用于所选协议的封闭参数声明。
-fn minimax_model_parameters(model_id: &str, protocol_id: &str) -> Vec<ModelParameterDefinition> {
-    let mut parameters = vec![ModelParameterDefinition {
-        id: String::from(SAMPLING_TEMPERATURE_PARAMETER_ID),
-        display_name: String::from("Temperature"),
-        description: String::from(
-            "Controls MiniMax sampling randomness; the verified compatible-API range is greater than 0 through 1.",
-        ),
-        schema: ModelParameterSchema::Decimal {
-            minimum: None,
-            maximum: Some(String::from("1")),
-            exclusive_minimum: Some(String::from("0")),
-            exclusive_maximum: None,
-        },
-        default: ModelParameterDefault::ProviderDefault,
-        protocol_ids: vec![protocol_id.to_string()],
-        model_ids: vec![model_id.to_string()],
-        dependent_required: Vec::new(),
-        conflicts: Vec::new(),
-        evidence_revision: String::from("minimax-compatible-text-api-2026-07-28"),
-    }];
-    if protocol_id == OPENAI_CHAT_PROFILE_ID {
-        parameters.push(ModelParameterDefinition {
-            id: String::from(crate::MINIMAX_REASONING_SPLIT_PARAMETER_ID),
-            display_name: String::from("Separate reasoning"),
-            description: String::from(
-                "Returns MiniMax interleaved thinking in the OpenAI-compatible reasoning_details field.",
-            ),
-            schema: ModelParameterSchema::Boolean,
-            default: ModelParameterDefault::ExplicitValue {
-                value: vulcan_ai_contract::ModelParameterValue::Boolean(true),
-            },
-            protocol_ids: vec![String::from(OPENAI_CHAT_PROFILE_ID)],
-            model_ids: vec![model_id.to_string()],
-            dependent_required: Vec::new(),
-            conflicts: Vec::new(),
-            evidence_revision: String::from("minimax-openai-reasoning-split-2026-07-28"),
-        });
-    }
-    parameters
-}
-
 /// Builds the minimum safe capability set for an unverified OpenRouter model.
 /// 为未验证的 OpenRouter 模型构建最小安全能力集合。
 fn openrouter_reported_capabilities(model: &OpenRouterModelEntry) -> ModelCapabilities {
@@ -2284,24 +2455,26 @@ fn openrouter_reported_capabilities(model: &OpenRouterModelEntry) -> ModelCapabi
     let input_resources = model
         .architecture
         .as_ref()
-        .map(|architecture| resource_kinds(architecture.input_modalities.as_slice()))
+        .and_then(|architecture| architecture.input_modalities.as_deref())
+        .map(resource_kinds)
         .unwrap_or_default();
     let output_resources = model
         .architecture
         .as_ref()
-        .map(|architecture| resource_kinds(architecture.output_modalities.as_slice()))
+        .and_then(|architecture| architecture.output_modalities.as_deref())
+        .map(resource_kinds)
         .unwrap_or_default();
     // supports_text_conversation requires both sides of the exact OpenRouter architecture contract.
     // supports_text_conversation 要求 OpenRouter 精确架构契约的输入与输出两侧都声明文本。
     let supports_text_conversation = model.architecture.as_ref().is_some_and(|architecture| {
         architecture
             .input_modalities
-            .iter()
-            .any(|modality| modality == "text")
+            .as_ref()
+            .is_some_and(|modalities| modalities.iter().any(|modality| modality == "text"))
             && architecture
                 .output_modalities
-                .iter()
-                .any(|modality| modality == "text")
+                .as_ref()
+                .is_some_and(|modalities| modalities.iter().any(|modality| modality == "text"))
     });
     let mut model_parameters = Vec::new();
     let reasoning_efforts = model
@@ -2346,7 +2519,7 @@ fn openrouter_reported_capabilities(model: &OpenRouterModelEntry) -> ModelCapabi
                 exclusive_minimum: None,
                 exclusive_maximum: None,
             },
-            default: ModelParameterDefault::ProviderDefault,
+            default: ModelParameterDefault::ProviderDefault {},
             protocol_ids: vec![
                 String::from(ANTHROPIC_MESSAGES_PROFILE_ID),
                 String::from(OPENAI_CHAT_PROFILE_ID),
@@ -2364,7 +2537,7 @@ fn openrouter_reported_capabilities(model: &OpenRouterModelEntry) -> ModelCapabi
         .is_some_and(|reasoning| reasoning.supports_max_tokens)
     {
         model_parameters.push(ModelParameterDefinition {
-            id: String::from(OPENROUTER_REASONING_MAX_TOKENS_PARAMETER_ID),
+            id: String::from(REASONING_MAX_TOKENS_PARAMETER_ID),
             display_name: String::from("Reasoning token budget"),
             description: String::from(
                 "Sets OpenRouter reasoning.max_tokens when the selected model reports direct reasoning-budget support.",
@@ -2374,7 +2547,7 @@ fn openrouter_reported_capabilities(model: &OpenRouterModelEntry) -> ModelCapabi
                 maximum: None,
                 step: Some(1),
             },
-            default: ModelParameterDefault::ProviderDefault,
+            default: ModelParameterDefault::ProviderDefault {},
             protocol_ids: vec![
                 String::from(OPENAI_CHAT_PROFILE_ID),
                 String::from(OPENAI_RESPONSES_PROFILE_ID),
@@ -2426,6 +2599,44 @@ fn openrouter_reported_capabilities(model: &OpenRouterModelEntry) -> ModelCapabi
         prompt_cache: PromptCacheCapability::default(),
         model_parameters,
         evidence_revision: String::from("openrouter-models-api-2026-07"),
+    }
+}
+
+/// Records exactly which OpenRouter capability fields were present in one model record.
+/// 精确记录一条 OpenRouter 模型记录中实际出现的能力字段。
+///
+/// # Parameters
+/// 参数
+/// `model` is the exact entry returned by the documented OpenRouter Models API.
+/// `model` 是 OpenRouter 文档化 Models API 返回的精确条目。
+///
+/// # Returns
+/// 返回值
+/// Presence-aware evidence used to bound signed manifest defaults without granting unrelated
+/// capabilities such as tool calling.
+/// 返回带字段存在性语义的证据，用于约束签名清单默认值且不会授予工具调用等无关能力。
+fn openrouter_capability_evidence(model: &OpenRouterModelEntry) -> ModelCapabilityEvidence {
+    let architecture = model.architecture.as_ref();
+    ModelCapabilityEvidence {
+        context_limit_declared: model.context_length.is_some()
+            || model
+                .top_provider
+                .as_ref()
+                .is_some_and(|provider| provider.context_length.is_some()),
+        output_limit_declared: model
+            .top_provider
+            .as_ref()
+            .is_some_and(|provider| provider.max_completion_tokens.is_some()),
+        input_modalities_declared: architecture
+            .is_some_and(|architecture| architecture.input_modalities.is_some()),
+        output_modalities_declared: architecture
+            .is_some_and(|architecture| architecture.output_modalities.is_some()),
+        supports_text_input: architecture
+            .and_then(|architecture| architecture.input_modalities.as_ref())
+            .map(|modalities| modalities.iter().any(|modality| modality == "text")),
+        supports_text_output: architecture
+            .and_then(|architecture| architecture.output_modalities.as_ref())
+            .map(|modalities| modalities.iter().any(|modality| modality == "text")),
     }
 }
 
@@ -2561,6 +2772,7 @@ fn resource_kinds(modalities: &[String]) -> Vec<ResourceKind> {
 
 /// MiniMax documented model-list response.
 /// MiniMax 文档化模型列表响应。
+#[cfg(test)]
 #[derive(Debug, Deserialize)]
 struct MiniMaxModelList {
     /// Exact model entries.
@@ -2576,6 +2788,7 @@ struct MiniMaxModelList {
 
 /// Parsed MiniMax page shared with the HTTP pagination client.
 /// 与 HTTP 分页客户端共享的已解析 MiniMax 页面。
+#[cfg(test)]
 pub(crate) struct MiniMaxModelPage {
     /// Exact model projections in provider order.
     /// 按供应商顺序排列的精确模型投影。
@@ -2590,6 +2803,7 @@ pub(crate) struct MiniMaxModelPage {
 
 /// MiniMax documented model entry.
 /// MiniMax 文档化模型条目。
+#[cfg(test)]
 #[derive(Debug, Deserialize)]
 struct MiniMaxModelEntry {
     /// Exact model identifier.
@@ -2941,11 +3155,11 @@ struct OpenRouterArchitecture {
     /// Reported input modality identifiers.
     /// 报告的输入模态标识。
     #[serde(default)]
-    input_modalities: Vec<String>,
+    input_modalities: Option<Vec<String>>,
     /// Reported output modality identifiers.
     /// 报告的输出模态标识。
     #[serde(default)]
-    output_modalities: Vec<String>,
+    output_modalities: Option<Vec<String>>,
 }
 
 /// OpenRouter documented top-provider subset.
@@ -2965,6 +3179,7 @@ struct OpenRouterTopProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     /// Verifies MiniMax discovery rejects missing documented identity fields.
     /// 验证 MiniMax 发现拒绝缺失文档化身份字段。
@@ -2977,6 +3192,64 @@ mod tests {
         )
         .expect_err("missing display_name must fail");
         assert!(error.contains("display_name"));
+    }
+
+    /// Verifies the removed MiniMax parsers and provider-neutral parsers preserve route identities.
+    /// 验证已移除的 MiniMax 解析器与供应商无关解析器保留相同路由身份。
+    #[test]
+    fn minimax_legacy_discovery_oracles_match_generic_parsers() {
+        // anthropic_body is one representative documented compatible page.
+        // anthropic_body 是一份代表性的文档化兼容分页。
+        let anthropic_body = r#"{"data":[{"id":"MiniMax-M3","display_name":"MiniMax M3"},{"id":"MiniMax-M2.7","display_name":"MiniMax M2.7"}],"has_more":true,"last_id":"MiniMax-M2.7"}"#;
+        // legacy_anthropic is the code-owned behavior being retired from production.
+        // legacy_anthropic 是正从生产路径退役的代码持有行为。
+        let legacy_anthropic =
+            parse_minimax_model_page(anthropic_body).expect("legacy MiniMax page must parse");
+        // generic_anthropic is the provider-neutral replacement selected by the manifest.
+        // generic_anthropic 是由 Manifest 选择的供应商无关替代实现。
+        let generic_anthropic = parse_anthropic_model_page(anthropic_body, false)
+            .expect("generic Anthropic-compatible page must parse");
+        assert_eq!(
+            legacy_anthropic
+                .models
+                .iter()
+                .map(|model| (&model.id, &model.display_name))
+                .collect::<Vec<_>>(),
+            generic_anthropic
+                .models
+                .iter()
+                .map(|model| (&model.id, &model.display_name))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(legacy_anthropic.has_more, generic_anthropic.has_more);
+        assert_eq!(legacy_anthropic.last_id, generic_anthropic.last_id);
+
+        // openai_body is one representative standard OpenAI model-list envelope.
+        // openai_body 是一份代表性的标准 OpenAI 模型列表封装。
+        let openai_body = r#"{"object":"list","data":[{"id":"MiniMax-M3","object":"model","created":1,"owned_by":"minimax"},{"id":"MiniMax-M2.7","object":"model","created":1,"owned_by":"minimax"}]}"#;
+        // legacy_openai is the former named parser retained only as a migration oracle.
+        // legacy_openai 是仅作为迁移基准保留的旧具名解析器。
+        let legacy_openai = parse_minimax_openai_model_catalog("connection", 7, openai_body)
+            .expect("legacy MiniMax OpenAI catalog must parse");
+        // generic_openai is the production provider-neutral replacement.
+        // generic_openai 是生产路径中的供应商无关替代实现。
+        let generic_openai = parse_openai_model_catalog("connection", 7, openai_body)
+            .expect("generic OpenAI-compatible catalog must parse");
+        assert_eq!(
+            legacy_openai
+                .models
+                .iter()
+                .map(|model| (&model.id, &model.display_name))
+                .collect::<Vec<_>>(),
+            generic_openai
+                .models
+                .iter()
+                .map(|model| (&model.id, &model.display_name))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(legacy_openai.connection_id, generic_openai.connection_id);
+        assert_eq!(legacy_openai.generation, generic_openai.generation);
+        assert_eq!(legacy_openai.page_count, generic_openai.page_count);
     }
 
     /// Verifies Kimi Coding Plan publishes the documented modality and reasoning contracts.
@@ -2994,7 +3267,7 @@ mod tests {
             ]}"#,
         )
         .expect("Kimi model list should parse");
-        enrich_compatible_model_catalog(
+        enrich_compatible_model_catalog_for_migration_oracle(
             "kimi",
             "coding-plan",
             OPENAI_CHAT_PROFILE_ID,
@@ -3058,45 +3331,22 @@ mod tests {
             let mut catalog =
                 parse_openai_model_catalog("connection", 1, r#"{"data":[{"id":"k3"}]}"#)
                     .expect("Kimi model list should parse");
-            enrich_compatible_model_catalog("kimi", "coding-plan", protocol_id, &mut catalog);
+            enrich_compatible_model_catalog_for_migration_oracle(
+                "kimi",
+                "coding-plan",
+                protocol_id,
+                &mut catalog,
+            );
 
             let k3 = catalog.models.first().expect("K3");
             assert_eq!(k3.capabilities.input_resources, expected_resources);
         }
     }
 
-    /// Verifies the product-level plan filter deliberately reserves one-million-token K3 for Allegretto and above.
-    /// 验证产品级套餐过滤刻意将百万上下文 K3 保留给 Allegretto 及以上等级。
-    #[test]
-    fn kimi_coding_plan_model_access_matches_product_matrix() {
-        assert!(kimi_coding_plan_model_is_available(
-            Some("Andante"),
-            "kimi-for-coding"
-        ));
-        assert!(!kimi_coding_plan_model_is_available(
-            Some("Andante"),
-            "k3-256k"
-        ));
-        assert!(kimi_coding_plan_model_is_available(
-            Some("Moderato"),
-            "k3-256k"
-        ));
-        assert!(!kimi_coding_plan_model_is_available(Some("Moderato"), "k3"));
-        assert!(kimi_coding_plan_model_is_available(
-            Some("Allegretto"),
-            "k3"
-        ));
-        assert!(kimi_coding_plan_model_is_available(
-            Some("Allegretto"),
-            "kimi-for-coding-highspeed"
-        ));
-        assert!(kimi_coding_plan_model_is_available(None, "k3"));
-    }
-
     /// Verifies Alibaba Coding Plan static catalogs retain exact regional identity and limits.
     /// 验证阿里云 Coding Plan 静态目录保留精确区域身份与限制。
     #[test]
-    fn alibaba_coding_plan_static_catalog_is_region_scoped() {
+    fn legacy_alibaba_coding_plan_catalog_is_region_scoped() {
         let catalog = build_alibaba_coding_plan_catalog("connection", "coding-plan-cn", 7)
             .expect("registered Coding Plan entry must build");
         assert_eq!(catalog.connection_id, "connection");
@@ -3150,7 +3400,7 @@ mod tests {
             r#"{"object":"list","data":[{"id":"text-embedding-v4","object":"model","created":1,"owned_by":"alibaba"},{"id":"text-embedding-v3","object":"model","created":1,"owned_by":"alibaba"},{"id":"qwen3.7-text-embedding","object":"model","created":1,"owned_by":"alibaba"},{"id":"qwen3-rerank","object":"model","created":1,"owned_by":"alibaba"}]}"#,
         )
         .expect("OpenAI-compatible identity list should parse");
-        enrich_compatible_model_catalog(
+        enrich_compatible_model_catalog_for_migration_oracle(
             "alibaba",
             "model-studio-cn",
             OPENAI_CHAT_PROFILE_ID,
@@ -3223,7 +3473,7 @@ mod tests {
             r#"{"object":"list","data":[{"id":"qwen3.7-text-embedding","object":"model","created":1,"owned_by":"alibaba"}]}"#,
         )
         .expect("OpenAI-compatible identity list should parse");
-        enrich_compatible_model_catalog(
+        enrich_compatible_model_catalog_for_migration_oracle(
             "alibaba",
             "model-studio-singapore",
             OPENAI_CHAT_PROFILE_ID,
@@ -3239,17 +3489,36 @@ mod tests {
     /// 验证 MiniMax 发现明确保留 M3 与 M2 的能力差异。
     #[test]
     fn minimax_discovery_projects_exact_model_families() {
-        let catalog = parse_minimax_model_catalog(
+        let mut catalog = parse_minimax_model_catalog(
             "connection",
             1,
             r#"{"data":[{"id":"MiniMax-M3","display_name":"MiniMax M3"},{"id":"MiniMax-M2.7","display_name":"MiniMax M2.7"},{"id":"MiniMax-Future","display_name":"Future"}],"has_more":false,"last_id":"MiniMax-Future"}"#,
         )
         .expect("documented identities should parse");
+        assert!(
+            catalog
+                .models
+                .iter()
+                .all(|model| model.capabilities.context_limit.is_none()),
+            "raw discovery must not infer vendor capability tables"
+        );
+        let manifests = crate::provider_manifest::load_bundled_resolved_catalog();
+        let manifest = manifests
+            .manifest_arc("minimax")
+            .expect("MiniMax manifest must exist");
+        enrich_compatible_model_catalog_with_manifest(
+            "minimax",
+            "global",
+            Some("payg-api-key"),
+            ANTHROPIC_MESSAGES_PROFILE_ID,
+            &mut catalog,
+            &manifest,
+        );
         let m3 = &catalog.models[0].capabilities;
         assert_eq!(m3.context_limit, Some(1_000_000));
         assert!(m3.input_resources.is_empty());
         assert!(!m3.prompt_cache.supports_managed_explicit);
-        assert_eq!(m3.model_parameters[0].model_ids, vec!["MiniMax-M3"]);
+        assert_eq!(m3.model_parameters[0].id, SAMPLING_TEMPERATURE_PARAMETER_ID);
 
         let m2 = &catalog.models[1].capabilities;
         assert_eq!(m2.context_limit, Some(204_800));
@@ -3267,16 +3536,31 @@ mod tests {
     /// 验证 MiniMax OpenAI 发现仅注册其精确兼容路由参数。
     #[test]
     fn minimax_openai_discovery_is_protocol_scoped() {
-        let catalog = parse_minimax_openai_model_catalog(
+        let mut catalog = parse_minimax_openai_model_catalog(
             "connection",
             1,
             r#"{"object":"list","data":[{"id":"MiniMax-M2.7","object":"model","created":1,"owned_by":"minimax"}]}"#,
         )
         .expect("documented OpenAI-compatible response should parse");
+        let manifests = crate::provider_manifest::load_bundled_resolved_catalog();
+        let manifest = manifests
+            .manifest_arc("minimax")
+            .expect("MiniMax manifest must exist");
+        enrich_compatible_model_catalog_with_manifest(
+            "minimax",
+            "global",
+            Some("payg-api-key"),
+            OPENAI_CHAT_PROFILE_ID,
+            &mut catalog,
+            &manifest,
+        );
         let capabilities = &catalog.models[0].capabilities;
         assert!(!capabilities.prompt_cache.supports_managed_explicit);
         assert!(capabilities.model_parameters.iter().all(|parameter| {
-            parameter.protocol_ids == vec![String::from(OPENAI_CHAT_PROFILE_ID)]
+            parameter
+                .protocol_ids
+                .iter()
+                .any(|protocol_id| protocol_id == OPENAI_CHAT_PROFILE_ID)
         }));
         let reasoning_split = capabilities
             .model_parameters
@@ -3322,7 +3606,51 @@ mod tests {
                 .capabilities
                 .model_parameters
                 .iter()
-                .any(|parameter| parameter.id == OPENROUTER_REASONING_MAX_TOKENS_PARAMETER_ID)
+                .any(|parameter| parameter.id == REASONING_MAX_TOKENS_PARAMETER_ID)
+        );
+    }
+
+    /// Verifies an unmatched default-bound model keeps only permitted discovery evidence.
+    /// 验证未匹配但允许默认绑定的模型仅保留获准的发现证据。
+    #[test]
+    fn default_binding_capabilities_are_signed_and_discovery_bounded() {
+        let mut catalog = parse_openrouter_model_catalog(
+            "connection",
+            1,
+            r#"{"data":[{"id":"deepseek/future-model","name":"Future","context_length":131072,"supported_parameters":["tools"],"architecture":{"input_modalities":["text","image"],"output_modalities":["text"]},"top_provider":{"max_completion_tokens":8192}}]}"#,
+        )
+        .expect("explicit discovery evidence must parse");
+        assert_eq!(
+            catalog.models[0].capabilities.tool_calling,
+            CapabilitySupport::Native
+        );
+        let manifests = crate::provider_manifest::load_bundled_resolved_catalog();
+        let manifest = manifests
+            .manifest("deepseek")
+            .expect("DeepSeek manifest must exist");
+        enrich_compatible_model_catalog_with_manifest(
+            "deepseek",
+            "official-api",
+            Some("api-key"),
+            OPENAI_CHAT_PROFILE_ID,
+            &mut catalog,
+            manifest,
+        );
+
+        let capabilities = &catalog.models[0].capabilities;
+        assert_eq!(capabilities.context_limit, Some(131_072));
+        assert_eq!(capabilities.output_limit, Some(8_192));
+        assert_eq!(capabilities.input_resources, vec![ResourceKind::Image]);
+        assert_eq!(capabilities.tool_calling, CapabilitySupport::Unknown);
+        assert!(
+            capabilities
+                .operations
+                .contains(&AiOperation::ConversationRespond)
+        );
+        assert!(
+            capabilities
+                .evidence_revision
+                .contains("deepseek.default-capabilities.v1+discovery:")
         );
     }
 
@@ -3457,9 +3785,29 @@ mod tests {
         )
         .expect("OpenRouter catalog should parse");
 
+        // The direct parser stays conservative; the bundled manifest rule carries the reviewed
+        // reasoning contract (toggle with none/adaptive).
+        // 直接解析保持保守；已审核思考契约由内置清单规则承载（toggle + none/adaptive）。
+        assert!(direct.models[0].capabilities.reasoning_efforts.is_empty());
+        let manifests = super::super::provider_manifest::load_bundled_resolved_manifests();
+        let minimax = manifests
+            .get("minimax")
+            .expect("bundled minimax manifest must load");
+        let mut model = direct.models[0].clone();
+        assert!(super::apply_manifest_model_rule(
+            minimax,
+            "global",
+            None,
+            "anthropic-messages.v1",
+            &mut model
+        ));
         assert_eq!(
-            direct.models[0].capabilities.reasoning_efforts,
+            model.capabilities.reasoning_efforts,
             vec![ReasoningEffort::None, ReasoningEffort::Adaptive]
+        );
+        assert_eq!(
+            model.capabilities.reasoning_control,
+            ReasoningControlMode::Toggle
         );
         assert_eq!(
             openrouter.models[0].capabilities.reasoning_efforts,
@@ -3616,7 +3964,7 @@ mod tests {
             r#"{"object":"list","data":[{"id":"gpt-5.6","object":"model","created":1,"owned_by":"openai"}]}"#,
         )
         .expect("official response should parse");
-        enrich_compatible_model_catalog(
+        enrich_compatible_model_catalog_for_migration_oracle(
             "openai",
             "public-api",
             OPENAI_CHAT_PROFILE_ID,
@@ -3643,7 +3991,7 @@ mod tests {
             r#"{"object":"list","data":[{"id":"deepseek-v4-pro","object":"model","created":1,"owned_by":"deepseek"}]}"#,
         )
         .expect("documented response should parse");
-        enrich_compatible_model_catalog(
+        enrich_compatible_model_catalog_for_migration_oracle(
             "deepseek",
             "official-api",
             OPENAI_CHAT_PROFILE_ID,
@@ -3666,7 +4014,10 @@ mod tests {
             .iter()
             .find(|parameter| parameter.id == SAMPLING_TEMPERATURE_PARAMETER_ID)
             .expect("DeepSeek Chat should expose documented temperature control");
-        assert_eq!(temperature.default, ModelParameterDefault::ProviderDefault);
+        assert_eq!(
+            temperature.default,
+            ModelParameterDefault::ProviderDefault {}
+        );
         assert_eq!(
             temperature.protocol_ids,
             vec![String::from(OPENAI_CHAT_PROFILE_ID)]
@@ -3674,7 +4025,7 @@ mod tests {
 
         for protocol_id in [ANTHROPIC_MESSAGES_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID] {
             let mut protocol_catalog = catalog.clone();
-            enrich_compatible_model_catalog(
+            enrich_compatible_model_catalog_for_migration_oracle(
                 "deepseek",
                 "official-api",
                 protocol_id,
@@ -3797,5 +4148,696 @@ mod tests {
         assert_eq!(catalog.models[0].display_name, "Gemini Code");
         assert_eq!(catalog.models[0].capabilities.context_limit, Some(1048576));
         assert_eq!(catalog.models[0].capabilities.output_limit, Some(65536));
+    }
+
+    /// Compiles the bundled deepseek manifest for manifest-rule enrichment tests.
+    /// 编译内置 deepseek 清单供 Manifest 规则补全测试使用。
+    fn bundled_deepseek_manifest() -> crate::provider_manifest::ResolvedProviderManifest {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("vulcan-runtime-assets")
+            .join("resources")
+            .join("provider-manifests")
+            .join("manifests")
+            .join("deepseek.json");
+        let text = std::fs::read_to_string(&path).expect("read bundled deepseek manifest");
+        crate::provider_manifest::compile_manifest_text(
+            &text,
+            crate::provider_manifest::ManifestOwnership::System,
+        )
+        .expect("bundled deepseek manifest must compile")
+    }
+
+    /// Verifies manifest rules apply protocol-scoped provider-native tools.
+    /// 验证 Manifest 规则应用协议作用域供应商原生工具。
+    #[test]
+    fn manifest_rule_applies_protocol_scoped_web_search() {
+        let resolved = bundled_deepseek_manifest();
+        let mut model = ConnectionModel {
+            id: String::from("deepseek-v4-flash"),
+            display_name: String::from("DeepSeek V4 Flash"),
+            capabilities: ModelCapabilities::default(),
+            capability_evidence: Default::default(),
+            protocol_variants: BTreeMap::new(),
+            resolved_protocol_binding: None,
+        };
+        let matched = apply_manifest_model_rule(
+            &resolved,
+            "official-api",
+            None,
+            ANTHROPIC_MESSAGES_PROFILE_ID,
+            &mut model,
+        );
+        assert!(matched, "flash must match the prefix rule");
+        assert_eq!(
+            model.capabilities.provider_native_tools,
+            vec![NativeToolKind::WebSearch]
+        );
+        assert_eq!(model.capabilities.context_limit, Some(1_000_000));
+        assert_eq!(model.capabilities.reasoning, CapabilitySupport::Native);
+        assert_eq!(
+            model.capabilities.reasoning_control,
+            ReasoningControlMode::Toggle
+        );
+        assert!(
+            model
+                .capabilities
+                .model_parameters
+                .iter()
+                .any(|parameter| parameter.id == SAMPLING_TEMPERATURE_PARAMETER_ID)
+        );
+
+        // The chat protocol carries no native search tool for the same model.
+        // 同一模型在 chat 协议下不携带原生搜索工具。
+        let mut chat_model = ConnectionModel {
+            id: String::from("deepseek-v4-flash"),
+            display_name: String::from("DeepSeek V4 Flash"),
+            capabilities: ModelCapabilities::default(),
+            capability_evidence: Default::default(),
+            protocol_variants: BTreeMap::new(),
+            resolved_protocol_binding: None,
+        };
+        apply_manifest_model_rule(
+            &resolved,
+            "official-api",
+            None,
+            OPENAI_CHAT_PROFILE_ID,
+            &mut chat_model,
+        );
+        assert!(chat_model.capabilities.provider_native_tools.is_empty());
+    }
+
+    /// Verifies a model-rule parameter replaces a lower-precedence parameter with the same stable id.
+    /// 验证模型规则参数会替换具有相同稳定 ID 的低优先级参数。
+    #[test]
+    fn manifest_rule_parameter_overrides_existing_same_id_definition() {
+        let resolved = bundled_deepseek_manifest();
+        let instance = resolved
+            .rule_for_model("official-api", None, "deepseek-v4-flash")
+            .expect("flash must match the bundled prefix rule");
+        let expected = instance
+            .model_parameters
+            .iter()
+            .find(|parameter| parameter.id == SAMPLING_TEMPERATURE_PARAMETER_ID)
+            .expect("the bundled rule must declare sampling temperature")
+            .clone();
+        // staleDefinition models lower-precedence discovery data for the same parameter id.
+        // staleDefinition 模拟同一参数 ID 的低优先级发现数据。
+        let mut stale_definition = expected.clone();
+        stale_definition.description = String::from("stale discovery definition");
+        let mut model = ConnectionModel {
+            id: String::from("deepseek-v4-flash"),
+            display_name: String::from("DeepSeek V4 Flash"),
+            capabilities: ModelCapabilities {
+                model_parameters: vec![stale_definition],
+                ..ModelCapabilities::default()
+            },
+            capability_evidence: Default::default(),
+            protocol_variants: BTreeMap::new(),
+            resolved_protocol_binding: None,
+        };
+
+        assert!(apply_manifest_model_rule(
+            &resolved,
+            "official-api",
+            None,
+            ANTHROPIC_MESSAGES_PROFILE_ID,
+            &mut model,
+        ));
+
+        let actual = model
+            .capabilities
+            .model_parameters
+            .iter()
+            .find(|parameter| parameter.id == SAMPLING_TEMPERATURE_PARAMETER_ID)
+            .expect("effective parameters must retain sampling temperature");
+        assert_eq!(actual, &expected);
+    }
+
+    /// Verifies V4 Pro rules exclude Responses until the upstream formal release.
+    /// 验证 V4 Pro 规则在上游正式版发布前排除 Responses。
+    #[test]
+    fn manifest_rule_v4_pro_excludes_responses() {
+        let resolved = bundled_deepseek_manifest();
+        let instance = resolved
+            .rule_for_model("official-api", None, "deepseek-v4-pro")
+            .expect("pro must match a rule");
+        assert_eq!(
+            instance.selected_protocol.as_deref(),
+            Some(ANTHROPIC_MESSAGES_PROFILE_ID)
+        );
+        assert!(
+            !instance
+                .supported_protocols
+                .iter()
+                .any(|protocol| protocol == OPENAI_RESPONSES_PROFILE_ID)
+        );
+    }
+
+    /// Verifies unmatched models report no manifest match so legacy enrichment remains.
+    /// 验证未命中模型报告无 Manifest 匹配，使旧补全路径保持。
+    #[test]
+    fn unmatched_model_reports_no_manifest_match() {
+        let resolved = bundled_deepseek_manifest();
+        let mut model = ConnectionModel {
+            id: String::from("unknown-model-9"),
+            display_name: String::from("Unknown"),
+            capabilities: ModelCapabilities::default(),
+            capability_evidence: Default::default(),
+            protocol_variants: BTreeMap::new(),
+            resolved_protocol_binding: None,
+        };
+        let matched = apply_manifest_model_rule(
+            &resolved,
+            "official-api",
+            None,
+            ANTHROPIC_MESSAGES_PROFILE_ID,
+            &mut model,
+        );
+        assert!(!matched);
+    }
+}
+
+#[cfg(test)]
+mod manifest_migration_tests {
+    //! Equivalence oracle: migrated manifest rules must reproduce the legacy code-owned
+    //! capability enrichment exactly (except evidence revisions).
+    //! 等价 oracle：迁移后的清单规则必须精确复现旧版代码持有能力补全（证据修订号除外）。
+
+    use super::*;
+    use crate::provider_manifest::load_bundled_resolved_manifests;
+
+    /// Compares one model's capabilities after manifest-rule enrichment versus the legacy oracle.
+    /// 对比一个模型经清单规则补全与旧版 oracle 补全后的能力。
+    fn assert_rule_equals_legacy(
+        provider_id: &str,
+        service_entry_id: &str,
+        protocol_id: &str,
+        model_id: &str,
+        apply_legacy: impl FnOnce(&mut ConnectionModel),
+    ) {
+        let manifests = load_bundled_resolved_manifests();
+        let manifest = manifests
+            .get(provider_id)
+            .unwrap_or_else(|| panic!("missing bundled manifest for `{provider_id}`"));
+
+        let mut via_manifest = ConnectionModel {
+            id: model_id.to_string(),
+            display_name: model_id.to_string(),
+            capabilities: ModelCapabilities::default(),
+            capability_evidence: ModelCapabilityEvidence::default(),
+            protocol_variants: BTreeMap::new(),
+            resolved_protocol_binding: None,
+        };
+        assert!(
+            apply_manifest_model_rule(
+                manifest,
+                service_entry_id,
+                None,
+                protocol_id,
+                &mut via_manifest
+            ),
+            "model `{model_id}` must match a `{provider_id}` manifest rule"
+        );
+
+        let mut via_legacy = ConnectionModel {
+            id: model_id.to_string(),
+            display_name: model_id.to_string(),
+            capabilities: ModelCapabilities::default(),
+            capability_evidence: ModelCapabilityEvidence::default(),
+            protocol_variants: BTreeMap::new(),
+            resolved_protocol_binding: None,
+        };
+        apply_legacy(&mut via_legacy);
+
+        let a = &via_manifest.capabilities;
+        let b = &via_legacy.capabilities;
+        assert_eq!(
+            a.context_limit, b.context_limit,
+            "context drift `{model_id}`"
+        );
+        assert_eq!(a.output_limit, b.output_limit, "output drift `{model_id}`");
+        assert_eq!(
+            a.input_resources, b.input_resources,
+            "input resource drift `{model_id}`"
+        );
+        assert_eq!(
+            a.output_resources, b.output_resources,
+            "output resource drift `{model_id}`"
+        );
+        assert_eq!(a.tool_calling, b.tool_calling, "tool drift `{model_id}`");
+        assert_eq!(
+            a.parallel_tool_calling, b.parallel_tool_calling,
+            "parallel tool drift `{model_id}`"
+        );
+        assert_eq!(a.reasoning, b.reasoning, "reasoning drift `{model_id}`");
+        assert_eq!(
+            a.reasoning_control, b.reasoning_control,
+            "reasoning control drift `{model_id}`"
+        );
+        assert_eq!(
+            a.reasoning_efforts, b.reasoning_efforts,
+            "reasoning efforts drift `{model_id}`"
+        );
+        assert_eq!(a.embedding, b.embedding, "embedding drift `{model_id}`");
+        assert_eq!(a.rerank, b.rerank, "rerank drift `{model_id}`");
+        assert_eq!(
+            a.provider_native_tools, b.provider_native_tools,
+            "native tools drift `{model_id}`"
+        );
+        // Model-parameter identities differ by design: manifest rules share one definition per
+        // rule while the legacy table emitted one definition per model. Compare every other field.
+        // 模型参数身份存在设计差异：清单规则按规则共享一份定义，而旧版表按模型逐份输出。
+        // 因此比较其余全部字段。
+        assert_eq!(
+            a.model_parameters.len(),
+            b.model_parameters.len(),
+            "model parameter count drift `{model_id}`"
+        );
+        for (left, right) in a.model_parameters.iter().zip(b.model_parameters.iter()) {
+            assert_eq!(left.id, right.id, "parameter id drift `{model_id}`");
+            assert_eq!(
+                left.display_name, right.display_name,
+                "param name `{model_id}`"
+            );
+            assert_eq!(
+                left.description, right.description,
+                "param desc `{model_id}`"
+            );
+            assert_eq!(left.schema, right.schema, "param schema `{model_id}`");
+            assert_eq!(left.default, right.default, "param default `{model_id}`");
+            // The legacy table emits the single calling protocol while the manifest declares the
+            // full applicability set; both must cover the exact route under test.
+            // 旧版表输出单个调用协议，而清单声明完整适用集合；两者都必须覆盖被测精确路由。
+            assert_eq!(
+                right.protocol_ids,
+                vec![protocol_id.to_string()],
+                "legacy param protocols `{model_id}`"
+            );
+            assert!(
+                left.protocol_ids.iter().any(|id| id == protocol_id),
+                "manifest param must cover `{protocol_id}` for `{model_id}`"
+            );
+            assert_eq!(
+                left.dependent_required, right.dependent_required,
+                "param deps `{model_id}`"
+            );
+            assert_eq!(
+                left.conflicts, right.conflicts,
+                "param conflicts `{model_id}`"
+            );
+        }
+    }
+
+    /// Builds the frozen code-owned Alibaba catalog used only as a migration oracle.
+    /// 构建仅作为迁移对照使用的冻结代码持有阿里目录。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `service_entry_id` and `protocol_id` identify the exact legacy product route.
+    /// `service_entry_id` 与 `protocol_id` 标识精确旧版产品路由。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The exact legacy catalog or an explicit unsupported-route failure.
+    /// 返回精确旧版目录或明确的不支持路由失败。
+    fn legacy_alibaba_static_catalog(
+        service_entry_id: &str,
+        protocol_id: &str,
+    ) -> ConnectionModelCatalog {
+        match service_entry_id {
+            "coding-plan-cn" | "coding-plan-global" => {
+                build_alibaba_coding_plan_catalog("migration", service_entry_id, 1)
+            }
+            "token-plan-personal-cn"
+            | "token-plan-personal-global"
+            | "token-plan-team-cn"
+            | "token-plan-team-global" => {
+                build_alibaba_token_plan_catalog("migration", service_entry_id, protocol_id, 1)
+            }
+            "model-studio-cn" | "model-studio-singapore" => {
+                build_alibaba_model_studio_catalog("migration", service_entry_id, protocol_id, 1)
+            }
+            unsupported => panic!("unexpected Alibaba migration entry `{unsupported}`"),
+        }
+        .expect("legacy Alibaba static catalog must build")
+    }
+
+    /// Builds the same route using only manifest inventory, rule, and protocol authority.
+    /// 仅使用 Manifest 清单、规则与协议权威构建同一路由。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `manifest`, `service_entry_id`, and `protocol_id` are the frozen compiled route facts.
+    /// `manifest`、`service_entry_id` 与 `protocol_id` 是冻结编译路由事实。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A catalog containing only identities authorized for the exact protocol.
+    /// 返回仅包含精确协议已授权身份的目录。
+    fn manifest_alibaba_static_catalog(
+        manifest: &ResolvedProviderManifest,
+        service_entry_id: &str,
+        protocol_id: &str,
+    ) -> ConnectionModelCatalog {
+        // credential_profile_id selects the exact product credential used by production discovery.
+        // credential_profile_id 选择生产发现使用的精确产品凭据。
+        let credential_profile_id = match service_entry_id {
+            "coding-plan-cn" | "coding-plan-global" => "coding-plan-api-key",
+            "token-plan-personal-cn"
+            | "token-plan-personal-global"
+            | "token-plan-team-cn"
+            | "token-plan-team-global" => "token-plan-api-key",
+            "model-studio-cn" | "model-studio-singapore" => "api-key",
+            unsupported => panic!("unexpected Alibaba migration entry `{unsupported}`"),
+        };
+        // declared_models is the sole identity source for ManifestStatic.
+        // declared_models 是 ManifestStatic 的唯一身份来源。
+        let declared_models = manifest
+            .catalog_models
+            .get(service_entry_id)
+            .expect("manifest-static inventory must exist");
+        // models contains only exact rule-authorized variants for this protocol.
+        // models 仅包含此协议由精确规则授权的变体。
+        let mut models = Vec::new();
+        for declared in declared_models {
+            // instance proves the model is covered for this service and credential.
+            // instance 证明该模型覆盖此服务与凭据。
+            let instance = manifest
+                .rule_for_model(
+                    service_entry_id,
+                    Some(credential_profile_id),
+                    declared.model_id.as_str(),
+                )
+                .expect("manifest-static identity must have a rule");
+            if !instance
+                .supported_protocols
+                .iter()
+                .any(|protocol| protocol == protocol_id)
+            {
+                continue;
+            }
+            // model begins without provider-neutral binary capability defaults.
+            // model 以不含供应商无关二进制能力默认的状态开始。
+            let mut model = ConnectionModel {
+                id: declared.model_id.clone(),
+                display_name: declared.display_name.clone(),
+                capabilities: ModelCapabilities::default(),
+                capability_evidence: ModelCapabilityEvidence::default(),
+                protocol_variants: BTreeMap::new(),
+                resolved_protocol_binding: None,
+            };
+            assert!(apply_manifest_model_rule(
+                manifest,
+                service_entry_id,
+                Some(credential_profile_id),
+                protocol_id,
+                &mut model,
+            ));
+            models.push(model);
+        }
+        ConnectionModelCatalog {
+            connection_id: String::from("migration"),
+            models,
+            generation: 1,
+            page_count: 1,
+            discovery_schema_revision: String::from("provider-manifest.static-models.v1"),
+        }
+    }
+
+    /// Verifies all eight Alibaba static products moved their executable facts into Manifest.
+    /// 验证全部八个阿里静态产品已把可执行事实迁入 Manifest。
+    #[test]
+    fn alibaba_manifest_static_catalogs_equal_legacy_oracle() {
+        // manifests provides the current fully compiled bundled authority.
+        // manifests 提供当前完全编译的内置权威。
+        let manifests = load_bundled_resolved_manifests();
+        // manifest is the exact Alibaba snapshot under comparison.
+        // manifest 是参与比较的精确阿里快照。
+        let manifest = manifests
+            .get("alibaba")
+            .expect("bundled Alibaba manifest must exist");
+        // service_protocols enumerates every production static route.
+        // service_protocols 枚举每条生产静态路由。
+        let service_protocols = [
+            ("coding-plan-cn", OPENAI_CHAT_PROFILE_ID),
+            ("coding-plan-cn", ANTHROPIC_MESSAGES_PROFILE_ID),
+            ("coding-plan-global", OPENAI_CHAT_PROFILE_ID),
+            ("coding-plan-global", ANTHROPIC_MESSAGES_PROFILE_ID),
+            ("token-plan-personal-cn", OPENAI_CHAT_PROFILE_ID),
+            ("token-plan-personal-cn", OPENAI_RESPONSES_PROFILE_ID),
+            ("token-plan-personal-cn", ANTHROPIC_MESSAGES_PROFILE_ID),
+            ("token-plan-personal-global", OPENAI_CHAT_PROFILE_ID),
+            ("token-plan-personal-global", OPENAI_RESPONSES_PROFILE_ID),
+            ("token-plan-personal-global", ANTHROPIC_MESSAGES_PROFILE_ID),
+            ("token-plan-team-cn", OPENAI_CHAT_PROFILE_ID),
+            ("token-plan-team-cn", OPENAI_RESPONSES_PROFILE_ID),
+            ("token-plan-team-cn", ANTHROPIC_MESSAGES_PROFILE_ID),
+            ("token-plan-team-global", OPENAI_CHAT_PROFILE_ID),
+            ("token-plan-team-global", OPENAI_RESPONSES_PROFILE_ID),
+            ("token-plan-team-global", ANTHROPIC_MESSAGES_PROFILE_ID),
+            ("model-studio-cn", OPENAI_CHAT_PROFILE_ID),
+            ("model-studio-cn", OPENAI_RESPONSES_PROFILE_ID),
+            ("model-studio-cn", ANTHROPIC_MESSAGES_PROFILE_ID),
+            ("model-studio-singapore", OPENAI_CHAT_PROFILE_ID),
+            ("model-studio-singapore", OPENAI_RESPONSES_PROFILE_ID),
+            ("model-studio-singapore", ANTHROPIC_MESSAGES_PROFILE_ID),
+        ];
+        for (service_entry_id, protocol_id) in service_protocols {
+            // legacy is the frozen pre-migration product output.
+            // legacy 是冻结的迁移前产品输出。
+            let legacy = legacy_alibaba_static_catalog(service_entry_id, protocol_id);
+            // via_manifest is produced without any common or provider-named capability seed.
+            // via_manifest 在不使用公共或供应商命名能力种子的情况下生成。
+            let via_manifest =
+                manifest_alibaba_static_catalog(manifest, service_entry_id, protocol_id);
+            assert_eq!(
+                via_manifest
+                    .models
+                    .iter()
+                    .map(|model| model.id.as_str())
+                    .collect::<Vec<_>>(),
+                legacy
+                    .models
+                    .iter()
+                    .map(|model| model.id.as_str())
+                    .collect::<Vec<_>>(),
+                "catalog membership drift for `{service_entry_id}` / `{protocol_id}`"
+            );
+            for (actual, expected) in via_manifest.models.iter().zip(&legacy.models) {
+                // Empty legacy operations identify embedding/rerank identities whose capabilities
+                // were already manifest-owned before this static-catalog migration. Their dedicated
+                // rule-oracle tests remain authoritative; this guard still checks membership/order.
+                // 旧版操作为空表示向量/重排身份，其能力在本次静态目录迁移前已由 Manifest 持有。
+                // 专用规则对照测试继续作为权威；本守卫仍检查其成员与顺序。
+                if expected.capabilities.operations.is_empty() {
+                    continue;
+                }
+                let actual_capabilities = &actual.capabilities;
+                let expected_capabilities = &expected.capabilities;
+                assert_eq!(
+                    actual_capabilities.operations, expected_capabilities.operations,
+                    "operation drift `{service_entry_id}` / `{protocol_id}` / `{}`",
+                    actual.id
+                );
+                assert_eq!(
+                    actual_capabilities.input_resources, expected_capabilities.input_resources,
+                    "input resource drift `{service_entry_id}` / `{protocol_id}` / `{}`",
+                    actual.id
+                );
+                assert_eq!(
+                    actual_capabilities.output_resources, expected_capabilities.output_resources,
+                    "output resource drift `{service_entry_id}` / `{protocol_id}` / `{}`",
+                    actual.id
+                );
+                assert_eq!(
+                    actual_capabilities.context_limit, expected_capabilities.context_limit,
+                    "context drift `{service_entry_id}` / `{protocol_id}` / `{}`",
+                    actual.id
+                );
+                assert_eq!(
+                    actual_capabilities.output_limit, expected_capabilities.output_limit,
+                    "output drift `{service_entry_id}` / `{protocol_id}` / `{}`",
+                    actual.id
+                );
+                assert_eq!(
+                    actual_capabilities.embedding, expected_capabilities.embedding,
+                    "embedding drift `{service_entry_id}` / `{protocol_id}` / `{}`",
+                    actual.id
+                );
+                assert_eq!(
+                    actual_capabilities.rerank, expected_capabilities.rerank,
+                    "rerank drift `{service_entry_id}` / `{protocol_id}` / `{}`",
+                    actual.id
+                );
+                assert_eq!(
+                    actual_capabilities.tool_calling, expected_capabilities.tool_calling,
+                    "tool drift `{service_entry_id}` / `{protocol_id}` / `{}`",
+                    actual.id
+                );
+                assert_eq!(
+                    actual_capabilities.parallel_tool_calling,
+                    expected_capabilities.parallel_tool_calling,
+                    "parallel tool drift `{service_entry_id}` / `{protocol_id}` / `{}`",
+                    actual.id
+                );
+                assert_eq!(
+                    actual_capabilities.reasoning, expected_capabilities.reasoning,
+                    "reasoning drift `{service_entry_id}` / `{protocol_id}` / `{}`",
+                    actual.id
+                );
+                assert_eq!(
+                    actual_capabilities.reasoning_control, expected_capabilities.reasoning_control,
+                    "reasoning control drift `{service_entry_id}` / `{protocol_id}` / `{}`",
+                    actual.id
+                );
+                assert_eq!(
+                    actual_capabilities.reasoning_efforts, expected_capabilities.reasoning_efforts,
+                    "reasoning effort drift `{service_entry_id}` / `{protocol_id}` / `{}`",
+                    actual.id
+                );
+            }
+        }
+    }
+
+    /// Verifies every migrated Kimi model rule equals the legacy enrich branch.
+    /// 验证每个已迁移 Kimi 模型规则与旧版补全分支等价。
+    #[test]
+    fn kimi_rules_equal_legacy_enrichment() {
+        for model_id in [
+            "kimi-for-coding",
+            "kimi-for-coding-highspeed",
+            "k3-256k",
+            "k3",
+            "kimi-k3",
+            "kimi-k2.7-code",
+            "kimi-k2.7-code-highspeed",
+            "kimi-k2.6",
+            "kimi-k2.5",
+            "moonshot-v1-8k",
+            "moonshot-v1-32k",
+            "moonshot-v1-128k",
+            "moonshot-v1-8k-vision-preview",
+            "moonshot-v1-32k-vision-preview",
+            "moonshot-v1-128k-vision-preview",
+        ] {
+            assert_rule_equals_legacy(
+                "kimi",
+                "coding-plan",
+                OPENAI_CHAT_PROFILE_ID,
+                model_id,
+                |model| enrich_kimi_model("coding-plan", OPENAI_CHAT_PROFILE_ID, model),
+            );
+        }
+        // The Anthropic route narrows video resources on the coding-plan entry.
+        // Anthropic 路由在 coding-plan 入口收窄视频资源。
+        assert_rule_equals_legacy(
+            "kimi",
+            "coding-plan",
+            ANTHROPIC_MESSAGES_PROFILE_ID,
+            "kimi-for-coding",
+            |model| enrich_kimi_model("coding-plan", ANTHROPIC_MESSAGES_PROFILE_ID, model),
+        );
+    }
+
+    /// Verifies migrated Alibaba embedding and rerank rules equal the legacy enrich branch.
+    /// 验证已迁移的阿里云向量与重排规则和旧版补全分支等价。
+    ///
+    /// Conversation rules now combine the old static-catalog facts with enrichment facts and are
+    /// exhaustively covered by `alibaba_manifest_static_catalogs_equal_legacy_oracle` above.
+    /// 会话规则现在合并旧静态目录事实与补全事实，并由上方
+    /// `alibaba_manifest_static_catalogs_equal_legacy_oracle` 完整覆盖。
+    #[test]
+    fn alibaba_embedding_and_rerank_rules_equal_legacy_enrichment() {
+        for model_id in [
+            "text-embedding-v4",
+            "text-embedding-v3",
+            "qwen3.7-text-embedding",
+            "qwen3-rerank",
+        ] {
+            assert_rule_equals_legacy(
+                "alibaba",
+                "model-studio-cn",
+                OPENAI_CHAT_PROFILE_ID,
+                model_id,
+                |model| enrich_alibaba_model("model-studio-cn", model),
+            );
+        }
+    }
+
+    /// Verifies every migrated DeepSeek model rule equals the legacy enrich branch.
+    /// 验证每个已迁移 DeepSeek 模型规则与旧版补全分支等价。
+    #[test]
+    fn deepseek_rules_equal_legacy_enrichment() {
+        for model_id in [
+            "deepseek-v4-flash",
+            "deepseek-v4-pro",
+            "deepseek-chat",
+            "deepseek-reasoner",
+        ] {
+            assert_rule_equals_legacy(
+                "deepseek",
+                "official-api",
+                ANTHROPIC_MESSAGES_PROFILE_ID,
+                model_id,
+                |model| enrich_deepseek_model(ANTHROPIC_MESSAGES_PROFILE_ID, model),
+            );
+            assert_rule_equals_legacy(
+                "deepseek",
+                "official-api",
+                OPENAI_CHAT_PROFILE_ID,
+                model_id,
+                |model| enrich_deepseek_model(OPENAI_CHAT_PROFILE_ID, model),
+            );
+        }
+    }
+
+    /// Verifies display names are owned by bundled manifest rules.
+    /// 验证显示名称由内置 Manifest 规则持有。
+    #[test]
+    fn known_display_names_match_legacy() {
+        let cases = [
+            ("kimi", "coding-plan", "kimi-for-coding", "Kimi K2.7 Code"),
+            ("kimi", "coding-plan", "k3-256k", "Kimi K3 256K"),
+            ("kimi", "coding-plan", "k3", "Kimi K3"),
+            ("kimi", "platform-cn", "kimi-k3", "Kimi K3"),
+            (
+                "kimi",
+                "platform-cn",
+                "moonshot-v1-8k-vision-preview",
+                "Moonshot V1 8K Vision",
+            ),
+            (
+                "deepseek",
+                "official-api",
+                "deepseek-v4-flash",
+                "DeepSeek V4 Flash",
+            ),
+        ];
+        let manifests = load_bundled_resolved_manifests();
+        for (provider_id, entry_id, model_id, expected) in cases {
+            let mut model = ConnectionModel {
+                id: model_id.to_string(),
+                display_name: String::new(),
+                capabilities: ModelCapabilities::default(),
+                capability_evidence: ModelCapabilityEvidence::default(),
+                protocol_variants: BTreeMap::new(),
+                resolved_protocol_binding: None,
+            };
+            let manifest = manifests
+                .get(provider_id)
+                .unwrap_or_else(|| panic!("missing bundled manifest for `{provider_id}`"));
+            assert!(
+                apply_manifest_model_rule(
+                    manifest,
+                    entry_id,
+                    None,
+                    OPENAI_CHAT_PROFILE_ID,
+                    &mut model,
+                ),
+                "display rule must match `{model_id}`"
+            );
+            assert_eq!(model.display_name, expected, "display drift `{model_id}`");
+        }
     }
 }

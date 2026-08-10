@@ -1,0 +1,228 @@
+{
+  "schema_version": "provider-manifest-execution-fixture.v1",
+  "fixture_id": "minimax-video-generic",
+  "base_manifest": "minimax.json",
+  "production_target_refs": [
+    "minimax::global.MiniMax-Hailuo-2.3-Fast",
+    "minimax::global.MiniMax-Hailuo-02",
+    "minimax::global.S2V-01",
+    "minimax::cn.MiniMax-Hailuo-2.3",
+    "minimax::cn.MiniMax-Hailuo-2.3-Fast",
+    "minimax::cn.MiniMax-Hailuo-02",
+    "minimax::cn.S2V-01",
+    "minimax::template.minimax.global.video-generate.v1.892bab10113ff5e3248d2bf8c99c1ef7ba4cae743d1068ca5c12b238743aa055"
+  ],
+  "tool_target": {
+    "target_id": "global.fixture-video-generic",
+    "description": "Generic MiniMax video lifecycle and success follow-up fixture.",
+    "service_entry_id": "global",
+    "credential_profile_ids": ["payg-api-key"],
+    "upstream_target_id": "S2V-01",
+    "display_name": "MiniMax Video Generic Fixture",
+    "tool_id": "fixture_minimax_video_generic",
+    "capability": "video_generate",
+    "input_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "prompt": {"type": "string", "minLength": 1, "maxLength": 2000},
+        "duration_seconds": {"type": "integer", "enum": [6, 10], "default": 6},
+        "subject_reference_image": {"type": "string", "minLength": 1},
+        "resolution": {"type": "string", "enum": ["512P", "768P", "1080P"]},
+        "prompt_extend": {"type": "boolean"}
+      },
+      "required": ["prompt", "subject_reference_image"]
+    },
+    "output": {
+      "kind": "resources",
+      "source_path": "/file/download_url",
+      "normalized_result_path": "resources",
+      "resource_kind": "video",
+      "mime_types": ["video/mp4"],
+      "resource_decoders": [
+        {
+          "source_path": "/file/download_url",
+          "encoding": "public_http_url",
+          "download_host_suffixes": ["example.com"],
+          "resource_kind": "video",
+          "mime_type": "video/mp4",
+          "optional": false,
+          "output_id_prefix": "video"
+        }
+      ]
+    },
+    "execution": {
+      "endpoint_path": "/v1/video_generation",
+      "authentication": "bearer_authorization",
+      "adapter": "generic_json",
+      "execution_kind": "http_json_async_poll"
+    }
+  },
+  "operation": {
+    "operation_id": "fixture.minimax-video-generic",
+    "operation": "video_generate",
+    "carrier": "provider_tool",
+    "input_resources": ["image"],
+    "output_resources": ["video"],
+    "tool_target_refs": ["global.fixture-video-generic"],
+    "request_profile_refs": ["fixture.minimax.video.request.v1"],
+    "response_profile_refs": ["fixture.minimax.video.response.v1"],
+    "upload_channel_refs": [],
+    "upload_bindings": [],
+    "async_execution": {
+      "poll_interval_ms": 250,
+      "max_backoff_ms": 1000,
+      "timeout_ms": 2000,
+      "cancellation_supported": false,
+      "generic_json": {
+        "poll_endpoint_path": "/v1/query/video_generation",
+        "poll_method": "get",
+        "task_id_pointer": "/task_id",
+        "task_id_query_parameter": "task_id",
+        "status_pointer": "/status",
+        "queued_statuses": ["Preparing", "Queueing"],
+        "running_statuses": ["Processing"],
+        "success_statuses": ["Success"],
+        "failure_statuses": ["Failed"],
+        "cancelled_statuses": [],
+        "success_follow_up": {
+          "endpoint_path": "/v1/files/retrieve",
+          "method": "get",
+          "identifier_pointer": "/file_id",
+          "identifier_query_parameter": "file_id"
+        }
+      }
+    },
+    "timeout_ms": 2000,
+    "idempotent": false
+  },
+  "upload_channels": [],
+  "request_profiles": [
+    {
+      "profile_id": "fixture.minimax.video.request.v1",
+      "description": "Build the exact MiniMax subject-to-video task-creation body.",
+      "payload": {
+        "profile_id": "fixture.minimax.video.request.v1",
+        "revision": 1,
+        "steps": [
+          {
+            "op": "rebuild_json_template",
+            "template": {
+              "model": {"$vulcan_model_id": true},
+              "prompt": {"$vulcan_ref": {"path": "/prompt"}},
+              "duration": {"$vulcan_ref": {"path": "/duration_seconds"}},
+              "subject_reference": {
+                "$vulcan_if_present": {
+                  "path": "/subject_reference_image",
+                  "then": [
+                    {
+                      "type": "character",
+                      "image": [
+                        {"$vulcan_ref": {"path": "/subject_reference_image"}}
+                      ]
+                    }
+                  ]
+                }
+              },
+              "resolution": {"$vulcan_ref": {"path": "/resolution", "optional": true}},
+              "prompt_optimizer": {"$vulcan_ref": {"path": "/prompt_extend", "optional": true}}
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "response_profiles": [
+    {
+      "profile_id": "fixture.minimax.video.response.v1",
+      "description": "Normalize MiniMax application status across start, poll, and file retrieval.",
+      "payload": {
+        "profile_id": "fixture.minimax.video.response.v1",
+        "revision": 1,
+        "steps": [
+          {
+            "op": "rebuild_json_template",
+            "template": {
+              "$vulcan_if_equals": {
+                "path": "/base_resp/status_code",
+                "equals": 0,
+                "then": {
+                  "task_id": {"$vulcan_ref": {"path": "/task_id", "optional": true}},
+                  "status": {"$vulcan_ref": {"path": "/status", "optional": true}},
+                  "file_id": {"$vulcan_ref": {"path": "/file_id", "optional": true}},
+                  "file": {"$vulcan_ref": {"path": "/file", "optional": true}}
+                },
+                "otherwise": {
+                  "error": {
+                    "code": {"$vulcan_ref": {"path": "/base_resp/status_code"}},
+                    "message": {"$vulcan_ref": {"path": "/base_resp/status_msg"}}
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "required_execution_primitives": ["http_json_async_poll"],
+  "required_upload_primitives": [],
+  "required_transformers": ["rebuild_json_template"],
+  "arguments": {
+    "prompt": "turn toward the camera",
+    "subject_reference_image": "data:image/png;base64,AQID",
+    "resolution": "512P",
+    "prompt_extend": true
+  },
+  "interactions": [
+    {
+      "method": "POST",
+      "path": "/v1/video_generation",
+      "expected_json_body": {
+        "model": "S2V-01",
+        "prompt": "turn toward the camera",
+        "duration": 6,
+        "subject_reference": [
+          {"type": "character", "image": ["data:image/png;base64,AQID"]}
+        ],
+        "resolution": "512P",
+        "prompt_optimizer": true
+      },
+      "response_status": 200,
+      "response_json_body": {
+        "task_id": "video-task-1",
+        "base_resp": {"status_code": 0, "status_msg": "success"}
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/v1/query/video_generation?task_id=video-task-1",
+      "response_status": 200,
+      "response_json_body": {
+        "status": "Processing",
+        "file_id": "",
+        "base_resp": {"status_code": 0, "status_msg": "success"}
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/v1/query/video_generation?task_id=video-task-1",
+      "response_status": 200,
+      "response_json_body": {
+        "status": "Success",
+        "file_id": "file-1",
+        "base_resp": {"status_code": 0, "status_msg": "success"}
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/v1/files/retrieve?file_id=file-1",
+      "response_status": 200,
+      "response_json_body": {
+        "file": {"download_url": "https://example.com/generated.mp4"},
+        "base_resp": {"status_code": 0, "status_msg": "success"}
+      }
+    }
+  ],
+  "expected_output_kind": "resources"
+}

@@ -331,6 +331,9 @@ export function ModelAccountPickerControl(props: {
   // connection is the authoritative redacted credential metadata for this account.
   // connection 是该账号的权威脱敏凭据元数据。
   const connection = detailsSnapshot?.connections.find((candidate) => candidate.id === selectedAccount?.connectionId);
+  // effectiveProtocolId comes only from the backend-resolved provider/connection/model route.
+  // effectiveProtocolId 仅来自后端解析的供应商、连接与模型精确路由。
+  const effectiveProtocolId = modelAccountEffectiveProtocolId(detailsSnapshot, selectedAccount);
   // provider is the registered adapter that owns the exact credential.
   // provider 是拥有该精确凭据的已注册适配器。
   const provider = detailsSnapshot?.providers.find((candidate) => candidate.id === connection?.provider_id);
@@ -351,12 +354,12 @@ export function ModelAccountPickerControl(props: {
   // usageOverviewVisible keeps quota-capable accounts visible while showing balance-only accounts after observation.
   // usageOverviewVisible 始终展示额度账号，并在余额账号取得观测后展示余额。
   const usageOverviewVisible = quotaWindowsSupported || Boolean(usage);
-  // usageSupported follows the same provider-specific rules as credential management.
-  // usageSupported 遵循与凭据管理相同的供应商专用规则。
+  // usageSupported follows the backend-declared credential requirement for this usage primitive.
+  // usageSupported 遵循后端为当前用量原语声明的凭据要求。
   const usageSupported = Boolean(
     connection
     && credentialProfile?.account_usage_query !== "unsupported"
-    && (connection.provider_id !== "openrouter" || connection.has_management_key),
+    && (!connection.usage_requires_management_key || connection.has_management_key),
   );
 
   // loadAccountDetails reads only the latest Core-managed memory snapshot.
@@ -520,7 +523,7 @@ export function ModelAccountPickerControl(props: {
             <div className="border-t pt-3 text-xs">
               <p className="text-muted-foreground">{t("composer.accountCard.protocolType")}</p>
               <p className="mt-0.5 truncate font-medium">
-                {connection ? modelAccountProtocolDisplayName(connection.selected_protocol) : "—"}
+                {effectiveProtocolId ? modelAccountProtocolDisplayName(effectiveProtocolId) : "—"}
               </p>
             </div>
             {connection && usageOverviewVisible ? (
@@ -548,8 +551,8 @@ export function ModelAccountPickerControl(props: {
 //
 // Parameters
 // 参数
-// `protocolId` is the selected protocol profile persisted on the credential connection.
-// `protocolId` 是持久化在凭据连接上的已选协议配置标识。
+// `protocolId` is the backend-resolved effective protocol for one exact model route.
+// `protocolId` 是后端为一条精确模型路由解析出的生效协议。
 //
 // Returns
 // 返回值
@@ -565,6 +568,33 @@ export function modelAccountProtocolDisplayName(protocolId: string): string {
     "openai-responses.v1": "OpenAI Responses",
   };
   return labels[protocolId] ?? protocolId;
+}
+
+// modelAccountEffectiveProtocolId resolves one account card's backend-authoritative model route.
+// modelAccountEffectiveProtocolId 解析账号卡片对应的后端权威模型路由。
+//
+// Parameters
+// 参数
+// `snapshot` owns backend route records and `choice` identifies one exact provider/account/model.
+// `snapshot` 持有后端路由记录，`choice` 标识精确供应商、账号与模型。
+//
+// Returns
+// 返回值
+// The exact effective protocol, or null when the backend did not publish that route.
+// 返回精确生效协议；后端未发布该路由时返回 null。
+export function modelAccountEffectiveProtocolId(
+  snapshot: Pick<PublicAiSettingsSnapshot, "modelRouteRecords"> | null | undefined,
+  choice: Pick<ModelPickerChoice, "providerId" | "connectionId" | "modelId"> | null | undefined,
+): string | null {
+  if (!snapshot || !choice) {
+    return null;
+  }
+  return snapshot.modelRouteRecords?.find((record) => (
+    record.providerId === choice.providerId
+    && record.connectionId === choice.connectionId
+    && record.modelId === choice.modelId
+    && record.executable
+  ))?.protocolId ?? null;
 }
 
 // formatModelPickerTranslation replaces simple named placeholders in localized model picker templates.

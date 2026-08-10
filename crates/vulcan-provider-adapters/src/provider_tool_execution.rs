@@ -6,19 +6,58 @@ use crate::provider_task::{
 };
 use crate::{
     AuthenticationProjection, CredentialExecutionSecret, ProviderToolAdapterKind,
-    ProviderToolExecutionResult, ProviderToolExtractFailure, ProviderToolExtractOutput,
-    ProviderToolExtractResult, ProviderToolGeneratedResource, ProviderToolNormalizedOutput,
+    ProviderToolExecutionKind, ProviderToolExecutionResult, ProviderToolExtractFailure,
+    ProviderToolExtractOutput, ProviderToolExtractResult, ProviderToolGeneratedResource,
+    ProviderToolNormalizedOutput, ProviderToolOutputKind, ProviderToolResourceDownloadPolicy,
     ProviderToolSearchOutput, ProviderToolSearchResult, ProviderToolTarget, ServiceEntry,
 };
 use base64::Engine;
 use futures_util::StreamExt;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 
 /// Maximum provider tool metadata response accepted before typed decoding.
 /// 强类型解码前允许接收的供应商工具元数据响应上限。
 const PROVIDER_TOOL_RESPONSE_BYTE_LIMIT: usize = 8 * 1024 * 1024;
+
+/// Maximum Unicode characters retained from one provider diagnostic field.
+/// 单个供应商诊断字段允许保留的最大 Unicode 字符数。
+const PROVIDER_TOOL_DIAGNOSTIC_FIELD_MAX_CHARACTERS: usize = 2_048;
+
+/// Maximum Unicode characters retained in one complete provider diagnostic.
+/// 一条完整供应商诊断允许保留的最大 Unicode 字符数。
+const PROVIDER_TOOL_DIAGNOSTIC_MAX_CHARACTERS: usize = 8_192;
+
+/// Maximum ordered resources one declarative output contract may materialize.
+/// 单份声明式输出契约允许物化的最大有序资源数量。
+const GENERIC_RESOURCE_COUNT_LIMIT: usize = 256;
+
+/// Absolute item ceiling for normalized search, extract, and nested URL collections.
+/// 归一化搜索、提取及嵌套 URL 集合的绝对条目上限。
+const GENERIC_STRUCTURED_RESULT_COUNT_LIMIT: usize = 256;
+
+/// Absolute decoded-byte ceiling accepted from one declarative resource extractor.
+/// 单个声明式资源提取器允许的绝对解码字节上限。
+const GENERIC_RESOURCE_BYTE_LIMIT: u64 = 100 * 1024 * 1024;
+
+/// Formats one provider-tool transport failure without retaining request URL material.
+/// 格式化一次供应商工具传输失败，且不保留请求 URL 材料。
+///
+/// # Parameters
+/// 参数
+/// `operation` is a controlled host label and `error` is the reqwest transport failure.
+/// `operation` 是受控宿主标签，`error` 是 reqwest 传输失败。
+///
+/// # Returns
+/// 返回值
+/// A diagnostic containing transport details but no task identifier or signed query URL.
+/// 返回包含传输详情但不含任务标识或签名查询 URL 的诊断。
+fn format_provider_tool_transport_error(operation: &str, error: reqwest::Error) -> String {
+    format!("{operation} request failed: {}", error.without_url())
+}
 
 /// Resolves the exact native endpoint for one frozen provider tool target.
 /// 为一个冻结供应商工具目标解析精确原生端点。
@@ -73,8 +112,12 @@ pub(crate) async fn read_bounded_provider_response(
     let mut bytes = Vec::new();
     let mut stream = response.bytes_stream();
     while let Some(chunk) = stream.next().await {
-        let chunk =
-            chunk.map_err(|error| format!("{operation} response could not be read: {error}"))?;
+        let chunk = chunk.map_err(|error| {
+            format!(
+                "{operation} response could not be read: {}",
+                error.without_url()
+            )
+        })?;
         if bytes.len().saturating_add(chunk.len()) > PROVIDER_TOOL_RESPONSE_BYTE_LIMIT {
             return Err(format!(
                 "{operation} response exceeds the 8 MiB metadata limit."
@@ -83,6 +126,65 @@ pub(crate) async fn read_bounded_provider_response(
         bytes.extend_from_slice(chunk.as_ref());
     }
     String::from_utf8(bytes).map_err(|_| format!("{operation} response is not valid UTF-8 text."))
+}
+
+/// Parses one provider JSON document through the shared byte, depth, and node-count bounds.
+/// 通过共享字节、深度与节点数量上限解析一份供应商 JSON 文档。
+///
+/// # Parameters
+/// 参数
+/// `text` is the provider-controlled UTF-8 document and `operation` scopes diagnostics.
+/// `text` 是供应商控制的 UTF-8 文档，`operation` 限定诊断范围。
+///
+/// # Returns
+/// 返回值
+/// The bounded JSON tree or a controlled size, syntax, depth, or node-count failure.
+/// 返回有界 JSON 树，或受控的大小、语法、深度或节点数量失败。
+pub(crate) fn parse_bounded_provider_json(text: &str, operation: &str) -> Result<Value, String> {
+    if text.len() > PROVIDER_TOOL_RESPONSE_BYTE_LIMIT {
+        return Err(format!(
+            "{operation} response exceeds the {PROVIDER_TOOL_RESPONSE_BYTE_LIMIT} byte limit."
+        ));
+    }
+    let value: Value = serde_json::from_str(text)
+        .map_err(|error| format!("{operation} JSON is invalid: {error}"))?;
+    crate::provider_manifest::validate_runtime_json_bounds(&value, operation)?;
+    Ok(value)
+}
+
+/// Validates and materializes defaults for one AI-visible provider-tool argument object.
+/// 校验并物化一份 AI 可见供应商工具参数对象的默认值。
+///
+/// # Parameters
+/// 参数
+/// `target` owns the exact frozen input schema and `arguments` are the pre-upload AI values.
+/// `target` 持有精确冻结的输入 Schema，`arguments` 是上传前的 AI 参数值。
+///
+/// # Returns
+/// 返回值
+/// Canonical validated arguments ready for declarative upload materialization.
+/// 返回可进入声明式上传物化的规范已校验参数。
+pub(crate) fn canonicalize_provider_tool_arguments(
+    target: &ProviderToolTarget,
+    mut arguments: Value,
+) -> Result<Value, String> {
+    validate_provider_tool_arguments(
+        &target.contract.input_schema,
+        &arguments,
+        target.contract.tool_id.as_str(),
+    )?;
+    apply_json_schema_defaults(&target.contract.input_schema, &mut arguments, 0)?;
+    validate_provider_tool_arguments(
+        &target.contract.input_schema,
+        &arguments,
+        target.contract.tool_id.as_str(),
+    )?;
+    validate_provider_tool_numeric_product_ranges(
+        &target.contract.input_numeric_product_ranges,
+        &arguments,
+        target.contract.tool_id.as_str(),
+    )?;
+    Ok(arguments)
 }
 
 /// Executes one exact provider tool adapter.
@@ -101,107 +203,544 @@ pub(crate) async fn execute_provider_tool(
     http: &reqwest::Client,
     entry: &ServiceEntry,
     target: &ProviderToolTarget,
+    request_profiles: &[crate::provider_manifest::RequestProjectionProfile],
+    response_profiles: &[crate::provider_manifest::ResponseProjectionProfile],
     arguments: Value,
     secret: &CredentialExecutionSecret,
 ) -> Result<ProviderToolExecutionResult, String> {
-    match target.execution.adapter {
-        ProviderToolAdapterKind::MiniMaxImageGenerate => {
-            execute_minimax_image_tool(http, entry, target, arguments, secret).await
-        }
-        ProviderToolAdapterKind::MiniMaxCodingPlanVision => {
-            execute_minimax_vision_tool(http, entry, target, arguments, secret).await
-        }
-        ProviderToolAdapterKind::MiniMaxSpeechSynthesize => {
-            execute_minimax_speech_tool(http, entry, target, arguments, secret).await
-        }
-        ProviderToolAdapterKind::MiniMaxMusicGenerate => {
-            execute_minimax_music_tool(http, entry, target, arguments, secret).await
-        }
-        ProviderToolAdapterKind::MiniMaxVideoGenerate => {
-            execute_minimax_video_tool(http, entry, target, arguments, secret).await
-        }
-        ProviderToolAdapterKind::MiniMaxCodingPlanSearch => {
-            execute_minimax_search_tool(http, entry, target, arguments, secret).await
-        }
-        ProviderToolAdapterKind::AlibabaModelStudioSearch => {
-            execute_alibaba_search_tool(http, entry, target, arguments, secret).await
-        }
-        ProviderToolAdapterKind::AlibabaQwenImageGenerate
-        | ProviderToolAdapterKind::AlibabaQwenImageEdit => {
-            execute_alibaba_qwen_image_tool(http, entry, target, arguments, secret).await
-        }
-        ProviderToolAdapterKind::AlibabaWanImageGenerate => {
-            execute_alibaba_wan_image_tool(http, entry, target, arguments, secret).await
-        }
-        ProviderToolAdapterKind::AlibabaCosyVoiceSynthesize => {
-            execute_alibaba_cosyvoice_tool(http, entry, target, arguments, secret).await
-        }
-        ProviderToolAdapterKind::AlibabaQwenSpeechSynthesize => {
-            execute_alibaba_qwen_tts_tool(http, entry, target, arguments, secret).await
-        }
-        ProviderToolAdapterKind::AlibabaQwenSpeechTranscribe => {
-            execute_alibaba_qwen_asr_tool(http, entry, target, arguments, secret).await
-        }
-        ProviderToolAdapterKind::AlibabaFunAsrTranscribe => {
-            crate::alibaba_provider_tools::execute_alibaba_fun_asr_tool(
-                http, entry, target, arguments, secret,
+    ensure_operation_profiles_supported(target, request_profiles, response_profiles)?;
+    if target.execution.adapter != ProviderToolAdapterKind::GenericJson {
+        return Err(format!(
+            "Provider tool `{}` does not use the installed generic JSON adapter.",
+            target.target_id
+        ));
+    }
+    // The manifest-selected execution kind is authoritative. Every production target now uses
+    // the same bounded declarative codec and no runtime branch is selected from a provider name.
+    // Manifest 选择的执行族具有权威性。所有生产目标现在使用同一套有界声明式编解码器，
+    // 运行时不再根据供应商名称选择分支。
+    match target.execution.execution_kind {
+        ProviderToolExecutionKind::HttpJsonSync
+            if matches!(
+                target.contract.output.kind,
+                ProviderToolOutputKind::Text
+                    | ProviderToolOutputKind::Resources
+                    | ProviderToolOutputKind::Search
+                    | ProviderToolOutputKind::Extract
+            ) =>
+        {
+            let canonical_arguments = arguments;
+            let projected_arguments = crate::execution::project_json_request_profiles(
+                request_profiles,
+                target.upstream_target_id.as_str(),
+                canonical_arguments.clone(),
+            )?;
+            execute_generic_json_sync_request(
+                http,
+                entry,
+                target,
+                secret,
+                &projected_arguments,
+                &target.contract.tool_id,
             )
             .await
+            .and_then(|body| {
+                decode_and_project_generic_json_response(
+                    &target.contract.output,
+                    response_profiles,
+                    body.as_str(),
+                    target.contract.tool_id.as_str(),
+                    Some(&canonical_arguments),
+                )
+            })
         }
-        ProviderToolAdapterKind::AlibabaQwenOmniMediaAnalyze => {
-            crate::alibaba_provider_tools::execute_alibaba_qwen_omni_media_tool(
-                http, entry, target, arguments, secret,
+        ProviderToolExecutionKind::McpHttpCall
+            if matches!(
+                target.contract.output.kind,
+                ProviderToolOutputKind::Text
+                    | ProviderToolOutputKind::Resources
+                    | ProviderToolOutputKind::Search
+                    | ProviderToolOutputKind::Extract
+            ) =>
+        {
+            let canonical_arguments = arguments;
+            let call_arguments = crate::execution::project_json_request_profiles(
+                request_profiles,
+                target.upstream_target_id.as_str(),
+                canonical_arguments.clone(),
+            )?;
+            execute_generic_mcp_http_call(http, entry, target, secret, &call_arguments)
+                .await
+                .and_then(|body| {
+                    decode_and_project_generic_json_response(
+                        &target.contract.output,
+                        response_profiles,
+                        body.as_str(),
+                        target.contract.tool_id.as_str(),
+                        Some(&canonical_arguments),
+                    )
+                })
+        }
+        ProviderToolExecutionKind::ConversationMediaAnalyze
+            if target.contract.output.kind == ProviderToolOutputKind::Text =>
+        {
+            let canonical_arguments = arguments;
+            let projected_arguments = crate::execution::project_json_request_profiles(
+                request_profiles,
+                target.upstream_target_id.as_str(),
+                canonical_arguments.clone(),
+            )?;
+            let text = execute_generic_openai_chat_sse_request(
+                http,
+                entry,
+                target,
+                secret,
+                &projected_arguments,
             )
-            .await
-        }
-        ProviderToolAdapterKind::AlibabaHappyHorseVideoGenerate
-        | ProviderToolAdapterKind::AlibabaHappyHorseVideoEdit => {
-            crate::alibaba_provider_tools::execute_alibaba_happyhorse_video_tool(
-                http, entry, target, arguments, secret,
+            .await?;
+            let response = serde_json::json!({"text": text});
+            let projected = serde_json::to_string(&response).map_err(|error| {
+                format!("Provider conversation media response could not be serialized: {error}")
+            })?;
+            decode_generic_json_sync_output_with_request(
+                &target.contract.output,
+                projected.as_str(),
+                Some(&canonical_arguments),
             )
-            .await
         }
-        ProviderToolAdapterKind::AlibabaWanVideoGenerate => {
-            crate::alibaba_provider_tools::execute_alibaba_wan_video_tool(
-                http, entry, target, arguments, secret,
-            )
-            .await
-        }
-        ProviderToolAdapterKind::AlibabaFunMusicGenerate => {
-            crate::alibaba_provider_tools::execute_alibaba_fun_music_tool(
-                http, entry, target, arguments, secret,
-            )
-            .await
-        }
-        ProviderToolAdapterKind::TavilySearch => {
-            execute_tavily_search_tool(http, entry, target, arguments, secret).await
-        }
-        ProviderToolAdapterKind::TavilyExtract => {
-            execute_tavily_extract_tool(http, entry, target, arguments, secret).await
-        }
+        ProviderToolExecutionKind::HttpJsonAsyncPoll => Err(format!(
+            "Provider tool `{}` must execute through the asynchronous task lifecycle.",
+            target.target_id
+        )),
+        execution_kind => Err(format!(
+            "Provider tool `{}` has unsupported generic execution kind `{execution_kind:?}` for output `{:?}`.",
+            target.target_id, target.contract.output.kind
+        )),
     }
 }
 
-/// Reports whether one adapter owns a provider-confirmed asynchronous task lifecycle.
-/// 报告某个适配器是否拥有供应商确认的异步任务生命周期。
+/// Executes one generic OpenAI-compatible Chat SSE request and returns its visible text.
+/// 执行一项通用 OpenAI 兼容 Chat SSE 请求并返回其可见文本。
 ///
 /// # Parameters
 /// 参数
-/// `adapter` is the exact registered provider-tool adapter.
-/// `adapter` 是精确已注册供应商工具适配器。
+/// The target freezes the endpoint and authentication while `body` is fully manifest-projected.
+/// 目标冻结端点与鉴权，`body` 是由 Manifest 完整投影的请求体。
 ///
 /// # Returns
 /// 返回值
-/// `true` only for adapters with split start and poll implementations.
-/// 仅对具有拆分启动与轮询实现的适配器返回 `true`。
-pub(crate) fn is_provider_async_task_adapter(adapter: ProviderToolAdapterKind) -> bool {
-    matches!(
-        adapter,
-        ProviderToolAdapterKind::AlibabaFunAsrTranscribe
-            | ProviderToolAdapterKind::AlibabaHappyHorseVideoGenerate
-            | ProviderToolAdapterKind::AlibabaHappyHorseVideoEdit
-            | ProviderToolAdapterKind::AlibabaWanVideoGenerate
-    )
+/// Bounded UTF-8 text assembled only from registered Chat delta content shapes.
+/// 返回仅由已注册 Chat 增量内容结构拼接的有界 UTF-8 文本。
+async fn execute_generic_openai_chat_sse_request(
+    http: &reqwest::Client,
+    entry: &ServiceEntry,
+    target: &ProviderToolTarget,
+    secret: &CredentialExecutionSecret,
+    body: &Value,
+) -> Result<String, String> {
+    let url = provider_tool_url(entry, target);
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        reqwest::header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    headers.insert(
+        reqwest::header::ACCEPT,
+        HeaderValue::from_static("text/event-stream"),
+    );
+    insert_declared_tool_headers(&mut headers, target)?;
+    insert_authentication_header(
+        &mut headers,
+        target.execution.authentication,
+        secret.expose_value(),
+    )?;
+    let response = http
+        .post(url.as_str())
+        .headers(headers)
+        .json(body)
+        .send()
+        .await
+        .map_err(|error| format_provider_tool_transport_error("Provider Chat SSE", error))?;
+    let status = response.status();
+    if !status.is_success() {
+        let text = read_bounded_provider_response(response, "Provider Chat SSE").await?;
+        return Err(format_http_error(
+            "Provider Chat SSE",
+            status.as_u16(),
+            text.as_str(),
+        ));
+    }
+    decode_generic_openai_chat_sse(response).await
+}
+
+/// Decodes one bounded OpenAI-compatible Chat SSE response.
+/// 解码一份有界 OpenAI 兼容 Chat SSE 响应。
+///
+/// # Parameters
+/// 参数
+/// `response` is one successful streaming HTTP response.
+/// `response` 是一份成功的流式 HTTP 响应。
+///
+/// # Returns
+/// 返回值
+/// Non-empty visible text after a unique `[DONE]` terminal record.
+/// 返回唯一 `[DONE]` 终止记录之后确认的非空可见文本。
+async fn decode_generic_openai_chat_sse(response: reqwest::Response) -> Result<String, String> {
+    let mut stream = response.bytes_stream();
+    let mut pending = Vec::new();
+    let mut output = String::new();
+    let mut terminal = false;
+    let mut received_bytes = 0usize;
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|error| {
+            format!(
+                "Provider Chat SSE could not be read: {}",
+                error.without_url()
+            )
+        })?;
+        received_bytes = received_bytes.saturating_add(chunk.len());
+        if received_bytes > PROVIDER_TOOL_RESPONSE_BYTE_LIMIT {
+            return Err(format!(
+                "Provider Chat SSE exceeds the {PROVIDER_TOOL_RESPONSE_BYTE_LIMIT} byte limit."
+            ));
+        }
+        pending.extend_from_slice(chunk.as_ref());
+        while let Some(position) = pending.iter().position(|byte| *byte == b'\n') {
+            let mut line = pending.drain(..=position).collect::<Vec<_>>();
+            while matches!(line.last(), Some(b'\n' | b'\r')) {
+                line.pop();
+            }
+            if line.is_empty() || line.starts_with(b":") {
+                continue;
+            }
+            let Some(data) = line.strip_prefix(b"data:") else {
+                continue;
+            };
+            let data = std::str::from_utf8(data)
+                .map_err(|_| String::from("Provider Chat SSE data is not UTF-8."))?
+                .trim();
+            if data == "[DONE]" {
+                if terminal {
+                    return Err(String::from(
+                        "Provider Chat SSE emitted more than one terminal record.",
+                    ));
+                }
+                terminal = true;
+                continue;
+            }
+            if terminal {
+                return Err(String::from(
+                    "Provider Chat SSE emitted data after its terminal record.",
+                ));
+            }
+            let value = parse_bounded_provider_json(data, "Provider Chat SSE")?;
+            append_generic_openai_chat_delta(&mut output, &value)?;
+            if output.len() > PROVIDER_TOOL_RESPONSE_BYTE_LIMIT {
+                return Err(format!(
+                    "Provider Chat SSE text exceeds the {PROVIDER_TOOL_RESPONSE_BYTE_LIMIT} byte limit."
+                ));
+            }
+        }
+    }
+    if !pending.iter().all(u8::is_ascii_whitespace) {
+        return Err(String::from(
+            "Provider Chat SSE ended with an incomplete record.",
+        ));
+    }
+    if !terminal {
+        return Err(String::from(
+            "Provider Chat SSE ended before the [DONE] terminal record.",
+        ));
+    }
+    if output.trim().is_empty() {
+        return Err(String::from("Provider Chat SSE returned no visible text."));
+    }
+    Ok(output)
+}
+
+/// Appends visible text from one closed OpenAI-compatible Chat delta event.
+/// 从一项封闭 OpenAI 兼容 Chat 增量事件追加可见文本。
+///
+/// # Parameters
+/// 参数
+/// `output` is the bounded accumulator and `value` is one decoded SSE data object.
+/// `output` 是有界累加器，`value` 是一个已解码 SSE data 对象。
+///
+/// # Returns
+/// 返回值
+/// Success when every encountered content value uses a registered text shape.
+/// 当遇到的每个内容值均使用已注册文本结构时返回成功。
+fn append_generic_openai_chat_delta(output: &mut String, value: &Value) -> Result<(), String> {
+    let choices = value
+        .get("choices")
+        .and_then(Value::as_array)
+        .ok_or_else(|| String::from("Provider Chat SSE event omitted choices."))?;
+    for choice in choices {
+        let Some(content) = choice.get("delta").and_then(|delta| delta.get("content")) else {
+            continue;
+        };
+        if let Some(text) = content.as_str() {
+            output.push_str(text);
+            continue;
+        }
+        if let Some(parts) = content.as_array() {
+            for part in parts {
+                if part.get("type").and_then(Value::as_str) == Some("text")
+                    && let Some(text) = part.get("text").and_then(Value::as_str)
+                {
+                    output.push_str(text);
+                }
+            }
+            continue;
+        }
+        if !content.is_null() {
+            return Err(String::from(
+                "Provider Chat SSE content has an unsupported shape.",
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Rejects operation profiles for named codecs whose wire body is not the canonical arguments.
+/// 拒绝把操作 Profile 用于 Wire 正文并非规范参数的具名编解码器。
+///
+/// # Parameters
+/// 参数
+/// `target` selects the installed codec while `request_profiles` and `response_profiles` are the
+/// exact frozen operation chains.
+/// `target` 选择已安装编解码器，`request_profiles` 与 `response_profiles` 是精确冻结的操作链。
+///
+/// # Returns
+/// 返回值
+/// Success for the generic JSON primitive or an explicit pre-dispatch incompatibility error.
+/// 通用 JSON 原语返回成功，否则返回明确的分派前不兼容错误。
+fn ensure_operation_profiles_supported(
+    target: &ProviderToolTarget,
+    request_profiles: &[crate::provider_manifest::RequestProjectionProfile],
+    response_profiles: &[crate::provider_manifest::ResponseProjectionProfile],
+) -> Result<(), String> {
+    if target.execution.adapter == ProviderToolAdapterKind::GenericJson
+        || (request_profiles.is_empty() && response_profiles.is_empty())
+    {
+        return Ok(());
+    }
+    Err(format!(
+        "Provider tool `{}` references operation profiles but adapter `{:?}` does not expose the generic JSON wire contract.",
+        target.target_id, target.execution.adapter
+    ))
+}
+
+/// Decodes and projects one raw generic JSON response before output normalization.
+/// 在输出归一化前解码并投影一个原始通用 JSON 响应。
+///
+/// # Parameters
+/// 参数
+/// `profiles` is the frozen response chain, `text` is the bounded UTF-8 response, and
+/// `operation` scopes deterministic diagnostics.
+/// `profiles` 是冻结响应链，`text` 是有界 UTF-8 响应，`operation` 限定确定性诊断范围。
+///
+/// # Returns
+/// 返回值
+/// The projected response object or an explicit decoding/projection failure.
+/// 返回投影后的响应对象，或明确的解码与投影失败。
+fn decode_and_project_generic_json_value(
+    profiles: &[crate::provider_manifest::ResponseProjectionProfile],
+    text: &str,
+    operation: &str,
+) -> Result<Value, String> {
+    let response = parse_bounded_provider_json(text, operation)?;
+    crate::execution::project_json_response_profiles(profiles, response)
+        .map_err(|error| format!("{operation} response profile failed: {error}"))
+}
+
+/// Projects and normalizes one generic JSON response through its output contract.
+/// 通过输出契约投影并归一化一个通用 JSON 响应。
+///
+/// # Parameters
+/// 参数
+/// `contract`, `profiles`, and `text` are frozen response facts while `operation` scopes errors.
+/// `contract`、`profiles` 与 `text` 是冻结响应事实，`operation` 限定错误范围。
+///
+/// # Returns
+/// 返回值
+/// One strongly typed provider-tool result or a deterministic contract failure.
+/// 返回一个强类型供应商工具结果或确定性的契约失败。
+fn decode_and_project_generic_json_response(
+    contract: &crate::ProviderToolOutputContract,
+    profiles: &[crate::provider_manifest::ResponseProjectionProfile],
+    text: &str,
+    operation: &str,
+    request_arguments: Option<&Value>,
+) -> Result<ProviderToolExecutionResult, String> {
+    let response = decode_and_project_generic_json_value(profiles, text, operation)?;
+    let projected = serde_json::to_string(&response).map_err(|error| {
+        format!("{operation} projected response could not be serialized: {error}")
+    })?;
+    decode_generic_json_sync_output_with_request(contract, projected.as_str(), request_arguments)
+}
+
+/// Applies literal JSON Schema defaults to one canonical provider-tool argument tree.
+/// 把字面 JSON Schema 默认值应用到一份规范供应商工具参数树。
+///
+/// # Parameters
+/// 参数
+/// `schema` is the validated model-visible schema, `value` is the exact argument value, and
+/// `depth` enforces the shared Manifest recursion ceiling.
+/// `schema` 是已校验的模型可见 Schema，`value` 是精确参数值，`depth` 强制执行共享 Manifest 递归上限。
+///
+/// # Returns
+/// 返回值
+/// Success after deterministic default materialization or one bounded-depth error.
+/// 确定性物化默认值后返回成功，或返回一条有界深度错误。
+fn apply_json_schema_defaults(
+    schema: &Value,
+    value: &mut Value,
+    depth: usize,
+) -> Result<(), String> {
+    if depth > crate::provider_manifest::MAX_JSON_DEPTH {
+        return Err(format!(
+            "Provider tool JSON Schema defaults exceed the {} level depth limit.",
+            crate::provider_manifest::MAX_JSON_DEPTH
+        ));
+    }
+    if let (Some(properties), Some(object)) = (
+        schema.get("properties").and_then(Value::as_object),
+        value.as_object_mut(),
+    ) {
+        for (property, property_schema) in properties {
+            if !object.contains_key(property)
+                && let Some(default) = property_schema.get("default")
+            {
+                object.insert(property.clone(), default.clone());
+            }
+            if let Some(property_value) = object.get_mut(property) {
+                apply_json_schema_defaults(property_schema, property_value, depth + 1)?;
+            }
+        }
+    }
+    if let (Some(item_schema), Some(items)) = (schema.get("items"), value.as_array_mut()) {
+        for item in items {
+            apply_json_schema_defaults(item_schema, item, depth + 1)?;
+        }
+    }
+    Ok(())
+}
+
+/// Validates one provider-tool argument object against its exact frozen JSON Schema.
+/// 按照精确冻结的 JSON Schema 校验一份供应商工具参数对象。
+///
+/// # Parameters
+/// 参数
+/// `schema` is manifest-owned, `arguments` are the exact pre- or post-default values, and
+/// `tool_id` scopes the controlled diagnostic.
+/// `schema` 由 Manifest 持有，`arguments` 是应用默认值前或后的精确值，`tool_id` 限定受控诊断。
+///
+/// # Returns
+/// 返回值
+/// Success only when the schema compiles locally and the arguments satisfy every constraint.
+/// 仅当 Schema 可在本地编译且参数满足全部约束时返回成功。
+fn validate_provider_tool_arguments(
+    schema: &Value,
+    arguments: &Value,
+    tool_id: &str,
+) -> Result<(), String> {
+    // Manifest validation rejects remote references, so runtime compilation remains local.
+    // Manifest 校验会拒绝远程引用，因此运行时编译保持纯本地。
+    let validator = jsonschema::draft202012::new(schema)
+        .map_err(|error| format!("Provider tool `{tool_id}` input schema is invalid: {error}"))?;
+    validator
+        .validate(arguments)
+        .map_err(|error| format!("Provider tool `{tool_id}` arguments are invalid: {error}"))
+}
+
+/// Enforces host-only product ranges after JSON Schema validation and default materialization.
+/// 在 JSON Schema 校验与默认值物化之后执行仅宿主可见的乘积区间约束。
+///
+/// # Parameters
+/// 参数
+/// `ranges` is the frozen manifest declaration, `arguments` is the canonical input object, and
+/// `tool_id` scopes deterministic diagnostics.
+/// `ranges` 是冻结的 Manifest 声明，`arguments` 是规范输入对象，`tool_id` 限定确定性诊断。
+///
+/// # Returns
+/// 返回值
+/// Success when every present factor pair has a checked product inside its inclusive range.
+/// 当每一对已提供因子的受检乘积都位于闭区间内时返回成功。
+fn validate_provider_tool_numeric_product_ranges(
+    ranges: &[crate::ProviderToolNumericProductRange],
+    arguments: &Value,
+    tool_id: &str,
+) -> Result<(), String> {
+    if ranges.len() > 8 {
+        return Err(format!(
+            "Provider tool `{tool_id}` declares more than 8 numeric product ranges."
+        ));
+    }
+    for range in ranges {
+        let left = arguments.pointer(range.factor_paths[0].as_str());
+        let right = arguments.pointer(range.factor_paths[1].as_str());
+        match (left, right) {
+            (None, None) => continue,
+            (None, Some(_)) | (Some(_), None) if range.require_all_or_none => {
+                return Err(format!(
+                    "Provider tool `{tool_id}` inputs `{}` and `{}` must be supplied together.",
+                    range.factor_paths[0], range.factor_paths[1]
+                ));
+            }
+            (None, Some(_)) | (Some(_), None) => continue,
+            (Some(left), Some(right)) => {
+                let left = left.as_u64().ok_or_else(|| {
+                    format!(
+                        "Provider tool `{tool_id}` input `{}` must be a non-negative integer.",
+                        range.factor_paths[0]
+                    )
+                })?;
+                let right = right.as_u64().ok_or_else(|| {
+                    format!(
+                        "Provider tool `{tool_id}` input `{}` must be a non-negative integer.",
+                        range.factor_paths[1]
+                    )
+                })?;
+                let product = left.checked_mul(right).ok_or_else(|| {
+                    format!(
+                        "Provider tool `{tool_id}` numeric product for `{}` and `{}` overflows.",
+                        range.factor_paths[0], range.factor_paths[1]
+                    )
+                })?;
+                if !(range.minimum..=range.maximum).contains(&product) {
+                    return Err(format!(
+                        "Provider tool `{tool_id}` numeric product for `{}` and `{}` must be between {} and {}.",
+                        range.factor_paths[0], range.factor_paths[1], range.minimum, range.maximum
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Frozen dependencies shared by one provider asynchronous task lifecycle operation.
+/// 一次供应商异步任务生命周期操作共享的冻结依赖。
+pub(crate) struct ProviderAsyncExecutionContext<'a> {
+    /// Shared HTTP client with the host security policy.
+    /// 携带宿主安全策略的共享 HTTP 客户端。
+    pub http: &'a reqwest::Client,
+    /// Exact service entry selected for the task.
+    /// 为任务选择的精确服务入口。
+    pub entry: &'a ServiceEntry,
+    /// Exact provider-tool target selected for the task.
+    /// 为任务选择的精确供应商工具目标。
+    pub target: &'a ProviderToolTarget,
+    /// Frozen request projection profiles.
+    /// 冻结的请求投影 Profile。
+    pub request_profiles: &'a [crate::provider_manifest::RequestProjectionProfile],
+    /// Frozen response projection profiles.
+    /// 冻结的响应投影 Profile。
+    pub response_profiles: &'a [crate::provider_manifest::ResponseProjectionProfile],
+    /// Exact credential projection loaded for the frozen route.
+    /// 为冻结路由加载的精确凭据投影。
+    pub secret: &'a CredentialExecutionSecret,
 }
 
 /// Starts one exact provider-native asynchronous task.
@@ -217,36 +756,27 @@ pub(crate) fn is_provider_async_task_adapter(adapter: ProviderToolAdapterKind) -
 /// A provider-confirmed task identity and non-secret recovery context.
 /// 返回供应商确认的任务身份与非秘密恢复上下文。
 pub(crate) async fn start_provider_async_task(
-    http: &reqwest::Client,
-    entry: &ServiceEntry,
-    target: &ProviderToolTarget,
+    context: ProviderAsyncExecutionContext<'_>,
     arguments: Value,
-    secret: &CredentialExecutionSecret,
+    async_execution: Option<&crate::provider_manifest::AsyncOperationDeclaration>,
 ) -> Result<ProviderAsyncTaskStart, String> {
-    match target.execution.adapter {
-        ProviderToolAdapterKind::AlibabaFunAsrTranscribe => {
-            crate::alibaba_provider_tools::start_alibaba_fun_asr_task(
-                http, entry, target, arguments, secret,
-            )
-            .await
-        }
-        ProviderToolAdapterKind::AlibabaHappyHorseVideoGenerate
-        | ProviderToolAdapterKind::AlibabaHappyHorseVideoEdit => {
-            crate::alibaba_provider_tools::start_alibaba_happyhorse_video_task(
-                http, entry, target, arguments, secret,
-            )
-            .await
-        }
-        ProviderToolAdapterKind::AlibabaWanVideoGenerate => {
-            crate::alibaba_provider_tools::start_alibaba_wan_video_task(
-                http, entry, target, arguments, secret,
-            )
-            .await
-        }
-        adapter => Err(format!(
-            "Provider tool adapter `{adapter:?}` does not expose an asynchronous task lifecycle."
-        )),
+    ensure_operation_profiles_supported(
+        context.target,
+        context.request_profiles,
+        context.response_profiles,
+    )?;
+    if context.target.execution.adapter != ProviderToolAdapterKind::GenericJson {
+        return Err(format!(
+            "Provider tool `{}` does not use the installed generic JSON adapter.",
+            context.target.target_id
+        ));
     }
+    start_generic_json_async_task(
+        &context,
+        arguments,
+        require_generic_json_lifecycle(async_execution, context.target)?,
+    )
+    .await
 }
 
 /// Polls one exact provider-native asynchronous task once.
@@ -262,49 +792,25 @@ pub(crate) async fn start_provider_async_task(
 /// A pending phase or a normalized terminal result.
 /// 返回等待阶段或归一化终态结果。
 pub(crate) async fn poll_provider_async_task(
-    http: &reqwest::Client,
-    entry: &ServiceEntry,
-    target: &ProviderToolTarget,
+    context: ProviderAsyncExecutionContext<'_>,
     provider_task_id: &str,
     recovery: &ProviderAsyncTaskRecoveryContext,
-    secret: &CredentialExecutionSecret,
+    async_execution: Option<&crate::provider_manifest::AsyncOperationDeclaration>,
 ) -> Result<ProviderAsyncTaskPoll, String> {
-    match target.execution.adapter {
-        ProviderToolAdapterKind::AlibabaFunAsrTranscribe => {
-            crate::alibaba_provider_tools::poll_alibaba_fun_asr_task(
-                http,
-                entry,
-                secret,
-                provider_task_id,
-                recovery,
-            )
-            .await
-        }
-        ProviderToolAdapterKind::AlibabaHappyHorseVideoGenerate
-        | ProviderToolAdapterKind::AlibabaHappyHorseVideoEdit => {
-            crate::alibaba_provider_tools::poll_alibaba_video_task(
-                http,
-                entry,
-                secret,
-                provider_task_id,
-                "Alibaba HappyHorse",
-            )
-            .await
-        }
-        ProviderToolAdapterKind::AlibabaWanVideoGenerate => {
-            crate::alibaba_provider_tools::poll_alibaba_video_task(
-                http,
-                entry,
-                secret,
-                provider_task_id,
-                "Alibaba Wan video",
-            )
-            .await
-        }
-        adapter => Err(format!(
-            "Provider tool adapter `{adapter:?}` does not expose an asynchronous task lifecycle."
-        )),
+    ensure_operation_profiles_supported(context.target, &[], context.response_profiles)?;
+    if context.target.execution.adapter != ProviderToolAdapterKind::GenericJson {
+        return Err(format!(
+            "Provider tool `{}` does not use the installed generic JSON adapter.",
+            context.target.target_id
+        ));
     }
+    poll_generic_json_async_task(
+        &context,
+        provider_task_id,
+        recovery,
+        require_generic_json_lifecycle(async_execution, context.target)?,
+    )
+    .await
 }
 
 /// Requests cancellation of one exact provider-native asynchronous task.
@@ -325,267 +831,988 @@ pub(crate) async fn cancel_provider_async_task(
     target: &ProviderToolTarget,
     provider_task_id: &str,
     secret: &CredentialExecutionSecret,
+    async_execution: Option<&crate::provider_manifest::AsyncOperationDeclaration>,
 ) -> Result<(), String> {
-    let operation = match target.execution.adapter {
-        ProviderToolAdapterKind::AlibabaHappyHorseVideoGenerate
-        | ProviderToolAdapterKind::AlibabaHappyHorseVideoEdit => "Alibaba HappyHorse",
-        ProviderToolAdapterKind::AlibabaWanVideoGenerate => "Alibaba Wan video",
-        ProviderToolAdapterKind::AlibabaFunAsrTranscribe => {
-            return Err(String::from(
-                "Alibaba Fun-ASR does not declare a provider cancellation endpoint.",
-            ));
-        }
-        adapter => {
-            return Err(format!(
-                "Provider tool adapter `{adapter:?}` does not expose an asynchronous task lifecycle."
-            ));
-        }
-    };
-    crate::alibaba_provider_tools::cancel_alibaba_task(
+    if target.execution.adapter != ProviderToolAdapterKind::GenericJson {
+        return Err(format!(
+            "Provider tool `{}` does not use the installed generic JSON adapter.",
+            target.target_id
+        ));
+    }
+    cancel_generic_json_async_task(
         http,
         entry,
-        secret,
+        target,
         provider_task_id,
-        operation,
+        secret,
+        require_generic_json_lifecycle(async_execution, target)?,
     )
     .await
 }
 
-/// Exact MCP protocol revision used by Alibaba Model Studio WebSearch.
-/// 阿里云百炼 Model Studio WebSearch 使用的精确 MCP 协议版本。
-const ALIBABA_MCP_PROTOCOL_VERSION: &str = "2025-03-26";
-/// Exact Alibaba Model Studio WebSearch MCP tool name.
-/// 阿里云百炼 Model Studio WebSearch 的精确 MCP 工具名称。
-const ALIBABA_WEB_SEARCH_TOOL_NAME: &str = "bailian_web_search";
-
-/// Strict AI-visible Alibaba WebSearch arguments.
-/// 严格的 AI 可见阿里云 WebSearch 参数。
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct AlibabaSearchToolArguments {
-    /// Exact search query.
-    /// 精确搜索查询。
-    query: String,
-    /// Optional ordered result limit.
-    /// 可选的有序结果数量限制。
-    #[serde(default)]
-    max_results: Option<u8>,
-}
-
-impl AlibabaSearchToolArguments {
-    /// Validates the exact Alibaba search argument boundary.
-    /// 验证精确的阿里云搜索参数边界。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Success when query and optional result count can be projected losslessly.
-    /// 当查询与可选结果数能够无损投影时返回成功。
-    fn validate(&self) -> Result<(), String> {
-        if self.query.trim().is_empty() {
-            return Err(String::from("Alibaba WebSearch query cannot be empty."));
-        }
-        if self
-            .max_results
-            .is_some_and(|maximum| !(1..=20).contains(&maximum))
-        {
-            return Err(String::from(
-                "Alibaba WebSearch max_results must be between one and twenty.",
-            ));
-        }
-        Ok(())
-    }
-}
-
-/// One typed JSON-RPC response envelope returned by Alibaba MCP.
-/// 阿里云 MCP 返回的一份强类型 JSON-RPC 响应信封。
-#[derive(Debug, Deserialize)]
-struct AlibabaMcpResponse {
-    /// Returned JSON-RPC version.
-    /// 返回的 JSON-RPC 版本。
-    jsonrpc: String,
-    /// Correlation identifier.
-    /// 关联标识。
-    id: u64,
-    /// Method-specific successful result.
-    /// 方法专属成功结果。
-    #[serde(default)]
-    result: Option<Value>,
-    /// Optional provider JSON-RPC error.
-    /// 可选的供应商 JSON-RPC 错误。
-    #[serde(default)]
-    error: Option<AlibabaMcpError>,
-}
-
-/// Controlled Alibaba MCP JSON-RPC error subset.
-/// 受控的阿里云 MCP JSON-RPC 错误子集。
-#[derive(Debug, Deserialize)]
-struct AlibabaMcpError {
-    /// Stable JSON-RPC error code.
-    /// 稳定的 JSON-RPC 错误码。
-    code: i64,
-}
-
-/// Alibaba MCP tools/call result.
-/// 阿里云 MCP tools/call 结果。
-#[derive(Debug, Deserialize)]
-struct AlibabaMcpToolResult {
-    /// Ordered content blocks.
-    /// 有序内容块。
-    content: Vec<AlibabaMcpContent>,
-    /// Application-level failure marker.
-    /// 应用层失败标记。
-    #[serde(default, rename = "isError")]
-    is_error: bool,
-}
-
-/// One Alibaba MCP content block.
-/// 一项阿里云 MCP 内容块。
-#[derive(Debug, Deserialize)]
-struct AlibabaMcpContent {
-    /// MCP content discriminator.
-    /// MCP 内容判别字段。
-    #[serde(rename = "type")]
-    kind: String,
-    /// JSON-encoded WebSearch pages for text content.
-    /// 文本内容中 JSON 编码的 WebSearch 页面。
-    #[serde(default)]
-    text: String,
-}
-
-/// Structured page envelope embedded in Alibaba MCP text content.
-/// 嵌入阿里云 MCP 文本内容中的结构化页面信封。
-#[derive(Debug, Deserialize)]
-struct AlibabaMcpPages {
-    /// Ordered provider pages.
-    /// 有序供应商页面。
-    pages: Vec<AlibabaMcpPage>,
-}
-
-/// One provider-returned Alibaba WebSearch page.
-/// 一条供应商返回的阿里云 WebSearch 页面。
-#[derive(Debug, Deserialize)]
-struct AlibabaMcpPage {
-    /// Provider-returned title.
-    /// 供应商返回的标题。
-    #[serde(default)]
-    title: String,
-    /// Provider-returned absolute HTTP(S) URL.
-    /// 供应商返回的绝对 HTTP(S) 地址。
-    #[serde(default)]
-    url: String,
-    /// Provider-returned excerpt.
-    /// 供应商返回的摘要。
-    #[serde(default)]
-    snippet: String,
-}
-
-/// Executes the reviewed Alibaba Model Studio Streamable HTTP MCP search flow.
-/// 执行已审核的阿里云百炼 Model Studio Streamable HTTP MCP 搜索流程。
+/// Requires the closed generic JSON lifecycle attached to one asynchronous operation.
+/// 要求一个异步操作附带封闭的通用 JSON 生命周期。
 ///
 /// # Parameters
 /// 参数
-/// All values are immutable snapshots for the selected regional Model Studio target.
-/// 所有值均为所选区域 Model Studio 目标的不可变快照。
+/// `async_execution` is the frozen operation payload and `target` scopes diagnostics.
+/// `async_execution` 是冻结的操作载荷，`target` 限定诊断范围。
 ///
 /// # Returns
 /// 返回值
-/// Ordered provider-backed search evidence normalized for the unified search card.
-/// 返回为统一搜索卡片归一化的有序供应商搜索证据。
-async fn execute_alibaba_search_tool(
+/// The exact generic lifecycle or a deterministic pre-dispatch error.
+/// 返回精确通用生命周期或确定性的分派前错误。
+fn require_generic_json_lifecycle<'a>(
+    async_execution: Option<&'a crate::provider_manifest::AsyncOperationDeclaration>,
+    target: &ProviderToolTarget,
+) -> Result<&'a crate::provider_manifest::GenericJsonAsyncLifecycleDeclaration, String> {
+    async_execution
+        .and_then(|declaration| declaration.generic_json.as_ref())
+        .ok_or_else(|| {
+            format!(
+                "Generic asynchronous provider tool `{}` has no generic JSON lifecycle declaration.",
+                target.target_id
+            )
+        })
+}
+
+/// Resolves fixed and predicate-enabled headers for one asynchronous task creation request.
+/// 为一次异步任务创建请求解析固定与断言启用的请求头。
+///
+/// # Parameters
+/// 参数
+/// `target` owns immutable header declarations and `arguments` contains post-upload canonical data.
+/// `target` 持有不可变请求头声明，`arguments` 包含上传后的规范数据。
+///
+/// # Returns
+/// 返回值
+/// A non-overlapping header map ready for validated HTTP insertion.
+/// 返回可供已校验 HTTP 插入使用的无重叠请求头映射。
+fn provider_tool_start_headers(
+    target: &ProviderToolTarget,
+    arguments: &Value,
+) -> Result<BTreeMap<String, String>, String> {
+    let mut headers = target.execution.start_fixed_headers.clone();
+    for rule in &target.execution.start_conditional_headers {
+        let enabled = rule
+            .when_any
+            .iter()
+            .map(|predicate| provider_tool_argument_predicate_matches(arguments, predicate))
+            .collect::<Result<Vec<_>, String>>()?
+            .into_iter()
+            .any(|matched| matched);
+        if enabled
+            && headers
+                .insert(rule.name.clone(), rule.value.clone())
+                .is_some()
+        {
+            return Err(format!(
+                "Provider tool conditional start header `{}` overlaps a fixed header.",
+                rule.name
+            ));
+        }
+    }
+    Ok(headers)
+}
+
+/// Evaluates one bounded JSON Pointer pattern against canonical provider-tool arguments.
+/// 针对规范供应商工具参数求值一个有界 JSON Pointer 模式。
+///
+/// # Parameters
+/// 参数
+/// `arguments` is the canonical JSON object and `predicate` declares one optional array wildcard
+/// plus an optional exact scalar comparison.
+/// `arguments` 是规范 JSON 对象，`predicate` 声明一个可选数组通配符与可选精确标量比较。
+///
+/// # Returns
+/// 返回值
+/// Whether at least one selected value satisfies the declaration.
+/// 返回至少一个选中值是否满足声明。
+fn provider_tool_argument_predicate_matches(
+    arguments: &Value,
+    predicate: &crate::ProviderToolArgumentPredicate,
+) -> Result<bool, String> {
+    let mut values = vec![arguments];
+    for raw_segment in predicate.pointer_pattern.split('/').skip(1) {
+        let mut next = Vec::new();
+        if raw_segment == "*" {
+            for value in values {
+                if let Some(items) = value.as_array() {
+                    next.extend(items.iter());
+                }
+            }
+        } else {
+            let segment = decode_json_pointer_segment(raw_segment)?;
+            for value in values {
+                match value {
+                    Value::Object(object) => {
+                        if let Some(selected) = object.get(segment.as_str()) {
+                            next.push(selected);
+                        }
+                    }
+                    Value::Array(items) => {
+                        if let Ok(index) = segment.parse::<usize>()
+                            && let Some(selected) = items.get(index)
+                        {
+                            next.push(selected);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        values = next;
+        if values.is_empty() {
+            return Ok(false);
+        }
+    }
+    Ok(values.into_iter().any(|value| {
+        if let Some(expected) = predicate.equals.as_ref() {
+            return value == expected;
+        }
+        match value {
+            Value::Null => false,
+            Value::String(value) => !value.is_empty(),
+            Value::Array(values) => !values.is_empty(),
+            Value::Object(values) => !values.is_empty(),
+            Value::Bool(_) | Value::Number(_) => true,
+        }
+    }))
+}
+
+/// Decodes one RFC 6901 JSON Pointer segment and rejects malformed escapes.
+/// 解码一个 RFC 6901 JSON Pointer 段并拒绝格式错误的转义。
+///
+/// # Parameters
+/// 参数
+/// `segment` is one raw slash-delimited pointer segment.
+/// `segment` 是一个原始斜杠分隔 Pointer 段。
+///
+/// # Returns
+/// 返回值
+/// The decoded object key or array index text.
+/// 返回已解码对象键或数组索引文本。
+fn decode_json_pointer_segment(segment: &str) -> Result<String, String> {
+    let mut decoded = String::with_capacity(segment.len());
+    let mut characters = segment.chars();
+    while let Some(character) = characters.next() {
+        if character != '~' {
+            decoded.push(character);
+            continue;
+        }
+        match characters.next() {
+            Some('0') => decoded.push('~'),
+            Some('1') => decoded.push('/'),
+            _ => {
+                return Err(String::from(
+                    "Provider tool conditional header pointer contains an invalid JSON Pointer escape.",
+                ));
+            }
+        }
+    }
+    Ok(decoded)
+}
+
+/// Starts one adapter-free JSON task through its manifest-owned start and task-id contracts.
+/// 通过 Manifest 持有的启动与任务标识契约启动一个无具名适配器 JSON 任务。
+async fn start_generic_json_async_task(
+    context: &ProviderAsyncExecutionContext<'_>,
+    arguments: Value,
+    lifecycle: &crate::provider_manifest::GenericJsonAsyncLifecycleDeclaration,
+) -> Result<ProviderAsyncTaskStart, String> {
+    let canonical_arguments = arguments;
+    let arguments = crate::execution::project_json_request_profiles(
+        context.request_profiles,
+        context.target.upstream_target_id.as_str(),
+        canonical_arguments.clone(),
+    )?;
+    let start_headers = provider_tool_start_headers(context.target, &canonical_arguments)?;
+    let text = execute_generic_json_sync_request_with_headers(
+        context.http,
+        context.entry,
+        context.target,
+        context.secret,
+        &arguments,
+        context.target.contract.tool_id.as_str(),
+        &start_headers,
+    )
+    .await?;
+    let response = decode_and_project_generic_json_value(
+        context.response_profiles,
+        text.as_str(),
+        "Provider task start",
+    )?;
+    if response.get("error").is_some() {
+        return Err(format_structured_provider_error(
+            "Provider task start",
+            None,
+            &response,
+        ));
+    }
+    if let Some(requirements) = lifecycle.start_requirements.as_ref() {
+        validate_generic_json_response_requirements(
+            &response,
+            requirements,
+            "Provider task start",
+        )?;
+    }
+    if let Some(status_pointer) = lifecycle.start_status_pointer.as_deref() {
+        let status = response
+            .pointer(status_pointer)
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                format!(
+                    "Provider task start response is missing string status at `{status_pointer}`."
+                )
+            })?;
+        if !lifecycle
+            .start_success_statuses
+            .iter()
+            .any(|accepted| accepted == status)
+        {
+            return Err(format!(
+                "Provider task start returned unaccepted status `{status}`."
+            ));
+        }
+    }
+    let provider_task_id = response
+        .pointer(lifecycle.task_id_pointer.as_str())
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty() && value.trim() == *value)
+        .ok_or_else(|| {
+            format!(
+                "Provider task start response is missing non-empty task id at `{}`.",
+                lifecycle.task_id_pointer
+            )
+        })?
+        .to_string();
+    Ok(ProviderAsyncTaskStart {
+        provider_task_id,
+        recovery: generic_json_async_recovery_context(&canonical_arguments, lifecycle)?,
+        cancellation_supported: lifecycle.cancel_endpoint_path.is_some(),
+    })
+}
+
+/// Builds provider-neutral ordered recovery fingerprints from one declared canonical argument.
+/// 从一个已声明规范参数构建供应商中性的有序恢复指纹。
+///
+/// # Parameters
+/// 参数
+/// `arguments` contains post-upload canonical values and `lifecycle` selects the only authorized
+/// identity source pointer.
+/// `arguments` 包含上传后的规范值，`lifecycle` 选择唯一获授权的身份源 Pointer。
+///
+/// # Returns
+/// 返回值
+/// No recovery state, or at most 256 ordered SHA-256 fingerprints without retaining signed URLs.
+/// 返回无恢复状态，或最多 256 个有序 SHA-256 指纹且不保留签名 URL。
+fn generic_json_async_recovery_context(
+    arguments: &Value,
+    lifecycle: &crate::provider_manifest::GenericJsonAsyncLifecycleDeclaration,
+) -> Result<ProviderAsyncTaskRecoveryContext, String> {
+    let Some(pointer) = lifecycle.recovery_identity_source_pointer.as_deref() else {
+        return Ok(ProviderAsyncTaskRecoveryContext::None);
+    };
+    let source = arguments.pointer(pointer).ok_or_else(|| {
+        format!("Provider task recovery identity source `{pointer}` is missing after upload.")
+    })?;
+    let values = match source {
+        Value::String(_) => std::slice::from_ref(source),
+        Value::Array(values) if !values.is_empty() && values.len() <= 256 => values.as_slice(),
+        _ => {
+            return Err(format!(
+                "Provider task recovery identity source `{pointer}` must be one string or an array of one through 256 strings."
+            ));
+        }
+    };
+    let fingerprints = values
+        .iter()
+        .map(|value| {
+            let identity = value
+                .as_str()
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| {
+                    format!(
+                        "Provider task recovery identity source `{pointer}` contains a non-string or empty item."
+                    )
+                })?;
+            Ok(format!("{:x}", Sha256::digest(identity.as_bytes())))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok(ProviderAsyncTaskRecoveryContext::OrderedSha256 { fingerprints })
+}
+
+/// Enforces one closed set of string requirements against a projected JSON response.
+/// 对一份已投影 JSON 响应执行一组封闭字符串要求。
+///
+/// # Parameters
+/// 参数
+/// `response` is the bounded projected object, `requirements` contains validated pointers, and
+/// `operation` scopes deterministic diagnostics.
+/// `response` 是有界已投影对象，`requirements` 包含已校验 Pointer，`operation` 限定确定性诊断。
+///
+/// # Returns
+/// 返回值
+/// Success only when every declared non-empty and empty-or-missing predicate holds.
+/// 仅当每项已声明非空与空或缺失断言均成立时返回成功。
+fn validate_generic_json_response_requirements(
+    response: &Value,
+    requirements: &crate::provider_manifest::GenericJsonResponseRequirementsDeclaration,
+    operation: &str,
+) -> Result<(), String> {
+    for pointer in &requirements.non_empty_string_pointers {
+        if response
+            .pointer(pointer)
+            .and_then(Value::as_str)
+            .is_none_or(|value| value.trim().is_empty())
+        {
+            return Err(format!(
+                "{operation} response requires a non-empty string at `{pointer}`."
+            ));
+        }
+    }
+    for pointer in &requirements.empty_or_missing_string_pointers {
+        if response
+            .pointer(pointer)
+            .is_some_and(|value| value.as_str().is_none_or(|value| !value.trim().is_empty()))
+        {
+            return Err(format!(
+                "{operation} response requires an empty or missing string at `{pointer}`."
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Polls one adapter-free JSON task through exact manifest status sets and output contract.
+/// 通过精确 Manifest 状态集合与输出契约轮询一个无具名适配器 JSON 任务。
+async fn poll_generic_json_async_task(
+    context: &ProviderAsyncExecutionContext<'_>,
+    provider_task_id: &str,
+    recovery: &ProviderAsyncTaskRecoveryContext,
+    lifecycle: &crate::provider_manifest::GenericJsonAsyncLifecycleDeclaration,
+) -> Result<ProviderAsyncTaskPoll, String> {
+    let url = generic_json_async_url(
+        context.entry,
+        context.target,
+        lifecycle.poll_endpoint_path.as_str(),
+        lifecycle.task_id_query_parameter.as_deref(),
+        lifecycle.task_id_in_path,
+        None,
+        provider_task_id,
+    )?;
+    let text = execute_generic_json_async_request(
+        context.http,
+        context.target,
+        context.secret,
+        lifecycle.poll_method,
+        url,
+        "Provider task poll",
+    )
+    .await?;
+    let response = decode_and_project_generic_json_value(
+        context.response_profiles,
+        text.as_str(),
+        "Provider task poll",
+    )?;
+    if response.get("error").is_some() {
+        return Ok(ProviderAsyncTaskPoll::Failed(
+            format_structured_provider_error("Provider task poll", None, &response),
+        ));
+    }
+    if let Some(requirements) = lifecycle.poll_requirements.as_ref() {
+        validate_generic_json_response_requirements(&response, requirements, "Provider task poll")?;
+    }
+    if let Some(pointer) = lifecycle.poll_task_id_pointer.as_deref()
+        && response.pointer(pointer).and_then(Value::as_str) != Some(provider_task_id)
+    {
+        return Err(format!(
+            "Provider task poll response does not correlate task id at `{pointer}`."
+        ));
+    }
+    let status = response
+        .pointer(lifecycle.status_pointer.as_str())
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| {
+            format!(
+                "Provider task poll response is missing non-empty status at `{}`.",
+                lifecycle.status_pointer
+            )
+        })?;
+    if lifecycle
+        .queued_statuses
+        .iter()
+        .any(|value| value == status)
+    {
+        return Ok(ProviderAsyncTaskPoll::Pending(
+            crate::provider_task::ProviderAsyncTaskPhase::Queued,
+        ));
+    }
+    if lifecycle
+        .running_statuses
+        .iter()
+        .any(|value| value == status)
+    {
+        return Ok(ProviderAsyncTaskPoll::Pending(
+            crate::provider_task::ProviderAsyncTaskPhase::Running,
+        ));
+    }
+    if lifecycle
+        .success_statuses
+        .iter()
+        .any(|value| value == status)
+    {
+        if let Some(requirements) = lifecycle.poll_success_requirements.as_ref() {
+            validate_generic_json_response_requirements(
+                &response,
+                requirements,
+                "Provider task successful poll",
+            )?;
+        }
+        if let Some(follow_up) = lifecycle.success_batch_follow_up.as_ref() {
+            let output = execute_generic_json_async_batch_follow_up(
+                context.http,
+                context.entry,
+                context.target,
+                &response,
+                recovery,
+                follow_up,
+            )
+            .await?;
+            return Ok(ProviderAsyncTaskPoll::Completed(
+                ProviderToolExecutionResult {
+                    upstream_response_id: Some(provider_task_id.to_string()),
+                    output: ProviderToolNormalizedOutput::Text(output),
+                },
+            ));
+        }
+        let response = if let Some(follow_up) = lifecycle.success_follow_up.as_ref() {
+            let identifier = response
+                .pointer(follow_up.identifier_pointer.as_str())
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| {
+                    format!(
+                        "Provider task successful response is missing non-empty follow-up identifier at `{}`.",
+                        follow_up.identifier_pointer
+                    )
+                })?;
+            let url = generic_json_async_url(
+                context.entry,
+                context.target,
+                follow_up.endpoint_path.as_str(),
+                Some(follow_up.identifier_query_parameter.as_str()),
+                false,
+                None,
+                identifier,
+            )?;
+            let text = execute_generic_json_async_request(
+                context.http,
+                context.target,
+                context.secret,
+                follow_up.method,
+                url,
+                "Provider task success follow-up",
+            )
+            .await?;
+            let response = decode_and_project_generic_json_value(
+                context.response_profiles,
+                text.as_str(),
+                "Provider task success follow-up",
+            )?;
+            if response.get("error").is_some() {
+                return Ok(ProviderAsyncTaskPoll::Failed(
+                    format_structured_provider_error(
+                        "Provider task success follow-up",
+                        None,
+                        &response,
+                    ),
+                ));
+            }
+            response
+        } else {
+            response
+        };
+        let projected = serde_json::to_string(&response).map_err(|error| {
+            format!("Provider task poll projected response could not be serialized: {error}")
+        })?;
+        let mut result =
+            decode_generic_json_sync_output(&context.target.contract.output, projected.as_str())?;
+        if result.upstream_response_id.is_none() {
+            result.upstream_response_id = Some(provider_task_id.to_string());
+        }
+        return Ok(ProviderAsyncTaskPoll::Completed(result));
+    }
+    if lifecycle
+        .failure_statuses
+        .iter()
+        .any(|value| value == status)
+    {
+        return Ok(ProviderAsyncTaskPoll::Failed(format!(
+            "Provider task reached configured failure status `{status}`."
+        )));
+    }
+    if lifecycle
+        .cancelled_statuses
+        .iter()
+        .any(|value| value == status)
+    {
+        return Ok(ProviderAsyncTaskPoll::Cancelled);
+    }
+    Ok(ProviderAsyncTaskPoll::Failed(format!(
+        "Provider task returned unknown status `{status}`."
+    )))
+}
+
+/// Fetches one bounded public JSON document per terminal item in submitted identity order.
+/// 按已提交身份顺序为每个终态项目拉取一份有界公共 JSON 文档。
+///
+/// # Parameters
+/// 参数
+/// `http` owns transport policy; `entry` and `target` freeze the initiating origin; `terminal` is
+/// the successful poll payload; `recovery` contains ordered identity fingerprints; `follow_up`
+/// declares all item and text pointers.
+/// `http` 持有传输策略；`entry` 与 `target` 冻结启动 Origin；`terminal` 是成功轮询载荷；
+/// `recovery` 包含有序身份指纹；`follow_up` 声明全部项目与文本 Pointer。
+///
+/// # Returns
+/// 返回值
+/// Joined text no larger than the shared 8 MiB metadata ceiling.
+/// 返回不超过共享 8 MiB 元数据上限的拼接文本。
+async fn execute_generic_json_async_batch_follow_up(
     http: &reqwest::Client,
     entry: &ServiceEntry,
     target: &ProviderToolTarget,
-    arguments: Value,
+    terminal: &Value,
+    recovery: &ProviderAsyncTaskRecoveryContext,
+    follow_up: &crate::provider_manifest::GenericJsonAsyncBatchFollowUpDeclaration,
+) -> Result<String, String> {
+    // exactOrigin is derived from the already-validated frozen target, never from response data.
+    // exactOrigin 从已验证冻结目标派生，绝不来自响应数据。
+    let exact_origin = reqwest::Url::parse(provider_tool_url(entry, target).as_str())
+        .map_err(|_| String::from("Provider task batch follow-up origin is invalid."))?;
+    let fingerprints = match recovery {
+        ProviderAsyncTaskRecoveryContext::OrderedSha256 { fingerprints } => fingerprints,
+        ProviderAsyncTaskRecoveryContext::None => {
+            return Err(String::from(
+                "Provider task batch follow-up recovery fingerprints are missing.",
+            ));
+        }
+    };
+    let items = terminal
+        .pointer(follow_up.items_pointer.as_str())
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            format!(
+                "Provider task batch follow-up is missing an item array at `{}`.",
+                follow_up.items_pointer
+            )
+        })?;
+    if items.len() != fingerprints.len()
+        || items.is_empty()
+        || items.len() > usize::from(follow_up.max_items)
+    {
+        return Err(String::from(
+            "Provider task batch follow-up item count differs from the submitted identity count or configured limit.",
+        ));
+    }
+    let mut items_by_fingerprint = BTreeMap::new();
+    for item in items {
+        let identity = item
+            .pointer(follow_up.item_identity_pointer.as_str())
+            .and_then(Value::as_str)
+            .filter(|identity| !identity.trim().is_empty())
+            .ok_or_else(|| {
+                format!(
+                    "Provider task batch item is missing an identity at `{}`.",
+                    follow_up.item_identity_pointer
+                )
+            })?;
+        let fingerprint = format!("{:x}", Sha256::digest(identity.as_bytes()));
+        if items_by_fingerprint.insert(fingerprint, item).is_some() {
+            return Err(String::from(
+                "Provider task batch follow-up returned duplicate identities.",
+            ));
+        }
+    }
+    let mut fetched_results = Vec::with_capacity(fingerprints.len());
+    let mut output_bytes = 0_usize;
+    for fingerprint in fingerprints {
+        let item = items_by_fingerprint.remove(fingerprint).ok_or_else(|| {
+            String::from("Provider task batch follow-up returned an unknown or missing identity.")
+        })?;
+        let status = item
+            .pointer(follow_up.item_status_pointer.as_str())
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                format!(
+                    "Provider task batch item is missing a string status at `{}`.",
+                    follow_up.item_status_pointer
+                )
+            })?;
+        if !follow_up
+            .item_success_statuses
+            .iter()
+            .any(|accepted| accepted == status)
+        {
+            return Err(format!(
+                "Provider task batch item returned unaccepted status `{status}`."
+            ));
+        }
+        let url_value = item
+            .pointer(follow_up.item_url_pointer.as_str())
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| {
+                format!(
+                    "Provider task batch item is missing a follow-up URL at `{}`.",
+                    follow_up.item_url_pointer
+                )
+            })?;
+        // The frozen follow-up policy prevents provider response data from selecting a new origin.
+        // 冻结的后续请求策略阻止供应商响应数据选择新的 Origin。
+        let download_policy = ProviderToolResourceDownloadPolicy {
+            encoding: follow_up.url_encoding,
+            host_suffixes: follow_up.url_host_suffixes.clone(),
+        };
+        let url = download_policy.validate_url_with_exact_origin(
+            url_value,
+            "Provider task batch follow-up URL",
+            &exact_origin,
+        )?;
+        let response = http.get(url).send().await.map_err(|error| {
+            format_provider_tool_transport_error("Provider task batch follow-up", error)
+        })?;
+        let status_code = response.status();
+        let body =
+            read_bounded_provider_response(response, "Provider task batch follow-up").await?;
+        if !status_code.is_success() {
+            return Err(format_http_error(
+                "Provider task batch follow-up",
+                status_code.as_u16(),
+                body.as_str(),
+            ));
+        }
+        let payload = parse_bounded_provider_json(body.as_str(), "Provider task batch follow-up")?;
+        let response_items = payload
+            .pointer(follow_up.response_items_pointer.as_str())
+            .and_then(Value::as_array)
+            .filter(|items| !items.is_empty() && items.len() <= 256)
+            .ok_or_else(|| {
+                format!(
+                    "Provider task batch follow-up is missing one through 256 response items at `{}`.",
+                    follow_up.response_items_pointer
+                )
+            })?;
+        let texts = response_items
+            .iter()
+            .map(|response_item| {
+                response_item
+                    .pointer(follow_up.response_text_pointer.as_str())
+                    .and_then(Value::as_str)
+                    .filter(|text| !text.is_empty())
+                    .map(str::to_string)
+                    .ok_or_else(|| {
+                        format!(
+                            "Provider task batch follow-up response item is missing text at `{}`.",
+                            follow_up.response_text_pointer
+                        )
+                    })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        let fetched = texts.join(follow_up.response_item_separator.as_str());
+        output_bytes = output_bytes.saturating_add(fetched.len());
+        if output_bytes > PROVIDER_TOOL_RESPONSE_BYTE_LIMIT {
+            return Err(String::from(
+                "Provider task batch follow-up text exceeds the 8 MiB output limit.",
+            ));
+        }
+        fetched_results.push(fetched);
+    }
+    if !items_by_fingerprint.is_empty() {
+        return Err(String::from(
+            "Provider task batch follow-up returned identities outside the recovery order.",
+        ));
+    }
+    let output = fetched_results.join(follow_up.result_separator.as_str());
+    if output.is_empty() {
+        return Err(String::from(
+            "Provider task batch follow-up produced no text.",
+        ));
+    }
+    Ok(output)
+}
+
+/// Cancels one adapter-free JSON task only through an explicitly declared endpoint and method.
+/// 仅通过显式声明的端点与方法取消一个无具名适配器 JSON 任务。
+async fn cancel_generic_json_async_task(
+    http: &reqwest::Client,
+    entry: &ServiceEntry,
+    target: &ProviderToolTarget,
+    provider_task_id: &str,
     secret: &CredentialExecutionSecret,
-) -> Result<ProviderToolExecutionResult, String> {
-    let arguments: AlibabaSearchToolArguments = serde_json::from_value(arguments)
-        .map_err(|error| format!("Alibaba WebSearch arguments are invalid: {error}"))?;
-    arguments.validate()?;
-    let query = arguments.query.trim().to_string();
+    lifecycle: &crate::provider_manifest::GenericJsonAsyncLifecycleDeclaration,
+) -> Result<(), String> {
+    let endpoint_path = lifecycle.cancel_endpoint_path.as_deref().ok_or_else(|| {
+        format!(
+            "Generic asynchronous provider tool `{}` does not declare cancellation.",
+            target.target_id
+        )
+    })?;
+    let method = lifecycle.cancel_method.ok_or_else(|| {
+        format!(
+            "Generic asynchronous provider tool `{}` has no cancellation method.",
+            target.target_id
+        )
+    })?;
+    let url = generic_json_async_url(
+        entry,
+        target,
+        endpoint_path,
+        lifecycle.task_id_query_parameter.as_deref(),
+        lifecycle.task_id_in_path,
+        lifecycle.cancel_task_id_path_suffix.as_deref(),
+        provider_task_id,
+    )?;
+    let text = execute_generic_json_async_request(
+        http,
+        target,
+        secret,
+        method,
+        url,
+        "Provider task cancellation",
+    )
+    .await?;
+    if let Some(requirements) = lifecycle.cancel_requirements.as_ref() {
+        let response = parse_bounded_provider_json(text.as_str(), "Provider task cancellation")?;
+        if response.get("error").is_some() {
+            return Err(format_structured_provider_error(
+                "Provider task cancellation",
+                None,
+                &response,
+            ));
+        }
+        validate_generic_json_response_requirements(
+            &response,
+            requirements,
+            "Provider task cancellation",
+        )?;
+    }
+    Ok(())
+}
+
+/// Builds one exact task endpoint URL and places the task id in its declared location.
+/// 构建一个精确任务端点 URL，并把任务标识放入已声明位置。
+fn generic_json_async_url(
+    entry: &ServiceEntry,
+    target: &ProviderToolTarget,
+    endpoint_path: &str,
+    task_id_query_parameter: Option<&str>,
+    task_id_in_path: bool,
+    task_id_path_suffix: Option<&str>,
+    provider_task_id: &str,
+) -> Result<reqwest::Url, String> {
+    let base_url = target
+        .execution
+        .endpoint_base_url
+        .as_deref()
+        .unwrap_or(entry.base_url.as_str())
+        .trim_end_matches('/');
+    let mut url = reqwest::Url::parse(format!("{base_url}{endpoint_path}").as_str())
+        .map_err(|_| String::from("Generic provider task endpoint URL is invalid."))?;
+    if task_id_in_path {
+        let mut segments = url.path_segments_mut().map_err(|_| {
+            String::from("Generic provider task endpoint cannot accept path segments.")
+        })?;
+        segments.pop_if_empty().push(provider_task_id);
+        if let Some(suffix) = task_id_path_suffix {
+            segments.push(suffix);
+        }
+    } else if let Some(parameter) = task_id_query_parameter {
+        if task_id_path_suffix.is_some() {
+            return Err(String::from(
+                "Generic provider task path suffix requires a path task identifier.",
+            ));
+        }
+        url.query_pairs_mut()
+            .append_pair(parameter, provider_task_id);
+    } else {
+        return Err(String::from(
+            "Generic provider task identifier location is not declared.",
+        ));
+    }
+    Ok(url)
+}
+
+/// Sends one bounded generic JSON task observation or cancellation request.
+/// 发送一次有界通用 JSON 任务观测或取消请求。
+async fn execute_generic_json_async_request(
+    http: &reqwest::Client,
+    target: &ProviderToolTarget,
+    secret: &CredentialExecutionSecret,
+    method: crate::provider_manifest::GenericJsonAsyncRequestMethod,
+    url: reqwest::Url,
+    operation: &str,
+) -> Result<String, String> {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        reqwest::header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    insert_declared_tool_headers(&mut headers, target)?;
+    insert_authentication_header(
+        &mut headers,
+        target.execution.authentication,
+        secret.expose_value(),
+    )?;
+    let request = match method {
+        crate::provider_manifest::GenericJsonAsyncRequestMethod::Get => http.get(url.clone()),
+        crate::provider_manifest::GenericJsonAsyncRequestMethod::Post => http.post(url.clone()),
+        crate::provider_manifest::GenericJsonAsyncRequestMethod::Delete => http.delete(url.clone()),
+    };
+    let response = request
+        .headers(headers)
+        .send()
+        .await
+        .map_err(|error| format_provider_tool_transport_error(operation, error))?;
+    let status = response.status();
+    let text = read_bounded_provider_response(response, operation).await?;
+    if !status.is_success() {
+        return Err(format_http_error(operation, status.as_u16(), text.as_str()));
+    }
+    Ok(text)
+}
+
+/// Stable host identity sent during every generic MCP initialization handshake.
+/// 每次通用 MCP 初始化握手发送的稳定宿主身份。
+const GENERIC_MCP_CLIENT_NAME: &str = "VulcanCode";
+/// Stable host implementation revision sent during every generic MCP initialization handshake.
+/// 每次通用 MCP 初始化握手发送的稳定宿主实现修订号。
+const GENERIC_MCP_CLIENT_VERSION: &str = "1";
+
+/// Executes one closed Streamable HTTP MCP initialization, notification, and tool-call sequence.
+/// 执行一条封闭的 Streamable HTTP MCP 初始化、通知与工具调用序列。
+///
+/// # Parameters
+/// 参数
+/// `http`, `entry`, `target`, and `secret` are one frozen provider route; `call_arguments` is the
+/// manifest-projected JSON object passed to the exact upstream tool name.
+/// `http`、`entry`、`target` 与 `secret` 构成一条冻结供应商路由；`call_arguments` 是传给精确
+/// 上游工具名称的 Manifest 投影 JSON 对象。
+///
+/// # Returns
+/// 返回值
+/// A provider-neutral JSON document containing the projected call arguments and bounded aggregated
+/// items decoded from MCP text content blocks.
+/// 返回一份供应商中立 JSON 文档，其中包含投影后的调用参数与从 MCP 文本内容块解码出的有界
+/// 聚合条目。
+async fn execute_generic_mcp_http_call(
+    http: &reqwest::Client,
+    entry: &ServiceEntry,
+    target: &ProviderToolTarget,
+    secret: &CredentialExecutionSecret,
+    call_arguments: &Value,
+) -> Result<String, String> {
+    let contract = target.execution.mcp_http_call.as_ref().ok_or_else(|| {
+        format!(
+            "Provider tool `{}` omitted its MCP HTTP call contract.",
+            target.target_id
+        )
+    })?;
+    if !call_arguments.is_object() {
+        return Err(format!(
+            "Provider tool `{}` MCP call arguments must project to an object.",
+            target.target_id
+        ));
+    }
     let initialize = serde_json::json!({
         "jsonrpc": "2.0",
         "id": 1,
         "method": "initialize",
         "params": {
-            "protocolVersion": ALIBABA_MCP_PROTOCOL_VERSION,
+            "protocolVersion": contract.protocol_version,
             "capabilities": {},
             "clientInfo": {
-                "name": "VulcanCode",
-                "version": "1"
+                "name": GENERIC_MCP_CLIENT_NAME,
+                "version": GENERIC_MCP_CLIENT_VERSION
             }
         }
     });
-    let (initialize_body, mut session_id) =
-        execute_alibaba_mcp_request(http, entry, target, secret, &initialize, None, "initialize")
-            .await?;
-    decode_alibaba_mcp_response(initialize_body.as_str(), 1)?;
+    let (initialize_body, initialize_content_type, mut session_id) =
+        execute_generic_mcp_http_request(
+            http,
+            entry,
+            target,
+            secret,
+            &initialize,
+            None,
+            "MCP initialize",
+        )
+        .await?;
+    decode_generic_mcp_json_rpc_result(
+        initialize_body.as_str(),
+        initialize_content_type.as_str(),
+        1,
+    )?;
 
     let initialized = serde_json::json!({
         "jsonrpc": "2.0",
         "method": "notifications/initialized"
     });
-    let (_, refreshed_session_id) = execute_alibaba_mcp_request(
+    let (_, _, refreshed_session_id) = execute_generic_mcp_http_request(
         http,
         entry,
         target,
         secret,
         &initialized,
         session_id.as_deref(),
-        "initialized notification",
+        "MCP initialized notification",
     )
     .await?;
     if refreshed_session_id.is_some() {
         session_id = refreshed_session_id;
     }
 
-    let mut call_arguments =
-        serde_json::Map::from_iter([(String::from("query"), Value::String(query.clone()))]);
-    if let Some(maximum) = arguments.max_results {
-        call_arguments.insert(
-            String::from("count"),
-            Value::Number(serde_json::Number::from(maximum)),
-        );
-    }
     let call = serde_json::json!({
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
         "params": {
-            "name": ALIBABA_WEB_SEARCH_TOOL_NAME,
-            "arguments": Value::Object(call_arguments)
+            "name": target.upstream_target_id,
+            "arguments": call_arguments
         }
     });
-    let (call_body, _) = execute_alibaba_mcp_request(
+    let (call_body, call_content_type, _) = execute_generic_mcp_http_request(
         http,
         entry,
         target,
         secret,
         &call,
         session_id.as_deref(),
-        "tool call",
+        "MCP tool call",
     )
     .await?;
-    let result = decode_alibaba_mcp_response(call_body.as_str(), 2)?;
-    decode_alibaba_search_result(
-        query.as_str(),
-        arguments.max_results.map(usize::from),
-        result,
-    )
+    let result =
+        decode_generic_mcp_json_rpc_result(call_body.as_str(), call_content_type.as_str(), 2)?;
+    aggregate_generic_mcp_text_json(contract, call_arguments, &result)
 }
 
-/// Sends one exact authenticated Alibaba MCP request.
-/// 发送一份精确且已鉴权的阿里云 MCP 请求。
+/// Sends one authenticated MCP HTTP request while preserving the standard session header.
+/// 发送一次已鉴权 MCP HTTP 请求并保留标准会话请求头。
 ///
 /// # Parameters
 /// 参数
-/// `session_id` is absent only for initialization; `operation` scopes controlled diagnostics.
-/// `session_id` 仅在初始化时缺失；`operation` 限定受控诊断范围。
+/// The route arguments are frozen for one call; `body` is one exact JSON-RPC envelope,
+/// `session_id` is the previously returned standard session token, and `operation` scopes errors.
+/// 路由参数在单次调用内冻结；`body` 是一份精确 JSON-RPC 信封，`session_id` 是此前返回的标准
+/// 会话令牌，`operation` 限定错误范围。
 ///
 /// # Returns
 /// 返回值
-/// The complete response body and an optional refreshed MCP session identifier.
-/// 返回完整响应正文与可选的已刷新 MCP 会话标识。
-async fn execute_alibaba_mcp_request(
+/// The bounded response body, normalized content type, and optional refreshed session id.
+/// 返回有界响应正文、规范化内容类型与可选的刷新后会话标识。
+async fn execute_generic_mcp_http_request(
     http: &reqwest::Client,
     entry: &ServiceEntry,
     target: &ProviderToolTarget,
@@ -593,9 +1820,10 @@ async fn execute_alibaba_mcp_request(
     body: &Value,
     session_id: Option<&str>,
     operation: &str,
-) -> Result<(String, Option<String>), String> {
+) -> Result<(String, String, Option<String>), String> {
     let url = provider_tool_url(entry, target);
     let mut headers = HeaderMap::new();
+    insert_declared_tool_headers(&mut headers, target)?;
     headers.insert(
         reqwest::header::CONTENT_TYPE,
         HeaderValue::from_static("application/json"),
@@ -605,8 +1833,13 @@ async fn execute_alibaba_mcp_request(
         HeaderValue::from_static("application/json, text/event-stream"),
     );
     if let Some(session_id) = session_id {
+        if session_id.len() > 1024 {
+            return Err(String::from(
+                "Provider MCP session identifier exceeds 1024 bytes.",
+            ));
+        }
         let value = HeaderValue::from_str(session_id)
-            .map_err(|_| String::from("Alibaba MCP session identifier is invalid."))?;
+            .map_err(|_| String::from("Provider MCP session identifier is invalid."))?;
         headers.insert(HeaderName::from_static("mcp-session-id"), value);
     }
     insert_authentication_header(
@@ -620,218 +1853,240 @@ async fn execute_alibaba_mcp_request(
         .json(body)
         .send()
         .await
-        .map_err(|error| format!("Alibaba WebSearch {operation} request failed: {error}"))?;
+        .map_err(|error| {
+            format_provider_tool_transport_error(format!("Provider {operation}").as_str(), error)
+        })?;
     let status = response.status();
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("application/json")
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
     let refreshed_session_id = response
         .headers()
         .get("mcp-session-id")
         .and_then(|value| value.to_str().ok())
         .map(str::trim)
-        .filter(|value| !value.is_empty())
+        .filter(|value| !value.is_empty() && value.len() <= 1024)
         .map(str::to_string);
-    let response_text =
-        read_bounded_provider_response(response, format!("Alibaba WebSearch {operation}").as_str())
-            .await?;
+    let response_text = read_bounded_provider_response(response, operation).await?;
     if !status.is_success() {
         return Err(format_http_error(
-            "Alibaba WebSearch",
+            "Provider MCP",
             status.as_u16(),
             response_text.as_str(),
         ));
     }
-    Ok((response_text, refreshed_session_id))
+    Ok((response_text, content_type, refreshed_session_id))
 }
 
-/// Decodes one correlated Alibaba MCP JSON-RPC response.
-/// 解码一份已关联的阿里云 MCP JSON-RPC 响应。
+/// Decodes one correlated JSON-RPC result from a JSON or bounded SSE response body.
+/// 从 JSON 或有界 SSE 响应正文中解码一份已关联 JSON-RPC 结果。
 ///
 /// # Parameters
 /// 参数
-/// `body` is the complete JSON document and `expected_id` is the exact request identifier.
-/// `body` 是完整 JSON 文档，`expected_id` 是精确请求标识。
+/// `body` is the bounded response text, `content_type` selects JSON versus SSE framing, and
+/// `expected_id` is the exact request correlation id.
+/// `body` 是有界响应文本，`content_type` 选择 JSON 或 SSE 分帧，`expected_id` 是精确请求关联标识。
 ///
 /// # Returns
 /// 返回值
-/// The method-specific result after version, correlation, and error validation.
-/// 返回经过版本、关联与错误校验的方法专属结果。
-fn decode_alibaba_mcp_response(body: &str, expected_id: u64) -> Result<Value, String> {
-    let response: AlibabaMcpResponse = serde_json::from_str(body)
-        .map_err(|error| format!("Alibaba MCP response JSON is invalid: {error}"))?;
-    if response.jsonrpc != "2.0" || response.id != expected_id {
-        return Err(String::from("Alibaba MCP response correlation is invalid."));
-    }
-    if let Some(error) = response.error {
+/// The correlated `result` value, or a controlled protocol/correlation/error diagnostic.
+/// 返回已关联的 `result` 值，或一条受控协议、关联或错误诊断。
+fn decode_generic_mcp_json_rpc_result(
+    body: &str,
+    content_type: &str,
+    expected_id: u64,
+) -> Result<Value, String> {
+    let envelopes = if content_type == "text/event-stream"
+        || body.lines().any(|line| line.starts_with("data:"))
+    {
+        decode_generic_mcp_sse_envelopes(body)?
+    } else {
+        vec![parse_bounded_provider_json(body, "Provider MCP response")?]
+    };
+    let mut correlated = envelopes
+        .into_iter()
+        .filter(|envelope| envelope.get("id").and_then(Value::as_u64) == Some(expected_id));
+    let envelope = correlated
+        .next()
+        .ok_or_else(|| format!("Provider MCP response omitted correlation id {expected_id}."))?;
+    if correlated.next().is_some() {
         return Err(format!(
-            "Alibaba MCP returned JSON-RPC error code {}.",
-            error.code
+            "Provider MCP response duplicated correlation id {expected_id}."
         ));
     }
-    response
-        .result
-        .ok_or_else(|| String::from("Alibaba MCP response omitted its result."))
+    if envelope.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
+        return Err(String::from(
+            "Provider MCP response uses an unsupported JSON-RPC version.",
+        ));
+    }
+    if let Some(error) = envelope.get("error") {
+        let code = error
+            .get("code")
+            .and_then(Value::as_i64)
+            .unwrap_or_default();
+        return Err(format!("Provider MCP returned JSON-RPC error code {code}."));
+    }
+    envelope
+        .get("result")
+        .cloned()
+        .ok_or_else(|| String::from("Provider MCP response omitted its result."))
 }
 
-/// Converts Alibaba MCP text pages into the unified structured search output.
-/// 将阿里云 MCP 文本页面转换为统一结构化搜索输出。
+/// Decodes at most 64 JSON-RPC envelopes from standard SSE `data` events.
+/// 从标准 SSE `data` 事件中解码至多 64 份 JSON-RPC 信封。
 ///
 /// # Parameters
 /// 参数
-/// `query`, `maximum`, and `result` are the frozen invocation values.
-/// `query`、`maximum` 与 `result` 是冻结的调用值。
+/// `body` is the already byte-bounded UTF-8 response text.
+/// `body` 是已经过字节上限约束的 UTF-8 响应文本。
 ///
 /// # Returns
 /// 返回值
-/// Validated ordered HTTP(S) results without provider-specific wrapper fields.
-/// 返回不含供应商专属包装字段的已验证有序 HTTP(S) 结果。
-fn decode_alibaba_search_result(
-    query: &str,
-    maximum: Option<usize>,
-    result: Value,
-) -> Result<ProviderToolExecutionResult, String> {
-    let tool_result: AlibabaMcpToolResult = serde_json::from_value(result)
-        .map_err(|error| format!("Alibaba MCP tool result is invalid: {error}"))?;
-    if tool_result.is_error {
-        return Err(String::from("Alibaba MCP WebSearch reported failure."));
-    }
-    let mut pages = Vec::new();
-    for content in tool_result.content {
-        if content.kind != "text" || content.text.trim().is_empty() {
+/// Ordered JSON event payloads; malformed framing, invalid JSON, or excess events fail closed.
+/// 返回有序 JSON 事件载荷；畸形分帧、非法 JSON 或事件超限都会封闭失败。
+fn decode_generic_mcp_sse_envelopes(body: &str) -> Result<Vec<Value>, String> {
+    let mut envelopes = Vec::new();
+    let mut data_lines = Vec::new();
+    for line in body.lines().chain(std::iter::once("")) {
+        if line.is_empty() {
+            if data_lines.is_empty() {
+                continue;
+            }
+            if envelopes.len() >= 64 {
+                return Err(String::from(
+                    "Provider MCP SSE response exceeds the 64 event limit.",
+                ));
+            }
+            let data = data_lines.join("\n");
+            data_lines.clear();
+            if data.trim() == "[DONE]" {
+                continue;
+            }
+            envelopes.push(parse_bounded_provider_json(
+                data.as_str(),
+                "Provider MCP SSE data event",
+            )?);
             continue;
         }
-        let envelope: AlibabaMcpPages = serde_json::from_str(content.text.as_str())
-            .map_err(|error| format!("Alibaba WebSearch page JSON is invalid: {error}"))?;
-        pages.extend(envelope.pages);
+        if let Some(data) = line.strip_prefix("data:") {
+            data_lines.push(data.strip_prefix(' ').unwrap_or(data).to_string());
+        } else if !line.starts_with(':')
+            && !line.starts_with("event:")
+            && !line.starts_with("id:")
+            && !line.starts_with("retry:")
+        {
+            return Err(String::from(
+                "Provider MCP SSE response contains an unregistered field.",
+            ));
+        }
     }
-    if pages.is_empty() {
+    if envelopes.is_empty() {
         return Err(String::from(
-            "Alibaba MCP WebSearch returned no structured pages.",
+            "Provider MCP SSE response contains no JSON data event.",
         ));
     }
-    if let Some(maximum) = maximum {
-        pages.truncate(maximum);
+    Ok(envelopes)
+}
+
+/// Aggregates arrays embedded as JSON in standard MCP text content blocks.
+/// 聚合标准 MCP 文本内容块中以 JSON 嵌入的数组。
+///
+/// # Parameters
+/// 参数
+/// `contract` owns all pointer and count bounds, `call_arguments` is the exact projected request,
+/// and `result` is the correlated MCP tools/call result.
+/// `contract` 持有全部 Pointer 与数量边界，`call_arguments` 是精确投影请求，`result` 是已关联
+/// MCP tools/call 结果。
+///
+/// # Returns
+/// 返回值
+/// A serialized canonical object with `call_arguments` and ordered `items` fields.
+/// 返回包含 `call_arguments` 与有序 `items` 字段的序列化规范对象。
+fn aggregate_generic_mcp_text_json(
+    contract: &crate::ProviderToolMcpHttpCallContract,
+    call_arguments: &Value,
+    result: &Value,
+) -> Result<String, String> {
+    if result
+        .get("isError")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return Err(String::from("Provider MCP tool call reported failure."));
     }
-    let results = pages
-        .into_iter()
-        .enumerate()
-        .map(|(index, page)| {
-            let url = reqwest::Url::parse(page.url.as_str())
-                .map_err(|_| format!("Alibaba WebSearch result {index} is not a valid URL."))?;
-            if !matches!(url.scheme(), "http" | "https")
-                || url.host_str().is_none()
-                || url.username() != ""
-                || url.password().is_some()
-            {
-                return Err(format!(
-                    "Alibaba WebSearch result {index} is not a credential-free HTTP(S) URL."
-                ));
-            }
-            Ok(ProviderToolSearchResult {
-                rank: index + 1,
-                title: page.title,
-                url: page.url,
-                source_domain: url.host_str().unwrap_or_default().to_ascii_lowercase(),
-                snippet: page.snippet,
-            })
-        })
-        .collect::<Result<Vec<_>, String>>()?;
-    Ok(ProviderToolExecutionResult {
-        upstream_response_id: None,
-        output: ProviderToolNormalizedOutput::Search(ProviderToolSearchOutput {
-            query: query.to_string(),
-            results,
-        }),
-    })
+    let content = result
+        .get("content")
+        .and_then(Value::as_array)
+        .ok_or_else(|| String::from("Provider MCP tool result omitted its content array."))?;
+    if content.len() > usize::from(contract.max_content_blocks) {
+        return Err(format!(
+            "Provider MCP tool result exceeds the {} content block limit.",
+            contract.max_content_blocks
+        ));
+    }
+    let mut items = Vec::new();
+    for block in content {
+        if block.get("type").and_then(Value::as_str) != Some("text") {
+            continue;
+        }
+        let Some(text) = block
+            .get("text")
+            .and_then(Value::as_str)
+            .filter(|text| !text.trim().is_empty())
+        else {
+            continue;
+        };
+        let embedded = parse_bounded_provider_json(text, "Provider MCP text content")?;
+        let selected = embedded
+            .pointer(contract.content_json_array_pointer.as_str())
+            .and_then(Value::as_array)
+            .ok_or_else(|| {
+                format!(
+                    "Provider MCP text content is missing array `{}`.",
+                    contract.content_json_array_pointer
+                )
+            })?;
+        if items.len().saturating_add(selected.len()) > usize::from(contract.max_items) {
+            return Err(format!(
+                "Provider MCP embedded output exceeds the {} item limit.",
+                contract.max_items
+            ));
+        }
+        items.extend(selected.iter().cloned());
+    }
+    if items.is_empty() {
+        return Err(String::from(
+            "Provider MCP tool result returned no structured items.",
+        ));
+    }
+    serde_json::to_string(&serde_json::json!({
+        "call_arguments": call_arguments,
+        "items": items
+    }))
+    .map_err(|error| format!("Provider MCP normalized response could not serialize: {error}"))
 }
 
-/// Executes and normalizes the selected Tavily structured-search contract.
-/// 执行并归一化选定的 Tavily 结构化搜索契约。
+/// Executes one synchronous JSON tool request through the generic transport primitive.
+/// 通过通用传输原语执行一次同步 JSON 工具请求。
 ///
 /// # Parameters
 /// 参数
-/// All values are immutable snapshots resolved before this provider call.
-/// 所有值均为本次供应商调用前解析的不可变快照。
+/// All values are immutable snapshots resolved before dispatch; `operation` labels the call
+/// for bounded error reporting.
+/// 所有值均为分派前解析的不可变快照；`operation` 为有界错误报告标记调用。
 ///
 /// # Returns
 /// 返回值
-/// Ordered provider-backed search evidence in the unified output union.
-/// 返回统一输出联合中的有序供应商搜索证据。
-async fn execute_tavily_search_tool(
-    http: &reqwest::Client,
-    entry: &ServiceEntry,
-    target: &ProviderToolTarget,
-    arguments: Value,
-    secret: &CredentialExecutionSecret,
-) -> Result<ProviderToolExecutionResult, String> {
-    let arguments: TavilySearchToolArguments = serde_json::from_value(arguments)
-        .map_err(|error| format!("Tavily search tool arguments are invalid: {error}"))?;
-    arguments.validate()?;
-    let query = arguments.query.trim().to_string();
-    let body = TavilySearchWireRequest {
-        query,
-        search_depth: String::from("basic"),
-        max_results: arguments.max_results,
-        include_domains: arguments.include_domains,
-        exclude_domains: arguments.exclude_domains,
-        include_answer: false,
-        include_raw_content: false,
-        include_usage: true,
-    };
-    let response_text =
-        execute_tavily_json_request(http, entry, target, secret, &body, "Tavily search").await?;
-    decode_tavily_search_response(response_text.as_str())
-}
-
-/// Executes and normalizes the selected Tavily structured-extraction contract.
-/// 执行并归一化选定的 Tavily 结构化网页提取契约。
-///
-/// # Parameters
-/// 参数
-/// All values are immutable snapshots resolved before this provider call.
-/// 所有值均为本次供应商调用前解析的不可变快照。
-///
-/// # Returns
-/// 返回值
-/// Structured successful pages and per-URL failures in the unified output union.
-/// 返回统一输出联合中的结构化成功页面与逐 URL 失败。
-async fn execute_tavily_extract_tool(
-    http: &reqwest::Client,
-    entry: &ServiceEntry,
-    target: &ProviderToolTarget,
-    arguments: Value,
-    secret: &CredentialExecutionSecret,
-) -> Result<ProviderToolExecutionResult, String> {
-    let arguments: TavilyExtractToolArguments = serde_json::from_value(arguments)
-        .map_err(|error| format!("Tavily extract tool arguments are invalid: {error}"))?;
-    arguments.validate()?;
-    let body = TavilyExtractWireRequest {
-        urls: arguments.urls,
-        query: arguments.query,
-        chunks_per_source: arguments.chunks_per_source,
-        extract_depth: arguments.extract_depth,
-        include_images: arguments.include_images,
-        include_favicon: arguments.include_favicon,
-        format: arguments.format,
-        timeout: arguments.timeout_seconds,
-        include_usage: true,
-    };
-    let response_text =
-        execute_tavily_json_request(http, entry, target, secret, &body, "Tavily extract").await?;
-    decode_tavily_extract_response(response_text.as_str())
-}
-
-/// Dispatches one authenticated synchronous Tavily JSON request.
-/// 分派一个经过鉴权的同步 Tavily JSON 请求。
-///
-/// # Parameters
-/// 参数
-/// `body` is the exact adapter-owned wire shape and `operation` scopes diagnostics.
-/// `body` 是适配器持有的精确 Wire 结构，`operation` 用于限定诊断范围。
-///
-/// # Returns
-/// 返回值
-/// The complete successful JSON body or a controlled provider error.
-/// 返回完整成功 JSON 正文或受控供应商错误。
-async fn execute_tavily_json_request<T: Serialize>(
+/// The bounded upstream response text, or a controlled transport error.
+/// 返回有界上游响应文本，或受控传输错误。
+async fn execute_generic_json_sync_request<T: Serialize>(
     http: &reqwest::Client,
     entry: &ServiceEntry,
     target: &ProviderToolTarget,
@@ -839,12 +2094,47 @@ async fn execute_tavily_json_request<T: Serialize>(
     body: &T,
     operation: &str,
 ) -> Result<String, String> {
+    execute_generic_json_sync_request_with_headers(
+        http,
+        entry,
+        target,
+        secret,
+        body,
+        operation,
+        &std::collections::BTreeMap::new(),
+    )
+    .await
+}
+
+/// Executes one generic JSON request with additional phase-scoped fixed headers.
+/// 使用额外阶段限定固定请求头执行一项通用 JSON 请求。
+///
+/// # Parameters
+/// 参数
+/// `additional_headers` contains only validated headers for the current lifecycle phase.
+/// `additional_headers` 仅包含当前生命周期阶段已校验的请求头。
+///
+/// # Returns
+/// 返回值
+/// The bounded upstream response text, or a controlled transport error.
+/// 返回有界上游响应文本，或受控传输错误。
+async fn execute_generic_json_sync_request_with_headers<T: Serialize>(
+    http: &reqwest::Client,
+    entry: &ServiceEntry,
+    target: &ProviderToolTarget,
+    secret: &CredentialExecutionSecret,
+    body: &T,
+    operation: &str,
+    additional_headers: &std::collections::BTreeMap<String, String>,
+) -> Result<String, String> {
     let url = provider_tool_url(entry, target);
     let mut headers = HeaderMap::new();
     headers.insert(
         reqwest::header::CONTENT_TYPE,
         HeaderValue::from_static("application/json"),
     );
+    insert_declared_tool_headers(&mut headers, target)?;
+    insert_fixed_tool_headers(&mut headers, additional_headers)?;
     insert_authentication_header(
         &mut headers,
         target.execution.authentication,
@@ -856,7 +2146,7 @@ async fn execute_tavily_json_request<T: Serialize>(
         .json(body)
         .send()
         .await
-        .map_err(|error| format!("{operation} request to `{url}` failed: {error}"))?;
+        .map_err(|error| format_provider_tool_transport_error(operation, error))?;
     let status = response.status();
     let response_text = read_bounded_provider_response(response, operation).await?;
     if !status.is_success() {
@@ -869,3376 +2159,694 @@ async fn execute_tavily_json_request<T: Serialize>(
     Ok(response_text)
 }
 
-/// Strict AI-visible Qwen image generation arguments after host resource materialization.
-/// 宿主资源物化后的严格 AI 可见 Qwen 图片生成参数。
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct AlibabaQwenImageGenerateArguments {
-    /// Exact generation prompt.
-    /// 精确生成提示词。
-    prompt: String,
-    /// Optional excluded visual content.
-    /// 可选排除视觉内容。
-    #[serde(default)]
-    negative_prompt: String,
-    /// Optional requested output count.
-    /// 可选请求输出数量。
-    #[serde(default)]
-    count: Option<u8>,
-    /// Optional output width.
-    /// 可选输出宽度。
-    #[serde(default)]
-    width: Option<u32>,
-    /// Optional output height.
-    /// 可选输出高度。
-    #[serde(default)]
-    height: Option<u32>,
-    /// Optional provider-relative seed.
-    /// 可选供应商相对随机种子。
-    #[serde(default)]
-    seed: Option<i64>,
-    /// Optional provider prompt rewriting switch.
-    /// 可选供应商提示词改写开关。
-    #[serde(default)]
-    prompt_extend: Option<bool>,
-    /// Optional provider watermark switch.
-    /// 可选供应商水印开关。
-    #[serde(default)]
-    watermark: Option<bool>,
-}
-
-/// Strict Qwen image editing arguments after local paths become bounded Data URLs.
-/// 本地路径转换为有界 Data URL 后的严格 Qwen 图片编辑参数。
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct AlibabaQwenImageEditArguments {
-    /// Exact editing instruction.
-    /// 精确编辑指令。
-    instruction: String,
-    /// Ordered host-materialized image Data URLs.
-    /// 宿主物化后的有序图片 Data URL。
-    source_images: Vec<String>,
-    /// Optional excluded visual content.
-    /// 可选排除视觉内容。
-    #[serde(default)]
-    negative_prompt: String,
-    /// Optional requested output count.
-    /// 可选请求输出数量。
-    #[serde(default)]
-    count: Option<u8>,
-    /// Optional provider-relative seed.
-    /// 可选供应商相对随机种子。
-    #[serde(default)]
-    seed: Option<i64>,
-    /// Optional provider prompt rewriting switch.
-    /// 可选供应商提示词改写开关。
-    #[serde(default)]
-    prompt_extend: Option<bool>,
-    /// Optional provider watermark switch.
-    /// 可选供应商水印开关。
-    #[serde(default)]
-    watermark: Option<bool>,
-}
-
-/// Strict Wan image generation arguments after local paths become bounded Data URLs.
-/// 本地路径转换为有界 Data URL 后的严格 Wan 图片生成参数。
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct AlibabaWanImageGenerateArguments {
-    /// Exact generation prompt.
-    /// 精确生成提示词。
-    prompt: String,
-    /// Ordered optional reference image Data URLs.
-    /// 有序可选参考图片 Data URL。
-    #[serde(default)]
-    reference_images: Vec<String>,
-    /// Optional excluded visual content.
-    /// 可选排除视觉内容。
-    #[serde(default)]
-    negative_prompt: String,
-    /// Optional documented resolution tier.
-    /// 可选文档化分辨率档位。
-    #[serde(default)]
-    resolution: Option<String>,
-    /// Optional requested output count.
-    /// 可选请求输出数量。
-    #[serde(default)]
-    count: Option<u8>,
-    /// Optional provider-relative seed.
-    /// 可选供应商相对随机种子。
-    #[serde(default)]
-    seed: Option<i64>,
-    /// Optional provider prompt rewriting switch.
-    /// 可选供应商提示词改写开关。
-    #[serde(default)]
-    prompt_extend: Option<bool>,
-    /// Optional provider watermark switch.
-    /// 可选供应商水印开关。
-    #[serde(default)]
-    watermark: Option<bool>,
-}
-
-/// Exact synchronous Alibaba image request shared by reviewed Qwen and Wan contracts.
-/// 已审核 Qwen 与 Wan 合同共享的精确同步阿里云图片请求。
-#[derive(Debug, Serialize)]
-struct AlibabaImageWireRequest {
-    /// Exact upstream model identifier.
-    /// 精确上游模型标识。
-    model: String,
-    /// Single-turn ordered multimodal input.
-    /// 单轮有序多模态输入。
-    input: AlibabaImageWireInput,
-    /// Exact optional provider controls.
-    /// 精确可选供应商控制项。
-    #[serde(skip_serializing_if = "AlibabaImageWireParameters::is_empty")]
-    parameters: AlibabaImageWireParameters,
-}
-
-/// Contains the single required image-generation message.
-/// 包含唯一必需的图片生成消息。
-#[derive(Debug, Serialize)]
-struct AlibabaImageWireInput {
-    /// Exactly one user message.
-    /// 恰好一条用户消息。
-    messages: Vec<AlibabaImageWireMessage>,
-}
-
-/// Contains ordered image sources followed by one text instruction.
-/// 包含有序图片来源及其后的一条文本指令。
-#[derive(Debug, Serialize)]
-struct AlibabaImageWireMessage {
-    /// Provider-fixed user role.
-    /// 供应商固定的用户角色。
-    role: &'static str,
-    /// Ordered exact-one-of content blocks.
-    /// 有序精确单选内容块。
-    content: Vec<AlibabaImageWireContent>,
-}
-
-/// Represents one image carrier or text instruction.
-/// 表示一个图片载体或文本指令。
-#[derive(Debug, Serialize)]
-struct AlibabaImageWireContent {
-    /// Optional inline image Data URL.
-    /// 可选内联图片 Data URL。
-    #[serde(skip_serializing_if = "Option::is_none")]
-    image: Option<String>,
-    /// Optional text instruction.
-    /// 可选文本指令。
-    #[serde(skip_serializing_if = "Option::is_none")]
-    text: Option<String>,
-}
-
-/// Contains the closed controls shared by Qwen Image 2.0 and Wan 2.7.
-/// 包含 Qwen Image 2.0 与 Wan 2.7 共享的封闭控制项。
-#[derive(Debug, Default, Serialize)]
-struct AlibabaImageWireParameters {
-    /// Optional excluded visual content.
-    /// 可选排除视觉内容。
-    #[serde(skip_serializing_if = "Option::is_none")]
-    negative_prompt: Option<String>,
-    /// Optional provider-native size string.
-    /// 可选供应商原生尺寸字符串。
-    #[serde(skip_serializing_if = "Option::is_none")]
-    size: Option<String>,
-    /// Optional requested output count.
-    /// 可选请求输出数量。
-    #[serde(rename = "n", skip_serializing_if = "Option::is_none")]
-    count: Option<u8>,
-    /// Optional provider-relative seed.
-    /// 可选供应商相对随机种子。
-    #[serde(skip_serializing_if = "Option::is_none")]
-    seed: Option<i64>,
-    /// Optional provider prompt rewriting switch.
-    /// 可选供应商提示词改写开关。
-    #[serde(skip_serializing_if = "Option::is_none")]
-    prompt_extend: Option<bool>,
-    /// Optional provider watermark switch.
-    /// 可选供应商水印开关。
-    #[serde(skip_serializing_if = "Option::is_none")]
-    watermark: Option<bool>,
-}
-
-impl AlibabaImageWireParameters {
-    /// Reports whether every optional provider control is absent.
-    /// 报告是否全部可选供应商控制项均缺失。
-    ///
-    /// # Returns
-    /// 返回值
-    /// `true` only when the request should omit the parameters object.
-    /// 仅在请求应省略参数对象时返回 `true`。
-    fn is_empty(&self) -> bool {
-        self.negative_prompt.is_none()
-            && self.size.is_none()
-            && self.count.is_none()
-            && self.seed.is_none()
-            && self.prompt_extend.is_none()
-            && self.watermark.is_none()
-    }
-}
-
-/// Exact successful Alibaba synchronous image response.
-/// 精确成功阿里云同步图片响应。
-#[derive(Debug, Deserialize)]
-struct AlibabaImageWireResponse {
-    /// Provider request identifier.
-    /// 供应商请求标识。
-    #[serde(default)]
-    request_id: Option<String>,
-    /// Ordered provider output.
-    /// 有序供应商输出。
-    output: AlibabaImageWireOutput,
-}
-
-/// Contains ordered image choices.
-/// 包含有序图片 Choice。
-#[derive(Debug, Deserialize)]
-struct AlibabaImageWireOutput {
-    /// Provider choices.
-    /// 供应商 Choice。
-    choices: Vec<AlibabaImageWireChoice>,
-}
-
-/// Contains one assistant response message.
-/// 包含一条 Assistant 响应消息。
-#[derive(Debug, Deserialize)]
-struct AlibabaImageWireChoice {
-    /// Generated resource message.
-    /// 生成资源消息。
-    message: AlibabaImageWireResponseMessage,
-}
-
-/// Contains ordered generated image content.
-/// 包含有序生成图片内容。
-#[derive(Debug, Deserialize)]
-struct AlibabaImageWireResponseMessage {
-    /// Generated content blocks.
-    /// 生成内容块。
-    content: Vec<AlibabaImageWireResponseContent>,
-}
-
-/// Contains one provider-issued temporary image URL.
-/// 包含一个供应商签发的临时图片 URL。
-#[derive(Debug, Deserialize)]
-struct AlibabaImageWireResponseContent {
-    /// Absolute temporary PNG URL.
-    /// 绝对临时 PNG URL。
-    image: String,
-}
-
-/// Executes one exact synchronous Qwen image generation or editing tool.
-/// 执行一个精确同步 Qwen 图片生成或编辑工具。
+/// Decodes one generic JSON-sync response through the manifest-owned output contract.
+/// 通过 Manifest 持有的输出契约解码一次通用 JSON 同步响应。
 ///
-/// # Parameters
-/// 参数
-/// `entry`, `target`, `arguments`, and `secret` are immutable invocation snapshots.
-/// `entry`、`target`、`arguments` 与 `secret` 是不可变调用快照。
-///
-/// # Returns
-/// 返回值
-/// Ordered generated PNG resources.
-/// 返回有序生成 PNG 资源。
-async fn execute_alibaba_qwen_image_tool(
-    http: &reqwest::Client,
-    entry: &ServiceEntry,
-    target: &ProviderToolTarget,
-    arguments: Value,
-    secret: &CredentialExecutionSecret,
+/// The contract's `source_path` names the provider response array and `normalized_result_path`
+/// names the stable model-facing result field, so a new provider operation with the same closed
+/// output kind becomes executable without a named adapter (plan §R9.6).
+/// 契约的 `source_path` 命名供应商响应数组，`normalized_result_path` 命名面向模型的稳定
+/// 结果字段，使具有相同封闭输出类别的新供应商操作无需命名适配器即可执行（方案 §R9.6）。
+/// Decodes one generic response without request-owned normalization context.
+/// 在没有请求自有归一化上下文的情况下解码一份通用响应。
+fn decode_generic_json_sync_output(
+    contract: &crate::ProviderToolOutputContract,
+    body: &str,
 ) -> Result<ProviderToolExecutionResult, String> {
-    let body = match target.execution.adapter {
-        ProviderToolAdapterKind::AlibabaQwenImageGenerate => {
-            let arguments: AlibabaQwenImageGenerateArguments = serde_json::from_value(arguments)
-                .map_err(|error| format!("Alibaba Qwen image arguments are invalid: {error}"))?;
-            build_alibaba_qwen_generate_body(target, arguments)?
-        }
-        ProviderToolAdapterKind::AlibabaQwenImageEdit => {
-            let arguments: AlibabaQwenImageEditArguments = serde_json::from_value(arguments)
-                .map_err(|error| {
-                    format!("Alibaba Qwen image-edit arguments are invalid: {error}")
-                })?;
-            build_alibaba_qwen_edit_body(target, arguments)?
-        }
-        _ => {
+    decode_generic_json_sync_output_with_request(contract, body, None)
+}
+
+/// Decodes one generic response with optional canonical request arguments for output limits.
+/// 使用可选规范请求参数解码一份通用响应，以应用输出数量限制。
+fn decode_generic_json_sync_output_with_request(
+    contract: &crate::ProviderToolOutputContract,
+    body: &str,
+    request_arguments: Option<&Value>,
+) -> Result<ProviderToolExecutionResult, String> {
+    let response = parse_bounded_provider_json(body, "Provider tool response")?;
+    if response.get("error").is_some() {
+        return Err(format_structured_provider_error(
+            "Provider tool",
+            None,
+            &response,
+        ));
+    }
+    if contract.kind == crate::ProviderToolOutputKind::Resources {
+        if contract.resource_decoders.is_empty() {
             return Err(String::from(
-                "Alibaba Qwen image executor received an incompatible adapter.",
+                "Provider tool resource output has no declared resource decoder.",
             ));
         }
-    };
-    execute_alibaba_image_request(http, entry, target, secret, &body, "Alibaba Qwen image").await
-}
-
-/// Builds and validates one exact Qwen image generation body.
-/// 构建并验证一份精确 Qwen 图片生成正文。
-///
-/// # Parameters
-/// 参数
-/// `target` fixes the model and `arguments` contains model-native controls.
-/// `target` 固定模型，`arguments` 包含模型原生控制项。
-///
-/// # Returns
-/// 返回值
-/// A lossless synchronous MultiModalConversation request.
-/// 返回无损同步 MultiModalConversation 请求。
-fn build_alibaba_qwen_generate_body(
-    target: &ProviderToolTarget,
-    arguments: AlibabaQwenImageGenerateArguments,
-) -> Result<AlibabaImageWireRequest, String> {
-    validate_alibaba_image_text(arguments.prompt.as_str(), "prompt", None)?;
-    validate_alibaba_image_text(
-        arguments.negative_prompt.as_str(),
-        "negative_prompt",
-        Some(500),
-    )?;
-    validate_alibaba_image_count(arguments.count, 6)?;
-    validate_alibaba_image_seed(arguments.seed)?;
-    if arguments.width.is_some() != arguments.height.is_some() {
-        return Err(String::from(
-            "Alibaba Qwen image width and height must be supplied together.",
-        ));
+        let resources = decode_declared_generic_resources(contract, &response, request_arguments)?;
+        return Ok(ProviderToolExecutionResult {
+            upstream_response_id: generic_provider_response_id(&response),
+            output: ProviderToolNormalizedOutput::Resources(resources),
+        });
     }
-    let size = match (arguments.width, arguments.height) {
-        (Some(width), Some(height)) => {
-            let pixels = u64::from(width) * u64::from(height);
-            if !(512 * 512..=2048 * 2048).contains(&pixels) {
-                return Err(String::from(
-                    "Alibaba Qwen image size must contain between 512*512 and 2048*2048 pixels.",
-                ));
-            }
-            Some(format!("{width}*{height}"))
-        }
-        (None, None) => None,
-        _ => unreachable!("paired width and height were validated"),
-    };
-    Ok(alibaba_image_wire_request(
-        target.upstream_target_id.as_str(),
-        Vec::new(),
-        arguments.prompt,
-        AlibabaImageWireParameters {
-            negative_prompt: non_empty(arguments.negative_prompt),
-            size,
-            count: arguments.count,
-            seed: arguments.seed,
-            prompt_extend: arguments.prompt_extend,
-            watermark: arguments.watermark,
-        },
-    ))
-}
-
-/// Builds and validates one exact Qwen image editing body.
-/// 构建并验证一份精确 Qwen 图片编辑正文。
-///
-/// # Parameters
-/// 参数
-/// `target` fixes the model and `arguments` contains host-materialized sources.
-/// `target` 固定模型，`arguments` 包含宿主物化来源。
-///
-/// # Returns
-/// 返回值
-/// A lossless synchronous MultiModalConversation request.
-/// 返回无损同步 MultiModalConversation 请求。
-fn build_alibaba_qwen_edit_body(
-    target: &ProviderToolTarget,
-    arguments: AlibabaQwenImageEditArguments,
-) -> Result<AlibabaImageWireRequest, String> {
-    validate_alibaba_image_text(arguments.instruction.as_str(), "instruction", None)?;
-    validate_alibaba_image_text(
-        arguments.negative_prompt.as_str(),
-        "negative_prompt",
-        Some(500),
-    )?;
-    if !(1..=3).contains(&arguments.source_images.len()) {
-        return Err(String::from(
-            "Alibaba Qwen image editing requires one to three source images.",
-        ));
-    }
-    for image in &arguments.source_images {
-        validate_alibaba_image_data_url(image, 10 * 1024 * 1024)?;
-    }
-    validate_alibaba_image_count(arguments.count, 6)?;
-    validate_alibaba_image_seed(arguments.seed)?;
-    Ok(alibaba_image_wire_request(
-        target.upstream_target_id.as_str(),
-        arguments.source_images,
-        arguments.instruction,
-        AlibabaImageWireParameters {
-            negative_prompt: non_empty(arguments.negative_prompt),
-            size: None,
-            count: arguments.count,
-            seed: arguments.seed,
-            prompt_extend: arguments.prompt_extend,
-            watermark: arguments.watermark,
-        },
-    ))
-}
-
-/// Executes one exact synchronous Wan 2.7 image generation tool.
-/// 执行一个精确同步 Wan 2.7 图片生成工具。
-///
-/// # Parameters
-/// 参数
-/// `entry`, `target`, `arguments`, and `secret` are immutable invocation snapshots.
-/// `entry`、`target`、`arguments` 与 `secret` 是不可变调用快照。
-///
-/// # Returns
-/// 返回值
-/// Ordered generated PNG resources.
-/// 返回有序生成 PNG 资源。
-async fn execute_alibaba_wan_image_tool(
-    http: &reqwest::Client,
-    entry: &ServiceEntry,
-    target: &ProviderToolTarget,
-    arguments: Value,
-    secret: &CredentialExecutionSecret,
-) -> Result<ProviderToolExecutionResult, String> {
-    let arguments: AlibabaWanImageGenerateArguments = serde_json::from_value(arguments)
-        .map_err(|error| format!("Alibaba Wan image arguments are invalid: {error}"))?;
-    let body = build_alibaba_wan_generate_body(target, arguments)?;
-    execute_alibaba_image_request(http, entry, target, secret, &body, "Alibaba Wan image").await
-}
-
-/// Builds one exact Wan 2.7 image request after validating model-specific constraints.
-/// 在验证模型专属约束后构建一项精确 Wan 2.7 图片请求。
-///
-/// # Parameters
-/// 参数
-/// `target` fixes the provider model and `arguments` contains host-materialized inputs.
-/// `target` 固定供应商模型，`arguments` 包含宿主已物化输入。
-///
-/// # Returns
-/// 返回值
-/// A lossless synchronous request or one pre-dispatch validation failure.
-/// 返回无损同步请求，或一项分派前验证失败。
-fn build_alibaba_wan_generate_body(
-    target: &ProviderToolTarget,
-    arguments: AlibabaWanImageGenerateArguments,
-) -> Result<AlibabaImageWireRequest, String> {
-    validate_alibaba_image_text(arguments.prompt.as_str(), "prompt", Some(5000))?;
-    if arguments.reference_images.len() > 9 {
-        return Err(String::from(
-            "Alibaba Wan image generation accepts at most nine reference images.",
-        ));
-    }
-    for image in &arguments.reference_images {
-        validate_alibaba_image_data_url(image, 20 * 1024 * 1024)?;
-    }
-    validate_alibaba_image_count(arguments.count, 4)?;
-    validate_alibaba_image_seed(arguments.seed)?;
-    let resolution = arguments.resolution.as_deref().map(str::to_ascii_lowercase);
-    if resolution
-        .as_deref()
-        .is_some_and(|value| !matches!(value, "1k" | "2k" | "4k"))
-    {
-        return Err(String::from(
-            "Alibaba Wan image resolution must be 1k, 2k, or 4k.",
-        ));
-    }
-    if resolution.as_deref() == Some("4k")
-        && (target.upstream_target_id != "wan2.7-image-pro"
-            || !arguments.reference_images.is_empty())
-    {
-        return Err(String::from(
-            "Alibaba Wan 4k output is limited to wan2.7-image-pro text-only generation.",
-        ));
-    }
-    Ok(alibaba_image_wire_request(
-        target.upstream_target_id.as_str(),
-        arguments.reference_images,
-        arguments.prompt,
-        AlibabaImageWireParameters {
-            negative_prompt: non_empty(arguments.negative_prompt),
-            size: resolution.map(|value| value.to_ascii_uppercase()),
-            count: arguments.count,
-            seed: arguments.seed,
-            prompt_extend: arguments.prompt_extend,
-            watermark: arguments.watermark,
-        },
-    ))
-}
-
-/// Builds the shared single-message image request while preserving source ordering.
-/// 构建共享单消息图片请求并保留来源顺序。
-///
-/// # Parameters
-/// 参数
-/// `model`, `images`, `text`, and `parameters` are already validated.
-/// `model`、`images`、`text` 与 `parameters` 已完成验证。
-///
-/// # Returns
-/// 返回值
-/// The exact provider wire request.
-/// 返回精确供应商 Wire 请求。
-fn alibaba_image_wire_request(
-    model: &str,
-    images: Vec<String>,
-    text: String,
-    parameters: AlibabaImageWireParameters,
-) -> AlibabaImageWireRequest {
-    let mut content = images
-        .into_iter()
-        .map(|image| AlibabaImageWireContent {
-            image: Some(image),
-            text: None,
-        })
-        .collect::<Vec<_>>();
-    content.push(AlibabaImageWireContent {
-        image: None,
-        text: Some(text),
-    });
-    AlibabaImageWireRequest {
-        model: model.to_string(),
-        input: AlibabaImageWireInput {
-            messages: vec![AlibabaImageWireMessage {
-                role: "user",
-                content,
-            }],
-        },
-        parameters,
-    }
-}
-
-/// Executes and decodes one synchronous Alibaba native image request.
-/// 执行并解码一项同步阿里云原生图片请求。
-///
-/// # Parameters
-/// 参数
-/// `body` is the exact reviewed wire request and `operation` scopes diagnostics.
-/// `body` 是精确已审核 Wire 请求，`operation` 限定诊断范围。
-///
-/// # Returns
-/// 返回值
-/// Ordered normalized image resources or a controlled provider error.
-/// 返回有序归一化图片资源或受控供应商错误。
-async fn execute_alibaba_image_request(
-    http: &reqwest::Client,
-    entry: &ServiceEntry,
-    target: &ProviderToolTarget,
-    secret: &CredentialExecutionSecret,
-    body: &AlibabaImageWireRequest,
-    operation: &str,
-) -> Result<ProviderToolExecutionResult, String> {
-    let url = provider_tool_url(entry, target);
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        reqwest::header::CONTENT_TYPE,
-        HeaderValue::from_static("application/json"),
-    );
-    insert_authentication_header(
-        &mut headers,
-        target.execution.authentication,
-        secret.expose_value(),
-    )?;
-    let response = http
-        .post(url.as_str())
-        .headers(headers)
-        .json(body)
-        .send()
-        .await
-        .map_err(|error| format!("{operation} request to `{url}` failed: {error}"))?;
-    let status = response.status();
-    let response_text = read_bounded_provider_response(response, operation).await?;
-    if !status.is_success() {
-        return Err(format_http_error(
-            operation,
-            status.as_u16(),
-            response_text.as_str(),
-        ));
-    }
-    decode_alibaba_image_response(operation, response_text.as_str())
-}
-
-/// Decodes one exact Alibaba synchronous image response.
-/// 解码一项精确阿里云同步图片响应。
-///
-/// # Parameters
-/// 参数
-/// `operation` scopes diagnostics and `response_text` is the bounded successful body.
-/// `operation` 限定诊断范围，`response_text` 是有界成功正文。
-///
-/// # Returns
-/// 返回值
-/// Ordered PNG download resources.
-/// 返回有序 PNG 下载资源。
-fn decode_alibaba_image_response(
-    operation: &str,
-    response_text: &str,
-) -> Result<ProviderToolExecutionResult, String> {
-    let response: AlibabaImageWireResponse = serde_json::from_str(response_text)
-        .map_err(|error| format!("{operation} response JSON is invalid: {error}"))?;
-    let mut resources = Vec::new();
-    for choice in response.output.choices {
-        for content in choice.message.content {
-            let url = reqwest::Url::parse(content.image.as_str())
-                .map_err(|_| format!("{operation} response contains an invalid image URL."))?;
-            if !matches!(url.scheme(), "http" | "https")
-                || url.host_str().is_none()
-                || !url.username().is_empty()
-                || url.password().is_some()
-            {
-                return Err(format!(
-                    "{operation} response contains a non-public image URL."
-                ));
-            }
-            resources.push(ProviderToolGeneratedResource {
-                output_id: format!("image-{}", resources.len()),
-                kind: String::from("image"),
-                mime_type: String::from("image/png"),
-                bytes: None,
-                download_url: Some(content.image),
-            });
-        }
-    }
-    if resources.is_empty() {
-        return Err(format!(
-            "{operation} response contains no generated images."
-        ));
-    }
-    Ok(ProviderToolExecutionResult {
-        upstream_response_id: response.request_id,
-        output: ProviderToolNormalizedOutput::Resources(resources),
-    })
-}
-
-/// Validates one required or bounded optional Alibaba image text field.
-/// 验证一个必需或有界可选阿里云图片文本字段。
-///
-/// # Parameters
-/// 参数
-/// `value`, `name`, and `maximum_characters` define the exact field boundary.
-/// `value`、`name` 与 `maximum_characters` 定义精确字段边界。
-///
-/// # Returns
-/// 返回值
-/// Success only for a non-empty required value within its character ceiling.
-/// 仅在必需值非空且未超过字符上限时返回成功。
-fn validate_alibaba_image_text(
-    value: &str,
-    name: &str,
-    maximum_characters: Option<usize>,
-) -> Result<(), String> {
-    if value.trim().is_empty() && name != "negative_prompt" {
-        return Err(format!("Alibaba image {name} cannot be empty."));
-    }
-    if let Some(maximum) = maximum_characters
-        && value.chars().count() > maximum
-    {
-        return Err(format!(
-            "Alibaba image {name} exceeds {maximum} characters."
-        ));
-    }
-    Ok(())
-}
-
-/// Validates one optional Alibaba image result count.
-/// 验证一个可选阿里云图片结果数量。
-///
-/// # Parameters
-/// 参数
-/// `count` is absent or positive and `maximum` is the model-specific ceiling.
-/// `count` 可缺失或为正数，`maximum` 是模型专属上限。
-///
-/// # Returns
-/// 返回值
-/// Success when the optional count is representable by the selected model.
-/// 当可选数量可由所选模型表示时返回成功。
-fn validate_alibaba_image_count(count: Option<u8>, maximum: u8) -> Result<(), String> {
-    if count.is_some_and(|count| count == 0 || count > maximum) {
-        return Err(format!(
-            "Alibaba image count must be between one and {maximum}."
-        ));
-    }
-    Ok(())
-}
-
-/// Validates one optional Alibaba provider-relative image seed.
-/// 验证一个可选阿里云供应商相对图片随机种子。
-///
-/// # Parameters
-/// 参数
-/// `seed` is absent or a signed integer from the AI-visible contract.
-/// `seed` 可缺失或为 AI 可见合同中的有符号整数。
-///
-/// # Returns
-/// 返回值
-/// Success only within the documented non-negative 32-bit range.
-/// 仅在文档明确的非负 32 位范围内返回成功。
-fn validate_alibaba_image_seed(seed: Option<i64>) -> Result<(), String> {
-    if seed.is_some_and(|seed| !(0..=2_147_483_647).contains(&seed)) {
-        return Err(String::from(
-            "Alibaba image seed must be between 0 and 2147483647.",
-        ));
-    }
-    Ok(())
-}
-
-/// Validates one host-created image Data URL and its provider-specific byte ceiling.
-/// 验证一个宿主创建的图片 Data URL 及其供应商专属字节上限。
-///
-/// # Parameters
-/// 参数
-/// `value` is the carrier and `maximum_bytes` is the exact selected-adapter limit.
-/// `value` 是载体，`maximum_bytes` 是精确所选适配器上限。
-///
-/// # Returns
-/// 返回值
-/// Success only for a supported non-empty image payload.
-/// 仅在图片载荷受支持且非空时返回成功。
-fn validate_alibaba_image_data_url(value: &str, maximum_bytes: usize) -> Result<(), String> {
-    let encoded = [
-        "data:image/jpeg;base64,",
-        "data:image/png;base64,",
-        "data:image/bmp;base64,",
-        "data:image/webp;base64,",
-        "data:image/gif;base64,",
-    ]
-    .into_iter()
-    .find_map(|prefix| value.strip_prefix(prefix))
-    .ok_or_else(|| {
-        String::from("Alibaba image input must be a JPEG, PNG, BMP, WebP, or GIF Data URL.")
-    })?;
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(encoded.as_bytes())
-        .map_err(|_| String::from("Alibaba image input contains invalid Base64."))?;
-    if bytes.is_empty() || bytes.len() > maximum_bytes {
-        return Err(format!(
-            "Alibaba image input must be non-empty and no larger than {maximum_bytes} bytes."
-        ));
-    }
-    Ok(())
-}
-
-/// Converts an optional empty provider string into an omitted wire field.
-/// 将可选空供应商字符串转换为省略的 Wire 字段。
-///
-/// # Parameters
-/// 参数
-/// `value` is an already validated optional provider field.
-/// `value` 是已验证的可选供应商字段。
-///
-/// # Returns
-/// 返回值
-/// `None` for empty text or the original non-empty text.
-/// 空文本返回 `None`，否则返回原始非空文本。
-fn non_empty(value: String) -> Option<String> {
-    (!value.is_empty()).then_some(value)
-}
-
-/// Strict CosyVoice synthesis arguments.
-/// 严格 CosyVoice 合成参数。
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct AlibabaCosyVoiceArguments {
-    /// Exact text or SSML document.
-    /// 精确文本或 SSML 文档。
-    text: String,
-    /// System, cloned, or designed voice identifier.
-    /// 系统、复刻或设计声音标识。
-    voice_id: String,
-    /// Requested provider audio encoding.
-    /// 请求的供应商音频编码。
-    #[serde(default = "default_alibaba_cosyvoice_format")]
-    output_format: String,
-    /// Optional output sample rate.
-    /// 可选输出采样率。
-    #[serde(default)]
-    sample_rate: Option<u32>,
-    /// Optional zero-through-one-hundred volume.
-    /// 可选零至一百音量。
-    #[serde(default)]
-    volume: Option<f64>,
-    /// Optional speech rate.
-    /// 可选语速。
-    #[serde(default)]
-    speed: Option<f64>,
-    /// Optional pitch multiplier.
-    /// 可选音调倍率。
-    #[serde(default)]
-    pitch: Option<f64>,
-    /// Optional deterministic seed.
-    /// 可选确定性种子。
-    #[serde(default)]
-    seed: Option<u16>,
-    /// Optional pronunciation language hint.
-    /// 可选发音语言提示。
-    #[serde(default)]
-    language: Option<String>,
-    /// Optional delivery instruction.
-    /// 可选表达指令。
-    #[serde(default)]
-    style: Option<String>,
-    /// Whether the exact text should be parsed as SSML.
-    /// 是否将精确文本解析为 SSML。
-    #[serde(default)]
-    enable_ssml: bool,
-}
-
-/// Returns the documented default CosyVoice output encoding.
-/// 返回文档规定的默认 CosyVoice 输出编码。
-///
-/// # Returns
-/// 返回值
-/// Lowercase `mp3`.
-/// 返回小写 `mp3`。
-fn default_alibaba_cosyvoice_format() -> String {
-    String::from("mp3")
-}
-
-/// Strict Qwen3-TTS synthesis arguments.
-/// 严格 Qwen3-TTS 合成参数。
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct AlibabaQwenTtsArguments {
-    /// Exact transcript to synthesize.
-    /// 待合成精确逐字稿。
-    text: String,
-    /// Documented preset voice identifier.
-    /// 文档规定的预设声音标识。
-    voice_id: String,
-    /// Optional documented pronunciation language.
-    /// 可选文档化发音语言。
-    #[serde(default)]
-    language: Option<String>,
-    /// Optional instruct-model delivery instruction.
-    /// 可选指令模型表达指令。
-    #[serde(default)]
-    style: Option<String>,
-}
-
-/// Strict Qwen3-ASR arguments after host audio materialization.
-/// 宿主音频物化后的严格 Qwen3-ASR 参数。
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct AlibabaQwenAsrArguments {
-    /// Host-created audio Data URL.
-    /// 宿主创建的音频 Data URL。
-    audio_url: String,
-    /// Optional documented source language.
-    /// 可选文档化源语言。
-    #[serde(default)]
-    language: Option<String>,
-}
-
-/// Exact Alibaba audio locator.
-/// 精确阿里云音频定位符。
-#[derive(Debug, Deserialize)]
-struct AlibabaAudioLocator {
-    /// Temporary complete resource URL.
-    /// 临时完整资源 URL。
-    url: String,
-}
-
-/// Exact CosyVoice successful response.
-/// 精确 CosyVoice 成功响应。
-#[derive(Debug, Deserialize)]
-struct AlibabaCosyVoiceResponse {
-    /// Provider request identifier.
-    /// 供应商请求标识。
-    request_id: String,
-    /// Terminal audio output.
-    /// 终态音频输出。
-    output: AlibabaCosyVoiceOutput,
-}
-
-/// Exact CosyVoice terminal output.
-/// 精确 CosyVoice 终态输出。
-#[derive(Debug, Deserialize)]
-struct AlibabaCosyVoiceOutput {
-    /// Complete audio locator.
-    /// 完整音频定位符。
-    audio: AlibabaAudioLocator,
-    /// Optional terminal reason.
-    /// 可选终止原因。
-    #[serde(default)]
-    finish_reason: String,
-}
-
-/// Exact non-streaming Qwen3-TTS response.
-/// 精确非流式 Qwen3-TTS 响应。
-#[derive(Debug, Deserialize)]
-struct AlibabaQwenTtsResponse {
-    /// Provider-repeated business status.
-    /// 供应商重复业务状态。
-    status_code: u16,
-    /// Provider request identifier.
-    /// 供应商请求标识。
-    request_id: String,
-    /// Terminal synthesis output.
-    /// 终态合成输出。
-    output: AlibabaQwenTtsOutput,
-}
-
-/// Exact Qwen3-TTS terminal output.
-/// 精确 Qwen3-TTS 终态输出。
-#[derive(Debug, Deserialize)]
-struct AlibabaQwenTtsOutput {
-    /// Required terminal reason.
-    /// 必需终止原因。
-    finish_reason: String,
-    /// Complete WAV locator.
-    /// 完整 WAV 定位符。
-    audio: AlibabaAudioLocator,
-}
-
-/// Exact synchronous Qwen3-ASR response.
-/// 精确同步 Qwen3-ASR 响应。
-#[derive(Debug, Deserialize)]
-struct AlibabaQwenAsrResponse {
-    /// Provider request identifier.
-    /// 供应商请求标识。
-    request_id: String,
-    /// Terminal recognition output.
-    /// 终态识别输出。
-    output: AlibabaQwenAsrOutput,
-}
-
-/// Contains exactly one terminal recognition choice.
-/// 包含恰好一个终态识别 Choice。
-#[derive(Debug, Deserialize)]
-struct AlibabaQwenAsrOutput {
-    /// Ordered recognition choices.
-    /// 有序识别 Choice。
-    choices: Vec<AlibabaQwenAsrChoice>,
-}
-
-/// Contains one terminal assistant transcript.
-/// 包含一个终态 Assistant 转录。
-#[derive(Debug, Deserialize)]
-struct AlibabaQwenAsrChoice {
-    /// Required terminal reason.
-    /// 必需终止原因。
-    finish_reason: String,
-    /// Assistant transcript message.
-    /// Assistant 转录消息。
-    message: AlibabaQwenAsrMessage,
-}
-
-/// Contains transcript text and provider annotations.
-/// 包含转录文本与供应商注解。
-#[derive(Debug, Deserialize)]
-struct AlibabaQwenAsrMessage {
-    /// Provider-fixed assistant role.
-    /// 供应商固定 Assistant 角色。
-    role: String,
-    /// Exactly one transcript content item.
-    /// 恰好一个转录内容项。
-    content: Vec<AlibabaQwenAsrContent>,
-}
-
-/// Contains one transcript text item.
-/// 包含一个转录文本项。
-#[derive(Debug, Deserialize)]
-struct AlibabaQwenAsrContent {
-    /// Complete recognized text.
-    /// 完整识别文本。
-    text: String,
-}
-
-/// Executes one exact CosyVoice synchronous synthesis request.
-/// 执行一个精确 CosyVoice 同步合成请求。
-///
-/// # Parameters
-/// 参数
-/// Invocation values are immutable after target selection and local validation.
-/// 调用值在目标选择与本地验证后保持不可变。
-///
-/// # Returns
-/// 返回值
-/// One normalized generated audio resource.
-/// 返回一个归一化生成音频资源。
-async fn execute_alibaba_cosyvoice_tool(
-    http: &reqwest::Client,
-    entry: &ServiceEntry,
-    target: &ProviderToolTarget,
-    arguments: Value,
-    secret: &CredentialExecutionSecret,
-) -> Result<ProviderToolExecutionResult, String> {
-    let arguments: AlibabaCosyVoiceArguments = serde_json::from_value(arguments)
-        .map_err(|error| format!("Alibaba CosyVoice arguments are invalid: {error}"))?;
-    let (body, mime_type) = build_alibaba_cosyvoice_body(target, arguments)?;
-    let response_text =
-        execute_alibaba_native_json(http, entry, target, secret, &body, "Alibaba CosyVoice")
-            .await?;
-    let response: AlibabaCosyVoiceResponse = serde_json::from_str(response_text.as_str())
-        .map_err(|error| format!("Alibaba CosyVoice response JSON is invalid: {error}"))?;
-    if response.request_id.trim().is_empty()
-        || (!response.output.finish_reason.is_empty() && response.output.finish_reason != "stop")
-    {
-        return Err(String::from("Alibaba CosyVoice response is not terminal."));
-    }
-    let url = validated_public_http_url(
-        response.output.audio.url.as_str(),
-        "Alibaba CosyVoice audio URL",
-    )?;
-    Ok(audio_resource_result(
-        Some(response.request_id),
-        url.to_string(),
-        mime_type,
-    ))
-}
-
-/// Builds one exact CosyVoice request and returns its normalized output MIME type.
-/// 构建一项精确 CosyVoice 请求并返回其归一化输出 MIME 类型。
-///
-/// # Parameters
-/// 参数
-/// `target` freezes the selected model and `arguments` contains strict caller input.
-/// `target` 冻结所选模型，`arguments` 包含严格调用方输入。
-///
-/// # Returns
-/// 返回值
-/// A provider-native JSON body and reviewed MIME type, or a pre-dispatch validation failure.
-/// 返回供应商原生 JSON 正文与已审核 MIME 类型，或分派前验证失败。
-fn build_alibaba_cosyvoice_body(
-    target: &ProviderToolTarget,
-    arguments: AlibabaCosyVoiceArguments,
-) -> Result<(Value, &'static str), String> {
-    if arguments.text.trim().is_empty() || arguments.voice_id.trim().is_empty() {
-        return Err(String::from(
-            "Alibaba CosyVoice requires non-empty text and voice_id.",
-        ));
-    }
-    if arguments
-        .volume
-        .is_some_and(|value| !(0.0..=100.0).contains(&value))
-        || arguments
-            .speed
-            .is_some_and(|value| !(0.5..=2.0).contains(&value))
-        || arguments
-            .pitch
-            .is_some_and(|value| !(0.5..=2.0).contains(&value))
-        || arguments.sample_rate == Some(0)
-    {
-        return Err(String::from(
-            "Alibaba CosyVoice numeric controls are outside their verified ranges.",
-        ));
-    }
-    let output_format = arguments.output_format.to_ascii_lowercase();
-    let mime_type = alibaba_cosyvoice_mime_type(output_format.as_str()).ok_or_else(|| {
-        String::from("Alibaba CosyVoice output_format must be mp3, pcm, wav, or opus.")
-    })?;
-    let language_hints = arguments
-        .language
-        .filter(|value| !value.is_empty())
-        .map(|value| vec![value]);
-    let input = json_object_with_optional_fields(
-        serde_json::Map::from_iter([
-            (String::from("text"), Value::String(arguments.text)),
-            (String::from("voice"), Value::String(arguments.voice_id)),
-            (String::from("format"), Value::String(output_format)),
-        ]),
-        [
-            (
-                "sample_rate",
-                arguments.sample_rate.map(|value| serde_json::json!(value)),
-            ),
-            (
-                "volume",
-                arguments.volume.map(|value| serde_json::json!(value)),
-            ),
-            (
-                "rate",
-                arguments.speed.map(|value| serde_json::json!(value)),
-            ),
-            (
-                "pitch",
-                arguments.pitch.map(|value| serde_json::json!(value)),
-            ),
-            ("seed", arguments.seed.map(|value| serde_json::json!(value))),
-            (
-                "language_hints",
-                language_hints.map(|value| serde_json::json!(value)),
-            ),
-            ("instruction", arguments.style.map(Value::String)),
-            (
-                "enable_ssml",
-                arguments.enable_ssml.then_some(Value::Bool(true)),
-            ),
-        ],
-    );
-    let body = serde_json::json!({
-        "model": target.upstream_target_id,
-        "input": input
-    });
-    Ok((body, mime_type))
-}
-
-/// Executes one exact non-streaming Qwen3-TTS request.
-/// 执行一个精确非流式 Qwen3-TTS 请求。
-///
-/// # Parameters
-/// 参数
-/// Invocation values are immutable after target selection and validation.
-/// 调用值在目标选择与验证后保持不可变。
-///
-/// # Returns
-/// 返回值
-/// One normalized generated WAV resource.
-/// 返回一个归一化生成 WAV 资源。
-async fn execute_alibaba_qwen_tts_tool(
-    http: &reqwest::Client,
-    entry: &ServiceEntry,
-    target: &ProviderToolTarget,
-    arguments: Value,
-    secret: &CredentialExecutionSecret,
-) -> Result<ProviderToolExecutionResult, String> {
-    let arguments: AlibabaQwenTtsArguments = serde_json::from_value(arguments)
-        .map_err(|error| format!("Alibaba Qwen3-TTS arguments are invalid: {error}"))?;
-    let body = build_alibaba_qwen_tts_body(target, arguments)?;
-    let response_text =
-        execute_alibaba_native_json(http, entry, target, secret, &body, "Alibaba Qwen3-TTS")
-            .await?;
-    let response: AlibabaQwenTtsResponse = serde_json::from_str(response_text.as_str())
-        .map_err(|error| format!("Alibaba Qwen3-TTS response JSON is invalid: {error}"))?;
-    if response.status_code != 200 || response.output.finish_reason != "stop" {
-        return Err(format!(
-            "Alibaba Qwen3-TTS returned non-terminal status {}.",
-            response.status_code
-        ));
-    }
-    let url = validated_public_http_url(
-        response.output.audio.url.as_str(),
-        "Alibaba Qwen3-TTS audio URL",
-    )?;
-    Ok(audio_resource_result(
-        Some(response.request_id),
-        url.to_string(),
-        "audio/wav",
-    ))
-}
-
-/// Builds one exact non-streaming Qwen3-TTS request.
-/// 构建一项精确非流式 Qwen3-TTS 请求。
-///
-/// # Parameters
-/// 参数
-/// `target` fixes plain versus instruct behavior and `arguments` contains strict semantic input.
-/// `target` 固定普通或指令模式行为，`arguments` 包含严格语义输入。
-///
-/// # Returns
-/// 返回值
-/// Provider-native JSON without unsupported explicit null fields.
-/// 返回不含不受支持显式空值的供应商原生 JSON。
-fn build_alibaba_qwen_tts_body(
-    target: &ProviderToolTarget,
-    arguments: AlibabaQwenTtsArguments,
-) -> Result<Value, String> {
-    if arguments.text.trim().is_empty()
-        || arguments.text.chars().count() > 600
-        || arguments.voice_id.trim().is_empty()
-    {
-        return Err(String::from(
-            "Alibaba Qwen3-TTS requires non-empty text of at most 600 characters and one voice_id.",
-        ));
-    }
-    if !supported_alibaba_qwen_tts_language(arguments.language.as_deref()) {
-        return Err(String::from("Alibaba Qwen3-TTS language is unsupported."));
-    }
-    if arguments.style.is_some() && target.upstream_target_id != "qwen3-tts-instruct-flash" {
-        return Err(String::from(
-            "Alibaba Qwen3-TTS style requires qwen3-tts-instruct-flash.",
-        ));
-    }
-    let optimize_instructions = arguments.style.is_some();
-    let input = json_object_with_optional_fields(
-        serde_json::Map::from_iter([
-            (String::from("text"), Value::String(arguments.text)),
-            (String::from("voice"), Value::String(arguments.voice_id)),
-        ]),
-        [
-            ("language_type", arguments.language.map(Value::String)),
-            ("instructions", arguments.style.map(Value::String)),
-            (
-                "optimize_instructions",
-                optimize_instructions.then_some(Value::Bool(true)),
-            ),
-        ],
-    );
-    let body = serde_json::json!({
-        "model": target.upstream_target_id,
-        "input": input
-    });
-    Ok(body)
-}
-
-/// Executes one exact synchronous Qwen3-ASR transcription request.
-/// 执行一个精确同步 Qwen3-ASR 转录请求。
-///
-/// # Parameters
-/// 参数
-/// Invocation values are immutable after host audio materialization.
-/// 调用值在宿主音频物化后保持不可变。
-///
-/// # Returns
-/// 返回值
-/// Complete provider transcript text.
-/// 返回完整供应商转录文本。
-async fn execute_alibaba_qwen_asr_tool(
-    http: &reqwest::Client,
-    entry: &ServiceEntry,
-    target: &ProviderToolTarget,
-    arguments: Value,
-    secret: &CredentialExecutionSecret,
-) -> Result<ProviderToolExecutionResult, String> {
-    let arguments: AlibabaQwenAsrArguments = serde_json::from_value(arguments)
-        .map_err(|error| format!("Alibaba Qwen3-ASR arguments are invalid: {error}"))?;
-    let body = build_alibaba_qwen_asr_body(target, arguments)?;
-    let response_text =
-        execute_alibaba_native_json(http, entry, target, secret, &body, "Alibaba Qwen3-ASR")
-            .await?;
-    let response: AlibabaQwenAsrResponse = serde_json::from_str(response_text.as_str())
-        .map_err(|error| format!("Alibaba Qwen3-ASR response JSON is invalid: {error}"))?;
-    if response.request_id.trim().is_empty() || response.output.choices.len() != 1 {
-        return Err(String::from(
-            "Alibaba Qwen3-ASR response omitted its terminal choice.",
-        ));
-    }
-    let choice = &response.output.choices[0];
-    if choice.finish_reason != "stop"
-        || choice.message.role != "assistant"
-        || choice.message.content.len() != 1
-    {
-        return Err(String::from("Alibaba Qwen3-ASR response is incomplete."));
-    }
-    Ok(ProviderToolExecutionResult {
-        upstream_response_id: Some(response.request_id),
-        output: ProviderToolNormalizedOutput::Text(choice.message.content[0].text.clone()),
-    })
-}
-
-/// Builds one exact synchronous Qwen3-ASR request.
-/// 构建一项精确同步 Qwen3-ASR 请求。
-///
-/// # Parameters
-/// 参数
-/// `target` fixes the ASR model and `arguments` contains host-materialized bounded audio.
-/// `target` 固定 ASR 模型，`arguments` 包含宿主已物化的有界音频。
-///
-/// # Returns
-/// 返回值
-/// Provider-native JSON with only reviewed optional fields.
-/// 返回仅含已审核可选字段的供应商原生 JSON。
-fn build_alibaba_qwen_asr_body(
-    target: &ProviderToolTarget,
-    arguments: AlibabaQwenAsrArguments,
-) -> Result<Value, String> {
-    if !supported_alibaba_qwen_asr_language(arguments.language.as_deref()) {
-        return Err(String::from("Alibaba Qwen3-ASR language is unsupported."));
-    }
-    validate_alibaba_audio_data_url(arguments.audio_url.as_str())?;
-    let asr_options = json_object_with_optional_fields(
-        serde_json::Map::from_iter([(String::from("enable_itn"), Value::Bool(false))]),
-        [("language", arguments.language.map(Value::String))],
-    );
-    let body = serde_json::json!({
-        "model": target.upstream_target_id,
-        "input": {
-            "messages": [{
-                "role": "user",
-                "content": [{"audio": arguments.audio_url}]
-            }]
-        },
-        "parameters": {
-            "result_format": "message",
-            "asr_options": asr_options
-        }
-    });
-    Ok(body)
-}
-
-/// Sends one synchronous Alibaba native JSON request through the selected origin.
-/// 通过所选源地址发送一项同步阿里云原生 JSON 请求。
-///
-/// # Parameters
-/// 参数
-/// `body` is the adapter-owned wire value and `operation` scopes diagnostics.
-/// `body` 是适配器持有的 Wire 值，`operation` 限定诊断范围。
-///
-/// # Returns
-/// 返回值
-/// The bounded successful response body.
-/// 返回有界成功响应正文。
-async fn execute_alibaba_native_json<T: Serialize + ?Sized>(
-    http: &reqwest::Client,
-    entry: &ServiceEntry,
-    target: &ProviderToolTarget,
-    secret: &CredentialExecutionSecret,
-    body: &T,
-    operation: &str,
-) -> Result<String, String> {
-    let url = provider_tool_url(entry, target);
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        reqwest::header::CONTENT_TYPE,
-        HeaderValue::from_static("application/json"),
-    );
-    insert_authentication_header(
-        &mut headers,
-        target.execution.authentication,
-        secret.expose_value(),
-    )?;
-    let response = http
-        .post(url.as_str())
-        .headers(headers)
-        .json(body)
-        .send()
-        .await
-        .map_err(|error| format!("{operation} request to `{url}` failed: {error}"))?;
-    let status = response.status();
-    let response_text = read_bounded_provider_response(response, operation).await?;
-    if !status.is_success() {
-        return Err(format_http_error(
-            operation,
-            status.as_u16(),
-            response_text.as_str(),
-        ));
-    }
-    Ok(response_text)
-}
-
-/// Adds only present provider-native optional fields to one JSON object.
-/// 仅把存在的供应商原生可选字段加入一个 JSON 对象。
-///
-/// # Parameters
-/// 参数
-/// `required` contains exact required fields and `optional` contains reviewed optional carriers.
-/// `required` 包含精确必需字段，`optional` 包含已审核可选载体。
-///
-/// # Returns
-/// 返回值
-/// A JSON object without unsupported explicit `null` values.
-/// 返回不含不支持显式 `null` 值的 JSON 对象。
-fn json_object_with_optional_fields<const N: usize>(
-    mut required: serde_json::Map<String, Value>,
-    optional: [(&str, Option<Value>); N],
-) -> Value {
-    for (name, value) in optional {
-        if let Some(value) = value {
-            required.insert(name.to_string(), value);
-        }
-    }
-    Value::Object(required)
-}
-
-/// Builds one normalized generated-audio result.
-/// 构建一个归一化生成音频结果。
-///
-/// # Parameters
-/// 参数
-/// `upstream_response_id`, `download_url`, and `mime_type` are already validated.
-/// `upstream_response_id`、`download_url` 与 `mime_type` 已完成验证。
-///
-/// # Returns
-/// 返回值
-/// A single-resource output union.
-/// 返回单资源输出联合。
-fn audio_resource_result(
-    upstream_response_id: Option<String>,
-    download_url: String,
-    mime_type: &str,
-) -> ProviderToolExecutionResult {
-    ProviderToolExecutionResult {
-        upstream_response_id,
-        output: ProviderToolNormalizedOutput::Resources(vec![ProviderToolGeneratedResource {
-            output_id: String::from("audio-0"),
-            kind: String::from("audio"),
-            mime_type: mime_type.to_string(),
-            bytes: None,
-            download_url: Some(download_url),
-        }]),
-    }
-}
-
-/// Maps one verified CosyVoice format to its exact MIME type.
-/// 将一个已验证 CosyVoice 格式映射为精确 MIME 类型。
-///
-/// # Parameters
-/// 参数
-/// `format` is the normalized provider encoding.
-/// `format` 是归一化供应商编码。
-///
-/// # Returns
-/// 返回值
-/// The matching MIME type or `None` for unsupported input.
-/// 返回匹配 MIME 类型，不支持时返回 `None`。
-fn alibaba_cosyvoice_mime_type(format: &str) -> Option<&'static str> {
-    match format {
-        "mp3" => Some("audio/mpeg"),
-        "pcm" => Some("audio/pcm"),
-        "wav" => Some("audio/wav"),
-        "opus" => Some("audio/opus"),
-        _ => None,
-    }
-}
-
-/// Reports whether Qwen3-TTS documents one pronunciation language.
-/// 报告 Qwen3-TTS 是否记录一种发音语言。
-///
-/// # Parameters
-/// 参数
-/// `language` is absent or one model-native language name.
-/// `language` 可缺失或为一个模型原生语言名称。
-///
-/// # Returns
-/// 返回值
-/// Whether the selected value can be projected losslessly.
-/// 返回所选值能否无损投影。
-fn supported_alibaba_qwen_tts_language(language: Option<&str>) -> bool {
-    matches!(
-        language,
-        None | Some(
-            "Auto"
-                | "Chinese"
-                | "English"
-                | "German"
-                | "Italian"
-                | "Portuguese"
-                | "Spanish"
-                | "Japanese"
-                | "Korean"
-                | "French"
-                | "Russian"
-        )
-    )
-}
-
-/// Reports whether Qwen3-ASR documents one source language.
-/// 报告 Qwen3-ASR 是否记录一种源语言。
-///
-/// # Parameters
-/// 参数
-/// `language` is absent or one provider-native source-language code.
-/// `language` 可缺失或为一个供应商原生源语言代码。
-///
-/// # Returns
-/// 返回值
-/// Whether the selected value can be projected losslessly.
-/// 返回所选值能否无损投影。
-fn supported_alibaba_qwen_asr_language(language: Option<&str>) -> bool {
-    matches!(
-        language,
-        None | Some(
-            "zh" | "yue"
-                | "en"
-                | "ja"
-                | "de"
-                | "ko"
-                | "ru"
-                | "fr"
-                | "pt"
-                | "ar"
-                | "it"
-                | "es"
-                | "hi"
-                | "id"
-                | "th"
-                | "tr"
-                | "uk"
-                | "vi"
-                | "cs"
-                | "da"
-                | "fil"
-                | "fi"
-                | "is"
-                | "ms"
-                | "no"
-                | "pl"
-                | "sv"
-        )
-    )
-}
-
-/// Validates one host-created Qwen3-ASR audio Data URL.
-/// 验证一个宿主创建的 Qwen3-ASR 音频 Data URL。
-///
-/// # Parameters
-/// 参数
-/// `value` is the complete provider audio carrier.
-/// `value` 是完整供应商音频载体。
-///
-/// # Returns
-/// 返回值
-/// Success only for one supported non-empty bounded audio payload.
-/// 仅在音频载荷受支持、非空且有界时返回成功。
-fn validate_alibaba_audio_data_url(value: &str) -> Result<(), String> {
-    let encoded = [
-        "data:audio/mpeg;base64,",
-        "data:audio/mp3;base64,",
-        "data:audio/wav;base64,",
-        "data:audio/x-wav;base64,",
-        "data:audio/mp4;base64,",
-        "data:audio/aac;base64,",
-        "data:audio/ogg;base64,",
-        "data:audio/flac;base64,",
-        "data:audio/webm;base64,",
-    ]
-    .into_iter()
-    .find_map(|prefix| value.strip_prefix(prefix))
-    .ok_or_else(|| String::from("Alibaba Qwen3-ASR audio format is unsupported."))?;
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(encoded.as_bytes())
-        .map_err(|_| String::from("Alibaba Qwen3-ASR audio contains invalid Base64."))?;
-    if bytes.is_empty() || bytes.len() > 50 * 1024 * 1024 {
-        return Err(String::from(
-            "Alibaba Qwen3-ASR audio must be non-empty and no larger than 50 MiB.",
-        ));
-    }
-    Ok(())
-}
-
-/// Executes and decodes the exact MiniMax synchronous image contract.
-/// 执行并解码精确的 MiniMax 同步图片契约。
-///
-/// # Parameters
-/// 参数
-/// All arguments are immutable snapshots for the selected target.
-/// 全部参数均为选定目标的不可变快照。
-///
-/// # Returns
-/// 返回值
-/// Ordered generated JPEG resources.
-/// 返回有序生成的 JPEG 资源。
-async fn execute_minimax_image_tool(
-    http: &reqwest::Client,
-    entry: &ServiceEntry,
-    target: &ProviderToolTarget,
-    arguments: Value,
-    secret: &CredentialExecutionSecret,
-) -> Result<ProviderToolExecutionResult, String> {
-    let request = MiniMaxImageToolArguments::from_json(arguments)?;
-    let body = request.into_wire_body(target.upstream_target_id.as_str())?;
-    let url = provider_tool_url(entry, target);
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        reqwest::header::CONTENT_TYPE,
-        HeaderValue::from_static("application/json"),
-    );
-    insert_authentication_header(
-        &mut headers,
-        target.execution.authentication,
-        secret.expose_value(),
-    )?;
-    let response = http
-        .post(url.as_str())
-        .headers(headers)
-        .json(&body)
-        .send()
-        .await
-        .map_err(|error| format!("MiniMax image request to `{url}` failed: {error}"))?;
-    let status = response.status();
-    let response_text = read_bounded_provider_response(response, "MiniMax image").await?;
-    if !status.is_success() {
-        return Err(format_http_error(
-            "MiniMax image",
-            status.as_u16(),
-            response_text.as_str(),
-        ));
-    }
-    decode_minimax_image_response(response_text.as_str())
-}
-
-/// Executes and decodes the exact MiniMax Coding Plan search contract.
-/// 执行并解码精确的 MiniMax Coding Plan 搜索契约。
-///
-/// # Parameters
-/// 参数
-/// All arguments are immutable snapshots for the selected regional target.
-/// 全部参数均为选定区域目标的不可变快照。
-///
-/// # Returns
-/// 返回值
-/// Ordered structured search results in the unified output union.
-/// 返回统一输出联合中的有序结构化搜索结果。
-async fn execute_minimax_search_tool(
-    http: &reqwest::Client,
-    entry: &ServiceEntry,
-    target: &ProviderToolTarget,
-    arguments: Value,
-    secret: &CredentialExecutionSecret,
-) -> Result<ProviderToolExecutionResult, String> {
-    let arguments: MiniMaxSearchToolArguments = serde_json::from_value(arguments)
-        .map_err(|error| format!("MiniMax search tool arguments are invalid: {error}"))?;
-    let query = arguments.query.trim();
-    if query.is_empty() {
-        return Err(String::from("MiniMax search query cannot be empty."));
-    }
-    if arguments
-        .max_results
-        .is_some_and(|maximum| !(1..=10).contains(&maximum))
-    {
-        return Err(String::from(
-            "MiniMax search max_results must be between one and ten.",
-        ));
-    }
-    let url = provider_tool_url(entry, target);
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        reqwest::header::CONTENT_TYPE,
-        HeaderValue::from_static("application/json"),
-    );
-    insert_authentication_header(
-        &mut headers,
-        target.execution.authentication,
-        secret.expose_value(),
-    )?;
-    let response = http
-        .post(url.as_str())
-        .headers(headers)
-        .json(&serde_json::json!({"q": query}))
-        .send()
-        .await
-        .map_err(|error| format!("MiniMax search request to `{url}` failed: {error}"))?;
-    let status = response.status();
-    let response_text = read_bounded_provider_response(response, "MiniMax search").await?;
-    if !status.is_success() {
-        return Err(format_http_error(
-            "MiniMax search",
-            status.as_u16(),
-            response_text.as_str(),
-        ));
-    }
-    decode_minimax_search_response(
-        query,
-        arguments.max_results.unwrap_or(10),
-        response_text.as_str(),
-    )
-}
-
-/// Strict host-materialized MiniMax Coding Plan image-understanding arguments.
-/// 严格的宿主物化 MiniMax Coding Plan 图片理解参数。
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct MiniMaxVisionToolArguments {
-    /// Exact analysis instruction.
-    /// 精确分析指令。
-    prompt: String,
-    /// Host-created JPEG, PNG, or WebP Data URL.
-    /// 宿主创建的 JPEG、PNG 或 WebP Data URL。
-    image_url: String,
-}
-
-impl MiniMaxVisionToolArguments {
-    /// Validates the exact copied MiniMax Coding Plan VLM carrier.
-    /// 验证精确复制的 MiniMax Coding Plan VLM 载体。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Success only for a non-empty prompt and a bounded supported image Data URL.
-    /// 仅在提示词非空且图片 Data URL 受支持并有界时返回成功。
-    fn validate(&self) -> Result<(), String> {
-        if self.prompt.trim().is_empty() {
-            return Err(String::from(
-                "MiniMax image-understanding prompt cannot be empty.",
-            ));
-        }
-        let encoded = [
-            "data:image/jpeg;base64,",
-            "data:image/png;base64,",
-            "data:image/webp;base64,",
-        ]
-        .into_iter()
-        .find_map(|prefix| self.image_url.strip_prefix(prefix))
+    let source = response
+        .pointer(contract.source_path.as_str())
         .ok_or_else(|| {
-            String::from(
-                "MiniMax image-understanding image_url must be a JPEG, PNG, or WebP Data URL.",
+            format!(
+                "Provider tool response is missing source path `{}`.",
+                contract.source_path
             )
         })?;
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(encoded.as_bytes())
-            .map_err(|_| {
-                String::from("MiniMax image-understanding image_url contains invalid Base64.")
+    match contract.kind {
+        crate::ProviderToolOutputKind::Text => {
+            let text = source
+                .as_str()
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| {
+                    format!(
+                        "Provider tool text source `{}` is not a non-empty string.",
+                        contract.source_path
+                    )
+                })?;
+            Ok(ProviderToolExecutionResult {
+                upstream_response_id: generic_provider_response_id(&response),
+                output: ProviderToolNormalizedOutput::Text(text.to_string()),
+            })
+        }
+        crate::ProviderToolOutputKind::Resources => Err(String::from(
+            "Provider tool resource output bypassed its declared resource decoders.",
+        )),
+        crate::ProviderToolOutputKind::Search => {
+            let maximum_results = request_arguments
+                .and_then(|arguments| arguments.pointer("/max_results"))
+                .and_then(Value::as_u64)
+                .and_then(|value| usize::try_from(value).ok());
+            let source_items = source.as_array().ok_or_else(|| {
+                format!(
+                    "Provider tool search source `{}` is not an array.",
+                    contract.source_path
+                )
             })?;
-        if bytes.is_empty() || bytes.len() >= 10_000_000 {
-            return Err(String::from(
-                "MiniMax image-understanding image must be non-empty and smaller than 10 MB.",
-            ));
-        }
-        Ok(())
-    }
-}
-
-/// Exact successful MiniMax Coding Plan VLM response.
-/// 精确的 MiniMax Coding Plan VLM 成功响应。
-#[derive(Debug, Deserialize)]
-struct MiniMaxVisionWireResponse {
-    /// Provider-generated analysis text.
-    /// 供应商生成的分析文本。
-    content: String,
-}
-
-/// Executes and normalizes the selected MiniMax Coding Plan image-understanding target.
-/// 执行并归一化所选 MiniMax Coding Plan 图片理解目标。
-///
-/// # Parameters
-/// 参数
-/// All values are immutable snapshots after host-side local-resource materialization.
-/// 所有值均为宿主侧本地资源物化后的不可变快照。
-///
-/// # Returns
-/// 返回值
-/// Provider-generated analysis in the unified text output branch.
-/// 返回统一文本输出分支中的供应商生成分析。
-async fn execute_minimax_vision_tool(
-    http: &reqwest::Client,
-    entry: &ServiceEntry,
-    target: &ProviderToolTarget,
-    arguments: Value,
-    secret: &CredentialExecutionSecret,
-) -> Result<ProviderToolExecutionResult, String> {
-    let arguments: MiniMaxVisionToolArguments = serde_json::from_value(arguments)
-        .map_err(|error| format!("MiniMax image-understanding arguments are invalid: {error}"))?;
-    arguments.validate()?;
-    let url = provider_tool_url(entry, target);
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        reqwest::header::CONTENT_TYPE,
-        HeaderValue::from_static("application/json"),
-    );
-    insert_authentication_header(
-        &mut headers,
-        target.execution.authentication,
-        secret.expose_value(),
-    )?;
-    let response = http
-        .post(url.as_str())
-        .headers(headers)
-        .json(&arguments)
-        .send()
-        .await
-        .map_err(|error| {
-            format!("MiniMax image-understanding request to `{url}` failed: {error}")
-        })?;
-    let status = response.status();
-    let response_text =
-        read_bounded_provider_response(response, "MiniMax image-understanding").await?;
-    if !status.is_success() {
-        return Err(format_http_error(
-            "MiniMax image-understanding",
-            status.as_u16(),
-            response_text.as_str(),
-        ));
-    }
-    let response: MiniMaxVisionWireResponse = serde_json::from_str(response_text.as_str())
-        .map_err(|error| {
-            format!("MiniMax image-understanding response JSON is invalid: {error}")
-        })?;
-    if response.content.trim().is_empty() {
-        return Err(String::from(
-            "MiniMax image-understanding response omitted its content.",
-        ));
-    }
-    Ok(ProviderToolExecutionResult {
-        upstream_response_id: None,
-        output: ProviderToolNormalizedOutput::Text(response.content),
-    })
-}
-
-/// Strict AI-visible synchronous MiniMax speech arguments.
-/// 严格的 AI 可见同步 MiniMax 语音参数。
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct MiniMaxSpeechToolArguments {
-    /// Text to synthesize.
-    /// 待合成文本。
-    text: String,
-    /// Built-in or account-owned voice identifier.
-    /// 内置或账户自有声音标识。
-    voice_id: String,
-    /// Optional provider language boost.
-    /// 可选供应商语言增强。
-    #[serde(default)]
-    language: Option<String>,
-    /// Optional speaking speed.
-    /// 可选语速。
-    #[serde(default)]
-    speed: Option<f64>,
-    /// Optional provider volume.
-    /// 可选供应商音量。
-    #[serde(default)]
-    volume: Option<f64>,
-    /// Optional integer pitch.
-    /// 可选整数音高。
-    #[serde(default)]
-    pitch: Option<i8>,
-    /// Optional sample rate.
-    /// 可选采样率。
-    #[serde(default)]
-    sample_rate: Option<u32>,
-    /// Optional MP3 bitrate.
-    /// 可选 MP3 比特率。
-    #[serde(default)]
-    bitrate: Option<u32>,
-    /// Optional channel count.
-    /// 可选声道数。
-    #[serde(default)]
-    channels: Option<u8>,
-    /// Requested audio encoding.
-    /// 请求的音频编码。
-    #[serde(default = "default_minimax_speech_format")]
-    output_format: String,
-    /// Whether subtitle timing JSON is requested.
-    /// 是否请求字幕计时 JSON。
-    #[serde(default)]
-    timestamps: bool,
-    /// Ordered pronunciation dictionary entries.
-    /// 有序发音字典条目。
-    #[serde(default)]
-    pronunciations: Vec<String>,
-}
-
-impl MiniMaxSpeechToolArguments {
-    /// Validates MiniMax synchronous T2A controls and resolves provider defaults.
-    /// 验证 MiniMax 同步 T2A 控制并解析供应商默认值。
-    ///
-    /// # Returns
-    /// 返回值
-    /// One exact wire body and its normalized output MIME type.
-    /// 返回一份精确 Wire 正文及其归一化输出 MIME 类型。
-    fn into_wire_body(self, model_id: &str) -> Result<(Value, String), String> {
-        if !matches!(
-            model_id,
-            "speech-2.8-hd" | "speech-2.8-turbo" | "speech-2.6" | "speech-02"
-        ) {
-            return Err(String::from("MiniMax speech model is not registered."));
-        }
-        if self.text.chars().count() == 0 || self.text.chars().count() > 9999 {
-            return Err(String::from(
-                "MiniMax speech text must contain between one and 9999 characters.",
-            ));
-        }
-        if self.voice_id.trim().is_empty() {
-            return Err(String::from("MiniMax speech voice_id cannot be empty."));
-        }
-        if self
-            .language
-            .as_deref()
-            .is_some_and(|language| !supported_minimax_speech_language(language))
-        {
-            return Err(String::from("MiniMax speech language is not supported."));
-        }
-        let speed = self.speed.unwrap_or(1.0);
-        let volume = self.volume.unwrap_or(1.0);
-        let pitch = self.pitch.unwrap_or(0);
-        if !speed.is_finite()
-            || !(0.5..=2.0).contains(&speed)
-            || !volume.is_finite()
-            || volume <= 0.0
-            || volume > 10.0
-            || !(-12..=12).contains(&pitch)
-        {
-            return Err(String::from(
-                "MiniMax speech speed, volume, or pitch is outside its supported range.",
-            ));
-        }
-        let (format, mime_type) = minimax_speech_format(self.output_format.as_str())?;
-        let sample_rate = self.sample_rate.unwrap_or(match format {
-            "opus" => 24_000,
-            "pcmu_raw" | "pcmu_wav" => 8_000,
-            _ => 32_000,
-        });
-        if !matches!(
-            sample_rate,
-            8_000 | 16_000 | 22_050 | 24_000 | 32_000 | 44_100
-        ) {
-            return Err(String::from("MiniMax speech sample_rate is not supported."));
-        }
-        let channels = self.channels.unwrap_or(1);
-        if !matches!(channels, 1 | 2) {
-            return Err(String::from("MiniMax speech channels must be one or two."));
-        }
-        let bitrate = if format == "mp3" {
-            let bitrate = self.bitrate.unwrap_or(128_000);
-            if !matches!(bitrate, 32_000 | 64_000 | 128_000 | 256_000) {
-                return Err(String::from("MiniMax speech MP3 bitrate is not supported."));
-            }
-            Some(bitrate)
-        } else {
-            if self.bitrate.is_some() {
-                return Err(String::from(
-                    "MiniMax speech bitrate is valid only for MP3 output.",
+            if maximum_results.is_none()
+                && source_items.len() > GENERIC_STRUCTURED_RESULT_COUNT_LIMIT
+            {
+                return Err(format!(
+                    "Provider tool search response exceeds the {GENERIC_STRUCTURED_RESULT_COUNT_LIMIT}-item host limit."
                 ));
             }
-            None
-        };
-        if self
-            .pronunciations
-            .iter()
-            .any(|pronunciation| pronunciation.trim().is_empty())
-        {
-            return Err(String::from(
-                "MiniMax speech pronunciations cannot contain empty values.",
-            ));
-        }
-        let mut audio_setting = serde_json::Map::from_iter([
-            (
-                String::from("sample_rate"),
-                Value::Number(serde_json::Number::from(sample_rate)),
-            ),
-            (String::from("format"), Value::String(format.to_string())),
-            (
-                String::from("channel"),
-                Value::Number(serde_json::Number::from(channels)),
-            ),
-        ]);
-        if let Some(bitrate) = bitrate {
-            audio_setting.insert(
-                String::from("bitrate"),
-                Value::Number(serde_json::Number::from(bitrate)),
-            );
-        }
-        let mut body = serde_json::Map::from_iter([
-            (String::from("model"), Value::String(model_id.to_string())),
-            (String::from("text"), Value::String(self.text)),
-            (String::from("stream"), Value::Bool(false)),
-            (
-                String::from("output_format"),
-                Value::String(String::from("hex")),
-            ),
-            (
-                String::from("voice_setting"),
-                serde_json::json!({
-                    "voice_id": self.voice_id,
-                    "speed": speed,
-                    "vol": volume,
-                    "pitch": pitch
+            let result_limit = maximum_results
+                .unwrap_or(GENERIC_STRUCTURED_RESULT_COUNT_LIMIT)
+                .min(GENERIC_STRUCTURED_RESULT_COUNT_LIMIT);
+            let results = source_items
+                .iter()
+                .take(result_limit)
+                .enumerate()
+                .map(|(index, item)| {
+                    let url = item
+                        .get("url")
+                        .and_then(Value::as_str)
+                        .filter(|value| !value.trim().is_empty())
+                        .ok_or_else(|| {
+                            format!("Provider tool search result {index} has no non-empty url.")
+                        })?;
+                    let parsed_url = validated_https_url(
+                        url,
+                        format!("Provider tool search result {index}").as_str(),
+                    )?;
+                    Ok(ProviderToolSearchResult {
+                        rank: index + 1,
+                        title: item
+                            .get("title")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                        url: parsed_url.to_string(),
+                        source_domain: parsed_url
+                            .host_str()
+                            .expect("validated HTTPS URL always has a host")
+                            .to_ascii_lowercase(),
+                        snippet: item
+                            .get("content")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                    })
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            let query = response
+                .get("query")
+                .and_then(Value::as_str)
+                .or_else(|| {
+                    request_arguments
+                        .and_then(|arguments| arguments.pointer("/query"))
+                        .and_then(Value::as_str)
+                })
+                .unwrap_or_default()
+                .to_string();
+            Ok(ProviderToolExecutionResult {
+                upstream_response_id: response
+                    .get("request_id")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .filter(|value| !value.trim().is_empty()),
+                output: ProviderToolNormalizedOutput::Search(ProviderToolSearchOutput {
+                    query,
+                    results,
                 }),
-            ),
-            (String::from("audio_setting"), Value::Object(audio_setting)),
-        ]);
-        if let Some(language) = self.language {
-            body.insert(String::from("language_boost"), Value::String(language));
+            })
         }
-        if self.timestamps {
-            body.insert(String::from("subtitle_enable"), Value::Bool(true));
+        crate::ProviderToolOutputKind::Extract => {
+            let source_items = source.as_array().ok_or_else(|| {
+                format!(
+                    "Provider tool extract source `{}` is not an array.",
+                    contract.source_path
+                )
+            })?;
+            if source_items.len() > GENERIC_STRUCTURED_RESULT_COUNT_LIMIT {
+                return Err(format!(
+                    "Provider tool extract response exceeds the {GENERIC_STRUCTURED_RESULT_COUNT_LIMIT}-item host limit."
+                ));
+            }
+            let results = source_items
+                .iter()
+                .enumerate()
+                .map(|(index, item)| {
+                    let url = item
+                        .get("url")
+                        .and_then(Value::as_str)
+                        .filter(|value| !value.trim().is_empty())
+                        .ok_or_else(|| {
+                            format!("Provider tool extract result {index} has no non-empty url.")
+                        })?;
+                    let parsed_url = validated_https_url(
+                        url,
+                        format!("Provider tool extract result {index}").as_str(),
+                    )?;
+                    let images = match item.get("images") {
+                        None | Some(Value::Null) => Vec::new(),
+                        Some(Value::Array(values)) => {
+                            if values.len() > GENERIC_STRUCTURED_RESULT_COUNT_LIMIT {
+                                return Err(format!(
+                                    "Provider tool extract result {index} exceeds the {GENERIC_STRUCTURED_RESULT_COUNT_LIMIT}-image host limit."
+                                ));
+                            }
+                            values
+                                .iter()
+                                .enumerate()
+                                .map(|(image_index, value)| {
+                                    let image = value
+                                        .as_str()
+                                        .filter(|value| !value.trim().is_empty())
+                                        .ok_or_else(|| {
+                                            format!(
+                                                "Provider tool extract result {index} image {image_index} is not a non-empty URL."
+                                            )
+                                        })?;
+                                    validated_https_url(
+                                        image,
+                                        format!(
+                                            "Provider tool extract result {index} image {image_index}"
+                                        )
+                                        .as_str(),
+                                    )
+                                    .map(|url| url.to_string())
+                                })
+                                .collect::<Result<Vec<_>, String>>()?
+                        }
+                        Some(_) => {
+                            return Err(format!(
+                                "Provider tool extract result {index} images value is not an array."
+                            ));
+                        }
+                    };
+                    let favicon = match item.get("favicon") {
+                        None | Some(Value::Null) => None,
+                        Some(Value::String(value)) if value.trim().is_empty() => None,
+                        Some(Value::String(value)) => Some(
+                            validated_https_url(
+                                value,
+                                format!("Provider tool extract result {index} favicon").as_str(),
+                            )?
+                            .to_string(),
+                        ),
+                        Some(_) => {
+                            return Err(format!(
+                                "Provider tool extract result {index} favicon is not a string URL."
+                            ));
+                        }
+                    };
+                    Ok(ProviderToolExtractResult {
+                        url: parsed_url.to_string(),
+                        content: item
+                            .get("raw_content")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                        images,
+                        favicon,
+                    })
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            let failures = match response.get("failed_results") {
+                None | Some(Value::Null) => Vec::new(),
+                Some(Value::Array(values)) => {
+                    if values.len() > GENERIC_STRUCTURED_RESULT_COUNT_LIMIT {
+                        return Err(format!(
+                            "Provider tool extract failures exceed the {GENERIC_STRUCTURED_RESULT_COUNT_LIMIT}-item host limit."
+                        ));
+                    }
+                    values
+                        .iter()
+                        .enumerate()
+                        .map(|(index, item)| {
+                            let url = item
+                                .get("url")
+                                .and_then(Value::as_str)
+                                .filter(|value| !value.trim().is_empty())
+                                .ok_or_else(|| {
+                                    format!(
+                                        "Provider tool extract failure {index} has no non-empty url."
+                                    )
+                                })?;
+                            let parsed_url = validated_https_url(
+                                url,
+                                format!("Provider tool extract failure {index}").as_str(),
+                            )?;
+                            let error = item
+                                    .get("error")
+                                    .and_then(Value::as_str)
+                                    .filter(|value| !value.trim().is_empty())
+                                    .ok_or_else(|| {
+                                        format!(
+                                            "Provider tool extract failure {index} has no non-empty error."
+                                        )
+                                    })?;
+                            Ok(ProviderToolExtractFailure {
+                                url: parsed_url.to_string(),
+                                error: error.to_string(),
+                            })
+                        })
+                        .collect::<Result<Vec<_>, String>>()?
+                }
+                Some(_) => {
+                    return Err(String::from(
+                        "Provider tool extract failed_results value is not an array.",
+                    ));
+                }
+            };
+            Ok(ProviderToolExecutionResult {
+                upstream_response_id: response
+                    .get("request_id")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .filter(|value| !value.trim().is_empty()),
+                output: ProviderToolNormalizedOutput::Extract(ProviderToolExtractOutput {
+                    results,
+                    failures,
+                }),
+            })
         }
-        if !self.pronunciations.is_empty() {
-            body.insert(
-                String::from("pronunciation_dict"),
-                serde_json::json!({"tone": self.pronunciations}),
-            );
-        }
-        Ok((Value::Object(body), mime_type.to_string()))
-    }
-}
-
-/// Exact MiniMax synchronous speech response subset.
-/// 精确的 MiniMax 同步语音响应子集。
-#[derive(Debug, Deserialize)]
-struct MiniMaxSpeechWireResponse {
-    /// Completed audio result when generation succeeds.
-    /// 生成成功时的完整音频结果。
-    #[serde(default)]
-    data: Option<MiniMaxSpeechWireData>,
-    /// Provider application status.
-    /// 供应商应用状态。
-    base_resp: MiniMaxBaseResponse,
-}
-
-/// Completed MiniMax synchronous speech payload.
-/// 完成的 MiniMax 同步语音载荷。
-#[derive(Debug, Deserialize)]
-struct MiniMaxSpeechWireData {
-    /// Hexadecimal audio bytes.
-    /// 十六进制音频字节。
-    audio: String,
-    /// Completion status, equal to two only on completion.
-    /// 完成状态，仅在完成时等于二。
-    status: u8,
-    /// Optional subtitle timing JSON URL.
-    /// 可选字幕计时 JSON 地址。
-    #[serde(default)]
-    subtitle_file: String,
-}
-
-/// Executes and normalizes one exact MiniMax synchronous T2A target.
-/// 执行并归一化一个精确的 MiniMax 同步 T2A 目标。
-///
-/// # Parameters
-/// 参数
-/// All values are immutable snapshots for the selected regional speech model.
-/// 所有值均为所选区域语音模型的不可变快照。
-///
-/// # Returns
-/// 返回值
-/// One audio resource and an optional subtitle resource in the unified resource branch.
-/// 返回统一资源分支中的一个音频资源与可选字幕资源。
-async fn execute_minimax_speech_tool(
-    http: &reqwest::Client,
-    entry: &ServiceEntry,
-    target: &ProviderToolTarget,
-    arguments: Value,
-    secret: &CredentialExecutionSecret,
-) -> Result<ProviderToolExecutionResult, String> {
-    let arguments: MiniMaxSpeechToolArguments = serde_json::from_value(arguments)
-        .map_err(|error| format!("MiniMax speech arguments are invalid: {error}"))?;
-    let (body, mime_type) = arguments.into_wire_body(target.upstream_target_id.as_str())?;
-    let url = provider_tool_url(entry, target);
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        reqwest::header::CONTENT_TYPE,
-        HeaderValue::from_static("application/json"),
-    );
-    insert_authentication_header(
-        &mut headers,
-        target.execution.authentication,
-        secret.expose_value(),
-    )?;
-    let response = http
-        .post(url.as_str())
-        .headers(headers)
-        .json(&body)
-        .send()
-        .await
-        .map_err(|error| format!("MiniMax speech request to `{url}` failed: {error}"))?;
-    let status = response.status();
-    let response_text = read_bounded_provider_response(response, "MiniMax speech").await?;
-    if !status.is_success() {
-        return Err(format_http_error(
-            "MiniMax speech",
-            status.as_u16(),
-            response_text.as_str(),
-        ));
-    }
-    decode_minimax_speech_response(response_text.as_str(), mime_type.as_str())
-}
-
-/// Decodes one MiniMax synchronous speech response into unified resources.
-/// 将一份 MiniMax 同步语音响应解码为统一资源。
-///
-/// # Parameters
-/// 参数
-/// `body` is the complete provider JSON and `mime_type` is resolved from the selected format.
-/// `body` 是完整供应商 JSON，`mime_type` 从所选格式解析。
-///
-/// # Returns
-/// 返回值
-/// Validated bounded audio bytes plus an optional public subtitle URL.
-/// 返回已验证有界音频字节与可选公开字幕地址。
-fn decode_minimax_speech_response(
-    body: &str,
-    mime_type: &str,
-) -> Result<ProviderToolExecutionResult, String> {
-    let response: MiniMaxSpeechWireResponse = serde_json::from_str(body)
-        .map_err(|error| format!("MiniMax speech response JSON is invalid: {error}"))?;
-    if response.base_resp.status_code != 0 {
-        return Err(format!(
-            "MiniMax speech request failed: code={} | {}",
-            response.base_resp.status_code, response.base_resp.status_msg
-        ));
-    }
-    let data = response
-        .data
-        .filter(|data| data.status == 2 && !data.audio.trim().is_empty())
-        .ok_or_else(|| String::from("MiniMax speech response omitted complete audio."))?;
-    let audio = decode_hexadecimal_bytes(data.audio.as_str())?;
-    if audio.is_empty() || audio.len() > 10_000_000 {
-        return Err(String::from(
-            "MiniMax speech audio must be non-empty and no larger than 10 MB.",
-        ));
-    }
-    let mut resources = vec![ProviderToolGeneratedResource {
-        output_id: String::from("audio-0"),
-        kind: String::from("audio"),
-        mime_type: mime_type.to_string(),
-        bytes: Some(audio),
-        download_url: None,
-    }];
-    if !data.subtitle_file.trim().is_empty() {
-        let subtitle_url =
-            validated_public_http_url(data.subtitle_file.as_str(), "MiniMax speech subtitle URL")?;
-        resources.push(ProviderToolGeneratedResource {
-            output_id: String::from("subtitle-0"),
-            kind: String::from("file"),
-            mime_type: String::from("application/json"),
-            bytes: None,
-            download_url: Some(subtitle_url.to_string()),
-        });
-    }
-    Ok(ProviderToolExecutionResult {
-        upstream_response_id: None,
-        output: ProviderToolNormalizedOutput::Resources(resources),
-    })
-}
-
-/// Returns the provider default MiniMax speech format.
-/// 返回供应商默认的 MiniMax 语音格式。
-fn default_minimax_speech_format() -> String {
-    String::from("mp3")
-}
-
-/// Maps one MiniMax speech output format to its exact MIME type.
-/// 将一个 MiniMax 语音输出格式映射到精确 MIME 类型。
-///
-/// # Parameters
-/// 参数
-/// `format` is the AI-selected closed format value.
-/// `format` 是 AI 选择的封闭格式值。
-///
-/// # Returns
-/// 返回值
-/// The normalized provider format and MIME type.
-/// 返回归一化供应商格式与 MIME 类型。
-fn minimax_speech_format(format: &str) -> Result<(&'static str, &'static str), String> {
-    match format {
-        "mp3" => Ok(("mp3", "audio/mpeg")),
-        "wav" => Ok(("wav", "audio/wav")),
-        "pcm" => Ok(("pcm", "audio/pcm")),
-        "flac" => Ok(("flac", "audio/flac")),
-        "pcmu_raw" => Ok(("pcmu_raw", "audio/basic")),
-        "pcmu_wav" => Ok(("pcmu_wav", "audio/wav")),
-        "opus" => Ok(("opus", "audio/opus")),
-        _ => Err(String::from(
-            "MiniMax speech output_format is not supported.",
+        _ => Err(format!(
+            "Provider tool output kind `{:?}` is not decodable by the generic JSON-sync primitive.",
+            contract.kind
         )),
     }
 }
 
-/// Reports whether one language belongs to the reviewed MiniMax language_boost vocabulary.
-/// 报告一种语言是否属于已审核的 MiniMax language_boost 词汇表。
-fn supported_minimax_speech_language(language: &str) -> bool {
-    matches!(
-        language,
-        "Chinese"
-            | "Chinese,Yue"
-            | "English"
-            | "Arabic"
-            | "Russian"
-            | "Spanish"
-            | "French"
-            | "Portuguese"
-            | "German"
-            | "Turkish"
-            | "Dutch"
-            | "Ukrainian"
-            | "Vietnamese"
-            | "Indonesian"
-            | "Japanese"
-            | "Italian"
-            | "Korean"
-            | "Thai"
-            | "Polish"
-            | "Romanian"
-            | "Greek"
-            | "Czech"
-            | "Finnish"
-            | "Hindi"
-            | "Bulgarian"
-            | "Danish"
-            | "Hebrew"
-            | "Malay"
-            | "Persian"
-            | "Slovak"
-            | "Swedish"
-            | "Croatian"
-            | "Filipino"
-            | "Hungarian"
-            | "Norwegian"
-            | "Slovenian"
-            | "Catalan"
-            | "Nynorsk"
-            | "Tamil"
-            | "Afrikaans"
-            | "auto"
-    )
-}
-
-/// Decodes an even-length hexadecimal string into bytes.
-/// 将偶数长度的十六进制字符串解码为字节。
+/// Reads one stable upstream response identifier from the closed generic response envelope.
+/// 从封闭通用响应信封读取一个稳定上游响应标识。
 ///
 /// # Parameters
 /// 参数
-/// `value` is provider-returned hexadecimal audio.
-/// `value` 是供应商返回的十六进制音频。
+/// `response` is the complete validated JSON response object.
+/// `response` 是完整且已校验的 JSON 响应对象。
 ///
 /// # Returns
 /// 返回值
-/// Decoded bytes or an explicit malformed-audio error.
-/// 返回解码字节或明确的音频格式错误。
-fn decode_hexadecimal_bytes(value: &str) -> Result<Vec<u8>, String> {
-    if !value.len().is_multiple_of(2) {
+/// The first exact non-empty `request_id` or `id` string.
+/// 返回首个精确非空的 `request_id` 或 `id` 字符串。
+fn generic_provider_response_id(response: &Value) -> Option<String> {
+    response
+        .get("request_id")
+        .or_else(|| response.get("id"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string)
+}
+
+/// Decodes every ordered resource extractor declared by one manifest output contract.
+/// 解码一份 Manifest 输出契约声明的每个有序资源提取器。
+///
+/// # Parameters
+/// 参数
+/// `contract` owns the closed extractors, `response` is the projected provider JSON, and
+/// `request_arguments` supplies only explicitly declared MIME-selection values.
+/// `contract` 持有封闭提取器，`response` 是投影后的供应商 JSON，`request_arguments`
+/// 仅提供显式声明的 MIME 选择值。
+///
+/// # Returns
+/// 返回值
+/// A non-empty bounded resource list or one controlled contract/provider-data error.
+/// 返回非空有界资源列表，或一条受控契约/供应商数据错误。
+fn decode_declared_generic_resources(
+    contract: &crate::ProviderToolOutputContract,
+    response: &Value,
+    request_arguments: Option<&Value>,
+) -> Result<Vec<ProviderToolGeneratedResource>, String> {
+    // The accumulated list preserves declaration order followed by provider array order.
+    // 累积列表依次保留声明顺序与供应商数组顺序。
+    let mut resources = Vec::new();
+    for (decoder_index, decoder) in contract.resource_decoders.iter().enumerate() {
+        // The selected source remains borrowed from the bounded response body.
+        // 选中的来源继续借用自有界响应正文。
+        let source = response.pointer(decoder.source_path.as_str());
+        let Some(source) = source else {
+            if decoder.optional {
+                continue;
+            }
+            return Err(format!(
+                "Provider tool resource decoder {decoder_index} is missing source path `{}`.",
+                decoder.source_path
+            ));
+        };
+        if source.is_null()
+            || source.as_str().is_some_and(|value| value.trim().is_empty())
+            || source.as_array().is_some_and(Vec::is_empty)
+        {
+            if decoder.optional {
+                continue;
+            }
+            return Err(format!(
+                "Provider tool resource decoder {decoder_index} source `{}` is empty.",
+                decoder.source_path
+            ));
+        }
+        // A scalar is treated as one resource while an array preserves its exact order.
+        // 标量按一个资源处理，数组则保留其精确顺序。
+        let values = source
+            .as_array()
+            .map(Vec::as_slice)
+            .unwrap_or_else(|| std::slice::from_ref(source));
+        if resources.len().saturating_add(values.len()) > GENERIC_RESOURCE_COUNT_LIMIT {
+            return Err(format!(
+                "Provider tool resources exceed the {GENERIC_RESOURCE_COUNT_LIMIT} item limit."
+            ));
+        }
+        for (source_index, value) in values.iter().enumerate() {
+            // The global index is stable across multiple extractor declarations.
+            // 全局索引在多个提取器声明之间保持稳定。
+            let global_index = resources.len();
+            resources.push(decode_declared_generic_resource(
+                contract,
+                decoder,
+                value,
+                request_arguments,
+                decoder_index,
+                source_index,
+                global_index,
+            )?);
+        }
+    }
+    if resources.is_empty() {
         return Err(String::from(
-            "MiniMax speech response contains invalid hexadecimal audio.",
+            "Provider tool response did not contain any declared resources.",
+        ));
+    }
+    Ok(resources)
+}
+
+/// Decodes one scalar through one exact declarative resource extractor.
+/// 通过一个精确声明式资源提取器解码一个标量。
+///
+/// # Parameters
+/// 参数
+/// Indices scope deterministic diagnostics and output identifiers; all authority comes from the
+/// frozen output contract and optional canonical request values.
+/// 各索引用于限定确定性诊断与输出标识；全部权威来自冻结输出契约与可选规范请求值。
+///
+/// # Returns
+/// 返回值
+/// One validated inline-byte or public-URL resource.
+/// 返回一项已校验的内联字节或公共 URL 资源。
+fn decode_declared_generic_resource(
+    contract: &crate::ProviderToolOutputContract,
+    decoder: &crate::ProviderToolResourceDecoder,
+    value: &Value,
+    request_arguments: Option<&Value>,
+    decoder_index: usize,
+    source_index: usize,
+    global_index: usize,
+) -> Result<ProviderToolGeneratedResource, String> {
+    // Declarative resource carriers are deliberately scalar strings only.
+    // 声明式资源载体刻意只允许标量字符串。
+    let carrier = value
+        .as_str()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| {
+            format!(
+                "Provider tool resource decoder {decoder_index} item {source_index} is not a non-empty string."
+            )
+        })?;
+    // The optional decoded bytes are populated only for inline carrier families.
+    // 可选解码字节仅由内联载体族填充。
+    let mut bytes = None;
+    // The optional URL is populated only for reviewed public-reference carrier families.
+    // 可选 URL 仅由已审核公共引用载体族填充。
+    let mut download_url = None;
+    // URL carriers retain the exact frozen network authority for final host-side staging.
+    // URL 载体保留精确的冻结网络权限，供最终宿主侧暂存复验。
+    let mut download_policy = None;
+    // A Data URL owns its embedded MIME while other carriers resolve MIME from the declaration.
+    // Data URL 持有其内嵌 MIME，其他载体从声明解析 MIME。
+    let embedded_mime = match decoder.encoding {
+        crate::ProviderToolResourceEncoding::HttpsUrl
+        | crate::ProviderToolResourceEncoding::PublicHttpUrl => {
+            let policy = ProviderToolResourceDownloadPolicy {
+                encoding: decoder.encoding,
+                host_suffixes: decoder.download_host_suffixes.clone(),
+            };
+            policy.validate_url(
+                carrier,
+                format!("Provider tool resource {global_index}").as_str(),
+            )?;
+            download_url = Some(carrier.to_string());
+            download_policy = Some(policy);
+            None
+        }
+        crate::ProviderToolResourceEncoding::DataUrl => {
+            // The decoded pair retains both the embedded MIME authority and exact bytes.
+            // 解码结果同时保留内嵌 MIME 权威与精确字节。
+            let (mime_type, decoded) = decode_generic_data_url(carrier, global_index)?;
+            enforce_declared_resource_byte_limit(decoder, decoded.len(), global_index)?;
+            bytes = Some(decoded);
+            Some(mime_type)
+        }
+        crate::ProviderToolResourceEncoding::Base64 => {
+            // Standard Base64 is the only registered raw-Base64 alphabet.
+            // 标准 Base64 是唯一已注册的原始 Base64 字母表。
+            let decoded = base64::engine::general_purpose::STANDARD
+                .decode(carrier)
+                .map_err(|error| {
+                    format!("Provider tool resource {global_index} base64 is invalid: {error}")
+                })?;
+            enforce_declared_resource_byte_limit(decoder, decoded.len(), global_index)?;
+            bytes = Some(decoded);
+            None
+        }
+        crate::ProviderToolResourceEncoding::Hex => {
+            // Hexadecimal decoding is provider-neutral and rejects odd or non-hex input.
+            // 十六进制解码与供应商无关，并拒绝奇数长度或非十六进制输入。
+            let decoded = decode_generic_hexadecimal_bytes(carrier, global_index)?;
+            enforce_declared_resource_byte_limit(decoder, decoded.len(), global_index)?;
+            bytes = Some(decoded);
+            None
+        }
+    };
+    // MIME resolution is closed to the Data URL, one literal, or one exact request mapping.
+    // MIME 解析封闭为 Data URL、一个字面量或一个精确请求映射。
+    let mime_type = resolve_declared_resource_mime(
+        decoder,
+        request_arguments,
+        embedded_mime.as_deref(),
+        global_index,
+    )?;
+    validate_generic_resource_mime(contract, mime_type.as_str(), global_index)?;
+    // The prefix is validated by manifest compilation before runtime activation.
+    // 前缀在运行时激活前已由 Manifest 编译校验。
+    let output_prefix = decoder.output_id_prefix.as_deref().unwrap_or("resource");
+    Ok(ProviderToolGeneratedResource {
+        output_id: format!("{output_prefix}-{}", source_index + 1),
+        kind: decoder.resource_kind.clone(),
+        mime_type,
+        bytes,
+        download_url,
+        download_policy,
+    })
+}
+
+/// Decodes one strict Base64 Data URL into its MIME type and bytes.
+/// 把一个严格 Base64 Data URL 解码为 MIME 类型与字节。
+fn decode_generic_data_url(value: &str, index: usize) -> Result<(String, Vec<u8>), String> {
+    // The prefix must be exact so arbitrary URI schemes cannot enter the byte decoder.
+    // 前缀必须精确，避免任意 URI Scheme 进入字节解码器。
+    let payload = value
+        .strip_prefix("data:")
+        .ok_or_else(|| format!("Provider tool resource {index} is not a data URL."))?;
+    // The first comma separates metadata from the bounded encoded payload.
+    // 第一个逗号分隔元数据与有界编码载荷。
+    let (metadata, encoded) = payload
+        .split_once(',')
+        .ok_or_else(|| format!("Provider tool resource {index} carries a malformed data URL."))?;
+    // The first metadata item is the exact MIME and one later item must register Base64.
+    // 第一项元数据是精确 MIME，后续至少一项必须注册 Base64。
+    let mut metadata_parts = metadata.split(';');
+    let mime_type = metadata_parts.next().unwrap_or_default();
+    if mime_type.trim().is_empty() || !metadata_parts.any(|part| part == "base64") {
+        return Err(format!(
+            "Provider tool resource {index} data URL must declare a MIME type and base64 encoding."
+        ));
+    }
+    // Standard Base64 produces the exact inline artifact bytes.
+    // 标准 Base64 生成精确的内联产物字节。
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .map_err(|error| format!("Provider tool resource {index} base64 is invalid: {error}"))?;
+    Ok((mime_type.to_string(), bytes))
+}
+
+/// Decodes one even-length hexadecimal resource string.
+/// 解码一个偶数长度的十六进制资源字符串。
+fn decode_generic_hexadecimal_bytes(value: &str, index: usize) -> Result<Vec<u8>, String> {
+    if !value.len().is_multiple_of(2) {
+        return Err(format!(
+            "Provider tool resource {index} hexadecimal payload has odd length."
         ));
     }
     value
         .as_bytes()
         .chunks_exact(2)
         .map(|pair| {
-            let pair = std::str::from_utf8(pair)
-                .map_err(|_| String::from("MiniMax speech hexadecimal audio is invalid."))?;
-            u8::from_str_radix(pair, 16)
-                .map_err(|_| String::from("MiniMax speech hexadecimal audio is invalid."))
+            // Each pair is ASCII by construction only when it is a valid hexadecimal byte.
+            // 每个二元组仅在构成有效十六进制字节时才是合法 ASCII。
+            let pair = std::str::from_utf8(pair).map_err(|_| {
+                format!("Provider tool resource {index} hexadecimal payload is invalid.")
+            })?;
+            u8::from_str_radix(pair, 16).map_err(|_| {
+                format!("Provider tool resource {index} hexadecimal payload is invalid.")
+            })
         })
         .collect()
 }
 
-/// Validates one credential-free public HTTP(S) URL.
-/// 验证一个不含凭据的公开 HTTP(S) 地址。
+/// Enforces one manifest-declared byte ceiling within the engine-wide absolute limit.
+/// 在引擎绝对上限内执行一个 Manifest 声明的字节上限。
+fn enforce_declared_resource_byte_limit(
+    decoder: &crate::ProviderToolResourceDecoder,
+    decoded_length: usize,
+    index: usize,
+) -> Result<(), String> {
+    // Raw byte carriers must always state a positive bounded ceiling.
+    // 原始字节载体必须始终声明正数有界上限。
+    let maximum = decoder.max_bytes.ok_or_else(|| {
+        format!("Provider tool resource decoder for item {index} has no byte limit.")
+    })?;
+    if maximum == 0 || maximum > GENERIC_RESOURCE_BYTE_LIMIT {
+        return Err(format!(
+            "Provider tool resource decoder for item {index} has an invalid byte limit."
+        ));
+    }
+    if decoded_length == 0 || decoded_length as u64 > maximum {
+        return Err(format!(
+            "Provider tool resource {index} must be non-empty and no larger than {maximum} bytes."
+        ));
+    }
+    Ok(())
+}
+
+/// Resolves one exact resource MIME authority from a closed declaration.
+/// 从一份封闭声明解析一个精确资源 MIME 权威。
+fn resolve_declared_resource_mime(
+    decoder: &crate::ProviderToolResourceDecoder,
+    request_arguments: Option<&Value>,
+    embedded_mime: Option<&str>,
+    index: usize,
+) -> Result<String, String> {
+    if let Some(embedded_mime) = embedded_mime {
+        if decoder.mime_type.is_some()
+            || decoder.mime_type_request_path.is_some()
+            || !decoder.mime_types_by_request_value.is_empty()
+        {
+            return Err(format!(
+                "Provider tool resource decoder {index} has ambiguous MIME authority."
+            ));
+        }
+        return Ok(embedded_mime.to_string());
+    }
+    if let Some(mime_type) = decoder.mime_type.as_deref() {
+        if decoder.mime_type_request_path.is_some()
+            || !decoder.mime_types_by_request_value.is_empty()
+        {
+            return Err(format!(
+                "Provider tool resource decoder {index} has ambiguous MIME authority."
+            ));
+        }
+        return Ok(mime_type.to_string());
+    }
+    // Request-selected MIME requires both one exact pointer and a non-empty literal table.
+    // 请求选择 MIME 必须同时声明一个精确指针与一份非空字面量表。
+    let request_path = decoder
+        .mime_type_request_path
+        .as_deref()
+        .ok_or_else(|| format!("Provider tool resource decoder {index} has no MIME authority."))?;
+    if decoder.mime_types_by_request_value.is_empty() {
+        return Err(format!(
+            "Provider tool resource decoder {index} has an empty request MIME mapping."
+        ));
+    }
+    // Only exact scalar strings are accepted as request mapping keys.
+    // 仅接受精确标量字符串作为请求映射键。
+    let request_value = request_arguments
+        .and_then(|arguments| arguments.pointer(request_path))
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            format!(
+                "Provider tool resource decoder {index} cannot resolve request MIME path `{request_path}`."
+            )
+        })?;
+    decoder
+        .mime_types_by_request_value
+        .get(request_value)
+        .cloned()
+        .ok_or_else(|| {
+            format!(
+                "Provider tool resource decoder {index} has no MIME mapping for request value `{request_value}`."
+            )
+        })
+}
+
+/// Validates one resource MIME value against the exact manifest allowlist.
+/// 对照精确 Manifest 允许列表校验一个资源 MIME 值。
 ///
 /// # Parameters
 /// 参数
-/// `value` is the provider-returned URL and `label` scopes diagnostics.
-/// `value` 是供应商返回的地址，`label` 限定诊断范围。
+/// `contract` owns allowed MIME values, `mime_type` is exact, and `index` scopes diagnostics.
+/// `contract` 持有允许的 MIME 值，`mime_type` 是精确值，`index` 限定诊断范围。
 ///
 /// # Returns
 /// 返回值
-/// A parsed URL accepted for controlled host-side download.
-/// 返回可供受控宿主侧下载使用的已解析地址。
-pub(crate) fn validated_public_http_url(value: &str, label: &str) -> Result<reqwest::Url, String> {
-    let url = reqwest::Url::parse(value).map_err(|_| format!("{label} is not a valid URL."))?;
-    if !matches!(url.scheme(), "http" | "https")
-        || url.host_str().is_none()
-        || url.username() != ""
-        || url.password().is_some()
+/// Success only for a non-empty MIME explicitly allowed by the contract.
+/// 仅对契约明确允许的非空 MIME 返回成功。
+fn validate_generic_resource_mime(
+    contract: &crate::ProviderToolOutputContract,
+    mime_type: &str,
+    index: usize,
+) -> Result<(), String> {
+    if mime_type.trim().is_empty()
+        || (!contract.mime_types.is_empty()
+            && !contract
+                .mime_types
+                .iter()
+                .any(|allowed| allowed == mime_type))
     {
         return Err(format!(
-            "{label} must be a credential-free absolute HTTP(S) URL."
+            "Provider tool resource {index} MIME `{mime_type}` is not allowed by the output contract."
         ));
     }
-    Ok(url)
-}
-
-/// Strict AI-visible synchronous MiniMax music arguments.
-/// 严格的 AI 可见同步 MiniMax 音乐参数。
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct MiniMaxMusicToolArguments {
-    /// Style, mood, and scenario prompt.
-    /// 风格、情绪与场景提示词。
-    #[serde(default)]
-    prompt: String,
-    /// Exact song lyrics.
-    /// 精确歌曲歌词。
-    #[serde(default)]
-    lyrics: String,
-    /// Requests music without vocals.
-    /// 请求无声乐的纯音乐。
-    #[serde(default)]
-    instrumental: bool,
-    /// Requests provider-generated optimized lyrics.
-    /// 请求供应商生成优化歌词。
-    #[serde(default)]
-    lyrics_optimizer: bool,
-    /// Optional output sample rate.
-    /// 可选输出采样率。
-    #[serde(default)]
-    sample_rate: Option<u32>,
-    /// Optional output bitrate.
-    /// 可选输出码率。
-    #[serde(default)]
-    bitrate: Option<u32>,
-    /// Optional output channel count.
-    /// 可选输出声道数。
-    #[serde(default)]
-    channels: Option<u8>,
-    /// Optional deterministic provider seed.
-    /// 可选供应商确定性种子。
-    #[serde(default)]
-    seed: Option<i64>,
-    /// Requests an AIGC watermark.
-    /// 请求 AIGC 水印。
-    #[serde(default)]
-    watermark: bool,
-    /// Exact output audio format.
-    /// 精确输出音频格式。
-    #[serde(default = "default_minimax_music_format")]
-    output_format: String,
-}
-
-impl MiniMaxMusicToolArguments {
-    /// Validates MiniMax music intent and projects one exact provider request body.
-    /// 验证 MiniMax 音乐意图并投影一个精确供应商请求体。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `model_id` is the frozen selected MiniMax music model.
-    /// `model_id` 是冻结的所选 MiniMax 音乐模型。
-    ///
-    /// # Returns
-    /// 返回值
-    /// One synchronous URL-output request and its normalized MIME type.
-    /// 返回一个同步 URL 输出请求及其归一化 MIME 类型。
-    fn into_wire_body(self, model_id: &str) -> Result<(Value, String), String> {
-        if !matches!(
-            model_id,
-            "music-3.0" | "music-2.6" | "music-2.6-free" | "music-2.5+" | "music-2.5"
-        ) {
-            return Err(String::from("MiniMax music model is not registered."));
-        }
-        let prompt_length = self.prompt.chars().count();
-        let lyrics_length = self.lyrics.chars().count();
-        if prompt_length > 2000 || lyrics_length > 3500 {
-            return Err(String::from(
-                "MiniMax music prompt or lyrics exceeds its supported length.",
-            ));
-        }
-        if self.instrumental {
-            if prompt_length == 0 || lyrics_length != 0 || self.lyrics_optimizer {
-                return Err(String::from(
-                    "MiniMax instrumental music requires a prompt and forbids lyrics or lyric optimization.",
-                ));
-            }
-        } else if self.lyrics_optimizer {
-            if prompt_length == 0 || lyrics_length != 0 {
-                return Err(String::from(
-                    "MiniMax lyric optimization requires a prompt and forbids explicit lyrics.",
-                ));
-            }
-        } else if lyrics_length == 0 {
-            return Err(String::from(
-                "MiniMax vocal music requires explicit lyrics or lyric optimization.",
-            ));
-        }
-        let (output_format, mime_type) = minimax_music_format(self.output_format.as_str())?;
-        let sample_rate = self.sample_rate.unwrap_or(44_100);
-        let bitrate = self.bitrate.unwrap_or(256_000);
-        if sample_rate == 0 || bitrate == 0 {
-            return Err(String::from(
-                "MiniMax music sample_rate and bitrate must be positive.",
-            ));
-        }
-        if self
-            .channels
-            .is_some_and(|channels| !matches!(channels, 1 | 2))
-        {
-            return Err(String::from("MiniMax music channels must be one or two."));
-        }
-        let mut audio_setting = serde_json::Map::from_iter([
-            (
-                String::from("sample_rate"),
-                Value::Number(serde_json::Number::from(sample_rate)),
-            ),
-            (
-                String::from("bitrate"),
-                Value::Number(serde_json::Number::from(bitrate)),
-            ),
-            (
-                String::from("format"),
-                Value::String(output_format.to_string()),
-            ),
-        ]);
-        if let Some(channels) = self.channels {
-            audio_setting.insert(
-                String::from("channel"),
-                Value::Number(serde_json::Number::from(channels)),
-            );
-        }
-        let mut body = serde_json::Map::from_iter([
-            (String::from("model"), Value::String(model_id.to_string())),
-            (String::from("stream"), Value::Bool(false)),
-            (
-                String::from("output_format"),
-                Value::String(String::from("url")),
-            ),
-            (String::from("audio_setting"), Value::Object(audio_setting)),
-        ]);
-        if !self.prompt.is_empty() {
-            body.insert(String::from("prompt"), Value::String(self.prompt));
-        }
-        if !self.lyrics.is_empty() {
-            body.insert(String::from("lyrics"), Value::String(self.lyrics));
-        }
-        if self.instrumental {
-            body.insert(String::from("is_instrumental"), Value::Bool(true));
-        }
-        if self.lyrics_optimizer {
-            body.insert(String::from("lyrics_optimizer"), Value::Bool(true));
-        }
-        if let Some(seed) = self.seed {
-            body.insert(
-                String::from("seed"),
-                Value::Number(serde_json::Number::from(seed)),
-            );
-        }
-        if self.watermark {
-            body.insert(String::from("aigc_watermark"), Value::Bool(true));
-        }
-        Ok((Value::Object(body), mime_type.to_string()))
-    }
-}
-
-/// Exact MiniMax synchronous music response subset.
-/// 精确的 MiniMax 同步音乐响应子集。
-#[derive(Debug, Deserialize)]
-struct MiniMaxMusicWireResponse {
-    /// Completed provider audio data.
-    /// 已完成的供应商音频数据。
-    data: MiniMaxMusicWireData,
-    /// Provider request identifier.
-    /// 供应商请求标识。
-    trace_id: String,
-    /// Provider application status.
-    /// 供应商应用状态。
-    base_resp: MiniMaxBaseResponse,
-}
-
-/// Completed MiniMax synchronous music payload.
-/// 已完成的 MiniMax 同步音乐载荷。
-#[derive(Debug, Deserialize)]
-struct MiniMaxMusicWireData {
-    /// Temporary public audio URL.
-    /// 临时公网音频地址。
-    audio_url: String,
-    /// Completion status, equal to two only on completion.
-    /// 完成状态，仅在完成时等于二。
-    status: u8,
-}
-
-/// Executes and normalizes one exact MiniMax synchronous music target.
-/// 执行并归一化一个精确的 MiniMax 同步音乐目标。
-///
-/// # Parameters
-/// 参数
-/// All values are immutable snapshots for the selected regional music model.
-/// 所有值均为所选区域音乐模型的不可变快照。
-///
-/// # Returns
-/// 返回值
-/// One unified audio resource or an explicit provider error.
-/// 返回一个统一音频资源或明确的供应商错误。
-async fn execute_minimax_music_tool(
-    http: &reqwest::Client,
-    entry: &ServiceEntry,
-    target: &ProviderToolTarget,
-    arguments: Value,
-    secret: &CredentialExecutionSecret,
-) -> Result<ProviderToolExecutionResult, String> {
-    let arguments: MiniMaxMusicToolArguments = serde_json::from_value(arguments)
-        .map_err(|error| format!("MiniMax music arguments are invalid: {error}"))?;
-    let (body, mime_type) = arguments.into_wire_body(target.upstream_target_id.as_str())?;
-    let url = provider_tool_url(entry, target);
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        reqwest::header::CONTENT_TYPE,
-        HeaderValue::from_static("application/json"),
-    );
-    insert_authentication_header(
-        &mut headers,
-        target.execution.authentication,
-        secret.expose_value(),
-    )?;
-    let response = http
-        .post(url.as_str())
-        .headers(headers)
-        .json(&body)
-        .send()
-        .await
-        .map_err(|error| format!("MiniMax music request to `{url}` failed: {error}"))?;
-    let status = response.status();
-    let response_text = read_bounded_provider_response(response, "MiniMax music").await?;
-    if !status.is_success() {
-        return Err(format_http_error(
-            "MiniMax music",
-            status.as_u16(),
-            response_text.as_str(),
-        ));
-    }
-    decode_minimax_music_response(response_text.as_str(), mime_type.as_str())
-}
-
-/// Decodes one MiniMax music response into a unified audio resource.
-/// 将一份 MiniMax 音乐响应解码为统一音频资源。
-///
-/// # Parameters
-/// 参数
-/// `body` is provider JSON and `mime_type` comes from the selected output format.
-/// `body` 是供应商 JSON，`mime_type` 来自所选输出格式。
-///
-/// # Returns
-/// 返回值
-/// One validated temporary audio URL and provider request identifier.
-/// 返回一个已验证临时音频地址与供应商请求标识。
-fn decode_minimax_music_response(
-    body: &str,
-    mime_type: &str,
-) -> Result<ProviderToolExecutionResult, String> {
-    let response: MiniMaxMusicWireResponse = serde_json::from_str(body)
-        .map_err(|error| format!("MiniMax music response JSON is invalid: {error}"))?;
-    if response.base_resp.status_code != 0 {
-        return Err(format!(
-            "MiniMax music request failed: code={} | {}",
-            response.base_resp.status_code, response.base_resp.status_msg
-        ));
-    }
-    if response.data.status != 2 || response.trace_id.trim().is_empty() {
-        return Err(String::from(
-            "MiniMax music response omitted its completed result.",
-        ));
-    }
-    let audio_url =
-        validated_public_http_url(response.data.audio_url.as_str(), "MiniMax music audio URL")?;
-    Ok(ProviderToolExecutionResult {
-        upstream_response_id: Some(response.trace_id),
-        output: ProviderToolNormalizedOutput::Resources(vec![ProviderToolGeneratedResource {
-            output_id: String::from("music-0"),
-            kind: String::from("audio"),
-            mime_type: mime_type.to_string(),
-            bytes: None,
-            download_url: Some(audio_url.to_string()),
-        }]),
-    })
-}
-
-/// Returns the default MiniMax music output format.
-/// 返回默认 MiniMax 音乐输出格式。
-fn default_minimax_music_format() -> String {
-    String::from("mp3")
-}
-
-/// Maps one MiniMax music format to the exact output MIME type.
-/// 将一种 MiniMax 音乐格式映射到精确输出 MIME 类型。
-///
-/// # Parameters
-/// 参数
-/// `format` is the AI-selected closed output format.
-/// `format` 是 AI 选择的封闭输出格式。
-///
-/// # Returns
-/// 返回值
-/// The normalized provider format and MIME type.
-/// 返回归一化供应商格式与 MIME 类型。
-fn minimax_music_format(format: &str) -> Result<(&'static str, &'static str), String> {
-    match format {
-        "mp3" => Ok(("mp3", "audio/mpeg")),
-        "wav" => Ok(("wav", "audio/wav")),
-        "pcm" => Ok(("pcm", "audio/L16")),
-        _ => Err(String::from(
-            "MiniMax music output_format is not supported.",
-        )),
-    }
-}
-
-/// Strict host-materialized MiniMax video arguments.
-/// 严格的宿主物化 MiniMax 视频参数。
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct MiniMaxVideoToolArguments {
-    /// Motion and scene prompt.
-    /// 运动与场景提示词。
-    prompt: String,
-    /// Optional first-frame Data URL.
-    /// 可选首帧 Data URL。
-    #[serde(default)]
-    first_frame_image: Option<String>,
-    /// Optional last-frame Data URL.
-    /// 可选末帧 Data URL。
-    #[serde(default)]
-    last_frame_image: Option<String>,
-    /// Optional subject-reference Data URL.
-    /// 可选主体参考 Data URL。
-    #[serde(default)]
-    subject_reference_image: Option<String>,
-    /// Six- or ten-second duration.
-    /// 六秒或十秒时长。
-    #[serde(default = "default_minimax_video_duration")]
-    duration_seconds: u8,
-    /// Optional model-scoped resolution.
-    /// 可选模型作用域分辨率。
-    #[serde(default)]
-    resolution: Option<String>,
-    /// Optional provider prompt optimization control.
-    /// 可选供应商提示词优化控制。
-    #[serde(default)]
-    prompt_extend: Option<bool>,
-}
-
-impl MiniMaxVideoToolArguments {
-    /// Validates model-specific MiniMax video modes and projects the start body.
-    /// 验证模型专属 MiniMax 视频模式并投影启动请求体。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `model_id` is the frozen selected video model.
-    /// `model_id` 是冻结的所选视频模型。
-    ///
-    /// # Returns
-    /// 返回值
-    /// One exact provider task-creation JSON body.
-    /// 返回一个精确供应商任务创建 JSON 请求体。
-    fn into_wire_body(self, model_id: &str) -> Result<Value, String> {
-        if self.prompt.trim().is_empty() || self.prompt.chars().count() > 2000 {
-            return Err(String::from(
-                "MiniMax video prompt must contain between one and 2000 characters.",
-            ));
-        }
-        if !matches!(self.duration_seconds, 6 | 10) {
-            return Err(String::from(
-                "MiniMax video duration_seconds must be six or ten.",
-            ));
-        }
-        for image in [
-            self.first_frame_image.as_deref(),
-            self.last_frame_image.as_deref(),
-            self.subject_reference_image.as_deref(),
-        ]
-        .into_iter()
-        .flatten()
-        {
-            if !image.starts_with("data:image/") || !image.contains(";base64,") {
-                return Err(String::from(
-                    "MiniMax video image inputs must be host-materialized Data URLs.",
-                ));
-            }
-        }
-        let image_mode = self.first_frame_image.is_some();
-        let subject_mode = self.subject_reference_image.is_some();
-        match model_id {
-            "MiniMax-Hailuo-2.3" => {
-                if self.last_frame_image.is_some() || subject_mode {
-                    return Err(String::from(
-                        "MiniMax Hailuo 2.3 accepts only an optional first frame.",
-                    ));
-                }
-            }
-            "MiniMax-Hailuo-2.3-Fast" => {
-                if !image_mode || self.last_frame_image.is_some() || subject_mode {
-                    return Err(String::from(
-                        "MiniMax Hailuo 2.3 Fast requires exactly one first frame.",
-                    ));
-                }
-            }
-            "MiniMax-Hailuo-02" => {
-                if subject_mode || self.last_frame_image.is_some() && !image_mode {
-                    return Err(String::from(
-                        "MiniMax Hailuo 02 last-frame mode requires a first frame.",
-                    ));
-                }
-            }
-            "S2V-01" => {
-                if !subject_mode || image_mode || self.last_frame_image.is_some() {
-                    return Err(String::from(
-                        "MiniMax S2V 01 requires exactly one subject reference.",
-                    ));
-                }
-            }
-            _ => return Err(String::from("MiniMax video model is not registered.")),
-        }
-        let resolution = self
-            .resolution
-            .as_deref()
-            .map(str::to_ascii_uppercase)
-            .unwrap_or_default();
-        if !resolution.is_empty() {
-            let supported = matches!(resolution.as_str(), "768P" | "1080P")
-                || resolution == "512P" && model_id == "MiniMax-Hailuo-02" && image_mode
-                || resolution == "512P" && model_id == "S2V-01";
-            if !supported {
-                return Err(String::from(
-                    "MiniMax video resolution is not supported by the selected model and mode.",
-                ));
-            }
-        }
-        if self.duration_seconds == 10
-            && !resolution.is_empty()
-            && resolution != "768P"
-            && !(model_id == "MiniMax-Hailuo-02" && image_mode && resolution == "512P")
-        {
-            return Err(String::from(
-                "MiniMax ten-second video resolution is not supported by the selected mode.",
-            ));
-        }
-        let mut body = serde_json::Map::from_iter([
-            (String::from("model"), Value::String(model_id.to_string())),
-            (String::from("prompt"), Value::String(self.prompt)),
-            (
-                String::from("duration"),
-                Value::Number(serde_json::Number::from(self.duration_seconds)),
-            ),
-        ]);
-        if let Some(first_frame) = self.first_frame_image {
-            body.insert(
-                String::from("first_frame_image"),
-                Value::String(first_frame),
-            );
-        }
-        if let Some(last_frame) = self.last_frame_image {
-            body.insert(String::from("last_frame_image"), Value::String(last_frame));
-        }
-        if let Some(subject_reference) = self.subject_reference_image {
-            body.insert(
-                String::from("subject_reference"),
-                serde_json::json!([{
-                    "type": "character",
-                    "image": [subject_reference]
-                }]),
-            );
-        }
-        if !resolution.is_empty() {
-            body.insert(String::from("resolution"), Value::String(resolution));
-        }
-        if let Some(prompt_extend) = self.prompt_extend {
-            body.insert(String::from("prompt_optimizer"), Value::Bool(prompt_extend));
-        }
-        Ok(Value::Object(body))
-    }
-}
-
-/// Exact MiniMax video task-creation response.
-/// 精确的 MiniMax 视频任务创建响应。
-#[derive(Debug, Deserialize)]
-struct MiniMaxVideoStartWireResponse {
-    /// Private provider task identifier.
-    /// 私有供应商任务标识。
-    task_id: String,
-    /// Provider application status.
-    /// 供应商应用状态。
-    base_resp: MiniMaxBaseResponse,
-}
-
-/// Exact MiniMax video task observation.
-/// 精确的 MiniMax 视频任务观测。
-#[derive(Debug, Deserialize)]
-struct MiniMaxVideoPollWireResponse {
-    /// Documented provider task state.
-    /// 文档声明的供应商任务状态。
-    status: String,
-    /// Private generated file identifier.
-    /// 私有生成文件标识。
-    #[serde(default)]
-    file_id: String,
-    /// Provider application status.
-    /// 供应商应用状态。
-    base_resp: MiniMaxBaseResponse,
-}
-
-/// Exact MiniMax generated-file lookup response.
-/// 精确的 MiniMax 生成文件查询响应。
-#[derive(Debug, Deserialize)]
-struct MiniMaxVideoFileWireResponse {
-    /// Generated file metadata.
-    /// 生成文件元数据。
-    file: MiniMaxVideoFileWireData,
-    /// Provider application status.
-    /// 供应商应用状态。
-    base_resp: MiniMaxBaseResponse,
-}
-
-/// Exact MiniMax generated-file metadata.
-/// 精确的 MiniMax 生成文件元数据。
-#[derive(Debug, Deserialize)]
-struct MiniMaxVideoFileWireData {
-    /// Temporary provider download URL.
-    /// 临时供应商下载地址。
-    download_url: String,
-}
-
-/// Executes one MiniMax video task through creation, polling, and file resolution.
-/// 通过创建、轮询与文件解析执行一个 MiniMax 视频任务。
-///
-/// # Parameters
-/// 参数
-/// All values are frozen for the selected regional video target.
-/// 所有值均针对所选区域视频目标保持冻结。
-///
-/// # Returns
-/// 返回值
-/// One unified MP4 resource after the provider reaches its terminal success state.
-/// 在供应商到达成功终态后返回一个统一 MP4 资源。
-async fn execute_minimax_video_tool(
-    http: &reqwest::Client,
-    entry: &ServiceEntry,
-    target: &ProviderToolTarget,
-    arguments: Value,
-    secret: &CredentialExecutionSecret,
-) -> Result<ProviderToolExecutionResult, String> {
-    let arguments: MiniMaxVideoToolArguments = serde_json::from_value(arguments)
-        .map_err(|error| format!("MiniMax video arguments are invalid: {error}"))?;
-    let body = arguments.into_wire_body(target.upstream_target_id.as_str())?;
-    let start_url = provider_tool_url(entry, target);
-    let base_url = target
-        .execution
-        .endpoint_base_url
-        .as_deref()
-        .unwrap_or(entry.base_url.as_str())
-        .trim_end_matches('/');
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        reqwest::header::CONTENT_TYPE,
-        HeaderValue::from_static("application/json"),
-    );
-    insert_authentication_header(
-        &mut headers,
-        target.execution.authentication,
-        secret.expose_value(),
-    )?;
-    let start_response = http
-        .post(start_url.as_str())
-        .headers(headers.clone())
-        .json(&body)
-        .send()
-        .await
-        .map_err(|error| format!("MiniMax video request to `{start_url}` failed: {error}"))?;
-    let start_status = start_response.status();
-    let start_text = read_bounded_provider_response(start_response, "MiniMax video start").await?;
-    if !start_status.is_success() {
-        return Err(format_http_error(
-            "MiniMax video",
-            start_status.as_u16(),
-            start_text.as_str(),
-        ));
-    }
-    let start: MiniMaxVideoStartWireResponse = serde_json::from_str(start_text.as_str())
-        .map_err(|error| format!("MiniMax video start response JSON is invalid: {error}"))?;
-    if start.base_resp.status_code != 0 {
-        return Err(format!(
-            "MiniMax video task creation failed: code={} | {}",
-            start.base_resp.status_code, start.base_resp.status_msg
-        ));
-    }
-    if start.task_id.trim().is_empty() {
-        return Err(String::from(
-            "MiniMax video task creation omitted its task identifier.",
-        ));
-    }
-    loop {
-        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
-        let mut poll_url =
-            reqwest::Url::parse(format!("{base_url}/v1/query/video_generation").as_str())
-                .map_err(|_| String::from("MiniMax video poll URL is invalid."))?;
-        poll_url
-            .query_pairs_mut()
-            .append_pair("task_id", start.task_id.as_str());
-        let poll_response = http
-            .get(poll_url.clone())
-            .headers(headers.clone())
-            .send()
-            .await
-            .map_err(|error| format!("MiniMax video poll to `{poll_url}` failed: {error}"))?;
-        let poll_status = poll_response.status();
-        let poll_text = read_bounded_provider_response(poll_response, "MiniMax video poll").await?;
-        if !poll_status.is_success() {
-            return Err(format_http_error(
-                "MiniMax video poll",
-                poll_status.as_u16(),
-                poll_text.as_str(),
-            ));
-        }
-        let poll: MiniMaxVideoPollWireResponse = serde_json::from_str(poll_text.as_str())
-            .map_err(|error| format!("MiniMax video poll response JSON is invalid: {error}"))?;
-        if poll.base_resp.status_code != 0 {
-            return Err(format!(
-                "MiniMax video poll failed: code={} | {}",
-                poll.base_resp.status_code, poll.base_resp.status_msg
-            ));
-        }
-        match poll.status.as_str() {
-            "Preparing" | "Queueing" | "Processing" => continue,
-            "Failed" => {
-                return Err(String::from(
-                    "MiniMax video generation reached the provider failed state.",
-                ));
-            }
-            "Success" if !poll.file_id.trim().is_empty() => {
-                let mut file_url =
-                    reqwest::Url::parse(format!("{base_url}/v1/files/retrieve").as_str())
-                        .map_err(|_| String::from("MiniMax video file URL is invalid."))?;
-                file_url
-                    .query_pairs_mut()
-                    .append_pair("file_id", poll.file_id.as_str());
-                let file_response = http
-                    .get(file_url.clone())
-                    .headers(headers)
-                    .send()
-                    .await
-                    .map_err(|error| {
-                        format!("MiniMax video file request to `{file_url}` failed: {error}")
-                    })?;
-                let file_status = file_response.status();
-                let file_text =
-                    read_bounded_provider_response(file_response, "MiniMax video file").await?;
-                if !file_status.is_success() {
-                    return Err(format_http_error(
-                        "MiniMax video file",
-                        file_status.as_u16(),
-                        file_text.as_str(),
-                    ));
-                }
-                return decode_minimax_video_file_response(
-                    file_text.as_str(),
-                    start.task_id.as_str(),
-                );
-            }
-            "Success" => {
-                return Err(String::from(
-                    "MiniMax video successful task omitted its file identifier.",
-                ));
-            }
-            _ => {
-                return Err(format!(
-                    "MiniMax video returned unknown task status `{}`.",
-                    poll.status
-                ));
-            }
-        }
-    }
-}
-
-/// Decodes a completed MiniMax file lookup into one unified video resource.
-/// 将完成的 MiniMax 文件查询解码为一个统一视频资源。
-///
-/// # Parameters
-/// 参数
-/// `body` is the file response and `task_id` is the provider task identity.
-/// `body` 是文件响应，`task_id` 是供应商任务标识。
-///
-/// # Returns
-/// 返回值
-/// One validated temporary MP4 resource.
-/// 返回一个已验证临时 MP4 资源。
-fn decode_minimax_video_file_response(
-    body: &str,
-    task_id: &str,
-) -> Result<ProviderToolExecutionResult, String> {
-    let response: MiniMaxVideoFileWireResponse = serde_json::from_str(body)
-        .map_err(|error| format!("MiniMax video file response JSON is invalid: {error}"))?;
-    if response.base_resp.status_code != 0 {
-        return Err(format!(
-            "MiniMax video file request failed: code={} | {}",
-            response.base_resp.status_code, response.base_resp.status_msg
-        ));
-    }
-    let download_url = validated_public_http_url(
-        response.file.download_url.as_str(),
-        "MiniMax video download URL",
-    )?;
-    Ok(ProviderToolExecutionResult {
-        upstream_response_id: Some(task_id.to_string()),
-        output: ProviderToolNormalizedOutput::Resources(vec![ProviderToolGeneratedResource {
-            output_id: String::from("video-0"),
-            kind: String::from("video"),
-            mime_type: String::from("video/mp4"),
-            bytes: None,
-            download_url: Some(download_url.to_string()),
-        }]),
-    })
-}
-
-/// Returns the provider default MiniMax video duration.
-/// 返回供应商默认 MiniMax 视频时长。
-fn default_minimax_video_duration() -> u8 {
-    6
-}
-
-/// Strict AI-visible Tavily search arguments.
-/// 严格的 AI 可见 Tavily 搜索参数。
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct TavilySearchToolArguments {
-    /// Exact query text.
-    /// 精确查询文本。
-    query: String,
-    /// Optional result limit.
-    /// 可选结果数量上限。
-    #[serde(default)]
-    max_results: Option<u8>,
-    /// Optional exact domain allowlist.
-    /// 可选精确域名允许列表。
-    #[serde(default)]
-    include_domains: Vec<String>,
-    /// Optional exact domain blocklist.
-    /// 可选精确域名阻止列表。
-    #[serde(default)]
-    exclude_domains: Vec<String>,
-}
-
-impl TavilySearchToolArguments {
-    /// Validates semantic constraints not expressible through deserialization alone.
-    /// 验证仅靠反序列化无法表达的语义约束。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Success when the selected Tavily target accepts every argument.
-    /// 当选定 Tavily 目标接受全部参数时返回成功。
-    fn validate(&self) -> Result<(), String> {
-        if self.query.trim().is_empty() {
-            return Err(String::from("Tavily search query cannot be empty."));
-        }
-        if self
-            .max_results
-            .is_some_and(|maximum| !(1..=20).contains(&maximum))
-        {
-            return Err(String::from(
-                "Tavily search max_results must be between one and twenty.",
-            ));
-        }
-        validate_domain_list("include_domains", &self.include_domains, 300)?;
-        validate_domain_list("exclude_domains", &self.exclude_domains, 150)
-    }
-}
-
-/// Exact adapter-owned Tavily search wire request.
-/// 适配器持有的精确 Tavily 搜索 Wire 请求。
-#[derive(Debug, Serialize)]
-struct TavilySearchWireRequest {
-    /// Exact query text.
-    /// 精确查询文本。
-    query: String,
-    /// Fixed predictable search depth.
-    /// 固定且可预测的搜索深度。
-    search_depth: String,
-    /// Optional result limit.
-    /// 可选结果数量上限。
-    #[serde(skip_serializing_if = "Option::is_none")]
-    max_results: Option<u8>,
-    /// Optional domain allowlist.
-    /// 可选域名允许列表。
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    include_domains: Vec<String>,
-    /// Optional domain blocklist.
-    /// 可选域名阻止列表。
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    exclude_domains: Vec<String>,
-    /// Fixed result-only behavior.
-    /// 固定的仅结果行为。
-    include_answer: bool,
-    /// Prevents implicit full-page extraction.
-    /// 阻止隐式完整网页提取。
-    include_raw_content: bool,
-    /// Requests exact provider credit accounting.
-    /// 请求精确的供应商 Credit 计量。
-    include_usage: bool,
-}
-
-/// Exact Tavily structured-search response subset consumed by the adapter.
-/// 适配器消费的精确 Tavily 结构化搜索响应子集。
-#[derive(Debug, Deserialize)]
-struct TavilySearchWireResponse {
-    /// Actual executed query.
-    /// 实际执行的查询。
-    query: String,
-    /// Ordered provider results.
-    /// 有序供应商结果。
-    results: Vec<TavilySearchWireResult>,
-    /// Provider support identifier.
-    /// 供应商支持标识。
-    request_id: String,
-}
-
-/// One Tavily structured-search result.
-/// 一条 Tavily 结构化搜索结果。
-#[derive(Debug, Deserialize)]
-struct TavilySearchWireResult {
-    /// Provider-returned title.
-    /// 供应商返回的标题。
-    title: String,
-    /// Provider-returned destination.
-    /// 供应商返回的目标地址。
-    url: String,
-    /// Provider-returned excerpt.
-    /// 供应商返回的摘要。
-    content: String,
-}
-
-/// Decodes one Tavily search response into the unified search output.
-/// 将一份 Tavily 搜索响应解码为统一搜索输出。
-///
-/// # Parameters
-/// 参数
-/// `body` is the complete provider JSON document.
-/// `body` 是完整供应商 JSON 文档。
-///
-/// # Returns
-/// 返回值
-/// Validated ordered search results and the provider request identifier.
-/// 返回已验证有序搜索结果与供应商请求标识。
-fn decode_tavily_search_response(body: &str) -> Result<ProviderToolExecutionResult, String> {
-    let response: TavilySearchWireResponse = serde_json::from_str(body)
-        .map_err(|error| format!("Tavily search response JSON is invalid: {error}"))?;
-    if response.query.trim().is_empty() {
-        return Err(String::from(
-            "Tavily search response omitted the executed query.",
-        ));
-    }
-    let results = response
-        .results
-        .into_iter()
-        .enumerate()
-        .map(|(index, result)| {
-            let url = validated_https_url(
-                result.url.as_str(),
-                format!("Tavily search result {index}").as_str(),
-            )?;
-            Ok(ProviderToolSearchResult {
-                rank: index + 1,
-                title: result.title,
-                url: result.url,
-                source_domain: url.host_str().unwrap_or_default().to_ascii_lowercase(),
-                snippet: result.content,
-            })
-        })
-        .collect::<Result<Vec<_>, String>>()?;
-    Ok(ProviderToolExecutionResult {
-        upstream_response_id: non_empty_identifier(response.request_id),
-        output: ProviderToolNormalizedOutput::Search(ProviderToolSearchOutput {
-            query: response.query,
-            results,
-        }),
-    })
-}
-
-/// Strict AI-visible Tavily extraction arguments.
-/// 严格的 AI 可见 Tavily 网页提取参数。
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct TavilyExtractToolArguments {
-    /// One to twenty HTTPS URLs.
-    /// 一到二十个 HTTPS 地址。
-    urls: Vec<String>,
-    /// Optional relevance query.
-    /// 可选相关性查询。
-    #[serde(default)]
-    query: Option<String>,
-    /// Optional relevant chunks per source.
-    /// 每个来源的可选相关片段数。
-    #[serde(default)]
-    chunks_per_source: Option<u8>,
-    /// Extraction depth.
-    /// 提取深度。
-    #[serde(default = "default_tavily_extract_depth")]
-    extract_depth: String,
-    /// Output text format.
-    /// 输出文本格式。
-    #[serde(default = "default_tavily_extract_format")]
-    format: String,
-    /// Whether extracted images are requested.
-    /// 是否请求提取图片。
-    #[serde(default)]
-    include_images: bool,
-    /// Whether favicons are requested.
-    /// 是否请求站点图标。
-    #[serde(default)]
-    include_favicon: bool,
-    /// Optional provider timeout in seconds.
-    /// 可选供应商超时秒数。
-    #[serde(default)]
-    timeout_seconds: Option<f64>,
-}
-
-impl TavilyExtractToolArguments {
-    /// Validates selected-target extraction constraints.
-    /// 验证选定目标的网页提取约束。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Success when all URLs and dependent fields match Tavily's contract.
-    /// 当全部地址与依赖字段符合 Tavily 契约时返回成功。
-    fn validate(&self) -> Result<(), String> {
-        if self.urls.is_empty() || self.urls.len() > 20 {
-            return Err(String::from(
-                "Tavily extract requires between one and twenty URLs.",
-            ));
-        }
-        let mut unique = std::collections::BTreeSet::new();
-        for (index, url) in self.urls.iter().enumerate() {
-            validated_https_url(url, format!("Tavily extract URL {index}").as_str())?;
-            if !unique.insert(url) {
-                return Err(format!("Tavily extract URL {index} is duplicated."));
-            }
-        }
-        if self
-            .query
-            .as_deref()
-            .is_some_and(|query| query.trim().is_empty())
-        {
-            return Err(String::from(
-                "Tavily extract query cannot be empty when provided.",
-            ));
-        }
-        if self.chunks_per_source.is_some() && self.query.is_none() {
-            return Err(String::from(
-                "Tavily extract chunks_per_source requires query.",
-            ));
-        }
-        if self
-            .chunks_per_source
-            .is_some_and(|chunks| !(1..=5).contains(&chunks))
-        {
-            return Err(String::from(
-                "Tavily extract chunks_per_source must be between one and five.",
-            ));
-        }
-        if !matches!(self.extract_depth.as_str(), "basic" | "advanced") {
-            return Err(String::from(
-                "Tavily extract extract_depth must be basic or advanced.",
-            ));
-        }
-        if !matches!(self.format.as_str(), "markdown" | "text") {
-            return Err(String::from(
-                "Tavily extract format must be markdown or text.",
-            ));
-        }
-        if self
-            .timeout_seconds
-            .is_some_and(|timeout| !(1.0..=60.0).contains(&timeout))
-        {
-            return Err(String::from(
-                "Tavily extract timeout_seconds must be between one and sixty.",
-            ));
-        }
-        Ok(())
-    }
-}
-
-/// Exact adapter-owned Tavily extraction wire request.
-/// 适配器持有的精确 Tavily 网页提取 Wire 请求。
-#[derive(Debug, Serialize)]
-struct TavilyExtractWireRequest {
-    /// Requested HTTPS URLs.
-    /// 请求的 HTTPS 地址。
-    urls: Vec<String>,
-    /// Optional relevance query.
-    /// 可选相关性查询。
-    #[serde(skip_serializing_if = "Option::is_none")]
-    query: Option<String>,
-    /// Optional relevant chunks per source.
-    /// 每个来源的可选相关片段数。
-    #[serde(skip_serializing_if = "Option::is_none")]
-    chunks_per_source: Option<u8>,
-    /// Provider extraction depth.
-    /// 供应商提取深度。
-    extract_depth: String,
-    /// Whether images are requested.
-    /// 是否请求图片。
-    include_images: bool,
-    /// Whether favicons are requested.
-    /// 是否请求站点图标。
-    include_favicon: bool,
-    /// Provider output format.
-    /// 供应商输出格式。
-    format: String,
-    /// Optional provider timeout.
-    /// 可选供应商超时。
-    #[serde(skip_serializing_if = "Option::is_none")]
-    timeout: Option<f64>,
-    /// Requests exact provider credit accounting.
-    /// 请求精确供应商 Credit 计量。
-    include_usage: bool,
-}
-
-/// Exact Tavily extraction response subset consumed by the adapter.
-/// 适配器消费的精确 Tavily 网页提取响应子集。
-#[derive(Debug, Deserialize)]
-struct TavilyExtractWireResponse {
-    /// Ordered successful pages.
-    /// 有序成功页面。
-    #[serde(default)]
-    results: Vec<TavilyExtractWireResult>,
-    /// Ordered provider failures.
-    /// 有序供应商失败。
-    #[serde(default)]
-    failed_results: Vec<TavilyExtractWireFailure>,
-    /// Provider support identifier.
-    /// 供应商支持标识。
-    request_id: String,
-}
-
-/// One successful Tavily extraction result.
-/// 一条成功 Tavily 网页提取结果。
-#[derive(Debug, Deserialize)]
-struct TavilyExtractWireResult {
-    /// Extracted page URL.
-    /// 已提取页面地址。
-    url: String,
-    /// Requested Markdown or text content.
-    /// 请求的 Markdown 或文本内容。
-    raw_content: String,
-    /// Optional extracted image URLs.
-    /// 可选提取图片地址。
-    #[serde(default)]
-    images: Vec<String>,
-    /// Optional favicon URL.
-    /// 可选站点图标地址。
-    #[serde(default)]
-    favicon: Option<String>,
-}
-
-/// One provider-reported Tavily extraction failure.
-/// 一条供应商报告的 Tavily 网页提取失败。
-#[derive(Debug, Deserialize)]
-struct TavilyExtractWireFailure {
-    /// Failed page URL.
-    /// 失败页面地址。
-    url: String,
-    /// Provider failure message.
-    /// 供应商失败消息。
-    error: String,
-}
-
-/// Decodes one Tavily extraction response into the unified extract output.
-/// 将一份 Tavily 网页提取响应解码为统一提取输出。
-///
-/// # Parameters
-/// 参数
-/// `body` is the complete provider JSON document.
-/// `body` 是完整供应商 JSON 文档。
-///
-/// # Returns
-/// 返回值
-/// Validated successful pages, failures, and the provider request identifier.
-/// 返回已验证成功页面、失败与供应商请求标识。
-fn decode_tavily_extract_response(body: &str) -> Result<ProviderToolExecutionResult, String> {
-    let response: TavilyExtractWireResponse = serde_json::from_str(body)
-        .map_err(|error| format!("Tavily extract response JSON is invalid: {error}"))?;
-    let results = response
-        .results
-        .into_iter()
-        .enumerate()
-        .map(|(index, result)| {
-            validated_https_url(
-                result.url.as_str(),
-                format!("Tavily extract result {index}").as_str(),
-            )?;
-            let images = result
-                .images
-                .into_iter()
-                .enumerate()
-                .map(|(image_index, url)| {
-                    validated_https_url(
-                        url.as_str(),
-                        format!("Tavily extract result {index} image {image_index}").as_str(),
-                    )?;
-                    Ok::<String, String>(url)
-                })
-                .collect::<Result<Vec<_>, String>>()?;
-            let favicon = result
-                .favicon
-                .filter(|value| !value.trim().is_empty())
-                .map(|url| {
-                    validated_https_url(
-                        url.as_str(),
-                        format!("Tavily extract result {index} favicon").as_str(),
-                    )?;
-                    Ok::<String, String>(url)
-                })
-                .transpose()?;
-            Ok(ProviderToolExtractResult {
-                url: result.url,
-                content: result.raw_content,
-                images,
-                favicon,
-            })
-        })
-        .collect::<Result<Vec<_>, String>>()?;
-    let failures = response
-        .failed_results
-        .into_iter()
-        .enumerate()
-        .map(|(index, failure)| {
-            validated_https_url(
-                failure.url.as_str(),
-                format!("Tavily extract failure {index}").as_str(),
-            )?;
-            Ok(ProviderToolExtractFailure {
-                url: failure.url,
-                error: failure.error,
-            })
-        })
-        .collect::<Result<Vec<_>, String>>()?;
-    Ok(ProviderToolExecutionResult {
-        upstream_response_id: non_empty_identifier(response.request_id),
-        output: ProviderToolNormalizedOutput::Extract(ProviderToolExtractOutput {
-            results,
-            failures,
-        }),
-    })
+    Ok(())
 }
 
 /// Validates an absolute HTTPS URL without accepting credentials or fragments as alternate sources.
@@ -4267,510 +2875,6 @@ fn validated_https_url(value: &str, label: &str) -> Result<reqwest::Url, String>
     Ok(url)
 }
 
-/// Validates one Tavily domain filter list.
-/// 验证一份 Tavily 域名过滤列表。
-///
-/// # Parameters
-/// 参数
-/// `name` scopes diagnostics, `domains` are exact values, and `maximum` is provider-owned.
-/// `name` 用于限定诊断，`domains` 是精确值，`maximum` 由供应商规定。
-///
-/// # Returns
-/// 返回值
-/// Success when every value is non-empty, unique, and within the provider count limit.
-/// 当每个值非空、唯一且未超过供应商数量上限时返回成功。
-fn validate_domain_list(name: &str, domains: &[String], maximum: usize) -> Result<(), String> {
-    if domains.len() > maximum {
-        return Err(format!(
-            "Tavily search {name} exceeds the maximum of {maximum} domains."
-        ));
-    }
-    let mut unique = std::collections::BTreeSet::new();
-    for (index, domain) in domains.iter().enumerate() {
-        if domain.trim().is_empty() {
-            return Err(format!("Tavily search {name}[{index}] cannot be empty."));
-        }
-        if !unique.insert(domain) {
-            return Err(format!("Tavily search {name}[{index}] is duplicated."));
-        }
-    }
-    Ok(())
-}
-
-/// Retains one non-empty provider support identifier.
-/// 保留一个非空供应商支持标识。
-///
-/// # Parameters
-/// 参数
-/// `value` is the exact provider-returned identifier.
-/// `value` 是供应商返回的精确标识。
-///
-/// # Returns
-/// 返回值
-/// The identifier when non-empty, otherwise `None`.
-/// 标识非空时返回该标识，否则返回 `None`。
-fn non_empty_identifier(value: String) -> Option<String> {
-    (!value.trim().is_empty()).then_some(value)
-}
-
-/// Returns Tavily's default extraction depth.
-/// 返回 Tavily 默认提取深度。
-fn default_tavily_extract_depth() -> String {
-    String::from("basic")
-}
-
-/// Returns Tavily's default extraction format.
-/// 返回 Tavily 默认提取格式。
-fn default_tavily_extract_format() -> String {
-    String::from("markdown")
-}
-
-/// Strict AI-visible MiniMax search arguments.
-/// 严格的 AI 可见 MiniMax 搜索参数。
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct MiniMaxSearchToolArguments {
-    /// Exact query text.
-    /// 精确查询文本。
-    query: String,
-    /// Optional client-side result limit.
-    /// 可选客户端结果数量限制。
-    #[serde(default)]
-    max_results: Option<usize>,
-}
-
-/// Exact MiniMax structured search response.
-/// 精确的 MiniMax 结构化搜索响应。
-#[derive(Debug, Deserialize)]
-struct MiniMaxSearchWireResponse {
-    /// Ordered organic search results.
-    /// 有序自然搜索结果。
-    #[serde(default)]
-    organic: Vec<MiniMaxSearchWireResult>,
-    /// Application status.
-    /// 应用状态。
-    base_resp: MiniMaxBaseResponse,
-}
-
-/// One MiniMax upstream search result.
-/// 一条 MiniMax 上游搜索结果。
-#[derive(Debug, Deserialize)]
-struct MiniMaxSearchWireResult {
-    /// Result title.
-    /// 结果标题。
-    title: String,
-    /// Result destination.
-    /// 结果目标地址。
-    link: String,
-    /// Result excerpt.
-    /// 结果摘要。
-    snippet: String,
-}
-
-/// Decodes and normalizes one MiniMax structured search response.
-/// 解码并归一化一份 MiniMax 结构化搜索响应。
-///
-/// # Parameters
-/// 参数
-/// `query`, `maximum`, and `body` are frozen invocation values.
-/// `query`、`maximum` 与 `body` 是冻结的调用值。
-///
-/// # Returns
-/// 返回值
-/// Validated ordered HTTP(S) search results.
-/// 返回已校验的有序 HTTP(S) 搜索结果。
-fn decode_minimax_search_response(
-    query: &str,
-    maximum: usize,
-    body: &str,
-) -> Result<ProviderToolExecutionResult, String> {
-    let response: MiniMaxSearchWireResponse = serde_json::from_str(body)
-        .map_err(|error| format!("MiniMax search response JSON is invalid: {error}"))?;
-    if response.base_resp.status_code != 0 {
-        return Err(format!(
-            "MiniMax search request failed: code={} | {}",
-            response.base_resp.status_code, response.base_resp.status_msg
-        ));
-    }
-    let mut results = Vec::new();
-    for (index, result) in response.organic.into_iter().take(maximum).enumerate() {
-        let url = reqwest::Url::parse(result.link.as_str())
-            .map_err(|_| format!("MiniMax search result {index} contains an invalid URL."))?;
-        if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
-            return Err(format!(
-                "MiniMax search result {index} must use an absolute HTTP(S) URL."
-            ));
-        }
-        results.push(ProviderToolSearchResult {
-            rank: index + 1,
-            title: result.title,
-            url: result.link,
-            source_domain: url.host_str().unwrap_or_default().to_ascii_lowercase(),
-            snippet: result.snippet,
-        });
-    }
-    Ok(ProviderToolExecutionResult {
-        upstream_response_id: None,
-        output: ProviderToolNormalizedOutput::Search(ProviderToolSearchOutput {
-            query: query.to_string(),
-            results,
-        }),
-    })
-}
-
-/// Parsed AI-visible MiniMax image arguments after local resources are materialized.
-/// 本地资源物化后的已解析 AI 可见 MiniMax 图片参数。
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct MiniMaxImageToolArguments {
-    /// Image description.
-    /// 图片描述。
-    prompt: String,
-    /// Host-materialized JPEG or PNG Data URLs.
-    /// 宿主物化后的 JPEG 或 PNG Data URL。
-    #[serde(default)]
-    subject_references: Vec<String>,
-    /// Optional preset aspect ratio.
-    /// 可选预设宽高比。
-    #[serde(default)]
-    aspect_ratio: Option<String>,
-    /// Requested output count.
-    /// 请求输出数量。
-    #[serde(default = "default_image_count")]
-    count: u8,
-    /// Optional deterministic seed.
-    /// 可选确定性随机种子。
-    #[serde(default)]
-    seed: Option<i64>,
-    /// Provider prompt optimizer.
-    /// 供应商提示词优化开关。
-    #[serde(default)]
-    prompt_optimizer: bool,
-    /// Provider AIGC watermark.
-    /// 供应商 AIGC 水印开关。
-    #[serde(default)]
-    aigc_watermark: bool,
-    /// image-01 custom width.
-    /// image-01 自定义宽度。
-    #[serde(default)]
-    width: Option<u16>,
-    /// image-01 custom height.
-    /// image-01 自定义高度。
-    #[serde(default)]
-    height: Option<u16>,
-    /// image-01-live style.
-    /// image-01-live 风格。
-    #[serde(default)]
-    style_type: Option<String>,
-    /// image-01-live style strength.
-    /// image-01-live 风格强度。
-    #[serde(default)]
-    style_weight: Option<f64>,
-}
-
-impl MiniMaxImageToolArguments {
-    /// Parses a strict selected-model argument object.
-    /// 解析严格的选定模型参数对象。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `arguments` is the AI-visible JSON object.
-    /// `arguments` 是 AI 可见 JSON 对象。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Typed arguments or a controlled schema error.
-    /// 返回类型化参数或受控 Schema 错误。
-    fn from_json(arguments: Value) -> Result<Self, String> {
-        serde_json::from_value(arguments)
-            .map_err(|error| format!("MiniMax image tool arguments are invalid: {error}"))
-    }
-
-    /// Projects exact model-specific MiniMax JSON.
-    /// 投影精确的模型专属 MiniMax JSON。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `model_id` is frozen by the selected target.
-    /// `model_id` 由选定目标冻结。
-    ///
-    /// # Returns
-    /// 返回值
-    /// A validated request containing no local paths.
-    /// 返回不含本地路径的已校验请求。
-    fn into_wire_body(self, model_id: &str) -> Result<MiniMaxImageWireRequest, String> {
-        validate_image_arguments(model_id, &self)?;
-        let style = image_style(model_id, self.style_type.as_deref(), self.style_weight)?;
-        let subject_reference = self
-            .subject_references
-            .into_iter()
-            .map(|image_file| {
-                if !image_file.starts_with("data:image/jpeg;base64,")
-                    && !image_file.starts_with("data:image/png;base64,")
-                {
-                    return Err(String::from(
-                        "MiniMax subject references must be host-materialized JPEG or PNG Data URLs.",
-                    ));
-                }
-                Ok(MiniMaxImageSubjectReference {
-                    kind: String::from("character"),
-                    image_file,
-                })
-            })
-            .collect::<Result<Vec<_>, String>>()?;
-        Ok(MiniMaxImageWireRequest {
-            model: model_id.to_string(),
-            prompt: self.prompt,
-            subject_reference,
-            aspect_ratio: self.aspect_ratio,
-            width: self.width,
-            height: self.height,
-            response_format: String::from("base64"),
-            seed: self.seed,
-            count: self.count,
-            prompt_optimizer: self.prompt_optimizer,
-            aigc_watermark: self.aigc_watermark,
-            style,
-        })
-    }
-}
-
-/// Exact MiniMax image request body.
-/// 精确 MiniMax 图片请求体。
-#[derive(Debug, Serialize)]
-struct MiniMaxImageWireRequest {
-    /// Frozen upstream model.
-    /// 冻结的上游模型。
-    model: String,
-    /// Image prompt.
-    /// 图片提示词。
-    prompt: String,
-    /// Character references.
-    /// 角色参考图。
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    subject_reference: Vec<MiniMaxImageSubjectReference>,
-    /// Preset ratio.
-    /// 预设宽高比。
-    #[serde(skip_serializing_if = "Option::is_none")]
-    aspect_ratio: Option<String>,
-    /// Custom width.
-    /// 自定义宽度。
-    #[serde(skip_serializing_if = "Option::is_none")]
-    width: Option<u16>,
-    /// Custom height.
-    /// 自定义高度。
-    #[serde(skip_serializing_if = "Option::is_none")]
-    height: Option<u16>,
-    /// Private inline result carrier.
-    /// 私有内联结果载体。
-    response_format: String,
-    /// Deterministic seed.
-    /// 确定性随机种子。
-    #[serde(skip_serializing_if = "Option::is_none")]
-    seed: Option<i64>,
-    /// Output count.
-    /// 输出数量。
-    #[serde(rename = "n")]
-    count: u8,
-    /// Prompt optimizer.
-    /// 提示词优化开关。
-    prompt_optimizer: bool,
-    /// AIGC watermark.
-    /// AIGC 水印开关。
-    aigc_watermark: bool,
-    /// Live-model style.
-    /// Live 模型风格。
-    #[serde(skip_serializing_if = "Option::is_none")]
-    style: Option<MiniMaxImageStyle>,
-}
-
-/// One MiniMax character reference.
-/// 一项 MiniMax 角色参考图。
-#[derive(Debug, Serialize)]
-struct MiniMaxImageSubjectReference {
-    /// Official fixed reference type.
-    /// 官方固定参考类型。
-    #[serde(rename = "type")]
-    kind: String,
-    /// Inline image carrier.
-    /// 内联图片载体。
-    image_file: String,
-}
-
-/// MiniMax live-model style.
-/// MiniMax Live 模型风格。
-#[derive(Debug, Serialize)]
-struct MiniMaxImageStyle {
-    /// Official style identifier.
-    /// 官方风格标识。
-    style_type: String,
-    /// Optional style strength.
-    /// 可选风格强度。
-    #[serde(skip_serializing_if = "Option::is_none")]
-    style_weight: Option<f64>,
-}
-
-/// Closed MiniMax image response.
-/// 封闭 MiniMax 图片响应。
-#[derive(Debug, Deserialize)]
-struct MiniMaxImageWireResponse {
-    /// Image output data.
-    /// 图片输出数据。
-    data: MiniMaxImageWireResponseData,
-    /// Application status.
-    /// 应用状态。
-    base_resp: MiniMaxBaseResponse,
-}
-
-/// Ordered MiniMax image carriers.
-/// 有序 MiniMax 图片载体。
-#[derive(Debug, Deserialize)]
-struct MiniMaxImageWireResponseData {
-    /// Provider task identifier.
-    /// 供应商任务标识。
-    task_id: String,
-    /// Private Base64 JPEG outputs.
-    /// 私有 Base64 JPEG 输出。
-    #[serde(default)]
-    image_base64: Vec<String>,
-    /// Temporary output URLs.
-    /// 临时输出 URL。
-    #[serde(default)]
-    image_urls: Vec<String>,
-    /// Successful count.
-    /// 成功数量。
-    success_count: usize,
-    /// Failed count.
-    /// 失败数量。
-    failed_count: usize,
-}
-
-/// MiniMax application result.
-/// MiniMax 应用结果。
-#[derive(Debug, Deserialize)]
-struct MiniMaxBaseResponse {
-    /// Zero means success.
-    /// 零表示成功。
-    status_code: i64,
-    /// Safe provider status message.
-    /// 安全的供应商状态消息。
-    status_msg: String,
-}
-
-/// Returns the provider default image count.
-/// 返回供应商默认图片数量。
-fn default_image_count() -> u8 {
-    1
-}
-
-/// Validates the exact selected-model argument constraints.
-/// 校验精确的选定模型参数约束。
-///
-/// # Parameters
-/// 参数
-/// `model_id` and `arguments` are frozen invocation values.
-/// `model_id` 与 `arguments` 是冻结的调用值。
-///
-/// # Returns
-/// 返回值
-/// Success only when the provider model accepts every value.
-/// 仅当供应商模型接受全部值时返回成功。
-fn validate_image_arguments(
-    model_id: &str,
-    arguments: &MiniMaxImageToolArguments,
-) -> Result<(), String> {
-    if !matches!(model_id, "image-01" | "image-01-live") {
-        return Err(format!(
-            "MiniMax image model `{model_id}` is not registered."
-        ));
-    }
-    if !(1..=1_500).contains(&arguments.prompt.chars().count()) {
-        return Err(String::from(
-            "MiniMax image prompt must contain one to 1500 Unicode characters.",
-        ));
-    }
-    if !(1..=9).contains(&arguments.count) {
-        return Err(String::from(
-            "MiniMax image count must be between one and nine.",
-        ));
-    }
-    if !image_ratio_is_valid(model_id, arguments.aspect_ratio.as_deref()) {
-        return Err(String::from(
-            "MiniMax image aspect ratio is not supported by the selected model.",
-        ));
-    }
-    if model_id == "image-01-live" && (arguments.width.is_some() || arguments.height.is_some()) {
-        return Err(String::from(
-            "MiniMax image-01-live does not accept width or height.",
-        ));
-    }
-    if arguments.width.is_some() != arguments.height.is_some()
-        || (arguments.width.is_some() && arguments.aspect_ratio.is_some())
-    {
-        return Err(String::from(
-            "MiniMax image width and height must appear together and cannot be combined with aspect_ratio.",
-        ));
-    }
-    if let (Some(width), Some(height)) = (arguments.width, arguments.height)
-        && (!(512..=2_048).contains(&width)
-            || !(512..=2_048).contains(&height)
-            || width % 8 != 0
-            || height % 8 != 0)
-    {
-        return Err(String::from(
-            "MiniMax image dimensions must be 512 to 2048 and divisible by eight.",
-        ));
-    }
-    Ok(())
-}
-
-/// Reports whether one optional ratio belongs to the selected model.
-/// 报告一个可选宽高比是否属于选定模型。
-fn image_ratio_is_valid(model_id: &str, aspect_ratio: Option<&str>) -> bool {
-    let Some(aspect_ratio) = aspect_ratio else {
-        return true;
-    };
-    matches!(
-        aspect_ratio,
-        "1:1" | "16:9" | "4:3" | "3:2" | "2:3" | "3:4" | "9:16"
-    ) || (model_id == "image-01" && aspect_ratio == "21:9")
-}
-
-/// Builds and validates image-01-live style parameters.
-/// 构建并校验 image-01-live 风格参数。
-fn image_style(
-    model_id: &str,
-    style_type: Option<&str>,
-    style_weight: Option<f64>,
-) -> Result<Option<MiniMaxImageStyle>, String> {
-    if model_id == "image-01" {
-        if style_type.is_some() || style_weight.is_some() {
-            return Err(String::from(
-                "MiniMax image-01 does not accept live-model style parameters.",
-            ));
-        }
-        return Ok(None);
-    }
-    let Some(style_type) = style_type else {
-        if style_weight.is_some() {
-            return Err(String::from("MiniMax style_weight requires style_type."));
-        }
-        return Ok(None);
-    };
-    if !matches!(style_type, "漫画" | "元气" | "中世纪" | "水彩") {
-        return Err(String::from("MiniMax style_type is not supported."));
-    }
-    if style_weight.is_some_and(|weight| !weight.is_finite() || weight <= 0.0 || weight > 1.0) {
-        return Err(String::from(
-            "MiniMax style_weight must be greater than zero and at most one.",
-        ));
-    }
-    Ok(Some(MiniMaxImageStyle {
-        style_type: style_type.to_string(),
-        style_weight,
-    }))
-}
-
 /// Inserts one exact direct-tool authentication header.
 /// 插入一个精确的直连工具鉴权请求头。
 fn insert_authentication_header(
@@ -4779,7 +2883,8 @@ fn insert_authentication_header(
     secret: &str,
 ) -> Result<(), String> {
     let (name, value) = match projection {
-        AuthenticationProjection::BearerAuthorization => {
+        AuthenticationProjection::BearerAuthorization
+        | AuthenticationProjection::CodingDeviceBearer => {
             (reqwest::header::AUTHORIZATION, format!("Bearer {secret}"))
         }
         AuthenticationProjection::XApiKey => {
@@ -4797,568 +2902,944 @@ fn insert_authentication_header(
     Ok(())
 }
 
-/// Decodes and validates one successful MiniMax image response.
-/// 解码并校验一份成功的 MiniMax 图片响应。
-fn decode_minimax_image_response(body: &str) -> Result<ProviderToolExecutionResult, String> {
-    let response: MiniMaxImageWireResponse = serde_json::from_str(body)
-        .map_err(|error| format!("MiniMax image response JSON is invalid: {error}"))?;
-    if response.base_resp.status_code != 0 {
-        return Err(format!(
-            "MiniMax image request failed: code={} | {}",
-            response.base_resp.status_code, response.base_resp.status_msg
-        ));
+/// Inserts one target's validated non-sensitive fixed headers without overriding engine authority.
+/// 插入一个目标已校验的非敏感固定请求头，且不覆盖引擎权威字段。
+///
+/// # Parameters
+/// 参数
+/// `headers` is the outbound map and `target` owns the frozen fixed-header declaration.
+/// `headers` 是出站映射，`target` 持有冻结的固定请求头声明。
+///
+/// # Returns
+/// 返回值
+/// Success after every declared name and value is parsed and inserted exactly once.
+/// 在每个声明名称和值均完成解析并精确插入一次后返回成功。
+fn insert_declared_tool_headers(
+    headers: &mut HeaderMap,
+    target: &ProviderToolTarget,
+) -> Result<(), String> {
+    insert_fixed_tool_headers(headers, &target.execution.fixed_headers)
+}
+
+/// Inserts one validated fixed-header map into an outbound request.
+/// 把一份已校验固定请求头映射插入出站请求。
+///
+/// # Parameters
+/// 参数
+/// `headers` is the outbound map and `fixed_headers` is the immutable declaration.
+/// `headers` 是出站映射，`fixed_headers` 是不可变声明。
+///
+/// # Returns
+/// 返回值
+/// Success after every declared header is parsed and inserted.
+/// 在每个声明请求头均完成解析并插入后返回成功。
+fn insert_fixed_tool_headers(
+    headers: &mut HeaderMap,
+    fixed_headers: &std::collections::BTreeMap<String, String>,
+) -> Result<(), String> {
+    for (name, value) in fixed_headers {
+        let header_name = HeaderName::from_bytes(name.as_bytes())
+            .map_err(|_| format!("Provider tool fixed header name `{name}` is invalid."))?;
+        let header_value = HeaderValue::from_str(value)
+            .map_err(|_| format!("Provider tool fixed header `{name}` has an invalid value."))?;
+        headers.insert(header_name, header_value);
     }
-    let base64_count = response.data.image_base64.len();
-    let url_count = response.data.image_urls.len();
-    if response.data.task_id.trim().is_empty()
-        || (base64_count == 0 && url_count == 0)
-        || (base64_count != 0 && url_count != 0)
-        || response.data.success_count != base64_count + url_count
-        || response.data.failed_count > 0
-    {
-        return Err(String::from(
-            "MiniMax image response fields are inconsistent.",
-        ));
-    }
-    let mut resources = Vec::with_capacity(response.data.success_count);
-    for (index, encoded) in response.data.image_base64.into_iter().enumerate() {
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(encoded.as_bytes())
-            .map_err(|_| format!("MiniMax image output {index} contains invalid Base64."))?;
-        if bytes.is_empty() {
-            return Err(format!("MiniMax image output {index} is empty."));
-        }
-        resources.push(ProviderToolGeneratedResource {
-            output_id: format!("image-{index}"),
-            kind: String::from("image"),
-            mime_type: String::from("image/jpeg"),
-            bytes: Some(bytes),
-            download_url: None,
-        });
-    }
-    for (index, download_url) in response.data.image_urls.into_iter().enumerate() {
-        let parsed = reqwest::Url::parse(download_url.as_str())
-            .map_err(|_| format!("MiniMax image output {index} contains an invalid URL."))?;
-        if parsed.scheme() != "https" || parsed.host_str().is_none() {
-            return Err(format!(
-                "MiniMax image output {index} must use an absolute HTTPS URL."
-            ));
-        }
-        resources.push(ProviderToolGeneratedResource {
-            output_id: format!("image-{index}"),
-            kind: String::from("image"),
-            mime_type: String::from("image/jpeg"),
-            bytes: None,
-            download_url: Some(download_url),
-        });
-    }
-    Ok(ProviderToolExecutionResult {
-        upstream_response_id: Some(response.data.task_id),
-        output: ProviderToolNormalizedOutput::Resources(resources),
-    })
+    Ok(())
 }
 
 /// Formats one provider tool HTTP error without exposing request or credential data.
 /// 格式化一个供应商工具 HTTP 错误且不暴露请求或凭据数据。
-fn format_http_error(label: &str, status: u16, body: &str) -> String {
-    let message = serde_json::from_str::<Value>(body)
-        .ok()
-        .and_then(|value| {
-            value
-                .pointer("/base_resp/status_msg")
-                .or_else(|| value.pointer("/error/message"))
-                .or_else(|| value.pointer("/detail/error"))
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        })
-        .unwrap_or_else(|| String::from("The provider returned an unreadable error response."));
-    format!("{label} request failed: HTTP {status} | {message}")
+pub(crate) fn format_http_error(label: &str, status: u16, body: &str) -> String {
+    match parse_bounded_provider_json(body, label) {
+        Ok(value) => format_structured_provider_error(label, Some(status), &value),
+        Err(_) => format!(
+            "{label} request failed: HTTP {status} | message=The provider returned an unreadable error response."
+        ),
+    }
+}
+
+/// Bounds one diagnostic at a Unicode character boundary.
+/// 在 Unicode 字符边界上限制一段诊断文本。
+///
+/// # Parameters
+/// 参数
+/// `value` is provider-controlled text and `maximum_characters` is the exact retained ceiling.
+/// `value` 是供应商控制的文本，`maximum_characters` 是精确保留上限。
+///
+/// # Returns
+/// 返回值
+/// The original text when already bounded, otherwise a character-safe ellipsized prefix.
+/// 文本已在上限内时返回原文，否则返回按字符安全截断并带省略号的前缀。
+fn bound_provider_diagnostic_text(value: &str, maximum_characters: usize) -> String {
+    if value.chars().count() <= maximum_characters {
+        return value.to_string();
+    }
+    // retained_characters reserves the three-character ellipsis inside the declared ceiling.
+    // retained_characters 在声明上限内为三个字符的省略号预留空间。
+    let retained_characters = maximum_characters.saturating_sub(3);
+    // bounded never splits a UTF-8 code point because it operates on Unicode scalar values.
+    // bounded 基于 Unicode 标量值操作，因此绝不会切开 UTF-8 码点。
+    let mut bounded = value.chars().take(retained_characters).collect::<String>();
+    bounded.push_str("...");
+    bounded
+}
+
+/// Reports whether one provider-owned JSON key names credential or signing material.
+/// 判断一个供应商 JSON 键是否命名凭据或签名材料。
+///
+/// # Parameters
+/// 参数
+/// `key` is the exact provider-owned object key.
+/// `key` 是供应商持有的精确对象键。
+///
+/// # Returns
+/// 返回值
+/// `true` only for explicit credential/signing names or their conventional suffixes.
+/// 仅对显式凭据、签名名称或其常规后缀返回 `true`。
+fn provider_diagnostic_key_is_sensitive(key: &str) -> bool {
+    // lowercase makes the closed comparison independent from provider key casing.
+    // lowercase 使封闭比较不受供应商键名大小写影响。
+    let lowercase = key.to_ascii_lowercase();
+    matches!(
+        lowercase.as_str(),
+        "authorization"
+            | "proxy-authorization"
+            | "api_key"
+            | "api-key"
+            | "apikey"
+            | "secret"
+            | "client_secret"
+            | "token"
+            | "access_token"
+            | "refresh_token"
+            | "signature"
+            | "policy"
+            | "password"
+            | "credential"
+            | "oss_access_key_id"
+    ) || [
+        "_secret",
+        "-secret",
+        "_token",
+        "-token",
+        "_signature",
+        "-signature",
+        "_password",
+        "-password",
+        "_credential",
+        "-credential",
+        "_api_key",
+        "-api-key",
+    ]
+    .iter()
+    .any(|suffix| lowercase.ends_with(suffix))
+}
+
+/// Sanitizes one provider-controlled diagnostic scalar without retaining URLs or credentials.
+/// 清理一个供应商控制的诊断标量，不保留 URL 或凭据。
+///
+/// # Parameters
+/// 参数
+/// `value` is one non-empty provider-controlled string.
+/// `value` 是一段非空供应商控制字符串。
+///
+/// # Returns
+/// 返回值
+/// A bounded safe value or a stable redaction marker.
+/// 返回有界安全值或稳定脱敏标记。
+pub(crate) fn sanitize_provider_diagnostic_text(value: &str) -> String {
+    // lowercase and trimmed expose credential shapes without changing retained safe text.
+    // lowercase 与 trimmed 在不改变保留安全文本的前提下暴露凭据形态。
+    let lowercase = value.to_ascii_lowercase();
+    let trimmed = lowercase.trim();
+    if lowercase.contains("://") {
+        return String::from("<redacted-url>");
+    }
+    if [
+        "authorization=",
+        "authorization:",
+        "api_key=",
+        "api-key=",
+        "apikey=",
+        "secret=",
+        "token=",
+        "signature=",
+        "password=",
+        "\"api_key\"",
+        "\"api-key\"",
+        "\"apikey\"",
+        "\"secret\"",
+        "\"token\"",
+        "\"signature\"",
+        "\"password\"",
+    ]
+    .iter()
+    .any(|marker| lowercase.contains(marker))
+        || [
+            "bearer ",
+            "basic ",
+            "sk-",
+            "sk_",
+            "xoxb-",
+            "xoxp-",
+            "ghp_",
+            "github_pat_",
+            "akia",
+            "aiza",
+        ]
+        .iter()
+        .any(|prefix| trimmed.starts_with(prefix))
+    {
+        return String::from("<redacted>");
+    }
+    bound_provider_diagnostic_text(value, PROVIDER_TOOL_DIAGNOSTIC_FIELD_MAX_CHARACTERS)
+}
+
+/// Recursively redacts sensitive metadata keys and bounds every provider-controlled string.
+/// 递归脱敏敏感 metadata 键，并限制每段供应商控制字符串。
+///
+/// # Parameters
+/// 参数
+/// `value` is a subtree from an already depth/node-bounded provider response.
+/// `value` 来自已经过深度与节点上限校验的供应商响应子树。
+///
+/// # Returns
+/// 返回值
+/// A detached JSON value safe for bounded diagnostic serialization.
+/// 返回可安全用于有界诊断序列化的独立 JSON 值。
+fn redact_provider_diagnostic_json(value: &Value) -> Value {
+    match value {
+        Value::Object(object) => Value::Object(
+            object
+                .iter()
+                .map(|(key, value)| {
+                    // redacted_value removes exact secret-bearing fields before serialization.
+                    // redacted_value 在序列化前移除精确承载秘密的字段。
+                    let redacted_value = if provider_diagnostic_key_is_sensitive(key) {
+                        Value::String(String::from("<redacted>"))
+                    } else {
+                        redact_provider_diagnostic_json(value)
+                    };
+                    (key.clone(), redacted_value)
+                })
+                .collect(),
+        ),
+        Value::Array(values) => {
+            Value::Array(values.iter().map(redact_provider_diagnostic_json).collect())
+        }
+        Value::String(value) => Value::String(sanitize_provider_diagnostic_text(value)),
+        _ => value.clone(),
+    }
+}
+
+/// Converts one optional provider scalar into bounded secret-safe diagnostic text.
+/// 把一个可选供应商标量转换为有界且秘密安全的诊断文本。
+///
+/// # Parameters
+/// 参数
+/// `value` is an optional scalar from a reviewed diagnostic field.
+/// `value` 是来自已审核诊断字段的可选标量。
+///
+/// # Returns
+/// 返回值
+/// Sanitized string, number, or boolean text; empty and structured values return `None`.
+/// 返回已清理的字符串、数字或布尔文本；空值与结构值返回 `None`。
+fn safe_provider_diagnostic_scalar(value: Option<&Value>) -> Option<String> {
+    value.and_then(|value| match value {
+        Value::String(value) if !value.trim().is_empty() => {
+            Some(sanitize_provider_diagnostic_text(value))
+        }
+        Value::Number(value) => Some(value.to_string()),
+        Value::Bool(value) => Some(value.to_string()),
+        _ => None,
+    })
+}
+
+/// Formats a structured provider error while preserving the bounded diagnostic contract.
+/// 格式化结构化供应商错误，同时保留有界诊断契约。
+///
+/// # Parameters
+/// 参数
+/// `label` scopes the operation, `status` is optional for HTTP-200 error envelopes, and `body`
+/// is the parsed provider response.
+/// `label` 限定操作范围，`status` 对 HTTP 200 错误信封可选，`body` 是已解析供应商响应。
+///
+/// # Returns
+/// 返回值
+/// A deterministic diagnostic retaining status, code, type, param, message, request id, and
+/// bounded metadata without request or credential material.
+/// 返回一条确定性诊断，保留 status、code、type、param、message、request id 与有界 metadata，
+/// 且不包含请求或凭据材料。
+fn format_structured_provider_error(label: &str, status: Option<u16>, body: &Value) -> String {
+    // error selects the standard error envelope while retaining compatible top-level responses.
+    // error 选择标准错误信封，同时保留兼容的顶层响应。
+    let error = body.get("error").unwrap_or(body);
+    // fields accumulates only the reviewed structured diagnostic contract.
+    // fields 只累积已审核的结构化诊断契约。
+    let mut fields = Vec::new();
+    if let Some(status) = status {
+        fields.push(format!("status={status}"));
+    }
+    for (name, value) in [
+        ("code", safe_provider_diagnostic_scalar(error.get("code"))),
+        ("type", safe_provider_diagnostic_scalar(error.get("type"))),
+        ("param", safe_provider_diagnostic_scalar(error.get("param"))),
+    ] {
+        if let Some(value) = value {
+            fields.push(format!("{name}={value}"));
+        }
+    }
+    // message follows the closed provider-compatible precedence without retaining raw bodies.
+    // message 遵循封闭的供应商兼容优先级，且不保留原始正文。
+    let message = safe_provider_diagnostic_scalar(error.get("message"))
+        .or_else(|| safe_provider_diagnostic_scalar(body.pointer("/base_resp/status_msg")))
+        .or_else(|| safe_provider_diagnostic_scalar(body.pointer("/detail/error")))
+        .unwrap_or_else(|| String::from("The provider returned an unspecified error."));
+    fields.push(format!("message={message}"));
+    if let Some(request_id) = safe_provider_diagnostic_scalar(error.get("request_id"))
+        .or_else(|| safe_provider_diagnostic_scalar(body.get("request_id")))
+        .or_else(|| safe_provider_diagnostic_scalar(body.get("id")))
+    {
+        fields.push(format!("request_id={request_id}"));
+    }
+    if let Some(metadata) = error.get("metadata") {
+        // safe_metadata removes credential/signing keys before rendering provider-controlled data.
+        // safe_metadata 在渲染供应商控制数据前移除凭据与签名键。
+        let safe_metadata = redact_provider_diagnostic_json(metadata);
+        // rendered is character-bounded after JSON serialization to remain valid UTF-8.
+        // rendered 在 JSON 序列化后按字符限制，确保始终是有效 UTF-8。
+        let rendered = serde_json::to_string(&safe_metadata)
+            .unwrap_or_else(|_| String::from("<unserializable metadata>"));
+        fields.push(format!(
+            "metadata={}",
+            bound_provider_diagnostic_text(
+                rendered.as_str(),
+                PROVIDER_TOOL_DIAGNOSTIC_FIELD_MAX_CHARACTERS,
+            )
+        ));
+    }
+    // diagnostic applies the final whole-message ceiling after every field has been sanitized.
+    // diagnostic 在每个字段完成清理后应用最终整条消息上限。
+    let diagnostic = format!("{label} request failed: {}", fields.join(" | "));
+    bound_provider_diagnostic_text(diagnostic.as_str(), PROVIDER_TOOL_DIAGNOSTIC_MAX_CHARACTERS)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Verifies MiniMax inline images normalize into typed resource bytes.
-    /// 验证 MiniMax 内联图片会归一化为强类型资源字节。
-    #[test]
-    fn decodes_minimax_inline_image_response() {
-        let result = decode_minimax_image_response(
-            r#"{"data":{"task_id":"task-1","image_base64":["aGVsbG8="],"success_count":1,"failed_count":0},"base_resp":{"status_code":0,"status_msg":""}}"#,
-        )
-        .expect("valid image response");
-        assert_eq!(result.upstream_response_id.as_deref(), Some("task-1"));
-        let ProviderToolNormalizedOutput::Resources(resources) = result.output else {
-            panic!("expected resource output");
-        };
-        assert_eq!(resources[0].bytes.as_deref(), Some("hello".as_bytes()));
-    }
-
-    /// Verifies Qwen image generation projects the reviewed synchronous wire shape.
-    /// 验证 Qwen 图片生成投影已审核同步 Wire 结构。
-    #[test]
-    fn projects_alibaba_qwen_image_request() {
-        let target = crate::built_in_provider_tool_targets("alibaba")
-            .into_iter()
-            .find(|target| {
-                target.service_entry_id == "model-studio-cn"
-                    && target.execution.adapter == ProviderToolAdapterKind::AlibabaQwenImageGenerate
-            })
-            .expect("Qwen generation target");
-        let arguments: AlibabaQwenImageGenerateArguments =
-            serde_json::from_value(serde_json::json!({
-                "prompt": "A blue forge",
-                "width": 1024,
-                "height": 1024,
-                "count": 2,
-                "prompt_extend": false
-            }))
-            .expect("typed Qwen arguments");
-        let body =
-            build_alibaba_qwen_generate_body(&target, arguments).expect("valid Qwen request");
-        let value = serde_json::to_value(body).expect("serializable Qwen body");
-        assert_eq!(value["model"], "qwen-image-2.0-pro");
-        assert_eq!(value["input"]["messages"][0]["role"], "user");
-        assert_eq!(
-            value["input"]["messages"][0]["content"][0]["text"],
-            "A blue forge"
-        );
-        assert_eq!(value["parameters"]["size"], "1024*1024");
-        assert_eq!(value["parameters"]["n"], 2);
-        assert_eq!(value["parameters"]["prompt_extend"], false);
-    }
-
-    /// Verifies Wan 4k output rejects reference-image generation exactly as documented.
-    /// 验证 Wan 4k 输出会按文档精确拒绝参考图生成。
-    #[test]
-    fn rejects_alibaba_wan_4k_reference_request() {
-        let target = crate::built_in_provider_tool_targets("alibaba")
-            .into_iter()
-            .find(|target| {
-                target.upstream_target_id == "wan2.7-image-pro"
-                    && target.execution.adapter == ProviderToolAdapterKind::AlibabaWanImageGenerate
-            })
-            .expect("Wan Pro target");
-        let arguments = serde_json::json!({
-            "prompt": "Retain this composition.",
-            "resolution": "4k",
-            "reference_images": ["data:image/png;base64,aGVsbG8="]
+    /// Verifies transport diagnostics never retain task identities or signed URL queries.
+    /// 验证传输诊断绝不保留任务身份或签名 URL 查询串。
+    #[tokio::test]
+    async fn provider_tool_transport_diagnostic_removes_complete_request_url() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("loopback listener should bind");
+        let address = listener
+            .local_addr()
+            .expect("loopback listener address should resolve");
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener
+                .accept()
+                .await
+                .expect("loopback connection should arrive");
+            drop(stream);
         });
-        let parsed: AlibabaWanImageGenerateArguments =
-            serde_json::from_value(arguments).expect("typed Wan arguments");
-        let error = build_alibaba_wan_generate_body(&target, parsed)
-            .expect_err("Wan Pro 4k reference generation must be rejected");
-        assert_eq!(
-            error,
-            "Alibaba Wan 4k output is limited to wan2.7-image-pro text-only generation."
+        let sensitive_url =
+            format!("http://{address}/tasks/provider-task-secret?signature=signed-query-secret");
+        let error = reqwest::Client::new()
+            .get(sensitive_url.as_str())
+            .send()
+            .await
+            .expect_err("closed loopback response must fail");
+        server.await.expect("loopback server should finish");
+
+        let diagnostic = format_provider_tool_transport_error("Provider task poll", error);
+        assert!(diagnostic.starts_with("Provider task poll request failed:"));
+        assert!(!diagnostic.contains("provider-task-secret"));
+        assert!(!diagnostic.contains("signed-query-secret"));
+        assert!(!diagnostic.contains(address.to_string().as_str()));
+    }
+
+    /// Verifies provider JSON parsing rejects trees beyond shared depth and node ceilings.
+    /// 验证供应商 JSON 解析会拒绝超过共享深度与节点数量上限的树。
+    #[test]
+    fn provider_json_parser_enforces_depth_and_node_bounds() {
+        let mut deeply_nested = Value::Null;
+        for _ in 0..=crate::provider_manifest::MAX_JSON_DEPTH {
+            deeply_nested = Value::Array(vec![deeply_nested]);
+        }
+        let deep_text = serde_json::to_string(&deeply_nested).expect("deep fixture should encode");
+        assert!(
+            parse_bounded_provider_json(deep_text.as_str(), "Provider fixture")
+                .expect_err("deep provider JSON must fail")
+                .contains("depth limit")
+        );
+
+        let oversized_nodes =
+            Value::Array(vec![Value::Null; crate::provider_manifest::MAX_JSON_NODES]);
+        let oversized_text =
+            serde_json::to_string(&oversized_nodes).expect("node fixture should encode");
+        assert!(
+            parse_bounded_provider_json(oversized_text.as_str(), "Provider fixture")
+                .expect_err("oversized provider JSON node tree must fail")
+                .contains("node limit")
         );
     }
 
-    /// Verifies Alibaba temporary image URLs normalize into shared resource output.
-    /// 验证阿里云临时图片 URL 会归一化到共享资源输出。
+    /// Returns manifest-owned provider-tool targets for one bundled provider fixture.
+    /// 返回一个内置供应商夹具中由 Manifest 持有的供应商工具目标。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `provider_id` is the exact bundled provider identity.
+    /// `provider_id` 是精确的内置供应商标识。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The compiled target list, or an empty list when the manifest is absent.
+    /// 返回已编译目标列表；清单不存在时返回空列表。
+    fn bundled_manifest_tool_targets(provider_id: &str) -> Vec<ProviderToolTarget> {
+        crate::provider_manifest::load_bundled_resolved_catalog()
+            .manifest(provider_id)
+            .map(|manifest| manifest.tool_targets.clone())
+            .unwrap_or_default()
+    }
+
+    /// Verifies a bundled generic target enforces its host-only numeric product range.
+    /// 验证内置通用目标会执行其仅宿主可见的数值乘积区间。
     #[test]
-    fn decodes_alibaba_image_response() {
-        let result = decode_alibaba_image_response(
-            "Alibaba image",
-            r#"{"request_id":"request-1","output":{"choices":[{"message":{"content":[{"image":"https://example.com/generated.png"}]}}]}}"#,
-        )
-        .expect("valid Alibaba image response");
-        assert_eq!(result.upstream_response_id.as_deref(), Some("request-1"));
-        let ProviderToolNormalizedOutput::Resources(resources) = result.output else {
-            panic!("expected resource output");
-        };
-        assert_eq!(resources.len(), 1);
-        assert_eq!(resources[0].mime_type, "image/png");
+    fn generic_qwen_image_target_enforces_total_pixel_range() {
+        // catalog retains both generated targets and their immutable template provenance.
+        // catalog 同时保留生成目标及其不可变模板来源。
+        let catalog = crate::provider_manifest::load_bundled_resolved_catalog();
+        // manifest is the authoritative compiled Alibaba declaration.
+        // manifest 是权威的已编译 Alibaba 声明。
+        let manifest = catalog
+            .manifest("alibaba")
+            .expect("bundled Alibaba manifest");
+        // instance identifies the generated target by exact template and model facts.
+        // instance 通过精确模板与模型事实标识生成目标。
+        let instance = manifest
+            .tool_target_template_instances
+            .values()
+            .find(|instance| {
+                instance.template_id == "alibaba.model-studio-cn.qwen-image-generate.v1"
+                    && instance.model_id == "qwen-image-2.0-pro"
+            })
+            .expect("generic Qwen image template instance");
+        // target is resolved through provenance instead of relying on an obsolete fixed target id.
+        // target 通过来源解析，而不是依赖已废弃的固定目标标识。
+        let target = manifest
+            .tool_targets
+            .iter()
+            .find(|target| target.target_id == instance.target_id)
+            .cloned()
+            .expect("generic Qwen image target");
         assert_eq!(
-            resources[0].download_url.as_deref(),
-            Some("https://example.com/generated.png")
+            target.execution.adapter,
+            ProviderToolAdapterKind::GenericJson
         );
-    }
 
-    /// Verifies CosyVoice projects only supplied native fields and the reviewed MIME type.
-    /// 验证 CosyVoice 仅投影已提供原生字段与已审核 MIME 类型。
-    #[test]
-    fn projects_alibaba_cosyvoice_request_without_null_fields() {
-        let target = crate::built_in_provider_tool_targets("alibaba")
-            .into_iter()
-            .find(|target| {
-                target.service_entry_id == "model-studio-cn"
-                    && target.upstream_target_id == "cosyvoice-v3-flash"
-            })
-            .expect("CosyVoice target");
-        let arguments: AlibabaCosyVoiceArguments = serde_json::from_value(serde_json::json!({
-            "text": "你好，Vulcan。",
-            "voice_id": "longxiaochun",
-            "output_format": "wav",
-            "speed": 1.2
-        }))
-        .expect("typed CosyVoice arguments");
-        let (body, mime_type) =
-            build_alibaba_cosyvoice_body(&target, arguments).expect("valid CosyVoice body");
-        assert_eq!(body["model"], "cosyvoice-v3-flash");
-        assert_eq!(body["input"]["voice"], "longxiaochun");
-        assert_eq!(body["input"]["format"], "wav");
-        assert_eq!(body["input"]["rate"], 1.2);
-        assert!(body["input"].get("sample_rate").is_none());
-        assert!(body["input"].get("language_hints").is_none());
-        assert_eq!(mime_type, "audio/wav");
-    }
-
-    /// Verifies Qwen3-TTS exposes instructions only for the instruct model.
-    /// 验证 Qwen3-TTS 仅为指令模型暴露表达指令。
-    #[test]
-    fn projects_alibaba_qwen_tts_model_specific_request() {
-        let targets = crate::built_in_provider_tool_targets("alibaba");
-        let plain = targets
-            .iter()
-            .find(|target| {
-                target.service_entry_id == "model-studio-cn"
-                    && target.upstream_target_id == "qwen3-tts-flash"
-            })
-            .expect("plain Qwen3-TTS target");
-        let instruct = targets
-            .iter()
-            .find(|target| {
-                target.service_entry_id == "model-studio-cn"
-                    && target.upstream_target_id == "qwen3-tts-instruct-flash"
-            })
-            .expect("instruct Qwen3-TTS target");
-        let plain_error = build_alibaba_qwen_tts_body(
-            plain,
-            AlibabaQwenTtsArguments {
-                text: String::from("Hello."),
-                voice_id: String::from("Cherry"),
-                language: None,
-                style: Some(String::from("Speak warmly.")),
-            },
-        )
-        .expect_err("plain TTS must reject instructions");
-        assert!(plain_error.contains("requires qwen3-tts-instruct-flash"));
-        let body = build_alibaba_qwen_tts_body(
-            instruct,
-            AlibabaQwenTtsArguments {
-                text: String::from("Hello."),
-                voice_id: String::from("Cherry"),
-                language: Some(String::from("English")),
-                style: Some(String::from("Speak warmly.")),
-            },
-        )
-        .expect("valid instruct TTS body");
-        assert_eq!(body["input"]["instructions"], "Speak warmly.");
-        assert_eq!(body["input"]["optimize_instructions"], true);
-        assert_eq!(body["input"]["language_type"], "English");
-    }
-
-    /// Verifies Qwen3-ASR emits one bounded Data URL and omits an absent language.
-    /// 验证 Qwen3-ASR 发送一个有界 Data URL 并省略缺失语言。
-    #[test]
-    fn projects_alibaba_qwen_asr_request_without_null_language() {
-        let target = crate::built_in_provider_tool_targets("alibaba")
-            .into_iter()
-            .find(|target| {
-                target.service_entry_id == "model-studio-singapore"
-                    && target.upstream_target_id == "qwen3-asr-flash"
-            })
-            .expect("Qwen3-ASR target");
-        let body = build_alibaba_qwen_asr_body(
+        let valid = canonicalize_provider_tool_arguments(
             &target,
-            AlibabaQwenAsrArguments {
-                audio_url: String::from("data:audio/mpeg;base64,aGVsbG8="),
-                language: None,
-            },
+            serde_json::json!({"prompt": "A blue forge", "width": 512, "height": 512}),
         )
-        .expect("valid Qwen3-ASR body");
-        assert_eq!(
-            body["input"]["messages"][0]["content"][0]["audio"],
-            "data:audio/mpeg;base64,aGVsbG8="
-        );
-        assert_eq!(body["parameters"]["asr_options"]["enable_itn"], false);
-        assert!(body["parameters"]["asr_options"].get("language").is_none());
-    }
+        .expect("minimum reviewed pixel product should pass");
+        assert_eq!(valid["count"], 1);
 
-    /// Verifies image-01-live rejects image-01-only dimensions.
-    /// 验证 image-01-live 会拒绝仅 image-01 支持的尺寸。
-    #[test]
-    fn live_model_rejects_dimensions() {
-        let arguments = MiniMaxImageToolArguments::from_json(serde_json::json!({
-            "prompt": "test",
-            "width": 1024,
-            "height": 1024
-        }))
-        .expect("typed arguments");
-        assert!(validate_image_arguments("image-01-live", &arguments).is_err());
-    }
-
-    /// Verifies MiniMax search responses normalize into the shared search union.
-    /// 验证 MiniMax 搜索响应会归一化到共享搜索联合。
-    #[test]
-    fn decodes_minimax_search_response() {
-        let result = decode_minimax_search_response(
-            "Vulcan",
-            1,
-            r#"{"organic":[{"title":"First","link":"https://example.com/first","snippet":"one"},{"title":"Second","link":"https://example.org/second","snippet":"two"}],"base_resp":{"status_code":0,"status_msg":"success"}}"#,
+        let error = canonicalize_provider_tool_arguments(
+            &target,
+            serde_json::json!({"prompt": "A blue forge", "width": 511, "height": 512}),
         )
-        .expect("valid search response");
-        let ProviderToolNormalizedOutput::Search(search) = result.output else {
-            panic!("expected search output");
-        };
-        assert_eq!(search.query, "Vulcan");
-        assert_eq!(search.results.len(), 1);
-        assert_eq!(search.results[0].source_domain, "example.com");
-    }
-
-    /// Verifies MiniMax image-understanding accepts only the copied Data URL contract.
-    /// 验证 MiniMax 图片理解仅接受复制的 Data URL 契约。
-    #[test]
-    fn validates_minimax_vision_data_url() {
-        let arguments = MiniMaxVisionToolArguments {
-            prompt: String::from("Describe this image."),
-            image_url: String::from("data:image/webp;base64,aGVsbG8="),
-        };
-        arguments.validate().expect("supported WebP Data URL");
-        let invalid = MiniMaxVisionToolArguments {
-            prompt: String::from("Describe this image."),
-            image_url: String::from("https://example.com/image.webp"),
-        };
-        assert!(invalid.validate().is_err());
-    }
-
-    /// Verifies MiniMax speech arguments project exact provider defaults and fields.
-    /// 验证 MiniMax 语音参数会投影精确的供应商默认值与字段。
-    #[test]
-    fn projects_minimax_speech_request() {
-        let arguments: MiniMaxSpeechToolArguments = serde_json::from_value(serde_json::json!({
-            "text": "Hello",
-            "voice_id": "English_Graceful_Lady",
-            "timestamps": true,
-            "pronunciations": ["Vulcan/ˈvʌlkən"]
-        }))
-        .expect("typed speech arguments");
-        let (body, mime_type) = arguments
-            .into_wire_body("speech-2.8-hd")
-            .expect("valid speech request");
-        assert_eq!(mime_type, "audio/mpeg");
-        assert_eq!(body["model"], "speech-2.8-hd");
-        assert_eq!(body["stream"], false);
-        assert_eq!(body["output_format"], "hex");
-        assert_eq!(body["voice_setting"]["speed"], 1.0);
-        assert_eq!(body["audio_setting"]["sample_rate"], 32_000);
-        assert_eq!(body["audio_setting"]["bitrate"], 128_000);
-        assert_eq!(body["subtitle_enable"], true);
-        assert_eq!(body["pronunciation_dict"]["tone"][0], "Vulcan/ˈvʌlkən");
-    }
-
-    /// Verifies non-MP3 MiniMax speech requests reject the MP3-only bitrate field.
-    /// 验证非 MP3 MiniMax 语音请求会拒绝仅适用于 MP3 的码率字段。
-    #[test]
-    fn rejects_minimax_speech_bitrate_for_non_mp3() {
-        let arguments: MiniMaxSpeechToolArguments = serde_json::from_value(serde_json::json!({
-            "text": "Hello",
-            "voice_id": "English_Graceful_Lady",
-            "output_format": "flac",
-            "bitrate": 128000
-        }))
-        .expect("typed speech arguments");
-        assert!(arguments.into_wire_body("speech-2.8-hd").is_err());
-    }
-
-    /// Verifies MiniMax speech responses normalize hexadecimal audio and subtitle resources.
-    /// 验证 MiniMax 语音响应会归一化十六进制音频与字幕资源。
-    #[test]
-    fn decodes_minimax_speech_response() {
-        let result = decode_minimax_speech_response(
-            r#"{"data":{"audio":"68656c6c6f","status":2,"subtitle_file":"https://example.com/subtitle.json"},"base_resp":{"status_code":0,"status_msg":"success"}}"#,
-            "audio/mpeg",
-        )
-        .expect("valid speech response");
-        let ProviderToolNormalizedOutput::Resources(resources) = result.output else {
-            panic!("expected resource output");
-        };
-        assert_eq!(resources.len(), 2);
-        assert_eq!(resources[0].bytes.as_deref(), Some("hello".as_bytes()));
-        assert_eq!(resources[0].mime_type, "audio/mpeg");
-        assert_eq!(resources[1].kind, "file");
-        assert_eq!(
-            resources[1].download_url.as_deref(),
-            Some("https://example.com/subtitle.json")
+        .expect_err("sub-minimum pixel product must fail before dispatch");
+        assert!(
+            error.contains("numeric product") && error.contains("262144"),
+            "unexpected product-range error: {error}"
         );
     }
 
-    /// Verifies MiniMax music intent projects an exact synchronous URL request.
-    /// 验证 MiniMax 音乐意图会投影精确的同步 URL 请求。
+    /// Verifies the manifest-owned generic JSON-sync decoder preserves the reviewed search contract.
+    /// 验证 Manifest 持有的通用 JSON 同步解码器保持已审核搜索契约。
     #[test]
-    fn projects_minimax_music_request() {
-        let arguments: MiniMaxMusicToolArguments = serde_json::from_value(serde_json::json!({
-            "prompt": "A cinematic instrumental theme",
-            "instrumental": true,
-            "output_format": "wav",
-            "channels": 2
-        }))
-        .expect("typed music arguments");
-        let (body, mime_type) = arguments
-            .into_wire_body("music-3.0")
-            .expect("valid music request");
-        assert_eq!(mime_type, "audio/wav");
-        assert_eq!(body["model"], "music-3.0");
-        assert_eq!(body["stream"], false);
-        assert_eq!(body["output_format"], "url");
-        assert_eq!(body["is_instrumental"], true);
-        assert_eq!(body["audio_setting"]["sample_rate"], 44_100);
-        assert_eq!(body["audio_setting"]["bitrate"], 256_000);
-        assert_eq!(body["audio_setting"]["channel"], 2);
-    }
-
-    /// Verifies MiniMax music intent does not silently infer missing lyrics behavior.
-    /// 验证 MiniMax 音乐意图不会静默推测缺失的歌词行为。
-    #[test]
-    fn rejects_ambiguous_minimax_music_intent() {
-        let arguments: MiniMaxMusicToolArguments = serde_json::from_value(serde_json::json!({
-            "prompt": "A vocal pop song"
-        }))
-        .expect("typed music arguments");
-        assert!(arguments.into_wire_body("music-3.0").is_err());
-    }
-
-    /// Verifies MiniMax music responses normalize one validated audio resource.
-    /// 验证 MiniMax 音乐响应会归一化一个已验证音频资源。
-    #[test]
-    fn decodes_minimax_music_response() {
-        let result = decode_minimax_music_response(
-            r#"{"data":{"audio_url":"https://example.com/music.mp3","status":2},"trace_id":"trace-1","base_resp":{"status_code":0,"status_msg":"success"}}"#,
-            "audio/mpeg",
-        )
-        .expect("valid music response");
-        assert_eq!(result.upstream_response_id.as_deref(), Some("trace-1"));
-        let ProviderToolNormalizedOutput::Resources(resources) = result.output else {
-            panic!("expected resource output");
+    fn generic_json_sync_decodes_search_contract() {
+        let contract = crate::ProviderToolOutputContract {
+            kind: ProviderToolOutputKind::Search,
+            source_path: String::from("/results"),
+            normalized_result_path: String::from("/search"),
+            resource_kind: None,
+            mime_types: Vec::new(),
+            resource_decoders: Vec::new(),
         };
-        assert_eq!(resources.len(), 1);
-        assert_eq!(resources[0].kind, "audio");
-        assert_eq!(
-            resources[0].download_url.as_deref(),
-            Some("https://example.com/music.mp3")
-        );
-    }
-
-    /// Verifies MiniMax Fast video requests require and project one first frame.
-    /// 验证 MiniMax Fast 视频请求要求并投影一个首帧。
-    #[test]
-    fn projects_minimax_fast_video_request() {
-        let arguments: MiniMaxVideoToolArguments = serde_json::from_value(serde_json::json!({
-            "prompt": "Camera pushes toward the subject.",
-            "first_frame_image": "data:image/png;base64,aGVsbG8=",
-            "duration_seconds": 6,
-            "resolution": "1080P",
-            "prompt_extend": true
-        }))
-        .expect("typed video arguments");
-        let body = arguments
-            .into_wire_body("MiniMax-Hailuo-2.3-Fast")
-            .expect("valid video request");
-        assert_eq!(body["model"], "MiniMax-Hailuo-2.3-Fast");
-        assert_eq!(body["first_frame_image"], "data:image/png;base64,aGVsbG8=");
-        assert_eq!(body["duration"], 6);
-        assert_eq!(body["resolution"], "1080P");
-        assert_eq!(body["prompt_optimizer"], true);
-    }
-
-    /// Verifies MiniMax video model-specific input modes do not cross over.
-    /// 验证 MiniMax 视频模型专属输入模式不会相互串用。
-    #[test]
-    fn rejects_cross_model_minimax_video_input() {
-        let arguments: MiniMaxVideoToolArguments = serde_json::from_value(serde_json::json!({
-            "prompt": "A character turns around.",
-            "subject_reference_image": "data:image/jpeg;base64,aGVsbG8="
-        }))
-        .expect("typed video arguments");
-        assert!(arguments.into_wire_body("MiniMax-Hailuo-2.3").is_err());
-    }
-
-    /// Verifies MiniMax video file responses normalize one MP4 resource.
-    /// 验证 MiniMax 视频文件响应会归一化一个 MP4 资源。
-    #[test]
-    fn decodes_minimax_video_file_response() {
-        let result = decode_minimax_video_file_response(
-            r#"{"file":{"download_url":"https://example.com/video.mp4"},"base_resp":{"status_code":0,"status_msg":"success"}}"#,
-            "task-1",
+        let result = decode_generic_json_sync_output(
+            &contract,
+            r#"{"query":"Vulcan","results":[{"title":"First","url":"https://example.com/first","content":"one"}],"request_id":"request-1"}"#,
         )
-        .expect("valid video file response");
-        assert_eq!(result.upstream_response_id.as_deref(), Some("task-1"));
-        let ProviderToolNormalizedOutput::Resources(resources) = result.output else {
-            panic!("expected resource output");
-        };
-        assert_eq!(resources[0].mime_type, "video/mp4");
-        assert_eq!(
-            resources[0].download_url.as_deref(),
-            Some("https://example.com/video.mp4")
-        );
-    }
-
-    /// Verifies Tavily search output preserves request identity and ordered evidence.
-    /// 验证 Tavily 搜索输出保留请求标识与有序证据。
-    #[test]
-    fn decodes_tavily_search_response() {
-        let result = decode_tavily_search_response(
-            r#"{"query":"Vulcan","results":[{"title":"First","url":"https://example.com/first","content":"one","score":0.9}],"usage":{"credits":1},"request_id":"request-1"}"#,
-        )
-        .expect("valid Tavily search response");
+        .expect("generic search decode must succeed");
         assert_eq!(result.upstream_response_id.as_deref(), Some("request-1"));
         let ProviderToolNormalizedOutput::Search(search) = result.output else {
             panic!("expected search output");
         };
         assert_eq!(search.query, "Vulcan");
+        assert_eq!(search.results[0].rank, 1);
         assert_eq!(search.results[0].source_domain, "example.com");
+        assert_eq!(search.results[0].snippet, "one");
     }
 
-    /// Verifies Tavily extraction output preserves successful pages and per-URL failures.
-    /// 验证 Tavily 网页提取输出保留成功页面与逐 URL 失败。
+    /// Verifies the generic decoder normalizes an extract response including per-URL failures.
+    /// 验证通用解码器归一化包含逐 URL 失败的提取响应。
     #[test]
-    fn decodes_tavily_extract_response() {
-        let result = decode_tavily_extract_response(
-            r##"{"results":[{"url":"https://example.com/page","raw_content":"# Page","images":["https://example.com/image.png"],"favicon":"https://example.com/favicon.ico"}],"failed_results":[{"url":"https://example.org/missing","error":"not found"}],"usage":{"credits":1},"request_id":"request-2"}"##,
+    fn generic_json_sync_decodes_extract_contract() {
+        let contract = crate::ProviderToolOutputContract {
+            kind: ProviderToolOutputKind::Extract,
+            source_path: String::from("/results"),
+            normalized_result_path: String::from("/extract"),
+            resource_kind: None,
+            mime_types: Vec::new(),
+            resource_decoders: Vec::new(),
+        };
+        let result = decode_generic_json_sync_output(
+            &contract,
+            r##"{"results":[{"url":"https://example.com/page","raw_content":"# Page","images":["https://example.com/image.png"],"favicon":"https://example.com/favicon.ico"}],"failed_results":[{"url":"https://example.org/missing","error":"not found"}],"request_id":"request-2"}"##,
         )
-        .expect("valid Tavily extract response");
-        assert_eq!(result.upstream_response_id.as_deref(), Some("request-2"));
+        .expect("generic extract decode must succeed");
         let ProviderToolNormalizedOutput::Extract(extract) = result.output else {
             panic!("expected extract output");
         };
         assert_eq!(extract.results[0].content, "# Page");
+        assert_eq!(
+            extract.results[0].images[0],
+            "https://example.com/image.png"
+        );
         assert_eq!(extract.failures[0].error, "not found");
     }
 
-    /// Verifies Alibaba MCP text pages normalize into the shared search union.
-    /// 验证阿里云 MCP 文本页面会归一化到共享搜索联合。
+    /// Verifies every nested extract URL and collection remains safe and bounded.
+    /// 验证每个嵌套提取 URL 与集合均保持安全且有界。
     #[test]
-    fn decodes_alibaba_mcp_search_result() {
-        let result = decode_alibaba_search_result(
-            "Vulcan",
-            Some(1),
-            serde_json::json!({
-                "content": [{
-                    "type": "text",
-                    "text": "{\"pages\":[{\"title\":\"First\",\"url\":\"https://example.com/first\",\"snippet\":\"one\"},{\"title\":\"Second\",\"url\":\"https://example.org/second\",\"snippet\":\"two\"}]}"
-                }]
-            }),
-        )
-        .expect("valid Alibaba search result");
-        let ProviderToolNormalizedOutput::Search(search) = result.output else {
-            panic!("expected search output");
+    fn generic_json_sync_rejects_unsafe_or_unbounded_extract_urls() {
+        let contract = crate::ProviderToolOutputContract {
+            kind: ProviderToolOutputKind::Extract,
+            source_path: String::from("/results"),
+            normalized_result_path: String::from("/extract"),
+            resource_kind: None,
+            mime_types: Vec::new(),
+            resource_decoders: Vec::new(),
         };
-        assert_eq!(search.query, "Vulcan");
-        assert_eq!(search.results.len(), 1);
-        assert_eq!(search.results[0].source_domain, "example.com");
+
+        let image_error = decode_generic_json_sync_output(
+            &contract,
+            r#"{"results":[{"url":"https://example.com/page","images":["javascript:alert(1)"]}]}"#,
+        )
+        .expect_err("non-HTTPS image URL must fail");
+        assert!(image_error.contains("absolute credential-free HTTPS URL"));
+
+        let failure_error = decode_generic_json_sync_output(
+            &contract,
+            r#"{"results":[],"failed_results":[{"url":"file:///private.txt","error":"blocked"}]}"#,
+        )
+        .expect_err("non-HTTPS failure URL must fail before reaching an anchor");
+        assert!(failure_error.contains("absolute credential-free HTTPS URL"));
+
+        let images = vec![
+            Value::String(String::from("https://example.com/image.png"));
+            GENERIC_STRUCTURED_RESULT_COUNT_LIMIT + 1
+        ];
+        let oversized = serde_json::json!({
+            "results": [{
+                "url": "https://example.com/page",
+                "images": images,
+            }],
+        });
+        let oversized_text = serde_json::to_string(&oversized).expect("fixture should serialize");
+        let limit_error = decode_generic_json_sync_output(&contract, oversized_text.as_str())
+            .expect_err("unbounded nested image list must fail");
+        assert!(limit_error.contains("256-image host limit"));
     }
 
-    /// Verifies Alibaba MCP JSON-RPC errors remain controlled and correlated.
-    /// 验证阿里云 MCP JSON-RPC 错误保持受控且完成关联。
+    /// Verifies the generic decoder rejects a missing source path and a non-array source.
+    /// 验证通用解码器拒绝缺失源路径与非数组源。
     #[test]
-    fn rejects_alibaba_mcp_error_response() {
-        let error = decode_alibaba_mcp_response(
-            r#"{"jsonrpc":"2.0","id":2,"error":{"code":-32000,"message":"secret detail"}}"#,
-            2,
+    fn generic_json_sync_decoder_rejects_invalid_contract_source() {
+        let contract = crate::ProviderToolOutputContract {
+            kind: ProviderToolOutputKind::Search,
+            source_path: String::from("/missing"),
+            normalized_result_path: String::from("/search"),
+            resource_kind: None,
+            mime_types: Vec::new(),
+            resource_decoders: Vec::new(),
+        };
+        let error =
+            decode_generic_json_sync_output(&contract, r#"{"query":"Vulcan","results":[]}"#)
+                .expect_err("missing source path must fail");
+        assert!(error.contains("missing source path"), "error: {error}");
+
+        let non_array = crate::ProviderToolOutputContract {
+            kind: ProviderToolOutputKind::Search,
+            source_path: String::from("/results"),
+            normalized_result_path: String::from("/search"),
+            resource_kind: None,
+            mime_types: Vec::new(),
+            resource_decoders: Vec::new(),
+        };
+        let error = decode_generic_json_sync_output(
+            &non_array,
+            r#"{"query":"Vulcan","results":{"title":"not-an-array"}}"#,
         )
-        .expect_err("provider error must be rejected");
-        assert!(error.contains("-32000"));
-        assert!(!error.contains("secret detail"));
+        .expect_err("non-array source must fail");
+        assert!(error.contains("is not an array"), "error: {error}");
+    }
+
+    /// Verifies generic text and resource contracts produce strong normalized output shapes.
+    /// 验证通用文本与资源契约会产生强类型归一化输出形态。
+    #[test]
+    fn generic_json_sync_decodes_text_and_resource_contracts() {
+        let text_contract = crate::ProviderToolOutputContract {
+            kind: ProviderToolOutputKind::Text,
+            source_path: String::from("/answer"),
+            normalized_result_path: String::from("/text"),
+            resource_kind: None,
+            mime_types: Vec::new(),
+            resource_decoders: Vec::new(),
+        };
+        let text = decode_generic_json_sync_output(
+            &text_contract,
+            r#"{"answer":"completed","id":"response-1"}"#,
+        )
+        .expect("generic text should decode");
+        assert_eq!(text.upstream_response_id.as_deref(), Some("response-1"));
+        assert!(matches!(
+            text.output,
+            ProviderToolNormalizedOutput::Text(ref value) if value == "completed"
+        ));
+
+        let resource_contract = crate::ProviderToolOutputContract {
+            kind: ProviderToolOutputKind::Resources,
+            source_path: String::from("/unused"),
+            normalized_result_path: String::from("/resources"),
+            resource_kind: Some(String::from("image")),
+            mime_types: vec![String::from("image/png")],
+            resource_decoders: vec![
+                crate::ProviderToolResourceDecoder {
+                    source_path: String::from("/inline"),
+                    encoding: crate::ProviderToolResourceEncoding::DataUrl,
+                    download_host_suffixes: Vec::new(),
+                    resource_kind: String::from("image"),
+                    mime_type: None,
+                    mime_type_request_path: None,
+                    mime_types_by_request_value: std::collections::BTreeMap::new(),
+                    optional: false,
+                    max_bytes: Some(16),
+                    output_id_prefix: Some(String::from("inline")),
+                },
+                crate::ProviderToolResourceDecoder {
+                    source_path: String::from("/url"),
+                    encoding: crate::ProviderToolResourceEncoding::HttpsUrl,
+                    download_host_suffixes: vec![String::from("example.com")],
+                    resource_kind: String::from("image"),
+                    mime_type: Some(String::from("image/png")),
+                    mime_type_request_path: None,
+                    mime_types_by_request_value: std::collections::BTreeMap::new(),
+                    optional: false,
+                    max_bytes: None,
+                    output_id_prefix: Some(String::from("url")),
+                },
+            ],
+        };
+        let resources = decode_generic_json_sync_output(
+            &resource_contract,
+            r#"{"inline":"data:image/png;base64,aGVsbG8=","url":"https://example.com/image.png"}"#,
+        )
+        .expect("generic resources should decode");
+        let ProviderToolNormalizedOutput::Resources(resources) = resources.output else {
+            panic!("expected resource output");
+        };
+        assert_eq!(resources[0].bytes.as_deref(), Some("hello".as_bytes()));
+        assert_eq!(
+            resources[1].download_url.as_deref(),
+            Some("https://example.com/image.png")
+        );
+    }
+
+    /// Verifies declarative resource extractors decode mixed carriers and request-selected MIME.
+    /// 验证声明式资源提取器可解码混合载体与请求选择 MIME。
+    #[test]
+    fn generic_resource_decoders_handle_hex_and_optional_url() {
+        // The audio MIME table is owned by the frozen canonical request value.
+        // 音频 MIME 表由冻结的规范请求值持有。
+        let audio_mime_mapping = std::collections::BTreeMap::from([
+            (String::from("mp3"), String::from("audio/mpeg")),
+            (String::from("wav"), String::from("audio/wav")),
+        ]);
+        // The output contract extracts one inline audio artifact and one optional subtitle URL.
+        // 输出契约提取一项内联音频产物与一项可选字幕 URL。
+        let contract = crate::ProviderToolOutputContract {
+            kind: ProviderToolOutputKind::Resources,
+            source_path: String::from("/unused"),
+            normalized_result_path: String::from("/resources"),
+            resource_kind: None,
+            mime_types: vec![
+                String::from("audio/mpeg"),
+                String::from("audio/wav"),
+                String::from("application/json"),
+            ],
+            resource_decoders: vec![
+                crate::ProviderToolResourceDecoder {
+                    source_path: String::from("/data/audio"),
+                    encoding: crate::ProviderToolResourceEncoding::Hex,
+                    download_host_suffixes: Vec::new(),
+                    resource_kind: String::from("audio"),
+                    mime_type: None,
+                    mime_type_request_path: Some(String::from("/output_format")),
+                    mime_types_by_request_value: audio_mime_mapping,
+                    optional: false,
+                    max_bytes: Some(16),
+                    output_id_prefix: Some(String::from("audio")),
+                },
+                crate::ProviderToolResourceDecoder {
+                    source_path: String::from("/data/subtitle_file"),
+                    encoding: crate::ProviderToolResourceEncoding::PublicHttpUrl,
+                    download_host_suffixes: vec![String::from("example.com")],
+                    resource_kind: String::from("file"),
+                    mime_type: Some(String::from("application/json")),
+                    mime_type_request_path: None,
+                    mime_types_by_request_value: std::collections::BTreeMap::new(),
+                    optional: true,
+                    max_bytes: None,
+                    output_id_prefix: Some(String::from("subtitle")),
+                },
+            ],
+        };
+        // The canonical arguments select MP3 independently of provider response fields.
+        // 规范参数独立于供应商响应字段选择 MP3。
+        let request = serde_json::json!({"output_format": "mp3"});
+        // The projected response contains raw hex bytes plus one reviewed public URL.
+        // 投影响应包含原始十六进制字节与一个已审核公共 URL。
+        let result = decode_generic_json_sync_output_with_request(
+            &contract,
+            r#"{"data":{"audio":"68656c6c6f","subtitle_file":"http://example.com/subtitle.json"}}"#,
+            Some(&request),
+        )
+        .expect("declarative mixed resources should decode");
+        let ProviderToolNormalizedOutput::Resources(resources) = result.output else {
+            panic!("expected resource output");
+        };
+        assert_eq!(resources[0].output_id, "audio-1");
+        assert_eq!(resources[0].mime_type, "audio/mpeg");
+        assert_eq!(resources[0].bytes.as_deref(), Some("hello".as_bytes()));
+        assert_eq!(resources[1].output_id, "subtitle-1");
+        assert_eq!(
+            resources[1].download_url.as_deref(),
+            Some("http://example.com/subtitle.json")
+        );
+        // The retained policy must match the exact decoder authority rather than response data.
+        // 保留策略必须匹配精确解码器权限，而不是响应数据。
+        let download_policy = resources[1]
+            .download_policy
+            .as_ref()
+            .expect("URL resource must retain frozen download authority");
+        assert_eq!(
+            download_policy.encoding,
+            crate::ProviderToolResourceEncoding::PublicHttpUrl
+        );
+        assert_eq!(download_policy.host_suffixes, [String::from("example.com")]);
+        // An alternate valid HTTPS origin proves host authority is enforced independently of syntax.
+        // 另一个有效 HTTPS Origin 证明宿主权限独立于语法得到执行。
+        let error = download_policy
+            .validate_url(
+                "https://assets.example.org/subtitle.json",
+                "Provider tool test resource",
+            )
+            .expect_err("undeclared host must remain outside the frozen authority");
+        assert!(error.contains("declared scheme"));
+        assert!(error.contains("host suffixes"));
+
+        // A non-default port is a distinct network authority that the host-only policy cannot grant.
+        // 非默认端口属于宿主专用策略无法授权的另一项网络权限。
+        let error = download_policy
+            .validate_url(
+                "https://example.com:8443/subtitle.json?signature=temporary",
+                "Provider tool test resource",
+            )
+            .expect_err("undeclared port must remain outside the frozen authority");
+        assert!(error.contains("default port"));
+
+        // exactOrigin is a host-owned exception for a task initiated on one declared non-default port.
+        // exactOrigin 是对一个已声明非默认端口启动任务的宿主持有例外。
+        let exact_origin = reqwest::Url::parse("https://example.com:8443/v1/tasks/1")
+            .expect("exact operation origin should parse");
+        download_policy
+            .validate_url_with_exact_origin(
+                "https://example.com:8443/subtitle.json?signature=temporary",
+                "Provider tool test resource",
+                &exact_origin,
+            )
+            .expect("the exact frozen operation origin should retain its port");
+        let wrong_port = download_policy
+            .validate_url_with_exact_origin(
+                "https://example.com:9443/subtitle.json?signature=temporary",
+                "Provider tool test resource",
+                &exact_origin,
+            )
+            .expect_err("a different non-default port must remain outside the frozen authority");
+        assert!(wrong_port.contains("exact operation origin"));
+    }
+
+    /// Verifies declarative resource byte limits and MIME mappings fail closed.
+    /// 验证声明式资源字节上限与 MIME 映射保持失败关闭。
+    #[test]
+    fn generic_resource_decoders_reject_overflow_and_unknown_mime_selection() {
+        // The decoder permits only one decoded byte and one registered request format.
+        // 解码器只允许一个解码字节与一个已注册请求格式。
+        let contract = crate::ProviderToolOutputContract {
+            kind: ProviderToolOutputKind::Resources,
+            source_path: String::from("/unused"),
+            normalized_result_path: String::from("/resources"),
+            resource_kind: None,
+            mime_types: vec![String::from("audio/mpeg")],
+            resource_decoders: vec![crate::ProviderToolResourceDecoder {
+                source_path: String::from("/audio"),
+                encoding: crate::ProviderToolResourceEncoding::Base64,
+                download_host_suffixes: Vec::new(),
+                resource_kind: String::from("audio"),
+                mime_type: None,
+                mime_type_request_path: Some(String::from("/format")),
+                mime_types_by_request_value: std::collections::BTreeMap::from([(
+                    String::from("mp3"),
+                    String::from("audio/mpeg"),
+                )]),
+                optional: false,
+                max_bytes: Some(1),
+                output_id_prefix: Some(String::from("audio")),
+            }],
+        };
+        // Two decoded bytes exceed the exact declared ceiling.
+        // 两个解码字节超过精确声明上限。
+        let overflow_error = decode_generic_json_sync_output_with_request(
+            &contract,
+            r#"{"audio":"aGk="}"#,
+            Some(&serde_json::json!({"format": "mp3"})),
+        )
+        .expect_err("decoded bytes above max_bytes must fail");
+        assert!(overflow_error.contains("no larger than 1 bytes"));
+
+        // One decoded byte reaches MIME selection only after passing the byte guard.
+        // 一个解码字节在通过字节守卫后才进入 MIME 选择。
+        let mime_error = decode_generic_json_sync_output_with_request(
+            &contract,
+            r#"{"audio":"aA=="}"#,
+            Some(&serde_json::json!({"format": "flac"})),
+        )
+        .expect_err("unregistered request MIME selection must fail");
+        assert!(mime_error.contains("no MIME mapping"));
+    }
+
+    /// Verifies generic error envelopes retain every standard diagnostic field.
+    /// 验证通用错误信封保留每个标准诊断字段。
+    #[test]
+    fn generic_json_sync_preserves_structured_error_fields() {
+        let contract = crate::ProviderToolOutputContract {
+            kind: ProviderToolOutputKind::Text,
+            source_path: String::from("/answer"),
+            normalized_result_path: String::from("/text"),
+            resource_kind: None,
+            mime_types: Vec::new(),
+            resource_decoders: Vec::new(),
+        };
+        let error = decode_generic_json_sync_output(
+            &contract,
+            r#"{"request_id":"request-1","error":{"code":"bad_input","type":"invalid_request","param":"prompt","message":"Prompt is empty","metadata":{"provider_name":"fixture"}}}"#,
+        )
+        .expect_err("generic error envelope must fail");
+        for expected in [
+            "code=bad_input",
+            "type=invalid_request",
+            "param=prompt",
+            "message=Prompt is empty",
+            "request_id=request-1",
+            "provider_name",
+        ] {
+            assert!(
+                error.contains(expected),
+                "missing `{expected}` in `{error}`"
+            );
+        }
+    }
+
+    /// Verifies structured diagnostics redact signing data and truncate Unicode without panicking.
+    /// 验证结构化诊断会脱敏签名数据，并在不 panic 的情况下截断 Unicode。
+    #[test]
+    fn structured_error_diagnostics_are_secret_safe_and_character_bounded() {
+        // long_provider_name crosses the per-field ceiling exclusively with multibyte characters.
+        // long_provider_name 仅使用多字节字符跨越逐字段上限。
+        let long_provider_name = "供".repeat(PROVIDER_TOOL_DIAGNOSTIC_FIELD_MAX_CHARACTERS + 64);
+        // body contains credential-shaped scalars, a signed URL, and sensitive metadata keys.
+        // body 包含凭据形态标量、签名 URL 与敏感 metadata 键。
+        let body = serde_json::json!({
+            "error": {
+                "code": "sk-live-secret-code",
+                "message": "https://upload.example.invalid/object?signature=temporary-signature",
+                "metadata": {
+                    "access_token": "temporary-access-token",
+                    "provider_name": long_provider_name,
+                    "signature": "temporary-signature"
+                }
+            },
+            "request_id": "request-safe"
+        });
+        // body_text follows the same bounded JSON path used for live HTTP failures.
+        // body_text 遵循实时 HTTP 失败使用的同一有界 JSON 路径。
+        let body_text = serde_json::to_string(&body).expect("diagnostic fixture should serialize");
+
+        // diagnostic must preserve safe structure while excluding every sensitive fixture value.
+        // diagnostic 必须保留安全结构，同时排除每个敏感夹具值。
+        let diagnostic = format_http_error("Provider fixture", 400, body_text.as_str());
+        assert!(diagnostic.contains("status=400"));
+        assert!(diagnostic.contains("<redacted>"));
+        assert!(diagnostic.contains("<redacted-url>"));
+        assert!(!diagnostic.contains("temporary-access-token"));
+        assert!(!diagnostic.contains("temporary-signature"));
+        assert!(
+            diagnostic.chars().count() <= PROVIDER_TOOL_DIAGNOSTIC_MAX_CHARACTERS,
+            "diagnostic exceeded the character ceiling"
+        );
+    }
+
+    /// Verifies every bundled system target has left the legacy execution bridge.
+    /// 验证每个内置系统目标均已离开旧执行桥。
+    #[test]
+    fn bundled_system_targets_use_closed_execution_families() {
+        for provider_id in ["minimax", "alibaba", "tavily"] {
+            for target in bundled_manifest_tool_targets(provider_id) {
+                assert!(
+                    matches!(
+                        target.execution.execution_kind,
+                        ProviderToolExecutionKind::HttpJsonSync
+                            | ProviderToolExecutionKind::HttpBinarySync
+                            | ProviderToolExecutionKind::ConversationMediaAnalyze
+                            | ProviderToolExecutionKind::HttpJsonAsyncPoll
+                            | ProviderToolExecutionKind::McpHttpCall
+                    ),
+                    "target `{}` must use one closed execution family",
+                    target.target_id
+                );
+            }
+        }
+    }
+
+    /// Verifies every Tavily target declares the generic JSON-sync execution kind.
+    /// 验证全部 Tavily 目标声明通用 JSON 同步执行族。
+    #[test]
+    fn tavily_targets_declare_http_json_sync_execution() {
+        let targets = bundled_manifest_tool_targets("tavily");
+        assert_eq!(targets.len(), 2);
+        for target in targets {
+            assert_eq!(
+                target.execution.execution_kind,
+                ProviderToolExecutionKind::HttpJsonSync,
+                "target `{}` must use the generic primitive",
+                target.target_id
+            );
+        }
     }
 }

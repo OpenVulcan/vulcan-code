@@ -44,6 +44,7 @@ fn build_task_start_test_runtime_context(
             provider_id_override: None,
             model_id_override: None,
             connection_id_override: None,
+            provider_route_lease_identity: None,
             provider_tool_selections_override: Default::default(),
             subagent_prompt_context: None,
             task_session_store_root: None,

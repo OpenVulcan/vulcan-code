@@ -220,9 +220,33 @@ pub struct MediaUploadProgressChangedDelta {
     /// Exact provider selected for the pending request.
     /// 待处理请求选定的精确供应商。
     pub provider_id: String,
+    /// Exact service entry selected for the pending request.
+    /// 待处理请求选定的精确服务入口。
+    pub service_entry_id: String,
+    /// Exact credential connection selected without exposing credential material.
+    /// 不暴露凭据材料的精确凭据连接。
+    pub connection_id: String,
     /// Exact model selected for the pending request.
     /// 待处理请求选定的精确模型。
     pub model_id: String,
+    /// Exact provider-neutral protocol profile frozen for media preparation.
+    /// 媒体准备冻结的精确供应商无关协议 Profile。
+    pub protocol_profile_id: String,
+    /// Manifest revision frozen for media preparation.
+    /// 媒体准备冻结的 Manifest 修订号。
+    pub manifest_revision: u64,
+    /// Runtime manifest generation frozen for media preparation.
+    /// 媒体准备冻结的运行时 Manifest 代际。
+    pub manifest_generation: u64,
+    /// Content-addressed revision of the complete frozen route.
+    /// 完整冻结路由的内容寻址修订号。
+    pub route_revision: String,
+    /// Stable provider-neutral operation owning the transfer.
+    /// 拥有本次传输的稳定供应商无关 operation。
+    pub operation_id: String,
+    /// Exact manifest upload channel or the closed host inline channel identity.
+    /// 精确 Manifest 上传通道或封闭宿主内联通道身份。
+    pub upload_channel_id: String,
     /// User-visible source file name.
     /// 面向用户展示的源文件名。
     pub file_name: String,

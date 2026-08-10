@@ -1,0 +1,77 @@
+{
+  "schema_version": "provider-manifest-execution-fixture.v1",
+  "fixture_id": "minimax-vision-generic",
+  "base_manifest": "minimax.json",
+  "production_target_refs": [
+    "minimax::global:coding-plan-vlm",
+    "minimax::cn:coding-plan-vlm"
+  ],
+  "tool_target": {
+    "target_id": "global:fixture-vision-generic",
+    "description": "Generic MiniMax Coding Plan vision wire-contract fixture.",
+    "service_entry_id": "global",
+    "credential_profile_ids": ["token-plan-key"],
+    "upstream_target_id": "coding-plan-vlm",
+    "display_name": "MiniMax Vision Generic Fixture",
+    "tool_id": "fixture_minimax_vision_generic",
+    "capability": "media_analyze",
+    "input_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "prompt": {"type": "string", "minLength": 1},
+        "image_url": {"type": "string", "minLength": 1}
+      },
+      "required": ["prompt", "image_url"]
+    },
+    "output": {
+      "kind": "text",
+      "source_path": "/content",
+      "normalized_result_path": "text",
+      "resource_kind": null,
+      "mime_types": []
+    },
+    "execution": {
+      "endpoint_path": "/v1/coding_plan/vlm",
+      "authentication": "bearer_authorization",
+      "adapter": "generic_json",
+      "execution_kind": "http_json_sync"
+    }
+  },
+  "operation": {
+    "operation_id": "fixture.minimax-vision-generic",
+    "operation": "media_analyze",
+    "carrier": "provider_tool",
+    "input_resources": ["image"],
+    "output_resources": [],
+    "tool_target_refs": ["global:fixture-vision-generic"],
+    "request_profile_refs": [],
+    "response_profile_refs": [],
+    "upload_channel_refs": [],
+    "upload_bindings": [],
+    "timeout_ms": 60000,
+    "idempotent": false
+  },
+  "upload_channels": [],
+  "request_profiles": [],
+  "response_profiles": [],
+  "required_execution_primitives": ["http_json_sync"],
+  "required_upload_primitives": [],
+  "arguments": {
+    "prompt": "describe the image",
+    "image_url": "data:image/png;base64,aGVsbG8="
+  },
+  "interactions": [
+    {
+      "method": "POST",
+      "path": "/v1/coding_plan/vlm",
+      "expected_json_body": {
+        "prompt": "describe the image",
+        "image_url": "data:image/png;base64,aGVsbG8="
+      },
+      "response_status": 200,
+      "response_json_body": {"content": "a red square"}
+    }
+  ],
+  "expected_output_kind": "text"
+}

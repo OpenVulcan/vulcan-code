@@ -135,6 +135,26 @@ const SYSTEM_PROMPT_SKILLS_DIR_NAME: &str = "system";
 /// 位于资源目录下的相对子代理定义目录名称。
 const SUBAGENTS_DIR_NAME: &str = "subagents";
 
+/// Relative provider-manifest resource directory name nested below resources.
+/// 位于资源目录下的相对供应商清单资源目录名称。
+const PROVIDER_MANIFESTS_DIR_NAME: &str = "provider-manifests";
+
+/// Relative bundled provider manifest directory name nested below provider-manifests.
+/// 位于供应商清单资源目录下的相对内置清单目录名称。
+const BUNDLED_MANIFESTS_DIR_NAME: &str = "manifests";
+
+/// Relative bundled provider-manifest integrity index file name.
+/// 相对内置供应商清单完整性索引文件名。
+const BUNDLED_MANIFEST_INDEX_FILE_NAME: &str = "bundled-index.json";
+
+/// Relative JSON Schema directory nested below provider-manifests.
+/// 位于供应商清单资源目录下的相对 JSON Schema 目录名称。
+const PROVIDER_MANIFEST_SCHEMA_DIR_NAME: &str = "schema";
+
+/// Relative executable fixture directory nested below provider-manifests.
+/// 位于供应商清单资源目录下的相对可执行 fixture 目录名称。
+const PROVIDER_MANIFEST_FIXTURES_DIR_NAME: &str = "fixtures";
+
 /// Relative Lua runtime packages directory name bundled into the output root.
 /// 打包到 output 根目录中的 Lua 运行时包目录名称。
 const LUA_PACKAGES_DIR_NAME: &str = "lua_packages";
@@ -192,6 +212,56 @@ pub fn resolve_system_prompt_skills_resource_directory() -> PathBuf {
 /// 返回当前进程使用的生效打包系统子代理定义目录。
 pub fn resolve_system_subagents_resource_directory() -> PathBuf {
     resolve_app_resources_directory().join(SUBAGENTS_DIR_NAME)
+}
+
+/// Returns the effective provider-manifest resource directory for the current process.
+/// 返回当前进程使用的生效供应商清单资源目录。
+pub fn resolve_provider_manifests_directory() -> PathBuf {
+    resolve_app_resources_directory().join(PROVIDER_MANIFESTS_DIR_NAME)
+}
+
+/// Returns the effective bundled provider manifest directory for the current process.
+/// 返回当前进程使用的生效内置供应商清单目录。
+pub fn resolve_bundled_provider_manifests_directory() -> PathBuf {
+    resolve_provider_manifests_directory().join(BUNDLED_MANIFESTS_DIR_NAME)
+}
+
+/// Returns the effective bundled provider-manifest integrity index for the current process.
+/// 返回当前进程使用的生效内置供应商清单完整性索引。
+pub fn resolve_bundled_provider_manifest_index_path() -> PathBuf {
+    resolve_provider_manifests_directory().join(BUNDLED_MANIFEST_INDEX_FILE_NAME)
+}
+
+/// Returns the source-tree bundled provider manifest directory for local development runs.
+/// 返回本地开发运行使用的源码树内置供应商清单目录。
+pub fn source_bundled_provider_manifests_directory() -> PathBuf {
+    source_resource_directory()
+        .join(PROVIDER_MANIFESTS_DIR_NAME)
+        .join(BUNDLED_MANIFESTS_DIR_NAME)
+}
+
+/// Returns the source-tree bundled provider-manifest integrity index for local verification.
+/// 返回本地校验使用的源码树内置供应商清单完整性索引。
+pub fn source_bundled_provider_manifest_index_path() -> PathBuf {
+    source_resource_directory()
+        .join(PROVIDER_MANIFESTS_DIR_NAME)
+        .join(BUNDLED_MANIFEST_INDEX_FILE_NAME)
+}
+
+/// Returns the source-tree provider-manifest JSON Schema directory.
+/// 返回源码树 Provider Manifest JSON Schema 目录。
+pub fn source_provider_manifest_schema_directory() -> PathBuf {
+    source_resource_directory()
+        .join(PROVIDER_MANIFESTS_DIR_NAME)
+        .join(PROVIDER_MANIFEST_SCHEMA_DIR_NAME)
+}
+
+/// Returns the source-tree provider-manifest execution fixture directory.
+/// 返回源码树 Provider Manifest 执行 fixture 目录。
+pub fn source_provider_manifest_fixtures_directory() -> PathBuf {
+    source_resource_directory()
+        .join(PROVIDER_MANIFESTS_DIR_NAME)
+        .join(PROVIDER_MANIFEST_FIXTURES_DIR_NAME)
 }
 
 /// Returns the effective application resource directory for the current process.

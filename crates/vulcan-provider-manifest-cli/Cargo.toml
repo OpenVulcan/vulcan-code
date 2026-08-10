@@ -1,0 +1,26 @@
+[package]
+name = "vulcan-provider-manifest-cli"
+description = "Provider-manifest validate/compile/diff/index/sign/verify CLI (plan §R10)."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "vulcan-provider-manifest-cli"
+path = "src/main.rs"
+
+[dependencies]
+vulcan-provider-config.workspace = true
+vulcan-provider-adapters.workspace = true
+vulcan-runtime-assets.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+jsonschema.workspace = true
+
+[dev-dependencies]
+tempfile = "3.27.0"

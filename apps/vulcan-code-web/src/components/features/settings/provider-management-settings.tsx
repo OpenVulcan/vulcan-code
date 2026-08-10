@@ -13,6 +13,8 @@ import {
 
 import { ProviderIcon } from "@/components/features/settings/provider-icon"
 import { CustomProviderModelsDialog } from "@/components/features/settings/custom-provider-models-dialog"
+import { persistAndApplyCustomProviderSnapshot } from "@/components/features/settings/custom-provider-save-state"
+import { ProviderManifestStatusPanel } from "@/components/features/settings/provider-manifest-status"
 import { ProviderModelAccessDialog } from "@/components/features/settings/provider-model-access-dialog"
 import { localizedProviderDescription } from "@/components/features/settings/provider-presentation"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -61,6 +63,20 @@ import {
 import { useI18n } from "@/i18n"
 import type { TranslationKey } from "@/i18n-messages"
 import {
+  codexResponsesFeaturePoliciesFromEntry,
+  customProtocolProfileId,
+  emptyProtocolRouteDraft,
+  protocolCollectionChanged,
+  protocolCollectionFromEntry,
+  protocolRoutesFromCollection,
+  protocolSetChange,
+  sortProtocolsByAutoPriority,
+} from "@/components/features/settings/custom-provider-protocol-drafts"
+import type {
+  CustomProtocolRouteDraft,
+  CustomProviderProtocolCollection,
+} from "@/components/features/settings/custom-provider-protocol-drafts"
+import {
   loadPublicAiSettings,
   probePublicAiCustomProvider,
   removePublicAiCustomProvider,
@@ -70,6 +86,7 @@ import type {
   PublicAiCustomProviderModelDiscoveryMode,
   PublicAiCustomProviderProbeResult,
   PublicAiCustomProviderProtocol,
+  PublicAiCustomProviderProtocolRoute,
   PublicAiCustomProviderSaveRequest,
   PublicAiResponsesRemoteCompactionPolicy,
   PublicAiResponsesWebsocketPolicy,
@@ -77,6 +94,7 @@ import type {
   PublicAiModelCapabilityEvidence,
   PublicAiModelOverrideRecord,
   PublicAiProviderDescriptor,
+  PublicAiProtocolRoute,
   PublicAiServiceEntry,
   PublicAiSettingsSnapshot,
 } from "@/types"
@@ -92,6 +110,7 @@ export function ProviderManagementArea() {
   const [modelsDialogOpen, setModelsDialogOpen] = React.useState(false)
   const [busyProviderId, setBusyProviderId] = React.useState<string | null>(null)
   const [providerToRemove, setProviderToRemove] = React.useState<PublicAiProviderDescriptor | null>(null)
+  const [isolatedProviderToRemove, setIsolatedProviderToRemove] = React.useState<string | null>(null)
   const [error, setError] = React.useState<string | null>(null)
 
   // refresh loads the effective system and custom provider registry.
@@ -163,12 +182,38 @@ export function ProviderManagementArea() {
     }
   }, [])
 
+  // removeIsolatedProvider deletes one exact failed standalone reference without fabricating a descriptor.
+  // removeIsolatedProvider 不伪造描述符，直接删除一项精确失败的独立引用。
+  const removeIsolatedProvider = React.useCallback(async (providerId: string) => {
+    setBusyProviderId(providerId)
+    setError(null)
+    try {
+      setSnapshot(await removePublicAiCustomProvider(providerId))
+    } catch (reason) {
+      setError(errorMessage(reason))
+    } finally {
+      setBusyProviderId(null)
+      setIsolatedProviderToRemove(null)
+    }
+  }, [])
+
   // systemProviders contains the immutable built-in provider definitions.
   // systemProviders 包含不可变的内置供应商定义。
   const systemProviders = snapshot?.providers.filter((provider) => provider.kind === "system") ?? []
   // customProviders contains the user-managed provider definitions.
   // customProviders 包含用户管理的供应商定义。
   const customProviders = snapshot?.providers.filter((provider) => provider.kind === "custom") ?? []
+  // customProviderManifestFailures are backend-bounded startup failures; the browser never
+  // reparses invalid source bytes or guesses a fallback provider.
+  // customProviderManifestFailures 是后端有界的启动失败；浏览器绝不重新解析
+  // 无效源字节，也不猜测回退供应商。
+  const customProviderManifestFailures = snapshot?.customProviderManifestFailures ?? []
+  // customProviderManifestFailureTotalCount keeps the warning truthful when details are truncated.
+  // customProviderManifestFailureTotalCount 在详情被截断时保持警告数量真实。
+  const customProviderManifestFailureTotalCount = Math.max(
+    snapshot?.customProviderManifestFailureTotalCount ?? 0,
+    customProviderManifestFailures.length,
+  )
 
   // providerToRemoveConnectionCount counts credentials that the confirmation may delete with the provider.
   // providerToRemoveConnectionCount 统计确认后可能与供应商一并删除的凭据数量。
@@ -249,6 +294,45 @@ export function ProviderManagementArea() {
         </div>
       ) : null}
 
+      {customProviderManifestFailureTotalCount > 0 ? (
+        <div className="rounded-xl border border-destructive/40 bg-destructive/5 p-4 text-sm">
+          <p className="font-semibold text-destructive">
+            已隔离 {customProviderManifestFailureTotalCount} 个自定义供应商
+          </p>
+          <p className="mt-1 text-muted-foreground">
+            该供应商已停止参与运行时路由；其他供应商及其设置仍可正常使用和保存。下列独立 Manifest 源文件会在保存时保持原始字节不变；可修复源文件后重启 Service，或显式删除对应隔离项。
+          </p>
+          <ul className="mt-2 space-y-2 text-xs text-destructive">
+            {customProviderManifestFailures.map((failure, index) => (
+              <li
+                className="flex flex-wrap items-start justify-between gap-2 rounded-lg border border-destructive/20 p-2"
+                key={`${failure.providerId}:${index}`}
+              >
+                <span className="min-w-0 flex-1 break-all font-mono">
+                  {failure.providerId}：{failure.message}
+                </span>
+                <Button
+                  className="shrink-0"
+                  disabled={busyProviderId !== null}
+                  onClick={() => setIsolatedProviderToRemove(failure.providerId)}
+                  size="sm"
+                  type="button"
+                  variant="destructive"
+                >
+                  <Trash2 className="mr-1 size-3.5" />
+                  删除隔离项
+                </Button>
+              </li>
+            ))}
+          </ul>
+          {snapshot?.customProviderManifestFailuresTruncated ? (
+            <p className="mt-2 text-xs text-muted-foreground">其余诊断已按安全上限省略。</p>
+          ) : null}
+        </div>
+      ) : null}
+
+      <ProviderManifestStatusPanel />
+
       <CustomProviderTable
         busyProviderId={busyProviderId}
         connections={snapshot?.connections ?? []}
@@ -318,6 +402,43 @@ export function ProviderManagementArea() {
               variant="destructive"
             >
               {t("settings.customProviders.removeTitle")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      <AlertDialog
+        onOpenChange={(open) => !open && setIsolatedProviderToRemove(null)}
+        open={isolatedProviderToRemove !== null}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>删除隔离的自定义供应商</AlertDialogTitle>
+            <AlertDialogDescription>
+              <span className="block space-y-2">
+                <span className="block">
+                  将永久删除该供应商的独立 Manifest、中央引用、连接、凭据与模型设置；其他供应商不受影响。
+                </span>
+                <span className="block break-all font-mono text-foreground">
+                  {isolatedProviderToRemove}
+                </span>
+              </span>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t("memory.common.cancel")}</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={isolatedProviderToRemove
+                ? busyProviderId === isolatedProviderToRemove
+                : true}
+              onClick={(event) => {
+                event.preventDefault()
+                if (isolatedProviderToRemove) {
+                  void removeIsolatedProvider(isolatedProviderToRemove)
+                }
+              }}
+              variant="destructive"
+            >
+              永久删除
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -595,6 +716,118 @@ function SystemProviderTable(props: {
   )
 }
 
+// CustomProtocolRouteDraftCard edits one enabled protocol's route overrides: base URL
+// override, endpoint path, authentication, discovery, and fixed headers. Empty values
+// inherit the shared provider projection on save (plan §R6.5).
+// CustomProtocolRouteDraftCard 编辑一个启用协议的路由覆盖：基础 URL 覆盖、端点路径、
+// 鉴权、发现与固定请求头。保存时空值继承共享供应商投影（方案 §R6.5）。
+function CustomProtocolRouteDraftCard(props: {
+  draft: CustomProtocolRouteDraft
+  onChange: (draft: CustomProtocolRouteDraft) => void
+  protocol: PublicAiCustomProviderProtocol
+  t: (key: TranslationKey) => string
+}) {
+  const { draft, onChange, protocol, t } = props
+  return (
+    <details className="rounded-lg border bg-muted/30 p-3 text-sm">
+      <summary className="cursor-pointer font-medium text-foreground">
+        {t("settings.customProviders.routeDraftFor").replace(
+          "{protocol}",
+          protocolDisplayName(customProtocolProfileId(protocol)),
+        )}
+      </summary>
+      <div className="mt-3 grid gap-3">
+        <label className="settings-form-field">
+          <span>{t("settings.customProviders.routeBaseUrl")}</span>
+          <Input
+            onChange={(event) => onChange({ ...draft, baseUrlOverride: event.target.value })}
+            placeholder={t("settings.customProviders.routeBaseUrlPlaceholder")}
+            value={draft.baseUrlOverride}
+          />
+        </label>
+        <label className="settings-form-field">
+          <span>{t("settings.customProviders.routeEndpointPath")}</span>
+          <Input
+            onChange={(event) => onChange({ ...draft, endpointPath: event.target.value })}
+            placeholder="/v1/chat/completions"
+            value={draft.endpointPath}
+          />
+        </label>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className="settings-form-field">
+            <span>{t("settings.customProviders.routeAuthentication")}</span>
+            <Select
+              onValueChange={(value) => onChange({
+                ...draft,
+                authentication: value as CustomProtocolRouteDraft["authentication"],
+              })}
+              value={draft.authentication || ""}
+            >
+              <SelectTrigger><SelectValue placeholder={t("settings.customProviders.routeInherit")} /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="">{t("settings.customProviders.routeInherit")}</SelectItem>
+                <SelectItem value="bearer_authorization">Authorization: Bearer</SelectItem>
+                <SelectItem value="google_api_key">Gemini API Key</SelectItem>
+                <SelectItem value="x_api_key">x-api-key</SelectItem>
+              </SelectContent>
+            </Select>
+          </label>
+          <label className="settings-form-field">
+            <span>{t("settings.customProviders.routeDiscoveryMode")}</span>
+            <Select
+              onValueChange={(value) => onChange({
+                ...draft,
+                modelDiscoveryMode: value as CustomProtocolRouteDraft["modelDiscoveryMode"],
+              })}
+              value={draft.modelDiscoveryMode || ""}
+            >
+              <SelectTrigger><SelectValue placeholder={t("settings.customProviders.routeInherit")} /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="">{t("settings.customProviders.routeInherit")}</SelectItem>
+                <SelectItem value="standard">{t("settings.customProviders.discoveryStandard")}</SelectItem>
+                <SelectItem value="custom_path">{t("settings.customProviders.discoveryCustomPath")}</SelectItem>
+                <SelectItem value="manual">{t("settings.customProviders.discoveryManual")}</SelectItem>
+              </SelectContent>
+            </Select>
+          </label>
+        </div>
+        {draft.modelDiscoveryMode === "custom_path" ? (
+          <label className="settings-form-field">
+            <span>{t("settings.customProviders.routeDiscoveryPath")}</span>
+            <Input
+              onChange={(event) => onChange({ ...draft, modelDiscoveryPath: event.target.value })}
+              placeholder="/models"
+              value={draft.modelDiscoveryPath}
+            />
+          </label>
+        ) : null}
+        <label className="settings-form-field">
+          <span>{t("settings.customProviders.routeHeaders")}</span>
+          <textarea
+            className="min-h-[72px] w-full rounded-md border bg-background px-3 py-2 text-xs"
+            onChange={(event) => {
+              const headers: Record<string, string> = {}
+              for (const line of event.target.value.split("\n")) {
+                const separator = line.indexOf(":")
+                if (separator > 0) {
+                  const key = line.slice(0, separator).trim()
+                  const value = line.slice(separator + 1).trim()
+                  if (key) headers[key] = value
+                }
+              }
+              onChange({ ...draft, requestHeaders: headers })
+            }}
+            placeholder="accept: application/json"
+            value={Object.entries(draft.requestHeaders)
+              .map(([key, value]) => `${key}: ${value}`)
+              .join("\n")}
+          />
+        </label>
+      </div>
+    </details>
+  )
+}
+
 // CustomProviderDialog edits the exact public custom-provider contract.
 // CustomProviderDialog 编辑精确的公开自定义供应商契约。
 function CustomProviderDialog(props: {
@@ -608,7 +841,12 @@ function CustomProviderDialog(props: {
   const { t } = useI18n()
   const [displayName, setDisplayName] = React.useState("")
   const [baseUrl, setBaseUrl] = React.useState("")
-  const [protocol, setProtocol] = React.useState<PublicAiCustomProviderProtocol>("open_ai_responses")
+  // protocols is the authoritative enabled protocol collection (at least one element) and
+  // routeDrafts keeps one independent draft per enabled protocol (plan §R6.4/§R6.5).
+  // protocols 是权威启用协议集合（至少一个元素），routeDrafts 为每个启用协议保留独立草稿
+  // （方案 §R6.4/§R6.5）。
+  const [protocols, setProtocols] = React.useState<PublicAiCustomProviderProtocol[]>(["open_ai_responses"])
+  const [routeDrafts, setRouteDrafts] = React.useState<CustomProviderProtocolCollection["drafts"]>({})
   const [remoteCompactionPolicy, setRemoteCompactionPolicy] = React.useState<PublicAiResponsesRemoteCompactionPolicy>("disabled")
   const [websocketPolicy, setWebsocketPolicy] = React.useState<PublicAiResponsesWebsocketPolicy>("disabled")
   const [authentication, setAuthentication] = React.useState<"bearer_authorization" | "google_api_key" | "x_api_key">("bearer_authorization")
@@ -653,13 +891,19 @@ function CustomProviderDialog(props: {
     setAuthentication(entry?.authentication === "google_api_key"
       ? "google_api_key"
       : entry?.authentication === "x_api_key" ? "x_api_key" : "bearer_authorization")
-    const nextProtocol = customProtocolFromProfile(entry?.protocol_routes[0]?.protocol_profile_id ?? "") ?? "open_ai_responses"
-    const routeFeatures = entry?.protocol_routes[0]?.responses_features
-    setProtocol(nextProtocol)
-    setRemoteCompactionPolicy(routeFeatures?.remote_compaction ?? "disabled")
-    setWebsocketPolicy(routeFeatures?.websocket ?? "disabled")
+    // The persisted protocol collection and its per-protocol route drafts initialize the
+    // editable state so an edit never drops a route-level override (plan §R6.5).
+    // 持久化协议集合及其逐协议路由草稿初始化可编辑状态，使编辑绝不丢弃路由级覆盖
+    // （方案 §R6.5）。
+    const collection = protocolCollectionFromEntry(entry)
+    setProtocols(collection.protocols)
+    setRouteDrafts(collection.drafts)
+    const codexFeatures = codexResponsesFeaturePoliciesFromEntry(entry)
+    setRemoteCompactionPolicy(codexFeatures.remoteCompactionPolicy)
+    setWebsocketPolicy(codexFeatures.websocketPolicy)
     setModelDiscoveryMode(customProviderDiscoveryMode(entry))
-    setModelDiscoveryPath(entry?.protocol_routes[0]?.model_discovery_path ?? "")
+    const firstDraft = collection.drafts[collection.protocols[0]]
+    setModelDiscoveryPath(firstDraft?.modelDiscoveryPath ?? "")
     setCredentialDisplayName(props.provider?.display_name ?? "")
     setSecret("")
     setValidationConnectionId(providerConnections[0]?.id ?? "")
@@ -717,7 +961,14 @@ function CustomProviderDialog(props: {
     providerId: props.provider?.id,
     displayName: displayName.trim(),
     baseUrl: baseUrl.trim(),
-    protocol,
+    // protocol is the legacy single-protocol projection kept for older Service clients; the
+    // authoritative collection is persisted in full below (plan §R6.4).
+    // protocol 是为旧版 Service 客户端保留的旧版单协议投影；权威集合在下方完整持久化
+    // （方案 §R6.4）。
+    protocol: protocols[0] ?? "open_ai_responses",
+    // The enabled protocol collection is authoritative and never empty.
+    // 启用协议集合是权威事实且绝不为空。
+    protocols,
     remoteCompactionPolicy,
     websocketPolicy,
     authentication,
@@ -729,10 +980,16 @@ function CustomProviderDialog(props: {
         }),
     modelDiscoveryMode,
     modelDiscoveryPath: modelDiscoveryMode === "custom_path" ? modelDiscoveryPath.trim() : undefined,
+    // Per-protocol route overrides are serialized from the independent drafts so edits never
+    // silently drop route-level base URLs, authentication, discovery, or headers (plan
+    // §R6.5/§R6.10).
+    // 逐协议路由覆盖从独立草稿序列化，使编辑绝不静默丢弃路由级基础 URL、鉴权、发现或
+    // 请求头（方案 §R6.5/§R6.10）。
+    protocolRoutes: protocolRoutesFromCollection({ protocols, drafts: routeDrafts }),
     allowManualFallback: acceptance === "manual",
     allowPendingValidation: acceptance === "pending",
     confirmInactiveProtocolOverrideDeletion,
-  }), [authentication, baseUrl, credentialDisplayName, displayName, modelDiscoveryMode, modelDiscoveryPath, props.provider, protocol, remoteCompactionPolicy, secret, validationConnectionId, websocketPolicy])
+  }), [authentication, baseUrl, credentialDisplayName, displayName, modelDiscoveryMode, modelDiscoveryPath, protocols, remoteCompactionPolicy, routeDrafts, secret, validationConnectionId, websocketPolicy])
 
   // probe verifies authentication and model discovery without persisting the provider or secret.
   // probe 在不持久化供应商或秘密的情况下验证鉴权与模型发现。
@@ -760,20 +1017,23 @@ function CustomProviderDialog(props: {
   // originalEntry is the persisted technical contract used to distinguish cosmetic edits.
   // originalEntry 是用于区分纯展示编辑的持久化技术契约。
   const originalEntry = props.provider?.service_entries[0]
-  // originalProtocol is the exact persisted profile projected into the browser-editable contract.
-  // originalProtocol 是投影到浏览器可编辑契约中的精确持久化协议配置档。
-  const originalProtocol = customProtocolFromProfile(
-    originalEntry?.protocol_routes[0]?.protocol_profile_id ?? "",
-  ) ?? "open_ai_responses"
-  // protocolChanged distinguishes destructive route transitions from other technical edits.
-  // protocolChanged 将破坏性路由切换与其他技术编辑区分开。
-  const protocolChanged = Boolean(props.provider) && protocol !== originalProtocol
-  // inactiveProtocolOverrideCount counts exact old-route settings requiring explicit deletion confirmation.
-  // inactiveProtocolOverrideCount 统计需要显式确认删除的精确旧路由设置。
-  const inactiveProtocolOverrideCount = protocolChanged && props.provider
+  // originalProtocols is the exact persisted protocol set projected into the browser-editable
+  // contract (plan §R6.8).
+  // originalProtocols 是投影到浏览器可编辑契约中的精确持久化协议集合（方案 §R6.8）。
+  const originalProtocols = protocolCollectionFromEntry(originalEntry).protocols
+  // protocolSetChange distinguishes destructive protocol removals from other technical edits;
+  // additions never invalidate existing settings (plan §R6.8).
+  // protocolSetChange 将破坏性协议删除与其他技术编辑区分开；新增绝不让既有设置失效
+  // （方案 §R6.8）。
+  const protocolChange = protocolSetChange(originalProtocols, protocols)
+  const removedProtocols = protocolChange.removed
+  // inactiveProtocolOverrideCount counts exact settings owned by the removed protocols that
+  // require explicit deletion confirmation.
+  // inactiveProtocolOverrideCount 统计被移除协议拥有的、需要显式确认删除的精确设置数量。
+  const inactiveProtocolOverrideCount = props.provider && removedProtocols.length > 0
     ? props.modelOverrideRecords.filter((record) => (
         record.providerId === props.provider?.id
-        && record.protocolId !== customProtocolProfileId(protocol)
+        && removedProtocols.some((removed) => customProtocolProfileId(removed) === record.protocolId)
       )).length
     : 0
 
@@ -791,11 +1051,11 @@ function CustomProviderDialog(props: {
     setSaving(true)
     setError(null)
     try {
-      const nextSnapshot = await savePublicAiCustomProvider(requestBody(
-        acceptance,
-        confirmInactiveProtocolOverrideDeletion,
-      ))
-      props.onSaved(nextSnapshot)
+      await persistAndApplyCustomProviderSnapshot(
+        requestBody(acceptance, confirmInactiveProtocolOverrideDeletion),
+        savePublicAiCustomProvider,
+        props.onSaved,
+      )
       props.onOpenChange(false)
     } catch (reason) {
       setError(errorMessage(reason))
@@ -813,7 +1073,12 @@ function CustomProviderDialog(props: {
     void save()
   }, [save, validateConnectionDraft])
 
-  const protocolEndpoint = customProviderEndpointPreview(baseUrl, protocol)
+  // primaryProtocol is the first enabled protocol used for the shared endpoint preview and
+  // the shared Codex capability switches; every protocol still keeps its own route draft.
+  // primaryProtocol 是用于共享端点预览与共享 Codex 能力开关的第一个启用协议；每个协议
+  // 仍保留自己的路由草稿。
+  const primaryProtocol = protocols[0] ?? "open_ai_responses"
+  const protocolEndpoint = customProviderEndpointPreview(baseUrl, primaryProtocol)
   const discoveryEndpoint = customProviderDiscoveryEndpointPreview(baseUrl, modelDiscoveryMode, modelDiscoveryPath)
   const acceptedWithoutOverride = probeResult?.status.state === "ready"
   const validationConnection = providerConnections.find(
@@ -824,17 +1089,19 @@ function CustomProviderDialog(props: {
   const connectionContractChanged = Boolean(props.provider) && (
     !originalEntry
     || baseUrl.trim().replace(/\/+$/, "") !== originalEntry.base_url.replace(/\/+$/, "")
-    || protocolChanged
+    || protocolCollectionChanged(originalEntry, { protocols, drafts: routeDrafts })
     || authentication !== customProviderAuthentication(originalEntry)
     || modelDiscoveryMode !== customProviderDiscoveryMode(originalEntry)
     || (modelDiscoveryMode === "custom_path"
-      && modelDiscoveryPath.trim() !== (originalEntry.protocol_routes[0]?.model_discovery_path ?? ""))
+      && modelDiscoveryPath.trim() !== (protocolCollectionFromEntry(originalEntry).drafts[originalProtocols[0]]?.modelDiscoveryPath ?? ""))
   )
   // responsesFeaturesChanged tracks explicit Codex transport capabilities without forcing credential revalidation.
   // responsesFeaturesChanged 跟踪显式 Codex 传输能力开关，但不会强制重新验证凭据。
-  const originalResponsesFeatures = originalEntry?.protocol_routes[0]?.responses_features
+  const originalResponsesFeatures = originalEntry?.protocol_routes.find(
+    (route) => route.protocol_profile_id === "openai-codex-responses.v1",
+  )?.responses_features
   const responsesFeaturesChanged = Boolean(props.provider)
-    && protocol === "open_ai_codex_responses"
+    && protocols.includes("open_ai_codex_responses")
     && (
       remoteCompactionPolicy !== (originalResponsesFeatures?.remote_compaction ?? "disabled")
       || websocketPolicy !== (originalResponsesFeatures?.websocket ?? "disabled")
@@ -888,28 +1155,50 @@ function CustomProviderDialog(props: {
               <span>{t("settings.customProviders.baseUrl")}</span>
               <Input onChange={(event) => setBaseUrl(event.target.value)} placeholder="https://example.com/v1" value={baseUrl} />
             </label>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <label className="settings-form-field">
-                <span>{t("settings.customProviders.protocol")}</span>
-                  <Select onValueChange={(value) => {
-                     const nextProtocol = value as PublicAiCustomProviderProtocol
-                     setProtocol(nextProtocol)
-                     if (nextProtocol === "gemini_generate_content") {
-                       setAuthentication("google_api_key")
-                     }
-                    if (nextProtocol !== "open_ai_codex_responses") {
-                      setRemoteCompactionPolicy("disabled")
-                      setWebsocketPolicy("disabled")
-                    }
-                  }} value={protocol}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {customProtocolOptions.map((option) => (
-                      <SelectItem key={option.id} value={option.id}>{option.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </label>
+            <div className="grid gap-4">
+              <fieldset className="settings-form-field">
+                <legend className="text-sm font-medium">{t("settings.customProviders.protocols")}</legend>
+                <p className="text-xs text-muted-foreground">{t("settings.customProviders.protocolsHint")}</p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {customProtocolOptions.map((option) => {
+                    const enabled = protocols.includes(option.id)
+                    return (
+                      <label
+                        className={`inline-flex cursor-pointer items-center gap-2 rounded-full border px-3 py-1.5 text-sm ${enabled ? "border-foreground bg-muted font-medium" : "text-muted-foreground"}`}
+                        key={option.id}
+                      >
+                        <input
+                          checked={enabled}
+                          className="size-4"
+                          disabled={saving}
+                          onChange={() => {
+                            setProtocols((current) => {
+                              const next = enabled
+                                ? current.filter((protocol) => protocol !== option.id)
+                                : [...current, option.id]
+                              // At least one protocol must stay enabled; the last protocol
+                              // cannot be removed (plan §R6.4).
+                              // 至少保留一个启用协议；最后一个协议不可移除（方案 §R6.4）。
+                              if (next.length === 0) {
+                                return current
+                              }
+                              if (!enabled) {
+                                setRouteDrafts((drafts: CustomProviderProtocolCollection["drafts"]) => ({
+                                  ...drafts,
+                                  [option.id]: drafts[option.id] ?? emptyProtocolRouteDraft(),
+                                }))
+                              }
+                              return sortProtocolsByAutoPriority(next)
+                            })
+                          }}
+                          type="checkbox"
+                        />
+                        {option.label}
+                      </label>
+                    )
+                  })}
+                </div>
+              </fieldset>
               <label className="settings-form-field">
                 <span>{t("settings.customProviders.authentication")}</span>
                 <Select onValueChange={(value) => setAuthentication(value as "bearer_authorization" | "google_api_key" | "x_api_key")} value={authentication}>
@@ -922,6 +1211,23 @@ function CustomProviderDialog(props: {
                 </Select>
               </label>
             </div>
+            {protocols.length > 1 ? (
+              <fieldset className="settings-form-field">
+                <legend className="text-sm font-medium">{t("settings.customProviders.routeDrafts")}</legend>
+                <p className="text-xs text-muted-foreground">{t("settings.customProviders.routeDraftsHint")}</p>
+                <div className="mt-2 grid gap-2">
+                  {protocols.map((protocolId) => (
+                    <CustomProtocolRouteDraftCard
+                      draft={routeDrafts[protocolId] ?? emptyProtocolRouteDraft()}
+                      key={protocolId}
+                      onChange={(draft) => setRouteDrafts((drafts: CustomProviderProtocolCollection["drafts"]) => ({ ...drafts, [protocolId]: draft }))}
+                      protocol={protocolId}
+                      t={t}
+                    />
+                  ))}
+                </div>
+              </fieldset>
+            ) : null}
             <label className="settings-form-field">
               <span>{t("settings.customProviders.discoveryMode")}</span>
               <Select onValueChange={(value) => setModelDiscoveryMode(value as PublicAiCustomProviderModelDiscoveryMode)} value={modelDiscoveryMode}>
@@ -939,7 +1245,7 @@ function CustomProviderDialog(props: {
                 <Input onChange={(event) => setModelDiscoveryPath(event.target.value)} placeholder="/models" value={modelDiscoveryPath} />
               </label>
             ) : null}
-            {protocol === "open_ai_codex_responses" ? (
+            {protocols.includes("open_ai_codex_responses") ? (
               <div className="grid gap-3 rounded-xl border bg-muted/30 p-3 text-sm">
                 <p className="font-medium text-foreground">{t("settings.customProviders.codexCapabilities")}</p>
                 <label className="flex items-start gap-2">
@@ -1087,7 +1393,9 @@ function CustomProviderDialog(props: {
               <AlertDialogDescription>
                 {t("settings.customProviders.protocolOverridesConfirmDescription")
                   .replace("{count}", String(inactiveProtocolOverrideCount))
-                  .replace("{protocol}", protocolDisplayName(customProtocolProfileId(protocol)))}
+                  .replace("{protocol}", removedProtocols
+                    .map((removed) => protocolDisplayName(customProtocolProfileId(removed)))
+                    .join(", ") || t("settings.customProviders.protocol"))}
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
@@ -1392,45 +1700,6 @@ function uniqueProtocolNames(provider: PublicAiProviderDescriptor): string[] {
   return Array.from(new Set(provider.service_entries.flatMap(
     (entry) => entry.protocol_routes.map((route) => protocolDisplayName(route.protocol_profile_id)),
   )))
-}
-
-// customProtocolFromProfile maps one exact runtime profile to the custom-provider contract.
-// customProtocolFromProfile 将一个精确运行时 Profile 映射到自定义供应商契约。
-function customProtocolFromProfile(profileId: string): PublicAiCustomProviderProtocol | null {
-  if (profileId === "anthropic-messages.v1") {
-    return "anthropic_messages"
-  }
-  if (profileId === "openai-chat-completions.v1") {
-    return "open_ai_chat"
-  }
-  if (profileId === "openai-responses.v1") {
-    return "open_ai_responses"
-  }
-  if (profileId === "openai-codex-responses.v1") {
-    return "open_ai_codex_responses"
-  }
-  if (profileId === "google.gemini.generate_content") {
-    return "gemini_generate_content"
-  }
-  return null
-}
-
-// customProtocolProfileId maps one browser protocol choice to its exact runtime profile identifier.
-// customProtocolProfileId 将一个浏览器协议选择映射到精确运行时配置档标识。
-function customProtocolProfileId(protocol: PublicAiCustomProviderProtocol): string {
-  if (protocol === "anthropic_messages") {
-    return "anthropic-messages.v1"
-  }
-  if (protocol === "open_ai_chat") {
-    return "openai-chat-completions.v1"
-  }
-  if (protocol === "gemini_generate_content") {
-    return "google.gemini.generate_content"
-  }
-  if (protocol === "open_ai_codex_responses") {
-    return "openai-codex-responses.v1"
-  }
-  return "openai-responses.v1"
 }
 
 // protocolDisplayName returns the user-visible label for one exact profile.

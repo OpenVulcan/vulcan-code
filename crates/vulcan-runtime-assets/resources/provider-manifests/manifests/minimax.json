@@ -1,0 +1,5754 @@
+{
+  "schema_version": "vulcan.provider-manifest.v1",
+  "provider_id": "minimax",
+  "revision": 10,
+  "published_at": "2026-08-09T00:00:00Z",
+  "engine_contract": {
+    "minimum_manifest_engine": 1,
+    "required_protocol_profiles": [
+      "anthropic-messages.v1",
+      "openai-chat-completions.v1"
+    ],
+    "required_execution_primitives": [
+      "conversation_media_analyze",
+      "http_json_async_poll",
+      "http_json_sync"
+    ],
+    "required_upload_primitives": [
+      "inline_data_url",
+      "multipart_file"
+    ],
+    "required_transformers": [
+      "copy_request_field",
+      "delete_json_pointer",
+      "enum_map",
+      "rebuild_json_template",
+      "reject_if_present",
+      "remove_if_empty"
+    ]
+  },
+  "display": {
+    "name": "MiniMax",
+    "category": "official",
+    "credential_directory_visibility": "configured_only"
+  },
+  "credential_registration": "mini_max_regional_api_key",
+  "services": [
+    {
+      "service_entry_id": "global",
+      "display_name": "International",
+      "kind": "conversation",
+      "base_url": "https://api.minimax.io",
+      "credential_profiles": [
+        {
+          "credential_profile_id": "payg-api-key",
+          "display_name": "Pay-as-you-go API Key",
+          "credential_mode": "token",
+          "billing_kind": "pay_as_you_go",
+          "account_usage_query": "unsupported",
+          "key_prefix": "sk-api-",
+          "allowed_usage_scopes": [
+            "interactive_agent",
+            "internal_background",
+            "external_service"
+          ]
+        },
+        {
+          "credential_profile_id": "token-plan-key",
+          "display_name": "Token Plan Key",
+          "credential_mode": "token",
+          "billing_kind": "token_plan",
+          "account_usage_query": "mini_max_token_plan",
+          "key_prefix": "sk-cp-",
+          "allowed_usage_scopes": [
+            "interactive_agent"
+          ]
+        },
+        {
+          "credential_profile_id": "token-plan-oauth",
+          "display_name": "Token Plan Login",
+          "credential_mode": "auth",
+          "oauth_provider": "mini_max_global_token_plan",
+          "billing_kind": "token_plan",
+          "account_usage_query": "mini_max_token_plan",
+          "authentication": "bearer_authorization",
+          "allowed_usage_scopes": [
+            "interactive_agent"
+          ]
+        }
+      ],
+      "default_authentication": "x_api_key",
+      "request_projector": "compatible",
+      "model_catalog": {
+        "source_policy": "manifest_and_discovery",
+        "discovery_kind": "anthropic_compatible"
+      },
+      "protocol_routes": [
+        {
+          "protocol_profile_id": "anthropic-messages.v1",
+          "endpoint_path": "/anthropic/v1/messages",
+          "model_discovery_base_url_override": "https://api.minimax.io/anthropic/v1",
+          "input_resource_constraints": [
+            {
+              "resource_kind": "video",
+              "max_bytes": 50000000,
+              "reference_policy": "local_only",
+              "upload_channel_refs": [
+                "global.video-file"
+              ]
+            }
+          ],
+          "usage_profile_refs": [],
+          "request_profile_refs": [
+            "minimax.anthropic.thinking.v1"
+          ],
+          "response_profile_refs": [],
+          "provider_request_id_headers": [],
+          "verified": true
+        },
+        {
+          "protocol_profile_id": "openai-chat-completions.v1",
+          "endpoint_path": "/v1/chat/completions",
+          "authentication": "bearer_authorization",
+          "model_discovery": "open_ai",
+          "model_discovery_base_url_override": "https://api.minimax.io/v1",
+          "input_resource_constraints": [
+            {
+              "resource_kind": "video",
+              "max_bytes": 50000000,
+              "reference_policy": "local_only",
+              "upload_channel_refs": [
+                "global.video-file"
+              ]
+            }
+          ],
+          "usage_profile_refs": [],
+          "request_profile_refs": [
+            "minimax.chat.thinking.v1"
+          ],
+          "response_profile_refs": [],
+          "provider_request_id_headers": [],
+          "verified": true
+        }
+      ]
+    },
+    {
+      "service_entry_id": "cn",
+      "display_name": "China",
+      "kind": "conversation",
+      "base_url": "https://api.minimaxi.com",
+      "credential_profiles": [
+        {
+          "credential_profile_id": "payg-api-key",
+          "display_name": "Pay-as-you-go API Key",
+          "credential_mode": "token",
+          "billing_kind": "pay_as_you_go",
+          "account_usage_query": "unsupported",
+          "key_prefix": "sk-api-",
+          "allowed_usage_scopes": [
+            "interactive_agent",
+            "internal_background",
+            "external_service"
+          ]
+        },
+        {
+          "credential_profile_id": "token-plan-key",
+          "display_name": "Token Plan Key",
+          "credential_mode": "token",
+          "billing_kind": "token_plan",
+          "account_usage_query": "mini_max_token_plan",
+          "key_prefix": "sk-cp-",
+          "allowed_usage_scopes": [
+            "interactive_agent"
+          ]
+        },
+        {
+          "credential_profile_id": "token-plan-oauth",
+          "display_name": "Token Plan Login",
+          "credential_mode": "auth",
+          "oauth_provider": "mini_max_china_token_plan",
+          "billing_kind": "token_plan",
+          "account_usage_query": "mini_max_token_plan",
+          "authentication": "bearer_authorization",
+          "allowed_usage_scopes": [
+            "interactive_agent"
+          ]
+        }
+      ],
+      "default_authentication": "x_api_key",
+      "request_projector": "compatible",
+      "model_catalog": {
+        "source_policy": "manifest_and_discovery",
+        "discovery_kind": "anthropic_compatible"
+      },
+      "protocol_routes": [
+        {
+          "protocol_profile_id": "anthropic-messages.v1",
+          "endpoint_path": "/anthropic/v1/messages",
+          "model_discovery_base_url_override": "https://api.minimaxi.com/anthropic/v1",
+          "input_resource_constraints": [
+            {
+              "resource_kind": "video",
+              "max_bytes": 50000000,
+              "reference_policy": "local_only",
+              "upload_channel_refs": [
+                "cn.video-file"
+              ]
+            }
+          ],
+          "usage_profile_refs": [],
+          "request_profile_refs": [
+            "minimax.anthropic.thinking.v1"
+          ],
+          "response_profile_refs": [],
+          "provider_request_id_headers": [],
+          "verified": true
+        },
+        {
+          "protocol_profile_id": "openai-chat-completions.v1",
+          "endpoint_path": "/v1/chat/completions",
+          "authentication": "bearer_authorization",
+          "model_discovery": "open_ai",
+          "model_discovery_base_url_override": "https://api.minimaxi.com/v1",
+          "input_resource_constraints": [
+            {
+              "resource_kind": "video",
+              "max_bytes": 50000000,
+              "reference_policy": "local_only",
+              "upload_channel_refs": [
+                "cn.video-file"
+              ]
+            }
+          ],
+          "usage_profile_refs": [],
+          "request_profile_refs": [
+            "minimax.chat.thinking.v1"
+          ],
+          "response_profile_refs": [],
+          "provider_request_id_headers": [],
+          "verified": true
+        }
+      ]
+    }
+  ],
+  "model_defaults": {
+    "default_enabled": true,
+    "catalog_membership_policy": "declared_and_discovery",
+    "unknown_model_policy": "default_binding_allowed",
+    "supported_protocols": [
+      "anthropic-messages.v1",
+      "openai-chat-completions.v1"
+    ],
+    "selected_protocol": "anthropic-messages.v1",
+    "capabilities": {
+      "operations": ["conversation_respond"],
+      "evidence_revision": "minimax.default-capabilities.v1"
+    },
+    "default_usage_profile_refs": [],
+    "default_request_profile_refs": [],
+    "default_response_profile_refs": [],
+    "default_operation_refs": []
+  },
+  "model_rules": [
+    {
+      "rule_id": "reasoning-minimax-m3",
+      "matcher": {
+        "kind": "prefix",
+        "value": "MiniMax-M3"
+      },
+      "supported_protocols": [
+        "anthropic-messages.v1",
+        "openai-chat-completions.v1"
+      ],
+      "capabilities": {
+        "operations": [
+          "conversation_respond"
+        ],
+        "input_resources": [],
+        "output_resources": [],
+        "tool_calling": "native",
+        "parallel_tool_calling": "unknown",
+        "reasoning": "native",
+        "provider_native_tools": [],
+        "reasoning_control": "toggle",
+        "reasoning_efforts": [
+          "none",
+          "adaptive"
+        ],
+        "prompt_cache": {
+          "provider_default_behavior": "MiniMax M3 caching follows the provider default for this compatible route.",
+          "supports_managed_explicit": false
+        },
+        "context_limit": 1000000,
+        "evidence_revision": "minimax-compatible-text-openapi-2026-07-30"
+      },
+      "input_resource_constraints": [
+        {
+          "resource_kind": "image",
+          "max_bytes": 10000000
+        },
+        {
+          "resource_kind": "video",
+          "accepted_mime_types": [
+            "video/mp4",
+            "video/x-msvideo",
+            "video/quicktime",
+            "video/mov",
+            "video/x-matroska"
+          ],
+          "max_bytes": 50000000,
+          "reference_policy": "local_only"
+        }
+      ],
+      "model_parameters": [
+        {
+          "id": "sampling.temperature",
+          "display_name": "Temperature",
+          "description": "Controls MiniMax sampling randomness; the verified compatible-API range is greater than 0 through 1.",
+          "schema": {
+            "type": "decimal",
+            "maximum": "1",
+            "exclusive_minimum": "0"
+          },
+          "default": {
+            "type": "provider_default"
+          },
+          "protocol_ids": [
+            "anthropic-messages.v1",
+            "openai-chat-completions.v1"
+          ],
+          "model_ids": [],
+          "dependent_required": [],
+          "conflicts": [],
+          "evidence_revision": "minimax-compatible-text-api-2026-07-28"
+        }
+      ]
+    },
+    {
+      "rule_id": "reasoning-minimax-m2",
+      "matcher": {
+        "kind": "prefix",
+        "value": "MiniMax-M2"
+      },
+      "supported_protocols": [
+        "anthropic-messages.v1",
+        "openai-chat-completions.v1"
+      ],
+      "capabilities": {
+        "operations": [
+          "conversation_respond"
+        ],
+        "input_resources": [],
+        "output_resources": [],
+        "tool_calling": "native",
+        "parallel_tool_calling": "unknown",
+        "reasoning": "native",
+        "provider_native_tools": [],
+        "reasoning_control": "fixed_on",
+        "reasoning_efforts": [],
+        "prompt_cache": {
+          "provider_default_behavior": "MiniMax automatic caching is used without host-injected cache controls.",
+          "supports_managed_explicit": false
+        },
+        "context_limit": 204800,
+        "evidence_revision": "minimax-compatible-text-openapi-2026-07-30"
+      },
+      "protocol_capabilities": {
+        "anthropic-messages.v1": {
+          "prompt_cache": {
+            "provider_default_behavior": "MiniMax automatic caching is used without host-injected cache controls.",
+            "supports_managed_explicit": true,
+            "supported_ttl_options": [
+              {
+                "id": "5m",
+                "display_name": "5 minutes",
+                "description": "MiniMax explicit Anthropic-compatible cache lifetime."
+              }
+            ],
+            "profile_default_ttl_option_id": "5m",
+            "minimum_cacheable_tokens": 512,
+            "maximum_breakpoints": 4
+          }
+        },
+        "openai-chat-completions.v1": {
+          "prompt_cache": {
+            "provider_default_behavior": "MiniMax OpenAI-compatible prompt caching is automatic and does not accept host-injected cache markers.",
+            "supports_managed_explicit": false
+          }
+        }
+      },
+      "model_parameters": [
+        {
+          "id": "sampling.temperature",
+          "display_name": "Temperature",
+          "description": "Controls MiniMax sampling randomness; the verified compatible-API range is greater than 0 through 1.",
+          "schema": {
+            "type": "decimal",
+            "maximum": "1",
+            "exclusive_minimum": "0"
+          },
+          "default": {
+            "type": "provider_default"
+          },
+          "protocol_ids": [
+            "anthropic-messages.v1",
+            "openai-chat-completions.v1"
+          ],
+          "model_ids": [],
+          "dependent_required": [],
+          "conflicts": [],
+          "evidence_revision": "minimax-compatible-text-api-2026-07-28"
+        },
+        {
+          "id": "minimax.reasoning_split",
+          "display_name": "Separate reasoning",
+          "description": "Returns MiniMax interleaved thinking in the OpenAI-compatible reasoning_details field.",
+          "schema": {
+            "type": "boolean"
+          },
+          "default": {
+            "type": "explicit_value",
+            "value": {
+              "type": "boolean",
+              "value": true
+            }
+          },
+          "protocol_ids": [
+            "openai-chat-completions.v1"
+          ],
+          "model_ids": [],
+          "dependent_required": [],
+          "conflicts": [],
+          "evidence_revision": "minimax-openai-reasoning-split-2026-07-28"
+        }
+      ]
+    }
+  ],
+  "usage_profiles": [],
+  "request_profiles": [
+    {
+      "profile_id": "minimax.chat.thinking.v1",
+      "description": "MiniMax Chat thinking projection",
+      "payload": {
+        "profile_id": "minimax.chat.thinking.v1",
+        "revision": 1,
+        "steps": [
+          {
+            "op": "enum_map",
+            "path": "/thinking",
+            "source": "request_field",
+            "source_path": "@reasoning_effort",
+            "mapping": {
+              "none": {
+                "type": "disabled"
+              },
+              "adaptive": {
+                "type": "adaptive"
+              }
+            },
+            "unmatched": "error",
+            "default": null
+          },
+          {
+            "op": "delete_json_pointer",
+            "path": "/reasoning_effort"
+          },
+          {
+            "op": "copy_request_field",
+            "path": "/reasoning_split",
+            "field": "model_parameters.minimax.reasoning_split"
+          }
+        ]
+      }
+    },
+    {
+      "profile_id": "minimax.anthropic.thinking.v1",
+      "description": "MiniMax Anthropic thinking projection",
+      "payload": {
+        "profile_id": "minimax.anthropic.thinking.v1",
+        "revision": 1,
+        "steps": [
+          {
+            "op": "enum_map",
+            "path": "/thinking",
+            "source": "request_field",
+            "source_path": "@reasoning_effort",
+            "mapping": {
+              "none": {
+                "type": "disabled"
+              },
+              "adaptive": {
+                "type": "adaptive"
+              }
+            },
+            "unmatched": "error",
+            "default": null
+          },
+          {
+            "op": "delete_json_pointer",
+            "path": "/output_config/effort"
+          },
+          {
+            "op": "remove_if_empty",
+            "path": "/output_config"
+          },
+          {
+            "op": "reject_if_present",
+            "source": "request_field",
+            "source_path": "@model_parameters.minimax.reasoning_split",
+            "message": "MiniMax reasoning_split is registered only for OpenAI Chat."
+          }
+        ]
+      }
+    },
+    {
+      "profile_id": "minimax.search.request.v1",
+      "description": "Build the reviewed MiniMax Coding Plan search request body.",
+      "payload": {
+        "profile_id": "minimax.search.request.v1",
+        "revision": 1,
+        "steps": [
+          {
+            "op": "rebuild_json_template",
+            "template": {
+              "q": {"$vulcan_ref": {"path": "/query"}}
+            }
+          }
+        ]
+      }
+    },
+    {
+      "profile_id": "minimax.image.request.v1",
+      "description": "Build the reviewed MiniMax image generation wire body from canonical arguments.",
+      "payload": {
+        "profile_id": "minimax.image.request.v1",
+        "revision": 1,
+        "steps": [
+          {
+            "op": "rebuild_json_template",
+            "template": {
+              "model": {"$vulcan_model_id": true},
+              "prompt": {"$vulcan_ref": {"path": "/prompt"}},
+              "subject_reference": {
+                "$vulcan_map": {
+                  "path": "/subject_references",
+                  "optional": true,
+                  "template": {
+                    "type": "character",
+                    "image_file": {"$vulcan_ref": {"scope": "item", "path": ""}}
+                  }
+                }
+              },
+              "aspect_ratio": {"$vulcan_ref": {"path": "/aspect_ratio", "optional": true}},
+              "width": {"$vulcan_ref": {"path": "/width", "optional": true}},
+              "height": {"$vulcan_ref": {"path": "/height", "optional": true}},
+              "response_format": "base64",
+              "seed": {"$vulcan_ref": {"path": "/seed", "optional": true}},
+              "n": {"$vulcan_ref": {"path": "/count"}},
+              "prompt_optimizer": {"$vulcan_ref": {"path": "/prompt_optimizer"}},
+              "aigc_watermark": {"$vulcan_ref": {"path": "/aigc_watermark"}},
+              "style": {
+                "style_type": {"$vulcan_ref": {"path": "/style_type", "optional": true}},
+                "style_weight": {"$vulcan_ref": {"path": "/style_weight", "optional": true}}
+              }
+            }
+          },
+          {"op": "remove_if_empty", "path": "/subject_reference"},
+          {"op": "remove_if_empty", "path": "/style"}
+        ]
+      }
+    },
+    {
+      "profile_id": "minimax.speech.request.v1",
+      "description": "Build the reviewed MiniMax synchronous speech wire body with format-dependent defaults.",
+      "payload": {
+        "profile_id": "minimax.speech.request.v1",
+        "revision": 1,
+        "steps": [
+          {
+            "op": "rebuild_json_template",
+            "template": {
+              "model": {"$vulcan_model_id": true},
+              "text": {"$vulcan_ref": {"path": "/text"}},
+              "stream": false,
+              "output_format": "hex",
+              "voice_setting": {
+                "voice_id": {"$vulcan_ref": {"path": "/voice_id"}},
+                "speed": {"$vulcan_ref": {"path": "/speed"}},
+                "vol": {"$vulcan_ref": {"path": "/volume"}},
+                "pitch": {"$vulcan_ref": {"path": "/pitch"}}
+              },
+              "audio_setting": {
+                "sample_rate": {
+                  "$vulcan_coalesce": [
+                    {"$vulcan_ref": {"path": "/sample_rate", "optional": true}},
+                    {
+                      "$vulcan_enum": {
+                        "path": "/output_format",
+                        "mapping": {
+                          "opus": 24000,
+                          "pcmu_raw": 8000,
+                          "pcmu_wav": 8000
+                        },
+                        "default": 32000
+                      }
+                    }
+                  ]
+                },
+                "format": {"$vulcan_ref": {"path": "/output_format"}},
+                "channel": {"$vulcan_ref": {"path": "/channels"}},
+                "bitrate": {
+                  "$vulcan_if_equals": {
+                    "path": "/output_format",
+                    "equals": "mp3",
+                    "then": {
+                      "$vulcan_coalesce": [
+                        {"$vulcan_ref": {"path": "/bitrate", "optional": true}},
+                        128000
+                      ]
+                    },
+                    "otherwise": {"$vulcan_ref": {"path": "/bitrate", "optional": true}}
+                  }
+                }
+              },
+              "language_boost": {"$vulcan_ref": {"path": "/language", "optional": true}},
+              "subtitle_enable": {
+                "$vulcan_if_equals": {
+                  "path": "/timestamps",
+                  "equals": true,
+                  "then": true
+                }
+              },
+              "pronunciation_dict": {
+                "tone": {"$vulcan_ref": {"path": "/pronunciations", "optional": true}}
+              }
+            }
+          },
+          {"op": "remove_if_empty", "path": "/pronunciation_dict/tone"},
+          {"op": "remove_if_empty", "path": "/pronunciation_dict"}
+        ]
+      }
+    },
+    {
+      "profile_id": "minimax.music.request.v1",
+      "description": "Build the reviewed MiniMax synchronous music URL-output wire body.",
+      "payload": {
+        "profile_id": "minimax.music.request.v1",
+        "revision": 1,
+        "steps": [
+          {
+            "op": "rebuild_json_template",
+            "template": {
+              "model": {"$vulcan_model_id": true},
+              "stream": false,
+              "output_format": "url",
+              "audio_setting": {
+                "sample_rate": {"$vulcan_ref": {"path": "/sample_rate"}},
+                "bitrate": {"$vulcan_ref": {"path": "/bitrate"}},
+                "format": {"$vulcan_ref": {"path": "/output_format"}},
+                "channel": {"$vulcan_ref": {"path": "/channels", "optional": true}}
+              },
+              "prompt": {"$vulcan_ref": {"path": "/prompt", "optional": true}},
+              "lyrics": {"$vulcan_ref": {"path": "/lyrics", "optional": true}},
+              "is_instrumental": {
+                "$vulcan_if_equals": {
+                  "path": "/instrumental",
+                  "equals": true,
+                  "then": true
+                }
+              },
+              "lyrics_optimizer": {
+                "$vulcan_if_equals": {
+                  "path": "/lyrics_optimizer",
+                  "equals": true,
+                  "then": true
+                }
+              },
+              "seed": {"$vulcan_ref": {"path": "/seed", "optional": true}},
+              "aigc_watermark": {
+                "$vulcan_if_equals": {
+                  "path": "/watermark",
+                  "equals": true,
+                  "then": true
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "profile_id": "minimax.video.request.v1",
+      "description": "Build the reviewed MiniMax asynchronous video task-creation body from canonical arguments.",
+      "payload": {
+        "profile_id": "minimax.video.request.v1",
+        "revision": 1,
+        "steps": [
+          {
+            "op": "rebuild_json_template",
+            "template": {
+              "model": {"$vulcan_model_id": true},
+              "prompt": {"$vulcan_ref": {"path": "/prompt"}},
+              "duration": {"$vulcan_ref": {"path": "/duration_seconds"}},
+              "first_frame_image": {"$vulcan_ref": {"path": "/first_frame_image", "optional": true}},
+              "last_frame_image": {"$vulcan_ref": {"path": "/last_frame_image", "optional": true}},
+              "subject_reference": {
+                "$vulcan_if_present": {
+                  "path": "/subject_reference_image",
+                  "then": [
+                    {
+                      "type": "character",
+                      "image": [
+                        {"$vulcan_ref": {"path": "/subject_reference_image"}}
+                      ]
+                    }
+                  ]
+                }
+              },
+              "resolution": {"$vulcan_ref": {"path": "/resolution", "optional": true}},
+              "prompt_optimizer": {"$vulcan_ref": {"path": "/prompt_extend", "optional": true}}
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "response_profiles": [
+    {
+      "profile_id": "minimax.search.response.v1",
+      "description": "Normalize the reviewed MiniMax Coding Plan search response envelope.",
+      "payload": {
+        "profile_id": "minimax.search.response.v1",
+        "revision": 1,
+        "steps": [
+          {
+            "op": "rebuild_json_template",
+            "template": {
+              "$vulcan_if_equals": {
+                "path": "/base_resp/status_code",
+                "equals": 0,
+                "then": {
+                  "results": {
+                    "$vulcan_map": {
+                      "path": "/organic",
+                      "template": {
+                        "title": {"$vulcan_ref": {"scope": "item", "path": "/title"}},
+                        "url": {"$vulcan_ref": {"scope": "item", "path": "/link"}},
+                        "content": {"$vulcan_ref": {"scope": "item", "path": "/snippet"}}
+                      }
+                    }
+                  }
+                },
+                "otherwise": {
+                  "error": {
+                    "code": {"$vulcan_ref": {"path": "/base_resp/status_code"}},
+                    "message": {"$vulcan_ref": {"path": "/base_resp/status_msg"}}
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "profile_id": "minimax.image.response.v1",
+      "description": "Normalize MiniMax image application status while preserving declarative resource carriers.",
+      "payload": {
+        "profile_id": "minimax.image.response.v1",
+        "revision": 1,
+        "steps": [
+          {
+            "op": "rebuild_json_template",
+            "template": {
+              "$vulcan_if_equals": {
+                "path": "/base_resp/status_code",
+                "equals": 0,
+                "then": {
+                  "$vulcan_if_equals": {
+                    "path": "/data/failed_count",
+                    "equals": 0,
+                    "then": {
+                      "id": {"$vulcan_ref": {"path": "/data/task_id"}},
+                      "data": {"$vulcan_ref": {"path": "/data"}}
+                    },
+                    "otherwise": {
+                      "error": {
+                        "code": "partial_failure",
+                        "message": "Provider reported one or more failed image outputs."
+                      }
+                    }
+                  }
+                },
+                "otherwise": {
+                  "error": {
+                    "code": {"$vulcan_ref": {"path": "/base_resp/status_code"}},
+                    "message": {"$vulcan_ref": {"path": "/base_resp/status_msg"}}
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "profile_id": "minimax.video.response.v1",
+      "description": "Normalize every MiniMax video lifecycle envelope while preserving phase-specific fields.",
+      "payload": {
+        "profile_id": "minimax.video.response.v1",
+        "revision": 1,
+        "steps": [
+          {
+            "op": "rebuild_json_template",
+            "template": {
+              "$vulcan_if_equals": {
+                "path": "/base_resp/status_code",
+                "equals": 0,
+                "then": {
+                  "task_id": {"$vulcan_ref": {"path": "/task_id", "optional": true}},
+                  "status": {"$vulcan_ref": {"path": "/status", "optional": true}},
+                  "file_id": {"$vulcan_ref": {"path": "/file_id", "optional": true}},
+                  "file": {"$vulcan_ref": {"path": "/file", "optional": true}}
+                },
+                "otherwise": {
+                  "error": {
+                    "code": {"$vulcan_ref": {"path": "/base_resp/status_code"}},
+                    "message": {"$vulcan_ref": {"path": "/base_resp/status_msg"}}
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "profile_id": "minimax.speech.response.v1",
+      "description": "Normalize MiniMax speech status while preserving hex audio and optional subtitle carriers.",
+      "payload": {
+        "profile_id": "minimax.speech.response.v1",
+        "revision": 1,
+        "steps": [
+          {
+            "op": "rebuild_json_template",
+            "template": {
+              "$vulcan_if_equals": {
+                "path": "/base_resp/status_code",
+                "equals": 0,
+                "then": {
+                  "$vulcan_if_equals": {
+                    "path": "/data/status",
+                    "equals": 2,
+                    "then": {"data": {"$vulcan_ref": {"path": "/data"}}},
+                    "otherwise": {
+                      "error": {
+                        "code": "incomplete_result",
+                        "message": "Provider response did not contain completed speech audio."
+                      }
+                    }
+                  }
+                },
+                "otherwise": {
+                  "error": {
+                    "code": {"$vulcan_ref": {"path": "/base_resp/status_code"}},
+                    "message": {"$vulcan_ref": {"path": "/base_resp/status_msg"}}
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "profile_id": "minimax.music.response.v1",
+      "description": "Normalize MiniMax music status while preserving the reviewed public audio URL.",
+      "payload": {
+        "profile_id": "minimax.music.response.v1",
+        "revision": 1,
+        "steps": [
+          {
+            "op": "rebuild_json_template",
+            "template": {
+              "$vulcan_if_equals": {
+                "path": "/base_resp/status_code",
+                "equals": 0,
+                "then": {
+                  "$vulcan_if_equals": {
+                    "path": "/data/status",
+                    "equals": 2,
+                    "then": {
+                      "id": {"$vulcan_ref": {"path": "/trace_id"}},
+                      "data": {"$vulcan_ref": {"path": "/data"}}
+                    },
+                    "otherwise": {
+                      "error": {
+                        "code": "incomplete_result",
+                        "message": "Provider response did not contain a completed music result."
+                      }
+                    }
+                  }
+                },
+                "otherwise": {
+                  "error": {
+                    "code": {"$vulcan_ref": {"path": "/base_resp/status_code"}},
+                    "message": {"$vulcan_ref": {"path": "/base_resp/status_msg"}}
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "upload_channels": [
+    {
+      "upload_channel_id": "global.video-file",
+      "description": "Upload one local video through the MiniMax international file endpoint.",
+      "primitive": "multipart_file",
+      "endpoint_host": "api.minimax.io",
+      "endpoint_path": "/v1/files/upload",
+      "method": "POST",
+      "file_field": "file",
+      "accepted_mime_types": [
+        "video/mp4",
+        "video/quicktime",
+        "video/x-matroska",
+        "video/webm",
+        "video/x-msvideo"
+      ],
+      "max_bytes": 50000000,
+      "max_count": 1,
+      "timeout_ms": 1800000,
+      "response_id_pointer": "/file/file_id",
+      "reference_template": "mm_file://{id}",
+      "progress_supported": true,
+      "cancellation_supported": true,
+      "fixed_fields": {
+        "purpose": "retrieval"
+      },
+      "cache_duration_ms": 1800000,
+      "reference_encoding": "template"
+    },
+    {
+      "upload_channel_id": "cn.video-file",
+      "description": "Upload one local video through the MiniMax China file endpoint.",
+      "primitive": "multipart_file",
+      "endpoint_host": "api.minimaxi.com",
+      "endpoint_path": "/v1/files/upload",
+      "method": "POST",
+      "file_field": "file",
+      "accepted_mime_types": [
+        "video/mp4",
+        "video/quicktime",
+        "video/x-matroska",
+        "video/webm",
+        "video/x-msvideo"
+      ],
+      "max_bytes": 50000000,
+      "max_count": 1,
+      "timeout_ms": 1800000,
+      "response_id_pointer": "/file/file_id",
+      "reference_template": "mm_file://{id}",
+      "progress_supported": true,
+      "cancellation_supported": true,
+      "fixed_fields": {
+        "purpose": "retrieval"
+      },
+      "cache_duration_ms": 1800000,
+      "reference_encoding": "template"
+    },
+    {
+      "upload_channel_id": "inline.image-data-url",
+      "description": "Materialize a verified local image as an inline Data URL.",
+      "primitive": "inline_data_url",
+      "accepted_mime_types": [
+        "image/jpeg",
+        "image/png",
+        "image/webp"
+      ],
+      "max_bytes": 20971520,
+      "max_count": 16,
+      "progress_supported": false,
+      "cancellation_supported": false,
+      "reference_encoding": "response_url"
+    }
+  ],
+  "operations": [
+    {
+      "operation_id": "minimax.mini_max_coding_plan_vision",
+      "operation": "media_analyze",
+      "carrier": "provider_tool",
+      "input_resources": [],
+      "output_resources": [],
+      "tool_target_refs": [
+        "global:coding-plan-vlm",
+        "cn:coding-plan-vlm"
+      ],
+      "request_profile_refs": [],
+      "response_profile_refs": [],
+      "upload_channel_refs": [
+        "inline.image-data-url"
+      ],
+      "upload_bindings": [
+        {
+          "source_path": "/image_path",
+          "target_path": "/image_url",
+          "upload_channel_refs": [
+            "inline.image-data-url"
+          ],
+          "mime_types_by_extension": {
+            "jpg": "image/jpeg",
+            "jpeg": "image/jpeg",
+            "png": "image/png",
+            "webp": "image/webp"
+          },
+          "required": true,
+          "remove_source": true
+        }
+      ],
+      "timeout_ms": 60000,
+      "idempotent": false
+    },
+    {
+      "operation_id": "minimax.mini_max_image_generate",
+      "operation": "image_generate",
+      "carrier": "provider_tool",
+      "input_resources": [],
+      "output_resources": [
+        "image"
+      ],
+      "tool_target_refs": [
+        "global.image-01-live",
+        "cn.image-01",
+        "cn.image-01-live"
+      ],
+      "tool_target_template_refs": ["minimax.global.image-generate.v1"],
+      "request_profile_refs": ["minimax.image.request.v1"],
+      "response_profile_refs": ["minimax.image.response.v1"],
+      "upload_channel_refs": [
+        "inline.image-data-url"
+      ],
+      "upload_bindings": [
+        {
+          "source_path": "/subject_references",
+          "target_path": "/subject_references",
+          "upload_channel_refs": [
+            "inline.image-data-url"
+          ],
+          "mime_types_by_extension": {
+            "jpg": "image/jpeg",
+            "jpeg": "image/jpeg",
+            "png": "image/png",
+            "webp": "image/webp"
+          },
+          "required": false,
+          "remove_source": false
+        }
+      ],
+      "timeout_ms": 60000,
+      "idempotent": false
+    },
+    {
+      "operation_id": "minimax.mini_max_coding_plan_search",
+      "operation": "web_search",
+      "carrier": "provider_tool",
+      "input_resources": [],
+      "output_resources": [],
+      "tool_target_refs": [
+        "global:coding-plan-search",
+        "cn:coding-plan-search"
+      ],
+      "request_profile_refs": ["minimax.search.request.v1"],
+      "response_profile_refs": ["minimax.search.response.v1"],
+      "upload_channel_refs": [],
+      "upload_bindings": [],
+      "timeout_ms": 60000,
+      "idempotent": false
+    },
+    {
+      "operation_id": "minimax.mini_max_speech_synthesize",
+      "operation": "speech_synthesize",
+      "carrier": "provider_tool",
+      "input_resources": [],
+      "output_resources": [
+        "audio"
+      ],
+      "tool_target_refs": [
+        "global.speech-2.8-hd",
+        "global.speech-2.8-turbo",
+        "global.speech-2.6",
+        "global.speech-02",
+        "cn.speech-2.8-hd",
+        "cn.speech-2.8-turbo",
+        "cn.speech-2.6",
+        "cn.speech-02"
+      ],
+      "request_profile_refs": ["minimax.speech.request.v1"],
+      "response_profile_refs": ["minimax.speech.response.v1"],
+      "upload_channel_refs": [],
+      "upload_bindings": [],
+      "timeout_ms": 60000,
+      "idempotent": false
+    },
+    {
+      "operation_id": "minimax.mini_max_music_generate",
+      "operation": "music_generate",
+      "carrier": "provider_tool",
+      "input_resources": [],
+      "output_resources": [
+        "audio"
+      ],
+      "tool_target_refs": [
+        "global.music-3.0",
+        "global.music-2.6",
+        "global.music-2.6-free",
+        "global.music-2.5+",
+        "global.music-2.5",
+        "cn.music-3.0",
+        "cn.music-2.6",
+        "cn.music-2.6-free",
+        "cn.music-2.5+",
+        "cn.music-2.5"
+      ],
+      "request_profile_refs": ["minimax.music.request.v1"],
+      "response_profile_refs": ["minimax.music.response.v1"],
+      "upload_channel_refs": [],
+      "upload_bindings": [],
+      "timeout_ms": 60000,
+      "idempotent": false
+    },
+    {
+      "operation_id": "minimax.mini_max_video_generate",
+      "operation": "video_generate",
+      "carrier": "provider_tool",
+      "input_resources": [
+        "image"
+      ],
+      "output_resources": [
+        "video"
+      ],
+      "tool_target_refs": [
+        "global.MiniMax-Hailuo-2.3-Fast",
+        "global.MiniMax-Hailuo-02",
+        "global.S2V-01",
+        "cn.MiniMax-Hailuo-2.3",
+        "cn.MiniMax-Hailuo-2.3-Fast",
+        "cn.MiniMax-Hailuo-02",
+        "cn.S2V-01"
+      ],
+      "tool_target_template_refs": ["minimax.global.video-generate.v1"],
+      "request_profile_refs": ["minimax.video.request.v1"],
+      "response_profile_refs": ["minimax.video.response.v1"],
+      "upload_channel_refs": [
+        "inline.image-data-url"
+      ],
+      "upload_bindings": [
+        {
+          "source_path": "/first_frame_path",
+          "target_path": "/first_frame_image",
+          "upload_channel_refs": [
+            "inline.image-data-url"
+          ],
+          "mime_types_by_extension": {
+            "jpg": "image/jpeg",
+            "jpeg": "image/jpeg",
+            "png": "image/png",
+            "webp": "image/webp"
+          },
+          "required": false,
+          "remove_source": true
+        },
+        {
+          "source_path": "/last_frame_path",
+          "target_path": "/last_frame_image",
+          "upload_channel_refs": [
+            "inline.image-data-url"
+          ],
+          "mime_types_by_extension": {
+            "jpg": "image/jpeg",
+            "jpeg": "image/jpeg",
+            "png": "image/png",
+            "webp": "image/webp"
+          },
+          "required": false,
+          "remove_source": true
+        },
+        {
+          "source_path": "/subject_reference_path",
+          "target_path": "/subject_reference_image",
+          "upload_channel_refs": [
+            "inline.image-data-url"
+          ],
+          "mime_types_by_extension": {
+            "jpg": "image/jpeg",
+            "jpeg": "image/jpeg",
+            "png": "image/png",
+            "webp": "image/webp"
+          },
+          "required": false,
+          "remove_source": true
+        }
+      ],
+      "timeout_ms": 1800000,
+      "idempotent": false,
+      "async_execution": {
+        "poll_interval_ms": 15000,
+        "max_backoff_ms": 60000,
+        "timeout_ms": 1800000,
+        "cancellation_supported": false,
+        "generic_json": {
+          "poll_endpoint_path": "/v1/query/video_generation",
+          "poll_method": "get",
+          "task_id_pointer": "/task_id",
+          "task_id_query_parameter": "task_id",
+          "status_pointer": "/status",
+          "queued_statuses": ["Preparing", "Queueing"],
+          "running_statuses": ["Processing"],
+          "success_statuses": ["Success"],
+          "failure_statuses": ["Failed"],
+          "cancelled_statuses": [],
+          "success_follow_up": {
+            "endpoint_path": "/v1/files/retrieve",
+            "method": "get",
+            "identifier_pointer": "/file_id",
+            "identifier_query_parameter": "file_id"
+          }
+        }
+      }
+    }
+  ],
+  "tool_targets": [
+    {
+      "capability": "media_analyze",
+      "credential_profile_ids": [
+        "token-plan-key",
+        "token-plan-oauth"
+      ],
+      "description": "Analyze one local JPEG, PNG, or WebP image with the selected MiniMax Coding Plan account.",
+      "display_name": "MiniMax Coding Plan Image Understanding",
+      "execution": {
+        "adapter": "generic_json",
+        "authentication": "bearer_authorization",
+        "endpoint_path": "/v1/coding_plan/vlm",
+        "execution_kind": "http_json_sync"
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "image_path": {
+            "description": "Local path to one JPEG, PNG, or WebP image.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "prompt": {
+            "description": "Exact analysis instruction for the image.",
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "image_path",
+          "prompt"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "kind": "text",
+        "normalized_result_path": "text",
+        "source_path": "/content"
+      },
+      "service_entry_id": "global",
+      "target_id": "global:coding-plan-vlm",
+      "tool_id": "image_understand",
+      "upstream_target_id": "coding-plan-vlm"
+    },
+    {
+      "capability": "image_generate",
+      "credential_profile_ids": [
+        "payg-api-key",
+        "token-plan-key",
+        "token-plan-oauth"
+      ],
+      "description": "Generate one or more images with the selected MiniMax model and optional local character references.",
+      "display_name": "MiniMax Image 01 Live",
+      "execution": {
+        "adapter": "generic_json",
+        "authentication": "bearer_authorization",
+        "endpoint_path": "/v1/image_generation",
+        "execution_kind": "http_json_sync"
+      },
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "required": [
+                "style_weight"
+              ]
+            },
+            "then": {
+              "required": [
+                "style_type"
+              ]
+            }
+          }
+        ],
+        "description": "MiniMax model-specific image generation tool arguments.",
+        "properties": {
+          "aigc_watermark": {
+            "default": false,
+            "description": "Add the provider AIGC watermark.",
+            "type": "boolean"
+          },
+          "aspect_ratio": {
+            "description": "Provider-supported output aspect ratio.",
+            "enum": [
+              "1:1",
+              "16:9",
+              "4:3",
+              "3:2",
+              "2:3",
+              "3:4",
+              "9:16"
+            ],
+            "type": "string"
+          },
+          "count": {
+            "default": 1,
+            "description": "Number of images to generate.",
+            "maximum": 9,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "prompt": {
+            "description": "Image description. Required and limited to 1500 Unicode characters.",
+            "maxLength": 1500,
+            "minLength": 1,
+            "type": "string"
+          },
+          "prompt_optimizer": {
+            "default": false,
+            "description": "Enable MiniMax prompt optimization.",
+            "type": "boolean"
+          },
+          "seed": {
+            "description": "Optional provider seed for similar reproducible outputs.",
+            "type": "integer"
+          },
+          "style_type": {
+            "description": "MiniMax image-01-live style type.",
+            "enum": [
+              "漫画",
+              "元气",
+              "中世纪",
+              "水彩"
+            ],
+            "type": "string"
+          },
+          "style_weight": {
+            "description": "MiniMax image-01-live style weight in the interval (0, 1].",
+            "exclusiveMinimum": 0,
+            "maximum": 1,
+            "type": "number"
+          },
+          "subject_references": {
+            "description": "Optional local JPG or PNG paths containing front-facing character references.",
+            "items": {
+              "description": "Local character-reference image path.",
+              "format": "vulcan-local-path",
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "prompt"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "kind": "resources",
+        "mime_types": [
+          "image/jpeg"
+        ],
+        "normalized_result_path": "resources",
+        "resource_kind": "image",
+        "source_path": "/data/image_base64",
+        "resource_decoders": [
+          {
+            "source_path": "/data/image_base64",
+            "encoding": "base64",
+            "resource_kind": "image",
+            "mime_type": "image/jpeg",
+            "optional": true,
+            "max_bytes": 8388608,
+            "output_id_prefix": "image_base64"
+          },
+          {
+            "source_path": "/data/image_urls",
+            "encoding": "https_url",
+            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com"],
+            "resource_kind": "image",
+            "mime_type": "image/jpeg",
+            "optional": true,
+            "output_id_prefix": "image_url"
+          }
+        ]
+      },
+      "service_entry_id": "global",
+      "target_id": "global.image-01-live",
+      "tool_id": "image_generate",
+      "upstream_target_id": "image-01-live"
+    },
+    {
+      "capability": "web_search",
+      "credential_profile_ids": [
+        "token-plan-key",
+        "token-plan-oauth"
+      ],
+      "description": "Search the public web with the selected MiniMax Coding Plan account and return ordered structured results.",
+      "display_name": "MiniMax Coding Plan Search",
+      "execution": {
+        "adapter": "generic_json",
+        "authentication": "bearer_authorization",
+        "endpoint_path": "/v1/coding_plan/search",
+        "execution_kind": "http_json_sync"
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "max_results": {
+            "description": "Maximum number of ordered results to return.",
+            "default": 10,
+            "maximum": 10,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "query": {
+            "description": "The exact web search query.",
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "kind": "search",
+        "normalized_result_path": "search",
+        "source_path": "/results"
+      },
+      "service_entry_id": "global",
+      "target_id": "global:coding-plan-search",
+      "tool_id": "vulcan_web_search",
+      "upstream_target_id": "coding-plan-search"
+    },
+    {
+      "capability": "speech_synthesize",
+      "credential_profile_ids": [
+        "payg-api-key",
+        "token-plan-key",
+        "token-plan-oauth"
+      ],
+      "description": "Synthesize one bounded speech audio resource with the selected MiniMax speech model.",
+      "display_name": "MiniMax Speech 2.8 HD",
+      "execution": {
+        "adapter": "generic_json",
+        "authentication": "bearer_authorization",
+        "endpoint_path": "/v1/t2a_v2",
+        "execution_kind": "http_json_sync"
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {"required": ["bitrate"]},
+            "then": {
+              "properties": {"output_format": {"const": "mp3"}}
+            }
+          }
+        ],
+        "properties": {
+          "bitrate": {
+            "description": "MP3 bitrate; omit for non-MP3 output.",
+            "enum": [
+              32000,
+              64000,
+              128000,
+              256000
+            ],
+            "type": "integer"
+          },
+          "channels": {
+            "default": 1,
+            "enum": [
+              1,
+              2
+            ],
+            "type": "integer"
+          },
+          "language": {
+            "description": "Optional MiniMax language_boost value.",
+            "enum": [
+              "Chinese",
+              "Chinese,Yue",
+              "English",
+              "Arabic",
+              "Russian",
+              "Spanish",
+              "French",
+              "Portuguese",
+              "German",
+              "Turkish",
+              "Dutch",
+              "Ukrainian",
+              "Vietnamese",
+              "Indonesian",
+              "Japanese",
+              "Italian",
+              "Korean",
+              "Thai",
+              "Polish",
+              "Romanian",
+              "Greek",
+              "Czech",
+              "Finnish",
+              "Hindi",
+              "Bulgarian",
+              "Danish",
+              "Hebrew",
+              "Malay",
+              "Persian",
+              "Slovak",
+              "Swedish",
+              "Croatian",
+              "Filipino",
+              "Hungarian",
+              "Norwegian",
+              "Slovenian",
+              "Catalan",
+              "Nynorsk",
+              "Tamil",
+              "Afrikaans",
+              "auto"
+            ],
+            "type": "string"
+          },
+          "output_format": {
+            "default": "mp3",
+            "enum": [
+              "mp3",
+              "pcm",
+              "flac",
+              "wav",
+              "pcmu_raw",
+              "pcmu_wav",
+              "opus"
+            ],
+            "type": "string"
+          },
+          "pitch": {
+            "default": 0,
+            "maximum": 12,
+            "minimum": -12,
+            "type": "integer"
+          },
+          "pronunciations": {
+            "description": "Ordered MiniMax pronunciation_dict tone entries.",
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "sample_rate": {
+            "enum": [
+              8000,
+              16000,
+              22050,
+              24000,
+              32000,
+              44100
+            ],
+            "type": "integer"
+          },
+          "speed": {
+            "default": 1.0,
+            "maximum": 2.0,
+            "minimum": 0.5,
+            "type": "number"
+          },
+          "text": {
+            "description": "Text to synthesize.",
+            "maxLength": 9999,
+            "minLength": 1,
+            "type": "string"
+          },
+          "timestamps": {
+            "default": false,
+            "description": "Request a subtitle timing JSON resource.",
+            "type": "boolean"
+          },
+          "voice_id": {
+            "description": "Built-in or account-owned MiniMax voice identifier.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "volume": {
+            "default": 1.0,
+            "exclusiveMinimum": 0,
+            "maximum": 10.0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "text",
+          "voice_id"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "kind": "resources",
+        "mime_types": [
+          "audio/mpeg",
+          "audio/wav",
+          "audio/pcm",
+          "audio/flac",
+          "audio/basic",
+          "audio/opus",
+          "application/json"
+        ],
+        "normalized_result_path": "resources",
+        "resource_kind": "audio",
+        "source_path": "/data/audio",
+        "resource_decoders": [
+          {
+            "source_path": "/data/audio",
+            "encoding": "hex",
+            "resource_kind": "audio",
+            "mime_type_request_path": "/output_format",
+            "mime_types_by_request_value": {
+              "mp3": "audio/mpeg",
+              "wav": "audio/wav",
+              "pcm": "audio/pcm",
+              "flac": "audio/flac",
+              "pcmu_raw": "audio/basic",
+              "pcmu_wav": "audio/wav",
+              "opus": "audio/opus"
+            },
+            "optional": false,
+            "max_bytes": 10000000,
+            "output_id_prefix": "audio"
+          },
+          {
+            "source_path": "/data/subtitle_file",
+            "encoding": "public_http_url",
+            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com"],
+            "resource_kind": "file",
+            "mime_type": "application/json",
+            "optional": true,
+            "output_id_prefix": "subtitle"
+          }
+        ]
+      },
+      "service_entry_id": "global",
+      "target_id": "global.speech-2.8-hd",
+      "tool_id": "speech_synthesize",
+      "upstream_target_id": "speech-2.8-hd"
+    },
+    {
+      "capability": "speech_synthesize",
+      "credential_profile_ids": [
+        "payg-api-key",
+        "token-plan-key",
+        "token-plan-oauth"
+      ],
+      "description": "Synthesize one bounded speech audio resource with the selected MiniMax speech model.",
+      "display_name": "MiniMax Speech 2.8 Turbo",
+      "execution": {
+        "adapter": "generic_json",
+        "authentication": "bearer_authorization",
+        "endpoint_path": "/v1/t2a_v2",
+        "execution_kind": "http_json_sync"
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {"required": ["bitrate"]},
+            "then": {
+              "properties": {"output_format": {"const": "mp3"}}
+            }
+          }
+        ],
+        "properties": {
+          "bitrate": {
+            "description": "MP3 bitrate; omit for non-MP3 output.",
+            "enum": [
+              32000,
+              64000,
+              128000,
+              256000
+            ],
+            "type": "integer"
+          },
+          "channels": {
+            "default": 1,
+            "enum": [
+              1,
+              2
+            ],
+            "type": "integer"
+          },
+          "language": {
+            "description": "Optional MiniMax language_boost value.",
+            "enum": [
+              "Chinese",
+              "Chinese,Yue",
+              "English",
+              "Arabic",
+              "Russian",
+              "Spanish",
+              "French",
+              "Portuguese",
+              "German",
+              "Turkish",
+              "Dutch",
+              "Ukrainian",
+              "Vietnamese",
+              "Indonesian",
+              "Japanese",
+              "Italian",
+              "Korean",
+              "Thai",
+              "Polish",
+              "Romanian",
+              "Greek",
+              "Czech",
+              "Finnish",
+              "Hindi",
+              "Bulgarian",
+              "Danish",
+              "Hebrew",
+              "Malay",
+              "Persian",
+              "Slovak",
+              "Swedish",
+              "Croatian",
+              "Filipino",
+              "Hungarian",
+              "Norwegian",
+              "Slovenian",
+              "Catalan",
+              "Nynorsk",
+              "Tamil",
+              "Afrikaans",
+              "auto"
+            ],
+            "type": "string"
+          },
+          "output_format": {
+            "default": "mp3",
+            "enum": [
+              "mp3",
+              "pcm",
+              "flac",
+              "wav",
+              "pcmu_raw",
+              "pcmu_wav",
+              "opus"
+            ],
+            "type": "string"
+          },
+          "pitch": {
+            "default": 0,
+            "maximum": 12,
+            "minimum": -12,
+            "type": "integer"
+          },
+          "pronunciations": {
+            "description": "Ordered MiniMax pronunciation_dict tone entries.",
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "sample_rate": {
+            "enum": [
+              8000,
+              16000,
+              22050,
+              24000,
+              32000,
+              44100
+            ],
+            "type": "integer"
+          },
+          "speed": {
+            "default": 1.0,
+            "maximum": 2.0,
+            "minimum": 0.5,
+            "type": "number"
+          },
+          "text": {
+            "description": "Text to synthesize.",
+            "maxLength": 9999,
+            "minLength": 1,
+            "type": "string"
+          },
+          "timestamps": {
+            "default": false,
+            "description": "Request a subtitle timing JSON resource.",
+            "type": "boolean"
+          },
+          "voice_id": {
+            "description": "Built-in or account-owned MiniMax voice identifier.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "volume": {
+            "default": 1.0,
+            "exclusiveMinimum": 0,
+            "maximum": 10.0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "text",
+          "voice_id"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "kind": "resources",
+        "mime_types": [
+          "audio/mpeg",
+          "audio/wav",
+          "audio/pcm",
+          "audio/flac",
+          "audio/basic",
+          "audio/opus",
+          "application/json"
+        ],
+        "normalized_result_path": "resources",
+        "resource_kind": "audio",
+        "source_path": "/data/audio",
+        "resource_decoders": [
+          {
+            "source_path": "/data/audio",
+            "encoding": "hex",
+            "resource_kind": "audio",
+            "mime_type_request_path": "/output_format",
+            "mime_types_by_request_value": {
+              "mp3": "audio/mpeg",
+              "wav": "audio/wav",
+              "pcm": "audio/pcm",
+              "flac": "audio/flac",
+              "pcmu_raw": "audio/basic",
+              "pcmu_wav": "audio/wav",
+              "opus": "audio/opus"
+            },
+            "optional": false,
+            "max_bytes": 10000000,
+            "output_id_prefix": "audio"
+          },
+          {
+            "source_path": "/data/subtitle_file",
+            "encoding": "public_http_url",
+            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com"],
+            "resource_kind": "file",
+            "mime_type": "application/json",
+            "optional": true,
+            "output_id_prefix": "subtitle"
+          }
+        ]
+      },
+      "service_entry_id": "global",
+      "target_id": "global.speech-2.8-turbo",
+      "tool_id": "speech_synthesize",
+      "upstream_target_id": "speech-2.8-turbo"
+    },
+    {
+      "capability": "speech_synthesize",
+      "credential_profile_ids": [
+        "payg-api-key",
+        "token-plan-key",
+        "token-plan-oauth"
+      ],
+      "description": "Synthesize one bounded speech audio resource with the selected MiniMax speech model.",
+      "display_name": "MiniMax Speech 2.6",
+      "execution": {
+        "adapter": "generic_json",
+        "authentication": "bearer_authorization",
+        "endpoint_path": "/v1/t2a_v2",
+        "execution_kind": "http_json_sync"
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {"required": ["bitrate"]},
+            "then": {
+              "properties": {"output_format": {"const": "mp3"}}
+            }
+          }
+        ],
+        "properties": {
+          "bitrate": {
+            "description": "MP3 bitrate; omit for non-MP3 output.",
+            "enum": [
+              32000,
+              64000,
+              128000,
+              256000
+            ],
+            "type": "integer"
+          },
+          "channels": {
+            "default": 1,
+            "enum": [
+              1,
+              2
+            ],
+            "type": "integer"
+          },
+          "language": {
+            "description": "Optional MiniMax language_boost value.",
+            "enum": [
+              "Chinese",
+              "Chinese,Yue",
+              "English",
+              "Arabic",
+              "Russian",
+              "Spanish",
+              "French",
+              "Portuguese",
+              "German",
+              "Turkish",
+              "Dutch",
+              "Ukrainian",
+              "Vietnamese",
+              "Indonesian",
+              "Japanese",
+              "Italian",
+              "Korean",
+              "Thai",
+              "Polish",
+              "Romanian",
+              "Greek",
+              "Czech",
+              "Finnish",
+              "Hindi",
+              "Bulgarian",
+              "Danish",
+              "Hebrew",
+              "Malay",
+              "Persian",
+              "Slovak",
+              "Swedish",
+              "Croatian",
+              "Filipino",
+              "Hungarian",
+              "Norwegian",
+              "Slovenian",
+              "Catalan",
+              "Nynorsk",
+              "Tamil",
+              "Afrikaans",
+              "auto"
+            ],
+            "type": "string"
+          },
+          "output_format": {
+            "default": "mp3",
+            "enum": [
+              "mp3",
+              "pcm",
+              "flac",
+              "wav",
+              "pcmu_raw",
+              "pcmu_wav",
+              "opus"
+            ],
+            "type": "string"
+          },
+          "pitch": {
+            "default": 0,
+            "maximum": 12,
+            "minimum": -12,
+            "type": "integer"
+          },
+          "pronunciations": {
+            "description": "Ordered MiniMax pronunciation_dict tone entries.",
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "sample_rate": {
+            "enum": [
+              8000,
+              16000,
+              22050,
+              24000,
+              32000,
+              44100
+            ],
+            "type": "integer"
+          },
+          "speed": {
+            "default": 1.0,
+            "maximum": 2.0,
+            "minimum": 0.5,
+            "type": "number"
+          },
+          "text": {
+            "description": "Text to synthesize.",
+            "maxLength": 9999,
+            "minLength": 1,
+            "type": "string"
+          },
+          "timestamps": {
+            "default": false,
+            "description": "Request a subtitle timing JSON resource.",
+            "type": "boolean"
+          },
+          "voice_id": {
+            "description": "Built-in or account-owned MiniMax voice identifier.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "volume": {
+            "default": 1.0,
+            "exclusiveMinimum": 0,
+            "maximum": 10.0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "text",
+          "voice_id"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "kind": "resources",
+        "mime_types": [
+          "audio/mpeg",
+          "audio/wav",
+          "audio/pcm",
+          "audio/flac",
+          "audio/basic",
+          "audio/opus",
+          "application/json"
+        ],
+        "normalized_result_path": "resources",
+        "resource_kind": "audio",
+        "source_path": "/data/audio",
+        "resource_decoders": [
+          {
+            "source_path": "/data/audio",
+            "encoding": "hex",
+            "resource_kind": "audio",
+            "mime_type_request_path": "/output_format",
+            "mime_types_by_request_value": {
+              "mp3": "audio/mpeg",
+              "wav": "audio/wav",
+              "pcm": "audio/pcm",
+              "flac": "audio/flac",
+              "pcmu_raw": "audio/basic",
+              "pcmu_wav": "audio/wav",
+              "opus": "audio/opus"
+            },
+            "optional": false,
+            "max_bytes": 10000000,
+            "output_id_prefix": "audio"
+          },
+          {
+            "source_path": "/data/subtitle_file",
+            "encoding": "public_http_url",
+            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com"],
+            "resource_kind": "file",
+            "mime_type": "application/json",
+            "optional": true,
+            "output_id_prefix": "subtitle"
+          }
+        ]
+      },
+      "service_entry_id": "global",
+      "target_id": "global.speech-2.6",
+      "tool_id": "speech_synthesize",
+      "upstream_target_id": "speech-2.6"
+    },
+    {
+      "capability": "speech_synthesize",
+      "credential_profile_ids": [
+        "payg-api-key",
+        "token-plan-key",
+        "token-plan-oauth"
+      ],
+      "description": "Synthesize one bounded speech audio resource with the selected MiniMax speech model.",
+      "display_name": "MiniMax Speech 02",
+      "execution": {
+        "adapter": "generic_json",
+        "authentication": "bearer_authorization",
+        "endpoint_path": "/v1/t2a_v2",
+        "execution_kind": "http_json_sync"
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {"required": ["bitrate"]},
+            "then": {
+              "properties": {"output_format": {"const": "mp3"}}
+            }
+          }
+        ],
+        "properties": {
+          "bitrate": {
+            "description": "MP3 bitrate; omit for non-MP3 output.",
+            "enum": [
+              32000,
+              64000,
+              128000,
+              256000
+            ],
+            "type": "integer"
+          },
+          "channels": {
+            "default": 1,
+            "enum": [
+              1,
+              2
+            ],
+            "type": "integer"
+          },
+          "language": {
+            "description": "Optional MiniMax language_boost value.",
+            "enum": [
+              "Chinese",
+              "Chinese,Yue",
+              "English",
+              "Arabic",
+              "Russian",
+              "Spanish",
+              "French",
+              "Portuguese",
+              "German",
+              "Turkish",
+              "Dutch",
+              "Ukrainian",
+              "Vietnamese",
+              "Indonesian",
+              "Japanese",
+              "Italian",
+              "Korean",
+              "Thai",
+              "Polish",
+              "Romanian",
+              "Greek",
+              "Czech",
+              "Finnish",
+              "Hindi",
+              "Bulgarian",
+              "Danish",
+              "Hebrew",
+              "Malay",
+              "Persian",
+              "Slovak",
+              "Swedish",
+              "Croatian",
+              "Filipino",
+              "Hungarian",
+              "Norwegian",
+              "Slovenian",
+              "Catalan",
+              "Nynorsk",
+              "Tamil",
+              "Afrikaans",
+              "auto"
+            ],
+            "type": "string"
+          },
+          "output_format": {
+            "default": "mp3",
+            "enum": [
+              "mp3",
+              "pcm",
+              "flac",
+              "wav",
+              "pcmu_raw",
+              "pcmu_wav",
+              "opus"
+            ],
+            "type": "string"
+          },
+          "pitch": {
+            "default": 0,
+            "maximum": 12,
+            "minimum": -12,
+            "type": "integer"
+          },
+          "pronunciations": {
+            "description": "Ordered MiniMax pronunciation_dict tone entries.",
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "sample_rate": {
+            "enum": [
+              8000,
+              16000,
+              22050,
+              24000,
+              32000,
+              44100
+            ],
+            "type": "integer"
+          },
+          "speed": {
+            "default": 1.0,
+            "maximum": 2.0,
+            "minimum": 0.5,
+            "type": "number"
+          },
+          "text": {
+            "description": "Text to synthesize.",
+            "maxLength": 9999,
+            "minLength": 1,
+            "type": "string"
+          },
+          "timestamps": {
+            "default": false,
+            "description": "Request a subtitle timing JSON resource.",
+            "type": "boolean"
+          },
+          "voice_id": {
+            "description": "Built-in or account-owned MiniMax voice identifier.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "volume": {
+            "default": 1.0,
+            "exclusiveMinimum": 0,
+            "maximum": 10.0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "text",
+          "voice_id"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "kind": "resources",
+        "mime_types": [
+          "audio/mpeg",
+          "audio/wav",
+          "audio/pcm",
+          "audio/flac",
+          "audio/basic",
+          "audio/opus",
+          "application/json"
+        ],
+        "normalized_result_path": "resources",
+        "resource_kind": "audio",
+        "source_path": "/data/audio",
+        "resource_decoders": [
+          {
+            "source_path": "/data/audio",
+            "encoding": "hex",
+            "resource_kind": "audio",
+            "mime_type_request_path": "/output_format",
+            "mime_types_by_request_value": {
+              "mp3": "audio/mpeg",
+              "wav": "audio/wav",
+              "pcm": "audio/pcm",
+              "flac": "audio/flac",
+              "pcmu_raw": "audio/basic",
+              "pcmu_wav": "audio/wav",
+              "opus": "audio/opus"
+            },
+            "optional": false,
+            "max_bytes": 10000000,
+            "output_id_prefix": "audio"
+          },
+          {
+            "source_path": "/data/subtitle_file",
+            "encoding": "public_http_url",
+            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com"],
+            "resource_kind": "file",
+            "mime_type": "application/json",
+            "optional": true,
+            "output_id_prefix": "subtitle"
+          }
+        ]
+      },
+      "service_entry_id": "global",
+      "target_id": "global.speech-02",
+      "tool_id": "speech_synthesize",
+      "upstream_target_id": "speech-02"
+    },
+    {
+      "capability": "music_generate",
+      "credential_profile_ids": [
+        "payg-api-key",
+        "token-plan-key",
+        "token-plan-oauth"
+      ],
+      "description": "Generate one music audio resource with the selected MiniMax music model.",
+      "display_name": "MiniMax Music 3.0",
+      "execution": {
+        "adapter": "generic_json",
+        "authentication": "bearer_authorization",
+        "endpoint_path": "/v1/music_generation",
+        "execution_kind": "http_json_sync"
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "properties": {
+              "instrumental": {"const": true},
+              "lyrics_optimizer": {"const": false},
+              "lyrics": {"maxLength": 0},
+              "prompt": {"minLength": 1}
+            },
+            "required": ["instrumental", "prompt"]
+          },
+          {
+            "properties": {
+              "instrumental": {"const": false},
+              "lyrics_optimizer": {"const": true},
+              "lyrics": {"maxLength": 0},
+              "prompt": {"minLength": 1}
+            },
+            "required": ["lyrics_optimizer", "prompt"]
+          },
+          {
+            "properties": {
+              "instrumental": {"const": false},
+              "lyrics_optimizer": {"const": false},
+              "lyrics": {"minLength": 1}
+            },
+            "required": ["lyrics"]
+          }
+        ],
+        "properties": {
+          "bitrate": {
+            "default": 256000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "channels": {
+            "maximum": 2,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "instrumental": {
+            "default": false,
+            "description": "Generate instrumental music without lyrics.",
+            "type": "boolean"
+          },
+          "lyrics": {
+            "description": "Exact lyrics; omit for instrumental or optimized lyric generation.",
+            "maxLength": 3500,
+            "type": "string"
+          },
+          "lyrics_optimizer": {
+            "default": false,
+            "description": "Let MiniMax generate optimized lyrics from the prompt.",
+            "type": "boolean"
+          },
+          "output_format": {
+            "default": "mp3",
+            "enum": [
+              "mp3",
+              "wav",
+              "pcm"
+            ],
+            "type": "string"
+          },
+          "prompt": {
+            "description": "Style, mood, and scenario guidance.",
+            "maxLength": 2000,
+            "type": "string"
+          },
+          "sample_rate": {
+            "default": 44100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "seed": {
+            "type": "integer"
+          },
+          "watermark": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "output": {
+        "kind": "resources",
+        "mime_types": [
+          "audio/mpeg",
+          "audio/wav",
+          "audio/L16"
+        ],
+        "normalized_result_path": "resources",
+        "resource_kind": "audio",
+        "source_path": "/data/audio_url",
+        "resource_decoders": [
+          {
+            "source_path": "/data/audio_url",
+            "encoding": "public_http_url",
+            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com"],
+            "resource_kind": "audio",
+            "mime_type_request_path": "/output_format",
+            "mime_types_by_request_value": {
+              "mp3": "audio/mpeg",
+              "wav": "audio/wav",
+              "pcm": "audio/L16"
+            },
+            "optional": false,
+            "output_id_prefix": "music"
+          }
+        ]
+      },
+      "service_entry_id": "global",
+      "target_id": "global.music-3.0",
+      "tool_id": "music_generate",
+      "upstream_target_id": "music-3.0"
+    },
+    {
+      "capability": "music_generate",
+      "credential_profile_ids": [
+        "payg-api-key",
+        "token-plan-key",
+        "token-plan-oauth"
+      ],
+      "description": "Generate one music audio resource with the selected MiniMax music model.",
+      "display_name": "MiniMax Music 2.6",
+      "execution": {
+        "adapter": "generic_json",
+        "authentication": "bearer_authorization",
+        "endpoint_path": "/v1/music_generation",
+        "execution_kind": "http_json_sync"
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "properties": {
+              "instrumental": {"const": true},
+              "lyrics_optimizer": {"const": false},
+              "lyrics": {"maxLength": 0},
+              "prompt": {"minLength": 1}
+            },
+            "required": ["instrumental", "prompt"]
+          },
+          {
+            "properties": {
+              "instrumental": {"const": false},
+              "lyrics_optimizer": {"const": true},
+              "lyrics": {"maxLength": 0},
+              "prompt": {"minLength": 1}
+            },
+            "required": ["lyrics_optimizer", "prompt"]
+          },
+          {
+            "properties": {
+              "instrumental": {"const": false},
+              "lyrics_optimizer": {"const": false},
+              "lyrics": {"minLength": 1}
+            },
+            "required": ["lyrics"]
+          }
+        ],
+        "properties": {
+          "bitrate": {
+            "default": 256000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "channels": {
+            "maximum": 2,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "instrumental": {
+            "default": false,
+            "description": "Generate instrumental music without lyrics.",
+            "type": "boolean"
+          },
+          "lyrics": {
+            "description": "Exact lyrics; omit for instrumental or optimized lyric generation.",
+            "maxLength": 3500,
+            "type": "string"
+          },
+          "lyrics_optimizer": {
+            "default": false,
+            "description": "Let MiniMax generate optimized lyrics from the prompt.",
+            "type": "boolean"
+          },
+          "output_format": {
+            "default": "mp3",
+            "enum": [
+              "mp3",
+              "wav",
+              "pcm"
+            ],
+            "type": "string"
+          },
+          "prompt": {
+            "description": "Style, mood, and scenario guidance.",
+            "maxLength": 2000,
+            "type": "string"
+          },
+          "sample_rate": {
+            "default": 44100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "seed": {
+            "type": "integer"
+          },
+          "watermark": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "output": {
+        "kind": "resources",
+        "mime_types": [
+          "audio/mpeg",
+          "audio/wav",
+          "audio/L16"
+        ],
+        "normalized_result_path": "resources",
+        "resource_kind": "audio",
+        "source_path": "/data/audio_url",
+        "resource_decoders": [
+          {
+            "source_path": "/data/audio_url",
+            "encoding": "public_http_url",
+            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com"],
+            "resource_kind": "audio",
+            "mime_type_request_path": "/output_format",
+            "mime_types_by_request_value": {
+              "mp3": "audio/mpeg",
+              "wav": "audio/wav",
+              "pcm": "audio/L16"
+            },
+            "optional": false,
+            "output_id_prefix": "music"
+          }
+        ]
+      },
+      "service_entry_id": "global",
+      "target_id": "global.music-2.6",
+      "tool_id": "music_generate",
+      "upstream_target_id": "music-2.6"
+    },
+    {
+      "capability": "music_generate",
+      "credential_profile_ids": [
+        "payg-api-key",
+        "token-plan-key",
+        "token-plan-oauth"
+      ],
+      "description": "Generate one music audio resource with the selected MiniMax music model.",
+      "display_name": "MiniMax Music 2.6 Free",
+      "execution": {
+        "adapter": "generic_json",
+        "authentication": "bearer_authorization",
+        "endpoint_path": "/v1/music_generation",
+        "execution_kind": "http_json_sync"
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "properties": {
+              "instrumental": {"const": true},
+              "lyrics_optimizer": {"const": false},
+              "lyrics": {"maxLength": 0},
+              "prompt": {"minLength": 1}
+            },
+            "required": ["instrumental", "prompt"]
+          },
+          {
+            "properties": {
+              "instrumental": {"const": false},
+              "lyrics_optimizer": {"const": true},
+              "lyrics": {"maxLength": 0},
+              "prompt": {"minLength": 1}
+            },
+            "required": ["lyrics_optimizer", "prompt"]
+          },
+          {
+            "properties": {
+              "instrumental": {"const": false},
+              "lyrics_optimizer": {"const": false},
+              "lyrics": {"minLength": 1}
+            },
+            "required": ["lyrics"]
+          }
+        ],
+        "properties": {
+          "bitrate": {
+            "default": 256000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "channels": {
+            "maximum": 2,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "instrumental": {
+            "default": false,
+            "description": "Generate instrumental music without lyrics.",
+            "type": "boolean"
+          },
+          "lyrics": {
+            "description": "Exact lyrics; omit for instrumental or optimized lyric generation.",
+            "maxLength": 3500,
+            "type": "string"
+          },
+          "lyrics_optimizer": {
+            "default": false,
+            "description": "Let MiniMax generate optimized lyrics from the prompt.",
+            "type": "boolean"
+          },
+          "output_format": {
+            "default": "mp3",
+            "enum": [
+              "mp3",
+              "wav",
+              "pcm"
+            ],
+            "type": "string"
+          },
+          "prompt": {
+            "description": "Style, mood, and scenario guidance.",
+            "maxLength": 2000,
+            "type": "string"
+          },
+          "sample_rate": {
+            "default": 44100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "seed": {
+            "type": "integer"
+          },
+          "watermark": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "output": {
+        "kind": "resources",
+        "mime_types": [
+          "audio/mpeg",
+          "audio/wav",
+          "audio/L16"
+        ],
+        "normalized_result_path": "resources",
+        "resource_kind": "audio",
+        "source_path": "/data/audio_url",
+        "resource_decoders": [
+          {
+            "source_path": "/data/audio_url",
+            "encoding": "public_http_url",
+            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com"],
+            "resource_kind": "audio",
+            "mime_type_request_path": "/output_format",
+            "mime_types_by_request_value": {
+              "mp3": "audio/mpeg",
+              "wav": "audio/wav",
+              "pcm": "audio/L16"
+            },
+            "optional": false,
+            "output_id_prefix": "music"
+          }
+        ]
+      },
+      "service_entry_id": "global",
+      "target_id": "global.music-2.6-free",
+      "tool_id": "music_generate",
+      "upstream_target_id": "music-2.6-free"
+    },
+    {
+      "capability": "music_generate",
+      "credential_profile_ids": [
+        "payg-api-key",
+        "token-plan-key",
+        "token-plan-oauth"
+      ],
+      "description": "Generate one music audio resource with the selected MiniMax music model.",
+      "display_name": "MiniMax Music 2.5 Plus",
+      "execution": {
+        "adapter": "generic_json",
+        "authentication": "bearer_authorization",
+        "endpoint_path": "/v1/music_generation",
+        "execution_kind": "http_json_sync"
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "properties": {
+              "instrumental": {"const": true},
+              "lyrics_optimizer": {"const": false},
+              "lyrics": {"maxLength": 0},
+              "prompt": {"minLength": 1}
+            },
+            "required": ["instrumental", "prompt"]
+          },
+          {
+            "properties": {
+              "instrumental": {"const": false},
+              "lyrics_optimizer": {"const": true},
+              "lyrics": {"maxLength": 0},
+              "prompt": {"minLength": 1}
+            },
+            "required": ["lyrics_optimizer", "prompt"]
+          },
+          {
+            "properties": {
+              "instrumental": {"const": false},
+              "lyrics_optimizer": {"const": false},
+              "lyrics": {"minLength": 1}
+            },
+            "required": ["lyrics"]
+          }
+        ],
+        "properties": {
+          "bitrate": {
+            "default": 256000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "channels": {
+            "maximum": 2,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "instrumental": {
+            "default": false,
+            "description": "Generate instrumental music without lyrics.",
+            "type": "boolean"
+          },
+          "lyrics": {
+            "description": "Exact lyrics; omit for instrumental or optimized lyric generation.",
+            "maxLength": 3500,
+            "type": "string"
+          },
+          "lyrics_optimizer": {
+            "default": false,
+            "description": "Let MiniMax generate optimized lyrics from the prompt.",
+            "type": "boolean"
+          },
+          "output_format": {
+            "default": "mp3",
+            "enum": [
+              "mp3",
+              "wav",
+              "pcm"
+            ],
+            "type": "string"
+          },
+          "prompt": {
+            "description": "Style, mood, and scenario guidance.",
+            "maxLength": 2000,
+            "type": "string"
+          },
+          "sample_rate": {
+            "default": 44100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "seed": {
+            "type": "integer"
+          },
+          "watermark": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "output": {
+        "kind": "resources",
+        "mime_types": [
+          "audio/mpeg",
+          "audio/wav",
+          "audio/L16"
+        ],
+        "normalized_result_path": "resources",
+        "resource_kind": "audio",
+        "source_path": "/data/audio_url",
+        "resource_decoders": [
+          {
+            "source_path": "/data/audio_url",
+            "encoding": "public_http_url",
+            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com"],
+            "resource_kind": "audio",
+            "mime_type_request_path": "/output_format",
+            "mime_types_by_request_value": {
+              "mp3": "audio/mpeg",
+              "wav": "audio/wav",
+              "pcm": "audio/L16"
+            },
+            "optional": false,
+            "output_id_prefix": "music"
+          }
+        ]
+      },
+      "service_entry_id": "global",
+      "target_id": "global.music-2.5+",
+      "tool_id": "music_generate",
+      "upstream_target_id": "music-2.5+"
+    },
+    {
+      "capability": "music_generate",
+      "credential_profile_ids": [
+        "payg-api-key",
+        "token-plan-key",
+        "token-plan-oauth"
+      ],
+      "description": "Generate one music audio resource with the selected MiniMax music model.",
+      "display_name": "MiniMax Music 2.5",
+      "execution": {
+        "adapter": "generic_json",
+        "authentication": "bearer_authorization",
+        "endpoint_path": "/v1/music_generation",
+        "execution_kind": "http_json_sync"
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "properties": {
+              "instrumental": {"const": true},
+              "lyrics_optimizer": {"const": false},
+              "lyrics": {"maxLength": 0},
+              "prompt": {"minLength": 1}
+            },
+            "required": ["instrumental", "prompt"]
+          },
+          {
+            "properties": {
+              "instrumental": {"const": false},
+              "lyrics_optimizer": {"const": true},
+              "lyrics": {"maxLength": 0},
+              "prompt": {"minLength": 1}
+            },
+            "required": ["lyrics_optimizer", "prompt"]
+          },
+          {
+            "properties": {
+              "instrumental": {"const": false},
+              "lyrics_optimizer": {"const": false},
+              "lyrics": {"minLength": 1}
+            },
+            "required": ["lyrics"]
+          }
+        ],
+        "properties": {
+          "bitrate": {
+            "default": 256000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "channels": {
+            "maximum": 2,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "instrumental": {
+            "default": false,
+            "description": "Generate instrumental music without lyrics.",
+            "type": "boolean"
+          },
+          "lyrics": {
+            "description": "Exact lyrics; omit for instrumental or optimized lyric generation.",
+            "maxLength": 3500,
+            "type": "string"
+          },
+          "lyrics_optimizer": {
+            "default": false,
+            "description": "Let MiniMax generate optimized lyrics from the prompt.",
+            "type": "boolean"
+          },
+          "output_format": {
+            "default": "mp3",
+            "enum": [
+              "mp3",
+              "wav",
+              "pcm"
+            ],
+            "type": "string"
+          },
+          "prompt": {
+            "description": "Style, mood, and scenario guidance.",
+            "maxLength": 2000,
+            "type": "string"
+          },
+          "sample_rate": {
+            "default": 44100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "seed": {
+            "type": "integer"
+          },
+          "watermark": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "output": {
+        "kind": "resources",
+        "mime_types": [
+          "audio/mpeg",
+          "audio/wav",
+          "audio/L16"
+        ],
+        "normalized_result_path": "resources",
+        "resource_kind": "audio",
+        "source_path": "/data/audio_url",
+        "resource_decoders": [
+          {
+            "source_path": "/data/audio_url",
+            "encoding": "public_http_url",
+            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com"],
+            "resource_kind": "audio",
+            "mime_type_request_path": "/output_format",
+            "mime_types_by_request_value": {
+              "mp3": "audio/mpeg",
+              "wav": "audio/wav",
+              "pcm": "audio/L16"
+            },
+            "optional": false,
+            "output_id_prefix": "music"
+          }
+        ]
+      },
+      "service_entry_id": "global",
+      "target_id": "global.music-2.5",
+      "tool_id": "music_generate",
+      "upstream_target_id": "music-2.5"
+    },
+    {
+      "capability": "video_generate",
+      "credential_profile_ids": [
+        "payg-api-key",
+        "token-plan-key",
+        "token-plan-oauth"
+      ],
+      "description": "Generate one MP4 video with the selected MiniMax video model and wait for provider completion.",
+      "display_name": "MiniMax Hailuo 2.3 Fast",
+      "execution": {
+        "adapter": "generic_json",
+        "authentication": "bearer_authorization",
+        "endpoint_path": "/v1/video_generation",
+        "execution_kind": "http_json_async_poll"
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "duration_seconds": {
+            "default": 6,
+            "enum": [
+              6,
+              10
+            ],
+            "type": "integer"
+          },
+          "first_frame_path": {
+            "description": "Required local JPEG, PNG, or WebP first-frame path.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "prompt": {
+            "description": "Motion and scene description.",
+            "maxLength": 2000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "prompt_extend": {
+            "description": "Enable provider-native prompt optimization.",
+            "type": "boolean"
+          },
+          "resolution": {
+            "enum": [
+              "768P",
+              "1080P"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "prompt",
+          "first_frame_path"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "kind": "resources",
+        "mime_types": [
+          "video/mp4"
+        ],
+        "normalized_result_path": "resources",
+        "resource_kind": "video",
+        "source_path": "/file/download_url",
+        "resource_decoders": [
+          {
+            "source_path": "/file/download_url",
+            "encoding": "public_http_url",
+            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com"],
+            "resource_kind": "video",
+            "mime_type": "video/mp4",
+            "optional": false,
+            "output_id_prefix": "video"
+          }
+        ]
+      },
+      "service_entry_id": "global",
+      "target_id": "global.MiniMax-Hailuo-2.3-Fast",
+      "tool_id": "video_generate",
+      "upstream_target_id": "MiniMax-Hailuo-2.3-Fast"
+    },
+    {
+      "capability": "video_generate",
+      "credential_profile_ids": [
+        "payg-api-key",
+        "token-plan-key",
+        "token-plan-oauth"
+      ],
+      "description": "Generate one MP4 video with the selected MiniMax video model and wait for provider completion.",
+      "display_name": "MiniMax Hailuo 02",
+      "execution": {
+        "adapter": "generic_json",
+        "authentication": "bearer_authorization",
+        "endpoint_path": "/v1/video_generation",
+        "execution_kind": "http_json_async_poll"
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "dependentRequired": {
+          "last_frame_path": [
+            "first_frame_path"
+          ]
+        },
+        "properties": {
+          "duration_seconds": {
+            "default": 6,
+            "enum": [
+              6,
+              10
+            ],
+            "type": "integer"
+          },
+          "first_frame_path": {
+            "description": "Optional local JPEG, PNG, or WebP first-frame path.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "last_frame_path": {
+            "description": "Optional local last-frame path; requires first_frame_path.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "prompt": {
+            "description": "Motion and scene description.",
+            "maxLength": 2000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "prompt_extend": {
+            "description": "Enable provider-native prompt optimization.",
+            "type": "boolean"
+          },
+          "resolution": {
+            "enum": [
+              "512P",
+              "768P",
+              "1080P"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "prompt"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "kind": "resources",
+        "mime_types": [
+          "video/mp4"
+        ],
+        "normalized_result_path": "resources",
+        "resource_kind": "video",
+        "source_path": "/file/download_url",
+        "resource_decoders": [
+          {
+            "source_path": "/file/download_url",
+            "encoding": "public_http_url",
+            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com"],
+            "resource_kind": "video",
+            "mime_type": "video/mp4",
+            "optional": false,
+            "output_id_prefix": "video"
+          }
+        ]
+      },
+      "service_entry_id": "global",
+      "target_id": "global.MiniMax-Hailuo-02",
+      "tool_id": "video_generate",
+      "upstream_target_id": "MiniMax-Hailuo-02"
+    },
+    {
+      "capability": "video_generate",
+      "credential_profile_ids": [
+        "payg-api-key",
+        "token-plan-key",
+        "token-plan-oauth"
+      ],
+      "description": "Generate one MP4 video with the selected MiniMax video model and wait for provider completion.",
+      "display_name": "MiniMax S2V 01",
+      "execution": {
+        "adapter": "generic_json",
+        "authentication": "bearer_authorization",
+        "endpoint_path": "/v1/video_generation",
+        "execution_kind": "http_json_async_poll"
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "duration_seconds": {
+            "default": 6,
+            "enum": [
+              6,
+              10
+            ],
+            "type": "integer"
+          },
+          "prompt": {
+            "description": "Motion and scene description.",
+            "maxLength": 2000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "prompt_extend": {
+            "description": "Enable provider-native prompt optimization.",
+            "type": "boolean"
+          },
+          "resolution": {
+            "enum": [
+              "512P",
+              "768P",
+              "1080P"
+            ],
+            "type": "string"
+          },
+          "subject_reference_path": {
+            "description": "Required local JPEG, PNG, or WebP character reference path.",
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "prompt",
+          "subject_reference_path"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "kind": "resources",
+        "mime_types": [
+          "video/mp4"
+        ],
+        "normalized_result_path": "resources",
+        "resource_kind": "video",
+        "source_path": "/file/download_url",
+        "resource_decoders": [
+          {
+            "source_path": "/file/download_url",
+            "encoding": "public_http_url",
+            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com"],
+            "resource_kind": "video",
+            "mime_type": "video/mp4",
+            "optional": false,
+            "output_id_prefix": "video"
+          }
+        ]
+      },
+      "service_entry_id": "global",
+      "target_id": "global.S2V-01",
+      "tool_id": "video_generate",
+      "upstream_target_id": "S2V-01"
+    },
+    {
+      "capability": "media_analyze",
+      "credential_profile_ids": [
+        "token-plan-key",
+        "token-plan-oauth"
+      ],
+      "description": "Analyze one local JPEG, PNG, or WebP image with the selected MiniMax Coding Plan account.",
+      "display_name": "MiniMax Coding Plan Image Understanding",
+      "execution": {
+        "adapter": "generic_json",
+        "authentication": "bearer_authorization",
+        "endpoint_path": "/v1/coding_plan/vlm",
+        "execution_kind": "http_json_sync"
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "image_path": {
+            "description": "Local path to one JPEG, PNG, or WebP image.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "prompt": {
+            "description": "Exact analysis instruction for the image.",
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "image_path",
+          "prompt"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "kind": "text",
+        "normalized_result_path": "text",
+        "source_path": "/content"
+      },
+      "service_entry_id": "cn",
+      "target_id": "cn:coding-plan-vlm",
+      "tool_id": "image_understand",
+      "upstream_target_id": "coding-plan-vlm"
+    },
+    {
+      "capability": "image_generate",
+      "credential_profile_ids": [
+        "payg-api-key",
+        "token-plan-key",
+        "token-plan-oauth"
+      ],
+      "description": "Generate one or more images with the selected MiniMax model and optional local character references.",
+      "display_name": "MiniMax Image 01",
+      "execution": {
+        "adapter": "generic_json",
+        "authentication": "bearer_authorization",
+        "endpoint_path": "/v1/image_generation",
+        "execution_kind": "http_json_sync"
+      },
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "required": [
+                "width"
+              ]
+            },
+            "then": {
+              "not": {
+                "required": [
+                  "aspect_ratio"
+                ]
+              },
+              "required": [
+                "height"
+              ]
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "height"
+              ]
+            },
+            "then": {
+              "not": {
+                "required": [
+                  "aspect_ratio"
+                ]
+              },
+              "required": [
+                "width"
+              ]
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "aspect_ratio"
+              ]
+            },
+            "then": {
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "width"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "height"
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        ],
+        "description": "MiniMax model-specific image generation tool arguments.",
+        "properties": {
+          "aigc_watermark": {
+            "default": false,
+            "description": "Add the provider AIGC watermark.",
+            "type": "boolean"
+          },
+          "aspect_ratio": {
+            "description": "Provider-supported output aspect ratio.",
+            "enum": [
+              "1:1",
+              "16:9",
+              "4:3",
+              "3:2",
+              "2:3",
+              "3:4",
+              "9:16",
+              "21:9"
+            ],
+            "type": "string"
+          },
+          "count": {
+            "default": 1,
+            "description": "Number of images to generate.",
+            "maximum": 9,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "height": {
+            "description": "Custom height for image-01; requires the other dimension and excludes aspect_ratio.",
+            "maximum": 2048,
+            "minimum": 512,
+            "multipleOf": 8,
+            "type": "integer"
+          },
+          "prompt": {
+            "description": "Image description. Required and limited to 1500 Unicode characters.",
+            "maxLength": 1500,
+            "minLength": 1,
+            "type": "string"
+          },
+          "prompt_optimizer": {
+            "default": false,
+            "description": "Enable MiniMax prompt optimization.",
+            "type": "boolean"
+          },
+          "seed": {
+            "description": "Optional provider seed for similar reproducible outputs.",
+            "type": "integer"
+          },
+          "subject_references": {
+            "description": "Optional local JPG or PNG paths containing front-facing character references.",
+            "items": {
+              "description": "Local character-reference image path.",
+              "format": "vulcan-local-path",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "width": {
+            "description": "Custom width for image-01; requires the other dimension and excludes aspect_ratio.",
+            "maximum": 2048,
+            "minimum": 512,
+            "multipleOf": 8,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "prompt"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "kind": "resources",
+        "mime_types": [
+          "image/jpeg"
+        ],
+        "normalized_result_path": "resources",
+        "resource_kind": "image",
+        "source_path": "/data/image_base64",
+        "resource_decoders": [
+          {
+            "source_path": "/data/image_base64",
+            "encoding": "base64",
+            "resource_kind": "image",
+            "mime_type": "image/jpeg",
+            "optional": true,
+            "max_bytes": 8388608,
+            "output_id_prefix": "image_base64"
+          },
+          {
+            "source_path": "/data/image_urls",
+            "encoding": "https_url",
+            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com"],
+            "resource_kind": "image",
+            "mime_type": "image/jpeg",
+            "optional": true,
+            "output_id_prefix": "image_url"
+          }
+        ]
+      },
+      "service_entry_id": "cn",
+      "target_id": "cn.image-01",
+      "tool_id": "image_generate",
+      "upstream_target_id": "image-01"
+    },
+    {
+      "capability": "image_generate",
+      "credential_profile_ids": [
+        "payg-api-key",
+        "token-plan-key",
+        "token-plan-oauth"
+      ],
+      "description": "Generate one or more images with the selected MiniMax model and optional local character references.",
+      "display_name": "MiniMax Image 01 Live",
+      "execution": {
+        "adapter": "generic_json",
+        "authentication": "bearer_authorization",
+        "endpoint_path": "/v1/image_generation",
+        "execution_kind": "http_json_sync"
+      },
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "required": [
+                "style_weight"
+              ]
+            },
+            "then": {
+              "required": [
+                "style_type"
+              ]
+            }
+          }
+        ],
+        "description": "MiniMax model-specific image generation tool arguments.",
+        "properties": {
+          "aigc_watermark": {
+            "default": false,
+            "description": "Add the provider AIGC watermark.",
+            "type": "boolean"
+          },
+          "aspect_ratio": {
+            "description": "Provider-supported output aspect ratio.",
+            "enum": [
+              "1:1",
+              "16:9",
+              "4:3",
+              "3:2",
+              "2:3",
+              "3:4",
+              "9:16"
+            ],
+            "type": "string"
+          },
+          "count": {
+            "default": 1,
+            "description": "Number of images to generate.",
+            "maximum": 9,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "prompt": {
+            "description": "Image description. Required and limited to 1500 Unicode characters.",
+            "maxLength": 1500,
+            "minLength": 1,
+            "type": "string"
+          },
+          "prompt_optimizer": {
+            "default": false,
+            "description": "Enable MiniMax prompt optimization.",
+            "type": "boolean"
+          },
+          "seed": {
+            "description": "Optional provider seed for similar reproducible outputs.",
+            "type": "integer"
+          },
+          "style_type": {
+            "description": "MiniMax image-01-live style type.",
+            "enum": [
+              "漫画",
+              "元气",
+              "中世纪",
+              "水彩"
+            ],
+            "type": "string"
+          },
+          "style_weight": {
+            "description": "MiniMax image-01-live style weight in the interval (0, 1].",
+            "exclusiveMinimum": 0,
+            "maximum": 1,
+            "type": "number"
+          },
+          "subject_references": {
+            "description": "Optional local JPG or PNG paths containing front-facing character references.",
+            "items": {
+              "description": "Local character-reference image path.",
+              "format": "vulcan-local-path",
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "prompt"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "kind": "resources",
+        "mime_types": [
+          "image/jpeg"
+        ],
+        "normalized_result_path": "resources",
+        "resource_kind": "image",
+        "source_path": "/data/image_base64",
+        "resource_decoders": [
+          {
+            "source_path": "/data/image_base64",
+            "encoding": "base64",
+            "resource_kind": "image",
+            "mime_type": "image/jpeg",
+            "optional": true,
+            "max_bytes": 8388608,
+            "output_id_prefix": "image_base64"
+          },
+          {
+            "source_path": "/data/image_urls",
+            "encoding": "https_url",
+            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com"],
+            "resource_kind": "image",
+            "mime_type": "image/jpeg",
+            "optional": true,
+            "output_id_prefix": "image_url"
+          }
+        ]
+      },
+      "service_entry_id": "cn",
+      "target_id": "cn.image-01-live",
+      "tool_id": "image_generate",
+      "upstream_target_id": "image-01-live"
+    },
+    {
+      "capability": "web_search",
+      "credential_profile_ids": [
+        "token-plan-key",
+        "token-plan-oauth"
+      ],
+      "description": "Search the public web with the selected MiniMax Coding Plan account and return ordered structured results.",
+      "display_name": "MiniMax Coding Plan Search",
+      "execution": {
+        "adapter": "generic_json",
+        "authentication": "bearer_authorization",
+        "endpoint_path": "/v1/coding_plan/search",
+        "execution_kind": "http_json_sync"
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "max_results": {
+            "description": "Maximum number of ordered results to return.",
+            "default": 10,
+            "maximum": 10,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "query": {
+            "description": "The exact web search query.",
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "kind": "search",
+        "normalized_result_path": "search",
+        "source_path": "/results"
+      },
+      "service_entry_id": "cn",
+      "target_id": "cn:coding-plan-search",
+      "tool_id": "vulcan_web_search",
+      "upstream_target_id": "coding-plan-search"
+    },
+    {
+      "capability": "speech_synthesize",
+      "credential_profile_ids": [
+        "payg-api-key",
+        "token-plan-key",
+        "token-plan-oauth"
+      ],
+      "description": "Synthesize one bounded speech audio resource with the selected MiniMax speech model.",
+      "display_name": "MiniMax Speech 2.8 HD",
+      "execution": {
+        "adapter": "generic_json",
+        "authentication": "bearer_authorization",
+        "endpoint_path": "/v1/t2a_v2",
+        "execution_kind": "http_json_sync"
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {"required": ["bitrate"]},
+            "then": {
+              "properties": {"output_format": {"const": "mp3"}}
+            }
+          }
+        ],
+        "properties": {
+          "bitrate": {
+            "description": "MP3 bitrate; omit for non-MP3 output.",
+            "enum": [
+              32000,
+              64000,
+              128000,
+              256000
+            ],
+            "type": "integer"
+          },
+          "channels": {
+            "default": 1,
+            "enum": [
+              1,
+              2
+            ],
+            "type": "integer"
+          },
+          "language": {
+            "description": "Optional MiniMax language_boost value.",
+            "enum": [
+              "Chinese",
+              "Chinese,Yue",
+              "English",
+              "Arabic",
+              "Russian",
+              "Spanish",
+              "French",
+              "Portuguese",
+              "German",
+              "Turkish",
+              "Dutch",
+              "Ukrainian",
+              "Vietnamese",
+              "Indonesian",
+              "Japanese",
+              "Italian",
+              "Korean",
+              "Thai",
+              "Polish",
+              "Romanian",
+              "Greek",
+              "Czech",
+              "Finnish",
+              "Hindi",
+              "Bulgarian",
+              "Danish",
+              "Hebrew",
+              "Malay",
+              "Persian",
+              "Slovak",
+              "Swedish",
+              "Croatian",
+              "Filipino",
+              "Hungarian",
+              "Norwegian",
+              "Slovenian",
+              "Catalan",
+              "Nynorsk",
+              "Tamil",
+              "Afrikaans",
+              "auto"
+            ],
+            "type": "string"
+          },
+          "output_format": {
+            "default": "mp3",
+            "enum": [
+              "mp3",
+              "pcm",
+              "flac",
+              "wav",
+              "pcmu_raw",
+              "pcmu_wav",
+              "opus"
+            ],
+            "type": "string"
+          },
+          "pitch": {
+            "default": 0,
+            "maximum": 12,
+            "minimum": -12,
+            "type": "integer"
+          },
+          "pronunciations": {
+            "description": "Ordered MiniMax pronunciation_dict tone entries.",
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "sample_rate": {
+            "enum": [
+              8000,
+              16000,
+              22050,
+              24000,
+              32000,
+              44100
+            ],
+            "type": "integer"
+          },
+          "speed": {
+            "default": 1.0,
+            "maximum": 2.0,
+            "minimum": 0.5,
+            "type": "number"
+          },
+          "text": {
+            "description": "Text to synthesize.",
+            "maxLength": 9999,
+            "minLength": 1,
+            "type": "string"
+          },
+          "timestamps": {
+            "default": false,
+            "description": "Request a subtitle timing JSON resource.",
+            "type": "boolean"
+          },
+          "voice_id": {
+            "description": "Built-in or account-owned MiniMax voice identifier.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "volume": {
+            "default": 1.0,
+            "exclusiveMinimum": 0,
+            "maximum": 10.0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "text",
+          "voice_id"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "kind": "resources",
+        "mime_types": [
+          "audio/mpeg",
+          "audio/wav",
+          "audio/pcm",
+          "audio/flac",
+          "audio/basic",
+          "audio/opus",
+          "application/json"
+        ],
+        "normalized_result_path": "resources",
+        "resource_kind": "audio",
+        "source_path": "/data/audio",
+        "resource_decoders": [
+          {
+            "source_path": "/data/audio",
+            "encoding": "hex",
+            "resource_kind": "audio",
+            "mime_type_request_path": "/output_format",
+            "mime_types_by_request_value": {
+              "mp3": "audio/mpeg",
+              "wav": "audio/wav",
+              "pcm": "audio/pcm",
+              "flac": "audio/flac",
+              "pcmu_raw": "audio/basic",
+              "pcmu_wav": "audio/wav",
+              "opus": "audio/opus"
+            },
+            "optional": false,
+            "max_bytes": 10000000,
+            "output_id_prefix": "audio"
+          },
+          {
+            "source_path": "/data/subtitle_file",
+            "encoding": "public_http_url",
+            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com"],
+            "resource_kind": "file",
+            "mime_type": "application/json",
+            "optional": true,
+            "output_id_prefix": "subtitle"
+          }
+        ]
+      },
+      "service_entry_id": "cn",
+      "target_id": "cn.speech-2.8-hd",
+      "tool_id": "speech_synthesize",
+      "upstream_target_id": "speech-2.8-hd"
+    },
+    {
+      "capability": "speech_synthesize",
+      "credential_profile_ids": [
+        "payg-api-key",
+        "token-plan-key",
+        "token-plan-oauth"
+      ],
+      "description": "Synthesize one bounded speech audio resource with the selected MiniMax speech model.",
+      "display_name": "MiniMax Speech 2.8 Turbo",
+      "execution": {
+        "adapter": "generic_json",
+        "authentication": "bearer_authorization",
+        "endpoint_path": "/v1/t2a_v2",
+        "execution_kind": "http_json_sync"
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {"required": ["bitrate"]},
+            "then": {
+              "properties": {"output_format": {"const": "mp3"}}
+            }
+          }
+        ],
+        "properties": {
+          "bitrate": {
+            "description": "MP3 bitrate; omit for non-MP3 output.",
+            "enum": [
+              32000,
+              64000,
+              128000,
+              256000
+            ],
+            "type": "integer"
+          },
+          "channels": {
+            "default": 1,
+            "enum": [
+              1,
+              2
+            ],
+            "type": "integer"
+          },
+          "language": {
+            "description": "Optional MiniMax language_boost value.",
+            "enum": [
+              "Chinese",
+              "Chinese,Yue",
+              "English",
+              "Arabic",
+              "Russian",
+              "Spanish",
+              "French",
+              "Portuguese",
+              "German",
+              "Turkish",
+              "Dutch",
+              "Ukrainian",
+              "Vietnamese",
+              "Indonesian",
+              "Japanese",
+              "Italian",
+              "Korean",
+              "Thai",
+              "Polish",
+              "Romanian",
+              "Greek",
+              "Czech",
+              "Finnish",
+              "Hindi",
+              "Bulgarian",
+              "Danish",
+              "Hebrew",
+              "Malay",
+              "Persian",
+              "Slovak",
+              "Swedish",
+              "Croatian",
+              "Filipino",
+              "Hungarian",
+              "Norwegian",
+              "Slovenian",
+              "Catalan",
+              "Nynorsk",
+              "Tamil",
+              "Afrikaans",
+              "auto"
+            ],
+            "type": "string"
+          },
+          "output_format": {
+            "default": "mp3",
+            "enum": [
+              "mp3",
+              "pcm",
+              "flac",
+              "wav",
+              "pcmu_raw",
+              "pcmu_wav",
+              "opus"
+            ],
+            "type": "string"
+          },
+          "pitch": {
+            "default": 0,
+            "maximum": 12,
+            "minimum": -12,
+            "type": "integer"
+          },
+          "pronunciations": {
+            "description": "Ordered MiniMax pronunciation_dict tone entries.",
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "sample_rate": {
+            "enum": [
+              8000,
+              16000,
+              22050,
+              24000,
+              32000,
+              44100
+            ],
+            "type": "integer"
+          },
+          "speed": {
+            "default": 1.0,
+            "maximum": 2.0,
+            "minimum": 0.5,
+            "type": "number"
+          },
+          "text": {
+            "description": "Text to synthesize.",
+            "maxLength": 9999,
+            "minLength": 1,
+            "type": "string"
+          },
+          "timestamps": {
+            "default": false,
+            "description": "Request a subtitle timing JSON resource.",
+            "type": "boolean"
+          },
+          "voice_id": {
+            "description": "Built-in or account-owned MiniMax voice identifier.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "volume": {
+            "default": 1.0,
+            "exclusiveMinimum": 0,
+            "maximum": 10.0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "text",
+          "voice_id"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "kind": "resources",
+        "mime_types": [
+          "audio/mpeg",
+          "audio/wav",
+          "audio/pcm",
+          "audio/flac",
+          "audio/basic",
+          "audio/opus",
+          "application/json"
+        ],
+        "normalized_result_path": "resources",
+        "resource_kind": "audio",
+        "source_path": "/data/audio",
+        "resource_decoders": [
+          {
+            "source_path": "/data/audio",
+            "encoding": "hex",
+            "resource_kind": "audio",
+            "mime_type_request_path": "/output_format",
+            "mime_types_by_request_value": {
+              "mp3": "audio/mpeg",
+              "wav": "audio/wav",
+              "pcm": "audio/pcm",
+              "flac": "audio/flac",
+              "pcmu_raw": "audio/basic",
+              "pcmu_wav": "audio/wav",
+              "opus": "audio/opus"
+            },
+            "optional": false,
+            "max_bytes": 10000000,
+            "output_id_prefix": "audio"
+          },
+          {
+            "source_path": "/data/subtitle_file",
+            "encoding": "public_http_url",
+            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com"],
+            "resource_kind": "file",
+            "mime_type": "application/json",
+            "optional": true,
+            "output_id_prefix": "subtitle"
+          }
+        ]
+      },
+      "service_entry_id": "cn",
+      "target_id": "cn.speech-2.8-turbo",
+      "tool_id": "speech_synthesize",
+      "upstream_target_id": "speech-2.8-turbo"
+    },
+    {
+      "capability": "speech_synthesize",
+      "credential_profile_ids": [
+        "payg-api-key",
+        "token-plan-key",
+        "token-plan-oauth"
+      ],
+      "description": "Synthesize one bounded speech audio resource with the selected MiniMax speech model.",
+      "display_name": "MiniMax Speech 2.6",
+      "execution": {
+        "adapter": "generic_json",
+        "authentication": "bearer_authorization",
+        "endpoint_path": "/v1/t2a_v2",
+        "execution_kind": "http_json_sync"
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {"required": ["bitrate"]},
+            "then": {
+              "properties": {"output_format": {"const": "mp3"}}
+            }
+          }
+        ],
+        "properties": {
+          "bitrate": {
+            "description": "MP3 bitrate; omit for non-MP3 output.",
+            "enum": [
+              32000,
+              64000,
+              128000,
+              256000
+            ],
+            "type": "integer"
+          },
+          "channels": {
+            "default": 1,
+            "enum": [
+              1,
+              2
+            ],
+            "type": "integer"
+          },
+          "language": {
+            "description": "Optional MiniMax language_boost value.",
+            "enum": [
+              "Chinese",
+              "Chinese,Yue",
+              "English",
+              "Arabic",
+              "Russian",
+              "Spanish",
+              "French",
+              "Portuguese",
+              "German",
+              "Turkish",
+              "Dutch",
+              "Ukrainian",
+              "Vietnamese",
+              "Indonesian",
+              "Japanese",
+              "Italian",
+              "Korean",
+              "Thai",
+              "Polish",
+              "Romanian",
+              "Greek",
+              "Czech",
+              "Finnish",
+              "Hindi",
+              "Bulgarian",
+              "Danish",
+              "Hebrew",
+              "Malay",
+              "Persian",
+              "Slovak",
+              "Swedish",
+              "Croatian",
+              "Filipino",
+              "Hungarian",
+              "Norwegian",
+              "Slovenian",
+              "Catalan",
+              "Nynorsk",
+              "Tamil",
+              "Afrikaans",
+              "auto"
+            ],
+            "type": "string"
+          },
+          "output_format": {
+            "default": "mp3",
+            "enum": [
+              "mp3",
+              "pcm",
+              "flac",
+              "wav",
+              "pcmu_raw",
+              "pcmu_wav",
+              "opus"
+            ],
+            "type": "string"
+          },
+          "pitch": {
+            "default": 0,
+            "maximum": 12,
+            "minimum": -12,
+            "type": "integer"
+          },
+          "pronunciations": {
+            "description": "Ordered MiniMax pronunciation_dict tone entries.",
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "sample_rate": {
+            "enum": [
+              8000,
+              16000,
+              22050,
+              24000,
+              32000,
+              44100
+            ],
+            "type": "integer"
+          },
+          "speed": {
+            "default": 1.0,
+            "maximum": 2.0,
+            "minimum": 0.5,
+            "type": "number"
+          },
+          "text": {
+            "description": "Text to synthesize.",
+            "maxLength": 9999,
+            "minLength": 1,
+            "type": "string"
+          },
+          "timestamps": {
+            "default": false,
+            "description": "Request a subtitle timing JSON resource.",
+            "type": "boolean"
+          },
+          "voice_id": {
+            "description": "Built-in or account-owned MiniMax voice identifier.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "volume": {
+            "default": 1.0,
+            "exclusiveMinimum": 0,
+            "maximum": 10.0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "text",
+          "voice_id"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "kind": "resources",
+        "mime_types": [
+          "audio/mpeg",
+          "audio/wav",
+          "audio/pcm",
+          "audio/flac",
+          "audio/basic",
+          "audio/opus",
+          "application/json"
+        ],
+        "normalized_result_path": "resources",
+        "resource_kind": "audio",
+        "source_path": "/data/audio",
+        "resource_decoders": [
+          {
+            "source_path": "/data/audio",
+            "encoding": "hex",
+            "resource_kind": "audio",
+            "mime_type_request_path": "/output_format",
+            "mime_types_by_request_value": {
+              "mp3": "audio/mpeg",
+              "wav": "audio/wav",
+              "pcm": "audio/pcm",
+              "flac": "audio/flac",
+              "pcmu_raw": "audio/basic",
+              "pcmu_wav": "audio/wav",
+              "opus": "audio/opus"
+            },
+            "optional": false,
+            "max_bytes": 10000000,
+            "output_id_prefix": "audio"
+          },
+          {
+            "source_path": "/data/subtitle_file",
+            "encoding": "public_http_url",
+            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com"],
+            "resource_kind": "file",
+            "mime_type": "application/json",
+            "optional": true,
+            "output_id_prefix": "subtitle"
+          }
+        ]
+      },
+      "service_entry_id": "cn",
+      "target_id": "cn.speech-2.6",
+      "tool_id": "speech_synthesize",
+      "upstream_target_id": "speech-2.6"
+    },
+    {
+      "capability": "speech_synthesize",
+      "credential_profile_ids": [
+        "payg-api-key",
+        "token-plan-key",
+        "token-plan-oauth"
+      ],
+      "description": "Synthesize one bounded speech audio resource with the selected MiniMax speech model.",
+      "display_name": "MiniMax Speech 02",
+      "execution": {
+        "adapter": "generic_json",
+        "authentication": "bearer_authorization",
+        "endpoint_path": "/v1/t2a_v2",
+        "execution_kind": "http_json_sync"
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {"required": ["bitrate"]},
+            "then": {
+              "properties": {"output_format": {"const": "mp3"}}
+            }
+          }
+        ],
+        "properties": {
+          "bitrate": {
+            "description": "MP3 bitrate; omit for non-MP3 output.",
+            "enum": [
+              32000,
+              64000,
+              128000,
+              256000
+            ],
+            "type": "integer"
+          },
+          "channels": {
+            "default": 1,
+            "enum": [
+              1,
+              2
+            ],
+            "type": "integer"
+          },
+          "language": {
+            "description": "Optional MiniMax language_boost value.",
+            "enum": [
+              "Chinese",
+              "Chinese,Yue",
+              "English",
+              "Arabic",
+              "Russian",
+              "Spanish",
+              "French",
+              "Portuguese",
+              "German",
+              "Turkish",
+              "Dutch",
+              "Ukrainian",
+              "Vietnamese",
+              "Indonesian",
+              "Japanese",
+              "Italian",
+              "Korean",
+              "Thai",
+              "Polish",
+              "Romanian",
+              "Greek",
+              "Czech",
+              "Finnish",
+              "Hindi",
+              "Bulgarian",
+              "Danish",
+              "Hebrew",
+              "Malay",
+              "Persian",
+              "Slovak",
+              "Swedish",
+              "Croatian",
+              "Filipino",
+              "Hungarian",
+              "Norwegian",
+              "Slovenian",
+              "Catalan",
+              "Nynorsk",
+              "Tamil",
+              "Afrikaans",
+              "auto"
+            ],
+            "type": "string"
+          },
+          "output_format": {
+            "default": "mp3",
+            "enum": [
+              "mp3",
+              "pcm",
+              "flac",
+              "wav",
+              "pcmu_raw",
+              "pcmu_wav",
+              "opus"
+            ],
+            "type": "string"
+          },
+          "pitch": {
+            "default": 0,
+            "maximum": 12,
+            "minimum": -12,
+            "type": "integer"
+          },
+          "pronunciations": {
+            "description": "Ordered MiniMax pronunciation_dict tone entries.",
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "sample_rate": {
+            "enum": [
+              8000,
+              16000,
+              22050,
+              24000,
+              32000,
+              44100
+            ],
+            "type": "integer"
+          },
+          "speed": {
+            "default": 1.0,
+            "maximum": 2.0,
+            "minimum": 0.5,
+            "type": "number"
+          },
+          "text": {
+            "description": "Text to synthesize.",
+            "maxLength": 9999,
+            "minLength": 1,
+            "type": "string"
+          },
+          "timestamps": {
+            "default": false,
+            "description": "Request a subtitle timing JSON resource.",
+            "type": "boolean"
+          },
+          "voice_id": {
+            "description": "Built-in or account-owned MiniMax voice identifier.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "volume": {
+            "default": 1.0,
+            "exclusiveMinimum": 0,
+            "maximum": 10.0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "text",
+          "voice_id"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "kind": "resources",
+        "mime_types": [
+          "audio/mpeg",
+          "audio/wav",
+          "audio/pcm",
+          "audio/flac",
+          "audio/basic",
+          "audio/opus",
+          "application/json"
+        ],
+        "normalized_result_path": "resources",
+        "resource_kind": "audio",
+        "source_path": "/data/audio",
+        "resource_decoders": [
+          {
+            "source_path": "/data/audio",
+            "encoding": "hex",
+            "resource_kind": "audio",
+            "mime_type_request_path": "/output_format",
+            "mime_types_by_request_value": {
+              "mp3": "audio/mpeg",
+              "wav": "audio/wav",
+              "pcm": "audio/pcm",
+              "flac": "audio/flac",
+              "pcmu_raw": "audio/basic",
+              "pcmu_wav": "audio/wav",
+              "opus": "audio/opus"
+            },
+            "optional": false,
+            "max_bytes": 10000000,
+            "output_id_prefix": "audio"
+          },
+          {
+            "source_path": "/data/subtitle_file",
+            "encoding": "public_http_url",
+            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com"],
+            "resource_kind": "file",
+            "mime_type": "application/json",
+            "optional": true,
+            "output_id_prefix": "subtitle"
+          }
+        ]
+      },
+      "service_entry_id": "cn",
+      "target_id": "cn.speech-02",
+      "tool_id": "speech_synthesize",
+      "upstream_target_id": "speech-02"
+    },
+    {
+      "capability": "music_generate",
+      "credential_profile_ids": [
+        "payg-api-key",
+        "token-plan-key",
+        "token-plan-oauth"
+      ],
+      "description": "Generate one music audio resource with the selected MiniMax music model.",
+      "display_name": "MiniMax Music 3.0",
+      "execution": {
+        "adapter": "generic_json",
+        "authentication": "bearer_authorization",
+        "endpoint_path": "/v1/music_generation",
+        "execution_kind": "http_json_sync"
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "properties": {
+              "instrumental": {"const": true},
+              "lyrics_optimizer": {"const": false},
+              "lyrics": {"maxLength": 0},
+              "prompt": {"minLength": 1}
+            },
+            "required": ["instrumental", "prompt"]
+          },
+          {
+            "properties": {
+              "instrumental": {"const": false},
+              "lyrics_optimizer": {"const": true},
+              "lyrics": {"maxLength": 0},
+              "prompt": {"minLength": 1}
+            },
+            "required": ["lyrics_optimizer", "prompt"]
+          },
+          {
+            "properties": {
+              "instrumental": {"const": false},
+              "lyrics_optimizer": {"const": false},
+              "lyrics": {"minLength": 1}
+            },
+            "required": ["lyrics"]
+          }
+        ],
+        "properties": {
+          "bitrate": {
+            "default": 256000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "channels": {
+            "maximum": 2,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "instrumental": {
+            "default": false,
+            "description": "Generate instrumental music without lyrics.",
+            "type": "boolean"
+          },
+          "lyrics": {
+            "description": "Exact lyrics; omit for instrumental or optimized lyric generation.",
+            "maxLength": 3500,
+            "type": "string"
+          },
+          "lyrics_optimizer": {
+            "default": false,
+            "description": "Let MiniMax generate optimized lyrics from the prompt.",
+            "type": "boolean"
+          },
+          "output_format": {
+            "default": "mp3",
+            "enum": [
+              "mp3",
+              "wav",
+              "pcm"
+            ],
+            "type": "string"
+          },
+          "prompt": {
+            "description": "Style, mood, and scenario guidance.",
+            "maxLength": 2000,
+            "type": "string"
+          },
+          "sample_rate": {
+            "default": 44100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "seed": {
+            "type": "integer"
+          },
+          "watermark": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "output": {
+        "kind": "resources",
+        "mime_types": [
+          "audio/mpeg",
+          "audio/wav",
+          "audio/L16"
+        ],
+        "normalized_result_path": "resources",
+        "resource_kind": "audio",
+        "source_path": "/data/audio_url",
+        "resource_decoders": [
+          {
+            "source_path": "/data/audio_url",
+            "encoding": "public_http_url",
+            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com"],
+            "resource_kind": "audio",
+            "mime_type_request_path": "/output_format",
+            "mime_types_by_request_value": {
+              "mp3": "audio/mpeg",
+              "wav": "audio/wav",
+              "pcm": "audio/L16"
+            },
+            "optional": false,
+            "output_id_prefix": "music"
+          }
+        ]
+      },
+      "service_entry_id": "cn",
+      "target_id": "cn.music-3.0",
+      "tool_id": "music_generate",
+      "upstream_target_id": "music-3.0"
+    },
+    {
+      "capability": "music_generate",
+      "credential_profile_ids": [
+        "payg-api-key",
+        "token-plan-key",
+        "token-plan-oauth"
+      ],
+      "description": "Generate one music audio resource with the selected MiniMax music model.",
+      "display_name": "MiniMax Music 2.6",
+      "execution": {
+        "adapter": "generic_json",
+        "authentication": "bearer_authorization",
+        "endpoint_path": "/v1/music_generation",
+        "execution_kind": "http_json_sync"
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "properties": {
+              "instrumental": {"const": true},
+              "lyrics_optimizer": {"const": false},
+              "lyrics": {"maxLength": 0},
+              "prompt": {"minLength": 1}
+            },
+            "required": ["instrumental", "prompt"]
+          },
+          {
+            "properties": {
+              "instrumental": {"const": false},
+              "lyrics_optimizer": {"const": true},
+              "lyrics": {"maxLength": 0},
+              "prompt": {"minLength": 1}
+            },
+            "required": ["lyrics_optimizer", "prompt"]
+          },
+          {
+            "properties": {
+              "instrumental": {"const": false},
+              "lyrics_optimizer": {"const": false},
+              "lyrics": {"minLength": 1}
+            },
+            "required": ["lyrics"]
+          }
+        ],
+        "properties": {
+          "bitrate": {
+            "default": 256000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "channels": {
+            "maximum": 2,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "instrumental": {
+            "default": false,
+            "description": "Generate instrumental music without lyrics.",
+            "type": "boolean"
+          },
+          "lyrics": {
+            "description": "Exact lyrics; omit for instrumental or optimized lyric generation.",
+            "maxLength": 3500,
+            "type": "string"
+          },
+          "lyrics_optimizer": {
+            "default": false,
+            "description": "Let MiniMax generate optimized lyrics from the prompt.",
+            "type": "boolean"
+          },
+          "output_format": {
+            "default": "mp3",
+            "enum": [
+              "mp3",
+              "wav",
+              "pcm"
+            ],
+            "type": "string"
+          },
+          "prompt": {
+            "description": "Style, mood, and scenario guidance.",
+            "maxLength": 2000,
+            "type": "string"
+          },
+          "sample_rate": {
+            "default": 44100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "seed": {
+            "type": "integer"
+          },
+          "watermark": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "output": {
+        "kind": "resources",
+        "mime_types": [
+          "audio/mpeg",
+          "audio/wav",
+          "audio/L16"
+        ],
+        "normalized_result_path": "resources",
+        "resource_kind": "audio",
+        "source_path": "/data/audio_url",
+        "resource_decoders": [
+          {
+            "source_path": "/data/audio_url",
+            "encoding": "public_http_url",
+            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com"],
+            "resource_kind": "audio",
+            "mime_type_request_path": "/output_format",
+            "mime_types_by_request_value": {
+              "mp3": "audio/mpeg",
+              "wav": "audio/wav",
+              "pcm": "audio/L16"
+            },
+            "optional": false,
+            "output_id_prefix": "music"
+          }
+        ]
+      },
+      "service_entry_id": "cn",
+      "target_id": "cn.music-2.6",
+      "tool_id": "music_generate",
+      "upstream_target_id": "music-2.6"
+    },
+    {
+      "capability": "music_generate",
+      "credential_profile_ids": [
+        "payg-api-key",
+        "token-plan-key",
+        "token-plan-oauth"
+      ],
+      "description": "Generate one music audio resource with the selected MiniMax music model.",
+      "display_name": "MiniMax Music 2.6 Free",
+      "execution": {
+        "adapter": "generic_json",
+        "authentication": "bearer_authorization",
+        "endpoint_path": "/v1/music_generation",
+        "execution_kind": "http_json_sync"
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "properties": {
+              "instrumental": {"const": true},
+              "lyrics_optimizer": {"const": false},
+              "lyrics": {"maxLength": 0},
+              "prompt": {"minLength": 1}
+            },
+            "required": ["instrumental", "prompt"]
+          },
+          {
+            "properties": {
+              "instrumental": {"const": false},
+              "lyrics_optimizer": {"const": true},
+              "lyrics": {"maxLength": 0},
+              "prompt": {"minLength": 1}
+            },
+            "required": ["lyrics_optimizer", "prompt"]
+          },
+          {
+            "properties": {
+              "instrumental": {"const": false},
+              "lyrics_optimizer": {"const": false},
+              "lyrics": {"minLength": 1}
+            },
+            "required": ["lyrics"]
+          }
+        ],
+        "properties": {
+          "bitrate": {
+            "default": 256000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "channels": {
+            "maximum": 2,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "instrumental": {
+            "default": false,
+            "description": "Generate instrumental music without lyrics.",
+            "type": "boolean"
+          },
+          "lyrics": {
+            "description": "Exact lyrics; omit for instrumental or optimized lyric generation.",
+            "maxLength": 3500,
+            "type": "string"
+          },
+          "lyrics_optimizer": {
+            "default": false,
+            "description": "Let MiniMax generate optimized lyrics from the prompt.",
+            "type": "boolean"
+          },
+          "output_format": {
+            "default": "mp3",
+            "enum": [
+              "mp3",
+              "wav",
+              "pcm"
+            ],
+            "type": "string"
+          },
+          "prompt": {
+            "description": "Style, mood, and scenario guidance.",
+            "maxLength": 2000,
+            "type": "string"
+          },
+          "sample_rate": {
+            "default": 44100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "seed": {
+            "type": "integer"
+          },
+          "watermark": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "output": {
+        "kind": "resources",
+        "mime_types": [
+          "audio/mpeg",
+          "audio/wav",
+          "audio/L16"
+        ],
+        "normalized_result_path": "resources",
+        "resource_kind": "audio",
+        "source_path": "/data/audio_url",
+        "resource_decoders": [
+          {
+            "source_path": "/data/audio_url",
+            "encoding": "public_http_url",
+            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com"],
+            "resource_kind": "audio",
+            "mime_type_request_path": "/output_format",
+            "mime_types_by_request_value": {
+              "mp3": "audio/mpeg",
+              "wav": "audio/wav",
+              "pcm": "audio/L16"
+            },
+            "optional": false,
+            "output_id_prefix": "music"
+          }
+        ]
+      },
+      "service_entry_id": "cn",
+      "target_id": "cn.music-2.6-free",
+      "tool_id": "music_generate",
+      "upstream_target_id": "music-2.6-free"
+    },
+    {
+      "capability": "music_generate",
+      "credential_profile_ids": [
+        "payg-api-key",
+        "token-plan-key",
+        "token-plan-oauth"
+      ],
+      "description": "Generate one music audio resource with the selected MiniMax music model.",
+      "display_name": "MiniMax Music 2.5 Plus",
+      "execution": {
+        "adapter": "generic_json",
+        "authentication": "bearer_authorization",
+        "endpoint_path": "/v1/music_generation",
+        "execution_kind": "http_json_sync"
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "properties": {
+              "instrumental": {"const": true},
+              "lyrics_optimizer": {"const": false},
+              "lyrics": {"maxLength": 0},
+              "prompt": {"minLength": 1}
+            },
+            "required": ["instrumental", "prompt"]
+          },
+          {
+            "properties": {
+              "instrumental": {"const": false},
+              "lyrics_optimizer": {"const": true},
+              "lyrics": {"maxLength": 0},
+              "prompt": {"minLength": 1}
+            },
+            "required": ["lyrics_optimizer", "prompt"]
+          },
+          {
+            "properties": {
+              "instrumental": {"const": false},
+              "lyrics_optimizer": {"const": false},
+              "lyrics": {"minLength": 1}
+            },
+            "required": ["lyrics"]
+          }
+        ],
+        "properties": {
+          "bitrate": {
+            "default": 256000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "channels": {
+            "maximum": 2,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "instrumental": {
+            "default": false,
+            "description": "Generate instrumental music without lyrics.",
+            "type": "boolean"
+          },
+          "lyrics": {
+            "description": "Exact lyrics; omit for instrumental or optimized lyric generation.",
+            "maxLength": 3500,
+            "type": "string"
+          },
+          "lyrics_optimizer": {
+            "default": false,
+            "description": "Let MiniMax generate optimized lyrics from the prompt.",
+            "type": "boolean"
+          },
+          "output_format": {
+            "default": "mp3",
+            "enum": [
+              "mp3",
+              "wav",
+              "pcm"
+            ],
+            "type": "string"
+          },
+          "prompt": {
+            "description": "Style, mood, and scenario guidance.",
+            "maxLength": 2000,
+            "type": "string"
+          },
+          "sample_rate": {
+            "default": 44100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "seed": {
+            "type": "integer"
+          },
+          "watermark": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "output": {
+        "kind": "resources",
+        "mime_types": [
+          "audio/mpeg",
+          "audio/wav",
+          "audio/L16"
+        ],
+        "normalized_result_path": "resources",
+        "resource_kind": "audio",
+        "source_path": "/data/audio_url",
+        "resource_decoders": [
+          {
+            "source_path": "/data/audio_url",
+            "encoding": "public_http_url",
+            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com"],
+            "resource_kind": "audio",
+            "mime_type_request_path": "/output_format",
+            "mime_types_by_request_value": {
+              "mp3": "audio/mpeg",
+              "wav": "audio/wav",
+              "pcm": "audio/L16"
+            },
+            "optional": false,
+            "output_id_prefix": "music"
+          }
+        ]
+      },
+      "service_entry_id": "cn",
+      "target_id": "cn.music-2.5+",
+      "tool_id": "music_generate",
+      "upstream_target_id": "music-2.5+"
+    },
+    {
+      "capability": "music_generate",
+      "credential_profile_ids": [
+        "payg-api-key",
+        "token-plan-key",
+        "token-plan-oauth"
+      ],
+      "description": "Generate one music audio resource with the selected MiniMax music model.",
+      "display_name": "MiniMax Music 2.5",
+      "execution": {
+        "adapter": "generic_json",
+        "authentication": "bearer_authorization",
+        "endpoint_path": "/v1/music_generation",
+        "execution_kind": "http_json_sync"
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "properties": {
+              "instrumental": {"const": true},
+              "lyrics_optimizer": {"const": false},
+              "lyrics": {"maxLength": 0},
+              "prompt": {"minLength": 1}
+            },
+            "required": ["instrumental", "prompt"]
+          },
+          {
+            "properties": {
+              "instrumental": {"const": false},
+              "lyrics_optimizer": {"const": true},
+              "lyrics": {"maxLength": 0},
+              "prompt": {"minLength": 1}
+            },
+            "required": ["lyrics_optimizer", "prompt"]
+          },
+          {
+            "properties": {
+              "instrumental": {"const": false},
+              "lyrics_optimizer": {"const": false},
+              "lyrics": {"minLength": 1}
+            },
+            "required": ["lyrics"]
+          }
+        ],
+        "properties": {
+          "bitrate": {
+            "default": 256000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "channels": {
+            "maximum": 2,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "instrumental": {
+            "default": false,
+            "description": "Generate instrumental music without lyrics.",
+            "type": "boolean"
+          },
+          "lyrics": {
+            "description": "Exact lyrics; omit for instrumental or optimized lyric generation.",
+            "maxLength": 3500,
+            "type": "string"
+          },
+          "lyrics_optimizer": {
+            "default": false,
+            "description": "Let MiniMax generate optimized lyrics from the prompt.",
+            "type": "boolean"
+          },
+          "output_format": {
+            "default": "mp3",
+            "enum": [
+              "mp3",
+              "wav",
+              "pcm"
+            ],
+            "type": "string"
+          },
+          "prompt": {
+            "description": "Style, mood, and scenario guidance.",
+            "maxLength": 2000,
+            "type": "string"
+          },
+          "sample_rate": {
+            "default": 44100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "seed": {
+            "type": "integer"
+          },
+          "watermark": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "output": {
+        "kind": "resources",
+        "mime_types": [
+          "audio/mpeg",
+          "audio/wav",
+          "audio/L16"
+        ],
+        "normalized_result_path": "resources",
+        "resource_kind": "audio",
+        "source_path": "/data/audio_url",
+        "resource_decoders": [
+          {
+            "source_path": "/data/audio_url",
+            "encoding": "public_http_url",
+            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com"],
+            "resource_kind": "audio",
+            "mime_type_request_path": "/output_format",
+            "mime_types_by_request_value": {
+              "mp3": "audio/mpeg",
+              "wav": "audio/wav",
+              "pcm": "audio/L16"
+            },
+            "optional": false,
+            "output_id_prefix": "music"
+          }
+        ]
+      },
+      "service_entry_id": "cn",
+      "target_id": "cn.music-2.5",
+      "tool_id": "music_generate",
+      "upstream_target_id": "music-2.5"
+    },
+    {
+      "capability": "video_generate",
+      "credential_profile_ids": [
+        "payg-api-key",
+        "token-plan-key",
+        "token-plan-oauth"
+      ],
+      "description": "Generate one MP4 video with the selected MiniMax video model and wait for provider completion.",
+      "display_name": "MiniMax Hailuo 2.3",
+      "execution": {
+        "adapter": "generic_json",
+        "authentication": "bearer_authorization",
+        "endpoint_path": "/v1/video_generation",
+        "execution_kind": "http_json_async_poll"
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "duration_seconds": {
+            "default": 6,
+            "enum": [
+              6,
+              10
+            ],
+            "type": "integer"
+          },
+          "first_frame_path": {
+            "description": "Optional local JPEG, PNG, or WebP first-frame path.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "prompt": {
+            "description": "Motion and scene description.",
+            "maxLength": 2000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "prompt_extend": {
+            "description": "Enable provider-native prompt optimization.",
+            "type": "boolean"
+          },
+          "resolution": {
+            "enum": [
+              "768P",
+              "1080P"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "prompt"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "kind": "resources",
+        "mime_types": [
+          "video/mp4"
+        ],
+        "normalized_result_path": "resources",
+        "resource_kind": "video",
+        "source_path": "/file/download_url",
+        "resource_decoders": [
+          {
+            "source_path": "/file/download_url",
+            "encoding": "public_http_url",
+            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com"],
+            "resource_kind": "video",
+            "mime_type": "video/mp4",
+            "optional": false,
+            "output_id_prefix": "video"
+          }
+        ]
+      },
+      "service_entry_id": "cn",
+      "target_id": "cn.MiniMax-Hailuo-2.3",
+      "tool_id": "video_generate",
+      "upstream_target_id": "MiniMax-Hailuo-2.3"
+    },
+    {
+      "capability": "video_generate",
+      "credential_profile_ids": [
+        "payg-api-key",
+        "token-plan-key",
+        "token-plan-oauth"
+      ],
+      "description": "Generate one MP4 video with the selected MiniMax video model and wait for provider completion.",
+      "display_name": "MiniMax Hailuo 2.3 Fast",
+      "execution": {
+        "adapter": "generic_json",
+        "authentication": "bearer_authorization",
+        "endpoint_path": "/v1/video_generation",
+        "execution_kind": "http_json_async_poll"
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "duration_seconds": {
+            "default": 6,
+            "enum": [
+              6,
+              10
+            ],
+            "type": "integer"
+          },
+          "first_frame_path": {
+            "description": "Required local JPEG, PNG, or WebP first-frame path.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "prompt": {
+            "description": "Motion and scene description.",
+            "maxLength": 2000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "prompt_extend": {
+            "description": "Enable provider-native prompt optimization.",
+            "type": "boolean"
+          },
+          "resolution": {
+            "enum": [
+              "768P",
+              "1080P"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "prompt",
+          "first_frame_path"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "kind": "resources",
+        "mime_types": [
+          "video/mp4"
+        ],
+        "normalized_result_path": "resources",
+        "resource_kind": "video",
+        "source_path": "/file/download_url",
+        "resource_decoders": [
+          {
+            "source_path": "/file/download_url",
+            "encoding": "public_http_url",
+            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com"],
+            "resource_kind": "video",
+            "mime_type": "video/mp4",
+            "optional": false,
+            "output_id_prefix": "video"
+          }
+        ]
+      },
+      "service_entry_id": "cn",
+      "target_id": "cn.MiniMax-Hailuo-2.3-Fast",
+      "tool_id": "video_generate",
+      "upstream_target_id": "MiniMax-Hailuo-2.3-Fast"
+    },
+    {
+      "capability": "video_generate",
+      "credential_profile_ids": [
+        "payg-api-key",
+        "token-plan-key",
+        "token-plan-oauth"
+      ],
+      "description": "Generate one MP4 video with the selected MiniMax video model and wait for provider completion.",
+      "display_name": "MiniMax Hailuo 02",
+      "execution": {
+        "adapter": "generic_json",
+        "authentication": "bearer_authorization",
+        "endpoint_path": "/v1/video_generation",
+        "execution_kind": "http_json_async_poll"
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "dependentRequired": {
+          "last_frame_path": [
+            "first_frame_path"
+          ]
+        },
+        "properties": {
+          "duration_seconds": {
+            "default": 6,
+            "enum": [
+              6,
+              10
+            ],
+            "type": "integer"
+          },
+          "first_frame_path": {
+            "description": "Optional local JPEG, PNG, or WebP first-frame path.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "last_frame_path": {
+            "description": "Optional local last-frame path; requires first_frame_path.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "prompt": {
+            "description": "Motion and scene description.",
+            "maxLength": 2000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "prompt_extend": {
+            "description": "Enable provider-native prompt optimization.",
+            "type": "boolean"
+          },
+          "resolution": {
+            "enum": [
+              "512P",
+              "768P",
+              "1080P"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "prompt"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "kind": "resources",
+        "mime_types": [
+          "video/mp4"
+        ],
+        "normalized_result_path": "resources",
+        "resource_kind": "video",
+        "source_path": "/file/download_url",
+        "resource_decoders": [
+          {
+            "source_path": "/file/download_url",
+            "encoding": "public_http_url",
+            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com"],
+            "resource_kind": "video",
+            "mime_type": "video/mp4",
+            "optional": false,
+            "output_id_prefix": "video"
+          }
+        ]
+      },
+      "service_entry_id": "cn",
+      "target_id": "cn.MiniMax-Hailuo-02",
+      "tool_id": "video_generate",
+      "upstream_target_id": "MiniMax-Hailuo-02"
+    },
+    {
+      "capability": "video_generate",
+      "credential_profile_ids": [
+        "payg-api-key",
+        "token-plan-key",
+        "token-plan-oauth"
+      ],
+      "description": "Generate one MP4 video with the selected MiniMax video model and wait for provider completion.",
+      "display_name": "MiniMax S2V 01",
+      "execution": {
+        "adapter": "generic_json",
+        "authentication": "bearer_authorization",
+        "endpoint_path": "/v1/video_generation",
+        "execution_kind": "http_json_async_poll"
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "duration_seconds": {
+            "default": 6,
+            "enum": [
+              6,
+              10
+            ],
+            "type": "integer"
+          },
+          "prompt": {
+            "description": "Motion and scene description.",
+            "maxLength": 2000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "prompt_extend": {
+            "description": "Enable provider-native prompt optimization.",
+            "type": "boolean"
+          },
+          "resolution": {
+            "enum": [
+              "512P",
+              "768P",
+              "1080P"
+            ],
+            "type": "string"
+          },
+          "subject_reference_path": {
+            "description": "Required local JPEG, PNG, or WebP character reference path.",
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "prompt",
+          "subject_reference_path"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "kind": "resources",
+        "mime_types": [
+          "video/mp4"
+        ],
+        "normalized_result_path": "resources",
+        "resource_kind": "video",
+        "source_path": "/file/download_url",
+        "resource_decoders": [
+          {
+            "source_path": "/file/download_url",
+            "encoding": "public_http_url",
+            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com"],
+            "resource_kind": "video",
+            "mime_type": "video/mp4",
+            "optional": false,
+            "output_id_prefix": "video"
+          }
+        ]
+      },
+      "service_entry_id": "cn",
+      "target_id": "cn.S2V-01",
+      "tool_id": "video_generate",
+      "upstream_target_id": "S2V-01"
+    }
+  ],
+  "tool_target_templates": [
+    {
+      "template_id": "minimax.global.image-generate.v1",
+      "display_name_suffix": "",
+      "allowed_service_entry_ids": ["global"],
+      "capability": "image_generate",
+      "credential_profile_ids": [
+        "payg-api-key",
+        "token-plan-key",
+        "token-plan-oauth"
+      ],
+      "description": "Generate one or more images with the selected MiniMax model and optional local character references.",
+      "execution": {
+        "adapter": "generic_json",
+        "authentication": "bearer_authorization",
+        "endpoint_path": "/v1/image_generation",
+        "execution_kind": "http_json_sync"
+      },
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "required": [
+                "width"
+              ]
+            },
+            "then": {
+              "not": {
+                "required": [
+                  "aspect_ratio"
+                ]
+              },
+              "required": [
+                "height"
+              ]
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "height"
+              ]
+            },
+            "then": {
+              "not": {
+                "required": [
+                  "aspect_ratio"
+                ]
+              },
+              "required": [
+                "width"
+              ]
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "aspect_ratio"
+              ]
+            },
+            "then": {
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "width"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "height"
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        ],
+        "description": "MiniMax model-specific image generation tool arguments.",
+        "properties": {
+          "aigc_watermark": {
+            "default": false,
+            "description": "Add the provider AIGC watermark.",
+            "type": "boolean"
+          },
+          "aspect_ratio": {
+            "description": "Provider-supported output aspect ratio.",
+            "enum": [
+              "1:1",
+              "16:9",
+              "4:3",
+              "3:2",
+              "2:3",
+              "3:4",
+              "9:16",
+              "21:9"
+            ],
+            "type": "string"
+          },
+          "count": {
+            "default": 1,
+            "description": "Number of images to generate.",
+            "maximum": 9,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "height": {
+            "description": "Custom height for image-01; requires the other dimension and excludes aspect_ratio.",
+            "maximum": 2048,
+            "minimum": 512,
+            "multipleOf": 8,
+            "type": "integer"
+          },
+          "prompt": {
+            "description": "Image description. Required and limited to 1500 Unicode characters.",
+            "maxLength": 1500,
+            "minLength": 1,
+            "type": "string"
+          },
+          "prompt_optimizer": {
+            "default": false,
+            "description": "Enable MiniMax prompt optimization.",
+            "type": "boolean"
+          },
+          "seed": {
+            "description": "Optional provider seed for similar reproducible outputs.",
+            "type": "integer"
+          },
+          "subject_references": {
+            "description": "Optional local JPG or PNG paths containing front-facing character references.",
+            "items": {
+              "description": "Local character-reference image path.",
+              "format": "vulcan-local-path",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "width": {
+            "description": "Custom width for image-01; requires the other dimension and excludes aspect_ratio.",
+            "maximum": 2048,
+            "minimum": 512,
+            "multipleOf": 8,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "prompt"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "kind": "resources",
+        "mime_types": [
+          "image/jpeg"
+        ],
+        "normalized_result_path": "resources",
+        "resource_kind": "image",
+        "source_path": "/data/image_base64",
+        "resource_decoders": [
+          {
+            "source_path": "/data/image_base64",
+            "encoding": "base64",
+            "resource_kind": "image",
+            "mime_type": "image/jpeg",
+            "optional": true,
+            "max_bytes": 8388608,
+            "output_id_prefix": "image_base64"
+          },
+          {
+            "source_path": "/data/image_urls",
+            "encoding": "https_url",
+            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com"],
+            "resource_kind": "image",
+            "mime_type": "image/jpeg",
+            "optional": true,
+            "output_id_prefix": "image_url"
+          }
+        ]
+      },
+      "tool_id": "image_generate"
+    },
+    {
+      "template_id": "minimax.global.video-generate.v1",
+      "display_name_suffix": "",
+      "allowed_service_entry_ids": ["global"],
+      "capability": "video_generate",
+      "credential_profile_ids": [
+        "payg-api-key",
+        "token-plan-key",
+        "token-plan-oauth"
+      ],
+      "description": "Generate one MP4 video with the selected MiniMax video model and wait for provider completion.",
+      "execution": {
+        "adapter": "generic_json",
+        "authentication": "bearer_authorization",
+        "endpoint_path": "/v1/video_generation",
+        "execution_kind": "http_json_async_poll"
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "duration_seconds": {
+            "default": 6,
+            "enum": [
+              6,
+              10
+            ],
+            "type": "integer"
+          },
+          "first_frame_path": {
+            "description": "Optional local JPEG, PNG, or WebP first-frame path.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "prompt": {
+            "description": "Motion and scene description.",
+            "maxLength": 2000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "prompt_extend": {
+            "description": "Enable provider-native prompt optimization.",
+            "type": "boolean"
+          },
+          "resolution": {
+            "enum": [
+              "768P",
+              "1080P"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "prompt"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "kind": "resources",
+        "mime_types": [
+          "video/mp4"
+        ],
+        "normalized_result_path": "resources",
+        "resource_kind": "video",
+        "source_path": "/file/download_url",
+        "resource_decoders": [
+          {
+            "source_path": "/file/download_url",
+            "encoding": "public_http_url",
+            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com"],
+            "resource_kind": "video",
+            "mime_type": "video/mp4",
+            "optional": false,
+            "output_id_prefix": "video"
+          }
+        ]
+      },
+      "tool_id": "video_generate"
+    }
+  ],
+  "tool_target_template_bindings": [
+    {
+      "service_entry_id": "global",
+      "model_id": "image-01",
+      "display_name": "MiniMax Image 01",
+      "template_refs": ["minimax.global.image-generate.v1"]
+    },
+    {
+      "service_entry_id": "global",
+      "model_id": "MiniMax-Hailuo-2.3",
+      "display_name": "MiniMax Hailuo 2.3",
+      "template_refs": ["minimax.global.video-generate.v1"]
+    }
+  ],
+  "provenance": {
+    "status": "verified",
+    "sources": [
+      {
+        "url": "builtin:vulcan.reasoning-catalog.2026-08-06",
+        "note": "Legacy reasoning effort rules migrated into manifest model rules; evidence follows the legacy reasoning catalog."
+      }
+    ]
+  }
+}

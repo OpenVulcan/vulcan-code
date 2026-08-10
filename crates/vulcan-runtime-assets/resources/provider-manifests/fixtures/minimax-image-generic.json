@@ -1,0 +1,198 @@
+{
+  "schema_version": "provider-manifest-execution-fixture.v1",
+  "fixture_id": "minimax-image-generic",
+  "base_manifest": "minimax.json",
+  "production_target_refs": [
+    "minimax::global.image-01-live",
+    "minimax::cn.image-01",
+    "minimax::cn.image-01-live",
+    "minimax::template.minimax.global.image-generate.v1.13bf23784ddbe8cae507ded181503bc9d2319ddf8b5bc4318b7d55a303d80c30"
+  ],
+  "tool_target": {
+    "target_id": "global:fixture-image-generic",
+    "description": "Generic MiniMax image wire-contract fixture.",
+    "service_entry_id": "global",
+    "credential_profile_ids": ["payg-api-key"],
+    "upstream_target_id": "image-01",
+    "display_name": "MiniMax Image Generic Fixture",
+    "tool_id": "fixture_minimax_image_generic",
+    "capability": "image_generate",
+    "input_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "prompt": {"type": "string", "minLength": 1, "maxLength": 1500},
+        "subject_references": {"type": "array", "items": {"type": "string"}},
+        "aspect_ratio": {"type": "string"},
+        "width": {"type": "integer"},
+        "height": {"type": "integer"},
+        "count": {"type": "integer", "minimum": 1, "maximum": 9, "default": 1},
+        "seed": {"type": "integer"},
+        "prompt_optimizer": {"type": "boolean", "default": false},
+        "aigc_watermark": {"type": "boolean", "default": false},
+        "style_type": {"type": "string"},
+        "style_weight": {"type": "number"}
+      },
+      "required": ["prompt"]
+    },
+    "output": {
+      "kind": "resources",
+      "source_path": "/data/image_base64",
+      "normalized_result_path": "resources",
+      "resource_kind": "image",
+      "mime_types": ["image/jpeg"],
+      "resource_decoders": [
+        {
+          "source_path": "/data/image_base64",
+          "encoding": "base64",
+          "resource_kind": "image",
+          "mime_type": "image/jpeg",
+          "optional": true,
+          "max_bytes": 8388608,
+          "output_id_prefix": "image_base64"
+        },
+        {
+          "source_path": "/data/image_urls",
+          "encoding": "https_url",
+          "download_host_suffixes": ["example.com"],
+          "resource_kind": "image",
+          "mime_type": "image/jpeg",
+          "optional": true,
+          "output_id_prefix": "image_url"
+        }
+      ]
+    },
+    "execution": {
+      "endpoint_path": "/v1/image_generation",
+      "authentication": "bearer_authorization",
+      "adapter": "generic_json",
+      "execution_kind": "http_json_sync"
+    }
+  },
+  "operation": {
+    "operation_id": "fixture.minimax-image-generic",
+    "operation": "image_generate",
+    "carrier": "provider_tool",
+    "input_resources": [],
+    "output_resources": ["image"],
+    "tool_target_refs": ["global:fixture-image-generic"],
+    "request_profile_refs": ["fixture.minimax.image.request.v1"],
+    "response_profile_refs": ["fixture.minimax.image.response.v1"],
+    "upload_channel_refs": [],
+    "upload_bindings": [],
+    "timeout_ms": 60000,
+    "idempotent": false
+  },
+  "upload_channels": [],
+  "request_profiles": [
+    {
+      "profile_id": "fixture.minimax.image.request.v1",
+      "description": "Build the MiniMax image wire body.",
+      "payload": {
+        "profile_id": "fixture.minimax.image.request.v1",
+        "revision": 1,
+        "steps": [
+          {
+            "op": "rebuild_json_template",
+            "template": {
+              "model": {"$vulcan_model_id": true},
+              "prompt": {"$vulcan_ref": {"path": "/prompt"}},
+              "subject_reference": {
+                "$vulcan_map": {
+                  "path": "/subject_references",
+                  "optional": true,
+                  "template": {
+                    "type": "character",
+                    "image_file": {"$vulcan_ref": {"scope": "item", "path": ""}}
+                  }
+                }
+              },
+              "aspect_ratio": {"$vulcan_ref": {"path": "/aspect_ratio", "optional": true}},
+              "width": {"$vulcan_ref": {"path": "/width", "optional": true}},
+              "height": {"$vulcan_ref": {"path": "/height", "optional": true}},
+              "response_format": "base64",
+              "seed": {"$vulcan_ref": {"path": "/seed", "optional": true}},
+              "n": {"$vulcan_ref": {"path": "/count"}},
+              "prompt_optimizer": {"$vulcan_ref": {"path": "/prompt_optimizer"}},
+              "aigc_watermark": {"$vulcan_ref": {"path": "/aigc_watermark"}},
+              "style": {
+                "style_type": {"$vulcan_ref": {"path": "/style_type", "optional": true}},
+                "style_weight": {"$vulcan_ref": {"path": "/style_weight", "optional": true}}
+              }
+            }
+          },
+          {"op": "remove_if_empty", "path": "/subject_reference"},
+          {"op": "remove_if_empty", "path": "/style"}
+        ]
+      }
+    }
+  ],
+  "response_profiles": [
+    {
+      "profile_id": "fixture.minimax.image.response.v1",
+      "description": "Normalize MiniMax image application status.",
+      "payload": {
+        "profile_id": "fixture.minimax.image.response.v1",
+        "revision": 1,
+        "steps": [
+          {
+            "op": "rebuild_json_template",
+            "template": {
+              "$vulcan_if_equals": {
+                "path": "/base_resp/status_code",
+                "equals": 0,
+                "then": {
+                  "$vulcan_if_equals": {
+                    "path": "/data/failed_count",
+                    "equals": 0,
+                    "then": {
+                      "id": {"$vulcan_ref": {"path": "/data/task_id"}},
+                      "data": {"$vulcan_ref": {"path": "/data"}}
+                    },
+                    "otherwise": {"error": {"code": "partial_failure", "message": "failed image"}}
+                  }
+                },
+                "otherwise": {
+                  "error": {
+                    "code": {"$vulcan_ref": {"path": "/base_resp/status_code"}},
+                    "message": {"$vulcan_ref": {"path": "/base_resp/status_msg"}}
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "required_execution_primitives": ["http_json_sync"],
+  "required_upload_primitives": [],
+  "required_transformers": ["rebuild_json_template", "remove_if_empty"],
+  "arguments": {"prompt": "a red volcano"},
+  "interactions": [
+    {
+      "method": "POST",
+      "path": "/v1/image_generation",
+      "expected_json_body": {
+        "model": "image-01",
+        "prompt": "a red volcano",
+        "response_format": "base64",
+        "n": 1,
+        "prompt_optimizer": false,
+        "aigc_watermark": false
+      },
+      "response_status": 200,
+      "response_json_body": {
+        "data": {
+          "task_id": "image-task-1",
+          "image_base64": ["aGVsbG8="],
+          "image_urls": [],
+          "success_count": 1,
+          "failed_count": 0
+        },
+        "base_resp": {"status_code": 0, "status_msg": "ok"}
+      }
+    }
+  ],
+  "expected_output_kind": "resources"
+}

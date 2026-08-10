@@ -151,10 +151,18 @@ pub(crate) fn apply_execution_preparation(
                         updated_at: current_unix_millis_text(),
                         ..SessionRuntimeStateEntry::default()
                     });
-                let route_changed = runtime_state.active_provider_id.as_deref()
-                    != Some(preparation.model_blueprint.provider_id.as_str())
-                    || runtime_state.active_model_id.as_deref()
-                        != Some(preparation.model_blueprint.model_id.as_str())
+                // providerRouteLease is the non-secret persisted identity of the exact in-memory selection.
+                // providerRouteLease 是精确内存选择的非秘密持久化身份。
+                let provider_route_lease = preparation
+                    .model_blueprint
+                    .session_provider_route_lease_identity()
+                    .ok_or_else(|| {
+                        String::from(
+                            "Provider execution preparation did not contain a frozen session route.",
+                        )
+                    })?;
+                let route_changed = runtime_state.provider_route_lease.as_ref()
+                    != Some(&provider_route_lease)
                     || runtime_state.active_context_window_policy
                         != preparation
                             .context_compaction_policy
@@ -170,6 +178,7 @@ pub(crate) fn apply_execution_preparation(
                 runtime_state.active_connection_id =
                     Some(preparation.model_blueprint.connection_id.clone());
                 runtime_state.active_model_id = Some(preparation.model_blueprint.model_id.clone());
+                runtime_state.provider_route_lease = Some(provider_route_lease);
                 runtime_state.active_context_window_policy = preparation
                     .context_compaction_policy
                     .map(|policy| policy.window);

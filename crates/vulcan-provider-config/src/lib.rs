@@ -3,6 +3,9 @@
 
 mod atomic_file;
 pub mod config;
+pub mod custom_manifest;
+pub mod manifest_store;
+pub mod manifest_sync;
 
 /// Preserves the internal host-settings module path used by existing callers.
 /// 保留现有调用方使用的内部宿主设置模块路径。

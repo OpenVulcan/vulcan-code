@@ -1,5 +1,9 @@
 import React from "react";
 import {
+  enqueueComposerPersistence,
+  flushLatestComposerPersistence,
+} from "@/components/composer/composer-persistence-queue";
+import {
   ModelAccountPickerControl,
   ModelPickerControl,
   type ModelPickerChoice,
@@ -295,12 +299,30 @@ export function ComposerPanel(props: {
     onSelectModel: props.onSelectWorkbenchModel,
     onSelectReasoningEffort: props.onSelectWorkbenchReasoningEffort,
   });
+  // pendingModelSelectionRef retains the latest model/account persistence request until submission.
+  // pendingModelSelectionRef 将最新模型或账号持久化请求保留到提交边界。
+  const pendingModelSelectionRef = React.useRef<Promise<boolean> | null>(null);
+  // handlePersistedModelChoiceChange tracks the exact optimistic write started by either picker.
+  // handlePersistedModelChoiceChange 跟踪任一选择器启动的精确乐观写入。
+  const handlePersistedModelChoiceChange = React.useCallback((choice: ModelPickerChoice) => {
+    const pending = handleModelChoiceChange(choice);
+    pendingModelSelectionRef.current = pending;
+    void pending.finally(() => {
+      if (pendingModelSelectionRef.current === pending) {
+        pendingModelSelectionRef.current = null;
+      }
+    });
+    return pending;
+  }, [handleModelChoiceChange]);
   // secondaryRouteProviderId is the exact provider adapter id, not the credential-scoped row id.
   // secondaryRouteProviderId 是精确的供应商适配器标识，而不是凭据作用域行标识。
   const secondaryRouteProviderId = activeProviderModelSummary?.provider.sourceProviderId?.trim() ?? "";
   // pendingSecondaryRouteSelectionRef retains the latest provider/model route write until submission.
   // pendingSecondaryRouteSelectionRef 将最新供应商/模型路由写入保留到提交边界。
   const pendingSecondaryRouteSelectionRef = React.useRef<Promise<boolean> | null>(null);
+  // secondaryRoutePersistenceQueueRef orders overlapping route writes by user intent.
+  // secondaryRoutePersistenceQueueRef 按用户意图顺序排列重叠的二级路由写入。
+  const secondaryRoutePersistenceQueueRef = React.useRef<Promise<void>>(Promise.resolve());
   // handleSecondaryRouteSelection tracks the exact persistence request started by the route control.
   // handleSecondaryRouteSelection 跟踪路由控件启动的精确持久化请求。
   const handleSecondaryRouteSelection = React.useCallback((
@@ -308,7 +330,16 @@ export function ComposerPanel(props: {
     modelId: string,
     route: ProviderModelSecondaryRouteSelection | null,
   ) => {
-    const pending = props.onSelectWorkbenchModelSecondaryRoute(providerId, modelId, route);
+    // queuedWrite prevents a slower former RPC from overwriting the latest route choice.
+    // queuedWrite 防止较慢的旧 RPC 覆盖最新路由选择。
+    const queuedWrite = enqueueComposerPersistence(
+      secondaryRoutePersistenceQueueRef.current,
+      () => props.onSelectWorkbenchModelSecondaryRoute(providerId, modelId, route),
+    );
+    secondaryRoutePersistenceQueueRef.current = queuedWrite.tail;
+    // pending exposes the exact queued result to the submission barrier.
+    // pending 向提交屏障暴露精确的排队结果。
+    const pending = queuedWrite.result;
     pendingSecondaryRouteSelectionRef.current = pending;
     void pending.finally(() => {
       if (pendingSecondaryRouteSelectionRef.current === pending) {
@@ -320,8 +351,35 @@ export function ComposerPanel(props: {
   // flushSecondaryRouteSelection waits only for the currently visible route write.
   // flushSecondaryRouteSelection 仅等待当前可见的路由写入。
   const flushSecondaryRouteSelection = React.useCallback(async () => {
-    return await pendingSecondaryRouteSelectionRef.current ?? true;
+    return await flushLatestComposerPersistence(() => pendingSecondaryRouteSelectionRef.current);
   }, []);
+  // flushComposerRouteSelections prevents provider dispatch from racing an explicit model/account
+  // write, then waits for the selected model's secondary-route write.
+  // flushComposerRouteSelections 防止供应商分派与显式模型或账号写入竞争，随后等待所选模型的
+  // 二级路由写入。
+  const flushComposerRouteSelections = React.useCallback(async () => {
+    while (true) {
+      // modelSaved drains every model/account intent observable at this submission boundary.
+      // modelSaved 排空本次提交边界可观察到的全部模型或账号意图。
+      const modelSaved = await flushLatestComposerPersistence(() => pendingModelSelectionRef.current);
+      if (!modelSaved) {
+        return false;
+      }
+      // secondaryRouteSaved drains the route queue after the latest model intent has settled.
+      // secondaryRouteSaved 在最新模型意图结束后排空路由队列。
+      const secondaryRouteSaved = await flushSecondaryRouteSelection();
+      if (!secondaryRouteSaved) {
+        return false;
+      }
+      // A model change can arrive while the secondary route is settling, so both queues must be
+      // empty at the same synchronous fixed point before provider dispatch begins.
+      // 模型变更可能在二级路由结束期间到达，因此供应商分派前两个队列必须在同一个同步
+      // 不动点上均为空。
+      if (!pendingModelSelectionRef.current && !pendingSecondaryRouteSelectionRef.current) {
+        return true;
+      }
+    }
+  }, [flushSecondaryRouteSelection]);
   // placeholder describes the platform-specific send and newline keyboard behavior.
   // placeholder 描述平台相关的发送与换行键盘行为。
   const placeholder = React.useMemo(() => {
@@ -349,7 +407,7 @@ export function ComposerPanel(props: {
       : null,
     captureSessionSettings: draftSessionSettings.captureSubmissionSettings,
     clearSessionSettings: draftSessionSettings.clearSubmissionSettings,
-    beforeSubmit: flushSecondaryRouteSelection,
+    beforeSubmit: flushComposerRouteSelections,
     isConversationRunning: props.isConversationRunning,
     clearForSubmission,
     restoreFailedSubmission,
@@ -589,7 +647,7 @@ export function ComposerPanel(props: {
               fallbackLabel={t("composer.selectFallback")}
               filterPlaceholder={t("composer.modelPicker.filter")}
               noMatchesLabel={t("composer.modelPicker.noMatches")}
-              onValueChange={(choice) => void handleModelChoiceChange(choice)}
+              onValueChange={(choice) => void handlePersistedModelChoiceChange(choice)}
               openSignal={modelPickerOpenSignal}
               providers={props.providers}
               value={modelChoice}
@@ -597,7 +655,7 @@ export function ComposerPanel(props: {
             <ModelAccountPickerControl
               accounts={activeModelAccounts}
               ariaLabel={t("composer.aria.account")}
-              onValueChange={(choice) => void handleModelChoiceChange(choice)}
+              onValueChange={(choice) => void handlePersistedModelChoiceChange(choice)}
               value={activeModelChoice?.connectionId ?? ""}
             />
             <ComposerAiCapabilityControl

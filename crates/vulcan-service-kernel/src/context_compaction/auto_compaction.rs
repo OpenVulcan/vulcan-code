@@ -523,17 +523,36 @@ pub(crate) fn build_webui_context_compaction_job_request(
     let session_runtime_state = workspace_snapshot
         .as_ref()
         .and_then(|workspace| workspace.session_runtime_state.get(&session_id));
+    // compactionSessionId scopes compaction to the same immutable route lease as the owning session.
+    // compactionSessionId 将压缩限定到所属会话的同一不可变路由租约。
+    let compaction_session_id = session_id.to_string();
+    // routeLeaseIdentity prefers the already prepared source turn and otherwise uses persisted session state.
+    // routeLeaseIdentity 优先采用已准备来源回合，否则采用持久化会话状态。
+    let route_lease_identity = source_execution
+        .and_then(|(_, preparation)| {
+            preparation
+                .model_blueprint
+                .session_provider_route_lease_identity()
+        })
+        .or_else(|| {
+            session_runtime_state
+                .and_then(|runtime_state| runtime_state.provider_route_lease.clone())
+        });
     // modelTarget preserves the exact session account and rejects stale routes without switching credentials.
     // modelTarget 保留精确会话账号，并在路由失效时拒绝执行而不切换凭据。
     let model_target = match source_execution {
         Some((_, preparation)) => resolve_prompt_compaction_model_target(
             agent_runtime.public_ai_runtime.as_ref(),
+            compaction_session_id.as_str(),
+            route_lease_identity.as_ref(),
             Some(preparation.model_blueprint.provider_id.as_str()),
             Some(preparation.model_blueprint.connection_id.as_str()),
             Some(preparation.model_blueprint.model_id.as_str()),
         )?,
         None => resolve_prompt_compaction_model_target(
             agent_runtime.public_ai_runtime.as_ref(),
+            compaction_session_id.as_str(),
+            route_lease_identity.as_ref(),
             session_runtime_state
                 .and_then(|runtime_state| runtime_state.active_provider_id.as_deref()),
             session_runtime_state
@@ -732,6 +751,18 @@ mod tests {
                 provider_id: String::from("custom-response"),
                 model_id: String::from("response-model"),
                 connection_id: String::from("response-connection"),
+                provider_route_lease_identity:
+                    vulcan_workbench_model::SessionProviderRouteLeaseIdentity {
+                        schema_version: 1,
+                        provider_id: String::from("custom-response"),
+                        connection_id: String::from("response-connection"),
+                        model_id: String::from("response-model"),
+                        protocol_profile_id: String::from("openai-responses.v1"),
+                        manifest_revision: 1,
+                        manifest_generation: 1,
+                        catalog_revision: String::from("catalog-test"),
+                        route_revision: String::from("route-test"),
+                    },
                 remote_compaction_enabled: false,
             };
 

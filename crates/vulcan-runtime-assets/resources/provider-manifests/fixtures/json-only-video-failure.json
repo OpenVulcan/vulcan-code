@@ -1,0 +1,96 @@
+{
+  "schema_version": "provider-manifest-execution-fixture.v1",
+  "fixture_id": "json-only-video-failure",
+  "base_manifest": "tavily.json",
+  "tool_target": {
+    "target_id": "public-api.fixture-video-failure",
+    "description": "JSON-only asynchronous terminal failure fixture.",
+    "service_entry_id": "public-api",
+    "credential_profile_ids": ["api-key"],
+    "upstream_target_id": "fixture-video-failure-v1",
+    "display_name": "Fixture Video Failure",
+    "tool_id": "fixture_video_failure",
+    "capability": "video_generate",
+    "input_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {"prompt": {"type": "string"}},
+      "required": ["prompt"]
+    },
+    "output": {
+      "kind": "resources",
+      "source_path": "/result/videos",
+      "normalized_result_path": "resources",
+      "resource_kind": "video",
+      "mime_types": ["video/mp4"],
+      "resource_decoders": [
+        {
+          "source_path": "/result/videos",
+          "encoding": "https_url",
+          "download_host_suffixes": ["example.com"],
+          "resource_kind": "video",
+          "mime_type": "video/mp4",
+          "output_id_prefix": "video"
+        }
+      ]
+    },
+    "execution": {
+      "endpoint_path": "/fixtures/video-start",
+      "authentication": "bearer_authorization",
+      "adapter": "generic_json",
+      "execution_kind": "http_json_async_poll"
+    }
+  },
+  "operation": {
+    "operation_id": "fixture.json-only-video-failure",
+    "operation": "video_generate",
+    "carrier": "provider_tool",
+    "input_resources": [],
+    "output_resources": ["video"],
+    "tool_target_refs": ["public-api.fixture-video-failure"],
+    "request_profile_refs": [],
+    "response_profile_refs": [],
+    "upload_channel_refs": [],
+    "upload_bindings": [],
+    "async_execution": {
+      "poll_interval_ms": 250,
+      "max_backoff_ms": 1000,
+      "timeout_ms": 2000,
+      "cancellation_supported": false,
+      "generic_json": {
+        "poll_endpoint_path": "/fixtures/video-status",
+        "poll_method": "get",
+        "task_id_pointer": "/task/id",
+        "task_id_query_parameter": "task_id",
+        "status_pointer": "/task/status",
+        "queued_statuses": ["queued"],
+        "running_statuses": ["running"],
+        "success_statuses": ["succeeded"],
+        "failure_statuses": ["failed"],
+        "cancelled_statuses": ["cancelled"]
+      }
+    },
+    "timeout_ms": 2000,
+    "idempotent": false
+  },
+  "upload_channels": [],
+  "required_execution_primitives": ["http_json_async_poll"],
+  "required_upload_primitives": [],
+  "arguments": {"prompt": "fail deterministically"},
+  "interactions": [
+    {
+      "method": "POST",
+      "path": "/fixtures/video-start",
+      "expected_json_body": {"prompt": "fail deterministically"},
+      "response_status": 202,
+      "response_json_body": {"task": {"id": "video-task-failed"}}
+    },
+    {
+      "method": "GET",
+      "path": "/fixtures/video-status?task_id=video-task-failed",
+      "response_status": 200,
+      "response_json_body": {"task": {"status": "failed"}}
+    }
+  ],
+  "expected_error_contains": "configured failure status"
+}

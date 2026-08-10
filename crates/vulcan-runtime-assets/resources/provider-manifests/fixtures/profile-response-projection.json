@@ -1,0 +1,29 @@
+{
+  "schema_version": "provider-manifest-profile-fixture.v1",
+  "fixture_id": "profile-response-projection",
+  "base_manifest": "deepseek.json",
+  "required_transformers": ["rename_json_pointer"],
+  "fixture_kind": "response",
+  "declaration": {
+    "profile_id": "fixture.response.v1",
+    "description": "Executable response projection fixture",
+    "payload": {
+      "profile_id": "fixture.response.v1",
+      "revision": 1,
+      "steps": [
+        {
+          "op": "rename_json_pointer",
+          "from": "/vendor_output",
+          "to": "/output_text"
+        }
+      ]
+    }
+  },
+  "profile_id": "fixture.response.v1",
+  "input": {
+    "vendor_output": "done"
+  },
+  "expectations": {
+    "/output_text": "done"
+  }
+}

@@ -86,8 +86,13 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
     let public_ai_runtime = foundation
         .public_ai_runtime()
         .ok_or_else(|| String::from("The service has not installed the public AI runtime."))?;
+    // sessionId scopes the process-local immutable provider-route lease.
+    // sessionId 确定进程内不可变供应商路由租约的作用域。
+    let session_id = request.session_id.to_string();
     let model_blueprint = resolve_public_ai_provider_blueprint(
         public_ai_runtime.as_ref(),
+        session_id.as_str(),
+        request.provider_route_lease_identity.as_ref(),
         request.reasoning_effort,
         request.provider_id_override.as_deref(),
         request.model_id_override.as_deref(),

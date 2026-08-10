@@ -8,7 +8,9 @@ use crate::agent_runtime::provider_transport_entry_inputs::{
     PreparedProviderTransportEntryInputs, PreparedProviderTransportRuntimeInputs,
 };
 use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
-use crate::agent_runtime::provider_transport_request::ProviderTransportTurnStartMode;
+use crate::agent_runtime::provider_transport_request::{
+    ProviderRouteIdentity, ProviderTransportTurnStartMode,
+};
 use crate::agent_runtime::provider_transport_request_budget::{
     BudgetCheckedStreamingAdapter, ProviderBudgetRequest, ProviderRequestBudgetGuard,
 };
@@ -84,6 +86,32 @@ impl Drop for AbortProviderControllerOnDrop {
     }
 }
 
+/// Projects the immutable provider route into the retry event's auditable route key.
+/// 将不可变 Provider 路由投影为重试事件中可审计的路由键。
+///
+/// # Parameters
+/// 参数
+/// `route` is the exact route resolved before the transport adapter and retry loop are created.
+/// `route` 是在创建传输适配器与重试循环前已经解析完成的精确路由。
+///
+/// # Returns
+/// 返回值
+/// A non-secret JSON object containing every field that must remain stable across retries.
+/// 返回包含每次重试期间必须保持稳定的全部字段且不含秘密信息的 JSON 对象。
+fn provider_retry_route_key_metadata(route: &ProviderRouteIdentity) -> serde_json::Value {
+    json!({
+        "provider_id": route.provider_id.as_str(),
+        "service_entry_id": route.service_entry_id.as_str(),
+        "connection_id": route.connection_id.as_str(),
+        "credential_profile_id": route.credential_profile_id.as_str(),
+        "model_id": route.model_id.as_str(),
+        "protocol_profile_id": route.protocol_profile_id.as_str(),
+        "catalog_generation": route.catalog_generation,
+        "manifest_revision": route.manifest_revision,
+        "route_revision": route.route_revision.as_str(),
+    })
+}
+
 /// Executes one host-controlled provider stream through `vulcan-core`, forwards live deltas, and returns the final canonical state to the workbench layer.
 /// 通过 `vulcan-core` 执行一次宿主控制的 Provider 流，转发实时增量，并把最终规范状态返回给工作台层。
 pub(crate) fn execute_host_controlled_stream<A, F>(
@@ -102,6 +130,7 @@ pub(crate) fn execute_host_controlled_stream<A, F>(
     tool_request_rejection_reason: Option<String>,
     tool_request_rejection_all_tools: bool,
     tool_request_rejection_tool_ids: Vec<String>,
+    route_identity: crate::agent_runtime::provider_transport_request::ProviderRouteIdentity,
 ) -> ProviderDeltaStream
 where
     A: VulcanStreamingProviderAdapter<Response = CoreProviderTurnResponse>
@@ -128,6 +157,14 @@ where
             // retryResumesSeededInput prevents the original user prompt from being appended twice after resuming a committed snapshot.
             // retryResumesSeededInput 防止从已提交快照恢复后再次追加原始用户提示词。
             let mut retry_resumes_seeded_input = false;
+            // retryRouteKey is captured once from the already-resolved execution. The concrete
+            // adapter factory is also fixed outside this loop, so retries replay the same protocol,
+            // endpoint, request projection, manifest revision, and route revision without invoking
+            // any resolver again (plan §13.5.1/§13.5.2).
+            // retryRouteKey 从已解析执行中仅捕获一次。具体适配器工厂同样固定在循环之外，
+            // 因而重试会重放相同协议、端点、请求投影、清单修订号与路由修订号，且不会再次
+            // 调用任何解析器（方案 §13.5.1/§13.5.2）。
+            let retry_route_key = route_identity;
             loop {
                 let (attempt_sender, mut attempt_receiver) =
                     unbounded_channel::<Result<ProviderStreamDelta, String>>();
@@ -447,25 +484,16 @@ where
                             if task_sender.send(Ok(failed_request_delta)).is_err() {
                                 break;
                             }
-                            // retryDetail distinguishes count-limited transient retries from cancellation-bound rate-limit retries.
-                            // retryDetail 区分受次数限制的瞬态重试与仅由取消终止的限流重试。
-                            let retry_detail = if decision.unbounded {
-                                format!(
-                                    "{} 遇到限流，已安排第 {} 次重试；{} 秒后重试（将持续重试，直到用户终止）。",
-                                    provider_label,
-                                    decision.retry_number,
-                                    delay_seconds,
-                                )
-                            } else {
-                                format!(
-                                    "{} 第 {}/{} 次重试将在 {} 秒后开始：{}",
-                                    provider_label,
-                                    decision.retry_number,
-                                    decision.max_retries,
-                                    delay_seconds,
-                                    decision.reason,
-                                )
-                            };
+                            // retryDetail exposes the exact finite host budget for every automatic retry.
+                            // retryDetail 为每次自动重试公开精确的有限宿主预算。
+                            let retry_detail = format!(
+                                "{} 第 {}/{} 次重试将在 {} 秒后开始：{}",
+                                provider_label,
+                                decision.retry_number,
+                                decision.max_retries,
+                                delay_seconds,
+                                decision.reason,
+                            );
                             let retry_event = crate::agent_runtime::events::RuntimeEvent::new(
                                 crate::agent_runtime::events::RuntimeEventKind::Retrying,
                                 "Provider 自动重试",
@@ -478,6 +506,7 @@ where
                                 "delay_ms": delay_ms,
                                 "delay_seconds": delay_seconds,
                                 "reason": decision.reason,
+                                "retry_route_key": provider_retry_route_key_metadata(&retry_route_key),
                             })));
                             // Stop retrying when the host runtime consumer has already dropped this stream.
                             // 当宿主运行时消费端已经丢弃当前流时，停止继续后台重试。
@@ -755,6 +784,7 @@ where
         tool_request_rejection_reason,
         tool_request_rejection_all_tools,
         tool_request_rejection_tool_ids,
+        route_identity,
     } = prepared_runtime_inputs;
 
     let adapter_inputs = PreparedProviderTransportAdapterInputs {
@@ -777,6 +807,7 @@ where
         tool_request_rejection_reason,
         tool_request_rejection_all_tools,
         tool_request_rejection_tool_ids,
+        route_identity,
     )
 }
 
@@ -787,6 +818,37 @@ mod tests {
 
     use super::*;
     use tokio::sync::Notify;
+
+    /// Verifies retry telemetry carries every field that defines the immutable resolved route.
+    /// 验证重试遥测携带定义不可变已解析路由的全部字段。
+    #[test]
+    fn retry_route_key_metadata_preserves_protocol_and_manifest_identity() {
+        // route models one session-frozen selection before the adapter is constructed.
+        // route 模拟适配器构造前已经由会话冻结的一次选择。
+        let route = ProviderRouteIdentity {
+            provider_id: String::from("provider-a"),
+            service_entry_id: String::from("entry-a"),
+            connection_id: String::from("connection-a"),
+            credential_profile_id: String::from("credential-a"),
+            model_id: String::from("model-a"),
+            protocol_profile_id: String::from("responses-a"),
+            catalog_generation: 17,
+            manifest_revision: 23,
+            route_revision: String::from("sha256:route-a"),
+        };
+
+        let metadata = provider_retry_route_key_metadata(&route);
+
+        assert_eq!(metadata["provider_id"], "provider-a");
+        assert_eq!(metadata["service_entry_id"], "entry-a");
+        assert_eq!(metadata["connection_id"], "connection-a");
+        assert_eq!(metadata["credential_profile_id"], "credential-a");
+        assert_eq!(metadata["model_id"], "model-a");
+        assert_eq!(metadata["protocol_profile_id"], "responses-a");
+        assert_eq!(metadata["catalog_generation"], 17);
+        assert_eq!(metadata["manifest_revision"], 23);
+        assert_eq!(metadata["route_revision"], "sha256:route-a");
+    }
 
     /// Builds one typed context-window provider failure for compensation-safety tests.
     /// 构建一个用于补偿安全测试的强类型上下文窗口供应商失败。

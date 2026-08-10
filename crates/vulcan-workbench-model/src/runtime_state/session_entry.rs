@@ -1,5 +1,38 @@
 use super::*;
 
+/// Persisted non-secret identity of the provider route leased by one session.
+/// 单个会话租用的供应商路由之持久化非秘密身份。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionProviderRouteLeaseIdentity {
+    /// Stable schema version for fail-closed restoration.
+    /// 用于封闭失败恢复的稳定 Schema 版本。
+    pub schema_version: u32,
+    /// Exact provider identifier frozen by the lease.
+    /// 租约冻结的精确供应商标识。
+    pub provider_id: String,
+    /// Exact credential connection identifier frozen by the lease.
+    /// 租约冻结的精确凭据连接标识。
+    pub connection_id: String,
+    /// Exact model identifier frozen by the lease.
+    /// 租约冻结的精确模型标识。
+    pub model_id: String,
+    /// Exact protocol profile selected for the frozen route.
+    /// 冻结路由选择的精确协议 Profile。
+    pub protocol_profile_id: String,
+    /// Provider Manifest revision captured for diagnostics, not restoration identity.
+    /// 为诊断捕获的供应商 Manifest 修订号，不作为恢复身份。
+    pub manifest_revision: u64,
+    /// Process-local Manifest catalog generation captured for diagnostics, not restoration identity.
+    /// 为诊断捕获的进程内 Manifest 目录代数，不作为恢复身份。
+    pub manifest_generation: u64,
+    /// Content revision of the effective model catalog captured for diagnostics, not restoration identity.
+    /// 为诊断捕获的生效模型目录内容修订号，不作为恢复身份。
+    pub catalog_revision: String,
+    /// Content-addressed revision of the complete execution route.
+    /// 完整执行路由的内容寻址修订号。
+    pub route_revision: String,
+}
+
 /// Session-scoped runtime state required for context reconstruction and agent tracing.
 /// 上下文重建与代理追踪所需的按会话归属运行时状态。
 /// Session-scoped output-style selection and the last safely applied prompt snapshot.
@@ -118,8 +151,12 @@ pub struct SessionRuntimeStateEntry {
     /// Last active model identifier used by the session.
     /// 最近一次被该会话使用的激活模型标识。
     pub active_model_id: Option<String>,
+    /// Persisted non-secret identity of the session's frozen provider route.
+    /// 当前会话冻结供应商路由的持久化非秘密身份。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_route_lease: Option<SessionProviderRouteLeaseIdentity>,
     /// Fully resolved context-window policy frozen at the latest accepted turn boundary.
-    /// 鏈€杩戜竴娆℃帴鍙楃殑鍥炲悎杈圭晫鎵€鍐荤粨鐨勫畬鏁翠笂涓嬫枃绐楀彛绛栫暐銆?
+    /// 最近一次接受的回合边界所冻结的完整上下文窗口策略。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_context_window_policy: Option<ContextWindowPolicy>,
     /// Last reasoning-effort preset selected while this session was active.

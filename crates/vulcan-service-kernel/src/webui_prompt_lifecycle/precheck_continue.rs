@@ -345,65 +345,32 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_from_state(
     request.model_id_override = agent_runtime.model_id_override.clone();
     request.connection_id_override = agent_runtime.connection_id_override.clone();
     if request.provider_id_override.is_none() && request.model_id_override.is_none() {
-        // session_model identifies the persisted provider, credential connection, and model.
-        // session_model 标识持久化的 Provider、凭据连接与模型。
-        let session_model = workspace_snapshot
-            .session_runtime_state
-            .get(&session_id)
-            .and_then(|runtime_state| {
-                runtime_state
-                    .active_provider_id
-                    .as_deref()
-                    .zip(runtime_state.active_connection_id.as_deref())
-                    .zip(runtime_state.active_model_id.as_deref())
-            });
-        if let Some(((provider_id, connection_id), model_id)) = session_model {
-            let configuration = agent_runtime.public_ai_runtime.configuration_snapshot()?;
-            if agent_runtime
-                .public_ai_runtime
-                .resolve_connection_model_selection(
-                    &configuration,
-                    connection_id,
-                    provider_id,
-                    model_id,
-                )
-                .is_ok()
+        // sessionRuntimeState owns both the selected target and its persisted non-secret lease identity.
+        // sessionRuntimeState 同时持有所选目标及其持久化非秘密租约身份。
+        let session_runtime_state = workspace_snapshot.session_runtime_state.get(&session_id);
+        if let Some(runtime_state) = session_runtime_state {
+            request.provider_route_lease_identity = runtime_state.provider_route_lease.clone();
+            if let Some((provider_id, model_id)) = runtime_state
+                .active_provider_id
+                .as_deref()
+                .zip(runtime_state.active_model_id.as_deref())
             {
+                // Exact persisted identifiers are passed through without consulting the current
+                // catalog. The provider runtime either reuses the in-memory lease or proves an
+                // identical restart restoration; it never degrades to another account or route.
+                // 精确持久化标识不查询当前目录而直接传递。供应商运行时要么复用内存租约，
+                // 要么证明重启恢复完全一致；绝不降级到其他账号或路由。
                 request.provider_id_override = Some(provider_id.to_string());
                 request.model_id_override = Some(model_id.to_string());
-                request.connection_id_override = Some(connection_id.to_string());
-            } else if agent_runtime
-                .public_ai_runtime
-                .resolve_model_selection(&configuration, provider_id, model_id)
-                .is_ok()
-            {
-                // An invalid account degrades to the same model's preferred or first available account.
-                // 无效账号降级到同模型的首选账号或第一个可用账号。
-                request.provider_id_override = Some(provider_id.to_string());
-                request.model_id_override = Some(model_id.to_string());
-            }
-        } else if let Some((provider_id, model_id)) = workspace_snapshot
-            .session_runtime_state
-            .get(&session_id)
-            .and_then(|runtime_state| {
-                runtime_state
-                    .active_provider_id
-                    .as_deref()
-                    .zip(runtime_state.active_model_id.as_deref())
-            })
-        {
-            // Historical sessions without a connection id retain model-level degradation.
-            // 缺少连接标识的历史会话继续使用模型级降级。
-            let configuration = agent_runtime.public_ai_runtime.configuration_snapshot()?;
-            if agent_runtime
-                .public_ai_runtime
-                .resolve_model_selection(&configuration, provider_id, model_id)
-                .is_ok()
-            {
-                request.provider_id_override = Some(provider_id.to_string());
-                request.model_id_override = Some(model_id.to_string());
+                request.connection_id_override =
+                    runtime_state.active_connection_id.as_ref().cloned();
             }
         }
+    } else {
+        // An explicit agent-scoped model target owns an independent lease and must not inherit
+        // the main session model identity.
+        // 显式代理作用域模型目标拥有独立租约，不得继承主会话模型身份。
+        request.provider_route_lease_identity = None;
     }
     request.controller_runtime = Some(controller_runtime.clone());
     // managedCodebaseMemory is resolved from the live controller authorization table without any workspace-path fallback.

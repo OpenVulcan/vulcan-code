@@ -5,8 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use vulcan_ai_contract::{
-    CapabilitySupport, ModelCapabilities, ModelParameterDefault, ReasoningControlMode,
-    ReasoningEffort, ResourceKind,
+    CapabilitySupport, ModelCapabilities, ReasoningControlMode, ReasoningEffort, ResourceKind,
 };
 use vulcan_context::ContextWindowPolicyOverrides;
 
@@ -537,6 +536,35 @@ pub struct CustomModelRequestProjection {
     pub delete: Vec<String>,
 }
 
+/// Selects how one custom-provider model binds its execution protocol.
+/// 选择一个自定义供应商模型如何绑定其执行协议。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum CustomModelProtocolPreference {
+    /// Auto-resolved by fixed priority at the configuration activation boundary.
+    /// 在配置激活边界按固定优先级自动解析。
+    #[default]
+    Auto,
+    /// Explicit protocol choice that must stay inside the enabled protocol set.
+    /// 必须保持在启用协议集合内的显式协议选择。
+    Explicit {
+        /// The exact protocol selected for this model.
+        /// 为该模型选定的精确协议。
+        protocol: crate::CustomProviderProtocol,
+    },
+}
+
+impl CustomModelProtocolPreference {
+    /// Returns the explicitly selected protocol, or `None` for automatic resolution.
+    /// 返回显式选定的协议；自动解析时返回 `None`。
+    pub fn explicit_protocol(self) -> Option<crate::CustomProviderProtocol> {
+        match self {
+            Self::Auto => None,
+            Self::Explicit { protocol } => Some(protocol),
+        }
+    }
+}
+
 /// Stores one user-owned model without duplicating provider or credential state.
 /// 保存一个不复制供应商或凭据状态的用户自有模型。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -646,29 +674,9 @@ impl CustomModelDefinition {
     /// Success only when identifiers, defaults, dependencies, conflicts, and request paths agree.
     /// 仅当标识、默认值、依赖、冲突与请求路径一致时返回成功。
     fn validate_model_parameter_definitions(&self) -> Result<(), String> {
-        let mut parameter_ids = BTreeSet::new();
-        for definition in &self.capabilities.model_parameters {
-            if definition.id.trim().is_empty() {
-                return Err(String::from(
-                    "Custom model parameter identifier is required.",
-                ));
-            }
-            if definition.display_name.trim().is_empty() {
-                return Err(format!(
-                    "Custom model parameter `{}` requires a display name.",
-                    definition.id
-                ));
-            }
-            if !parameter_ids.insert(definition.id.as_str()) {
-                return Err(format!(
-                    "Custom model parameter `{}` is declared more than once.",
-                    definition.id
-                ));
-            }
-            if let ModelParameterDefault::ExplicitValue { value } = &definition.default {
-                definition.validate_value(value)?;
-            }
-        }
+        vulcan_ai_contract::validate_model_parameter_definition_set(
+            self.capabilities.model_parameters.as_slice(),
+        )?;
         for definition in &self.capabilities.model_parameters {
             if !self
                 .request_projection
@@ -677,48 +685,6 @@ impl CustomModelDefinition {
             {
                 return Err(format!(
                     "Custom model parameter `{}` requires an exact request path.",
-                    definition.id
-                ));
-            }
-            let dependencies = definition
-                .dependent_required
-                .iter()
-                .map(String::as_str)
-                .collect::<BTreeSet<_>>();
-            let conflicts = definition
-                .conflicts
-                .iter()
-                .map(String::as_str)
-                .collect::<BTreeSet<_>>();
-            if dependencies.len() != definition.dependent_required.len() {
-                return Err(format!(
-                    "Custom model parameter `{}` contains duplicate dependencies.",
-                    definition.id
-                ));
-            }
-            if conflicts.len() != definition.conflicts.len() {
-                return Err(format!(
-                    "Custom model parameter `{}` contains duplicate conflicts.",
-                    definition.id
-                ));
-            }
-            for related_id in dependencies.union(&conflicts) {
-                if *related_id == definition.id {
-                    return Err(format!(
-                        "Custom model parameter `{}` cannot depend on or conflict with itself.",
-                        definition.id
-                    ));
-                }
-                if !parameter_ids.contains(related_id) {
-                    return Err(format!(
-                        "Custom model parameter `{}` references undeclared parameter `{related_id}`.",
-                        definition.id
-                    ));
-                }
-            }
-            if let Some(related_id) = dependencies.intersection(&conflicts).next() {
-                return Err(format!(
-                    "Custom model parameter `{}` both requires and conflicts with `{related_id}`.",
                     definition.id
                 ));
             }
@@ -1023,6 +989,7 @@ fn validate_request_path(path: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vulcan_ai_contract::ModelParameterDefault;
 
     /// Verifies provider defaults clamp output to a stronger effective context window.
     /// 验证供应商默认输出会收窄到更强来源给出的有效上下文窗口。
@@ -1324,8 +1291,8 @@ mod tests {
                     id: String::from("vendor.flag"),
                     display_name: String::from("Vendor flag"),
                     description: String::from("Controls one verified vendor flag."),
-                    schema: vulcan_ai_contract::ModelParameterSchema::Boolean,
-                    default: ModelParameterDefault::ProviderDefault,
+                    schema: vulcan_ai_contract::ModelParameterSchema::Boolean {},
+                    default: ModelParameterDefault::ProviderDefault {},
                     protocol_ids: Vec::new(),
                     model_ids: Vec::new(),
                     dependent_required: Vec::new(),

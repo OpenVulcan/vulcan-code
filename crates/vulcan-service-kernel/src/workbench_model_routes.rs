@@ -1,5 +1,5 @@
-//! Workbench model selection and OpenRouter secondary route services.
-//! 工作台模型选择与 OpenRouter 二级路由服务。
+//! Workbench model selection and manifest-selected secondary route services.
+//! 工作台模型选择与 Manifest 选择的二级路由服务。
 
 use serde::Deserialize;
 use vulcan_provider_adapters::{
@@ -9,14 +9,15 @@ use vulcan_service_api::ServiceEventEmitter;
 use vulcan_service_api::{
     ProviderModelSecondaryRouteSelection, ProviderModelSecondaryRouteSummary, WorkbenchSnapshot,
 };
-use vulcan_workbench_model::{SessionAddonNamespace, SessionRuntimeStateEntry};
+use vulcan_workbench_model::{SessionAddonNamespace, SessionId, SessionRuntimeStateEntry};
 
 use super::{
     SharedServiceBridgeState, current_unix_millis_text, emit_workbench_event,
-    mutate_provider_configuration, mutate_public_ai_configuration, parse_reasoning_effort,
-    parse_thinking_display_mode, publish_public_ai_workbench, refresh_settings_projection_locked,
-    refresh_workbench_runtime_controls_locked, selected_session_runtime_state_mut,
-    session_addon_state_from_workspace_snapshot, spawn_workspace_session_addon_state_persist_task,
+    mutate_provider_configuration, mutate_provider_configuration_with_state_validation,
+    mutate_public_ai_configuration, parse_reasoning_effort, parse_thinking_display_mode,
+    publish_public_ai_workbench, refresh_settings_projection_locked,
+    refresh_workbench_runtime_controls_locked, session_addon_state_from_workspace_snapshot,
+    spawn_workspace_session_addon_state_persist_task,
 };
 
 mod openrouter_routes;
@@ -49,9 +50,6 @@ pub(super) async fn service_list_workbench_model_secondary_routes(
 ) -> Result<Vec<ProviderModelSecondaryRouteSummary>, String> {
     let provider_id = provider_id.trim().to_string();
     let model_id = model_id.trim().to_string();
-    if provider_id != "openrouter" {
-        return Ok(Vec::new());
-    }
     let (runtime, configuration, connection_id, active_route) = {
         let guard = state
             .lock()
@@ -112,10 +110,7 @@ pub(super) async fn service_select_workbench_model_secondary_route(
 ) -> Result<WorkbenchSnapshot, String> {
     let provider_id = request.provider_id.trim().to_string();
     let model_id = request.model_id.trim().to_string();
-    if provider_id != "openrouter" {
-        return Err(String::from("当前只有 OpenRouter 支持二级供应商选择。"));
-    }
-    let (runtime, connection_id) = {
+    let (runtime, configuration, connection_id) = {
         let guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -136,7 +131,7 @@ pub(super) async fn service_select_workbench_model_secondary_route(
             provider_id.as_str(),
             model_id.as_str(),
         )?;
-        (runtime, active)
+        (runtime, configuration, active)
     };
     let selection = if let Some(route) = request.route {
         let route_id = if route.tag.trim().is_empty() {
@@ -144,13 +139,17 @@ pub(super) async fn service_select_workbench_model_secondary_route(
         } else {
             route.tag.trim()
         };
-        let options = runtime.cached_secondary_routes(connection_id.as_str(), model_id.as_str())?;
+        let options = runtime.cached_secondary_routes(
+            &configuration,
+            connection_id.as_str(),
+            model_id.as_str(),
+        )?;
         let option = options
             .into_iter()
             .find(|option| option.route_id == route_id)
             .ok_or_else(|| {
                 format!(
-                    "OpenRouter route `{route_id}` is not present in the current endpoint catalog."
+                    "Secondary route `{route_id}` is not present in the current endpoint catalog."
                 )
             })?;
         SecondaryRouteSelection::PinnedEndpoint {
@@ -163,10 +162,8 @@ pub(super) async fn service_select_workbench_model_secondary_route(
     };
     let settings_key =
         PersistedAiConfiguration::connection_model_key(connection_id.as_str(), model_id.as_str());
-    let configuration = mutate_public_ai_configuration(
-        &state,
-        "保存 OpenRouter 二级供应商失败",
-        |configuration| {
+    let configuration =
+        mutate_public_ai_configuration(&state, "保存二级供应商失败", |configuration| {
             runtime.resolve_connection_model_selection(
                 configuration,
                 connection_id.as_str(),
@@ -177,9 +174,8 @@ pub(super) async fn service_select_workbench_model_secondary_route(
                 .secondary_routes
                 .insert(settings_key.clone(), selection.clone());
             Ok(())
-        },
-    )
-    .await?;
+        })
+        .await?;
     publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)
 }
 
@@ -256,14 +252,35 @@ fn public_secondary_route_summary(
 pub(super) async fn service_select_workbench_reasoning_effort(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
+    conversation_id: SessionId,
     effort: String,
 ) -> Result<WorkbenchSnapshot, String> {
     let selected_effort =
         parse_reasoning_effort(effort.trim()).ok_or_else(|| format!("未知思考档位：{effort}"))?;
     let (controller_runtime, persist_session_id, persist_workspace_snapshot, workbench) =
-        mutate_provider_configuration(
+        mutate_provider_configuration_with_state_validation(
             &state,
             "保存思考档位失败",
+            |guard| {
+                // workspace proves the caller-owned session still exists at the serialized
+                // transaction boundary; selected_session is deliberately not consulted.
+                // workspace 在串行事务边界证明调用方持有的会话仍然存在；这里有意不读取
+                // selected_session。
+                let workspace = guard
+                    .workspace_snapshot
+                    .as_ref()
+                    .ok_or_else(|| String::from("workspace snapshot is not ready"))?;
+                if !workspace
+                    .sessions
+                    .iter()
+                    .any(|session| session.id == conversation_id)
+                {
+                    return Err(format!(
+                        "Conversation `{conversation_id}` is not an active workspace session."
+                    ));
+                }
+                Ok(())
+            },
             |configuration| {
                 configuration.workbench_reasoning_effort = Some(selected_effort);
                 configuration.workbench_reasoning_effort_explicit = true;
@@ -271,15 +288,22 @@ pub(super) async fn service_select_workbench_reasoning_effort(
             },
             |guard, configuration| {
                 let controller_runtime = guard.controller_runtime.clone();
-                let persist_session_id = guard.workspace_snapshot.as_mut().and_then(|workspace| {
-                    selected_session_runtime_state_mut(workspace).map(
-                        |(session_id, runtime_state)| {
-                            runtime_state.active_reasoning_effort = Some(selected_effort);
-                            runtime_state.active_reasoning_effort_explicit = true;
-                            runtime_state.updated_at = current_unix_millis_text();
-                            session_id
-                        },
-                    )
+                let persist_session_id = guard.workspace_snapshot.as_mut().map(|workspace| {
+                    // runtimeState is addressed by the immutable RPC target, so navigation while
+                    // the write is queued cannot redirect the setting into another session.
+                    // runtimeState 由不可变 RPC 目标寻址，因此写入排队期间的会话导航无法把设置
+                    // 重定向到其他会话。
+                    let runtime_state = workspace
+                        .session_runtime_state
+                        .entry(conversation_id)
+                        .or_insert_with(|| SessionRuntimeStateEntry {
+                            updated_at: current_unix_millis_text(),
+                            ..SessionRuntimeStateEntry::default()
+                        });
+                    runtime_state.active_reasoning_effort = Some(selected_effort);
+                    runtime_state.active_reasoning_effort_explicit = true;
+                    runtime_state.updated_at = current_unix_millis_text();
+                    conversation_id
                 });
                 refresh_workbench_runtime_controls_locked(guard, configuration);
                 (

@@ -5,7 +5,6 @@
 // 在所有协议符号由 LLM 核心重新导出期间保留源码兼容名称。
 extern crate vulcan_llm_core as vulcan_ai_protocols;
 
-mod alibaba_provider_tools;
 pub mod client;
 mod common_model_capabilities;
 pub mod configuration;
@@ -15,18 +14,23 @@ pub mod credentials;
 pub mod custom_model;
 pub mod custom_provider;
 pub mod discovery;
+mod discovery_signature;
 pub mod execution;
 pub mod graph;
 pub(crate) mod media;
 mod native_inference;
 pub mod oauth;
+pub mod provider_manifest;
+pub mod provider_manifest_fixture;
+mod provider_operational_telemetry;
 mod provider_task;
 mod provider_tool_execution;
 pub mod providers;
+#[cfg(test)]
 mod reasoning_catalog;
 pub mod registry;
 pub mod runtime;
-pub mod tool_catalog;
+mod upload_engine;
 
 pub use client::*;
 pub use common_model_capabilities::*;
@@ -42,7 +46,14 @@ pub use graph::*;
 pub use media::{MediaUploadCancellation, MediaUploadProgressCallback};
 pub use native_inference::registered_native_action_binding_id;
 pub use oauth::*;
+pub use provider_manifest::*;
+pub use provider_operational_telemetry::*;
 pub use provider_task::{ProviderAsyncTaskPhase, ProviderAsyncTaskRecord};
 pub use registry::*;
 pub use runtime::*;
-pub use tool_catalog::*;
+// Re-export the shared context override DTO for provider-configuration persistence layers.
+// 为供应商配置持久化层重新导出共享上下文覆盖 DTO。
+pub use vulcan_context::ContextWindowPolicyOverrides;
+// Re-export the exact model capability contract required by typed custom-model documents.
+// 重新导出强类型自定义模型文档所需的精确模型能力契约。
+pub use vulcan_ai_contract::ModelCapabilities;

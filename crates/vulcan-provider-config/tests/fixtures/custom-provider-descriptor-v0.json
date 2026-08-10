@@ -1,0 +1,38 @@
+{
+  "id": "custom:fixture-provider",
+  "display_name": "Provider custom:fixture-provider",
+  "kind": "custom",
+  "category": "unclassified",
+  "credential_directory_visibility": "configured_only",
+  "credential_registration": "direct",
+  "service_entries": [
+    {
+      "id": "default",
+      "display_name": "Compatible API",
+      "kind": "conversation",
+      "base_url": "https://example.test/v1",
+      "credential_profiles": [
+        {
+          "id": "api-key",
+          "display_name": "API Key",
+          "credential_mode": "token",
+          "billing_kind": "provider_managed",
+          "account_usage_query": "unsupported",
+          "allowed_usage_scopes": []
+        }
+      ],
+      "authentication": "bearer_authorization",
+      "model_discovery": "open_ai",
+      "request_projector": "direct",
+      "protocol_routes": [
+        {
+          "protocol_profile_id": "openai-responses.v1",
+          "endpoint_path": "/responses",
+          "model_discovery": "open_ai",
+          "verified": true
+        }
+      ],
+      "allowed_usage_scopes": []
+    }
+  ]
+}

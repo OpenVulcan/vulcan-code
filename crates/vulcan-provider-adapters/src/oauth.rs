@@ -7,7 +7,7 @@ use reqwest::{
     Client, Url,
     header::{HeaderMap, HeaderValue},
 };
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -36,6 +36,12 @@ const GOOGLE_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const GOOGLE_CODE_ASSIST_LOAD_URL: &str =
     "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist";
 const OAUTH_TRANSACTION_TIMEOUT: Duration = Duration::from_secs(600);
+/// Maximum wall-clock time for one OAuth HTTP exchange including its complete response body.
+/// 单次 OAuth HTTP 交换（含完整响应体）的最长墙钟时间。
+const OAUTH_HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+/// Maximum OAuth response bytes retained before closed JSON decoding.
+/// 封闭 JSON 解码前允许保留的 OAuth 响应最大字节数。
+const OAUTH_RESPONSE_MAX_BYTES: usize = 1024 * 1024;
 const OAUTH_CALLBACK_MAX_BYTES: usize = 16 * 1024;
 const OAUTH_MAX_LIVE_TRANSACTIONS: usize = 64;
 const MINIMAX_OAUTH_CLIENT_ID: &str = "659cf4c1-615c-45f6-a5f6-4bf15eb476e5";
@@ -45,14 +51,12 @@ const MINIMAX_GLOBAL_PLATFORM_URL: &str = "https://platform.minimax.io";
 const MINIMAX_CHINA_PLATFORM_URL: &str = "https://platform.minimaxi.com";
 const MINIMAX_GLOBAL_API_URL: &str = "https://api.minimax.io";
 const MINIMAX_CHINA_API_URL: &str = "https://api.minimaxi.com";
-const MINIMAX_OAUTH_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const MINIMAX_OAUTH_MAX_REQUEST_ATTEMPTS: usize = 3;
 const KIMI_CODING_CLIENT_ID: &str = "17e5f671-d194-4dfb-9706-5516cb48c098";
 const KIMI_DEVICE_AUTHORIZATION_URL: &str = "https://auth.kimi.com/api/oauth/device_authorization";
 const KIMI_TOKEN_URL: &str = "https://auth.kimi.com/api/oauth/token";
 const KIMI_DEVICE_FLOW_MAX_LIFETIME: Duration = Duration::from_secs(15 * 60);
 const KIMI_DEVICE_FLOW_DEFAULT_POLL_INTERVAL: Duration = Duration::from_secs(5);
-const KIMI_OAUTH_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Identifies one exact renewable provider authorization flow.
 /// 标识一个精确的可续期供应商授权流程。
@@ -592,7 +596,7 @@ impl OAuthAuthorizationRuntime {
                 ("code_challenge_method", "S256"),
                 ("state", state.as_str()),
             ])
-            .timeout(MINIMAX_OAUTH_REQUEST_TIMEOUT)
+            .timeout(OAUTH_HTTP_REQUEST_TIMEOUT)
             .send()
             .await
             .map_err(|error| format!("MiniMax Device Flow request failed: {error}"))?;
@@ -603,10 +607,11 @@ impl OAuthAuthorizationRuntime {
                 status.as_u16()
             ));
         }
-        let device = response
-            .json::<MiniMaxDeviceCodeResponse>()
-            .await
-            .map_err(|_| String::from("MiniMax Device Flow response was invalid."))?;
+        let device = decode_bounded_oauth_json_response::<MiniMaxDeviceCodeResponse>(
+            response,
+            "MiniMax Device Flow response",
+        )
+        .await?;
         validate_minimax_business_status(device.base_resp.as_ref(), "Device Flow")?;
         if device.state != state {
             return Err(String::from("MiniMax OAuth state validation failed."));
@@ -697,23 +702,22 @@ impl OAuthAuthorizationRuntime {
             .post(KIMI_DEVICE_AUTHORIZATION_URL)
             .form(&[("client_id", KIMI_CODING_CLIENT_ID)])
             .headers(kimi_device_headers(device_id.as_str())?)
-            .timeout(KIMI_OAUTH_REQUEST_TIMEOUT)
+            .timeout(OAUTH_HTTP_REQUEST_TIMEOUT)
             .send()
             .await
             .map_err(|error| format!("Kimi Device Flow request failed: {error}"))?;
         let status = response.status();
-        let body = response
-            .text()
-            .await
-            .map_err(|error| format!("Kimi Device Flow response failed: {error}"))?;
         if !status.is_success() {
             return Err(format!(
                 "Kimi Device Flow request returned HTTP {}.",
                 status.as_u16()
             ));
         }
-        let device: KimiDeviceCodeResponse = serde_json::from_str(body.as_str())
-            .map_err(|_| String::from("Kimi Device Flow response was invalid."))?;
+        let device = decode_bounded_oauth_json_response::<KimiDeviceCodeResponse>(
+            response,
+            "Kimi Device Flow response",
+        )
+        .await?;
         if device.device_code.trim().is_empty()
             || device.user_code.trim().is_empty()
             || device.verification_uri.trim().is_empty()
@@ -1103,8 +1107,8 @@ fn validate_minimax_business_status(
 ///
 /// # Returns
 /// 返回值
-/// The normalized URI only when scheme, host, and port match exactly.
-/// 仅在 Scheme、Host 与端口精确匹配时返回规范化 URI。
+/// The normalized URI only when scheme, host, and port match exactly and no credentials are embedded.
+/// 仅在 Scheme、Host 与端口精确匹配且不嵌入凭据时返回规范化 URI。
 fn validate_minimax_verification_uri(
     region: MiniMaxRegion,
     verification_uri: &str,
@@ -1120,6 +1124,8 @@ fn validate_minimax_verification_uri(
     if actual.scheme() != "https"
         || actual.host_str() != expected.host_str()
         || actual.port_or_known_default() != expected.port_or_known_default()
+        || !actual.username().is_empty()
+        || actual.password().is_some()
     {
         return Err(String::from(
             "MiniMax Device Flow returned an untrusted verification URL.",
@@ -1162,7 +1168,7 @@ async fn poll_minimax_device_flow(
                 ("user_code", flow.user_code.as_str()),
                 ("code_verifier", flow.verifier.as_str()),
             ])
-            .timeout(MINIMAX_OAUTH_REQUEST_TIMEOUT)
+            .timeout(OAUTH_HTTP_REQUEST_TIMEOUT)
             .send()
             .await
             .map_err(|error| format!("MiniMax Device Flow polling failed: {error}"))?;
@@ -1173,10 +1179,11 @@ async fn poll_minimax_device_flow(
                 status.as_u16()
             ));
         }
-        let token = response
-            .json::<MiniMaxTokenResponse>()
-            .await
-            .map_err(|_| String::from("MiniMax Device Flow token response was invalid."))?;
+        let token = decode_bounded_oauth_json_response::<MiniMaxTokenResponse>(
+            response,
+            "MiniMax Device Flow token response",
+        )
+        .await?;
         validate_minimax_business_status(token.base_resp.as_ref(), "Device Flow token exchange")?;
         if token.status == "pending" {
             continue;
@@ -1234,17 +1241,16 @@ async fn poll_kimi_device_flow(
                 ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
             ])
             .headers(kimi_device_headers(flow.device_id.as_str())?)
-            .timeout(KIMI_OAUTH_REQUEST_TIMEOUT)
+            .timeout(OAUTH_HTTP_REQUEST_TIMEOUT)
             .send()
             .await
             .map_err(|error| format!("Kimi Device Flow polling failed: {error}"))?;
         let status = response.status();
-        let body = response
-            .text()
-            .await
-            .map_err(|error| format!("Kimi Device Flow token response failed: {error}"))?;
-        let token: KimiTokenResponse = serde_json::from_str(body.as_str())
-            .map_err(|_| String::from("Kimi Device Flow token response was invalid."))?;
+        let token = decode_bounded_oauth_json_response::<KimiTokenResponse>(
+            response,
+            "Kimi Device Flow token response",
+        )
+        .await?;
         match token.error.as_str() {
             "authorization_pending" | "slow_down" => continue,
             "expired_token" => {
@@ -1339,17 +1345,16 @@ async fn refresh_kimi_oauth_token(
             ("grant_type", "refresh_token"),
         ])
         .headers(kimi_device_headers(device_id)?)
-        .timeout(KIMI_OAUTH_REQUEST_TIMEOUT)
+        .timeout(OAUTH_HTTP_REQUEST_TIMEOUT)
         .send()
         .await
         .map_err(|error| format!("Kimi OAuth refresh failed: {error}"))?;
     let status = response.status();
-    let body = response
-        .text()
-        .await
-        .map_err(|error| format!("Kimi OAuth refresh response failed: {error}"))?;
-    let token: KimiTokenResponse = serde_json::from_str(body.as_str())
-        .map_err(|_| String::from("Kimi OAuth refresh response was invalid."))?;
+    let token = decode_bounded_oauth_json_response::<KimiTokenResponse>(
+        response,
+        "Kimi OAuth refresh response",
+    )
+    .await?;
     if !status.is_success() || !token.error.is_empty() || token.access_token.trim().is_empty() {
         return Err(String::from(
             "Kimi OAuth session cannot be refreshed; reauthorization is required.",
@@ -1441,8 +1446,8 @@ fn kimi_device_model() -> String {
     format!("{operating_system} {}", std::env::consts::ARCH)
 }
 
-/// Accepts HTTPS URLs on the Kimi main domain or any of its subdomains.
-/// 接受 kimi.com 主域及其任意子域名上的 HTTPS URL。
+/// Accepts credential-free standard-port HTTPS URLs on the Kimi main domain or its subdomains.
+/// 接受 kimi.com 主域或其子域上不含凭据且使用标准端口的 HTTPS URL。
 fn validate_kimi_verification_uri(value: &str) -> Result<String, String> {
     let url = Url::parse(value)
         .map_err(|_| String::from("Kimi Device Flow returned an invalid verification URL."))?;
@@ -1453,7 +1458,12 @@ fn validate_kimi_verification_uri(value: &str) -> Result<String, String> {
         }
         None => false,
     };
-    if url.scheme() != "https" || !is_kimi_domain {
+    if url.scheme() != "https"
+        || url.port_or_known_default() != Some(443)
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || !is_kimi_domain
+    {
         return Err(String::from(
             "Kimi Device Flow returned an untrusted verification URL.",
         ));
@@ -1574,7 +1584,7 @@ async fn refresh_minimax_oauth_token(
                 ("refresh_token", tokens.refresh_token.as_str()),
                 ("client_id", MINIMAX_OAUTH_CLIENT_ID),
             ])
-            .timeout(MINIMAX_OAUTH_REQUEST_TIMEOUT)
+            .timeout(OAUTH_HTTP_REQUEST_TIMEOUT)
             .send()
             .await;
         let response = match response {
@@ -1594,10 +1604,11 @@ async fn refresh_minimax_oauth_token(
             last_failure = format!("MiniMax OAuth refresh returned HTTP {}.", status.as_u16());
             continue;
         }
-        let token = response
-            .json::<MiniMaxTokenResponse>()
-            .await
-            .map_err(|_| String::from("MiniMax OAuth refresh response was invalid."))?;
+        let token = decode_bounded_oauth_json_response::<MiniMaxTokenResponse>(
+            response,
+            "MiniMax OAuth refresh response",
+        )
+        .await?;
         validate_minimax_business_status(token.base_resp.as_ref(), "OAuth refresh")?;
         if token.status != "success" || token.access_token.is_none() {
             return Err(String::from(
@@ -2046,6 +2057,7 @@ async fn exchange_authorization_code(
             client
                 .post(flow.token_url.as_str())
                 .form(&form)
+                .timeout(OAUTH_HTTP_REQUEST_TIMEOUT)
                 .send()
                 .await
         }
@@ -2060,6 +2072,7 @@ async fn exchange_authorization_code(
                     "code_verifier": flow.verifier,
                     "state": flow.state,
                 }))
+                .timeout(OAUTH_HTTP_REQUEST_TIMEOUT)
                 .send()
                 .await
         }
@@ -2072,10 +2085,9 @@ async fn exchange_authorization_code(
             status.as_u16()
         ));
     }
-    let token = response
-        .json::<OAuthTokenResponse>()
-        .await
-        .map_err(|_| String::from("OAuth token response was invalid."))?;
+    let token =
+        decode_bounded_oauth_json_response::<OAuthTokenResponse>(response, "OAuth token response")
+            .await?;
     let issued_at_unix_ms = unix_millis()?;
     let expires_at_unix_ms = issued_at_unix_ms
         .checked_add(
@@ -2191,6 +2203,7 @@ async fn load_google_code_assist_project(
                 "ideType": "ANTIGRAVITY"
             }
         }))
+        .timeout(OAUTH_HTTP_REQUEST_TIMEOUT)
         .send()
         .await
         .map_err(|error| format!("Google Code Assist account validation failed: {error}"))?;
@@ -2201,10 +2214,11 @@ async fn load_google_code_assist_project(
             status.as_u16()
         ));
     }
-    let body = response
-        .json::<GoogleCodeAssistLoadResponse>()
-        .await
-        .map_err(|_| String::from("Google Code Assist account response was invalid."))?;
+    let body = decode_bounded_oauth_json_response::<GoogleCodeAssistLoadResponse>(
+        response,
+        "Google Code Assist account response",
+    )
+    .await?;
     [
         body.cloudaicompanion_project,
         body.project_id,
@@ -2257,7 +2271,12 @@ async fn refresh_oauth_token(
             if let Some(client_secret) = client_secret {
                 form.insert("client_secret", client_secret.to_string());
             }
-            client.post(token_url).form(&form).send().await
+            client
+                .post(token_url)
+                .form(&form)
+                .timeout(OAUTH_HTTP_REQUEST_TIMEOUT)
+                .send()
+                .await
         }
         OAuthTokenBodyKind::JsonWithState => {
             client
@@ -2267,20 +2286,21 @@ async fn refresh_oauth_token(
                     "client_id": client_id,
                     "refresh_token": tokens.refresh_token,
                 }))
+                .timeout(OAUTH_HTTP_REQUEST_TIMEOUT)
                 .send()
                 .await
         }
     }
     .map_err(|error| format!("OAuth token refresh request failed: {error}"))?;
     let status = response.status();
-    let body = response
-        .bytes()
-        .await
-        .map_err(|error| format!("OAuth token refresh response failed: {error}"))?;
+    let body = read_bounded_oauth_response(response, "OAuth token refresh response").await?;
     if !status.is_success() {
-        let error_id = serde_json::from_slice::<OAuthErrorResponse>(&body)
-            .ok()
-            .and_then(|error| error.error);
+        let error_id = decode_bounded_oauth_json::<OAuthErrorResponse>(
+            body.as_slice(),
+            "OAuth token refresh error response",
+        )
+        .ok()
+        .and_then(|error| error.error);
         if status.as_u16() == 400
             || status.as_u16() == 401
             || error_id.as_deref() == Some("invalid_grant")
@@ -2294,8 +2314,7 @@ async fn refresh_oauth_token(
             status.as_u16()
         ));
     }
-    serde_json::from_slice::<OAuthTokenResponse>(&body)
-        .map_err(|_| String::from("OAuth token refresh response was invalid."))
+    decode_bounded_oauth_json::<OAuthTokenResponse>(body.as_slice(), "OAuth token refresh response")
 }
 
 /// Merges one refresh response with stable identity and refresh-token fields.
@@ -2408,6 +2427,93 @@ async fn finish_transaction(
     }
 }
 
+/// Reads one OAuth response body without retaining bytes beyond the shared credential boundary.
+/// 在不保留超过共享凭据边界字节的前提下读取一份 OAuth 响应体。
+///
+/// # Parameters
+/// 参数
+/// `response` is already covered by the request-level deadline and `label` scopes diagnostics.
+/// `response` 已受请求级截止时间约束，`label` 限定诊断范围。
+///
+/// # Returns
+/// 返回值
+/// Exact bytes within the hard cap, or a controlled transport or size failure without body data.
+/// 返回硬上限内的精确字节，或不包含正文数据的受控传输或大小失败。
+async fn read_bounded_oauth_response(
+    mut response: reqwest::Response,
+    label: &str,
+) -> Result<Vec<u8>, String> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > OAUTH_RESPONSE_MAX_BYTES as u64)
+    {
+        return Err(format!(
+            "{label} exceeds the {OAUTH_RESPONSE_MAX_BYTES} byte limit."
+        ));
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|error| format!("{label} could not be read: {error}"))?
+    {
+        if body.len().saturating_add(chunk.len()) > OAUTH_RESPONSE_MAX_BYTES {
+            return Err(format!(
+                "{label} exceeds the {OAUTH_RESPONSE_MAX_BYTES} byte limit."
+            ));
+        }
+        body.extend_from_slice(chunk.as_ref());
+    }
+    Ok(body)
+}
+
+/// Decodes one byte-bounded OAuth JSON body under the shared depth and node limits.
+/// 在共享深度与节点数量限制下解码一份受字节约束的 OAuth JSON 正文。
+///
+/// # Parameters
+/// 参数
+/// `body` is exact response data and `label` scopes non-secret diagnostics.
+/// `body` 是精确响应数据，`label` 限定不含秘密的诊断范围。
+///
+/// # Returns
+/// 返回值
+/// The closed response type or a controlled syntax, shape, depth, or node-count failure.
+/// 返回封闭响应类型，或受控的语法、结构、深度或节点数量失败。
+fn decode_bounded_oauth_json<Response>(body: &[u8], label: &str) -> Result<Response, String>
+where
+    Response: DeserializeOwned,
+{
+    let value: serde_json::Value =
+        serde_json::from_slice(body).map_err(|_| format!("{label} was invalid."))?;
+    crate::provider_manifest::validate_runtime_json_bounds(&value, label)?;
+    serde_json::from_value(value).map_err(|_| format!("{label} was invalid."))
+}
+
+/// Reads and decodes one successful OAuth JSON response through all shared bounds.
+/// 通过全部共享边界读取并解码一份成功的 OAuth JSON 响应。
+///
+/// # Parameters
+/// 参数
+/// `response` owns the network body and `label` scopes non-secret diagnostics.
+/// `response` 持有网络正文，`label` 限定不含秘密的诊断范围。
+///
+/// # Returns
+/// 返回值
+/// The closed response type or the first transport, size, JSON, depth, or shape failure.
+/// 返回封闭响应类型，或首个传输、大小、JSON、深度或结构失败。
+async fn decode_bounded_oauth_json_response<Response>(
+    response: reqwest::Response,
+    label: &str,
+) -> Result<Response, String>
+where
+    Response: DeserializeOwned,
+{
+    let body = read_bounded_oauth_response(response, label).await?;
+    decode_bounded_oauth_json(body.as_slice(), label)
+}
+
+/// Returns the current Unix timestamp in milliseconds.
+/// 返回当前 Unix 毫秒时间戳。
 fn unix_millis() -> Result<u64, String> {
     let value = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -2549,6 +2655,10 @@ mod tests {
         assert!(validate_kimi_verification_uri("https://notkimi.com/device").is_err());
         assert!(validate_kimi_verification_uri("https://kimi.com.evil.example/device").is_err());
         assert!(validate_kimi_verification_uri("http://auth.kimi.com/device").is_err());
+        assert!(
+            validate_kimi_verification_uri("https://user:secret@auth.kimi.com/device").is_err()
+        );
+        assert!(validate_kimi_verification_uri("https://auth.kimi.com:444/device").is_err());
     }
 
     /// Verifies Kimi receives the provider-observed operating-system label.
@@ -2624,6 +2734,20 @@ mod tests {
             validate_minimax_verification_uri(
                 MiniMaxRegion::China,
                 "https://account.minimaxi.com/oauth-authorize?user_code=TEST"
+            )
+            .is_err()
+        );
+        assert!(
+            validate_minimax_verification_uri(
+                MiniMaxRegion::Global,
+                "https://user:secret@platform.minimax.io/oauth-authorize?user_code=TEST"
+            )
+            .is_err()
+        );
+        assert!(
+            validate_minimax_verification_uri(
+                MiniMaxRegion::Global,
+                "https://platform.minimax.io:444/oauth-authorize?user_code=TEST"
             )
             .is_err()
         );

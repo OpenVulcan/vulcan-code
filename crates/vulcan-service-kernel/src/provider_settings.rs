@@ -3,8 +3,9 @@
 
 use serde::Deserialize;
 use vulcan_agent_runtime::provider_config::{
+    PROVIDER_RATE_LIMIT_RETRY_MAX_RETRIES, PROVIDER_RETRY_MAX_RETRIES,
     PersistedProviderRateLimitRetryConfiguration, PersistedProviderRetryConfiguration,
-    ProviderConfigurationFile,
+    ProviderConfigurationFile, normalize_provider_rate_limit_retry_max_retries,
 };
 use vulcan_service_api::{
     ProviderRateLimitRetrySettingsSummary, ProviderRetrySettingsSummary, ServiceEventEmitter,
@@ -19,10 +20,6 @@ use crate::{
 /// Hard delay ceiling shared by the retry settings page and runtime rate-limit policy.
 /// 重试设置页面与运行时限流策略共享的硬等待上限。
 const PROVIDER_RETRY_SETTINGS_MAX_DELAY_MS: u64 = 1_800_000;
-
-/// Maximum finite rate-limit retry count accepted from the settings page.
-/// 设置页面允许提交的最大有限限流重试次数。
-const PROVIDER_RATE_LIMIT_SETTINGS_MAX_RETRIES: u32 = 100_000;
 
 /// Provider retry settings save request sent by the WebUI settings page.
 /// WebUI 设置页发送的 Provider 重试设置保存请求。
@@ -63,8 +60,8 @@ pub(super) struct ProviderRetrySettingsSaveRequest {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ProviderRateLimitRetrySettingsSaveRequest {
-    /// Maximum retry count, where zero means retry until cancellation.
-    /// 最大重试次数；零表示持续重试直至取消。
+    /// Maximum finite retry count; legacy zero requests migrate to the host hard ceiling.
+    /// 最大有限重试次数；旧版零值请求会迁移到宿主硬上限。
     max_retries: u32,
     /// Delay before the first rate-limit retry in milliseconds.
     /// 第一次限流重试前的等待毫秒数。
@@ -95,7 +92,9 @@ pub(super) async fn service_save_provider_retry_settings(
         respect_retry_after: request.respect_retry_after,
         retry_429: request.retry_429,
         rate_limit: PersistedProviderRateLimitRetryConfiguration {
-            max_retries: request.rate_limit.max_retries,
+            max_retries: normalize_provider_rate_limit_retry_max_retries(
+                request.rate_limit.max_retries,
+            ),
             initial_delay_ms: request.rate_limit.initial_delay_ms,
             max_delay_ms: request.rate_limit.max_delay_ms,
             backoff_factor: request.rate_limit.backoff_factor_milli as f64 / 1_000.0,
@@ -139,7 +138,7 @@ pub(crate) fn provider_retry_settings(
     );
     ProviderRetrySettingsSummary {
         enabled: retry.enabled,
-        max_retries: retry.max_retries.min(100),
+        max_retries: retry.max_retries.min(PROVIDER_RETRY_MAX_RETRIES),
         initial_delay_ms: retry.initial_delay_ms.max(1),
         max_delay_ms: retry.max_delay_ms.max(retry.initial_delay_ms.max(1)),
         backoff_factor_milli: normalized_backoff_factor_milli(retry.backoff_factor),
@@ -147,7 +146,9 @@ pub(crate) fn provider_retry_settings(
         respect_retry_after: retry.respect_retry_after,
         retry_429: retry.retry_429,
         rate_limit: ProviderRateLimitRetrySettingsSummary {
-            max_retries: retry.rate_limit.max_retries,
+            max_retries: normalize_provider_rate_limit_retry_max_retries(
+                retry.rate_limit.max_retries,
+            ),
             initial_delay_ms: rate_limit_initial_delay_ms,
             max_delay_ms: rate_limit_max_delay_ms,
             backoff_factor_milli: normalized_backoff_factor_milli(retry.rate_limit.backoff_factor),
@@ -160,8 +161,10 @@ pub(crate) fn provider_retry_settings(
 fn validate_provider_retry_settings_request(
     request: &ProviderRetrySettingsSaveRequest,
 ) -> Result<(), String> {
-    if request.max_retries > 100 {
-        return Err(String::from("普通重试最大次数必须位于 0 到 100 之间。"));
+    if request.max_retries > PROVIDER_RETRY_MAX_RETRIES {
+        return Err(format!(
+            "普通重试最大次数必须位于 0 到 {PROVIDER_RETRY_MAX_RETRIES} 之间。"
+        ));
     }
     validate_retry_delay_range(
         "普通重试",
@@ -173,9 +176,9 @@ fn validate_provider_retry_settings_request(
     if request.jitter_percent > 80 {
         return Err(String::from("普通重试抖动百分比必须位于 0 到 80 之间。"));
     }
-    if request.rate_limit.max_retries > PROVIDER_RATE_LIMIT_SETTINGS_MAX_RETRIES {
+    if request.rate_limit.max_retries > PROVIDER_RATE_LIMIT_RETRY_MAX_RETRIES {
         return Err(format!(
-            "限流重试最大次数必须位于 0 到 {PROVIDER_RATE_LIMIT_SETTINGS_MAX_RETRIES} 之间。"
+            "限流重试最大次数必须位于 0 到 {PROVIDER_RATE_LIMIT_RETRY_MAX_RETRIES} 之间。"
         ));
     }
     validate_retry_delay_range(
@@ -247,7 +250,7 @@ mod tests {
             respect_retry_after: true,
             retry_429: true,
             rate_limit: ProviderRateLimitRetrySettingsSaveRequest {
-                max_retries: 0,
+                max_retries: PROVIDER_RATE_LIMIT_RETRY_MAX_RETRIES,
                 initial_delay_ms: 5_000,
                 max_delay_ms: 1_800_000,
                 backoff_factor_milli: 2_000,
@@ -273,8 +276,23 @@ mod tests {
         assert_eq!(summary.rate_limit.backoff_factor_milli, 1_000);
     }
 
-    /// Verifies validation accepts fixed unbounded retries and rejects an inverted delay range.
-    /// 验证校验会接受固定间隔的持续重试，并拒绝倒置的等待范围。
+    /// Verifies a legacy zero retry sentinel is projected as the finite host ceiling.
+    /// 验证旧版零重试哨兵会被投影为有限宿主上限。
+    #[test]
+    fn retry_settings_summary_normalizes_legacy_zero_retry_sentinel() {
+        let mut configuration = ProviderConfigurationFile::default();
+        configuration.retry.rate_limit.max_retries = 0;
+
+        let summary = provider_retry_settings(&configuration);
+
+        assert_eq!(
+            summary.rate_limit.max_retries,
+            PROVIDER_RATE_LIMIT_RETRY_MAX_RETRIES
+        );
+    }
+
+    /// Verifies validation accepts a finite fixed schedule and rejects an inverted delay range.
+    /// 验证校验会接受有限固定间隔调度，并拒绝倒置的等待范围。
     #[test]
     fn retry_settings_validation_enforces_cross_field_delay_order() {
         let mut valid_request = valid_retry_request();

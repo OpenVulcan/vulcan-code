@@ -661,10 +661,18 @@ export interface MediaUploadProgressChangedDelta {
   // Existing conversation id, or null while a draft is being prepared.
   // 已有会话标识；草稿准备期间为空。
   conversationId?: string | null;
-  // Exact provider and model selected for this submission.
-  // 本次提交选定的精确供应商与模型。
+  // Exact non-secret route selected for this submission.
+  // 本次提交选定的精确非秘密路由。
   providerId: string;
+  serviceEntryId: string;
+  connectionId: string;
   modelId: string;
+  protocolProfileId: string;
+  manifestRevision: number;
+  manifestGeneration: number;
+  routeRevision: string;
+  operationId: string;
+  uploadChannelId: string;
   // User-visible source metadata.
   // 面向用户展示的源文件元数据。
   fileName: string;

@@ -310,8 +310,8 @@ export interface ProviderRetrySettingsSummary {
 // ProviderRateLimitRetrySettingsSummary describes the dedicated rate-limit schedule.
 // ProviderRateLimitRetrySettingsSummary 描述专用限流调度规则。
 export interface ProviderRateLimitRetrySettingsSummary {
-  // Maximum retry count, where zero means retry until user cancellation.
-  // 最大重试次数；零表示持续重试直至用户取消。
+  // Maximum finite retry count after host normalization.
+  // 宿主规范化后的最大有限重试次数。
   maxRetries: number;
   // Delay before the first rate-limit retry in milliseconds.
   // 第一次限流重试前的等待毫秒数。

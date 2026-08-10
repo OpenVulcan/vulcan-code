@@ -1,0 +1,305 @@
+{
+  "schema_version": "vulcan.provider-manifest.v1",
+  "provider_id": "tavily",
+  "revision": 2,
+  "published_at": "2026-08-06T00:00:00Z",
+  "engine_contract": {
+    "minimum_manifest_engine": 1,
+    "required_protocol_profiles": [],
+    "required_execution_primitives": [
+      "http_json_sync"
+    ],
+    "required_upload_primitives": [],
+    "required_transformers": [
+      "rename_json_pointer",
+      "set_default_if_missing",
+      "set_literal"
+    ]
+  },
+  "display": {
+    "name": "Tavily",
+    "category": "official",
+    "credential_directory_visibility": "configured_only"
+  },
+  "services": [
+    {
+      "service_entry_id": "public-api",
+      "display_name": "Tavily Search API",
+      "kind": "provider_tools",
+      "base_url": "https://api.tavily.com",
+      "credential_profiles": [
+        {
+          "credential_profile_id": "api-key",
+          "display_name": "API Key",
+          "credential_mode": "token",
+          "billing_kind": "provider_managed",
+          "account_usage_query": "tavily_credits",
+          "key_prefix": "tvly-",
+          "allowed_usage_scopes": [
+            "interactive_agent",
+            "internal_background",
+            "external_service"
+          ]
+        }
+      ],
+      "default_authentication": "bearer_authorization",
+      "request_projector": "direct",
+      "protocol_routes": []
+    }
+  ],
+  "model_defaults": {
+    "default_enabled": true,
+    "catalog_membership_policy": "declared_only",
+    "unknown_model_policy": "declared_rule_required",
+    "supported_protocols": [],
+    "default_usage_profile_refs": [],
+    "default_request_profile_refs": [],
+    "default_response_profile_refs": [],
+    "default_operation_refs": []
+  },
+  "model_rules": [],
+  "usage_profiles": [],
+  "request_profiles": [
+    {
+      "profile_id": "tavily.search.request.v1",
+      "description": "Project canonical search arguments into the reviewed Tavily JSON body.",
+      "payload": {
+        "profile_id": "tavily.search.request.v1",
+        "revision": 1,
+        "steps": [
+          {"op": "set_literal", "path": "/search_depth", "value": "basic"},
+          {"op": "set_default_if_missing", "path": "/max_results", "value": 5},
+          {"op": "set_literal", "path": "/include_answer", "value": false},
+          {"op": "set_literal", "path": "/include_raw_content", "value": false},
+          {"op": "set_literal", "path": "/include_usage", "value": true}
+        ]
+      }
+    },
+    {
+      "profile_id": "tavily.extract.request.v1",
+      "description": "Project canonical extraction arguments into the reviewed Tavily JSON body.",
+      "payload": {
+        "profile_id": "tavily.extract.request.v1",
+        "revision": 1,
+        "steps": [
+          {"op": "set_default_if_missing", "path": "/chunks_per_source", "value": 3},
+          {"op": "set_default_if_missing", "path": "/extract_depth", "value": "basic"},
+          {"op": "set_default_if_missing", "path": "/format", "value": "markdown"},
+          {"op": "set_default_if_missing", "path": "/include_images", "value": false},
+          {"op": "set_default_if_missing", "path": "/include_favicon", "value": false},
+          {"op": "rename_json_pointer", "from": "/timeout_seconds", "to": "/timeout"},
+          {"op": "set_literal", "path": "/include_usage", "value": true}
+        ]
+      }
+    }
+  ],
+  "response_profiles": [],
+  "upload_channels": [],
+  "operations": [
+    {
+      "operation_id": "tavily.tavily_search",
+      "operation": "web_search",
+      "carrier": "provider_tool",
+      "input_resources": [],
+      "output_resources": [],
+      "tool_target_refs": [
+        "public-api.search"
+      ],
+      "request_profile_refs": ["tavily.search.request.v1"],
+      "response_profile_refs": [],
+      "upload_channel_refs": [],
+      "upload_bindings": [],
+      "timeout_ms": 60000,
+      "idempotent": false
+    },
+    {
+      "operation_id": "tavily.tavily_extract",
+      "operation": "web_extract",
+      "carrier": "provider_tool",
+      "input_resources": [],
+      "output_resources": [],
+      "tool_target_refs": [
+        "public-api.extract"
+      ],
+      "request_profile_refs": ["tavily.extract.request.v1"],
+      "response_profile_refs": [],
+      "upload_channel_refs": [],
+      "upload_bindings": [],
+      "timeout_ms": 60000,
+      "idempotent": false
+    }
+  ],
+  "tool_targets": [
+    {
+      "target_id": "public-api.search",
+      "description": "Search the public web with the selected Tavily account and return provider-backed structured results.",
+      "service_entry_id": "public-api",
+      "credential_profile_ids": [
+        "api-key"
+      ],
+      "upstream_target_id": "search",
+      "display_name": "Tavily Search",
+      "tool_id": "vulcan_web_search",
+      "capability": "web_search",
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "description": "Tavily structured web search arguments.",
+        "additionalProperties": false,
+        "properties": {
+          "query": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The exact web search query."
+          },
+          "max_results": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 20,
+            "default": 5,
+            "description": "Maximum number of ordered results."
+          },
+          "include_domains": {
+            "type": "array",
+            "maxItems": 300,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Optional exact domain allowlist."
+          },
+          "exclude_domains": {
+            "type": "array",
+            "maxItems": 150,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Optional exact domain blocklist."
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "output": {
+        "kind": "search",
+        "source_path": "results",
+        "normalized_result_path": "search",
+        "resource_kind": null,
+        "mime_types": []
+      },
+      "execution": {
+        "endpoint_path": "/search",
+        "authentication": "bearer_authorization",
+        "adapter": "generic_json",
+        "execution_kind": "http_json_sync"
+      }
+    },
+    {
+      "target_id": "public-api.extract",
+      "description": "Extract structured content from one or more HTTPS pages with the selected Tavily account.",
+      "service_entry_id": "public-api",
+      "credential_profile_ids": [
+        "api-key"
+      ],
+      "upstream_target_id": "extract",
+      "display_name": "Tavily Extract",
+      "tool_id": "vulcan_web_extract",
+      "capability": "web_extract",
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "description": "Tavily web extraction arguments.",
+        "additionalProperties": false,
+        "properties": {
+          "urls": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 20,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "format": "uri",
+              "pattern": "^https://"
+            },
+            "description": "One to twenty credential-free HTTPS URLs."
+          },
+          "query": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional query used to retain relevance-ranked chunks."
+          },
+          "chunks_per_source": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5,
+            "default": 3,
+            "description": "Relevant chunks per source; valid only when query is present."
+          },
+          "extract_depth": {
+            "type": "string",
+            "enum": [
+              "basic",
+              "advanced"
+            ],
+            "default": "basic",
+            "description": "Provider extraction depth."
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "markdown",
+              "text"
+            ],
+            "default": "markdown",
+            "description": "Extracted content format."
+          },
+          "include_images": {
+            "type": "boolean",
+            "default": false,
+            "description": "Request extracted image URLs."
+          },
+          "include_favicon": {
+            "type": "boolean",
+            "default": false,
+            "description": "Request each page favicon URL."
+          },
+          "timeout_seconds": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 60,
+            "description": "Provider extraction timeout in seconds."
+          }
+        },
+        "required": [
+          "urls"
+        ],
+        "dependentRequired": {
+          "chunks_per_source": [
+            "query"
+          ]
+        }
+      },
+      "output": {
+        "kind": "extract",
+        "source_path": "results",
+        "normalized_result_path": "extract",
+        "resource_kind": null,
+        "mime_types": []
+      },
+      "execution": {
+        "endpoint_path": "/extract",
+        "authentication": "bearer_authorization",
+        "adapter": "generic_json",
+        "execution_kind": "http_json_sync"
+      }
+    }
+  ],
+  "provenance": {
+    "status": "migrated",
+    "sources": []
+  }
+}

@@ -3,19 +3,19 @@
 
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Describes how an unset model parameter behaves.
 /// 描述一个未设置模型参数的行为。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(deny_unknown_fields, tag = "type", rename_all = "snake_case")]
 pub enum ModelParameterDefault {
     /// Omits the wire field.
     /// 省略 Wire 字段。
-    Omit,
+    Omit {},
     /// Follows the provider default without injecting a value.
     /// 遵循供应商默认值且不注入数值。
-    ProviderDefault,
+    ProviderDefault {},
     /// Uses one explicit registered value.
     /// 使用一个显式注册值。
     ExplicitValue {
@@ -25,17 +25,17 @@ pub enum ModelParameterDefault {
     },
     /// Requires the user or adapter to provide a value.
     /// 要求用户或适配器提供数值。
-    RequiredValue,
+    RequiredValue {},
 }
 
 /// Defines one closed model-parameter value schema.
 /// 定义一个封闭的模型参数值 Schema。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(deny_unknown_fields, tag = "type", rename_all = "snake_case")]
 pub enum ModelParameterSchema {
     /// Boolean value.
     /// 布尔值。
-    Boolean,
+    Boolean {},
     /// Bounded integer value.
     /// 有界整数值。
     Integer {
@@ -122,7 +122,12 @@ pub enum ModelParameterSchema {
 /// Carries one strongly typed model parameter value.
 /// 承载一个强类型模型参数值。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", content = "value", rename_all = "snake_case")]
+#[serde(
+    deny_unknown_fields,
+    tag = "type",
+    content = "value",
+    rename_all = "snake_case"
+)]
 pub enum ModelParameterValue {
     /// Boolean value.
     /// 布尔值。
@@ -147,6 +152,7 @@ pub enum ModelParameterValue {
 /// Defines one adapter-registered model-specific parameter.
 /// 定义一个由适配器注册的模型独立参数。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ModelParameterDefinition {
     /// Stable namespaced parameter identifier.
     /// 稳定的命名空间参数标识。
@@ -185,6 +191,62 @@ pub struct ModelParameterDefinition {
 }
 
 impl ModelParameterDefinition {
+    /// Validates the complete parameter declaration before it becomes runtime authority.
+    /// 在参数声明成为运行时权威前校验其完整定义。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `Ok(())` for a closed, internally consistent declaration; otherwise a controlled message.
+    /// 对封闭且内部一致的声明返回 `Ok(())`，否则返回受控消息。
+    pub fn validate_definition(&self) -> Result<(), String> {
+        if self.id.trim().is_empty() {
+            return Err(String::from("Model parameter identifier is required."));
+        }
+        if self.display_name.trim().is_empty() {
+            return Err(format!(
+                "Model parameter `{}` requires a display name.",
+                self.id
+            ));
+        }
+        if self.description.trim().is_empty() {
+            return Err(format!(
+                "Model parameter `{}` requires a description.",
+                self.id
+            ));
+        }
+        if self.evidence_revision.trim().is_empty() {
+            return Err(format!(
+                "Model parameter `{}` requires an evidence revision.",
+                self.id
+            ));
+        }
+        validate_unique_non_empty_identifiers(
+            self.protocol_ids.as_slice(),
+            self.id.as_str(),
+            "protocol",
+        )?;
+        validate_unique_non_empty_identifiers(
+            self.model_ids.as_slice(),
+            self.id.as_str(),
+            "model",
+        )?;
+        validate_unique_non_empty_identifiers(
+            self.dependent_required.as_slice(),
+            self.id.as_str(),
+            "dependency",
+        )?;
+        validate_unique_non_empty_identifiers(
+            self.conflicts.as_slice(),
+            self.id.as_str(),
+            "conflict",
+        )?;
+        validate_schema_definition(&self.schema, self.id.as_str())?;
+        if let ModelParameterDefault::ExplicitValue { value } = &self.default {
+            self.validate_value(value)?;
+        }
+        Ok(())
+    }
+
     /// Validates one value against this definition.
     /// 根据当前定义校验一个值。
     ///
@@ -202,6 +264,322 @@ impl ModelParameterDefinition {
     }
 }
 
+/// Validates one complete effective model-parameter definition set and its relationships.
+/// 校验一组完整生效模型参数定义及其关系。
+///
+/// # Parameters
+/// 参数
+/// `definitions` is the post-inheritance parameter set for one exact model/protocol authority.
+/// `definitions` 是一个精确模型/协议权威在继承后的参数集合。
+///
+/// # Returns
+/// 返回值
+/// Success only when identifiers are unique and every dependency/conflict reference is coherent.
+/// 仅当标识唯一且每个依赖/冲突引用均一致时返回成功。
+pub fn validate_model_parameter_definition_set(
+    definitions: &[ModelParameterDefinition],
+) -> Result<(), String> {
+    let mut by_id = BTreeMap::new();
+    for definition in definitions {
+        definition.validate_definition()?;
+        if by_id.insert(definition.id.as_str(), definition).is_some() {
+            return Err(format!(
+                "Model parameter `{}` is declared more than once.",
+                definition.id
+            ));
+        }
+    }
+    for definition in definitions {
+        let dependencies = definition
+            .dependent_required
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        let conflicts = definition
+            .conflicts
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        for related_id in dependencies.union(&conflicts) {
+            if *related_id == definition.id {
+                return Err(format!(
+                    "Model parameter `{}` cannot depend on or conflict with itself.",
+                    definition.id
+                ));
+            }
+            if !by_id.contains_key(related_id) {
+                return Err(format!(
+                    "Model parameter `{}` references undeclared parameter `{related_id}`.",
+                    definition.id
+                ));
+            }
+        }
+        if let Some(related_id) = dependencies.intersection(&conflicts).next() {
+            return Err(format!(
+                "Model parameter `{}` both requires and conflicts with `{related_id}`.",
+                definition.id
+            ));
+        }
+        for dependency_id in dependencies {
+            let Some(dependency) = by_id.get(dependency_id) else {
+                return Err(format!(
+                    "Model parameter `{}` references undeclared dependency `{dependency_id}`.",
+                    definition.id
+                ));
+            };
+            validate_dependency_scope(definition, dependency)?;
+        }
+    }
+    Ok(())
+}
+
+/// Validates that one dependency is available everywhere its dependent parameter is available.
+/// 校验一个依赖项在依赖它的参数可用之处均同样可用。
+///
+/// # Parameters
+/// 参数
+/// `definition` is the dependent parameter and `dependency` is its declared prerequisite.
+/// `definition` 是依赖方参数，`dependency` 是其声明的前置参数。
+///
+/// # Returns
+/// 返回值
+/// Success when protocol and model allowlists of the dependency cover the dependent scope.
+/// 当依赖项的协议和模型白名单覆盖依赖方作用域时返回成功。
+fn validate_dependency_scope(
+    definition: &ModelParameterDefinition,
+    dependency: &ModelParameterDefinition,
+) -> Result<(), String> {
+    if !scope_allowlist_covers(&dependency.protocol_ids, &definition.protocol_ids) {
+        return Err(format!(
+            "Model parameter `{}` depends on `{}`, whose protocol scope does not cover it.",
+            definition.id, dependency.id
+        ));
+    }
+    if !scope_allowlist_covers(&dependency.model_ids, &definition.model_ids) {
+        return Err(format!(
+            "Model parameter `{}` depends on `{}`, whose model scope does not cover it.",
+            definition.id, dependency.id
+        ));
+    }
+    Ok(())
+}
+
+/// Reports whether one empty-means-all allowlist covers another allowlist.
+/// 报告一个“空集合表示全部”的白名单是否覆盖另一个白名单。
+///
+/// # Parameters
+/// 参数
+/// `authority` is the prerequisite scope and `dependent` is the scope requiring coverage.
+/// `authority` 是前置项作用域，`dependent` 是要求被覆盖的作用域。
+///
+/// # Returns
+/// 返回值
+/// `true` when every dependent identity is admitted by the authority.
+/// 当权威允许每个依赖方身份时返回 `true`。
+fn scope_allowlist_covers(authority: &[String], dependent: &[String]) -> bool {
+    authority.is_empty()
+        || (!dependent.is_empty()
+            && dependent
+                .iter()
+                .all(|identity| authority.contains(identity)))
+}
+
+/// Validates one identifier list without guessing or silently collapsing duplicates.
+/// 校验一个标识列表，不猜测也不静默折叠重复项。
+///
+/// # Parameters
+/// 参数
+/// `values` is the declared list, `parameter_id` identifies its owner, and `kind` names the list.
+/// `values` 是声明列表，`parameter_id` 标识其所有者，`kind` 命名该列表。
+///
+/// # Returns
+/// 返回值
+/// Success only when every identifier is non-empty and unique.
+/// 仅当每个标识均非空且唯一时返回成功。
+fn validate_unique_non_empty_identifiers(
+    values: &[String],
+    parameter_id: &str,
+    kind: &str,
+) -> Result<(), String> {
+    let mut unique = BTreeSet::new();
+    for value in values {
+        if value.trim().is_empty() {
+            return Err(format!(
+                "Model parameter `{parameter_id}` contains an empty {kind} identifier."
+            ));
+        }
+        if !unique.insert(value.as_str()) {
+            return Err(format!(
+                "Model parameter `{parameter_id}` contains duplicate {kind} identifier `{value}`."
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Validates one recursive model-parameter schema as a closed non-empty value domain.
+/// 将一个递归模型参数 Schema 校验为封闭且非空的值域。
+///
+/// # Parameters
+/// 参数
+/// `schema` is the declared value schema and `path` identifies the current recursive location.
+/// `schema` 是声明的值 Schema，`path` 标识当前递归位置。
+///
+/// # Returns
+/// 返回值
+/// Success only when bounds, collections, and required-property references are consistent.
+/// 仅当边界、集合及必填属性引用保持一致时返回成功。
+fn validate_schema_definition(schema: &ModelParameterSchema, path: &str) -> Result<(), String> {
+    match schema {
+        ModelParameterSchema::Boolean {} => Ok(()),
+        ModelParameterSchema::Integer {
+            minimum,
+            maximum,
+            step,
+        } => {
+            if minimum
+                .zip(*maximum)
+                .is_some_and(|(minimum, maximum)| minimum > maximum)
+            {
+                return Err(format!(
+                    "Model parameter schema `{path}` has a minimum above its maximum."
+                ));
+            }
+            if step.is_some_and(|step| step == 0) {
+                return Err(format!(
+                    "Model parameter schema `{path}` has an invalid zero step."
+                ));
+            }
+            Ok(())
+        }
+        ModelParameterSchema::Decimal {
+            minimum,
+            maximum,
+            exclusive_minimum,
+            exclusive_maximum,
+        } => {
+            for (label, bound) in [
+                ("minimum", minimum),
+                ("maximum", maximum),
+                ("exclusive minimum", exclusive_minimum),
+                ("exclusive maximum", exclusive_maximum),
+            ] {
+                if let Some(bound) = bound {
+                    validate_decimal_bound(bound, path, label)?;
+                }
+            }
+            validate_decimal_interval(minimum, maximum, false, false, path)?;
+            validate_decimal_interval(minimum, exclusive_maximum, false, true, path)?;
+            validate_decimal_interval(exclusive_minimum, maximum, true, false, path)?;
+            validate_decimal_interval(exclusive_minimum, exclusive_maximum, true, true, path)
+        }
+        ModelParameterSchema::String {
+            minimum_length,
+            maximum_length,
+        } => {
+            if minimum_length
+                .zip(*maximum_length)
+                .is_some_and(|(minimum, maximum)| minimum > maximum)
+            {
+                return Err(format!(
+                    "Model parameter schema `{path}` has a minimum length above its maximum length."
+                ));
+            }
+            Ok(())
+        }
+        ModelParameterSchema::Enum { values } => {
+            if values.is_empty() {
+                return Err(format!(
+                    "Model parameter schema `{path}` requires at least one enum value."
+                ));
+            }
+            let unique = values.iter().collect::<BTreeSet<_>>();
+            if unique.len() != values.len() {
+                return Err(format!(
+                    "Model parameter schema `{path}` contains duplicate enum values."
+                ));
+            }
+            Ok(())
+        }
+        ModelParameterSchema::Array {
+            items,
+            minimum_items,
+            maximum_items,
+        } => {
+            if minimum_items
+                .zip(*maximum_items)
+                .is_some_and(|(minimum, maximum)| minimum > maximum)
+            {
+                return Err(format!(
+                    "Model parameter schema `{path}` has a minimum item count above its maximum item count."
+                ));
+            }
+            validate_schema_definition(items, format!("{path}[]").as_str())
+        }
+        ModelParameterSchema::Object {
+            properties,
+            required,
+        } => {
+            let required_names = required.iter().collect::<BTreeSet<_>>();
+            if required_names.len() != required.len() {
+                return Err(format!(
+                    "Model parameter schema `{path}` contains duplicate required properties."
+                ));
+            }
+            for name in required {
+                if !properties.contains_key(name) {
+                    return Err(format!(
+                        "Model parameter schema `{path}` requires undeclared property `{name}`."
+                    ));
+                }
+            }
+            for (name, property_schema) in properties {
+                if name.is_empty() {
+                    return Err(format!(
+                        "Model parameter schema `{path}` contains an empty property name."
+                    ));
+                }
+                validate_schema_definition(property_schema, format!("{path}.{name}").as_str())?;
+            }
+            Ok(())
+        }
+    }
+}
+
+/// Validates whether two declared decimal endpoints leave a non-empty interval.
+/// 校验两个已声明十进制端点是否保留非空区间。
+///
+/// # Parameters
+/// 参数
+/// `lower` and `upper` are optional bounds, exclusivity flags describe their openness, and `path`
+/// identifies the owning schema.
+/// `lower` 与 `upper` 是可选边界，排他标志描述其开闭性，`path` 标识所属 Schema。
+///
+/// # Returns
+/// 返回值
+/// Success when either endpoint is absent or the resulting interval is non-empty.
+/// 任一端点缺失或所得区间非空时返回成功。
+fn validate_decimal_interval(
+    lower: &Option<String>,
+    upper: &Option<String>,
+    lower_exclusive: bool,
+    upper_exclusive: bool,
+    path: &str,
+) -> Result<(), String> {
+    let (Some(lower), Some(upper)) = (lower, upper) else {
+        return Ok(());
+    };
+    let ordering = compare_decimal_lexemes(lower, upper);
+    if ordering == Ordering::Greater
+        || (ordering == Ordering::Equal && (lower_exclusive || upper_exclusive))
+    {
+        return Err(format!(
+            "Model parameter schema `{path}` declares an empty decimal interval."
+        ));
+    }
+    Ok(())
+}
+
 /// Validates one model parameter value recursively.
 /// 递归校验一个模型参数值。
 fn validate_schema_value(
@@ -210,7 +588,7 @@ fn validate_schema_value(
     path: &str,
 ) -> Result<(), String> {
     match (schema, value) {
-        (ModelParameterSchema::Boolean, ModelParameterValue::Boolean(_)) => Ok(()),
+        (ModelParameterSchema::Boolean {}, ModelParameterValue::Boolean(_)) => Ok(()),
         (
             ModelParameterSchema::Integer {
                 minimum,
@@ -494,6 +872,139 @@ fn normalized_decimal(value: &str) -> NormalizedDecimal<'_> {
 mod tests {
     use super::*;
 
+    /// Builds one intrinsically valid parameter definition for focused schema tests.
+    /// 为聚焦 Schema 测试构建一个内部有效的参数定义。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `id` is the stable parameter identifier and `schema` is the value contract under test.
+    /// `id` 是稳定参数标识，`schema` 是待测值契约。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A definition with no relationship or applicability restrictions.
+    /// 返回不含关系或适用范围限制的定义。
+    fn parameter_definition(id: &str, schema: ModelParameterSchema) -> ModelParameterDefinition {
+        ModelParameterDefinition {
+            id: id.to_string(),
+            display_name: id.to_string(),
+            description: String::from("Test parameter definition."),
+            schema,
+            default: ModelParameterDefault::Omit {},
+            protocol_ids: Vec::new(),
+            model_ids: Vec::new(),
+            dependent_required: Vec::new(),
+            conflicts: Vec::new(),
+            evidence_revision: String::from("test.v1"),
+        }
+    }
+
+    /// Verifies serialized parameter definitions reject unknown top-level fields.
+    /// 验证序列化参数定义拒绝未知顶层字段。
+    #[test]
+    fn parameter_definition_rejects_unknown_fields() {
+        let document = serde_json::json!({
+            "id": "example.temperature",
+            "display_name": "Temperature",
+            "description": "Sampling temperature.",
+            "schema": { "type": "decimal" },
+            "default": { "type": "omit" },
+            "evidence_revision": "test.v1",
+            "unexpected": true
+        });
+
+        assert!(serde_json::from_value::<ModelParameterDefinition>(document).is_err());
+    }
+
+    /// Verifies serialized parameter schemas reject unknown variant fields.
+    /// 验证序列化参数 Schema 拒绝未知变体字段。
+    #[test]
+    fn parameter_schema_rejects_unknown_fields() {
+        let document = serde_json::json!({
+            "type": "integer",
+            "minimum": 0,
+            "unexpected": true
+        });
+
+        assert!(serde_json::from_value::<ModelParameterSchema>(document).is_err());
+    }
+
+    /// Verifies serialized parameter defaults reject unknown variant fields.
+    /// 验证序列化参数默认值拒绝未知变体字段。
+    #[test]
+    fn parameter_default_rejects_unknown_fields() {
+        let document = serde_json::json!({
+            "type": "explicit_value",
+            "value": { "type": "boolean", "value": true },
+            "unexpected": true
+        });
+
+        assert!(serde_json::from_value::<ModelParameterDefault>(document).is_err());
+    }
+
+    /// Verifies malformed ranges, enum domains, and object requirements fail before activation.
+    /// 验证畸形范围、枚举值域及对象必填声明在激活前失败。
+    #[test]
+    fn malformed_parameter_schemas_are_rejected() {
+        let schemas = [
+            ModelParameterSchema::Integer {
+                minimum: Some(2),
+                maximum: Some(1),
+                step: None,
+            },
+            ModelParameterSchema::Integer {
+                minimum: None,
+                maximum: None,
+                step: Some(0),
+            },
+            ModelParameterSchema::Decimal {
+                minimum: Some(String::from("2")),
+                maximum: Some(String::from("1")),
+                exclusive_minimum: None,
+                exclusive_maximum: None,
+            },
+            ModelParameterSchema::String {
+                minimum_length: Some(2),
+                maximum_length: Some(1),
+            },
+            ModelParameterSchema::Enum { values: Vec::new() },
+            ModelParameterSchema::Array {
+                items: Box::new(ModelParameterSchema::Boolean {}),
+                minimum_items: Some(2),
+                maximum_items: Some(1),
+            },
+            ModelParameterSchema::Object {
+                properties: BTreeMap::new(),
+                required: vec![String::from("missing")],
+            },
+        ];
+
+        for schema in schemas {
+            assert!(
+                parameter_definition("invalid", schema)
+                    .validate_definition()
+                    .is_err()
+            );
+        }
+    }
+
+    /// Verifies dependency scopes cover every protocol and model where the dependent is exposed.
+    /// 验证依赖项作用域覆盖依赖方公开到的每个协议与模型。
+    #[test]
+    fn dependency_scope_must_cover_dependent_scope() {
+        let mut dependent = parameter_definition("dependent", ModelParameterSchema::Boolean {});
+        dependent.protocol_ids = vec![String::from("responses"), String::from("anthropic")];
+        dependent.dependent_required = vec![String::from("prerequisite")];
+        let mut prerequisite =
+            parameter_definition("prerequisite", ModelParameterSchema::Boolean {});
+        prerequisite.protocol_ids = vec![String::from("responses")];
+
+        assert!(
+            validate_model_parameter_definition_set(&[dependent, prerequisite]).is_err(),
+            "a narrower prerequisite must not leave the dependent unusable on another protocol"
+        );
+    }
+
     /// Verifies closed objects reject unregistered fields.
     /// 验证封闭对象拒绝未注册字段。
     #[test]
@@ -505,11 +1016,11 @@ mod tests {
             schema: ModelParameterSchema::Object {
                 properties: BTreeMap::from([(
                     String::from("enabled"),
-                    ModelParameterSchema::Boolean,
+                    ModelParameterSchema::Boolean {},
                 )]),
                 required: vec![String::from("enabled")],
             },
-            default: ModelParameterDefault::Omit,
+            default: ModelParameterDefault::Omit {},
             protocol_ids: Vec::new(),
             model_ids: Vec::new(),
             dependent_required: Vec::new(),
@@ -538,7 +1049,7 @@ mod tests {
                 exclusive_minimum: None,
                 exclusive_maximum: None,
             },
-            default: ModelParameterDefault::Omit,
+            default: ModelParameterDefault::Omit {},
             protocol_ids: Vec::new(),
             model_ids: Vec::new(),
             dependent_required: Vec::new(),

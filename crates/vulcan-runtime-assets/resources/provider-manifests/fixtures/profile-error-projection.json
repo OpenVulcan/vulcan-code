@@ -1,0 +1,37 @@
+{
+  "schema_version": "provider-manifest-profile-fixture.v1",
+  "fixture_id": "profile-error-projection",
+  "base_manifest": "deepseek.json",
+  "required_transformers": ["rename_json_pointer", "set_literal"],
+  "fixture_kind": "error",
+  "declaration": {
+    "profile_id": "fixture.error.v1",
+    "description": "Executable HTTP error projection fixture",
+    "payload": {
+      "profile_id": "fixture.error.v1",
+      "revision": 1,
+      "steps": [
+        {
+          "op": "rename_json_pointer",
+          "from": "/failure/detail",
+          "to": "/error/message"
+        },
+        {
+          "op": "set_literal",
+          "path": "/error/type",
+          "value": "provider_error"
+        }
+      ]
+    }
+  },
+  "profile_id": "fixture.error.v1",
+  "input": {
+    "failure": {
+      "detail": "quota exhausted"
+    }
+  },
+  "expectations": {
+    "/error/message": "quota exhausted",
+    "/error/type": "provider_error"
+  }
+}

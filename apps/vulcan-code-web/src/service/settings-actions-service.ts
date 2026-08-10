@@ -11,6 +11,7 @@ import type {
   PublicAiCommonModelTemplateSuggestion,
   PublicAiCustomModelDefinition,
   PublicAiCustomModelValidationResult,
+  PublicAiCustomModelProtocolPreference,
   PublicAiModelCapabilityOverrides,
   PublicAiContextWindowPolicyOverrides,
   PublicAiModelOverrides,
@@ -27,6 +28,10 @@ import type {
   PublicAiOAuthStartRequest,
   PublicAiOAuthTransaction,
   PublicAiSettingsSnapshot,
+  ProviderManifestStatus,
+  ProviderManifestCandidatePreview,
+  ProviderRollbackReport,
+  ProviderSyncReport,
   ProviderUsageDashboard,
   ProviderModelSecondaryRouteSelection,
   ProviderModelSecondaryRouteSummary,
@@ -199,6 +204,18 @@ export async function savePublicAiCustomModels(
   );
 }
 
+// savePublicAiCustomModelProtocolPreferences replaces the per-model protocol preferences for one provider.
+// savePublicAiCustomModelProtocolPreferences 替换一个供应商的逐模型协议偏好。
+export async function savePublicAiCustomModelProtocolPreferences(
+  providerId: string,
+  preferences: { modelId: string; preference: PublicAiCustomModelProtocolPreference }[],
+): Promise<PublicAiSettingsSnapshot> {
+  return serviceClient.request<PublicAiSettingsSnapshot>(
+    "service_save_public_ai_custom_model_protocol_preferences",
+    { request: { providerId, preferences } },
+  );
+}
+
 // savePublicAiCustomProviderModelDefaults persists the safe provider-wide fallback contract.
 // savePublicAiCustomProviderModelDefaults 持久化安全的供应商级回退契约。
 export async function savePublicAiCustomProviderModelDefaults(request: {
@@ -325,6 +342,40 @@ export async function savePublicAiProviderCapabilityOverrides(request: {
 // syncPublicAiConnection 将一个模型目录刷新到内存。
 export async function syncPublicAiConnection(connectionId: string): Promise<PublicAiSettingsSnapshot> {
   return serviceClient.request<PublicAiSettingsSnapshot>("service_sync_public_ai_connection", { connectionId });
+}
+
+// getProviderManifestStatus returns the typed per-provider manifest status snapshot (plan §R10).
+// getProviderManifestStatus 返回 typed 逐供应商清单状态快照（方案 §R10）。
+export async function getProviderManifestStatus(): Promise<ProviderManifestStatus[]> {
+  const statuses = await serviceClient.request<ProviderManifestStatus[]>(
+    "service_get_provider_manifest_status",
+    {},
+  );
+  if (!statuses || !Array.isArray(statuses)) {
+    throw new Error("Provider manifest status response has an invalid contract.");
+  }
+  return statuses;
+}
+
+// previewProviderManifest verifies and diffs one signed candidate without mutating local state.
+// previewProviderManifest 验证并对比一个签名候选，且不修改本地状态。
+export async function previewProviderManifest(providerId: string): Promise<ProviderManifestCandidatePreview> {
+  return serviceClient.request<ProviderManifestCandidatePreview>(
+    "service_preview_provider_manifest",
+    { providerId },
+  );
+}
+
+// syncProviderManifest synchronizes exactly one provider through the reviewed production flow.
+// syncProviderManifest 通过已审核生产流程同步精确一个供应商。
+export async function syncProviderManifest(providerId: string): Promise<ProviderSyncReport> {
+  return serviceClient.request<ProviderSyncReport>("service_sync_provider_manifest", { providerId });
+}
+
+// rollbackProviderManifest explicitly rolls one provider back to its previous layer.
+// rollbackProviderManifest 显式把一个供应商回滚到 previous 层。
+export async function rollbackProviderManifest(providerId: string): Promise<ProviderRollbackReport> {
+  return serviceClient.request<ProviderRollbackReport>("service_rollback_provider_manifest", { providerId });
 }
 
 // queryPublicAiConnectionUsage queries one exact account without local persistence.
@@ -613,13 +664,23 @@ export async function selectWorkbenchModelSecondaryRoute(
   });
 }
 
-// selectWorkbenchReasoningEffort persists one reasoning selection through the desktop service router.
-// selectWorkbenchReasoningEffort 通过桌面服务路由持久化单个思考档位选择。
-export async function selectWorkbenchReasoningEffort(effort: string): Promise<WorkbenchSnapshot | null> {
+// selectWorkbenchReasoningEffort persists one reasoning selection for an exact materialized conversation.
+// selectWorkbenchReasoningEffort 为一个精确的已物化会话持久化思考档位选择。
+// Parameters: effort is the provider-neutral level and conversationId is the immutable session owner.
+// 参数：effort 是供应商中立档位，conversationId 是不可变会话归属。
+// Returns: the committed Workbench snapshot, or null when no desktop Service runtime exists.
+// 返回值：已提交的 Workbench 快照；桌面 Service 运行时不存在时返回 null。
+export async function selectWorkbenchReasoningEffort(
+  effort: string,
+  conversationId: string,
+): Promise<WorkbenchSnapshot | null> {
   if (!hasServiceRuntime()) {
     return null;
   }
-  return serviceClient.request<WorkbenchSnapshot>("service_select_workbench_reasoning_effort", { effort });
+  return serviceClient.request<WorkbenchSnapshot>("service_select_workbench_reasoning_effort", {
+    conversationId,
+    effort,
+  });
 }
 
 // selectWorkbenchThinkingDisplayMode persists one thinking display preference through the desktop service router.

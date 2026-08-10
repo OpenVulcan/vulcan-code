@@ -469,12 +469,64 @@ where
     Mutation: FnOnce(&mut ProviderConfigurationFile) -> Result<(), String>,
     Commit: FnOnce(&mut ServiceBridgeState, &ProviderConfigurationFile) -> Output,
 {
+    mutate_provider_configuration_with_state_validation(
+        state,
+        save_error_context,
+        |_| Ok(()),
+        mutate,
+        commit,
+    )
+    .await
+}
+
+/// Validates service-owned state, then mutates, persists, stores, and projects one Provider configuration transaction.
+/// 先校验服务持有状态，再在单个 Provider 配置事务中完成变更、持久化、回存与投影。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the retained provider configuration, workspace state, and runtime bridge.
+/// `state` 持有保留的 Provider 配置、工作区状态与运行时桥接。
+/// `save_error_context` identifies the user action when persistence fails.
+/// `save_error_context` 在持久化失败时标识对应的用户动作。
+/// `validate_state` checks state-dependent ownership while both transaction and service locks are held.
+/// `validate_state` 在配置事务锁与服务状态锁均已持有时校验依赖状态的归属。
+/// `mutate` applies one validated configuration mutation.
+/// `mutate` 应用单个已经校验的配置变更。
+/// `commit` applies runtime and workbench side effects while service state remains locked.
+/// `commit` 在服务状态仍被锁定时应用运行时与工作台副作用。
+///
+/// # Returns
+/// 返回值
+/// The value produced by `commit`, or the validation/persistence failure before any projection is published.
+/// 返回 `commit` 产生的值；若校验或持久化失败，则在发布任何投影前返回错误。
+pub(crate) async fn mutate_provider_configuration_with_state_validation<
+    ValidateState,
+    Mutation,
+    Commit,
+    Output,
+>(
+    state: &SharedServiceBridgeState,
+    save_error_context: &str,
+    validate_state: ValidateState,
+    mutate: Mutation,
+    commit: Commit,
+) -> Result<Output, String>
+where
+    ValidateState: FnOnce(&ServiceBridgeState) -> Result<(), String>,
+    Mutation: FnOnce(&mut ProviderConfigurationFile) -> Result<(), String>,
+    Commit: FnOnce(&mut ServiceBridgeState, &ProviderConfigurationFile) -> Output,
+{
     // transaction keeps clone, validation, persistence, runtime replacement, and projection globally ordered.
     // transaction 使克隆、校验、持久化、运行时替换与投影在全局保持有序。
     let transaction = begin_provider_configuration_transaction().await;
     let mut guard = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?;
+    // validateState runs after global serialization and before any durable write, so a target
+    // session cannot be replaced by whichever conversation happens to be selected later.
+    // validateState 在全局串行化之后、任何持久写入之前运行，因此目标会话不会被随后碰巧选中的
+    // 其他会话替代。
+    validate_state(&guard)?;
     // configuration starts from the latest retained runtime value after transaction serialization.
     // configuration 在事务串行化后从最新保留运行时值开始。
     let mut configuration = guard
@@ -517,42 +569,85 @@ where
     mutate_public_ai_configuration_in_transaction(state, save_error_context, mutate)
 }
 
-/// Mutates public AI configuration and commits dependent state while the caller owns the transaction guard.
-/// 在调用方持有事务守卫期间变更公共 AI 配置并提交依赖状态。
-pub(crate) fn mutate_public_ai_configuration_with_commit_in_transaction<Mutation, Commit, Output>(
-    state: &SharedServiceBridgeState,
+/// Persists one public AI configuration while keeping standalone custom manifests in sync.
+/// 持久化一份公共 AI 配置，同时保持独立自定义清单同步。
+///
+/// Custom provider bytes live in standalone manifest files below the application data root
+/// (plan §R6.1/§R6.2); the centralized document stores only the reference set, so every save
+/// writes one recoverable before/target journal, commits the standalone files and projected
+/// configuration, then removes the journal.
+/// 自定义供应商字节存于应用数据根目录下的独立清单文件（方案 §R6.1/§R6.2）；集中文档
+/// 只保存引用集，因此每次保存先写入可恢复的 before/target 日志，再提交独立文件与投影
+/// 配置，最后移除日志。
+///
+/// # Parameters
+/// 参数
+/// `configuration` is the authoritative in-memory snapshot and `save_error_context` labels
+/// persistence failures for the user-facing message.
+/// `configuration` 是权威内存快照，`save_error_context` 为面向用户的失败文案标注上下文。
+fn persist_public_ai_configuration_with_custom_manifests(
+    configuration: &vulcan_provider_adapters::PersistedAiConfiguration,
     save_error_context: &str,
-    mutate: Mutation,
-    commit: Commit,
-) -> Result<Output, String>
+) -> Result<(), String> {
+    let app_data_root = vulcan_workspace_store::data_plane::application_data_root();
+    vulcan_provider_config::config::save_public_ai_connections_with_custom_manifests(
+        configuration,
+        &app_data_root,
+    )
+    .map_err(|error| {
+        if save_error_context.is_empty() {
+            error
+        } else {
+            format!("{save_error_context}: {error}")
+        }
+    })
+}
+
+/// Installs one candidate runtime configuration only after its durable persistence succeeds.
+/// 仅在候选运行时配置持久化成功后安装该配置。
+///
+/// # Parameters
+/// 参数
+/// `runtime` owns the currently visible snapshot, `configuration` is the complete candidate,
+/// and `persist` durably commits that exact candidate before installation.
+/// `runtime` 持有当前可见快照，`configuration` 是完整候选配置，`persist` 在安装前持久
+/// 提交该精确候选。
+///
+/// # Returns
+/// 返回值
+/// The persisted and installed candidate, or the persistence/installation failure while the
+/// previous runtime snapshot remains visible on persistence failure.
+/// 返回已持久化并安装的候选配置；持久化失败时返回错误且先前运行时快照保持可见。
+fn persist_then_install_public_ai_configuration<Persist>(
+    runtime: &vulcan_provider_adapters::PublicAiRuntime,
+    configuration: vulcan_provider_adapters::PersistedAiConfiguration,
+    mut persist: Persist,
+) -> Result<vulcan_provider_adapters::PersistedAiConfiguration, String>
 where
-    Mutation: FnOnce(&mut vulcan_provider_adapters::PersistedAiConfiguration) -> Result<(), String>,
-    Commit: FnOnce(
-        &mut ServiceBridgeState,
-        &vulcan_provider_adapters::PersistedAiConfiguration,
-    ) -> Result<Output, String>,
+    Persist: FnMut(&vulcan_provider_adapters::PersistedAiConfiguration) -> Result<(), String>,
 {
-    let mut guard = state
-        .lock()
-        .map_err(|error| format!("failed to lock service state: {error}"))?;
-    let runtime = guard
-        .agent_runtime
-        .as_ref()
-        .map(|agent_runtime| std::sync::Arc::clone(&agent_runtime.public_ai_runtime))
-        .ok_or_else(|| String::from("service is still starting; public AI runtime is not ready"))?;
-    let mut configuration = runtime.configuration_snapshot()?;
-    mutate(&mut configuration)?;
-    vulcan_provider_config::config::save_public_ai_connections_file(&configuration).map_err(
-        |error| {
-            if save_error_context.is_empty() {
-                error
-            } else {
-                format!("{save_error_context}: {error}")
+    // beforeImage is the exact durable/runtime configuration restored if activation rejects the candidate.
+    // beforeImage 是激活拒绝候选时需要恢复的精确持久化/运行时配置。
+    let before_image = runtime.configuration_snapshot()?;
+    persist(&configuration)?;
+    match runtime.replace_configuration(configuration.clone()) {
+        Ok(()) => Ok(configuration),
+        Err(primary) => {
+            // persistenceCompensation prevents a successfully written candidate from surviving
+            // when its matching immutable runtime generation was never published.
+            // persistenceCompensation 防止候选写入成功、但其配对不可变运行时代际未发布时
+            // 仍残留在持久层。
+            let persistence_compensation = persist(&before_image);
+            match persistence_compensation {
+                Ok(()) => Err(format!(
+                    "Public AI configuration activation failed and the durable before-image was restored: {primary}"
+                )),
+                Err(compensation) => Err(format!(
+                    "Public AI configuration activation failed: {primary}; durable before-image restoration also failed: {compensation}"
+                )),
             }
-        },
-    )?;
-    runtime.replace_configuration(configuration.clone())?;
-    commit(&mut guard, &configuration)
+        }
+    }
 }
 
 /// Acquires exclusive ownership of public AI configuration and credential mutations.
@@ -604,22 +699,42 @@ where
     };
     let mut configuration = runtime.configuration_snapshot()?;
     mutate(&mut configuration)?;
-    vulcan_provider_config::config::save_public_ai_connections_file(&configuration).map_err(
-        |error| {
-            if save_error_context.is_empty() {
-                error
-            } else {
-                format!("{save_error_context}: {error}")
-            }
-        },
-    )?;
-    runtime.replace_configuration(configuration.clone())?;
-    Ok(configuration)
+    persist_then_install_public_ai_configuration(runtime.as_ref(), configuration, |configuration| {
+        persist_public_ai_configuration_with_custom_manifests(configuration, save_error_context)
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Verifies a failed durable write leaves the browser-visible runtime snapshot unchanged.
+    /// 验证持久写入失败会让浏览器可见运行时快照保持不变。
+    #[test]
+    fn persistence_failure_does_not_install_candidate_public_ai_configuration() {
+        let runtime = vulcan_provider_adapters::PublicAiRuntime::unavailable()
+            .expect("public AI runtime should initialize");
+        let before = runtime
+            .configuration_snapshot()
+            .expect("before configuration should read");
+        let mut candidate = before.clone();
+        candidate.usage_refresh_interval_seconds =
+            before.usage_refresh_interval_seconds.saturating_add(1);
+
+        let error =
+            persist_then_install_public_ai_configuration(&runtime, candidate, |_configuration| {
+                Err(String::from("injected durable write failure"))
+            })
+            .expect_err("injected persistence failure must surface");
+
+        assert_eq!(error, "injected durable write failure");
+        assert_eq!(
+            runtime
+                .configuration_snapshot()
+                .expect("runtime configuration should remain readable"),
+            before
+        );
+    }
 
     /// Verifies a second Provider configuration transaction cannot acquire ownership before the first releases it.
     /// 验证首个 Provider 配置事务释放前，第二个事务无法取得所有权。

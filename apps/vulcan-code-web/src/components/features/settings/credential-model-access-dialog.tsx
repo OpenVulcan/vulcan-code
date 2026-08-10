@@ -244,7 +244,9 @@ export function CredentialModelAccessDialog(props: CredentialModelAccessDialogPr
                 <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
                   <Badge variant="outline">{props.provider?.display_name ?? connection?.provider_id}</Badge>
                   {props.entry ? <Badge variant="outline">{props.entry.display_name}</Badge> : null}
-                  {connection ? <Badge variant="outline">{connection.selected_protocol}</Badge> : null}
+                  {connection?.verified_protocols.map((protocolId) => (
+                    <Badge key={protocolId} variant="outline">{protocolId}</Badge>
+                  ))}
                   <Badge variant="secondary">{directoryLabel}</Badge>
                 </div>
               </div>

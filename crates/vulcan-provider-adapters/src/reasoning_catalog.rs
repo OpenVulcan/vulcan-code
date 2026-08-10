@@ -5,6 +5,12 @@ use vulcan_ai_contract::{CapabilitySupport, ReasoningEffort};
 
 /// Identifies one fixed provider whose model endpoint omits reasoning controls.
 /// 标识模型端点未返回思考控制信息的固定供应商。
+///
+/// Every variant remains reachable through the test-only equivalence oracle that compares
+/// migrated manifest rules against this legacy table; only `OpenAi` is still referenced by
+/// the production degradation path.
+/// 每个变体仍通过比较迁移清单规则与旧版表的仅测试等价 oracle 可达；生产退化路径仅引用 `OpenAi`。
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FixedReasoningProvider {
     /// Official Anthropic Messages API.
@@ -39,7 +45,7 @@ pub(crate) struct FixedReasoningCapabilities {
 /// Matches either one exact model identity or a stable model-family prefix.
 /// 匹配一个精确模型身份或稳定模型族前缀。
 #[derive(Debug, Clone, Copy)]
-enum ModelRuleMatcher {
+pub(crate) enum ModelRuleMatcher {
     /// Matches one exact provider model identifier.
     /// 匹配一个精确供应商模型标识。
     Exact(&'static str),
@@ -72,13 +78,13 @@ impl ModelRuleMatcher {
 /// Declares one model-specific override or model-family default.
 /// 声明一个单模型覆盖或模型族默认值。
 #[derive(Debug, Clone, Copy)]
-struct ModelReasoningRule {
+pub(crate) struct ModelReasoningRule {
     /// Exact or family matcher.
     /// 精确或模型族匹配器。
-    matcher: ModelRuleMatcher,
+    pub(crate) matcher: ModelRuleMatcher,
     /// Exact effort values accepted by the matched API model.
     /// 匹配 API 模型接受的精确档位。
-    efforts: &'static [ReasoningEffort],
+    pub(crate) efforts: &'static [ReasoningEffort],
 }
 
 /// Resolves reasoning capabilities for one fixed provider and exact discovered model.
@@ -200,7 +206,7 @@ const MINIMAL_HIGH: &[ReasoningEffort] = &[ReasoningEffort::Minimal, ReasoningEf
 const PROVIDER_DEFAULT_ONLY: &[ReasoningEffort] = &[];
 /// Exact overrides precede broader Anthropic family defaults.
 /// Anthropic 精确覆盖位于更宽泛模型族默认值之前。
-const ANTHROPIC_REASONING_RULES: &[ModelReasoningRule] = &[
+pub(crate) const ANTHROPIC_REASONING_RULES: &[ModelReasoningRule] = &[
     ModelReasoningRule {
         matcher: ModelRuleMatcher::Prefix("claude-opus-4-8"),
         efforts: LOW_MEDIUM_HIGH_XHIGH_MAX,
@@ -241,7 +247,7 @@ const ANTHROPIC_REASONING_RULES: &[ModelReasoningRule] = &[
 
 /// Google exact model exceptions precede series defaults.
 /// Google 精确模型例外位于系列默认值之前。
-const GOOGLE_REASONING_RULES: &[ModelReasoningRule] = &[
+pub(crate) const GOOGLE_REASONING_RULES: &[ModelReasoningRule] = &[
     ModelReasoningRule {
         matcher: ModelRuleMatcher::Exact("gemini-3.1-flash-lite-image"),
         efforts: MINIMAL_HIGH,
@@ -282,7 +288,7 @@ const GOOGLE_REASONING_RULES: &[ModelReasoningRule] = &[
 
 /// MiniMax M3 exposes an on/off adaptive-thinking switch while M2.x reasoning remains fixed on.
 /// MiniMax M3 暴露自适应思考开关，而 M2.x 思考保持固定开启。
-const MINIMAX_REASONING_RULES: &[ModelReasoningRule] = &[
+pub(crate) const MINIMAX_REASONING_RULES: &[ModelReasoningRule] = &[
     ModelReasoningRule {
         matcher: ModelRuleMatcher::Prefix("MiniMax-M3"),
         efforts: &[ReasoningEffort::None, ReasoningEffort::Adaptive],
@@ -295,7 +301,7 @@ const MINIMAX_REASONING_RULES: &[ModelReasoningRule] = &[
 
 /// OpenAI exact Pro-model overrides precede broader GPT family defaults.
 /// OpenAI 精确 Pro 模型覆盖位于更宽泛 GPT 模型族默认值之前。
-const OPENAI_REASONING_RULES: &[ModelReasoningRule] = &[
+pub(crate) const OPENAI_REASONING_RULES: &[ModelReasoningRule] = &[
     ModelReasoningRule {
         matcher: ModelRuleMatcher::Prefix("gpt-5.4-pro"),
         efforts: MEDIUM_HIGH_XHIGH,

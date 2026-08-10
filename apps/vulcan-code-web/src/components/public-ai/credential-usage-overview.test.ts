@@ -1,13 +1,39 @@
 import { describe, expect, it } from "vitest"
 
 import type { TranslationKey } from "@/i18n"
-import type { PublicAiAccountUsageWindow } from "@/types"
+import type { PublicAiAccountUsageWindow, PublicAiCredentialProfile } from "@/types"
 
 import {
   formatCurrencyAmount,
+  credentialUsageIsNonPlanAccount,
   kimiUsageWindowLabel,
+  usageCapabilityRequiresManagementKey,
   usageCapabilitySupportsQuotaWindows,
 } from "./credential-usage-overview"
+
+// credentialProfile creates one minimal manifest-projected credential profile for semantics tests.
+// credentialProfile 为语义测试创建一个最小 Manifest 投影凭据配置档。
+function credentialProfile(
+  accountUsageQuery: PublicAiCredentialProfile["account_usage_query"],
+): PublicAiCredentialProfile {
+  return {
+    id: "test-profile",
+    display_name: "Test profile",
+    credential_mode: "token",
+    billing_kind: "pay_as_you_go",
+    account_usage_query: accountUsageQuery,
+  }
+}
+
+describe("credentialUsageIsNonPlanAccount", () => {
+  // Verifies UI semantics follow the credential profile and never a provider identifier.
+  // 验证 UI 语义跟随凭据配置档而绝不跟随供应商标识。
+  it("uses the manifest-projected usage capability", () => {
+    expect(credentialUsageIsNonPlanAccount(credentialProfile("deep_seek_balance"))).toBe(true)
+    expect(credentialUsageIsNonPlanAccount(credentialProfile("open_router_credits"))).toBe(false)
+    expect(credentialUsageIsNonPlanAccount(undefined)).toBe(false)
+  })
+})
 
 // kimiUsageWindow creates one minimal normalized Kimi quota window for label tests.
 // kimiUsageWindow 为名称测试创建一个最小规范化 Kimi 额度窗口。
@@ -59,6 +85,16 @@ describe("usageCapabilitySupportsQuotaWindows", () => {
     expect(usageCapabilitySupportsQuotaWindows("open_router_credits")).toBe(false)
     expect(usageCapabilitySupportsQuotaWindows("deep_seek_balance")).toBe(false)
     expect(usageCapabilitySupportsQuotaWindows("unsupported")).toBe(false)
+  })
+})
+
+describe("usageCapabilityRequiresManagementKey", () => {
+  // Verifies management-key presentation follows the manifest-selected host primitive.
+  // 验证管理密钥展示跟随清单选择的宿主原语。
+  it("separates management credentials from inference credentials", () => {
+    expect(usageCapabilityRequiresManagementKey("open_router_credits")).toBe(true)
+    expect(usageCapabilityRequiresManagementKey("mini_max_token_plan")).toBe(false)
+    expect(usageCapabilityRequiresManagementKey("unsupported")).toBe(false)
   })
 })
 

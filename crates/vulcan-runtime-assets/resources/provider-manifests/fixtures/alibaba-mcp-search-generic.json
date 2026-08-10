@@ -1,0 +1,140 @@
+{
+  "schema_version": "provider-manifest-execution-fixture.v1",
+  "fixture_id": "alibaba-mcp-search-generic",
+  "base_manifest": "alibaba.json",
+  "production_target_refs": [
+    "alibaba::model-studio-cn.web-search",
+    "alibaba::model-studio-singapore.web-search"
+  ],
+  "tool_target": {
+    "target_id": "model-studio-cn.fixture-mcp-search-generic",
+    "description": "Generic Streamable HTTP MCP search fixture.",
+    "service_entry_id": "model-studio-cn",
+    "credential_profile_ids": ["api-key"],
+    "upstream_target_id": "bailian_web_search",
+    "display_name": "Generic MCP Search Fixture",
+    "tool_id": "fixture_mcp_search_generic",
+    "capability": "web_search",
+    "input_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "query": {"type": "string", "minLength": 1},
+        "max_results": {"type": "integer", "minimum": 1, "maximum": 20}
+      },
+      "required": ["query"]
+    },
+    "output": {
+      "kind": "search",
+      "source_path": "/results",
+      "normalized_result_path": "search"
+    },
+    "execution": {
+      "endpoint_path": "/api/v1/mcps/WebSearch/mcp",
+      "authentication": "bearer_authorization",
+      "adapter": "generic_json",
+      "execution_kind": "mcp_http_call",
+      "mcp_http_call": {
+        "protocol_version": "2025-03-26",
+        "content_json_array_pointer": "/pages",
+        "max_content_blocks": 16,
+        "max_items": 100
+      }
+    }
+  },
+  "operation": {
+    "operation_id": "fixture.alibaba-mcp-search-generic",
+    "operation": "web_search",
+    "carrier": "provider_tool",
+    "input_resources": [],
+    "output_resources": [],
+    "tool_target_refs": ["model-studio-cn.fixture-mcp-search-generic"],
+    "request_profile_refs": ["alibaba.search.mcp-call.request.v1"],
+    "response_profile_refs": ["alibaba.search.mcp-call.response.v1"],
+    "upload_channel_refs": [],
+    "upload_bindings": [],
+    "timeout_ms": 3000,
+    "idempotent": false
+  },
+  "upload_channels": [],
+  "required_execution_primitives": ["mcp_http_call"],
+  "required_upload_primitives": [],
+  "arguments": {"query": "  rust async  ", "max_results": 2},
+  "interactions": [
+    {
+      "method": "POST",
+      "path": "/api/v1/mcps/WebSearch/mcp",
+      "expected_headers": {
+        "accept": "application/json, text/event-stream",
+        "content-type": "application/json"
+      },
+      "absent_headers": ["mcp-session-id"],
+      "expected_json_body": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+          "protocolVersion": "2025-03-26",
+          "capabilities": {},
+          "clientInfo": {"name": "VulcanCode", "version": "1"}
+        }
+      },
+      "response_status": 200,
+      "response_headers": {"mcp-session-id": "fixture-session-1"},
+      "response_json_body": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {"protocolVersion": "2025-03-26", "capabilities": {}}
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/mcps/WebSearch/mcp",
+      "expected_headers": {"mcp-session-id": "fixture-session-1"},
+      "expected_json_body": {
+        "jsonrpc": "2.0",
+        "method": "notifications/initialized"
+      },
+      "response_status": 202,
+      "response_headers": {"mcp-session-id": "fixture-session-2"},
+      "response_json_body": {}
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/mcps/WebSearch/mcp",
+      "expected_headers": {"mcp-session-id": "fixture-session-2"},
+      "expected_json_body": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+          "name": "bailian_web_search",
+          "arguments": {"query": "rust async", "count": 2}
+        }
+      },
+      "response_status": 200,
+      "response_content_type": "text/event-stream",
+      "response_text_body": "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"{\\\"pages\\\":[{\\\"title\\\":\\\"Async Rust\\\",\\\"url\\\":\\\"https://example.com/async\\\",\\\"snippet\\\":\\\"Async overview\\\"},{\\\"title\\\":\\\"Tokio Guide\\\",\\\"url\\\":\\\"https://docs.example.org/tokio\\\",\\\"snippet\\\":\\\"Runtime guide\\\"},{\\\"title\\\":\\\"Extra\\\",\\\"url\\\":\\\"https://extra.example.net/page\\\",\\\"snippet\\\":\\\"Must be truncated\\\"}]}\"}],\"isError\":false}}\n\n"
+    }
+  ],
+  "expected_output_kind": "search",
+  "expected_search_output": {
+    "query": "rust async",
+    "results": [
+      {
+        "rank": 1,
+        "title": "Async Rust",
+        "url": "https://example.com/async",
+        "source_domain": "example.com",
+        "snippet": "Async overview"
+      },
+      {
+        "rank": 2,
+        "title": "Tokio Guide",
+        "url": "https://docs.example.org/tokio",
+        "source_domain": "docs.example.org",
+        "snippet": "Runtime guide"
+      }
+    ]
+  }
+}

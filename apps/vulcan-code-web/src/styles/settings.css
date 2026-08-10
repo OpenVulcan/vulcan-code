@@ -521,7 +521,8 @@
 
 .settings-model-route-panel {
   width: 100%;
-  height: 34px;
+  min-height: 58px;
+  height: auto;
   min-width: 0;
   display: flex;
   align-items: center;
@@ -530,6 +531,15 @@
   border-radius: 0;
   padding: 5px 8px;
   text-align: left;
+}
+
+.settings-model-route-summary {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  overflow: hidden;
 }
 
 .settings-model-route-protocol {
@@ -546,6 +556,17 @@
 
 .settings-model-route-protocol svg {
   flex: 0 0 auto;
+}
+
+.settings-model-route-binding {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .settings-model-switches {

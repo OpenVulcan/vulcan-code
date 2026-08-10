@@ -187,28 +187,6 @@ fn apply_capability_overrides(
     }
 }
 
-/// Lists the reviewed OpenRouter models enabled by default.
-/// 列出默认启用的已审核 OpenRouter 模型。
-const OPENROUTER_FEATURED_MODELS: &[&str] = &[
-    "openai/gpt-5.6-sol",
-    "openai/gpt-5.6-terra",
-    "anthropic/claude-sonnet-5",
-    "anthropic/claude-opus-4.8",
-    "google/gemini-3.1-pro-preview",
-    "google/gemini-3.5-flash",
-    "deepseek/deepseek-v4-pro",
-    "deepseek/deepseek-v4-flash",
-    "qwen/qwen3.6-plus",
-    "z-ai/glm-5.2",
-    "minimax/minimax-m3",
-    "openai/text-embedding-3-small",
-    "cohere/rerank-v3.5",
-    "openai/gpt-image-1",
-    "google/veo-3.1",
-    "minimax/speech-2.8-turbo",
-    "openai/whisper-large-v3-turbo",
-];
-
 /// Identifies the exact model and account selected by the user.
 /// 标识用户选择的精确模型与账号。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -913,6 +891,19 @@ pub fn provider_billing_route_key(provider_id: &str, model_id: &str, route_id: &
     billing_composite_key(&[provider_id, model_id, route_id])
 }
 
+/// Describes one bounded standalone custom-provider failure isolated during hydration.
+/// 描述一条在补水期间被隔离的有界独立自定义供应商失败。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CustomProviderManifestFailure {
+    /// Bounded display identity of the exact referenced custom provider.
+    /// 精确被引用自定义供应商的有界展示身份。
+    pub provider_id: String,
+    /// Bounded non-secret repair diagnostic from the failed read, parse, or validation step.
+    /// 失败读取、解析或校验步骤产生的有界非秘密修复诊断。
+    pub message: String,
+}
+
 /// Stores all new AI configuration while excluding runtime-discovered model catalogs.
 /// 保存全部新 AI 配置，同时排除运行时发现的模型目录。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -936,6 +927,44 @@ pub struct PersistedAiConfiguration {
     /// 不包含凭据秘密或模型目录的用户自有兼容供应商定义。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub custom_providers: BTreeMap<String, ProviderDescriptor>,
+    /// Custom provider identifiers whose definition bytes live in standalone manifest files.
+    /// 定义字节已存于独立清单文件的自定义供应商标识。
+    ///
+    /// After migration the standalone `provider-manifests/custom/<encoded-id>.json` files are
+    /// authoritative and the centralized map is loaded from them; this reference set keeps the
+    /// centralized configuration compact and makes the migration idempotent (plan §R6.2).
+    /// 迁移后独立 `provider-manifests/custom/<编码-id>.json` 文件为权威，集中式映射从
+    /// 文件加载；该引用集使集中配置保持精简，并让迁移具备幂等性（方案 §R6.2）。
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub custom_provider_file_refs: BTreeSet<String>,
+    /// Hydrated full custom manifests keyed by exact provider identifier.
+    /// 按精确供应商标识索引的已补水完整自定义 Manifest。
+    ///
+    /// These documents are owned by standalone JSON files and deliberately excluded from the
+    /// centralized configuration serialization. Runtime activation freezes their compiled
+    /// form together with model catalogs.
+    /// 这些文档由独立 JSON 文件持有，并有意排除在中央配置序列化之外。运行时激活会把
+    /// 它们的编译结果与模型目录一同冻结。
+    #[serde(default, skip)]
+    pub custom_provider_manifests: BTreeMap<String, crate::ProviderManifestV1>,
+    /// Runtime-only bounded failures for standalone custom providers isolated during hydration.
+    /// 补水期间被隔离的独立自定义供应商运行时有界失败记录。
+    ///
+    /// The central reference and original standalone bytes remain authoritative while an entry
+    /// is present. Cross-file persistence carries those bytes forward unchanged, so healthy
+    /// provider settings remain writable without erasing the failed source (original plan §18.3).
+    /// 存在记录时，中央引用与原始独立字节仍是权威事实。跨文件持久化会原样携带这些字节，
+    /// 因而健康供应商设置仍可写入且不会擦除失败源（原始方案 §18.3）。
+    #[serde(default, skip)]
+    pub custom_provider_manifest_failures: Vec<CustomProviderManifestFailure>,
+    /// Total isolated custom-provider count before the browser-facing list bound was applied.
+    /// 应用面向浏览器的列表上限前，被隔离自定义供应商的总数。
+    #[serde(default, skip)]
+    pub custom_provider_manifest_failure_total_count: u64,
+    /// Whether additional isolated-provider diagnostics were omitted by the runtime bound.
+    /// 是否有额外隔离供应商诊断因运行时上限被省略。
+    #[serde(default, skip)]
+    pub custom_provider_manifest_failures_truncated: bool,
     /// User-owned model definitions grouped by custom provider identifier.
     /// 按自定义供应商标识分组的用户自有模型定义。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -948,6 +977,10 @@ pub struct PersistedAiConfiguration {
     /// 按供应商与模型索引的用户审查公共模板决策。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub custom_model_template_decisions: BTreeMap<String, CustomModelTemplateDecision>,
+    /// User-owned per-model protocol preferences for custom providers keyed by provider and model.
+    /// 按供应商与模型索引的自定义供应商逐模型协议偏好。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub custom_model_protocol_preferences: BTreeMap<String, crate::CustomModelProtocolPreference>,
     /// Explicit custom-model availability differences keyed by connection and model.
     /// 按连接与模型索引的自定义模型显式可用性差异。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -1107,9 +1140,15 @@ impl Default for PersistedAiConfiguration {
             usage_refresh_interval_seconds: default_usage_refresh_interval_seconds(),
             billing: ProviderBillingConfiguration::default(),
             custom_providers: BTreeMap::new(),
+            custom_provider_file_refs: BTreeSet::new(),
+            custom_provider_manifests: BTreeMap::new(),
+            custom_provider_manifest_failures: Vec::new(),
+            custom_provider_manifest_failure_total_count: 0,
+            custom_provider_manifest_failures_truncated: false,
             custom_models: BTreeMap::new(),
             custom_provider_model_defaults: BTreeMap::new(),
             custom_model_template_decisions: BTreeMap::new(),
+            custom_model_protocol_preferences: BTreeMap::new(),
             custom_model_connection_enabled_overrides: BTreeMap::new(),
             connection_model_access_policies: BTreeMap::new(),
             pending_validation_connection_ids: BTreeSet::new(),
@@ -1137,6 +1176,133 @@ impl Default for PersistedAiConfiguration {
 }
 
 impl PersistedAiConfiguration {
+    /// Reports whether one standalone custom-provider source is currently isolated.
+    /// 报告一个独立自定义供应商源当前是否已被隔离。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `provider_id` is the exact provider identity referenced by the central configuration.
+    /// `provider_id` 是中央配置引用的精确供应商身份。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` only when the authoritative standalone reference exists but hydration produced no
+    /// validated descriptor. The decision never depends on bounded or truncated diagnostic text.
+    /// 仅当权威独立引用存在、但补水未产出已验证描述符时返回 `true`；该判断绝不依赖有界或
+    /// 截断后的诊断文本。
+    pub fn custom_provider_manifest_is_isolated(&self, provider_id: &str) -> bool {
+        self.custom_provider_file_refs.contains(provider_id)
+            && !self.custom_providers.contains_key(provider_id)
+    }
+
+    /// Builds an in-memory execution projection that excludes isolated custom providers.
+    /// 构建一份排除已隔离自定义供应商的内存执行投影。
+    ///
+    /// The persisted configuration remains the repair authority. This projection removes only
+    /// executable/provider-owned references from a clone, allowing healthy providers to start and
+    /// remain usable without deleting the failed provider's connection or source bytes.
+    /// 持久化配置仍是修复权威。该投影只从克隆中移除可执行及供应商自有引用，使健康供应商
+    /// 可正常启动和使用，同时不删除失败供应商的连接或源字节。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A detached runtime-only configuration whose remaining references are internally coherent.
+    /// 返回一份独立、仅供运行时使用且剩余引用内部一致的配置。
+    pub fn without_isolated_custom_provider_runtime_state(&self) -> Self {
+        let isolated_provider_ids = self
+            .custom_provider_file_refs
+            .iter()
+            .filter(|provider_id| !self.custom_providers.contains_key(provider_id.as_str()))
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        self.without_provider_runtime_state(&isolated_provider_ids)
+    }
+
+    /// Builds an in-memory execution projection excluding an explicit provider identity set.
+    /// 构建一份排除显式供应商身份集合的内存执行投影。
+    ///
+    /// The persisted configuration remains untouched. All provider-owned model settings,
+    /// connections, account preferences, validation state, access policy, secondary routes, and
+    /// tool selections are removed coherently from the clone.
+    /// 持久化配置保持不变。全部供应商自有模型设置、连接、账号偏好、校验状态、访问策略、
+    /// 二级路由与工具选择会从克隆中一致移除。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `isolated_provider_ids` contains exact provider identities that have no executable runtime
+    /// authority in the target manifest generation.
+    /// `isolated_provider_ids` 包含目标 Manifest 代际中没有可执行运行时权威的精确供应商身份。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A detached internally coherent runtime-only configuration.
+    /// 返回一份独立且内部一致的仅运行时配置。
+    pub fn without_provider_runtime_state(&self, isolated_provider_ids: &BTreeSet<String>) -> Self {
+        if isolated_provider_ids.is_empty() {
+            return self.clone();
+        }
+
+        // projection is detached so provider-owned cleanup cannot alter the persisted repair image.
+        // projection 是独立克隆，因此供应商自有清理不会改变持久化修复镜像。
+        let mut projection = self.clone();
+        let removed_connection_ids = projection
+            .connection_graph
+            .connections
+            .values()
+            .filter(|connection| isolated_provider_ids.contains(connection.provider_id.as_str()))
+            .map(|connection| connection.id.clone())
+            .collect::<BTreeSet<_>>();
+        for provider_id in isolated_provider_ids {
+            projection.remove_provider_owned_model_settings(provider_id.as_str());
+        }
+        projection
+            .connection_graph
+            .connections
+            .retain(|_, connection| {
+                !isolated_provider_ids.contains(connection.provider_id.as_str())
+            });
+        // retainedConnectionIds closes every account preference over the projected graph only.
+        // retainedConnectionIds 使每项账号偏好仅引用投影后的连接图。
+        let retained_connection_ids = projection
+            .connection_graph
+            .connections
+            .keys()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        projection
+            .connection_graph
+            .account_preferences
+            .provider_defaults
+            .retain(|provider_id, connection_id| {
+                !isolated_provider_ids.contains(provider_id.as_str())
+                    && retained_connection_ids.contains(connection_id.as_str())
+            });
+        projection
+            .connection_graph
+            .account_preferences
+            .model_last_connections
+            .retain(|_, connection_id| retained_connection_ids.contains(connection_id.as_str()));
+        projection
+            .pending_validation_connection_ids
+            .retain(|connection_id| !removed_connection_ids.contains(connection_id.as_str()));
+        projection
+            .connection_model_access_policies
+            .retain(|connection_id, _| !removed_connection_ids.contains(connection_id.as_str()));
+        projection.provider_tool_selections.retain(|_, selection| {
+            !removed_connection_ids.contains(selection.connection_id.as_str())
+        });
+        for connection_id in &removed_connection_ids {
+            let connection_model_prefix = format!("{}:{connection_id}:", connection_id.len());
+            projection
+                .custom_model_connection_enabled_overrides
+                .retain(|key, _| !key.starts_with(connection_model_prefix.as_str()));
+            projection
+                .secondary_routes
+                .retain(|key, _| !key.starts_with(connection_model_prefix.as_str()));
+        }
+        projection
+    }
+
     /// Migrates the exact supported historical schema to the current version.
     /// 将精确支持的历史 Schema 迁移到当前版本。
     ///
@@ -2156,6 +2322,8 @@ impl PersistedAiConfiguration {
             .remove(provider_model_key.as_str());
         self.custom_model_template_decisions
             .remove(provider_model_key.as_str());
+        self.custom_model_protocol_preferences
+            .remove(provider_model_key.as_str());
         self.connection_graph
             .account_preferences
             .model_last_connections
@@ -2213,6 +2381,10 @@ impl PersistedAiConfiguration {
             .custom_model_template_decisions
             .keys()
             .any(|key| key.starts_with(provider_model_prefix.as_str()))
+            || self
+                .custom_model_protocol_preferences
+                .keys()
+                .any(|key| key.starts_with(provider_model_prefix.as_str()))
             || self
                 .model_enabled_overrides
                 .keys()
@@ -2332,6 +2504,70 @@ impl PersistedAiConfiguration {
         });
     }
 
+    /// Counts protocol-scoped model settings owned by protocols removed from an edited provider.
+    /// 统计被编辑供应商移除协议所拥有的协议作用域模型设置数量。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `provider_id` identifies the edited provider and `removed_protocols` is the exact set of
+    /// protocols the edit deletes. New protocols never invalidate existing settings, so only
+    /// the removed set participates (plan §R6.8).
+    /// `provider_id` 标识正在编辑的供应商，`removed_protocols` 是编辑删除的精确协议集合。
+    /// 新增协议绝不让既有设置失效，因此只统计被删除集合（方案 §R6.8）。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The number of exact provider-owned records bound to a removed protocol.
+    /// 返回绑定到被删协议的精确供应商自有记录数量。
+    pub fn removed_protocol_model_override_count(
+        &self,
+        provider_id: &str,
+        removed_protocols: &BTreeSet<String>,
+    ) -> usize {
+        if removed_protocols.is_empty() {
+            return 0;
+        }
+        self.model_overrides
+            .keys()
+            .filter(|key| {
+                Self::provider_model_protocol_key_parts(key).is_some_and(
+                    |(record_provider_id, _, record_protocol_id)| {
+                        record_provider_id == provider_id
+                            && removed_protocols.contains(record_protocol_id)
+                    },
+                )
+            })
+            .count()
+    }
+
+    /// Removes protocol-scoped model settings owned by protocols removed from an edited provider.
+    /// 移除被编辑供应商移除协议所拥有的协议作用域模型设置。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `provider_id` identifies the edited provider and `removed_protocols` is the exact set of
+    /// protocols the edit deletes. Only the removed set is cleaned; retained protocols keep
+    /// every owned override (plan §R6.8).
+    /// `provider_id` 标识正在编辑的供应商，`removed_protocols` 是编辑删除的精确协议集合。
+    /// 只清理被删除集合；保留协议及其全部覆盖不被触碰（方案 §R6.8）。
+    pub fn remove_removed_protocol_model_overrides(
+        &mut self,
+        provider_id: &str,
+        removed_protocols: &BTreeSet<String>,
+    ) {
+        if removed_protocols.is_empty() {
+            return;
+        }
+        self.model_overrides.retain(|key, _| {
+            Self::provider_model_protocol_key_parts(key).is_none_or(
+                |(record_provider_id, _, record_protocol_id)| {
+                    record_provider_id != provider_id
+                        || !removed_protocols.contains(record_protocol_id)
+                },
+            )
+        });
+    }
+
     /// Removes every persisted model setting and inference route owned by one provider.
     /// 移除一个供应商持有的全部持久化模型设置与推理路由。
     ///
@@ -2347,6 +2583,8 @@ impl PersistedAiConfiguration {
         self.provider_context_window_policy_overrides
             .remove(provider_id);
         self.custom_model_template_decisions
+            .retain(|key, _| !key.starts_with(provider_model_prefix.as_str()));
+        self.custom_model_protocol_preferences
             .retain(|key, _| !key.starts_with(provider_model_prefix.as_str()));
         self.model_enabled_overrides
             .retain(|key, _| !key.starts_with(provider_model_prefix.as_str()));
@@ -2390,6 +2628,53 @@ impl PersistedAiConfiguration {
         {
             self.active = None;
         }
+    }
+
+    /// Removes one custom provider descriptor together with every provider-owned runtime field.
+    /// 移除一个自定义供应商描述，并同步清理该供应商持有的全部运行时字段。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `provider_id` is the exact custom provider identity being deleted.
+    /// `provider_id` 是正在删除的精确自定义供应商标识。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The removed descriptor, or `None` when the provider was not configured.
+    /// 返回被移除的描述；供应商未配置时返回 `None`。
+    pub fn remove_custom_provider_owned_state(
+        &mut self,
+        provider_id: &str,
+    ) -> Option<ProviderDescriptor> {
+        self.remove_provider_owned_model_settings(provider_id);
+        // The hydrated manifest and its disk reference belong to the same provider transaction.
+        // 已补水 Manifest 与其磁盘引用属于同一供应商事务。
+        self.custom_provider_manifests.remove(provider_id);
+        self.custom_provider_file_refs.remove(provider_id);
+        // retainedFailureCount detects whether this exact provider owned one visible isolation record.
+        // retainedFailureCount 检测该精确供应商是否持有一条可见隔离记录。
+        let retained_failure_count = self.custom_provider_manifest_failures.len();
+        self.custom_provider_manifest_failures
+            .retain(|failure| failure.provider_id != provider_id);
+        let removed = self.custom_providers.remove(provider_id);
+        // remainingIsolatedCount is derived from the exact authority set rather than bounded
+        // diagnostics, so deleting a visible failure keeps total/truncated metadata coherent.
+        // remainingIsolatedCount 从精确权威集合而非有界诊断派生，因此删除可见失败后，
+        // 总数与截断元数据仍保持一致。
+        let remaining_isolated_count = self
+            .custom_provider_file_refs
+            .iter()
+            .filter(|provider_id| !self.custom_providers.contains_key(provider_id.as_str()))
+            .count() as u64;
+        self.custom_provider_manifest_failure_total_count = remaining_isolated_count;
+        self.custom_provider_manifest_failures_truncated =
+            remaining_isolated_count > self.custom_provider_manifest_failures.len() as u64;
+        if self.custom_provider_manifest_failures.len() == retained_failure_count
+            && remaining_isolated_count == 0
+        {
+            self.custom_provider_manifest_failures.clear();
+        }
+        removed
     }
 
     /// Builds a stable key for one provider-model-operation scoped internal setting.
@@ -2474,18 +2759,59 @@ impl PersistedAiConfiguration {
     ///
     /// # Returns
     /// 返回值
-    /// The effective enabled state.
-    /// 返回有效启用状态。
+    /// The persisted user/manual-model state, defaulting to enabled when no manifest default is
+    /// available. System-provider callers must use `model_is_enabled_with_default` or the runtime.
+    /// 返回持久化用户/手工模型状态；无清单默认值时默认启用。系统供应商调用方必须使用
+    /// `model_is_enabled_with_default` 或运行时。
     pub fn model_is_enabled(&self, provider_id: &str, model_id: &str) -> bool {
+        self.model_is_enabled_with_default(provider_id, model_id, true)
+    }
+
+    /// Resolves one model's enabled state against an externally owned inherited default.
+    /// 根据外部权威持有的继承默认值解析一个模型的启用状态。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `provider_id` and `model_id` identify the exact model; `inherited_default` comes from the
+    /// immutable manifest snapshot selected for the operation.
+    /// `provider_id` 与 `model_id` 标识精确模型；`inherited_default` 来自本次操作选定的不可变
+    /// 清单快照。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The explicit user override, then a manual model declaration, then `inherited_default`.
+    /// 依次返回显式用户覆盖、手工模型声明或 `inherited_default`。
+    pub fn model_is_enabled_with_default(
+        &self,
+        provider_id: &str,
+        model_id: &str,
+        inherited_default: bool,
+    ) -> bool {
         self.model_enabled_overrides
             .get(Self::provider_model_key(provider_id, model_id).as_str())
             .copied()
             .unwrap_or_else(|| {
-                self.custom_model(provider_id, model_id).map_or_else(
-                    || default_model_enabled(provider_id, model_id),
-                    |model| model.enabled,
-                )
+                self.custom_model(provider_id, model_id)
+                    .map_or_else(|| inherited_default, |model| model.enabled)
             })
+    }
+
+    /// Returns the persisted user-enabled override for one model when present.
+    /// 存在时返回一个模型的持久化用户启用覆盖。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `provider_id` and `model_id` identify the exact runtime model.
+    /// `provider_id` 与 `model_id` 标识精确运行时模型。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The explicit user choice, or `None` when the user never overrode this model.
+    /// 返回显式用户选择；用户从未覆盖该模型时返回 `None`。
+    pub fn model_enabled_override(&self, provider_id: &str, model_id: &str) -> Option<bool> {
+        self.model_enabled_overrides
+            .get(Self::provider_model_key(provider_id, model_id).as_str())
+            .copied()
     }
 
     /// Stores one explicit model enabled choice, including a value equal to its inherited default.
@@ -2513,26 +2839,79 @@ impl PersistedAiConfiguration {
     }
 }
 
-/// Returns the code-owned default model access policy.
-/// 返回代码拥有的默认模型访问策略。
-///
-/// # Parameters
-/// 参数
-/// `provider_id` and `model_id` identify the exact runtime model.
-/// `provider_id` 与 `model_id` 标识精确运行时模型。
-///
-/// # Returns
-/// 返回值
-/// OpenRouter is enabled only for reviewed models; every other provider defaults to enabled.
-/// OpenRouter 仅启用已审核模型；其他供应商默认全部启用。
-pub fn default_model_enabled(provider_id: &str, model_id: &str) -> bool {
-    provider_id != "openrouter" || OPENROUTER_FEATURED_MODELS.contains(&model_id)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CUSTOM_MODEL_TEMPLATE_REVISION, CustomModelTemplateSelection};
+    use crate::custom_provider::{
+        CustomProviderAuthentication, CustomProviderDefinition, CustomProviderModelDiscoveryMode,
+        CustomProviderProtocol,
+    };
+    use crate::{
+        CUSTOM_MODEL_TEMPLATE_REVISION, CustomModelProtocolPreference, CustomModelTemplateSelection,
+    };
+
+    /// Builds one complete custom provider descriptor for configuration-cleanup tests.
+    /// 为配置清理测试构建一个完整的自定义供应商描述。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `provider_id` is the exact custom provider identity used by the test.
+    /// `provider_id` 是测试使用的精确自定义供应商标识。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A valid single-protocol custom provider descriptor.
+    /// 返回有效的单协议自定义供应商描述。
+    fn custom_provider_descriptor(provider_id: &str) -> ProviderDescriptor {
+        CustomProviderDefinition {
+            id: provider_id.to_string(),
+            display_name: provider_id.to_string(),
+            base_url: String::from("https://example.com/v1"),
+            protocol: Some(CustomProviderProtocol::OpenAiResponses),
+            authentication: CustomProviderAuthentication::BearerAuthorization,
+            model_discovery_mode: CustomProviderModelDiscoveryMode::Standard,
+            model_discovery_path: None,
+            protocols: Vec::new(),
+            protocol_routes: Vec::new(),
+            request_headers: BTreeMap::new(),
+        }
+        .into_descriptor()
+        .expect("custom provider descriptor should be valid")
+    }
+
+    /// Builds one deterministic credential connection for configuration projection tests.
+    /// 为配置投影测试构建一个确定性凭据连接。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `connection_id` and `provider_id` identify the exact account and owning provider.
+    /// `connection_id` 与 `provider_id` 标识精确账号及其所属供应商。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A non-secret connection record using the custom provider's standard service entry.
+    /// 返回使用自定义供应商标准服务入口的不含秘密连接记录。
+    fn custom_provider_connection(
+        connection_id: &str,
+        provider_id: &str,
+    ) -> crate::CredentialConnection {
+        crate::CredentialConnection {
+            id: connection_id.to_string(),
+            provider_id: provider_id.to_string(),
+            service_entry_id: String::from("public-api"),
+            credential_profile_id: String::from("api-key"),
+            credential_mode: crate::CredentialMode::Token,
+            credential_id: format!("credential-{connection_id}"),
+            display_name: connection_id.to_string(),
+            secret_reference: format!("secret-{connection_id}"),
+            management_secret_reference: None,
+            service_origin_override: None,
+            verified_protocols: BTreeSet::from([String::from("openai_responses")]),
+            selected_protocol: String::from("openai_responses"),
+            prompt_cache_by_protocol: BTreeMap::new(),
+            usage_scope_override: None,
+        }
+    }
 
     /// Verifies runtime model catalogs cannot appear in persisted AI JSON.
     /// 验证运行时模型目录不会出现在持久化 AI JSON 中。
@@ -2542,6 +2921,229 @@ mod tests {
             serde_json::to_string(&PersistedAiConfiguration::default()).expect("must serialize");
         assert!(!encoded.contains("catalog"));
         assert!(!encoded.contains("connection_model_catalog"));
+    }
+
+    /// Verifies an isolated custom provider is removed only from a detached runtime projection.
+    /// 验证已隔离自定义供应商只会从独立运行时投影中移除。
+    #[test]
+    fn isolated_custom_provider_runtime_projection_preserves_repair_authority() {
+        let healthy_provider_id = "custom:healthy";
+        let isolated_provider_id = "custom:isolated";
+        let healthy_connection_id = "healthy-connection";
+        let isolated_connection_id = "isolated-connection";
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration.custom_provider_file_refs.extend([
+            healthy_provider_id.to_string(),
+            isolated_provider_id.to_string(),
+        ]);
+        configuration.custom_providers.insert(
+            healthy_provider_id.to_string(),
+            custom_provider_descriptor(healthy_provider_id),
+        );
+        configuration.connection_graph.connections.extend([
+            (
+                healthy_connection_id.to_string(),
+                custom_provider_connection(healthy_connection_id, healthy_provider_id),
+            ),
+            (
+                isolated_connection_id.to_string(),
+                custom_provider_connection(isolated_connection_id, isolated_provider_id),
+            ),
+        ]);
+        configuration
+            .connection_graph
+            .account_preferences
+            .provider_defaults
+            .extend([
+                (
+                    healthy_provider_id.to_string(),
+                    healthy_connection_id.to_string(),
+                ),
+                (
+                    isolated_provider_id.to_string(),
+                    isolated_connection_id.to_string(),
+                ),
+            ]);
+        configuration.active = Some(ActiveAiModelSelection {
+            provider_id: isolated_provider_id.to_string(),
+            model_id: String::from("isolated-model"),
+            connection_id: isolated_connection_id.to_string(),
+        });
+        configuration.model_enabled_overrides.extend([
+            (
+                PersistedAiConfiguration::provider_model_key(healthy_provider_id, "healthy-model"),
+                true,
+            ),
+            (
+                PersistedAiConfiguration::provider_model_key(
+                    isolated_provider_id,
+                    "isolated-model",
+                ),
+                true,
+            ),
+        ]);
+
+        let projection = configuration.without_isolated_custom_provider_runtime_state();
+
+        assert!(
+            configuration
+                .custom_provider_file_refs
+                .contains(isolated_provider_id)
+        );
+        assert!(
+            configuration
+                .connection_graph
+                .connections
+                .contains_key(isolated_connection_id)
+        );
+        assert!(configuration.active.is_some());
+        assert_eq!(
+            projection
+                .connection_graph
+                .connections
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>(),
+            vec![healthy_connection_id.to_string()]
+        );
+        assert_eq!(
+            projection
+                .connection_graph
+                .account_preferences
+                .provider_defaults,
+            BTreeMap::from([(
+                healthy_provider_id.to_string(),
+                healthy_connection_id.to_string(),
+            )])
+        );
+        assert!(projection.active.is_none());
+        assert!(
+            projection
+                .custom_provider_file_refs
+                .contains(isolated_provider_id)
+        );
+        assert_eq!(projection.model_enabled_overrides.len(), 1);
+        assert!(
+            projection.model_enabled_overrides.contains_key(
+                PersistedAiConfiguration::provider_model_key(healthy_provider_id, "healthy-model")
+                    .as_str()
+            )
+        );
+    }
+
+    /// Verifies explicit system-provider isolation removes only runtime-owned references.
+    /// 验证显式系统供应商隔离只移除运行时自有引用。
+    #[test]
+    fn isolated_system_provider_runtime_projection_preserves_persisted_repair_state() {
+        let healthy_provider_id = "openrouter";
+        let isolated_provider_id = "deepseek";
+        let healthy_connection_id = "openrouter-account";
+        let isolated_connection_id = "deepseek-account";
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration.connection_graph.connections.extend([
+            (
+                healthy_connection_id.to_string(),
+                custom_provider_connection(healthy_connection_id, healthy_provider_id),
+            ),
+            (
+                isolated_connection_id.to_string(),
+                custom_provider_connection(isolated_connection_id, isolated_provider_id),
+            ),
+        ]);
+        configuration
+            .connection_graph
+            .account_preferences
+            .provider_defaults
+            .extend([
+                (
+                    healthy_provider_id.to_string(),
+                    healthy_connection_id.to_string(),
+                ),
+                (
+                    isolated_provider_id.to_string(),
+                    isolated_connection_id.to_string(),
+                ),
+            ]);
+        configuration.active = Some(ActiveAiModelSelection {
+            provider_id: isolated_provider_id.to_string(),
+            model_id: String::from("deepseek-chat"),
+            connection_id: isolated_connection_id.to_string(),
+        });
+        configuration.model_enabled_overrides.extend([
+            (
+                PersistedAiConfiguration::provider_model_key(
+                    healthy_provider_id,
+                    "openrouter/auto",
+                ),
+                true,
+            ),
+            (
+                PersistedAiConfiguration::provider_model_key(isolated_provider_id, "deepseek-chat"),
+                true,
+            ),
+        ]);
+        let isolated_provider_ids = BTreeSet::from([isolated_provider_id.to_string()]);
+
+        let projection = configuration.without_provider_runtime_state(&isolated_provider_ids);
+
+        assert!(
+            configuration
+                .connection_graph
+                .connections
+                .contains_key(isolated_connection_id),
+            "the authoritative image must retain the isolated account for repair"
+        );
+        assert_eq!(
+            projection
+                .connection_graph
+                .connections
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>(),
+            vec![healthy_connection_id.to_string()]
+        );
+        assert!(projection.active.is_none());
+        assert_eq!(projection.model_enabled_overrides.len(), 1);
+        assert!(
+            projection.model_enabled_overrides.contains_key(
+                PersistedAiConfiguration::provider_model_key(
+                    healthy_provider_id,
+                    "openrouter/auto"
+                )
+                .as_str()
+            )
+        );
+    }
+
+    /// Verifies explicit deletion can remove an isolated reference without a hydrated descriptor.
+    /// 验证显式删除可在没有已补水描述符时移除一项隔离引用。
+    #[test]
+    fn isolated_custom_provider_reference_can_be_explicitly_removed() {
+        let provider_id = "custom:isolated-removal";
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration
+            .custom_provider_file_refs
+            .insert(provider_id.to_string());
+        configuration.custom_provider_manifest_failures = vec![CustomProviderManifestFailure {
+            provider_id: provider_id.to_string(),
+            message: String::from("invalid standalone document"),
+        }];
+        configuration.custom_provider_manifest_failure_total_count = 1;
+
+        let removed = configuration.remove_custom_provider_owned_state(provider_id);
+
+        assert!(removed.is_none());
+        assert!(
+            !configuration
+                .custom_provider_file_refs
+                .contains(provider_id)
+        );
+        assert!(configuration.custom_provider_manifest_failures.is_empty());
+        assert_eq!(
+            configuration.custom_provider_manifest_failure_total_count,
+            0
+        );
+        assert!(!configuration.custom_provider_manifest_failures_truncated);
     }
 
     /// Verifies billing overrides resolve by route, model, then provider precedence.
@@ -2856,33 +3458,145 @@ mod tests {
         );
     }
 
-    /// Verifies OpenRouter defaults to the curated set while other providers remain enabled.
-    /// 验证 OpenRouter 默认使用精选集合，而其他供应商保持启用。
+    /// Verifies the removed-protocol set cleanup deletes only that protocol's overrides,
+    /// while explicit preferences pointing at the removed protocol survive so binding keeps
+    /// failing closed until the user re-selects (plan §R6.8).
+    /// 验证被删除协议集合的清理只删除该协议拥有的覆盖；指向被删协议的显式偏好被保留，
+    /// 使绑定持续失败封闭直到用户重选（方案 §R6.8）。
     #[test]
-    fn model_access_defaults_are_provider_specific() {
-        assert!(default_model_enabled(
-            "openrouter",
-            "deepseek/deepseek-v4-pro"
-        ));
-        assert!(!default_model_enabled(
-            "openrouter",
-            "vendor/unreviewed-model"
-        ));
-        assert!(default_model_enabled("deepseek", "deepseek-v4-pro"));
+    fn removed_protocol_cleanup_is_scoped_to_the_removed_set() {
+        let mut configuration = PersistedAiConfiguration::default();
+        for (provider_id, protocol_id) in [
+            ("custom:test", "openai-chat-completions.v1"),
+            ("custom:test", "openai-responses.v1"),
+            ("custom:test", "anthropic-messages.v1"),
+            ("custom:other", "openai-chat-completions.v1"),
+        ] {
+            configuration.model_overrides.insert(
+                PersistedAiConfiguration::provider_model_protocol_key(
+                    provider_id,
+                    "private/chat",
+                    protocol_id,
+                ),
+                ModelExecutionOverrides {
+                    prompt_cache: Some(PromptCachePolicy::ProviderDefault),
+                    ..ModelExecutionOverrides::default()
+                },
+            );
+        }
+        configuration.custom_model_protocol_preferences.insert(
+            PersistedAiConfiguration::provider_model_key("custom:test", "private/chat"),
+            crate::CustomModelProtocolPreference::Explicit {
+                protocol: crate::CustomProviderProtocol::OpenAiChat,
+            },
+        );
+        configuration.custom_model_protocol_preferences.insert(
+            PersistedAiConfiguration::provider_model_key("custom:test", "private/chat2"),
+            crate::CustomModelProtocolPreference::Explicit {
+                protocol: crate::CustomProviderProtocol::OpenAiResponses,
+            },
+        );
+        let removed =
+            std::collections::BTreeSet::from([String::from("openai-chat-completions.v1")]);
+
+        assert_eq!(
+            configuration.removed_protocol_model_override_count("custom:test", &removed),
+            1,
+            "only the chat-completions override is owned by the removed protocol"
+        );
+        configuration.remove_removed_protocol_model_overrides("custom:test", &removed);
+        assert_eq!(configuration.model_overrides.len(), 3);
+        assert!(
+            configuration.model_overrides.contains_key(
+                PersistedAiConfiguration::provider_model_protocol_key(
+                    "custom:test",
+                    "private/chat",
+                    "openai-responses.v1"
+                )
+                .as_str()
+            ),
+            "retained protocols keep their overrides"
+        );
+        assert!(
+            configuration.model_overrides.contains_key(
+                PersistedAiConfiguration::provider_model_protocol_key(
+                    "custom:test",
+                    "private/chat",
+                    "anthropic-messages.v1"
+                )
+                .as_str()
+            )
+        );
+        assert!(
+            configuration.model_overrides.contains_key(
+                PersistedAiConfiguration::provider_model_protocol_key(
+                    "custom:other",
+                    "private/chat",
+                    "openai-chat-completions.v1"
+                )
+                .as_str()
+            ),
+            "other providers are never touched"
+        );
+
+        // The explicit preference for the removed protocol survives: dropping it would
+        // silently fall back to Auto, while retaining it keeps the model blocked
+        // (ExplicitProtocolDisabled) until the user re-selects (plan §R6.8).
+        // 指向被删协议的显式偏好被保留：删除它会静默回退 Auto，保留它则使模型保持
+        // blocked（ExplicitProtocolDisabled）直到用户重选（方案 §R6.8）。
+        assert!(
+            configuration
+                .custom_model_protocol_preferences
+                .contains_key(
+                    PersistedAiConfiguration::provider_model_key("custom:test", "private/chat")
+                        .as_str()
+                ),
+            "explicit preference for the removed protocol survives to keep the model blocked"
+        );
+        assert!(
+            configuration
+                .custom_model_protocol_preferences
+                .contains_key(
+                    PersistedAiConfiguration::provider_model_key("custom:test", "private/chat2")
+                        .as_str()
+                ),
+            "explicit preference for a retained protocol survives"
+        );
     }
 
-    /// Verifies persisted access choices retain only deviations from code-owned defaults.
-    /// 验证持久化访问选择仅保留相对代码默认值的偏差。
+    /// Verifies configuration contains no provider-owned default policy.
+    /// 验证配置层不包含供应商拥有的默认策略。
     #[test]
-    fn model_access_overrides_store_only_default_deviations() {
+    fn model_access_defaults_are_provider_neutral() {
+        let configuration = PersistedAiConfiguration::default();
+        assert!(configuration.model_is_enabled("openrouter", "vendor/unreviewed-model"));
+        assert!(!configuration.model_is_enabled_with_default(
+            "openrouter",
+            "vendor/unreviewed-model",
+            false
+        ));
+    }
+
+    /// Verifies persisted access choices override either manifest-owned inherited default.
+    /// 验证持久化访问选择会覆盖任一清单拥有的继承默认值。
+    #[test]
+    fn model_access_overrides_win_over_inherited_defaults() {
         let mut configuration = PersistedAiConfiguration::default();
         configuration.set_model_enabled("openrouter", "vendor/unreviewed-model", true);
-        assert!(configuration.model_is_enabled("openrouter", "vendor/unreviewed-model"));
+        assert!(configuration.model_is_enabled_with_default(
+            "openrouter",
+            "vendor/unreviewed-model",
+            false
+        ));
         assert_eq!(configuration.model_enabled_overrides.len(), 1);
 
         configuration.set_model_enabled("openrouter", "vendor/unreviewed-model", false);
         assert_eq!(configuration.model_enabled_overrides.len(), 1);
-        assert!(!configuration.model_is_enabled("openrouter", "vendor/unreviewed-model"));
+        assert!(!configuration.model_is_enabled_with_default(
+            "openrouter",
+            "vendor/unreviewed-model",
+            true
+        ));
         configuration.restore_model_enabled("openrouter", "vendor/unreviewed-model");
         assert!(configuration.model_enabled_overrides.is_empty());
     }
@@ -3296,13 +4010,61 @@ mod tests {
         assert!(configuration.provider_has_model_customizations(provider_id));
     }
 
-    /// Verifies deleting a provider clears every provider-scoped model setting without touching peers.
-    /// 验证删除供应商会清理全部供应商作用域模型设置且不会影响其他供应商。
+    /// Verifies one explicit model protocol choice alone is disclosed as provider-owned state.
+    /// 验证仅有一项显式模型协议选择时也会披露为供应商自有状态。
     #[test]
-    fn removing_provider_clears_provider_model_settings_without_touching_peers() {
+    fn provider_model_customization_detection_includes_protocol_preference() {
+        // provider_id and model_id identify the sole provider-owned customization below.
+        // provider_id 与 model_id 标识下方唯一的供应商自有定制。
+        let provider_id = "custom:protocol-only";
+        let model_id = "private-model";
+        // configuration intentionally contains no other model or route customization.
+        // configuration 有意不包含其他模型或路由定制。
         let mut configuration = PersistedAiConfiguration::default();
-        let removed_provider = "custom-provider";
-        let retained_provider = "other-provider";
+        configuration.custom_model_protocol_preferences.insert(
+            PersistedAiConfiguration::provider_model_key(provider_id, model_id),
+            CustomModelProtocolPreference::Explicit {
+                protocol: CustomProviderProtocol::AnthropicMessages,
+            },
+        );
+
+        assert!(configuration.provider_has_model_customizations(provider_id));
+        assert!(!configuration.provider_has_model_customizations("custom:peer"));
+    }
+
+    /// Verifies deleting a custom provider clears every hydrated field without touching peers.
+    /// 验证删除自定义供应商会清理全部已补水字段且不会影响其他供应商。
+    #[test]
+    fn removing_custom_provider_clears_all_owned_state_without_touching_peers() {
+        let mut configuration = PersistedAiConfiguration::default();
+        let removed_provider = "custom:provider";
+        let retained_provider = "custom:other-provider";
+        // These descriptors own the removable and retained standalone manifest documents.
+        // 这些描述分别持有待删除与保留的独立 Manifest 文档。
+        let removed_descriptor = custom_provider_descriptor(removed_provider);
+        let retained_descriptor = custom_provider_descriptor(retained_provider);
+        // These manifests prove the hydrated runtime map follows the descriptor lifecycle.
+        // 这些 Manifest 证明已补水运行时映射会遵循描述的生命周期。
+        let removed_manifest = crate::legacy_custom_descriptor_to_manifest(&removed_descriptor)
+            .expect("removed custom manifest should build");
+        let retained_manifest = crate::legacy_custom_descriptor_to_manifest(&retained_descriptor)
+            .expect("retained custom manifest should build");
+        configuration
+            .custom_providers
+            .insert(String::from(removed_provider), removed_descriptor);
+        configuration
+            .custom_providers
+            .insert(String::from(retained_provider), retained_descriptor);
+        configuration.custom_provider_file_refs.extend([
+            String::from(removed_provider),
+            String::from(retained_provider),
+        ]);
+        configuration
+            .custom_provider_manifests
+            .insert(String::from(removed_provider), removed_manifest);
+        configuration
+            .custom_provider_manifests
+            .insert(String::from(retained_provider), retained_manifest);
         let removed_key =
             PersistedAiConfiguration::provider_model_key(removed_provider, "private-model");
         let retained_key =
@@ -3453,8 +4215,37 @@ mod tests {
             },
         );
 
-        configuration.remove_provider_owned_model_settings(removed_provider);
+        // The removed descriptor proves the comprehensive cleanup path owned the exact provider.
+        // 被移除描述证明综合清理路径持有精确供应商。
+        let removed_descriptor = configuration
+            .remove_custom_provider_owned_state(removed_provider)
+            .expect("custom provider should be removed");
 
+        assert_eq!(removed_descriptor.id, removed_provider);
+        assert_eq!(
+            configuration
+                .custom_providers
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>(),
+            vec![String::from(retained_provider)]
+        );
+        assert_eq!(
+            configuration
+                .custom_provider_file_refs
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>(),
+            vec![String::from(retained_provider)]
+        );
+        assert_eq!(
+            configuration
+                .custom_provider_manifests
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>(),
+            vec![String::from(retained_provider)]
+        );
         assert_eq!(
             configuration
                 .custom_models
@@ -3560,6 +4351,49 @@ mod tests {
             decoded.model_capability_overrides,
             historical.model_capability_overrides
         );
+    }
+
+    /// R12/必测 1：从旧 schema 升级一次与重复升级两次结果相同。
+    ///
+    /// Every supported legacy schema (0..=12) must migrate idempotently: applying the
+    /// migration a second time to an already-current configuration produces the identical
+    /// snapshot and returns `Ok(false)` (no further change) (plan §R12).
+    /// 每个受支持的旧 schema（0..=12）必须幂等迁移：对已是当前版本的配置再次执行迁移，
+    /// 产生完全相同的快照并返回 `Ok(false)`（不再变化）（方案 §R12）。
+    #[test]
+    fn legacy_schema_migration_is_idempotent_across_all_supported_versions() {
+        for legacy_schema in 0..=12 {
+            let mut once = PersistedAiConfiguration {
+                schema_version: legacy_schema,
+                ..PersistedAiConfiguration::default()
+            };
+            assert!(
+                once.migrate_to_current_schema()
+                    .expect("legacy schema must migrate"),
+                "schema {legacy_schema} must change on first migration"
+            );
+            let once_encoded = serde_json::to_vec(&once).expect("configuration must serialize");
+
+            let mut twice = PersistedAiConfiguration {
+                schema_version: legacy_schema,
+                ..PersistedAiConfiguration::default()
+            };
+            twice
+                .migrate_to_current_schema()
+                .expect("first migration must succeed");
+            let second_changed = twice
+                .migrate_to_current_schema()
+                .expect("second migration must succeed");
+            assert!(
+                !second_changed,
+                "schema {legacy_schema} second migration must be a no-op"
+            );
+            let twice_encoded = serde_json::to_vec(&twice).expect("configuration must serialize");
+            assert_eq!(
+                once_encoded, twice_encoded,
+                "schema {legacy_schema} one-time and repeated migration must be identical"
+            );
+        }
     }
 
     /// Verifies schema two migrates legacy resolved custom capabilities into explicit differences.

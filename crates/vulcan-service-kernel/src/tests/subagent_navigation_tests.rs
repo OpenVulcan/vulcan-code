@@ -1,5 +1,5 @@
 //! subagent navigation tests.
-//! subagent navigation tests銆?
+//! 子智能体导航测试。
 use super::*;
 
 /// Returns the active surface id and fails the test on registry projection errors.
@@ -43,14 +43,14 @@ fn subagent_navigation_snapshot_from_cached_state(
 }
 
 /// Fixed creation timestamp used by segmented navigation preload fixtures.
-/// 鍒嗘瀵艰埅棰勮浇娴嬭瘯澶瑰叿浣跨敤鐨勫浐瀹氬垱寤烘椂闂存埑銆?
+/// 分段导航预加载测试夹具使用的固定创建时间戳。
 const NAVIGATION_TEST_ROOT_CREATED_AT: &str = "100";
 /// Directory date derived from the fixed navigation test creation timestamp.
-/// 浠庡浐瀹氬鑸祴璇曞垱寤烘椂闂存埑鎺ㄥ鍑虹殑鐩綍鏃ユ湡銆?
+/// 从固定导航测试创建时间戳推导出的目录日期。
 const NAVIGATION_TEST_ROOT_CREATED_DATE: &str = "1970-01-01";
 
 /// Builds the production-shaped segmented session directory for navigation preload fixtures.
-/// 涓哄鑸杞芥祴璇曞す鍏锋瀯寤虹鍚堢敓浜у懡鍚嶈鍒欑殑鍒嗘浼氳瘽鐩綍銆?
+/// 为导航预加载测试夹具构建符合生产命名规则的分段会话目录。
 fn navigation_test_session_dir(
     project_root: &std::path::Path,
     root_session_id: SessionId,
@@ -123,7 +123,7 @@ fn create_navigation_test_root_metadata(session_dir: &std::path::Path, root_sess
 }
 
 /// Builds one persisted navigation test task metadata document.
-/// 鏋勫缓鍗曚釜鎸佷箙鍖栧鑸祴璇曚换鍔″厓鏁版嵁鏂囨。銆?
+/// 构建单个持久化导航测试任务元数据文档。
 fn navigation_test_task_metadata(
     root_session_id: SessionNodeId,
     task_session_id: SessionNodeId,
@@ -145,7 +145,7 @@ fn navigation_test_task_metadata(
 }
 
 /// Verifies token-refresh projection can reuse existing subagent navigation without rebuilding the task list.
-/// 楠岃瘉 token 鍒锋柊鎶曞奖鍙互澶嶇敤鐜版湁瀛愪唬鐞嗗鑸€屼笉閲嶅缓浠诲姟鍒楄〃銆?
+/// 验证令牌刷新投影可复用现有子智能体导航，而无需重建任务列表。
 #[test]
 fn preserved_subagent_navigation_refresh_reads_child_surface_without_task_list_rebuild() {
     let parent_session_id = SessionId::new_v4();
@@ -169,6 +169,7 @@ fn preserved_subagent_navigation_refresh_reads_child_surface_without_task_list_r
         token_budget_runtime: None,
         mcp_runtime: None,
         cached_mcp_catalog: None,
+        provider_manifest_sync: None,
         live_context_budgets: BTreeMap::new(),
         session_goal_summaries: BTreeMap::new(),
         session_goal_dispatch_versions: BTreeMap::new(),
@@ -509,6 +510,7 @@ fn unclosed_subagent_cache_without_visible_round_builds_navigation() {
         token_budget_runtime: None,
         mcp_runtime: None,
         cached_mcp_catalog: None,
+        provider_manifest_sync: None,
         live_context_budgets: BTreeMap::new(),
         session_goal_summaries: BTreeMap::new(),
         session_goal_dispatch_versions: BTreeMap::new(),
@@ -635,7 +637,7 @@ fn cached_navigation_lists_unclosed_subagent_tree() {
 }
 
 /// Verifies a nested active subagent panel remains valid under root navigation.
-/// 楠岃瘉宓屽娲诲姩鏅鸿兘浣撻潰鏉垮湪鏍逛細璇濆鑸笅浠嶇劧鏈夋晥銆?
+/// 验证嵌套活动智能体面板在根会话导航下仍然有效。
 #[test]
 fn nested_active_subagent_panel_remains_active_under_root_navigation() {
     let root_session_id = SessionId::new_v4();
@@ -749,7 +751,7 @@ fn registry_nested_subagent_parent_lookup_uses_direct_parent() {
 }
 
 /// Verifies workspace bootstrap wording no longer promises subagent index preload.
-/// 楠岃瘉宸ヤ綔鍖哄惎鍔ㄦ枃妗堜笉鍐嶆壙璇洪杞芥櫤鑳戒綋绱㈠紩銆?
+/// 验证工作区启动文案不再承诺预加载智能体索引。
 #[test]
 fn workspace_bootstrap_ready_message_excludes_subagent_index_preload() {
     let message = crate::service_bootstrap::startup_ready_message("workspace");
@@ -759,7 +761,7 @@ fn workspace_bootstrap_ready_message_excludes_subagent_index_preload() {
 }
 
 /// Verifies detail preload does not create navigation membership without registry metadata.
-/// 楠岃瘉缂哄皯娉ㄥ唽琛ㄥ厓鏁版嵁鏃讹紝璇︽儏棰勮浇涓嶄細鍒涘缓瀵艰埅鎴愬憳鍏崇郴銆?
+/// 验证缺少注册表元数据时，详情预加载不会创建导航成员关系。
 #[test]
 fn detail_preload_does_not_create_navigation_membership_without_registry_metadata() {
     use vulcan_task_session::TaskSessionStore as _;
@@ -1192,7 +1194,7 @@ fn shared_state_preload_restores_all_unclosed_subagents_before_navigation_projec
 }
 
 /// Verifies surface preload fills missing WebUI navigation entries before cached projection.
-/// 楠岃瘉鐣岄潰棰勮浇浼氬湪缂撳瓨鎶曞奖鍓嶈ˉ榻愮己澶辩殑 WebUI 瀵艰埅鏉＄洰銆?
+/// 验证界面预加载会在缓存投影前补齐缺失的 WebUI 导航条目。
 #[test]
 fn surface_preload_restores_all_unclosed_tasks_before_cached_navigation() {
     use vulcan_task_session::TaskSessionStore as _;
@@ -1327,7 +1329,7 @@ fn surface_preload_restores_all_unclosed_tasks_before_cached_navigation() {
 }
 
 /// Verifies session hydration preloads unclosed subagent surfaces with transcript details.
-/// 楠岃瘉浼氳瘽姘村悎浼氶杞藉甫杞綍璇︽儏鐨勬湭鍏抽棴瀛愭櫤鑳戒綋鐣岄潰銆?
+/// 验证会话水合会预加载带转录详情的未关闭子智能体界面。
 #[test]
 fn hydration_preloads_unclosed_subagent_surface_from_segmented_store() {
     use vulcan_session_core::SessionNodeStore as _;
@@ -1945,6 +1947,7 @@ fn registry_terminal_status_remains_visible_after_stale_listener_is_suppressed()
         token_budget_runtime: None,
         mcp_runtime: None,
         cached_mcp_catalog: None,
+        provider_manifest_sync: None,
         live_context_budgets: BTreeMap::new(),
         session_goal_summaries: BTreeMap::new(),
         session_goal_dispatch_versions: BTreeMap::new(),
@@ -2055,7 +2058,7 @@ fn workspace_phase_live_run_helper_filters_only_stale_listener_state() {
 }
 
 /// Verifies a same-parent inactive subagent panel falls back to the parent surface.
-/// 楠岃瘉鍚岀埗绾х殑闈炴椿鍔ㄥ瓙浠ｇ悊闈㈡澘浼氬洖閫€鍒扮埗浼氳瘽鐣岄潰銆?
+/// 验证同父级的非活动子智能体面板会回退到父会话界面。
 #[test]
 fn inactive_same_parent_subagent_panel_falls_back_to_parent_surface() {
     let parent_session_id = SessionId::new_v4();
@@ -2079,6 +2082,7 @@ fn inactive_same_parent_subagent_panel_falls_back_to_parent_surface() {
         token_budget_runtime: None,
         mcp_runtime: None,
         cached_mcp_catalog: None,
+        provider_manifest_sync: None,
         live_context_budgets: BTreeMap::new(),
         session_goal_summaries: BTreeMap::new(),
         session_goal_dispatch_versions: BTreeMap::new(),
@@ -2155,7 +2159,7 @@ fn inactive_same_parent_subagent_panel_falls_back_to_parent_surface() {
 }
 
 /// Verifies a stale WebUI subagent panel cannot hijack another selected conversation surface.
-/// 楠岃瘉 WebUI 娈嬬暀鐨勫瓙浠ｇ悊闈㈡澘涓嶈兘鍔寔鍙︿竴涓凡閫変細璇濈殑鏄剧ず鐣岄潰銆?
+/// 验证 WebUI 残留的子智能体面板不能劫持另一个已选会话的显示界面。
 #[test]
 fn webui_active_subagent_panel_cannot_cross_selected_session() {
     let selected_session_id = SessionId::new_v4();
@@ -2180,6 +2184,7 @@ fn webui_active_subagent_panel_cannot_cross_selected_session() {
         token_budget_runtime: None,
         mcp_runtime: None,
         cached_mcp_catalog: None,
+        provider_manifest_sync: None,
         live_context_budgets: BTreeMap::new(),
         session_goal_summaries: BTreeMap::new(),
         session_goal_dispatch_versions: BTreeMap::new(),
@@ -2267,7 +2272,7 @@ fn webui_active_subagent_panel_cannot_cross_selected_session() {
 }
 
 /// Verifies task-session metadata merge updates the visible parent task card.
-/// 楠岃瘉 task-session 鍏冩暟鎹悎骞朵細鏇存柊鍙鐖剁骇浠诲姟鍗＄墖銆?
+/// 验证任务会话元数据合并会更新可见的父级任务卡片。
 #[test]
 fn task_session_tool_metadata_merge_updates_parent_card() {
     let parent_session_id = SessionId::new_v4();

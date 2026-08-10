@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   filterModelPickerChoices,
   groupModelPickerChoices,
+  modelAccountEffectiveProtocolId,
   modelAccountProtocolDisplayName,
   modelPickerChoiceKey,
   modelPickerChoicesFromProviders,
@@ -119,5 +120,63 @@ describe("modelAccountProtocolDisplayName", () => {
     expect(modelAccountProtocolDisplayName("anthropic-messages.v1")).toBe("Anthropic Messages");
     expect(modelAccountProtocolDisplayName("openai-responses.v1")).toBe("OpenAI Responses");
     expect(modelAccountProtocolDisplayName("future-protocol.v1")).toBe("future-protocol.v1");
+  });
+});
+
+describe("modelAccountEffectiveProtocolId", () => {
+  // Verifies one shared credential displays the exact selected model route instead of its
+  // connection-level compatibility anchor.
+  // 验证共享凭据展示精确选中模型路由，而不是连接级兼容锚点。
+  it("uses the backend provider-account-model route as its sole authority", () => {
+    // choice identifies the Responses-bound model on one multi-protocol account.
+    // choice 标识一个多协议账号上绑定 Responses 的模型。
+    const choice = modelPickerChoicesFromProviders(miniMaxProviders())[0]!;
+    expect(modelAccountEffectiveProtocolId({
+      modelRouteRecords: [
+        {
+          providerId: choice.providerId,
+          connectionId: choice.connectionId,
+          serviceEntryId: "official-api",
+          modelId: choice.modelId,
+          protocolId: "openai-responses.v1",
+          availableProtocols: ["openai-responses.v1", "anthropic-messages.v1"],
+          bindingSource: "system_manifest",
+          bindingRuleId: "responses-model",
+          manifestRevision: 1,
+          executable: true,
+        },
+        {
+          providerId: choice.providerId,
+          connectionId: choice.connectionId,
+          serviceEntryId: "official-api",
+          modelId: "another-model",
+          protocolId: "anthropic-messages.v1",
+          availableProtocols: ["anthropic-messages.v1"],
+          bindingSource: "system_manifest",
+          bindingRuleId: "anthropic-model",
+          manifestRevision: 1,
+          executable: true,
+        },
+      ],
+    }, choice)).toBe("openai-responses.v1");
+  });
+
+  // Verifies missing or explicitly blocked backend evidence never falls back to a connection protocol.
+  // 验证缺失或被后端显式阻止的证据绝不回退到连接协议。
+  it("fails closed when the exact model route is absent or blocked", () => {
+    const choice = modelPickerChoicesFromProviders(miniMaxProviders())[0]!;
+    expect(modelAccountEffectiveProtocolId({ modelRouteRecords: [] }, choice)).toBeNull();
+    expect(modelAccountEffectiveProtocolId({
+      modelRouteRecords: [{
+        providerId: choice.providerId,
+        connectionId: choice.connectionId,
+        serviceEntryId: "official-api",
+        modelId: choice.modelId,
+        availableProtocols: ["anthropic-messages.v1"],
+        manifestRevision: 2,
+        executable: false,
+        unavailableReason: "No executable model-level binding.",
+      }],
+    }, choice)).toBeNull();
   });
 });

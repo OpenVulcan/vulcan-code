@@ -1225,11 +1225,18 @@ pub(crate) async fn run_task_session_context_compaction(
     // compactionPreparationRequest 携带已为本次任务执行解析的精确供应商覆盖。
     let (provider_configuration, compaction_preparation_request) =
         build_task_runtime_preparation_request(&context, &request, &resolved_config)?;
+    // compactionSessionId scopes the task session's immutable provider-route lease.
+    // compactionSessionId 确定任务会话不可变供应商路由租约的作用域。
+    let compaction_session_id = compaction_preparation_request.session_id.to_string();
     // modelTarget freezes the same public route for remote and local task compaction when available.
     // modelTarget 在公共运行时可用时为远端与本地任务压缩冻结同一路由。
     let model_target = match context.foundation.public_ai_runtime() {
         Some(runtime) => resolve_prompt_compaction_model_target(
             runtime.as_ref(),
+            compaction_session_id.as_str(),
+            compaction_preparation_request
+                .provider_route_lease_identity
+                .as_ref(),
             compaction_preparation_request
                 .provider_id_override
                 .as_deref(),

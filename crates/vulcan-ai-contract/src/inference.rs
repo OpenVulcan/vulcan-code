@@ -1174,6 +1174,7 @@ pub struct InferenceCapabilitySnapshot {
 /// Declares strong embedding limits for one exact model route.
 /// 声明一条精确模型路由的强类型向量限制。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EmbeddingCapabilities {
     /// Supported semantic tasks.
     /// 支持的语义任务。
@@ -1293,6 +1294,7 @@ impl EmbeddingCapabilities {
 /// Declares strong rerank limits for one exact model route.
 /// 声明一条精确模型路由的强类型重排限制。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RerankCapabilities {
     /// Supported query resource kinds; an empty set means text only.
     /// 支持的查询资源类型；空集合表示仅文本。

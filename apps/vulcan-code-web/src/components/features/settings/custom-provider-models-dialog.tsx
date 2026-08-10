@@ -40,11 +40,20 @@ import {
   accountExposesModel,
   accountIncludesModel,
   buildCustomProviderModelRows,
+  mergeCustomModelProtocolPreferences,
   shouldBlockManualModelSubmission,
   shouldReplaceManualModelDrafts,
   type CustomProviderModelAccountState,
   type CustomProviderModelRow,
 } from "@/components/features/settings/custom-provider-models-state"
+import {
+  customProtocolProfileId,
+  customProtocolsFromServiceEntries,
+  exactCustomModelRouteRecord,
+  selectableCustomModelProtocols,
+  shouldShowCustomModelProtocolPreferenceCard,
+  shouldShowCustomModelProtocolSelector,
+} from "@/components/features/settings/custom-provider-protocol-drafts"
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
@@ -84,6 +93,7 @@ import {
   loadPublicAiSettings,
   savePublicAiCustomModelConnectionAvailability,
   savePublicAiCustomModelTemplateDecisionsBatch,
+  savePublicAiCustomModelProtocolPreferences,
   savePublicAiCustomModels,
   savePublicAiModelCapabilityOverrides,
   savePublicAiModelEnabled,
@@ -94,12 +104,15 @@ import {
 import type {
   PublicAiCommonModelTemplateSuggestion,
   PublicAiCustomModelDefinition,
+  PublicAiCustomModelProtocolPreference,
   PublicAiCustomModelRequestProjection,
   PublicAiCustomProviderModelDefaults,
+  PublicAiCustomProviderProtocol,
   PublicAiCustomModelTemplateDecision,
   PublicAiCustomModelTemplateDecisionBatchItem,
   PublicAiCustomModelTemplateSuggestionsRecord,
   PublicAiModelCapabilityOverrides,
+  PublicAiModelRouteRecord,
   PublicAiProviderDescriptor,
   PublicAiResourceKind,
   PublicAiSettingsSnapshot,
@@ -171,6 +184,168 @@ const REASONING_EFFORT_LABEL_KEYS = {
 
 // CustomProviderModelsDialog manages one merged model union and credential-scoped evidence.
 // CustomProviderModelsDialog 管理一个合并模型并集与凭据作用域证据。
+
+// ProtocolPreferenceCard edits one model's Auto/Explicit protocol choice using only Service-resolved
+// data; the browser never resolves rules or inheritance (completion gate).
+// ProtocolPreferenceCard 仅使用 Service 已解析数据编辑一个模型的 Auto/Explicit 协议选择；
+// 浏览器绝不解析规则或继承（完成门）。
+function ProtocolPreferenceCard(props: {
+  enabledProtocols: PublicAiCustomProviderProtocol[]
+  modelId: string
+  onSaved: (preferences: { modelId: string; preference: PublicAiCustomModelProtocolPreference }[]) => void
+  preference: PublicAiCustomModelProtocolPreference
+  routeRecord?: PublicAiModelRouteRecord
+  saving: boolean
+}) {
+  const { t } = useI18n()
+  // selectableProtocols consumes backend-observed model variants and never reimplements Auto.
+  // selectableProtocols 消费后端观测的模型变体，绝不重新实现 Auto。
+  const selectableProtocols = React.useMemo(
+    () => selectableCustomModelProtocols(props.enabledProtocols, props.routeRecord),
+    [props.enabledProtocols, props.routeRecord],
+  )
+  // initialProtocol preserves a valid explicit preference or selects the first exact available
+  // option for deliberate recovery from a stale explicit preference.
+  // initialProtocol 保留有效显式偏好；显式偏好失效时选择首个精确可用项供用户主动恢复。
+  const initialProtocol = props.preference.mode === "explicit"
+    && selectableProtocols.includes(props.preference.protocol)
+    ? props.preference.protocol
+    : (
+        selectableProtocols[0]
+        ?? (props.preference.mode === "explicit" ? props.preference.protocol : undefined)
+      )
+  const [mode, setMode] = React.useState<"auto" | "explicit">(
+    props.preference.mode === "explicit" ? "explicit" : "auto",
+  )
+  const [protocol, setProtocol] = React.useState<PublicAiCustomProviderProtocol | undefined>(initialProtocol)
+  // multiProtocolOnly shows the selector only for providers with more than one enabled protocol.
+  // multiProtocolOnly 仅在供应商启用多个协议时显示选择器。
+  const multiProtocolOnly = shouldShowCustomModelProtocolSelector(props.enabledProtocols)
+  // preferenceCardVisible keeps a recovery-only Auto action visible when a removed explicit
+  // protocol has intentionally left the model blocked.
+  // preferenceCardVisible 在已删除的显式协议刻意使模型保持阻塞时，保留仅用于恢复的
+  // Auto 操作入口。
+  const preferenceCardVisible = shouldShowCustomModelProtocolPreferenceCard(
+    props.enabledProtocols,
+    props.preference,
+  )
+  if (!preferenceCardVisible) {
+    return null
+  }
+  // selectedPreference stays absent until the user selects one exact backend-observed protocol;
+  // the browser must never invent a route merely to satisfy a controlled component.
+  // selectedPreference 在用户选择精确的后端观测协议前保持缺失；
+  // 浏览器绝不得仅为满足受控组件而伪造路由。
+  const selectedPreference: PublicAiCustomModelProtocolPreference | null = mode === "auto"
+    ? { mode: "auto" }
+    : (protocol ? { mode: "explicit", protocol } : null)
+  const selectionValid = selectedPreference !== null
+    && (selectedPreference.mode === "auto"
+      || selectableProtocols.includes(selectedPreference.protocol))
+  const dirty = selectedPreference !== null
+    && (selectedPreference.mode !== props.preference.mode
+    || (selectedPreference.mode === "explicit"
+      && props.preference.mode === "explicit"
+      && selectedPreference.protocol !== props.preference.protocol))
+  return (
+    <div className="space-y-3 rounded-lg border p-4">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="text-sm font-medium">{t("settings.customModels.protocolPreference")}</p>
+          <p className="text-xs text-muted-foreground">{t("settings.customModels.protocolPreferenceHint")}</p>
+        </div>
+        <RadioGroup
+          disabled={props.saving}
+          onValueChange={(value) => setMode(value as "auto" | "explicit")}
+          value={mode}
+        >
+          <div className="flex items-center gap-4">
+            <label className="flex items-center gap-2 text-sm"><RadioGroupItem value="auto" />{t("settings.customModels.protocolAuto")}</label>
+            {multiProtocolOnly ? (
+              <label className="flex items-center gap-2 text-sm"><RadioGroupItem value="explicit" />{t("settings.customModels.protocolExplicit")}</label>
+            ) : null}
+          </div>
+        </RadioGroup>
+      </div>
+      {mode === "explicit" && multiProtocolOnly ? (
+        <Select
+          disabled={props.saving}
+          onValueChange={(value) => setProtocol(value as PublicAiCustomProviderProtocol)}
+          value={protocol}
+        >
+          <SelectTrigger className="w-64"><SelectValue placeholder={t("settings.customModels.protocolSelect")} /></SelectTrigger>
+          <SelectContent>
+            {selectableProtocols.map((enabledProtocol) => (
+              <SelectItem key={enabledProtocol} value={enabledProtocol}>
+                {customProtocolProfileId(enabledProtocol)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      ) : null}
+      {props.routeRecord ? (
+        <dl className="grid gap-2 rounded-md bg-muted/45 p-3 text-xs sm:grid-cols-2">
+          <div className="min-w-0">
+            <dt className="text-muted-foreground">{t("settings.models.routeEffectiveProtocol")}</dt>
+            <dd className="truncate font-mono" title={props.routeRecord.protocolId}>
+              {props.routeRecord.protocolId ?? "—"}
+            </dd>
+          </div>
+          <div className="min-w-0">
+            <dt className="text-muted-foreground">{t("settings.models.routeAvailableProtocols")}</dt>
+            <dd
+              className="truncate font-mono"
+              title={props.routeRecord.availableProtocols.join(", ")}
+            >
+              {props.routeRecord.availableProtocols.join(", ") || "—"}
+            </dd>
+          </div>
+          <div className="min-w-0">
+            <dt className="text-muted-foreground">{t("settings.models.routeBindingSource")}</dt>
+            <dd className="truncate font-mono" title={props.routeRecord.bindingSource}>
+              {props.routeRecord.bindingSource ?? "—"}
+            </dd>
+          </div>
+          <div className="min-w-0">
+            <dt className="text-muted-foreground">{t("settings.models.routeBindingRule")}</dt>
+            <dd className="truncate font-mono" title={props.routeRecord.bindingRuleId}>
+              {props.routeRecord.bindingRuleId ?? t("settings.models.routeNoRule")}
+            </dd>
+          </div>
+          <div className="min-w-0">
+            <dt className="text-muted-foreground">{t("settings.models.routeManifestRevision")}</dt>
+            <dd className="font-mono">{props.routeRecord.manifestRevision}</dd>
+          </div>
+        </dl>
+      ) : (
+        <p className="rounded-md border border-destructive/35 bg-destructive/5 p-3 text-xs text-destructive">
+          {t("settings.models.routeUnresolved")}
+        </p>
+      )}
+      {props.routeRecord && !props.routeRecord.executable ? (
+        <p className="rounded-md border border-destructive/35 bg-destructive/5 p-3 text-xs text-destructive">
+          <span className="font-medium">{t("settings.models.routeUnavailableReason")}: </span>
+          {props.routeRecord.unavailableReason ?? t("settings.models.routeUnresolved")}
+        </p>
+      ) : null}
+      <div className="flex justify-end">
+        <Button
+          disabled={props.saving || !dirty || !selectionValid}
+          onClick={() => {
+            if (selectedPreference) {
+              props.onSaved([{ modelId: props.modelId, preference: selectedPreference }])
+            }
+          }}
+          size="sm"
+          type="button"
+        >
+          {t("settings.customModels.saveProtocolPreference")}
+        </Button>
+      </div>
+    </div>
+  )
+}
+
 export function CustomProviderModelsDialog(props: CustomProviderModelsDialogProps) {
   const { t } = useI18n()
   const [manualModels, setManualModels] = React.useState<PublicAiCustomModelDefinition[]>([])
@@ -191,6 +366,31 @@ export function CustomProviderModelsDialog(props: CustomProviderModelsDialogProp
   const [discardConfirmationOpen, setDiscardConfirmationOpen] = React.useState(false)
   const [advancedSaveConfirmationOpen, setAdvancedSaveConfirmationOpen] = React.useState(false)
   const [templateReviewOpen, setTemplateReviewOpen] = React.useState(false)
+
+  // protocolPreferences derives from the explicit snapshot records so the browser never parses
+  // composite keys (completion gate: no second protocol-resolution implementation).
+  // protocolPreferences 从显式快照记录派生，浏览器绝不解析组合键
+  // （完成门：不允许第二份协议解析实现）。
+  const protocolPreferences = React.useMemo(() => {
+    if (!props.snapshot || !props.provider) {
+      return new Map<string, PublicAiCustomModelProtocolPreference>()
+    }
+    return new Map(
+      (props.snapshot.customModelProtocolPreferenceRecords ?? [])
+        .filter((record) => record.providerId === props.provider?.id)
+        .map((record) => [record.modelId, record.preference]),
+    )
+  }, [props.provider, props.snapshot])
+  // enabledProtocols converts runtime profile identifiers back to the exact persisted custom
+  // protocol contract, removes duplicate routes, and preserves fixed Auto priority.
+  // enabledProtocols 将运行时配置档标识转换回精确持久化的自定义协议契约，去除重复路由，
+  // 并保持固定 Auto 优先级。
+  const enabledProtocols = React.useMemo(() => {
+    if (!props.provider) {
+      return []
+    }
+    return customProtocolsFromServiceEntries(props.provider.service_entries)
+  }, [props.provider])
 
   React.useEffect(() => {
     if (!props.open || !props.provider || !props.snapshot || manualModelsDirty) {
@@ -250,6 +450,21 @@ export function CustomProviderModelsDialog(props: CustomProviderModelsDialogProp
   const selectedAccount = selectedRow?.accounts.find(
     (account) => account.connection.id === selectedConnectionId,
   ) ?? selectedRow?.accounts[0]
+  // selectedRouteRecord selects only the exact backend-resolved provider/model/account identity;
+  // missing evidence remains visibly unresolved instead of borrowing a sibling account route.
+  // selectedRouteRecord 仅选择精确的后端已解析供应商/模型/账号身份；证据缺失时保持
+  // 可见的未解析状态，而不会借用同级账号路由。
+  const selectedRouteRecord = React.useMemo(() => {
+    if (!props.provider || !selectedRow) {
+      return undefined
+    }
+    return exactCustomModelRouteRecord(
+      props.snapshot?.modelRouteRecords,
+      props.provider.id,
+      selectedRow.id,
+      selectedAccount?.connection.id,
+    )
+  }, [props.provider, props.snapshot?.modelRouteRecords, selectedAccount?.connection.id, selectedRow])
   const visibleRows = React.useMemo(() => {
     const normalizedQuery = query.trim().toLocaleLowerCase()
     return rows.filter((row) => {
@@ -323,6 +538,29 @@ export function CustomProviderModelsDialog(props: CustomProviderModelsDialogProp
       setSaving(false)
     }
   }, [acceptSnapshot, advancedTextDrafts, manualModels, props.provider, t])
+
+  // persistProtocolPreferences writes the complete per-model preference set for this provider.
+  // persistProtocolPreferences 为该供应商写入完整逐模型偏好集合。
+  const persistProtocolPreferences = React.useCallback(async (
+    preferences: { modelId: string; preference: PublicAiCustomModelProtocolPreference }[],
+  ) => {
+    if (!props.provider) {
+      return
+    }
+    setSaving(true)
+    setError(null)
+    try {
+      const snapshot = await savePublicAiCustomModelProtocolPreferences(
+        props.provider.id,
+        mergeCustomModelProtocolPreferences(protocolPreferences, preferences),
+      )
+      props.onSaved(snapshot)
+    } catch (reason) {
+      setError(errorMessage(reason))
+    } finally {
+      setSaving(false)
+    }
+  }, [props, protocolPreferences])
 
   // updateManualDefinition materializes an inherited definition on its first direct edit.
   // updateManualDefinition 在首次直接编辑时实体化继承定义。
@@ -600,6 +838,15 @@ export function CustomProviderModelsDialog(props: CustomProviderModelsDialogProp
                         row={selectedRow}
                       />
                       <ResolvedCapabilitySummary account={selectedAccount} defaults={providerDefaults} row={selectedRow} />
+                      <ProtocolPreferenceCard
+                        enabledProtocols={enabledProtocols}
+                        key={`${selectedRow.id}:${selectedAccount?.connection.id ?? "no-account"}`}
+                        modelId={selectedRow.id}
+                        onSaved={persistProtocolPreferences}
+                        preference={protocolPreferences.get(selectedRow.id) ?? { mode: "auto" }}
+                        routeRecord={selectedRouteRecord}
+                        saving={saving}
+                      />
                     </TabsContent>
                     <TabsContent className="space-y-3" value="accounts">
                       <AccountAvailabilityEditor

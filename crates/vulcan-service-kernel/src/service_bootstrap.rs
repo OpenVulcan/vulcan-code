@@ -97,9 +97,49 @@ fn run_service_bootstrap(
         })?;
     let provider_configuration = vulcan_provider_config::config::load_configuration_file()
         .map_err(|error| ServiceBootstrapError::new("service-process", "Core Service", error))?;
-    let public_ai_configuration = vulcan_provider_config::config::load_public_ai_connections_file()
-        .map_err(|error| ServiceBootstrapError::new("service-process", "Core Service", error))?
-        .configuration;
+    let mut public_ai_configuration =
+        vulcan_provider_config::config::load_public_ai_connections_file()
+            .map_err(|error| ServiceBootstrapError::new("service-process", "Core Service", error))?
+            .configuration;
+    // legacy_custom_provider_ids are embedded providers not yet represented by standalone
+    // references. They migrate through the same recoverable journal as ordinary saves, so a
+    // crash cannot split provider bytes from the central reference document.
+    // legacy_custom_provider_ids 是尚未由独立引用表示的内嵌供应商。它们通过与普通保存
+    // 相同的可恢复日志迁移，进程崩溃不会拆分供应商字节与中央引用文档。
+    let legacy_custom_provider_ids = public_ai_configuration
+        .custom_providers
+        .keys()
+        .filter(|provider_id| {
+            !public_ai_configuration
+                .custom_provider_file_refs
+                .contains(*provider_id)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if !legacy_custom_provider_ids.is_empty() {
+        let app_data_root = vulcan_workspace_store::data_plane::application_data_root();
+        vulcan_provider_config::config::save_public_ai_connections_with_custom_manifests(
+            &public_ai_configuration,
+            &app_data_root,
+        )
+        .map_err(|error| {
+            ServiceBootstrapError::new(
+                "service-process",
+                "Core Service",
+                format!("自定义供应商独立清单事务迁移失败：{error}"),
+            )
+        })?;
+        public_ai_configuration.custom_provider_file_refs = public_ai_configuration
+            .custom_providers
+            .keys()
+            .cloned()
+            .collect();
+        logs.push(format!(
+            "已事务迁移 {} 个自定义供应商到独立清单：{}",
+            legacy_custom_provider_ids.len(),
+            legacy_custom_provider_ids.join(", ")
+        ));
+    }
     if let Ok(mut guard) = state.lock() {
         guard.startup.ui_locale = provider_configuration.ui_locale.clone();
         guard.workbench.ui_locale = provider_configuration.ui_locale.clone();
@@ -652,6 +692,58 @@ fn run_service_bootstrap(
     public_ai_runtime
         .replace_configuration(public_ai_configuration.clone())
         .map_err(|error| ServiceBootstrapError::new("workspace", "Workspace", error))?;
+    // The startup recovery chain restores any persisted system manifest layers (active,
+    // quarantined-invalid, then previous) into the single authoritative catalog before the
+    // first catalog refresh so operators never observe the bundled baseline over a
+    // successfully activated layer (plan §17.5).
+    // 启动恢复链在首次目录刷新前，把任何持久化系统清单层（active、隔离无效后 previous）
+    // 恢复到唯一权威目录，使操作者绝不在已成功激活层之上观察到内置基线（方案 §17.5）。
+    let manifest_restores = crate::provider_manifest_sync::restore_system_manifests_from_store(
+        public_ai_runtime.as_ref(),
+        &vulcan_workspace_store::data_plane::application_data_root(),
+    )
+    .map_err(|error| {
+        ServiceBootstrapError::new(
+            "workspace",
+            "Workspace",
+            format!("系统清单恢复链执行失败：{error}"),
+        )
+    })?;
+    if !manifest_restores.is_empty() {
+        logs.push(format!(
+            "已从持久化存储恢复 {} 个系统供应商清单：{}",
+            manifest_restores.len(),
+            manifest_restores
+                .iter()
+                .map(|report| format!("{}({})", report.provider_id, report.layer))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    // The provider-manifest sync service is injected once into the shared state so RPCs and
+    // periodic triggers reuse the same instance instead of constructing empty-key/None-URL
+    // services per call (plan §R7.13).
+    // 供应商清单同步服务在共享状态中注入一次，使 RPC 与周期触发复用同一实例，而不是
+    // 每次调用构造空密钥/None URL 的服务（方案 §R7.13）。
+    {
+        let sync_http =
+            crate::provider_manifest_sync::build_sync_http_client().map_err(|error| {
+                ServiceBootstrapError::new(
+                    "workspace",
+                    "Workspace",
+                    format!("供应商清单安全同步客户端初始化失败：{error}"),
+                )
+            })?;
+        let sync_service = crate::provider_manifest_sync::ProviderManifestSyncService::new(
+            &vulcan_workspace_store::data_plane::application_data_root(),
+            sync_http,
+            Vec::new(),
+            None,
+        );
+        if let Ok(mut guard) = state.lock() {
+            guard.provider_manifest_sync = Some(sync_service);
+        }
+    }
     public_ai_runtime
         .configure_provider_task_recovery(
             &vulcan_workspace_store::data_plane::application_data_root()
@@ -669,6 +761,17 @@ fn run_service_bootstrap(
         &public_ai_configuration,
         &mut logs,
     )?;
+    crate::provider_manifest_sync::emit_published_startup_manifest_restore_events(
+        public_ai_runtime.as_ref(),
+        &manifest_restores,
+    )
+    .map_err(|error| {
+        ServiceBootstrapError::new(
+            "workspace",
+            "Workspace",
+            format!("系统清单恢复事件发布失败：{error}"),
+        )
+    })?;
     // providerTaskRecoveryRuntime resumes only confirmed task identifiers and never replays
     // interrupted dispatch intents.
     // providerTaskRecoveryRuntime 仅恢复已确认任务标识，绝不重放中断的分派意图。
@@ -1074,6 +1177,17 @@ fn run_service_bootstrap(
     // runtime_guard makes the retained service runtime current while the notify loop is spawned.
     // runtime_guard 在生成 notify 循环期间使保留的服务运行时成为当前运行时。
     let _runtime_guard = runtime.enter();
+    match crate::provider_manifest_sync::start_provider_manifest_sync_monitor(
+        state.clone(),
+        event_emitter.clone(),
+    )
+    .map_err(|error| ServiceBootstrapError::new("workspace", "Provider Manifest", error))?
+    {
+        true => logs.push(String::from("供应商清单异步启动同步与周期同步任务已启动。")),
+        false => logs.push(String::from(
+            "供应商清单远端 URL 或受信密钥未配置；未启动自动同步任务。",
+        )),
+    }
     crate::start_codebase_memory_recovery_monitor(state.clone(), event_emitter.clone());
     crate::agent_skills_watcher::start_agent_skills_catalog_watcher(
         state.clone(),
@@ -1573,9 +1687,6 @@ fn refresh_public_ai_catalogs_at_startup(
     configuration: &vulcan_provider_adapters::PersistedAiConfiguration,
     logs: &mut Vec<String>,
 ) -> Result<(), ServiceBootstrapError> {
-    if configuration.connection_graph.connections.is_empty() {
-        return Ok(());
-    }
     let async_runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -1586,36 +1697,62 @@ fn refresh_public_ai_catalogs_at_startup(
                 format!("公共 AI 启动同步运行时创建失败：{error}"),
             )
         })?;
-    // Startup synchronization runs independent credential connections concurrently so one
-    // unavailable provider consumes at most one metadata timeout window.
-    // 启动同步并发处理相互独立的凭据连接，使单个不可用供应商最多占用一个元数据超时窗口。
-    let connection_ids = configuration
+    // Startup recovery has already staged persisted manifests. Refresh every affected source
+    // catalog against that exact staged generation and publish once; using ordinary refresh
+    // here would combine bundled provider metadata with recovered manifest rules.
+    // 启动恢复已经暂存持久化清单。针对该精确暂存代际刷新每个受影响源目录并只发布一次；
+    // 若此处使用普通刷新，会把内置供应商元数据与已恢复清单规则混合。
+    // runtimeConfiguration removes every provider identity without executable authority from a
+    // clone; the authoritative configuration and source bytes remain untouched for repair.
+    // runtimeConfiguration 从克隆中移除全部缺少可执行权威的供应商身份；权威配置与源字节保持
+    // 不变，以供修复。
+    let runtime_configuration = runtime
+        .runtime_configuration_snapshot(configuration)
+        .map_err(|error| {
+            ServiceBootstrapError::new(
+                "workspace",
+                "Workspace",
+                format!("公共 AI 启动配置投影失败：{error}"),
+            )
+        })?;
+    let connection_ids = runtime_configuration
         .connection_graph
         .connections
         .values()
         .map(|connection| connection.id.clone())
         .collect::<Vec<_>>();
-    let results = async_runtime.block_on(async {
-        futures_util::future::join_all(connection_ids.into_iter().map(|connection_id| async move {
-            let result = runtime
-                .refresh_connection_catalog(configuration, connection_id.as_str())
-                .await;
-            (connection_id, result)
-        }))
-        .await
-    });
-    for (connection_id, result) in results {
-        match result {
-            Ok(catalog) => logs.push(format!(
-                "[webui-service] public AI catalog synchronized: connection={} models={}",
-                connection_id,
-                catalog.models.len()
-            )),
-            Err(error) => logs.push(format!(
-                "[webui-service] public AI catalog synchronization failed: connection={} error={}",
-                connection_id, error
-            )),
-        }
+    async_runtime
+        .block_on(
+            runtime.activate_staged_manifest_catalogs(&runtime_configuration, &connection_ids),
+        )
+        .map_err(|error| {
+            ServiceBootstrapError::new(
+                "workspace",
+                "Workspace",
+                format!("公共 AI 启动代际发布失败：{error}"),
+            )
+        })?;
+    let catalogs = runtime.catalog_snapshot().map_err(|error| {
+        ServiceBootstrapError::new(
+            "workspace",
+            "Workspace",
+            format!("公共 AI 启动目录读取失败：{error}"),
+        )
+    })?;
+    for connection_id in connection_ids {
+        logs.push(format!(
+            "[webui-service] public AI catalog synchronized: connection={} models={}",
+            connection_id,
+            catalogs
+                .get(&connection_id)
+                .map_or(0, |catalog| catalog.models.len())
+        ));
+    }
+    if configuration.custom_provider_manifest_failure_total_count > 0 {
+        logs.push(format!(
+            "[webui-service] isolated {} invalid custom provider manifest(s); healthy providers remain active",
+            configuration.custom_provider_manifest_failure_total_count
+        ));
     }
     Ok(())
 }

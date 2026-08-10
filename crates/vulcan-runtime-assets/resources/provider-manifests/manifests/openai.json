@@ -1,0 +1,423 @@
+{
+  "schema_version": "vulcan.provider-manifest.v1",
+  "provider_id": "openai",
+  "revision": 6,
+  "published_at": "2026-08-06T00:00:00Z",
+  "engine_contract": {
+    "minimum_manifest_engine": 1,
+    "required_protocol_profiles": [
+      "openai-chat-completions.v1",
+      "openai-responses.v1",
+      "openai-codex-responses.v1"
+    ],
+    "required_execution_primitives": [],
+    "required_upload_primitives": [],
+    "required_transformers": []
+  },
+  "display": {
+    "name": "OpenAI",
+    "category": "official",
+    "credential_directory_visibility": "configured_only"
+  },
+  "services": [
+    {
+      "service_entry_id": "public-api",
+      "display_name": "OpenAI API",
+      "kind": "conversation",
+      "base_url": "https://api.openai.com/v1",
+      "credential_profiles": [
+        {
+          "credential_profile_id": "api-key",
+          "display_name": "API Key",
+          "credential_mode": "token",
+          "billing_kind": "pay_as_you_go",
+          "account_usage_query": "unsupported",
+          "allowed_usage_scopes": [
+            "interactive_agent",
+            "internal_background",
+            "external_service"
+          ]
+        }
+      ],
+      "default_authentication": "bearer_authorization",
+      "request_projector": "direct",
+      "model_catalog": {
+        "source_policy": "manifest_and_discovery",
+        "discovery_kind": "open_ai"
+      },
+      "protocol_routes": [
+        {
+          "protocol_profile_id": "openai-chat-completions.v1",
+          "endpoint_path": "/chat/completions",
+          "usage_profile_refs": [],
+          "request_profile_refs": [],
+          "response_profile_refs": [],
+          "provider_request_id_headers": [
+            "x-request-id",
+            "x-oai-request-id"
+          ],
+          "verified": true
+        },
+        {
+          "protocol_profile_id": "openai-responses.v1",
+          "endpoint_path": "/responses",
+          "usage_profile_refs": [],
+          "request_profile_refs": [],
+          "response_profile_refs": [],
+          "provider_request_id_headers": [
+            "x-request-id",
+            "x-oai-request-id"
+          ],
+          "verified": true
+        }
+      ]
+    },
+    {
+      "service_entry_id": "codex-subscription",
+      "display_name": "OpenAI Codex Subscription",
+      "kind": "conversation",
+      "base_url": "https://chatgpt.com/backend-api/codex",
+      "credential_profiles": [
+        {
+          "credential_profile_id": "codex-oauth",
+          "display_name": "Codex Login",
+          "credential_mode": "auth",
+          "oauth_provider": "open_ai_codex",
+          "billing_kind": "provider_managed",
+          "account_usage_query": "unsupported",
+          "allowed_usage_scopes": [
+            "interactive_agent"
+          ]
+        }
+      ],
+      "default_authentication": "open_ai_codex_bearer",
+      "request_headers": {
+        "originator": "codex_cli_rs",
+        "user-agent": "codex_cli_rs/0.144.1 (Windows 11; x86_64) vulcan-code/0.1"
+      },
+      "request_projector": "direct",
+      "model_catalog": {
+        "source_policy": "manifest_and_discovery",
+        "discovery_kind": "open_ai_codex"
+      },
+      "model_defaults_override": {
+        "supported_protocols": ["openai-codex-responses.v1"],
+        "selected_protocol": "openai-codex-responses.v1"
+      },
+      "protocol_routes": [
+        {
+          "protocol_profile_id": "openai-codex-responses.v1",
+          "endpoint_path": "/responses",
+          "responses_features": {
+            "remote_compaction": "enabled_with_local_fallback",
+            "websocket": "verified"
+          },
+          "usage_profile_refs": [],
+          "request_profile_refs": [],
+          "response_profile_refs": [],
+          "provider_request_id_headers": [
+            "x-request-id",
+            "x-oai-request-id"
+          ],
+          "verified": true
+        }
+      ]
+    }
+  ],
+  "model_defaults": {
+    "default_enabled": true,
+    "catalog_membership_policy": "declared_and_discovery",
+    "unknown_model_policy": "default_binding_allowed",
+    "supported_protocols": [
+      "openai-chat-completions.v1",
+      "openai-responses.v1",
+      "openai-codex-responses.v1"
+    ],
+    "selected_protocol": "openai-chat-completions.v1",
+    "capabilities": {
+      "operations": ["conversation_respond"],
+      "evidence_revision": "openai.default-capabilities.v1"
+    },
+    "default_usage_profile_refs": [],
+    "default_request_profile_refs": [],
+    "default_response_profile_refs": [],
+    "default_operation_refs": []
+  },
+  "model_rules": [
+    {
+      "rule_id": "reasoning-gpt-5.4-pro",
+      "matcher": {
+        "kind": "prefix",
+        "value": "gpt-5.4-pro"
+      },
+      "supported_protocols": [
+        "openai-chat-completions.v1",
+        "openai-responses.v1"
+      ],
+      "capabilities": {
+        "operations": ["conversation_respond"],
+        "input_resources": [],
+        "output_resources": [],
+        "tool_calling": "unknown",
+        "parallel_tool_calling": "unknown",
+        "reasoning": "native",
+        "provider_native_tools": [],
+        "reasoning_control": "unknown",
+        "reasoning_efforts": [
+          "medium",
+          "high",
+          "xhigh"
+        ],
+        "prompt_cache": {
+          "provider_default_behavior": "host-managed prompt cache injection is not available",
+          "supports_managed_explicit": false
+        },
+        "evidence_revision": "openai-model-docs-2026-07-28"
+      },
+      "scope": {
+        "service_entry_ids": [
+          "public-api"
+        ]
+      }
+    },
+    {
+      "rule_id": "reasoning-gpt-5.2-pro",
+      "matcher": {
+        "kind": "prefix",
+        "value": "gpt-5.2-pro"
+      },
+      "supported_protocols": [
+        "openai-chat-completions.v1",
+        "openai-responses.v1"
+      ],
+      "capabilities": {
+        "operations": ["conversation_respond"],
+        "input_resources": [],
+        "output_resources": [],
+        "tool_calling": "unknown",
+        "parallel_tool_calling": "unknown",
+        "reasoning": "native",
+        "provider_native_tools": [],
+        "reasoning_control": "unknown",
+        "reasoning_efforts": [
+          "medium",
+          "high",
+          "xhigh"
+        ],
+        "prompt_cache": {
+          "provider_default_behavior": "host-managed prompt cache injection is not available",
+          "supports_managed_explicit": false
+        },
+        "evidence_revision": "openai-model-docs-2026-07-28"
+      },
+      "scope": {
+        "service_entry_ids": [
+          "public-api"
+        ]
+      }
+    },
+    {
+      "rule_id": "reasoning-gpt-5.6",
+      "matcher": {
+        "kind": "prefix",
+        "value": "gpt-5.6"
+      },
+      "supported_protocols": [
+        "openai-chat-completions.v1",
+        "openai-responses.v1"
+      ],
+      "capabilities": {
+        "operations": ["conversation_respond"],
+        "input_resources": [],
+        "output_resources": [],
+        "tool_calling": "unknown",
+        "parallel_tool_calling": "unknown",
+        "reasoning": "native",
+        "provider_native_tools": [],
+        "reasoning_control": "unknown",
+        "reasoning_efforts": [
+          "none",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "prompt_cache": {
+          "provider_default_behavior": "host-managed prompt cache injection is not available",
+          "supports_managed_explicit": false
+        },
+        "evidence_revision": "openai-model-docs-2026-07-28"
+      },
+      "scope": {
+        "service_entry_ids": [
+          "public-api"
+        ]
+      }
+    },
+    {
+      "rule_id": "reasoning-gpt-5.4",
+      "matcher": {
+        "kind": "prefix",
+        "value": "gpt-5.4"
+      },
+      "supported_protocols": [
+        "openai-chat-completions.v1",
+        "openai-responses.v1"
+      ],
+      "capabilities": {
+        "operations": ["conversation_respond"],
+        "input_resources": [],
+        "output_resources": [],
+        "tool_calling": "unknown",
+        "parallel_tool_calling": "unknown",
+        "reasoning": "native",
+        "provider_native_tools": [],
+        "reasoning_control": "unknown",
+        "reasoning_efforts": [
+          "none",
+          "low",
+          "medium",
+          "high",
+          "xhigh"
+        ],
+        "prompt_cache": {
+          "provider_default_behavior": "host-managed prompt cache injection is not available",
+          "supports_managed_explicit": false
+        },
+        "evidence_revision": "openai-model-docs-2026-07-28"
+      },
+      "scope": {
+        "service_entry_ids": [
+          "public-api"
+        ]
+      }
+    },
+    {
+      "rule_id": "reasoning-gpt-5.2-codex",
+      "matcher": {
+        "kind": "prefix",
+        "value": "gpt-5.2-codex"
+      },
+      "supported_protocols": [
+        "openai-chat-completions.v1",
+        "openai-responses.v1"
+      ],
+      "capabilities": {
+        "operations": ["conversation_respond"],
+        "input_resources": [],
+        "output_resources": [],
+        "tool_calling": "unknown",
+        "parallel_tool_calling": "unknown",
+        "reasoning": "native",
+        "provider_native_tools": [],
+        "reasoning_control": "unknown",
+        "reasoning_efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh"
+        ],
+        "prompt_cache": {
+          "provider_default_behavior": "host-managed prompt cache injection is not available",
+          "supports_managed_explicit": false
+        },
+        "evidence_revision": "openai-model-docs-2026-07-28"
+      },
+      "scope": {
+        "service_entry_ids": [
+          "public-api"
+        ]
+      }
+    },
+    {
+      "rule_id": "reasoning-gpt-5.1",
+      "matcher": {
+        "kind": "prefix",
+        "value": "gpt-5.1"
+      },
+      "supported_protocols": [
+        "openai-chat-completions.v1",
+        "openai-responses.v1"
+      ],
+      "capabilities": {
+        "operations": ["conversation_respond"],
+        "input_resources": [],
+        "output_resources": [],
+        "tool_calling": "unknown",
+        "parallel_tool_calling": "unknown",
+        "reasoning": "native",
+        "provider_native_tools": [],
+        "reasoning_control": "unknown",
+        "reasoning_efforts": [
+          "none",
+          "low",
+          "medium",
+          "high"
+        ],
+        "prompt_cache": {
+          "provider_default_behavior": "host-managed prompt cache injection is not available",
+          "supports_managed_explicit": false
+        },
+        "evidence_revision": "openai-model-docs-2026-07-28"
+      },
+      "scope": {
+        "service_entry_ids": [
+          "public-api"
+        ]
+      }
+    },
+    {
+      "rule_id": "reasoning-gpt-5",
+      "matcher": {
+        "kind": "prefix",
+        "value": "gpt-5"
+      },
+      "supported_protocols": [
+        "openai-chat-completions.v1",
+        "openai-responses.v1"
+      ],
+      "capabilities": {
+        "operations": ["conversation_respond"],
+        "input_resources": [],
+        "output_resources": [],
+        "tool_calling": "unknown",
+        "parallel_tool_calling": "unknown",
+        "reasoning": "native",
+        "provider_native_tools": [],
+        "reasoning_control": "unknown",
+        "reasoning_efforts": [
+          "minimal",
+          "low",
+          "medium",
+          "high"
+        ],
+        "prompt_cache": {
+          "provider_default_behavior": "host-managed prompt cache injection is not available",
+          "supports_managed_explicit": false
+        },
+        "evidence_revision": "openai-model-docs-2026-07-28"
+      },
+      "scope": {
+        "service_entry_ids": [
+          "public-api"
+        ]
+      }
+    }
+  ],
+  "usage_profiles": [],
+  "request_profiles": [],
+  "response_profiles": [],
+  "upload_channels": [],
+  "operations": [],
+  "tool_targets": [],
+  "provenance": {
+    "status": "verified",
+    "sources": [
+      {
+        "url": "builtin:vulcan.reasoning-catalog.2026-08-06",
+        "note": "Legacy reasoning effort rules migrated into manifest model rules; evidence follows the legacy reasoning catalog."
+      }
+    ]
+  }
+}

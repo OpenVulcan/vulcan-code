@@ -59,3 +59,8 @@ vulcan-tools-manager.workspace = true
 vulcan-vmm.workspace = true
 vulcan-workbench-model.workspace = true
 vulcan-workspace-store.workspace = true
+
+[dev-dependencies]
+# Enables the explicit staged-source seam for immutable catalog activation tests.
+# 为不可变目录激活测试启用显式暂存来源接缝。
+vulcan-provider-adapters = { workspace = true, features = ["test-support"] }

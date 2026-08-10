@@ -1,0 +1,36 @@
+{
+  "schema_version": "provider-manifest-profile-fixture.v1",
+  "fixture_id": "profile-request-projection",
+  "base_manifest": "deepseek.json",
+  "required_transformers": ["rename_json_pointer", "set_literal"],
+  "fixture_kind": "request",
+  "declaration": {
+    "profile_id": "fixture.request.v1",
+    "description": "Executable request projection fixture",
+    "payload": {
+      "profile_id": "fixture.request.v1",
+      "revision": 1,
+      "steps": [
+        {
+          "op": "rename_json_pointer",
+          "from": "/vendor_prompt",
+          "to": "/prompt"
+        },
+        {
+          "op": "set_literal",
+          "path": "/provider_options/stream_hint",
+          "value": true
+        }
+      ]
+    }
+  },
+  "profile_id": "fixture.request.v1",
+  "input": {
+    "vendor_prompt": "hello"
+  },
+  "model_id": "fixture/model-v1",
+  "expectations": {
+    "/prompt": "hello",
+    "/provider_options/stream_hint": true
+  }
+}

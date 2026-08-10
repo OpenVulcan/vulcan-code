@@ -25,10 +25,10 @@ use vulcan_ai_contract::{
     DispatchOutcome, EmbeddingInputContent, EmbeddingRequest, EmbeddingResponse,
     ExecutionRouteSnapshot, InferenceCallerContext, InferenceCapabilitySnapshot,
     InferenceOperationCapability, InferencePermission, InferenceUsageScope, ModelCapabilities,
-    ModelParameterValue, NativeToolKind, ParallelToolCallPolicy, ReasoningControlMode,
-    ReasoningEffort, RequestUsage, RerankRequest, RerankResponse, ResourceKind,
-    ResponsesExecutionOutputItem, ResponsesExecutionRequest, ResponsesExecutionResult,
-    StructuredOutputPolicy, ToolCall, ToolChoicePolicy, UsageValue,
+    ModelParameterValue, NativeToolKind, ParallelToolCallPolicy, PromptCachePolicy,
+    ReasoningControlMode, ReasoningEffort, RequestUsage, RerankRequest, RerankResponse,
+    ResourceKind, ResponsesExecutionOutputItem, ResponsesExecutionRequest,
+    ResponsesExecutionResult, StructuredOutputPolicy, ToolCall, ToolChoicePolicy, UsageValue,
 };
 use vulcan_ai_protocols::{
     ANTHROPIC_MESSAGES_PROFILE_ID, ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID,
@@ -37,8 +37,7 @@ use vulcan_ai_protocols::{
 use vulcan_hooks::{HookContext, HookScope};
 use vulcan_plugin_runtime::VulcanPluginRuntimeManager;
 use vulcan_provider_adapters::{
-    InferenceRouteConfiguration, InternalModelOverrides,
-    OPENROUTER_REASONING_MAX_TOKENS_PARAMETER_ID, PersistedAiConfiguration,
+    InferenceRouteConfiguration, InternalModelOverrides, PersistedAiConfiguration,
     ProviderExecutionFailure, PublicAiRuntime, ResolvedPublicAiSelection,
 };
 use vulcan_provider_config::config::PersistedProviderRetryConfiguration;
@@ -4031,12 +4030,16 @@ fn responses_provider_request(
     let mut effective_capabilities = selection.model.capabilities.clone();
     vulcan_provider_adapters::apply_host_default_reasoning_policy(&mut effective_capabilities);
     validate_responses_model_capabilities(request, &effective_capabilities)?;
+    validate_prompt_cache_policy(&effective_capabilities, &prompt_cache)?;
     let requested_reasoning_effort = request
         .reasoning_effort
         .or_else(|| internal_overrides.and_then(|overrides| overrides.reasoning_effort));
     let reasoning_effort = enforce_vmm_reasoning_policy(
         request.consumer_profile_id.as_str(),
         &selection.model.capabilities,
+        &selection
+            .route
+            .model_parameters_conflicting_with_request_field("reasoning_effort"),
         &mut model_parameters,
         requested_reasoning_effort,
     )?;
@@ -4217,6 +4220,31 @@ fn validate_responses_model_capabilities(
     Ok(())
 }
 
+/// Validates the resolved prompt-cache policy against the frozen selected-model capability.
+/// 根据冻结的所选模型能力校验解析后的提示词缓存策略。
+///
+/// # Parameters
+/// 参数
+/// `capabilities` is the exact frozen model capability snapshot and `policy` is the effective
+/// policy after applying caller and configured overrides.
+/// `capabilities` 是精确冻结的模型能力快照，`policy` 是应用调用方与配置覆盖后的有效策略。
+///
+/// # Returns
+/// 返回值
+/// Success only when the selected route explicitly supports the resolved policy.
+/// 仅当所选路由显式支持解析后的策略时返回成功。
+fn validate_prompt_cache_policy(
+    capabilities: &ModelCapabilities,
+    policy: &PromptCachePolicy,
+) -> Result<(), ConfiguredInferenceError> {
+    capabilities
+        .prompt_cache
+        .validate_policy(policy)
+        .map_err(|message| {
+            ConfiguredInferenceError::new(ConfiguredInferenceErrorCategory::Contract, message)
+        })
+}
+
 /// Returns the stable public label for one resource kind.
 /// 返回一个资源类别的稳定公共标签。
 ///
@@ -4276,9 +4304,11 @@ fn structured_output_policy_for_protocol(
 /// # Parameters
 /// 参数
 /// `consumer_profile_id` identifies the configured-inference consumer; `capabilities` describes
-/// the selected model; `model_parameters` contains merged provider parameters; and
+/// the selected model; `conflicting_model_parameter_ids` comes from the frozen route's generic
+/// manifest guards; `model_parameters` contains merged provider parameters; and
 /// `requested_effort` is the caller or configured override.
 /// `consumer_profile_id` 标识已配置推理消费者；`capabilities` 描述所选模型；
+/// `conflicting_model_parameter_ids` 来自冻结路由的通用 Manifest 守卫；
 /// `model_parameters` 包含合并后的供应商参数；`requested_effort` 是调用方或配置覆盖值。
 ///
 /// # Returns
@@ -4288,6 +4318,7 @@ fn structured_output_policy_for_protocol(
 fn enforce_vmm_reasoning_policy(
     consumer_profile_id: &str,
     capabilities: &ModelCapabilities,
+    conflicting_model_parameter_ids: &BTreeSet<String>,
     model_parameters: &mut BTreeMap<String, ModelParameterValue>,
     requested_effort: Option<ReasoningEffort>,
 ) -> Result<Option<ReasoningEffort>, ConfiguredInferenceError> {
@@ -4300,11 +4331,13 @@ fn enforce_vmm_reasoning_policy(
             "VMM LLM inference requires a model that explicitly supports disabled reasoning.",
         ));
     }
-    // OpenRouter rejects a discrete reasoning effort when `reasoning.max_tokens` is also present;
-    // VMM owns the final disabled policy, so a model-level reasoning budget cannot override it.
-    // OpenRouter 会拒绝同时存在离散思考档位与 `reasoning.max_tokens`；VMM 拥有最终关闭策略，
-    // 因此模型级思考预算不能覆盖该策略。
-    model_parameters.remove(OPENROUTER_REASONING_MAX_TOKENS_PARAMETER_ID);
+    // The frozen manifest route declares every model parameter that conflicts with the host-owned
+    // reasoning field; VMM removes exactly those declarations before forcing the disabled policy.
+    // 冻结 Manifest 路由声明与宿主持有思考字段冲突的每个模型参数；VMM 在强制关闭策略前
+    // 仅移除这些声明。
+    for parameter_id in conflicting_model_parameter_ids {
+        model_parameters.remove(parameter_id);
+    }
     Ok(Some(ReasoningEffort::None))
 }
 
@@ -5934,6 +5967,21 @@ mod tests {
             .expect("declared image input should pass");
     }
 
+    /// Verifies caller-explicit prompt caching cannot bypass the selected model capability.
+    /// 验证调用方显式提示词缓存不能绕过所选模型能力。
+    #[test]
+    fn prompt_cache_policy_validation_rejects_unsupported_managed_explicit() {
+        let policy = PromptCachePolicy::ManagedExplicit {
+            ttl: vulcan_ai_contract::PromptCacheTtlSelection::ProfileDefault,
+        };
+
+        let error = validate_prompt_cache_policy(&ModelCapabilities::default(), &policy)
+            .expect_err("unsupported managed prompt caching must fail closed");
+
+        assert_eq!(error.category, ConfiguredInferenceErrorCategory::Contract);
+        assert!(error.message.contains("not supported"));
+    }
+
     /// Verifies reserved capacities keep interactive work admissible during lower-class saturation.
     /// 验证保留容量会在较低类别饱和时保持交互式工作可受理。
     #[test]
@@ -6029,20 +6077,21 @@ mod tests {
         };
         assert!(model_supports_disabled_reasoning(&fixed_off));
         let mut provider_parameters = BTreeMap::from([(
-            String::from(OPENROUTER_REASONING_MAX_TOKENS_PARAMETER_ID),
+            String::from("provider.reasoning_budget"),
             ModelParameterValue::Integer(4_096),
         )]);
         let effective_effort = enforce_vmm_reasoning_policy(
             VMM_CONSUMER_PROFILE_ID,
             &fixed_off,
+            &BTreeSet::from([String::from("provider.reasoning_budget")]),
             &mut provider_parameters,
             Some(ReasoningEffort::High),
         )
         .expect("VMM should override caller reasoning controls");
         assert_eq!(effective_effort, Some(ReasoningEffort::None));
         assert!(
-            !provider_parameters.contains_key(OPENROUTER_REASONING_MAX_TOKENS_PARAMETER_ID),
-            "VMM must remove the conflicting OpenRouter reasoning budget"
+            !provider_parameters.contains_key("provider.reasoning_budget"),
+            "VMM must remove every manifest-declared conflicting reasoning budget"
         );
 
         let toggle = ModelCapabilities {

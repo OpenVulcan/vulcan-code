@@ -61,3 +61,10 @@ vulcan-windows-console-helper = { path = "../vulcan-windows-console-helper" }
 
 [dev-dependencies]
 tempfile = "3.27.0"
+# Enables the provider runtime HTTP-client injection seam for signed transport E2E tests.
+# 为签名传输 E2E 测试启用供应商运行时 HTTP 客户端注入接缝。
+vulcan-provider-adapters = { workspace = true, features = ["test-support"] }
+# HTTPS loopback server for the local signing-server E2E (plan §R7.14).
+# 供本地签名服务器 E2E 使用的 HTTPS 回环服务器（方案 §R7.14）。
+rcgen = "0.13"
+tokio-rustls = "0.26"

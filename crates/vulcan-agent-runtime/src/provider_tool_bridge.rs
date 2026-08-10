@@ -1,10 +1,9 @@
-//! Per-turn provider tool registration and host-side resource materialization.
-//! 每回合供应商工具注册与宿主侧资源物化。
+//! Per-turn provider tool registration and host-side output staging.
+//! 每回合供应商工具注册与宿主侧输出暂存。
 
 use crate::attachment_assets::{
     attachment_descriptor_from_mime_type, stage_attachment_bytes, stage_attachment_file_streaming,
 };
-use base64::Engine;
 use futures_util::StreamExt;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
@@ -12,17 +11,14 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 use vulcan_provider_adapters::{
-    AvailableProviderToolTarget, PersistedAiConfiguration, ProviderToolAdapterKind,
-    ProviderToolExecutionResult, ProviderToolNormalizedOutput, PublicAiRuntime,
+    AvailableProviderToolTarget, PersistedAiConfiguration, ProviderToolExecutionResult,
+    ProviderToolNormalizedOutput, ProviderToolResourceDownloadPolicy, PublicAiRuntime,
 };
 use vulcan_tools_manager::{
     VulcanPlanToolPolicy, VulcanToolCandidate, VulcanToolDescriptor, VulcanToolHostResult,
     VulcanToolInvocationResult, VulcanToolSourceKind,
 };
 
-/// Maximum local image size accepted by provider input materializers.
-/// 供应商输入物化器接受的本地图片最大字节数。
-const PROVIDER_TOOL_IMAGE_INPUT_BYTE_LIMIT: usize = 50 * 1024 * 1024;
 /// Maximum generated image or generic file size accepted by the host.
 /// 宿主接受的生成图片或通用文件最大字节数。
 const PROVIDER_TOOL_DEFAULT_OUTPUT_BYTE_LIMIT: usize = 50 * 1024 * 1024;
@@ -230,7 +226,6 @@ fn build_provider_tool_candidate(
 ) -> VulcanToolCandidate {
     let contract = selected.target.contract.clone();
     let capability = contract.capability;
-    let adapter = selected.target.execution.adapter;
     VulcanToolCandidate {
         descriptor: VulcanToolDescriptor {
             id: contract.tool_id.clone(),
@@ -248,21 +243,17 @@ fn build_provider_tool_candidate(
             let configuration = configuration.clone();
             let workspace_root = workspace_root.clone();
             Box::pin(async move {
-                let projected_arguments = materialize_provider_tool_inputs(
-                    adapter,
-                    workspace_root.as_deref(),
-                    arguments,
-                )?;
                 let mut cancellation_guard = ProviderTaskCancellationOnDrop::new(
                     Arc::clone(&runtime),
                     owner_session_id.clone(),
                 );
                 let result = runtime
-                    .execute_selected_provider_tool_for_owner(
+                    .execute_selected_provider_tool_for_owner_in_workspace(
                         &configuration,
                         capability,
-                        projected_arguments,
+                        arguments,
                         owner_session_id,
+                        workspace_root.as_deref(),
                     )
                     .await?;
                 let rendered = render_provider_tool_result(workspace_root.as_deref(), result).await;
@@ -271,715 +262,6 @@ fn build_provider_tool_candidate(
             })
         }),
     }
-}
-
-/// Converts local semantic resource paths into provider-safe carriers.
-/// 将本地语义资源路径转换为供应商安全载体。
-///
-/// # Parameters
-/// 参数
-/// `adapter`, `workspace_root`, and `arguments` belong to one selected target.
-/// `adapter`、`workspace_root` 与 `arguments` 属于一个选定目标。
-///
-/// # Returns
-/// 返回值
-/// Provider-adapter arguments that contain no local path for handled resource fields.
-/// 返回已处理资源字段中不含本地路径的供应商适配器参数。
-fn materialize_provider_tool_inputs(
-    adapter: ProviderToolAdapterKind,
-    workspace_root: Option<&Path>,
-    mut arguments: Value,
-) -> Result<Value, String> {
-    match adapter {
-        ProviderToolAdapterKind::MiniMaxImageGenerate => {
-            let Some(references) = arguments
-                .as_object_mut()
-                .and_then(|object| object.get_mut("subject_references"))
-            else {
-                return Ok(arguments);
-            };
-            let paths = references.as_array().ok_or_else(|| {
-                String::from("Provider image subject_references must be an array of local paths.")
-            })?;
-            let materialized = paths
-                .iter()
-                .map(|path| {
-                    let path = path.as_str().ok_or_else(|| {
-                        String::from(
-                            "Provider image subject reference must be a local path string.",
-                        )
-                    })?;
-                    local_image_data_url(workspace_root, path, false)
-                })
-                .collect::<Result<Vec<_>, String>>()?;
-            *references = Value::Array(materialized.into_iter().map(Value::String).collect());
-            Ok(arguments)
-        }
-        ProviderToolAdapterKind::MiniMaxCodingPlanVision => {
-            let object = arguments.as_object_mut().ok_or_else(|| {
-                String::from("MiniMax image-understanding arguments must be an object.")
-            })?;
-            let image_path = object
-                .remove("image_path")
-                .and_then(|value| value.as_str().map(str::to_string))
-                .ok_or_else(|| {
-                    String::from(
-                        "MiniMax image-understanding image_path must be a local path string.",
-                    )
-                })?;
-            let image_url = local_image_data_url(workspace_root, image_path.as_str(), true)?;
-            object.insert(String::from("image_url"), Value::String(image_url));
-            Ok(arguments)
-        }
-        ProviderToolAdapterKind::MiniMaxVideoGenerate => {
-            let object = arguments.as_object_mut().ok_or_else(|| {
-                String::from("MiniMax video-generation arguments must be an object.")
-            })?;
-            for (path_field, image_field) in [
-                ("first_frame_path", "first_frame_image"),
-                ("last_frame_path", "last_frame_image"),
-                ("subject_reference_path", "subject_reference_image"),
-            ] {
-                let Some(path) = object
-                    .remove(path_field)
-                    .map(|value| {
-                        value.as_str().map(str::to_string).ok_or_else(|| {
-                            format!(
-                                "MiniMax video-generation {path_field} must be a local path string."
-                            )
-                        })
-                    })
-                    .transpose()?
-                else {
-                    continue;
-                };
-                let image = local_image_data_url(workspace_root, path.as_str(), true)?;
-                object.insert(String::from(image_field), Value::String(image));
-            }
-            Ok(arguments)
-        }
-        ProviderToolAdapterKind::AlibabaQwenImageEdit => materialize_local_image_path_array(
-            workspace_root,
-            &mut arguments,
-            "source_paths",
-            "source_images",
-            &[
-                "image/jpeg",
-                "image/png",
-                "image/bmp",
-                "image/webp",
-                "image/gif",
-            ],
-        ),
-        ProviderToolAdapterKind::AlibabaWanImageGenerate => materialize_local_image_path_array(
-            workspace_root,
-            &mut arguments,
-            "reference_paths",
-            "reference_images",
-            &[
-                "image/jpeg",
-                "image/png",
-                "image/bmp",
-                "image/webp",
-                "image/gif",
-            ],
-        ),
-        ProviderToolAdapterKind::AlibabaQwenSpeechTranscribe => {
-            let object = arguments.as_object_mut().ok_or_else(|| {
-                String::from("Alibaba speech-transcription arguments must be an object.")
-            })?;
-            let audio_path = object
-                .remove("audio_path")
-                .and_then(|value| value.as_str().map(str::to_string))
-                .ok_or_else(|| {
-                    String::from(
-                        "Alibaba speech-transcription audio_path must be a local path string.",
-                    )
-                })?;
-            let audio_url = local_media_data_url_for_mime_types(
-                workspace_root,
-                audio_path.as_str(),
-                &[
-                    "audio/mpeg",
-                    "audio/mp3",
-                    "audio/wav",
-                    "audio/x-wav",
-                    "audio/mp4",
-                    "audio/aac",
-                    "audio/ogg",
-                    "audio/flac",
-                    "audio/webm",
-                ],
-            )?;
-            object.insert(String::from("audio_url"), Value::String(audio_url));
-            Ok(arguments)
-        }
-        ProviderToolAdapterKind::AlibabaQwenOmniMediaAnalyze => {
-            let object = arguments.as_object_mut().ok_or_else(|| {
-                String::from("Alibaba media-analysis arguments must be an object.")
-            })?;
-            let paths = object
-                .remove("media_paths")
-                .and_then(|value| value.as_array().cloned())
-                .ok_or_else(|| {
-                    String::from("Alibaba media-analysis media_paths must be an array.")
-                })?;
-            let media = paths
-                .iter()
-                .map(|path| {
-                    let path = path.as_str().ok_or_else(|| {
-                        String::from("Alibaba media-analysis paths must be local path strings.")
-                    })?;
-                    local_typed_media_data_url(
-                        workspace_root,
-                        path,
-                        &[
-                            "image/jpeg",
-                            "image/png",
-                            "image/webp",
-                            "audio/wav",
-                            "audio/x-wav",
-                            "audio/mpeg",
-                            "audio/mp3",
-                            "audio/amr",
-                            "audio/aac",
-                            "audio/mp4",
-                            "audio/x-m4a",
-                            "audio/ogg",
-                            "audio/3gpp",
-                        ],
-                    )
-                })
-                .collect::<Result<Vec<_>, String>>()?;
-            object.insert(String::from("media"), Value::Array(media));
-            Ok(arguments)
-        }
-        ProviderToolAdapterKind::AlibabaFunAsrTranscribe => {
-            let object = arguments
-                .as_object_mut()
-                .ok_or_else(|| String::from("Alibaba Fun-ASR arguments must be an object."))?;
-            let paths = object
-                .remove("source_paths")
-                .and_then(|value| value.as_array().cloned())
-                .ok_or_else(|| String::from("Alibaba Fun-ASR source_paths must be an array."))?;
-            let sources = paths
-                .iter()
-                .map(|path| {
-                    let path = path.as_str().ok_or_else(|| {
-                        String::from("Alibaba Fun-ASR sources must be local path strings.")
-                    })?;
-                    local_provider_file_descriptor(
-                        workspace_root,
-                        path,
-                        &[
-                            "audio/aac",
-                            "audio/amr",
-                            "audio/flac",
-                            "audio/mp4",
-                            "audio/mpeg",
-                            "audio/ogg",
-                            "audio/opus",
-                            "audio/wav",
-                            "audio/x-ms-wma",
-                            "video/mp4",
-                            "video/mpeg",
-                            "video/quicktime",
-                            "video/webm",
-                            "video/x-flv",
-                            "video/x-matroska",
-                            "video/x-ms-wmv",
-                            "video/x-msvideo",
-                        ],
-                        2 * 1024 * 1024 * 1024,
-                    )
-                })
-                .collect::<Result<Vec<_>, String>>()?;
-            object.insert(String::from("sources"), Value::Array(sources));
-            Ok(arguments)
-        }
-        ProviderToolAdapterKind::AlibabaHappyHorseVideoGenerate => {
-            materialize_alibaba_happyhorse_generation(workspace_root, &mut arguments)
-        }
-        ProviderToolAdapterKind::AlibabaHappyHorseVideoEdit => {
-            materialize_alibaba_happyhorse_edit(workspace_root, &mut arguments)
-        }
-        ProviderToolAdapterKind::AlibabaWanVideoGenerate => {
-            materialize_alibaba_wan_video(workspace_root, &mut arguments)
-        }
-        _ => Ok(arguments),
-    }
-}
-
-/// Materializes exact Wan 2.7 local media without exposing provider handles to AI.
-/// 物化精确 Wan 2.7 本地媒体且不向 AI 暴露供应商句柄。
-///
-/// # Parameters
-/// 参数
-/// `workspace_root` resolves local paths and `arguments` contains one model-specific schema.
-/// `workspace_root` 解析本地路径，`arguments` 包含一个模型专属 Schema。
-///
-/// # Returns
-/// 返回值
-/// Image Data URLs and an optional trusted audio upload descriptor.
-/// 返回图片 Data URL 与可选的受信任音频上传描述符。
-fn materialize_alibaba_wan_video(
-    workspace_root: Option<&Path>,
-    arguments: &mut Value,
-) -> Result<Value, String> {
-    let object = arguments
-        .as_object_mut()
-        .ok_or_else(|| String::from("Alibaba Wan video arguments must be an object."))?;
-    for (path_key, carrier_key) in [
-        ("first_frame_path", "first_frame"),
-        ("last_frame_path", "last_frame"),
-    ] {
-        let Some(path) = object.remove(path_key) else {
-            continue;
-        };
-        let path = path
-            .as_str()
-            .ok_or_else(|| format!("Alibaba Wan video {path_key} must be a local path string."))?;
-        let data_url = local_media_data_url_for_mime_types(
-            workspace_root,
-            path,
-            &["image/jpeg", "image/png", "image/webp"],
-        )?;
-        object.insert(carrier_key.to_string(), Value::String(data_url));
-    }
-    if let Some(path) = object.remove("audio_path") {
-        let path = path.as_str().ok_or_else(|| {
-            String::from("Alibaba Wan video audio_path must be a local path string.")
-        })?;
-        let descriptor = local_provider_file_descriptor(
-            workspace_root,
-            path,
-            &["audio/mpeg", "audio/mp3", "audio/wav", "audio/x-wav"],
-            2 * 1024 * 1024 * 1024,
-        )?;
-        object.insert(String::from("audio_source"), descriptor);
-    }
-    Ok(arguments.clone())
-}
-
-/// Materializes exact HappyHorse generation resources without exposing provider handles to AI.
-/// 物化精确 HappyHorse 生成资源且不向 AI 暴露供应商句柄。
-///
-/// # Parameters
-/// 参数
-/// `workspace_root` resolves local paths and `arguments` contains one model-specific schema.
-/// `workspace_root` 解析本地路径，`arguments` 包含一个模型专属 Schema。
-///
-/// # Returns
-/// 返回值
-/// Trusted internal image carriers and upload descriptors.
-/// 返回受信任的内部图片载体与上传描述符。
-fn materialize_alibaba_happyhorse_generation(
-    workspace_root: Option<&Path>,
-    arguments: &mut Value,
-) -> Result<Value, String> {
-    let object = arguments
-        .as_object_mut()
-        .ok_or_else(|| String::from("Alibaba HappyHorse arguments must be an object."))?;
-    if let Some(path) = object
-        .remove("first_frame_path")
-        .map(|value| {
-            value.as_str().map(str::to_string).ok_or_else(|| {
-                String::from("HappyHorse first_frame_path must be a local path string.")
-            })
-        })
-        .transpose()?
-    {
-        let image = local_image_data_url(workspace_root, path.as_str(), true)?;
-        object.insert(String::from("first_frame_image"), Value::String(image));
-    }
-    let Some(references) = object.remove("references") else {
-        return Ok(arguments.clone());
-    };
-    let references = references
-        .as_array()
-        .ok_or_else(|| String::from("HappyHorse references must be an array."))?;
-    let materialized = references
-        .iter()
-        .map(|reference| {
-            let reference = reference
-                .as_object()
-                .ok_or_else(|| String::from("HappyHorse reference must be an object."))?;
-            let path = reference
-                .get("path")
-                .and_then(Value::as_str)
-                .ok_or_else(|| String::from("HappyHorse reference path is required."))?;
-            let kind = reference
-                .get("kind")
-                .and_then(Value::as_str)
-                .ok_or_else(|| String::from("HappyHorse reference kind is required."))?;
-            let carrier = match kind {
-                "image" => Value::String(local_image_data_url(workspace_root, path, true)?),
-                "video" => local_provider_file_descriptor(
-                    workspace_root,
-                    path,
-                    &["video/mp4", "video/quicktime"],
-                    2 * 1024 * 1024 * 1024,
-                )?,
-                _ => return Err(String::from("HappyHorse reference kind is unsupported.")),
-            };
-            let voice = reference
-                .get("voice_path")
-                .map(|value| {
-                    let voice_path = value.as_str().ok_or_else(|| {
-                        String::from("HappyHorse voice_path must be a local path string.")
-                    })?;
-                    local_provider_file_descriptor(
-                        workspace_root,
-                        voice_path,
-                        &[
-                            "audio/mpeg",
-                            "audio/wav",
-                            "audio/mp4",
-                            "audio/aac",
-                            "audio/flac",
-                        ],
-                        2 * 1024 * 1024 * 1024,
-                    )
-                })
-                .transpose()?;
-            Ok(json!({
-                "kind": kind,
-                "carrier": carrier,
-                "voice": voice
-            }))
-        })
-        .collect::<Result<Vec<_>, String>>()?;
-    object.insert(
-        String::from("materialized_references"),
-        Value::Array(materialized),
-    );
-    Ok(arguments.clone())
-}
-
-/// Materializes one HappyHorse edit source and optional image references.
-/// 物化一个 HappyHorse 编辑来源及可选图片参考。
-///
-/// # Parameters
-/// 参数
-/// `workspace_root` resolves local files and `arguments` contains the edit schema.
-/// `workspace_root` 解析本地文件，`arguments` 包含编辑 Schema。
-///
-/// # Returns
-/// 返回值
-/// Trusted internal source descriptor and inline reference images.
-/// 返回受信任的内部来源描述符与内联参考图片。
-fn materialize_alibaba_happyhorse_edit(
-    workspace_root: Option<&Path>,
-    arguments: &mut Value,
-) -> Result<Value, String> {
-    let object = arguments
-        .as_object_mut()
-        .ok_or_else(|| String::from("Alibaba HappyHorse edit arguments must be an object."))?;
-    let source_path = object
-        .remove("source_video_path")
-        .and_then(|value| value.as_str().map(str::to_string))
-        .ok_or_else(|| String::from("HappyHorse source_video_path must be a local path string."))?;
-    let source = local_provider_file_descriptor(
-        workspace_root,
-        source_path.as_str(),
-        &["video/mp4", "video/quicktime"],
-        2 * 1024 * 1024 * 1024,
-    )?;
-    object.insert(String::from("source_video"), source);
-    let Some(reference_paths) = object.remove("reference_image_paths") else {
-        return Ok(arguments.clone());
-    };
-    let reference_paths = reference_paths
-        .as_array()
-        .ok_or_else(|| String::from("HappyHorse reference_image_paths must be an array."))?;
-    let references = reference_paths
-        .iter()
-        .map(|path| {
-            let path = path.as_str().ok_or_else(|| {
-                String::from("HappyHorse reference image must be a local path string.")
-            })?;
-            local_image_data_url(workspace_root, path, true).map(Value::String)
-        })
-        .collect::<Result<Vec<_>, String>>()?;
-    object.insert(String::from("reference_images"), Value::Array(references));
-    Ok(arguments.clone())
-}
-
-/// Replaces one optional AI-visible local-path array with host-created image Data URLs.
-/// 将一个可选 AI 可见本地路径数组替换为宿主创建的图片 Data URL。
-///
-/// # Parameters
-/// 参数
-/// `workspace_root`, `arguments`, source/destination fields, and `allowed_mime_types` define
-/// one exact adapter-owned resource projection.
-/// `workspace_root`、`arguments`、来源/目标字段及 `allowed_mime_types`
-/// 定义一项精确适配器持有的资源投影。
-///
-/// # Returns
-/// 返回值
-/// Updated arguments containing no local path in the handled field.
-/// 返回在已处理字段中不含本地路径的更新参数。
-fn materialize_local_image_path_array(
-    workspace_root: Option<&Path>,
-    arguments: &mut Value,
-    source_field: &str,
-    destination_field: &str,
-    allowed_mime_types: &[&str],
-) -> Result<Value, String> {
-    let object = arguments
-        .as_object_mut()
-        .ok_or_else(|| String::from("Provider image tool arguments must be a JSON object."))?;
-    let Some(paths) = object.remove(source_field) else {
-        return Ok(arguments.clone());
-    };
-    let paths = paths
-        .as_array()
-        .ok_or_else(|| format!("Provider image {source_field} must be an array of local paths."))?;
-    let materialized = paths
-        .iter()
-        .map(|path| {
-            let path = path.as_str().ok_or_else(|| {
-                format!("Provider image {source_field} entries must be local path strings.")
-            })?;
-            local_media_data_url_for_mime_types(workspace_root, path, allowed_mime_types)
-                .map(Value::String)
-        })
-        .collect::<Result<Vec<_>, String>>()?;
-    object.insert(destination_field.to_string(), Value::Array(materialized));
-    Ok(arguments.clone())
-}
-
-/// Reads one local provider image and returns a bounded Data URL.
-/// 读取一张本地供应商图片并返回有界 Data URL。
-///
-/// # Parameters
-/// 参数
-/// `workspace_root` resolves relative paths, `path` is supplied by the AI tool call, and
-/// `allow_webp` follows the exact selected adapter contract.
-/// `workspace_root` 用于解析相对路径，`path` 由 AI 工具调用提供，`allow_webp`
-/// 遵循精确的所选适配器契约。
-///
-/// # Returns
-/// 返回值
-/// A provider-safe inline carrier.
-/// 返回供应商安全的内联载体。
-fn local_image_data_url(
-    workspace_root: Option<&Path>,
-    path: &str,
-    allow_webp: bool,
-) -> Result<String, String> {
-    let allowed_mime_types = if allow_webp {
-        &["image/jpeg", "image/png", "image/webp"][..]
-    } else {
-        &["image/jpeg", "image/png"][..]
-    };
-    local_media_data_url_for_mime_types(workspace_root, path, allowed_mime_types)
-}
-
-/// Reads one local media file using the exact MIME set owned by the selected adapter.
-/// 使用所选适配器持有的精确 MIME 集读取一个本地媒体文件。
-///
-/// # Parameters
-/// 参数
-/// `workspace_root` resolves relative paths, `path` identifies the source, and
-/// `allowed_mime_types` is the closed provider contract.
-/// `workspace_root` 解析相对路径，`path` 标识来源，`allowed_mime_types`
-/// 是封闭供应商合同。
-///
-/// # Returns
-/// 返回值
-/// A bounded provider-safe media Data URL.
-/// 返回有界且供应商安全的媒体 Data URL。
-fn local_media_data_url_for_mime_types(
-    workspace_root: Option<&Path>,
-    path: &str,
-    allowed_mime_types: &[&str],
-) -> Result<String, String> {
-    let source = PathBuf::from(path);
-    let resolved = if source.is_absolute() {
-        source
-    } else {
-        workspace_root
-            .ok_or_else(|| {
-                String::from(
-                    "Relative provider tool resource paths require an active workspace root.",
-                )
-            })?
-            .join(source)
-    };
-    let canonical = std::fs::canonicalize(&resolved).map_err(|error| {
-        format!(
-            "Provider tool resource `{}` cannot be resolved: {error}",
-            resolved.display()
-        )
-    })?;
-    let descriptor = crate::attachment_assets::attachment_descriptor_from_path(&canonical)
-        .filter(|descriptor| allowed_mime_types.contains(&descriptor.mime_type))
-        .ok_or_else(|| {
-            format!(
-                "Provider tool resource `{}` has an unsupported media format.",
-                canonical.display()
-            )
-        })?;
-    let bytes = std::fs::read(&canonical).map_err(|error| {
-        format!(
-            "Provider tool resource `{}` cannot be read: {error}",
-            canonical.display()
-        )
-    })?;
-    if bytes.is_empty() || bytes.len() > PROVIDER_TOOL_IMAGE_INPUT_BYTE_LIMIT {
-        return Err(format!(
-            "Provider tool resource `{}` must be non-empty and no larger than 50 MiB.",
-            canonical.display()
-        ));
-    }
-    Ok(format!(
-        "data:{};base64,{}",
-        descriptor.mime_type,
-        base64::engine::general_purpose::STANDARD.encode(bytes)
-    ))
-}
-
-/// Builds a typed inline carrier for one verified image or audio file.
-/// 为一个已验证图片或音频文件构建带类型内联载体。
-///
-/// # Parameters
-/// 参数
-/// `workspace_root`, `path`, and `allowed_mime_types` define one exact resource contract.
-/// `workspace_root`、`path` 与 `allowed_mime_types` 定义一个精确资源合同。
-///
-/// # Returns
-/// 返回值
-/// An internal object containing the semantic media kind, MIME type, and Data URL.
-/// 返回包含语义媒体类别、MIME 类型和 Data URL 的内部对象。
-fn local_typed_media_data_url(
-    workspace_root: Option<&Path>,
-    path: &str,
-    allowed_mime_types: &[&str],
-) -> Result<Value, String> {
-    let canonical = canonical_provider_resource_path(workspace_root, path)?;
-    let descriptor = crate::attachment_assets::attachment_descriptor_from_path(&canonical)
-        .filter(|descriptor| allowed_mime_types.contains(&descriptor.mime_type))
-        .ok_or_else(|| {
-            format!(
-                "Provider tool resource `{}` has an unsupported media format.",
-                canonical.display()
-            )
-        })?;
-    let bytes = std::fs::read(&canonical).map_err(|error| {
-        format!(
-            "Provider tool resource `{}` cannot be read: {error}",
-            canonical.display()
-        )
-    })?;
-    if bytes.is_empty() || bytes.len() > PROVIDER_TOOL_IMAGE_INPUT_BYTE_LIMIT {
-        return Err(format!(
-            "Provider tool resource `{}` must be non-empty and no larger than 50 MiB.",
-            canonical.display()
-        ));
-    }
-    let kind = if descriptor.mime_type.starts_with("image/") {
-        "image"
-    } else if descriptor.mime_type.starts_with("audio/") {
-        "audio"
-    } else {
-        return Err(format!(
-            "Provider tool resource `{}` is neither image nor audio.",
-            canonical.display()
-        ));
-    };
-    Ok(json!({
-        "kind": kind,
-        "mime_type": descriptor.mime_type,
-        "data_url": format!(
-            "data:{};base64,{}",
-            descriptor.mime_type,
-            base64::engine::general_purpose::STANDARD.encode(bytes)
-        )
-    }))
-}
-
-/// Builds a trusted streaming-file descriptor after exact local validation.
-/// 在精确本地校验后构建受信任的流式文件描述符。
-///
-/// # Parameters
-/// 参数
-/// `workspace_root`, `path`, MIME set, and byte limit define the selected provider contract.
-/// `workspace_root`、`path`、MIME 集与字节上限定义所选供应商合同。
-///
-/// # Returns
-/// 返回值
-/// A host-only canonical path descriptor consumed by the provider upload boundary.
-/// 返回由供应商上传边界消费的仅宿主可见规范路径描述符。
-fn local_provider_file_descriptor(
-    workspace_root: Option<&Path>,
-    path: &str,
-    allowed_mime_types: &[&str],
-    maximum_bytes: u64,
-) -> Result<Value, String> {
-    let canonical = canonical_provider_resource_path(workspace_root, path)?;
-    let descriptor = crate::attachment_assets::attachment_descriptor_from_path(&canonical)
-        .filter(|descriptor| allowed_mime_types.contains(&descriptor.mime_type))
-        .ok_or_else(|| {
-            format!(
-                "Provider tool resource `{}` has an unsupported media format.",
-                canonical.display()
-            )
-        })?;
-    let metadata = std::fs::metadata(&canonical).map_err(|error| {
-        format!(
-            "Provider tool resource `{}` metadata cannot be read: {error}",
-            canonical.display()
-        )
-    })?;
-    if !metadata.is_file() || metadata.len() == 0 || metadata.len() > maximum_bytes {
-        return Err(format!(
-            "Provider tool resource `{}` must be a non-empty regular file no larger than {} bytes.",
-            canonical.display(),
-            maximum_bytes
-        ));
-    }
-    Ok(json!({
-        "absolute_path": canonical.to_string_lossy(),
-        "mime_type": descriptor.mime_type,
-        "size_bytes": metadata.len()
-    }))
-}
-
-/// Resolves and canonicalizes one provider-tool local resource path.
-/// 解析并规范化一个供应商工具本地资源路径。
-///
-/// # Parameters
-/// 参数
-/// `workspace_root` resolves relative paths and `path` is the AI-supplied semantic path.
-/// `workspace_root` 解析相对路径，`path` 是 AI 提供的语义路径。
-///
-/// # Returns
-/// 返回值
-/// The canonical existing filesystem path.
-/// 返回已存在文件系统路径的规范形式。
-fn canonical_provider_resource_path(
-    workspace_root: Option<&Path>,
-    path: &str,
-) -> Result<PathBuf, String> {
-    let source = PathBuf::from(path);
-    let resolved = if source.is_absolute() {
-        source
-    } else {
-        workspace_root
-            .ok_or_else(|| {
-                String::from(
-                    "Relative provider tool resource paths require an active workspace root.",
-                )
-            })?
-            .join(source)
-    };
-    std::fs::canonicalize(&resolved).map_err(|error| {
-        format!(
-            "Provider tool resource `{}` cannot be resolved: {error}",
-            resolved.display()
-        )
-    })
 }
 
 /// Stages unified provider resources and builds model/card output.
@@ -1171,18 +453,25 @@ async fn stage_provider_resources(
                 )
             })?;
         let suggested_name = format!("{}.{}", resource.output_id, descriptor.extension);
-        let attachment = match (resource.bytes, resource.download_url.as_deref()) {
-            (Some(bytes), None) => stage_attachment_bytes(
+        let attachment = match (
+            resource.bytes,
+            resource.download_url.as_deref(),
+            resource.download_policy.as_ref(),
+        ) {
+            (Some(bytes), None, None) => stage_attachment_bytes(
                 workspace_text.as_str(),
                 &descriptor,
                 suggested_name.as_str(),
                 None,
                 bytes.as_slice(),
             )?,
-            (None, Some(download_url)) => {
-                let temporary_path =
-                    download_provider_resource_to_temp(download_url, resource.kind.as_str())
-                        .await?;
+            (None, Some(download_url), Some(download_policy)) => {
+                let temporary_path = download_provider_resource_to_temp(
+                    download_url,
+                    resource.kind.as_str(),
+                    download_policy,
+                )
+                .await?;
                 stage_attachment_file_streaming(
                     workspace_text.as_str(),
                     &descriptor,
@@ -1233,8 +522,10 @@ fn provider_resource_local_files(resources: &[Value]) -> Vec<String> {
 ///
 /// # Parameters
 /// 参数
-/// `download_url` is the provider-normalized public URL.
-/// `download_url` 是供应商归一化后的公开 URL。
+/// `download_url` is the provider-normalized locator, `resource_kind` selects the host byte limit,
+/// and `download_policy` carries the frozen manifest network authority.
+/// `download_url` 是供应商归一化后的定位符，`resource_kind` 选择宿主字节上限，
+/// `download_policy` 携带冻结的 Manifest 网络权限。
 ///
 /// # Returns
 /// 返回值
@@ -1243,18 +534,11 @@ fn provider_resource_local_files(resources: &[Value]) -> Vec<String> {
 async fn download_provider_resource_to_temp(
     download_url: &str,
     resource_kind: &str,
+    download_policy: &ProviderToolResourceDownloadPolicy,
 ) -> Result<tempfile::TempPath, String> {
-    let parsed_url = reqwest::Url::parse(download_url)
-        .map_err(|_| String::from("Provider resource URL is invalid."))?;
-    if parsed_url.scheme() != "https"
-        || parsed_url.host_str().is_none()
-        || !parsed_url.username().is_empty()
-        || parsed_url.password().is_some()
-    {
-        return Err(String::from(
-            "Provider resource URL must be a credential-free absolute HTTPS URL.",
-        ));
-    }
+    // The host revalidates the frozen adapter authority immediately before network access.
+    // 宿主在网络访问前立即复验适配器冻结的权限。
+    let parsed_url = download_policy.validate_url(download_url, "Provider resource URL")?;
     let byte_limit = match resource_kind {
         "audio" => PROVIDER_TOOL_AUDIO_OUTPUT_BYTE_LIMIT,
         "video" => PROVIDER_TOOL_VIDEO_OUTPUT_BYTE_LIMIT,
@@ -1329,14 +613,48 @@ async fn download_provider_resource_to_temp(
 mod tests {
     use super::{
         apply_session_provider_tool_selections, download_provider_resource_to_temp,
-        materialize_provider_tool_inputs, render_provider_tool_result,
+        render_provider_tool_result,
     };
     use serde_json::json;
     use vulcan_provider_adapters::{
-        ProviderToolAdapterKind, ProviderToolCompositeOutput, ProviderToolEmbeddingOutput,
-        ProviderToolEmbeddingVector, ProviderToolExecutionResult, ProviderToolNormalizedOutput,
-        ProviderToolRerankOutput, ProviderToolRerankResult,
+        ProviderToolCompositeOutput, ProviderToolEmbeddingOutput, ProviderToolEmbeddingVector,
+        ProviderToolExecutionResult, ProviderToolNormalizedOutput, ProviderToolRerankOutput,
+        ProviderToolRerankResult, ProviderToolResourceDownloadPolicy, ProviderToolResourceEncoding,
     };
+
+    /// Verifies Agent Runtime production input materialization has no provider-named branch.
+    /// 验证 Agent Runtime 生产输入物化不存在供应商命名分支。
+    ///
+    /// The release gate performs the same repository-wide check; this focused R0 guard keeps the
+    /// bridge invariant independently runnable with the crate tests.
+    /// 发布门禁会执行同类仓库级检查；本聚焦 R0 守卫使 bridge 不变量可随 crate 测试独立运行。
+    #[test]
+    fn agent_runtime_has_no_provider_named_input_materialization() {
+        // source includes this module so the production prefix is cut at the first test boundary.
+        // source 包含当前测试模块，因此在首个测试边界处截取生产前缀。
+        let source = include_str!("provider_tool_bridge.rs");
+        // production contains only the bridge code that ships in non-test builds.
+        // production 只包含非测试构建实际发布的 bridge 代码。
+        let production = source
+            .split_once("#[cfg(test)]")
+            .map(|(production, _)| production)
+            .expect("provider tool bridge must retain one explicit test boundary");
+        // forbidden_fragments are assembled so the guard strings cannot satisfy themselves.
+        // forbidden_fragments 通过分段组装，避免守卫字符串自身命中检查。
+        let forbidden_fragments = [
+            ["materialize_", "provider_tool_inputs"].concat(),
+            ["Ali", "baba"].concat(),
+            ["Mini", "Max"].concat(),
+            ["Tavi", "ly"].concat(),
+            ["ProviderTool", "AdapterKind"].concat(),
+        ];
+        for forbidden in forbidden_fragments {
+            assert!(
+                !production.contains(forbidden.as_str()),
+                "Agent provider-tool bridge restored forbidden production input authority `{forbidden}`"
+            );
+        }
+    }
 
     /// Verifies an explicit empty session selection disables every global provider tool.
     /// 验证显式空会话选择会禁用全部全局供应商工具。
@@ -1357,30 +675,47 @@ mod tests {
         assert!(configuration.provider_tool_selections.is_empty());
     }
 
-    /// Verifies capabilities without resources preserve exact native arguments.
-    /// 验证不含资源的能力会保留精确原生参数。
-    #[test]
-    fn non_resource_capability_keeps_arguments() {
-        let arguments = json!({"query": "Vulcan"});
-        assert_eq!(
-            materialize_provider_tool_inputs(
-                ProviderToolAdapterKind::TavilySearch,
-                None,
-                arguments.clone()
-            )
-            .expect("unchanged arguments"),
-            arguments
-        );
-    }
-
     /// Verifies the shared resource boundary rejects insecure provider URLs before networking.
     /// 验证共享资源边界会在发起网络请求前拒绝不安全的供应商 URL。
     #[tokio::test]
     async fn provider_resource_download_rejects_insecure_url() {
-        let error = download_provider_resource_to_temp("http://example.com/output.png", "image")
-            .await
-            .expect_err("insecure URL must be rejected");
-        assert!(error.contains("absolute HTTPS"));
+        // The HTTPS-only policy is the exact authority under test.
+        // 仅 HTTPS 策略是本测试使用的精确权限。
+        let policy = ProviderToolResourceDownloadPolicy {
+            encoding: ProviderToolResourceEncoding::HttpsUrl,
+            host_suffixes: vec![String::from("example.com")],
+        };
+        let error =
+            download_provider_resource_to_temp("http://example.com/output.png", "image", &policy)
+                .await
+                .expect_err("insecure URL must be rejected");
+        assert_eq!(
+            error,
+            "Provider resource URL is outside the declared scheme, default port or exact operation origin, and host suffixes."
+        );
+    }
+
+    /// Verifies a syntactically valid HTTPS URL cannot escape its manifest-owned host authority.
+    /// 验证语法有效的 HTTPS URL 无法逃逸 Manifest 持有的宿主权限。
+    #[tokio::test]
+    async fn provider_resource_download_rejects_undeclared_host() {
+        // The exact host matcher intentionally excludes every subdomain and alternate domain.
+        // 精确宿主匹配项刻意排除全部子域与其他域名。
+        let policy = ProviderToolResourceDownloadPolicy {
+            encoding: ProviderToolResourceEncoding::HttpsUrl,
+            host_suffixes: vec![String::from("example.com")],
+        };
+        let error = download_provider_resource_to_temp(
+            "https://assets.example.org/output.png",
+            "image",
+            &policy,
+        )
+        .await
+        .expect_err("undeclared host must be rejected before networking");
+        assert_eq!(
+            error,
+            "Provider resource URL is outside the declared scheme, default port or exact operation origin, and host suffixes."
+        );
     }
 
     /// Verifies embedding output remains typed in both model and host payloads.

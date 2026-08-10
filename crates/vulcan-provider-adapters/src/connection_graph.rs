@@ -130,37 +130,6 @@ impl PersistedConnectionGraph {
         Ok(())
     }
 
-    /// Atomically switches a connection to another verified protocol.
-    /// 将连接原子切换到另一个已验证协议。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `registry` is the strict provider registry, `connection_id` identifies the target, and
-    /// `protocol_id` is the requested verified profile.
-    /// `registry` 是严格供应商注册表，`connection_id` 标识目标，`protocol_id` 是请求的已验证 Profile。
-    ///
-    /// # Returns
-    /// 返回值
-    /// `Ok(())` when the saved protocol changes, otherwise the graph remains unchanged.
-    /// 保存协议变更时返回 `Ok(())`，否则连接图保持不变。
-    pub fn switch_protocol(
-        &mut self,
-        registry: &ProviderRegistry,
-        connection_id: &str,
-        protocol_id: &str,
-    ) -> Result<(), String> {
-        let current = self
-            .connections
-            .get(connection_id)
-            .ok_or_else(|| format!("Connection `{connection_id}` is not configured."))?;
-        let mut candidate = current.clone();
-        candidate.selected_protocol = protocol_id.to_string();
-        validate_connection(registry, &candidate)?;
-        self.connections
-            .insert(connection_id.to_string(), candidate);
-        Ok(())
-    }
-
     /// Resolves the explicit connection for one model without execution-time failover.
     /// 为一个模型解析显式连接，不进行执行时容灾。
     ///
@@ -273,16 +242,6 @@ fn validate_connection(
     registry: &ProviderRegistry,
     connection: &CredentialConnection,
 ) -> Result<(), String> {
-    let normalized_service_origin = crate::normalize_connection_service_origin_override(
-        connection.provider_id.as_str(),
-        connection.service_entry_id.as_str(),
-        connection.service_origin_override.as_deref(),
-    )?;
-    if normalized_service_origin != connection.service_origin_override {
-        return Err(String::from(
-            "The credential-scoped service origin is not in canonical form.",
-        ));
-    }
     let provider = registry
         .provider(connection.provider_id.as_str())
         .ok_or_else(|| format!("Provider `{}` is not registered.", connection.provider_id))?;
@@ -296,6 +255,15 @@ fn validate_connection(
                 connection.service_entry_id, connection.provider_id
             )
         })?;
+    let normalized_service_origin = crate::normalize_connection_service_origin_override(
+        entry,
+        connection.service_origin_override.as_deref(),
+    )?;
+    if normalized_service_origin != connection.service_origin_override {
+        return Err(String::from(
+            "The credential-scoped service origin is not in canonical form.",
+        ));
+    }
     let credential_profile = entry
         .credential_profile(connection.credential_profile_id.as_str())
         .ok_or_else(|| {
@@ -346,7 +314,7 @@ fn validate_connection(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CredentialMode, ProviderRegistry, providers::openrouter_descriptor};
+    use crate::{CredentialMode, ProviderRegistry};
     use std::collections::BTreeSet;
     use vulcan_ai_protocols::{ANTHROPIC_MESSAGES_PROFILE_ID, OPENAI_CHAT_PROFILE_ID};
 
@@ -354,8 +322,15 @@ mod tests {
     /// 构建一个严格 OpenRouter 注册表。
     fn registry() -> ProviderRegistry {
         let mut registry = ProviderRegistry::default();
+        // descriptor is compiled from the authoritative bundled manifest instead of a Rust oracle.
+        // descriptor 从权威内置 Manifest 编译，而不是来自 Rust 对照实现。
+        let descriptor = crate::provider_manifest::load_bundled_resolved_catalog()
+            .manifest("openrouter")
+            .expect("bundled OpenRouter manifest must exist")
+            .descriptor
+            .clone();
         registry
-            .register(openrouter_descriptor())
+            .register(descriptor)
             .expect("descriptor must register");
         registry
     }
@@ -382,26 +357,6 @@ mod tests {
             prompt_cache_by_protocol: BTreeMap::new(),
             usage_scope_override: None,
         }
-    }
-
-    /// Verifies an invalid switch leaves the original protocol untouched.
-    /// 验证无效切换不会修改原协议。
-    #[test]
-    fn protocol_switch_is_atomic() {
-        let registry = registry();
-        let mut graph = PersistedConnectionGraph::default();
-        graph
-            .add_connection(&registry, connection("one", ANTHROPIC_MESSAGES_PROFILE_ID))
-            .expect("connection should register");
-        assert!(
-            graph
-                .switch_protocol(&registry, "one", "unregistered")
-                .is_err()
-        );
-        assert_eq!(
-            graph.connections["one"].selected_protocol,
-            ANTHROPIC_MESSAGES_PROFILE_ID
-        );
     }
 
     /// Verifies the first connection becomes the provider default.
