@@ -6,7 +6,7 @@
 //! 验证器绝不访问网络、磁盘或 Secret。所有引擎事实通过 `EnginePrimitiveRegistry` 注入，
 //! 所有权事实通过 `ManifestOwnership` 注入。
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value;
 use time::{OffsetDateTime, UtcOffset, format_description::well_known::Rfc3339};
@@ -3783,11 +3783,13 @@ fn validate_usage_profile_payloads(
     errors: &mut Vec<ManifestValidationError>,
 ) {
     let mut with_payload = BTreeSet::new();
+    let mut payloads = BTreeMap::new();
     for (index, declaration) in manifest.usage_profiles.iter().enumerate() {
         let Some(payload) = declaration.payload.as_ref() else {
             continue;
         };
         with_payload.insert(declaration.profile_id.clone());
+        payloads.insert(declaration.profile_id.as_str(), payload);
         if let Err(error) = payload.validate() {
             errors.push(ManifestValidationError::new(
                 "invalid_usage_profile_payload",
@@ -3815,6 +3817,20 @@ fn validate_usage_profile_payloads(
                         "$.services[].protocol_routes[].usage_profile_refs",
                         format!("usage profile `{reference}` is referenced but has no payload"),
                     ));
+                } else if payloads.get(reference.as_str()).is_some_and(|payload| {
+                    !usage_record_kind_matches_protocol(
+                        payload.record_kind,
+                        protocol_route.protocol_profile_id.as_str(),
+                    )
+                }) {
+                    errors.push(ManifestValidationError::new(
+                        "usage_record_kind_protocol_mismatch",
+                        "$.services[].protocol_routes[].usage_profile_refs",
+                        format!(
+                            "usage profile `{reference}` record kind is incompatible with protocol `{}`",
+                            protocol_route.protocol_profile_id
+                        ),
+                    ));
                 }
             }
         }
@@ -3827,8 +3843,43 @@ fn validate_usage_profile_payloads(
                     "$.model_rules[].usage_profile_refs",
                     format!("usage profile `{reference}` is referenced but has no payload"),
                 ));
+            } else if let Some(selected_protocol) = rule.selected_protocol.as_deref()
+                && payloads.get(reference.as_str()).is_some_and(|payload| {
+                    !usage_record_kind_matches_protocol(payload.record_kind, selected_protocol)
+                })
+            {
+                errors.push(ManifestValidationError::new(
+                    "usage_record_kind_protocol_mismatch",
+                    "$.model_rules[].usage_profile_refs",
+                    format!(
+                        "usage profile `{reference}` record kind is incompatible with selected protocol `{selected_protocol}`"
+                    ),
+                ));
             }
         }
+    }
+}
+
+/// Reports whether one Usage transport record can be emitted by the selected protocol family.
+/// 报告一个用量传输记录是否可能由已选协议族发出。
+///
+/// `record_kind` is the manifest extraction source and `protocol_profile_id` is the frozen route.
+/// `record_kind` 是 Manifest 提取来源，`protocol_profile_id` 是冻结路由。
+/// Returns `false` only for closed transport combinations that are structurally impossible.
+/// 仅对结构上不可能的封闭传输组合返回 `false`。
+fn usage_record_kind_matches_protocol(
+    record_kind: vulcan_llm_core::UsageRecordKind,
+    protocol_profile_id: &str,
+) -> bool {
+    match record_kind {
+        vulcan_llm_core::UsageRecordKind::WebSocketFrame => matches!(
+            protocol_profile_id,
+            vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID
+                | vulcan_ai_protocols::OPENAI_CODEX_RESPONSES_PROFILE_ID
+        ),
+        vulcan_llm_core::UsageRecordKind::JsonBody
+        | vulcan_llm_core::UsageRecordKind::ErrorJsonBody
+        | vulcan_llm_core::UsageRecordKind::SseEvent => true,
     }
 }
 
@@ -7590,6 +7641,46 @@ mod tests {
                 .iter()
                 .any(|error| error.code == "invalid_usage_profile_payload"),
             "invalid usage payload must be rejected: {errors:?}"
+        );
+    }
+
+    /// Verifies a WebSocket usage record cannot be attached to a non-Responses protocol route.
+    /// 验证 WebSocket 用量记录不能绑定到非 Responses 协议路由。
+    #[test]
+    fn usage_record_kind_must_match_protocol_route() {
+        let mut manifest = minimal_manifest();
+        manifest.usage_profiles = vec![crate::provider_manifest::schema::UsageProfileDeclaration {
+            profile_id: String::from("test.usage.websocket.v1"),
+            description: String::from("test"),
+            payload: Some(vulcan_llm_core::UsageExtractionProfile {
+                profile_id: String::from("test.usage.websocket.v1"),
+                revision: 1,
+                record_kind: vulcan_llm_core::UsageRecordKind::WebSocketFrame,
+                update_kind: vulcan_ai_contract::UsageUpdateKind::Final,
+                event_type_pointer: Some(String::from("/type")),
+                event_type_value: Some(String::from("response.completed")),
+                required_pointer: Some(String::from("/response/usage")),
+                bindings: vec![vulcan_llm_core::UsageFieldBinding {
+                    field: vulcan_llm_core::UsageField::InputTokens,
+                    pointers: vec![String::from("/response/usage/input_tokens")],
+                    encoding: vulcan_llm_core::UsageValueEncoding::UnsignedInteger,
+                }],
+                derivations: Vec::new(),
+            }),
+        }];
+        manifest.services[0].protocol_routes[0].protocol_profile_id =
+            String::from(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID);
+        manifest.services[0].protocol_routes[0].usage_profile_refs =
+            vec![String::from("test.usage.websocket.v1")];
+
+        let errors = validate_manifest(&manifest, ManifestOwnership::System, &registry())
+            .expect_err("WebSocket usage on a Chat route must fail");
+
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.code == "usage_record_kind_protocol_mismatch"),
+            "transport-incompatible usage profile must be rejected: {errors:?}"
         );
     }
 

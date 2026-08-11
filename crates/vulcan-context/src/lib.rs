@@ -14,7 +14,7 @@ pub use assembly::{
 };
 pub use budget::{
     ContextBudgetAiToolCapability, ContextBudgetCapabilities, ContextReasoningEffort,
-    ContextTokenEstimator, RequestContextBudgetSnapshotInput, RequestContextBudgetSnapshotOptions,
+    RequestContextBudgetSnapshotInput, RequestContextBudgetSnapshotOptions,
     apply_context_budget_anchor_baseline, build_context_budget_fingerprint,
     build_request_context_budget_snapshot, build_request_context_budget_snapshot_with_options,
     calibrated_input_token_estimate, estimate_mixed_language_text_tokens, is_cjk_character,
@@ -381,6 +381,44 @@ impl ContextBudgetSeverity {
     }
 }
 
+/// Provenance and quality of the input-token value used for context admission.
+/// 上下文准入所使用输入 Token 数值的来源与质量。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ContextBudgetAccountingSource {
+    /// The exact assembled request matches one Provider-reported input baseline.
+    /// 精确装配请求与某个 Provider 报告的输入基线完全匹配。
+    ProviderReported,
+    /// A proven request prefix extends a Provider baseline with a character-level delta.
+    /// 已证明的请求前缀在 Provider 基线上叠加字符级增量。
+    ProviderAnchorPlusCharacterDelta,
+    /// No valid Provider anchor exists and the complete request uses character estimation.
+    /// 不存在有效 Provider 锚点，完整请求使用字符级估算。
+    #[default]
+    CharacterEstimate,
+}
+
+impl ContextBudgetAccountingSource {
+    /// Returns the stable serialized key used by session accounting and diagnostics.
+    /// 返回会话记账与诊断使用的稳定序列化键。
+    pub const fn stable_key(self) -> &'static str {
+        match self {
+            Self::ProviderReported => "provider_reported",
+            Self::ProviderAnchorPlusCharacterDelta => "provider_anchor_plus_character_delta",
+            Self::CharacterEstimate => "character_estimate",
+        }
+    }
+
+    /// Returns the concise Chinese label shown in Usage Tips.
+    /// 返回用量提示中展示的简短中文标签。
+    pub const fn display_label(self) -> &'static str {
+        match self {
+            Self::ProviderReported => "Provider 实测",
+            Self::ProviderAnchorPlusCharacterDelta => "Provider 锚点 + 字符增量",
+            Self::CharacterEstimate => "字符粗估",
+        }
+    }
+}
+
 /// Structured context-budget snapshot reused by execution previews, compaction checks, and runtime summaries.
 /// 供执行预览、压缩检查与运行时摘要复用的结构化上下文预算快照。
 #[derive(Debug, Clone)]
@@ -463,6 +501,15 @@ pub struct ContextBudgetSnapshot {
     /// Optional latest observed provider usage snapshot reused to calibrate host estimates conservatively.
     /// 用于保守校准宿主估算的可选最近一次 Provider 实测用量快照。
     pub observed_usage: Option<ProviderUsageSnapshot>,
+    /// Explicit source and quality of the input-token accounting value.
+    /// 输入 Token 记账值的明确来源与质量。
+    pub accounting_source: ContextBudgetAccountingSource,
+    /// Stable warning code when the accounting value is not exact Provider evidence.
+    /// 记账值不是精确 Provider 证据时使用的稳定警告码。
+    pub accounting_warning_code: Option<String>,
+    /// Physical Provider call used as the accounting anchor, when present.
+    /// 存在时作为记账锚点的物理 Provider 调用。
+    pub provider_anchor_call_id: Option<String>,
     /// Final severity bucket used by diagnostics and compaction thresholds.
     /// 供诊断与压缩阈值使用的最终严重级别分桶。
     pub severity: ContextBudgetSeverity,
@@ -499,6 +546,9 @@ impl Default for ContextBudgetSnapshot {
             estimated_total_tokens: 0,
             usage_ratio: 0.0,
             observed_usage: None,
+            accounting_source: ContextBudgetAccountingSource::CharacterEstimate,
+            accounting_warning_code: Some(String::from("provider_usage_baseline_unavailable")),
+            provider_anchor_call_id: None,
             severity: ContextBudgetSeverity::Healthy,
         }
     }
@@ -554,18 +604,14 @@ impl ContextBudgetSnapshot {
             .context_limit
             .map(|value| value.to_string())
             .unwrap_or_else(|| String::from("未声明"));
-        let input_source_label = if self.observed_usage.is_some() {
-            "输入(实测)"
-        } else {
-            "输入(估算)"
-        };
+        let input_source_label = self.accounting_source.display_label();
         let breakdown_label = if self.observed_usage.is_some() {
             "本地估算拆分"
         } else {
             "估算拆分"
         };
         format!(
-            "{severity_label} · {baseline_label}{} · 原始窗口 {} · 有效窗口 {} · 自动压缩线 {} · {} {} · {} 系统 {} / 历史 {} / 当前 {} / 工具 {} · 活动上下文 {} · 自动压缩计量 {} · 端到端占用 {} · 输出预留 {} · 推理预留 {} · 旧压缩预留 {}{}",
+            "{severity_label} · {baseline_label}{} · 原始窗口 {} · 有效窗口 {} · 自动压缩线 {} · 输入来源 {} · {} · {} 系统 {} / 历史 {} / 当前 {} / 工具 {} · 活动上下文 {} · 自动压缩计量 {} · 端到端占用 {} · 输出预留 {} · 推理预留 {} · 旧压缩预留 {}{}{}",
             baseline_reason_suffix,
             context_limit_label,
             self.effective_context_window
@@ -590,6 +636,10 @@ impl ContextBudgetSnapshot {
             self.observed_usage
                 .as_ref()
                 .map(|usage| format!(" · {}", provider_usage_label(usage)))
+                .unwrap_or_default(),
+            self.accounting_warning_code
+                .as_ref()
+                .map(|warning| format!(" · 警告 {warning}"))
                 .unwrap_or_default()
         )
     }

@@ -238,14 +238,8 @@ pub(super) async fn service_resume_session_goal(
     state: SharedServiceBridgeState,
     request: SessionGoalResumeRequest,
 ) -> Result<SessionAddonsChangedResponse, String> {
-    let (
-        controller_runtime,
-        agent_runtime,
-        _luaskills_catalog,
-        _token_budget_runtime,
-        _mcp_catalog,
-        _logs,
-    ) = runtime_parts_from_state(&state)?;
+    let (controller_runtime, agent_runtime, _luaskills_catalog, _mcp_catalog, _logs) =
+        runtime_parts_from_state(&state)?;
     let session_id = session_goal_request_session_id(&state, request.conversation_id.as_deref())?;
     let objective = normalize_session_goal_objective(&request.objective)?;
     validate_session_goal_budget(request.token_budget)?;
@@ -378,14 +372,8 @@ pub(super) async fn service_update_session_goal_status(
     state: SharedServiceBridgeState,
     request: SessionGoalStatusUpdateRequest,
 ) -> Result<SessionAddonsChangedResponse, String> {
-    let (
-        controller_runtime,
-        agent_runtime,
-        _luaskills_catalog,
-        _token_budget_runtime,
-        _mcp_catalog,
-        _logs,
-    ) = runtime_parts_from_state(&state)?;
+    let (controller_runtime, agent_runtime, _luaskills_catalog, _mcp_catalog, _logs) =
+        runtime_parts_from_state(&state)?;
     let session_id = session_goal_request_session_id(&state, request.conversation_id.as_deref())?;
     ensure_regular_session_exists(&state, session_id, "更新目标状态")?;
     let target_status = request.status.into_thread_goal_status();

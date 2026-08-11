@@ -86,9 +86,6 @@ export function ConversationBlocksView(props: {
   // Copies transcript text using the shell-provided clipboard path.
   // 使用外壳提供的剪贴板路径复制转录文本。
   onCopyText: (text: string) => Promise<void> | void;
-  // Retries the owning conversation from the retained service execution state.
-  // 从服务端保留的执行状态重试所属会话。
-  onRetryConversationRequest?: (conversationId: string) => Promise<boolean>;
   // Executes one pending Plan artifact.
   // 执行单个待确认计划产物。
   onPlanArtifactExecute?: (payload: PlanArtifactActionPayload) => Promise<void> | void;
@@ -166,7 +163,6 @@ export function ConversationBlocksView(props: {
       onLoadToolDetail={props.onLoadToolDetail}
       onExtractGeneratedMediaAttachments={props.onExtractGeneratedMediaAttachments}
       onCopyText={props.onCopyText}
-      onRetryConversationRequest={props.onRetryConversationRequest}
       pendingPlanArtifact={props.pendingPlanArtifact}
       onPlanArtifactExecute={props.onPlanArtifactExecute}
       onPlanArtifactSuggest={props.onPlanArtifactSuggest}
@@ -248,9 +244,6 @@ function SpecialConversationBlock(props: {
   // Copies transcript text using the shell-provided clipboard path.
   // 使用外壳提供的剪贴板路径复制转录文本。
   onCopyText: (text: string) => Promise<void> | void;
-  // Retries the owning conversation from the retained service execution state.
-  // 从服务端保留的执行状态重试所属会话。
-  onRetryConversationRequest?: (conversationId: string) => Promise<boolean>;
   // Executes one pending Plan artifact.
   // 执行单个待确认计划产物。
   onPlanArtifactExecute?: (payload: PlanArtifactActionPayload) => Promise<void> | void;
@@ -286,16 +279,7 @@ function SpecialConversationBlock(props: {
     ? parseSystemProviderError(props.block.body)
     : null;
   if (systemProviderError) {
-    // retryHandler is exposed only when the rendered row has an exact conversation owner.
-    // retryHandler 仅在当前渲染行具备明确会话归属时暴露。
-    const conversationId = props.conversationId;
-    const onRetryConversationRequest = props.onRetryConversationRequest;
-    const retryHandler = conversationId === null || onRetryConversationRequest === undefined
-      ? undefined
-      : async () => {
-        await onRetryConversationRequest(conversationId);
-      };
-    return <SystemErrorCard error={systemProviderError} onRetry={retryHandler} />;
+    return <SystemErrorCard error={systemProviderError} />;
   }
 
   if (props.block.kind === "turn-stats") {

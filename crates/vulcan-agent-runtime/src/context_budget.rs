@@ -5,14 +5,13 @@ use crate::agent_runtime::provider_reasoning::ProviderRuntimeReasoningResolution
 use crate::provider_config::ReasoningEffortLevel;
 use vulcan_ai_contract::{ModelCapabilities, ResourceKind};
 use vulcan_context::budget::{
-    ContextBudgetCapabilities, ContextReasoningEffort, ContextTokenEstimator,
-    RequestContextBudgetSnapshotInput, RequestContextBudgetSnapshotOptions,
-    build_request_context_budget_snapshot_with_options,
+    ContextBudgetCapabilities, ContextReasoningEffort, RequestContextBudgetSnapshotInput,
+    RequestContextBudgetSnapshotOptions, build_request_context_budget_snapshot_with_options,
 };
 pub use vulcan_context::{
     CONTEXT_BUDGET_COMPACTION_RATIO, CONTEXT_BUDGET_OVERFLOW_RATIO, CONTEXT_BUDGET_WARNING_RATIO,
-    ContextBudgetSeverity, ContextBudgetSnapshot, ContextCompactionPolicy,
-    apply_context_budget_anchor_baseline,
+    ContextBudgetAccountingSource, ContextBudgetSeverity, ContextBudgetSnapshot,
+    ContextCompactionPolicy, apply_context_budget_anchor_baseline,
 };
 use vulcan_core::types::{
     ProviderRequestSnapshot as CoreProviderRequestSnapshot, ProviderUsageSnapshot,
@@ -48,16 +47,25 @@ pub struct RequestContextCompactionBudgetSnapshotInput<'a> {
     /// Optional provider-observed usage used to calibrate estimates.
     /// 用于校准估算值的可选 Provider 实测用量。
     pub observed_usage: Option<&'a ProviderUsageSnapshot>,
+    /// Optional authoritative input-token accounting aligned to this exact request.
+    /// 已与当前精确请求对齐的可选权威输入 Token 记账值。
+    pub accounted_input_tokens: Option<usize>,
+    /// Explicit provenance and quality of the accounting value.
+    /// 记账值的明确来源与质量。
+    pub accounting_source: ContextBudgetAccountingSource,
+    /// Stable warning code for non-exact accounting.
+    /// 非精确记账使用的稳定警告码。
+    pub accounting_warning_code: Option<&'a str>,
+    /// Physical Provider call used as the accounting anchor.
+    /// 用作记账锚点的物理 Provider 调用。
+    pub provider_anchor_call_id: Option<&'a str>,
     /// Absolute input-token baseline for BodyAfterPrefix scope in the active compaction window.
     /// 当前压缩窗口 BodyAfterPrefix 范围使用的绝对输入 Token 基线。
     pub prefill_input_tokens: Option<usize>,
-    /// Optional host token estimator.
-    /// 可选宿主 Token 估算器。
-    pub estimator: Option<&'a dyn ContextTokenEstimator>,
 }
 
-/// Builds one request-facing compaction budget snapshot with an initialized token estimator.
-/// 使用已初始化的 Token 估算器构建一份面向真实请求的压缩预算快照。
+/// Builds one request-facing compaction budget snapshot from Provider evidence and character fallback.
+/// 根据 Provider 证据与字符级回退构建一份面向真实请求的压缩预算快照。
 pub fn build_request_context_compaction_budget_snapshot(
     input: RequestContextCompactionBudgetSnapshotInput<'_>,
 ) -> ContextBudgetSnapshot {
@@ -75,11 +83,14 @@ pub fn build_request_context_compaction_budget_snapshot(
             reasoning: map_reasoning_effort(input.reasoning.requested_effort),
             request_snapshot: input.request_snapshot,
             observed_usage: input.observed_usage,
+            accounted_input_tokens: input.accounted_input_tokens,
+            accounting_source: input.accounting_source,
+            accounting_warning_code: input.accounting_warning_code,
+            provider_anchor_call_id: input.provider_anchor_call_id,
             prefill_input_tokens: input.prefill_input_tokens,
         },
         RequestContextBudgetSnapshotOptions {
             compaction_policy: Some(compaction_policy),
-            estimator: input.estimator,
         },
     )
 }
@@ -201,6 +212,7 @@ mod tests {
             system_prompt: String::new(),
             prompt_layers: ProviderPromptLayers::default(),
             prompt: String::new(),
+            prompt_in_history: false,
             history: Vec::new(),
             temperature: None,
             max_turns: 1,
@@ -238,8 +250,11 @@ mod tests {
                 compaction_policy: Some(policy),
                 context_budget_override: None,
                 observed_usage: None,
+                accounted_input_tokens: None,
+                accounting_source: ContextBudgetAccountingSource::CharacterEstimate,
+                accounting_warning_code: Some("provider_usage_baseline_unavailable"),
+                provider_anchor_call_id: None,
                 prefill_input_tokens: None,
-                estimator: None,
             },
         );
 
@@ -259,8 +274,11 @@ mod tests {
                 compaction_policy: Some(ContextCompactionPolicy::default()),
                 context_budget_override: None,
                 observed_usage: None,
+                accounted_input_tokens: None,
+                accounting_source: ContextBudgetAccountingSource::CharacterEstimate,
+                accounting_warning_code: Some("provider_usage_baseline_unavailable"),
+                provider_anchor_call_id: None,
                 prefill_input_tokens: None,
-                estimator: None,
             },
         );
 
@@ -289,8 +307,11 @@ mod tests {
                 compaction_policy: Some(ContextCompactionPolicy::default()),
                 context_budget_override: None,
                 observed_usage: None,
+                accounted_input_tokens: None,
+                accounting_source: ContextBudgetAccountingSource::CharacterEstimate,
+                accounting_warning_code: Some("provider_usage_baseline_unavailable"),
+                provider_anchor_call_id: None,
                 prefill_input_tokens: None,
-                estimator: None,
             },
         );
 
@@ -320,8 +341,11 @@ mod tests {
                 compaction_policy: Some(ContextCompactionPolicy::default()),
                 context_budget_override: Some(12_000),
                 observed_usage: None,
+                accounted_input_tokens: None,
+                accounting_source: ContextBudgetAccountingSource::CharacterEstimate,
+                accounting_warning_code: Some("provider_usage_baseline_unavailable"),
+                provider_anchor_call_id: None,
                 prefill_input_tokens: None,
-                estimator: None,
             },
         );
 
@@ -338,8 +362,11 @@ mod tests {
                 compaction_policy: Some(ContextCompactionPolicy::default()),
                 context_budget_override: Some(30_000),
                 observed_usage: None,
+                accounted_input_tokens: None,
+                accounting_source: ContextBudgetAccountingSource::CharacterEstimate,
+                accounting_warning_code: Some("provider_usage_baseline_unavailable"),
+                provider_anchor_call_id: None,
                 prefill_input_tokens: None,
-                estimator: None,
             },
         );
 

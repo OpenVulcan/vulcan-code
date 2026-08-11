@@ -22,10 +22,6 @@ use std::time::Duration;
 /// 面向工作台的流式增量刷新节奏，用于避免每个 Provider token 都触发整窗重绘。
 const RUNTIME_STREAM_WORKBENCH_DELTA_FLUSH_INTERVAL: Duration = Duration::from_millis(50);
 
-/// Maximum post-provider window reserved for projecting final ready-request token estimates.
-/// Provider 结束后为投影已就绪请求最终 Token 估算保留的最长窗口。
-const RUNTIME_STREAM_FINAL_TOOL_REQUEST_TOKEN_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
-
 /// Accumulates adjacent visible stream deltas while preserving non-delta event ordering.
 /// 在保留非增量事件顺序的同时，合并相邻的可见流式增量。
 #[derive(Default)]
@@ -122,7 +118,6 @@ pub(crate) fn drive_runtime_stream_provider_loop(
         let preparation = launch.preparation;
         let active_agent = launch.active_agent;
         let task_runtime = launch.task_runtime;
-        let token_budget_runtime = launch.token_budget_runtime;
         let tools_manager = launch.tools_manager;
         let resolved_tool_definitions = launch.resolved_tool_definitions;
         let discovery_rows = launch.discovery_rows;
@@ -131,6 +126,9 @@ pub(crate) fn drive_runtime_stream_provider_loop(
         let system_preamble = launch.system_preamble;
         let core_snapshot = launch.core_snapshot;
         let mut stream_state = launch.stream_state;
+        let provider_usage_budget_baseline = stream_state
+            .provider_usage_budget_baseline_handle()
+            .expect("runtime launch must install Provider Usage telemetry context");
         let public_ai_runtime = launch.public_ai_runtime;
         // taskExecutionContextGuard owns the exact context generation used by this provider loop.
         // taskExecutionContextGuard 拥有本 Provider 循环使用的精确上下文注册世代。
@@ -145,7 +143,6 @@ pub(crate) fn drive_runtime_stream_provider_loop(
                         discovery_errors,
                         warnings,
                         &mut stream_state,
-                        token_budget_runtime.estimator(),
                         error,
                     ) {
                         yield event;
@@ -166,10 +163,10 @@ pub(crate) fn drive_runtime_stream_provider_loop(
             turn_start_mode,
             core_snapshot,
             task_runtime,
-            token_budget_runtime.clone(),
             tools_manager,
             resolved_tool_definitions,
             public_ai_runtime,
+            provider_usage_budget_baseline,
             prompt_intervention,
         );
 
@@ -178,21 +175,10 @@ pub(crate) fn drive_runtime_stream_provider_loop(
             tokio::time::Instant::now() + RUNTIME_STREAM_WORKBENCH_DELTA_FLUSH_INTERVAL;
 
         loop {
-            let token_poll_at = tokio::time::Instant::now()
-                + RUNTIME_STREAM_WORKBENCH_DELTA_FLUSH_INTERVAL;
-            let wait_deadline = if delta_coalescer.is_empty() {
-                token_poll_at
-            } else {
-                std::cmp::min(token_poll_at, next_delta_flush_at)
-            };
-            let item = match tokio::time::timeout_at(wait_deadline, provider_stream.next()).await {
+            let item =
+                match tokio::time::timeout_at(next_delta_flush_at, provider_stream.next()).await {
                 Ok(item) => item,
                 Err(_) => {
-                    for event in stream_state.drain_tool_request_token_progress(session_id) {
-                        for flushed_event in delta_coalescer.push_event(event) {
-                            yield flushed_event;
-                        }
-                    }
                     if !delta_coalescer.is_empty()
                         && tokio::time::Instant::now() >= next_delta_flush_at
                     {
@@ -239,29 +225,6 @@ pub(crate) fn drive_runtime_stream_provider_loop(
             }
         }
 
-        // finalTokenDrainDeadline prevents a failed background worker from blocking terminal delivery forever.
-        // finalTokenDrainDeadline 防止后台 worker 失效时永久阻塞终态投递。
-        let final_token_drain_deadline = tokio::time::Instant::now()
-            + RUNTIME_STREAM_FINAL_TOOL_REQUEST_TOKEN_DRAIN_TIMEOUT;
-        while stream_state.has_pending_ready_tool_request_token_progress()
-            && tokio::time::Instant::now() < final_token_drain_deadline
-        {
-            for event in stream_state.drain_tool_request_token_progress(session_id) {
-                for flushed_event in delta_coalescer.push_event(event) {
-                    yield flushed_event;
-                }
-            }
-            if stream_state.has_pending_ready_tool_request_token_progress() {
-                tokio::time::sleep(RUNTIME_STREAM_WORKBENCH_DELTA_FLUSH_INTERVAL).await;
-            }
-        }
-        // One last non-blocking drain catches a result that arrived at the deadline boundary.
-        // 最后一次非阻塞排空用于接收恰好在截止边界到达的结果。
-        for event in stream_state.drain_tool_request_token_progress(session_id) {
-            for flushed_event in delta_coalescer.push_event(event) {
-                yield flushed_event;
-            }
-        }
         for event in delta_coalescer.flush() {
             yield event;
         }
@@ -290,7 +253,6 @@ pub(crate) fn drive_runtime_stream_provider_loop(
                 discovery_errors,
                 warnings,
                 &mut stream_state,
-                token_budget_runtime.estimator(),
                 terminal_error,
             ) {
                 yield event;
@@ -315,7 +277,6 @@ pub(crate) fn drive_runtime_stream_provider_loop(
                 discovery_errors,
                 warnings,
                 &mut stream_state,
-                token_budget_runtime.estimator(),
                 error,
             ) {
                 yield event;
@@ -330,7 +291,6 @@ pub(crate) fn drive_runtime_stream_provider_loop(
             discovery_errors,
             warnings,
             &mut stream_state,
-            token_budget_runtime.estimator(),
         ) {
             yield event;
         }

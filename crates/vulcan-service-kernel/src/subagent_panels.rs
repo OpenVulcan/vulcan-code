@@ -279,7 +279,7 @@ pub(super) async fn service_stop_subagent_task(
     parent_conversation_id: String,
     task_id: String,
 ) -> Result<SubagentPanelRouteResponse, String> {
-    let (controller_runtime, agent_runtime, _, _, _, _) = runtime_parts_from_state(&state)?;
+    let (controller_runtime, agent_runtime, _, _, _) = runtime_parts_from_state(&state)?;
     let parent_session_id = parent_conversation_id
         .parse::<SessionId>()
         .map_err(|error| {
@@ -444,7 +444,7 @@ pub(super) async fn service_close_subagent_task(
     parent_conversation_id: String,
     task_id: String,
 ) -> Result<SubagentPanelRouteResponse, String> {
-    let (_, agent_runtime, _, _, _, _) = runtime_parts_from_state(&state)?;
+    let (_, agent_runtime, _, _, _) = runtime_parts_from_state(&state)?;
     let parent_session_id = parent_conversation_id
         .parse::<SessionId>()
         .map_err(|error| {

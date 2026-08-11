@@ -1,5 +1,5 @@
 use super::*;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 /// 从分段会话事实源加载出的持久化编辑草稿。
@@ -223,14 +223,14 @@ pub async fn rollback_persisted_session_before_user_prompt(
             message_id,
             &target.retained_messages,
         )?;
-        let mut runtime_state = SessionRuntimeStateEntry {
-            conversation_state: target.retained_conversation_state,
-            updated_at: current_unix_millis_text(),
-            ..SessionRuntimeStateEntry::default()
-        };
-        runtime_state.last_compaction_id = target.last_compaction_id;
-        runtime_state.context_start_message_id = target.context_start_message_id;
-        runtime_state.conversation_state.continuation = Default::default();
+        let runtime_state = rebuild_runtime_state_for_user_prompt_edit(
+            target.runtime_state,
+            target.retained_conversation_state,
+            &target.retained_record_ids,
+            target.edit_cutoff_at_ms,
+            target.last_compaction_id,
+            target.context_start_message_id,
+        )?;
         reset_vmm_state_for_history_rewrite(&target.session_dir)?;
         let state_document =
             state_document_from_runtime_state(&session.id.to_string(), &runtime_state)?;
@@ -257,6 +257,79 @@ pub async fn rollback_persisted_session_before_user_prompt(
     }
 }
 
+/// Rebuilds history-bound runtime fields for an edit while preserving session configuration and durable accounting.
+/// 为编辑重建历史绑定的运行态字段，同时保留会话配置与可靠记账事实。
+///
+/// # Parameters
+/// 参数
+/// `runtime_state` is the complete persisted state before the destructive edit.
+/// `runtime_state` 是破坏性编辑前的完整持久化状态。
+/// `retained_conversation_state` is the canonical prefix before the edited user record.
+/// `retained_conversation_state` 是被编辑用户记录之前的规范前缀。
+/// `retained_record_ids` identifies records that remain on the active branch.
+/// `retained_record_ids` 标识仍属于活动分支的记录。
+/// `edit_cutoff_at_ms` is the exact edited-record timestamp.
+/// `edit_cutoff_at_ms` 是被编辑记录的精确时间戳。
+/// `last_compaction_id` and `context_start_message_id` come from the retained replay.
+/// `last_compaction_id` 与 `context_start_message_id` 来自保留后的重放结果。
+///
+/// # Returns
+/// 返回值
+/// Returns a new edit generation with stale execution ownership removed.
+/// 返回移除过期执行所有权的新编辑代际。
+fn rebuild_runtime_state_for_user_prompt_edit(
+    mut runtime_state: SessionRuntimeStateEntry,
+    mut retained_conversation_state: SessionConversationState,
+    retained_record_ids: &BTreeSet<String>,
+    edit_cutoff_at_ms: i64,
+    last_compaction_id: Option<String>,
+    context_start_message_id: Option<String>,
+) -> Result<SessionRuntimeStateEntry, String> {
+    let edit_generation = runtime_state
+        .provider_call_ledger
+        .active_branch_generation
+        .checked_add(1)
+        .ok_or_else(|| String::from("ERR_USER_PROMPT_EDIT_BRANCH_GENERATION_EXHAUSTED"))?;
+    if runtime_state.provider_call_ledger.revision == u64::MAX {
+        return Err(String::from(
+            "ERR_USER_PROMPT_EDIT_LEDGER_REVISION_EXHAUSTED",
+        ));
+    }
+    let _ = runtime_state
+        .provider_call_ledger
+        .supersede_outside_record_boundary(
+            retained_record_ids,
+            edit_cutoff_at_ms,
+            edit_generation,
+            format!("edit_context_generation:{edit_generation}"),
+        );
+    retained_conversation_state.continuation = Default::default();
+    runtime_state.conversation_state = retained_conversation_state;
+    runtime_state.last_compaction_id = last_compaction_id;
+    runtime_state.context_start_message_id = context_start_message_id;
+    runtime_state.live_context_budget_fingerprint = None;
+    runtime_state.live_context_assembly_fingerprint = None;
+    runtime_state.last_provider_request_preview_markdown = None;
+    runtime_state.context_injection_state = Default::default();
+    runtime_state.todolist = Default::default();
+    runtime_state.plan_mode = Default::default();
+    runtime_state.vmm_writeback_outbox.clear();
+    runtime_state.vmm_profile_sync = Default::default();
+    runtime_state.auto_compaction_consecutive_failures = 0;
+    runtime_state.tool_call_record_ids.clear();
+    runtime_state.tool_request_record_ids.clear();
+    runtime_state.active_precheck_turn_id = None;
+    runtime_state.session_runtime_kernel = None;
+    runtime_state
+        .ui_state
+        .collapsed_message_ids
+        .retain(|record_id| retained_record_ids.contains(record_id));
+    runtime_state.ui_state.pending_prompt_queue.clear();
+    runtime_state.ui_state.pending_prompt_panel_queue.clear();
+    runtime_state.updated_at = current_unix_millis_text();
+    Ok(runtime_state)
+}
+
 /// Forks a persisted segmented session by copying its backing directory and indexing the clone.
 /// 通过复制底层目录并写入索引来分叉一个持久化分段会话。
 pub async fn fork_persisted_session(
@@ -280,6 +353,7 @@ pub async fn fork_persisted_session(
     )?;
     let _ = repair_segmented_session_display_if_needed(&source_dir)?;
     let source_replay = replay_segmented_session_context_without_repair(&source_dir)?;
+    let source_provider_call_ledger = provider_call_ledger_from_state_document(&source_dir)?;
     let source_anchor_index = anchor_message_id
         .map(|message_id| {
             let replay = source_replay
@@ -291,10 +365,43 @@ pub async fn fork_persisted_session(
     let source_last_visible_index = source_replay
         .as_ref()
         .and_then(last_visible_record_index_in_replay);
-    let truncate_after_anchor = match (source_anchor_index, source_last_visible_index) {
-        (Some(anchor_index), Some(last_index)) => anchor_index < last_index,
-        _ => false,
-    };
+    let source_retained_record_count = source_replay
+        .as_ref()
+        .map(|replay| {
+            source_anchor_index
+                .map(|anchor_index| fork_retained_record_count(replay, anchor_index))
+                .unwrap_or(replay.conversation_state.records.len())
+        })
+        .unwrap_or(0);
+    let truncate_after_anchor = source_replay.as_ref().is_some_and(|replay| {
+        source_retained_record_count < replay.conversation_state.records.len()
+    });
+    let inherited_call_cutoff_at_ms = source_anchor_index
+        .and_then(|record_index| {
+            source_replay
+                .as_ref()
+                .and_then(|replay| replay.conversation_state.records.get(record_index))
+        })
+        .map(|record| {
+            record
+                .created_at
+                .parse::<i64>()
+                .map_err(|_| String::from("ERR_SESSION_FORK_ANCHOR_TIMESTAMP_INVALID"))
+        })
+        .transpose()?
+        .unwrap_or(i64::MAX);
+    let retained_source_record_ids = source_replay
+        .as_ref()
+        .map(|replay| {
+            replay
+                .conversation_state
+                .records
+                .iter()
+                .take(source_retained_record_count)
+                .map(|record| record.id.clone())
+                .collect::<BTreeSet<_>>()
+        })
+        .unwrap_or_default();
     let identity_replacements =
         forked_identity_replacements_for_persisted_session(source_session.id, target_session_id);
     let source_anchor_message_id_for_display = anchor_message_id
@@ -331,10 +438,7 @@ pub async fn fork_persisted_session(
             })
     });
     let fork_result = async {
-        if truncate_after_anchor
-            && target_anchor_message_id.is_some()
-            && let Some(anchor_index) = source_anchor_index
-        {
+        if truncate_after_anchor && target_anchor_message_id.is_some() {
             let replay = source_replay
                 .as_ref()
                 .ok_or_else(|| String::from("ERR_SESSION_FORK_EMPTY_SESSION"))?;
@@ -342,10 +446,19 @@ pub async fn fork_persisted_session(
                 &target_dir,
                 &target_session_id_text,
                 replay,
-                anchor_index,
+                source_retained_record_count,
                 &identity_replacements,
             )?;
         }
+        persist_forked_provider_call_ledger(
+            &target_dir,
+            source_provider_call_ledger.clone(),
+            &retained_source_record_ids,
+            inherited_call_cutoff_at_ms,
+            truncate_after_anchor,
+            &identity_replacements,
+            format!("fork_context_generation:{target_session_id_text}"),
+        )?;
         record_persisted_session_fork_source_marker(
             &target_dir,
             source_session,
@@ -385,19 +498,103 @@ pub async fn fork_persisted_session(
     fork_result
 }
 
+/// Loads the complete Provider ledger from one segmented state document.
+/// 从一个分段状态文档加载完整 Provider 账本。
+fn provider_call_ledger_from_state_document(
+    session_dir: &Path,
+) -> Result<vulcan_workbench_model::SessionProviderCallLedger, String> {
+    let Some(state_document) = read_state(session_dir)? else {
+        return Ok(Default::default());
+    };
+    if !state_document.runtime_state.is_object() {
+        return Ok(Default::default());
+    }
+    let mut runtime_state = deserialize_session_runtime_state_entry(
+        state_document.runtime_state,
+        "invalid persisted Provider runtime state: ",
+    )?;
+    runtime_state
+        .migrate_legacy_provider_usage_summaries()
+        .map_err(|error| format!("invalid legacy Provider usage summaries: {error}"))?;
+    Ok(runtime_state.provider_call_ledger)
+}
+
+/// Writes the inherited source-call prefix into a fork without touching public usage statistics.
+/// 将继承的源调用前缀写入分叉会话且不改写公共用量统计。
+///
+/// `session_dir` owns the copied state, `ledger` is the source call history, the retained-record
+/// boundary and cutoff select the inherited prefix, `truncate_child_contributions` follows an
+/// anchored fork, `identity_replacements` rewrites target ownership, and `context_generation_id`
+/// invalidates every source request-budget anchor.
+/// `session_dir` 持有已复制状态，`ledger` 是源调用历史，保留记录边界与截止时间选择继承前缀，
+/// `truncate_child_contributions` 跟随锚定分叉，`identity_replacements` 改写目标归属，
+/// `context_generation_id` 使全部源请求预算锚点失效。
+fn persist_forked_provider_call_ledger(
+    session_dir: &Path,
+    mut ledger: vulcan_workbench_model::SessionProviderCallLedger,
+    retained_source_record_ids: &BTreeSet<String>,
+    cutoff_at_ms: i64,
+    truncate_child_contributions: bool,
+    identity_replacements: &BTreeMap<String, String>,
+    context_generation_id: String,
+) -> Result<(), String> {
+    if ledger.revision > u64::MAX - 2 {
+        return Err(String::from("ERR_SESSION_FORK_LEDGER_REVISION_EXHAUSTED"));
+    }
+    if !ledger.retain_inherited_through_record_boundary(
+        retained_source_record_ids,
+        cutoff_at_ms,
+        truncate_child_contributions,
+        context_generation_id,
+    ) {
+        return Err(String::from("ERR_SESSION_FORK_LEDGER_BOUNDARY_INVALID"));
+    }
+    if !ledger.rewrite_identities_for_fork(identity_replacements) {
+        return Err(String::from(
+            "ERR_SESSION_FORK_LEDGER_IDENTITY_REWRITE_FAILED",
+        ));
+    }
+    let mut state_document = read_state(session_dir)?
+        .ok_or_else(|| String::from("ERR_SESSION_FORK_STATE_DOCUMENT_MISSING"))?;
+    let runtime_state = state_document
+        .runtime_state
+        .as_object_mut()
+        .ok_or_else(|| String::from("ERR_SESSION_FORK_RUNTIME_STATE_INVALID"))?;
+    runtime_state.insert(
+        String::from("provider_call_ledger"),
+        serde_json::to_value(ledger)
+            .map_err(|error| format!("serialize forked Provider call ledger failed: {error}"))?,
+    );
+    state_document.updated_at = current_unix_millis_text();
+    write_state(session_dir, &state_document)
+}
+
 /// Rebuilds forked runtime artifacts from the already replayed source state.
 /// 从已重放的源会话状态重建分叉运行态产物。
 fn rebuild_forked_persisted_session_runtime_from_source_replay(
     session_dir: &Path,
     target_session_id_text: &str,
     source_replay: &SegmentedSessionReplayResult,
-    source_anchor_record_index: usize,
+    source_retained_record_count: usize,
     replacements: &BTreeMap<String, String>,
 ) -> Result<(), String> {
+    let mut runtime_state = read_state(session_dir)?
+        .filter(|state| !state.runtime_state.is_null())
+        .map(|state| {
+            deserialize_session_runtime_state_entry(
+                state.runtime_state,
+                "ERR_SESSION_FORK_RUNTIME_STATE_INVALID: ",
+            )
+        })
+        .transpose()?
+        .unwrap_or_default();
+    runtime_state
+        .migrate_legacy_provider_usage_summaries()
+        .map_err(|error| format!("ERR_SESSION_FORK_RUNTIME_STATE_INVALID: {error}"))?;
     let mut retained_conversation_state = source_replay.conversation_state.clone();
     retained_conversation_state
         .records
-        .truncate(source_anchor_record_index.saturating_add(1));
+        .truncate(source_retained_record_count);
     retained_conversation_state.continuation = Default::default();
     rewrite_forked_conversation_state_identity(&mut retained_conversation_state, replacements)?;
     let original_runtime_messages = retained_conversation_state.messages.clone();
@@ -413,18 +610,23 @@ fn rebuild_forked_persisted_session_runtime_from_source_replay(
         &retained_messages,
         &original_runtime_messages,
     )?;
+    let retained_record_ids = retained_conversation_state
+        .records
+        .iter()
+        .map(|record| record.id.clone())
+        .collect::<BTreeSet<_>>();
     let mut metadata = read_session_metadata(session_dir)?;
     update_segmented_message_checkpoint(&mut metadata, &retained_messages)?;
     write_metadata(session_dir, &metadata)?;
-    let updated_at = current_unix_millis_text();
-    let mut runtime_state = SessionRuntimeStateEntry {
-        conversation_state: retained_conversation_state,
-        updated_at,
-        ..SessionRuntimeStateEntry::default()
-    };
-    runtime_state.last_compaction_id = source_replay.last_compaction_id.clone();
-    runtime_state.context_start_message_id = retained_context_start_message_id;
-    runtime_state.conversation_state.continuation = Default::default();
+    let runtime_state = rebuild_runtime_state_for_persisted_fork(
+        runtime_state,
+        retained_conversation_state,
+        source_replay.last_compaction_id.clone(),
+        retained_context_start_message_id,
+        &retained_record_ids,
+        replacements,
+        current_unix_millis_text(),
+    )?;
     reset_vmm_state_for_history_rewrite(session_dir)?;
     let state_document = state_document_from_runtime_state(target_session_id_text, &runtime_state)?;
     write_state(session_dir, &state_document)?;
@@ -434,6 +636,67 @@ fn rebuild_forked_persisted_session_runtime_from_source_replay(
         &runtime_state.updated_at,
     )?;
     Ok(())
+}
+
+/// Rebuilds one forked runtime state while preserving session configuration and rewriting owned identities.
+/// 重建一份分叉运行态，同时保留会话配置并改写其拥有的身份标识。
+///
+/// `runtime_state` is the complete copied source state and `retained_conversation_state` is the canonical fork prefix.
+/// `runtime_state` 是完整复制的源状态，`retained_conversation_state` 是规范分叉前缀。
+/// `last_compaction_id` and `context_start_message_id` retain the surviving context boundary.
+/// `last_compaction_id` 与 `context_start_message_id` 保留仍有效的上下文边界。
+/// `retained_record_ids` limits UI references and `replacements` rewrites exact source identities.
+/// `retained_record_ids` 限制 UI 引用，`replacements` 精确改写源身份。
+/// `updated_at` is the deterministic persisted update timestamp.
+/// `updated_at` 是确定性的持久化更新时间戳。
+///
+/// # Returns
+/// 返回值
+/// Returns a target-owned runtime state with history-bound execution state cleared.
+/// 返回一份清除历史绑定执行状态且归目标所有的运行态。
+fn rebuild_runtime_state_for_persisted_fork(
+    mut runtime_state: SessionRuntimeStateEntry,
+    mut retained_conversation_state: SessionConversationState,
+    last_compaction_id: Option<String>,
+    context_start_message_id: Option<String>,
+    retained_record_ids: &BTreeSet<String>,
+    replacements: &BTreeMap<String, String>,
+    updated_at: String,
+) -> Result<SessionRuntimeStateEntry, String> {
+    retained_conversation_state.continuation = Default::default();
+    runtime_state.conversation_state = retained_conversation_state;
+    runtime_state.updated_at = updated_at;
+    runtime_state.last_compaction_id = last_compaction_id;
+    runtime_state.context_start_message_id = context_start_message_id;
+    runtime_state.live_context_budget_fingerprint = None;
+    runtime_state.live_context_assembly_fingerprint = None;
+    runtime_state.last_provider_request_preview_markdown = None;
+    runtime_state.context_injection_state = Default::default();
+    runtime_state.todolist = Default::default();
+    runtime_state.plan_mode = Default::default();
+    runtime_state.vmm_writeback_outbox.clear();
+    runtime_state.vmm_profile_sync = Default::default();
+    runtime_state.auto_compaction_consecutive_failures = 0;
+    runtime_state.tool_call_record_ids.clear();
+    runtime_state.tool_request_record_ids.clear();
+    runtime_state.active_precheck_turn_id = None;
+    runtime_state.session_runtime_kernel = None;
+    runtime_state.ui_state.pending_prompt_queue.clear();
+    runtime_state.ui_state.pending_prompt_panel_queue.clear();
+    let mut runtime_state_value = serialize_session_runtime_state_entry(
+        &runtime_state,
+        "serialize forked runtime state failed: ",
+    )?;
+    rewrite_json_value_identity_tokens(&mut runtime_state_value, replacements);
+    let mut runtime_state = deserialize_session_runtime_state_entry(
+        runtime_state_value,
+        "deserialize forked runtime state failed: ",
+    )?;
+    runtime_state
+        .ui_state
+        .collapsed_message_ids
+        .retain(|record_id| retained_record_ids.contains(record_id));
+    Ok(runtime_state)
 }
 
 /// Builds the exact session-id replacement table used by persisted fork reconstruction.
@@ -495,6 +758,30 @@ fn last_visible_record_index_in_replay(replay: &SegmentedSessionReplayResult) ->
         .records
         .iter()
         .rposition(|record| record.visible)
+}
+
+/// Returns the semantic fork boundary after hidden records owned by the selected visible anchor.
+/// 返回选中可见锚点所属隐藏记录之后的语义分叉边界。
+///
+/// # Parameters
+/// 参数
+/// `replay` is the canonical source replay and `anchor_index` is the validated visible record index.
+/// `replay` 是规范源回放，`anchor_index` 是已校验的可见记录索引。
+///
+/// # Returns
+/// 返回值
+/// Returns the exclusive retained record count, ending immediately before the next visible record.
+/// 返回保留记录的排他数量，边界位于下一条可见记录之前。
+fn fork_retained_record_count(replay: &SegmentedSessionReplayResult, anchor_index: usize) -> usize {
+    replay
+        .conversation_state
+        .records
+        .iter()
+        .enumerate()
+        .skip(anchor_index.saturating_add(1))
+        .find(|(_, record)| record.visible)
+        .map(|(index, _)| index)
+        .unwrap_or(replay.conversation_state.records.len())
 }
 
 /// Rejects anchors that belong to display history before the active runtime context boundary.
@@ -629,6 +916,15 @@ struct PersistedUserPromptTarget {
     /// Context-start message id preserved from segmented replay.
     /// 从分段重放中保留的上下文起点消息标识。
     context_start_message_id: Option<String>,
+    /// Complete persisted runtime state retained across destructive transcript edits.
+    /// 在破坏性转录编辑中完整保留的持久化运行态。
+    runtime_state: SessionRuntimeStateEntry,
+    /// Canonical record identities that remain before the edited user prompt.
+    /// 编辑用户提示词之前仍保留的规范记录身份。
+    retained_record_ids: BTreeSet<String>,
+    /// Target user-message timestamp used to map calls onto the retained branch prefix.
+    /// 用于把调用映射到保留分支前缀的目标用户消息时间戳。
+    edit_cutoff_at_ms: i64,
 }
 
 /// Locates one editable user prompt from persisted segmented replay output.
@@ -648,6 +944,19 @@ fn locate_persisted_user_prompt_target(
     let _ = repair_segmented_session_display_if_needed(&session_dir)?;
     let replay = replay_segmented_session_context(&session_dir)?
         .ok_or_else(|| String::from("ERR_USER_PROMPT_EDIT_EMPTY_SESSION"))?;
+    let mut runtime_state = read_state(&session_dir)?
+        .filter(|state| !state.runtime_state.is_null())
+        .map(|state| {
+            deserialize_session_runtime_state_entry(
+                state.runtime_state,
+                "ERR_USER_PROMPT_EDIT_RUNTIME_STATE_INVALID: ",
+            )
+        })
+        .transpose()?
+        .unwrap_or_default();
+    runtime_state
+        .migrate_legacy_provider_usage_summaries()
+        .map_err(|error| format!("ERR_USER_PROMPT_EDIT_RUNTIME_STATE_INVALID: {error}"))?;
     let record_index = replay
         .conversation_state
         .records
@@ -672,6 +981,17 @@ fn locate_persisted_user_prompt_target(
     };
     let prompt = text.clone();
     let attachments = attachments.clone();
+    let edit_cutoff_at_ms = replay.conversation_state.records[record_index]
+        .created_at
+        .parse::<i64>()
+        .map_err(|_| String::from("ERR_USER_PROMPT_EDIT_TIMESTAMP_INVALID"))?;
+    let retained_record_ids = replay
+        .conversation_state
+        .records
+        .iter()
+        .take(record_index)
+        .map(|record| record.id.clone())
+        .collect::<BTreeSet<_>>();
     let last_compaction_id = replay.last_compaction_id;
     let context_start_message_id = replay.context_start_message_id;
     let mut retained_conversation_state = replay.conversation_state;
@@ -687,6 +1007,9 @@ fn locate_persisted_user_prompt_target(
         retained_messages,
         last_compaction_id,
         context_start_message_id,
+        runtime_state,
+        retained_record_ids,
+        edit_cutoff_at_ms,
     })
 }
 
@@ -797,6 +1120,181 @@ mod tests {
         }
     }
 
+    /// Verifies an edit retains session configuration while clearing only history-bound execution state.
+    /// 验证编辑会保留会话配置，同时只清理与历史绑定的执行状态。
+    #[test]
+    fn user_prompt_edit_rebuild_preserves_session_configuration() {
+        let retained_message = test_message(
+            "retained-user",
+            SessionMessageKind::User,
+            SessionMessageRecordKind::Transcript,
+            "retained prompt",
+        );
+        let retained_conversation_state =
+            conversation_state_from_session_messages(std::slice::from_ref(&retained_message))
+                .expect("retained conversation state should build");
+        let retained_record_ids = BTreeSet::from([retained_message.id.clone()]);
+        let mut runtime_state = SessionRuntimeStateEntry {
+            active_provider_id: Some(String::from("provider-1")),
+            active_connection_id: Some(String::from("connection-1")),
+            active_model_id: Some(String::from("model-1")),
+            active_work_mode: Some(String::from("code")),
+            provider_tool_settings_initialized: true,
+            live_context_budget_fingerprint: Some(String::from("stale-budget")),
+            live_context_assembly_fingerprint: Some(String::from("stale-assembly")),
+            last_provider_request_preview_markdown: Some(String::from("stale preview")),
+            active_precheck_turn_id: Some(String::from("stale-turn")),
+            ..SessionRuntimeStateEntry::default()
+        };
+        runtime_state.output_style.override_style_id = Some(String::from("concise"));
+        runtime_state
+            .tool_call_record_ids
+            .insert(String::from("tool-call"), String::from("record-after"));
+        runtime_state
+            .tool_request_record_ids
+            .insert(String::from("tool-request"), String::from("record-after"));
+        runtime_state
+            .ui_state
+            .collapsed_message_ids
+            .extend([String::from("retained-user"), String::from("record-after")]);
+
+        let rebuilt = rebuild_runtime_state_for_user_prompt_edit(
+            runtime_state,
+            retained_conversation_state,
+            &retained_record_ids,
+            200,
+            Some(String::from("compaction-1")),
+            Some(String::from("retained-user")),
+        )
+        .expect("edit runtime state should rebuild");
+
+        assert_eq!(rebuilt.active_provider_id.as_deref(), Some("provider-1"));
+        assert_eq!(
+            rebuilt.active_connection_id.as_deref(),
+            Some("connection-1")
+        );
+        assert_eq!(rebuilt.active_model_id.as_deref(), Some("model-1"));
+        assert_eq!(rebuilt.active_work_mode.as_deref(), Some("code"));
+        assert!(rebuilt.provider_tool_settings_initialized);
+        assert_eq!(
+            rebuilt.output_style.override_style_id.as_deref(),
+            Some("concise")
+        );
+        assert_eq!(rebuilt.provider_call_ledger.active_branch_generation, 1);
+        assert_eq!(
+            rebuilt
+                .provider_call_ledger
+                .active_context_generation_id
+                .as_deref(),
+            Some("edit_context_generation:1")
+        );
+        assert!(
+            rebuilt
+                .provider_call_ledger
+                .last_stable_context_baseline
+                .is_none()
+        );
+        assert_eq!(rebuilt.last_compaction_id.as_deref(), Some("compaction-1"));
+        assert_eq!(
+            rebuilt.context_start_message_id.as_deref(),
+            Some("retained-user")
+        );
+        assert!(rebuilt.live_context_budget_fingerprint.is_none());
+        assert!(rebuilt.live_context_assembly_fingerprint.is_none());
+        assert!(rebuilt.last_provider_request_preview_markdown.is_none());
+        assert!(rebuilt.active_precheck_turn_id.is_none());
+        assert!(rebuilt.tool_call_record_ids.is_empty());
+        assert!(rebuilt.tool_request_record_ids.is_empty());
+        assert_eq!(
+            rebuilt.ui_state.collapsed_message_ids,
+            BTreeSet::from([String::from("retained-user")])
+        );
+        assert_eq!(rebuilt.conversation_state.records.len(), 1);
+    }
+
+    /// Verifies an anchored fork preserves session configuration while rewriting identities and clearing stale execution state.
+    /// 验证锚定分叉会保留会话配置，同时改写身份并清理过期执行状态。
+    #[test]
+    fn anchored_fork_rebuild_preserves_session_configuration() {
+        let retained_message = test_message(
+            "record-target-session",
+            SessionMessageKind::User,
+            SessionMessageRecordKind::Transcript,
+            "retained fork prompt",
+        );
+        let retained_conversation_state =
+            conversation_state_from_session_messages(std::slice::from_ref(&retained_message))
+                .expect("retained fork conversation state should build");
+        let retained_record_ids = BTreeSet::from([retained_message.id.clone()]);
+        let replacements = BTreeMap::from([(
+            String::from("source-session"),
+            String::from("target-session"),
+        )]);
+        let mut runtime_state = SessionRuntimeStateEntry {
+            active_provider_id: Some(String::from("provider-1")),
+            active_connection_id: Some(String::from("connection-1")),
+            active_model_id: Some(String::from("model-1")),
+            active_work_mode: Some(String::from("code")),
+            provider_tool_settings_initialized: true,
+            live_context_budget_fingerprint: Some(String::from("stale-budget")),
+            live_context_assembly_fingerprint: Some(String::from("stale-assembly")),
+            last_provider_request_preview_markdown: Some(String::from("stale preview")),
+            active_precheck_turn_id: Some(String::from("stale-turn")),
+            ..SessionRuntimeStateEntry::default()
+        };
+        runtime_state.output_style.override_style_id = Some(String::from("concise"));
+        runtime_state.tool_call_record_ids.insert(
+            String::from("tool-call"),
+            String::from("record-source-session"),
+        );
+        runtime_state.ui_state.collapsed_message_ids.extend([
+            String::from("record-source-session"),
+            String::from("discarded-record"),
+        ]);
+
+        let rebuilt = rebuild_runtime_state_for_persisted_fork(
+            runtime_state,
+            retained_conversation_state,
+            Some(String::from("compaction-source-session")),
+            Some(String::from("record-target-session")),
+            &retained_record_ids,
+            &replacements,
+            String::from("2026-08-10T00:00:00Z"),
+        )
+        .expect("fork runtime state should rebuild");
+
+        assert_eq!(rebuilt.active_provider_id.as_deref(), Some("provider-1"));
+        assert_eq!(
+            rebuilt.active_connection_id.as_deref(),
+            Some("connection-1")
+        );
+        assert_eq!(rebuilt.active_model_id.as_deref(), Some("model-1"));
+        assert_eq!(rebuilt.active_work_mode.as_deref(), Some("code"));
+        assert!(rebuilt.provider_tool_settings_initialized);
+        assert_eq!(
+            rebuilt.output_style.override_style_id.as_deref(),
+            Some("concise")
+        );
+        assert_eq!(
+            rebuilt.last_compaction_id.as_deref(),
+            Some("compaction-target-session")
+        );
+        assert_eq!(
+            rebuilt.context_start_message_id.as_deref(),
+            Some("record-target-session")
+        );
+        assert_eq!(
+            rebuilt.ui_state.collapsed_message_ids,
+            BTreeSet::from([String::from("record-target-session")])
+        );
+        assert!(rebuilt.live_context_budget_fingerprint.is_none());
+        assert!(rebuilt.live_context_assembly_fingerprint.is_none());
+        assert!(rebuilt.last_provider_request_preview_markdown.is_none());
+        assert!(rebuilt.active_precheck_turn_id.is_none());
+        assert!(rebuilt.tool_call_record_ids.is_empty());
+        assert_eq!(rebuilt.conversation_state.records.len(), 1);
+    }
+
     /// Verifies a fork anchor is accepted when it belongs to the visible transcript records.
     /// 验证分叉锚点属于可见转录记录时会被接受。
     #[test]
@@ -826,6 +1324,45 @@ mod tests {
             .expect("current display anchor should be accepted");
 
         assert_eq!(record_index, 2);
+    }
+
+    /// Verifies a visible assistant anchor retains its hidden terminal records but a user anchor excludes the later response.
+    /// 验证可见 Assistant 锚点保留所属隐藏终态记录，而用户锚点排除后续响应。
+    #[test]
+    fn fork_semantic_boundary_retains_hidden_records_owned_by_visible_anchor() {
+        let mut replay = replay_from_messages(vec![
+            test_message(
+                "user",
+                SessionMessageKind::User,
+                SessionMessageRecordKind::Transcript,
+                "prompt",
+            ),
+            test_message(
+                "assistant",
+                SessionMessageKind::Assistant,
+                SessionMessageRecordKind::AssistantOutput,
+                "answer",
+            ),
+            test_message(
+                "next-user",
+                SessionMessageKind::User,
+                SessionMessageRecordKind::Transcript,
+                "next prompt",
+            ),
+        ]);
+        let mut hidden_summary = replay.conversation_state.records[1].clone();
+        hidden_summary.id = String::from("hidden-summary");
+        hidden_summary.visible = false;
+        hidden_summary.record_kind = SessionMessageRecordKind::SummaryOutput;
+        let mut hidden_stats = hidden_summary.clone();
+        hidden_stats.id = String::from("hidden-stats");
+        hidden_stats.record_kind = SessionMessageRecordKind::TurnStats;
+        replay.conversation_state.records.insert(2, hidden_summary);
+        replay.conversation_state.records.insert(3, hidden_stats);
+
+        assert_eq!(fork_retained_record_count(&replay, 0), 1);
+        assert_eq!(fork_retained_record_count(&replay, 1), 4);
+        assert_eq!(fork_retained_record_count(&replay, 4), 5);
     }
 
     /// Verifies fork validation does not require a matching provider-runtime message id.

@@ -14,7 +14,6 @@ use crate::agent_runtime::runtime_stream_bootstrap_resources::{
     RuntimeBootstrapResources, resolve_runtime_bootstrap_resources,
 };
 use crate::agent_runtime::task_runtime::TaskRuntime;
-use crate::agent_runtime::token_budget_runtime::TokenBudgetRuntime;
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
 use std::sync::Arc;
 use vulcan_context::RuntimeProviderLoweringRepairEvent;
@@ -34,9 +33,6 @@ pub(crate) struct RuntimeStreamBootstrap {
     /// Shared resumable task runtime reused by the current execution turn.
     /// 被当前执行回合复用的共享可恢复任务运行时。
     pub task_runtime: Arc<TaskRuntime>,
-    /// Shared token-budget runtime initialized during host startup.
-    /// 宿主启动期间初始化的共享 Token 预算运行时。
-    pub token_budget_runtime: Arc<TokenBudgetRuntime>,
     /// Host-owned unified tool manager used by the transport layer.
     /// 供传输层使用的宿主自有统一工具管理器。
     pub tools_manager: VulcanToolsManager,
@@ -127,7 +123,6 @@ pub(crate) async fn bootstrap_runtime_stream(
             after_precheck_unix_millis().saturating_sub(core_started_at)
         ),
     );
-    let token_budget_runtime = foundation.token_budget_runtime();
     let prompt_purpose = preparation.prompt_purpose;
     let snapshot_seed_started_at = after_precheck_unix_millis();
     seed_runtime_request_snapshot(
@@ -136,7 +131,6 @@ pub(crate) async fn bootstrap_runtime_stream(
         &system_preamble,
         prompt_layers,
         &resolved_tool_definitions,
-        token_budget_runtime.estimator(),
         crate::agent_runtime::provider_runtime_context::resolve_runtime_max_turns(
             active_agent.as_ref(),
             prompt_purpose,
@@ -158,7 +152,6 @@ pub(crate) async fn bootstrap_runtime_stream(
         preparation,
         active_agent,
         task_runtime,
-        token_budget_runtime,
         tools_manager,
         resolved_tool_definitions,
         discovery_events,

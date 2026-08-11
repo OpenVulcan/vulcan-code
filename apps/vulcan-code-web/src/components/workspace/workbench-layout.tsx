@@ -1015,7 +1015,7 @@ export function WorkbenchLayout(props: {
     handleSubmitConversationPrompt,
     handleInsertPendingPrompt,
     handleStopConversationRun,
-    handleRetryConversationRequest,
+    handleContinueConversation,
     handleCancelConversationSubmission,
     handleCompactSelectedConversationContext,
     handleOpenSubagentPanel,
@@ -1822,7 +1822,7 @@ export function WorkbenchLayout(props: {
             onSetSessionVmmPolicy={handleSetSessionVmmPolicy}
             onSetSessionOutputStyle={handleSetSessionOutputStyle}
             onStopConversationRun={handleStopConversationRun}
-            onRetryConversationRequest={handleRetryConversationRequest}
+            onContinueConversation={handleContinueConversation}
             onOpenSubagentPanel={handleOpenSubagentPanel}
             onStopSubagentTask={handleStopSubagentTask}
             onCloseSubagentTask={handleCloseSubagentTask}

@@ -2,13 +2,9 @@
 //! 模型侧工具请求流协调与进度投影。
 
 use crate::agent_runtime::events::{RuntimeEvent, RuntimeEventKind};
-use crate::agent_runtime::token_budget_runtime::TokenBudgetRuntime;
 use serde_json::json;
 use std::collections::HashMap;
-use std::sync::Arc;
-use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
-use vulcan_context::{ContextTokenEstimator, estimate_mixed_language_text_tokens};
 use vulcan_tools_manager::{
     ResolvedToolDefinition, ToolRequestParserContext, ToolRequestParserSession, ToolRequestPreview,
     ToolRequestProgressPolicy, ToolRequestSensitivityPolicy, ToolRequestStagingPolicy,
@@ -18,10 +14,6 @@ use vulcan_tools_manager::{
 mod json_lexer;
 use crate::agent_runtime::tool_request_argument_assembler::ToolCallDraftAssembler;
 use json_lexer::IncrementalJsonLexer;
-
-/// Largest cumulative request eligible for immediate shared heuristic estimation on the SSE thread.
-/// 允许在 SSE 线程上立即使用共享启发式估算的最大累计请求大小。
-const MAX_SYNCHRONOUS_TOKEN_ESTIMATE_BYTES: usize = 16 * 1024;
 
 /// One provider-normalized fragment of a model-side tool request.
 /// 单条由 Provider 规范化后的模型侧工具请求碎片。
@@ -195,15 +187,6 @@ struct ToolRequestDraft {
     /// Frozen field whitelist and body ceiling enforced on every parser snapshot.
     /// 对每个解析器快照强制执行的冻结字段白名单与正文上限。
     sensitivity_policy: ToolRequestSensitivityPolicy,
-    /// Latest monotonic user-visible token estimate.
-    /// 最近一次单调用户可见 Token 估算值。
-    estimated_tokens: usize,
-    /// Precision route that produced the latest visible estimate.
-    /// 产生最近可见估算值的精度路径。
-    token_precision: String,
-    /// Whether one cumulative model-aware calculation is currently in flight.
-    /// 当前是否有一项累计模型感知计算正在执行。
-    token_task_in_flight: bool,
 }
 
 impl ToolRequestDraft {
@@ -255,112 +238,34 @@ impl ToolRequestDraft {
     }
 }
 
-/// One background cumulative token result correlated to an exact argument byte revision.
-/// 与精确参数字节修订关联的后台累计 Token 结果。
-struct ToolRequestTokenEstimateResult {
-    /// Stable request-stream identifier.
-    /// 稳定请求流标识。
-    request_stream_id: String,
-    /// UTF-8 byte count of the cumulative text measured by the worker.
-    /// 后台任务测量的累计文本 UTF-8 字节数。
-    source_bytes: usize,
-    /// Estimated cumulative token count.
-    /// 估算得到的累计 Token 数。
-    estimated_tokens: usize,
-    /// Precision route used by the worker.
-    /// 后台任务使用的精度路径。
-    token_precision: String,
-}
-
-/// One cumulative token-estimation task consumed by the coordinator-owned background worker.
-/// 由协调器自有后台工作线程消费的一项累计 Token 估算任务。
-struct ToolRequestTokenEstimateTask {
-    /// Stable request-stream identifier used to route the result.
-    /// 用于路由结果的稳定请求流标识。
-    request_stream_id: String,
-    /// Argument source snapshotted by the worker instead of the Provider stream thread.
-    /// 由 worker 而非 Provider 流线程生成快照的参数来源。
-    arguments: ToolRequestTokenEstimateInput,
-}
-
-/// Selects shared production storage or the local fallback used by focused tests.
-/// 选择生产共享存储，或聚焦测试使用的本地回退。
-enum ToolRequestTokenEstimateInput {
-    /// Shared assembler whose handle is cheap to enqueue from the Provider stream thread.
-    /// 可由 Provider 流线程低成本投递句柄的共享 assembler。
-    Shared(ToolCallDraftAssembler),
-    /// Owned local snapshot for request paths without a provider-shared assembler.
-    /// 未使用 Provider 共享 assembler 的请求路径所用自有本地快照。
-    Owned(String),
-}
-
-/// Coordinator action selected after correlating one background token result.
-/// 关联一项后台 Token 结果后选择的协调器动作。
-enum ToolRequestTokenEstimateDisposition {
-    /// The current request revision accepted a newer visible token estimate.
-    /// 当前请求修订接受了更新的可见 Token 估算。
-    Updated {
-        /// Exact request stream receiving the newer estimate.
-        /// 接收更新估算的精确请求流。
-        request_stream_id: String,
-        /// Whether the request already emitted its ready boundary.
-        /// 请求是否已经发出就绪边界。
-        completed: bool,
-    },
-    /// The source byte revision is stale and the latest cumulative text must be rescheduled.
-    /// 来源字节修订已过期，必须重新调度最新累计文本。
-    Stale(String),
-    /// The request ended before its background result could be correlated.
-    /// 请求在后台结果完成关联前已经结束。
-    Ignored,
-}
-
 /// Coordinates normalized request fragments into low-frequency runtime events.
 /// 将规范化请求碎片协调为低频运行时事件。
 pub(crate) struct ToolRequestStreamCoordinator {
     /// Active request drafts keyed by stable request-stream identifier.
     /// 以稳定请求流标识索引的活动请求草稿。
     drafts: HashMap<String, ToolRequestDraft>,
-    /// Ready requests retained only until their final cumulative token result arrives.
-    /// 仅保留到最终累计 Token 结果到达为止的已就绪请求。
-    completed_token_drafts: HashMap<String, ToolRequestDraft>,
     /// Frozen request-streaming capabilities keyed by exact public tool name.
     /// 按精确公开工具名称索引的冻结请求流能力。
     tool_capabilities: HashMap<String, Option<ToolRequestStreamingCapability>>,
-    /// Task sender feeding the single coordinator-owned background token worker.
-    /// 向协调器自有的单一后台 Token 工作线程投递任务的发送器。
-    token_task_sender: Sender<ToolRequestTokenEstimateTask>,
-    /// Receiver drained by the runtime stream driver without blocking Provider consumption.
-    /// 由运行时流驱动排空且不阻塞 Provider 消费的接收器。
-    token_result_receiver: Receiver<ToolRequestTokenEstimateResult>,
 }
 
 impl Default for ToolRequestStreamCoordinator {
-    /// Builds an inert coordinator for focused tests that do not provide runtime token services.
-    /// 为未提供运行时 Token 服务的聚焦测试构建惰性协调器。
+    /// Builds an inert coordinator for focused tests without resolved tools.
+    /// 为未提供已解析工具的聚焦测试构建惰性协调器。
     fn default() -> Self {
-        let (token_task_sender, token_result_receiver) =
-            spawn_token_estimate_worker(String::new(), None);
         Self {
             drafts: HashMap::new(),
-            completed_token_drafts: HashMap::new(),
             tool_capabilities: HashMap::new(),
-            token_task_sender,
-            token_result_receiver,
         }
     }
 }
 
 impl ToolRequestStreamCoordinator {
-    /// Builds one coordinator from the exact model and shared token runtime selected for the run.
-    /// 根据本次运行选择的精确模型与共享 Token 运行时构建协调器。
+    /// Builds one coordinator from the frozen resolved-tool snapshot.
+    /// 根据冻结的已解析工具快照构建协调器。
     ///
     /// # Parameters
     /// 参数
-    /// `model_id` identifies the tokenizer route for argument progress.
-    /// `model_id` 标识参数进度使用的 Tokenizer 路由。
-    /// `token_budget_runtime` owns the warmed model-aware token counter.
-    /// `token_budget_runtime` 持有已预热的模型感知 Token 统计器。
     /// `resolved_tools` is the frozen execution snapshot used for exact name resolution and parser routing.
     /// `resolved_tools` 是用于精确名称解析与解析器路由的冻结执行快照。
     ///
@@ -368,14 +273,7 @@ impl ToolRequestStreamCoordinator {
     /// 返回值
     /// A fresh coordinator with no active request drafts.
     /// 返回不包含活动请求草稿的新协调器。
-    pub(crate) fn new(
-        model_id: impl Into<String>,
-        token_budget_runtime: Arc<TokenBudgetRuntime>,
-        resolved_tools: &[ResolvedToolDefinition],
-    ) -> Self {
-        let model_id = model_id.into();
-        let (token_task_sender, token_result_receiver) =
-            spawn_token_estimate_worker(model_id.clone(), Some(Arc::clone(&token_budget_runtime)));
+    pub(crate) fn new(resolved_tools: &[ResolvedToolDefinition]) -> Self {
         // toolCapabilities uses the exact public ids exposed in provider function declarations.
         // toolCapabilities 使用 Provider 函数声明中暴露的精确公开标识。
         let tool_capabilities = resolved_tools
@@ -389,10 +287,7 @@ impl ToolRequestStreamCoordinator {
             .collect();
         Self {
             drafts: HashMap::new(),
-            completed_token_drafts: HashMap::new(),
             tool_capabilities,
-            token_task_sender,
-            token_result_receiver,
         }
     }
 
@@ -409,8 +304,7 @@ impl ToolRequestStreamCoordinator {
     /// Zero or more runtime events that contain counts but never raw argument fragments.
     /// 返回零条或多条仅包含计数、绝不包含原始参数碎片的运行时事件。
     pub(crate) fn apply(&mut self, fragment: ToolRequestFragment) -> Vec<RuntimeEvent> {
-        let mut events = self.drain_token_progress_events();
-        events.extend(match fragment {
+        match fragment {
             ToolRequestFragment::Detected {
                 request_stream_id,
                 tool_call_id,
@@ -437,8 +331,7 @@ impl ToolRequestStreamCoordinator {
                 request_stream_id,
                 reason,
             } => self.abort_request(&request_stream_id, &reason),
-        });
-        events
+        }
     }
 
     /// Starts one visible request draft and emits its initial progress snapshot.
@@ -497,10 +390,6 @@ impl ToolRequestStreamCoordinator {
             || initial_arguments.chars().count(),
             |assembler| assembler.read(|arguments| arguments.chars().count()),
         );
-        let initial_token_estimate = argument_assembler.as_ref().map_or_else(
-            || immediate_cumulative_token_estimate(&initial_arguments),
-            |assembler| assembler.read(immediate_cumulative_token_estimate),
-        );
         let mut draft = ToolRequestDraft {
             tool_call_id,
             tool_name,
@@ -521,9 +410,6 @@ impl ToolRequestStreamCoordinator {
             preview_kind,
             staging_policy,
             sensitivity_policy,
-            estimated_tokens: initial_token_estimate,
-            token_precision: String::from("heuristic"),
-            token_task_in_flight: false,
         };
         // startedEvent exposes identity and counts without leaking argument content.
         // startedEvent 在不泄漏参数内容的前提下暴露身份与计数。
@@ -572,7 +458,6 @@ impl ToolRequestStreamCoordinator {
             }
         }
         self.drafts.insert(request_stream_id.clone(), draft);
-        self.schedule_token_estimate(&request_stream_id);
         events
     }
 
@@ -591,12 +476,6 @@ impl ToolRequestStreamCoordinator {
                 return Vec::new();
             };
             draft.append_provider_delta(delta);
-            if let Some(cumulative_estimate) =
-                draft.read_arguments(immediate_cumulative_token_estimate_optional)
-            {
-                draft.estimated_tokens = cumulative_estimate;
-                draft.token_precision = String::from("heuristic");
-            }
             // preview is derived only from complete semantic JSON events.
             // preview 仅从完整语义 JSON 事件派生。
             let preview = push_argument_fragment_into_draft(draft, delta);
@@ -648,7 +527,6 @@ impl ToolRequestStreamCoordinator {
                     None,
                 ));
             }
-            self.schedule_token_estimate(request_stream_id);
         }
         if let Some(preview) = preview {
             if let Some(draft) = self.drafts.get_mut(request_stream_id) {
@@ -799,11 +677,6 @@ impl ToolRequestStreamCoordinator {
             None,
             preview_diagnostic,
         ));
-        // completedTokenDrafts keeps no parser or staging resource and exists only for the final background estimate.
-        // completedTokenDrafts 不保留解析器或暂存资源，仅用于最终后台估算。
-        self.completed_token_drafts
-            .insert(request_stream_id.to_string(), draft);
-        self.schedule_token_estimate(request_stream_id);
         events
     }
 
@@ -856,155 +729,6 @@ impl ToolRequestStreamCoordinator {
         )]
     }
 
-    /// Starts at most one background cumulative token calculation for an active or just-ready request.
-    /// 为一条活动或刚就绪请求启动至多一个后台累计 Token 计算。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `request_stream_id` identifies the exact cumulative argument buffer to snapshot.
-    /// `request_stream_id` 标识需要快照的精确累计参数缓冲区。
-    ///
-    /// # Returns
-    /// 返回值
-    /// This function schedules work when eligible and returns no value.
-    /// 此函数在符合条件时调度任务，不返回值。
-    fn schedule_token_estimate(&mut self, request_stream_id: &str) {
-        let draft = if let Some(draft) = self.drafts.get_mut(request_stream_id) {
-            draft
-        } else if let Some(draft) = self.completed_token_drafts.get_mut(request_stream_id) {
-            draft
-        } else {
-            return;
-        };
-        if draft.token_task_in_flight {
-            return;
-        }
-        draft.token_task_in_flight = true;
-        let request_stream_id = request_stream_id.to_string();
-        let arguments = match draft.argument_assembler.as_ref() {
-            Some(assembler) => ToolRequestTokenEstimateInput::Shared(assembler.clone()),
-            None => ToolRequestTokenEstimateInput::Owned(draft.arguments_json.clone()),
-        };
-        let task = ToolRequestTokenEstimateTask {
-            request_stream_id: request_stream_id.clone(),
-            arguments,
-        };
-        if self.token_task_sender.send(task).is_err() {
-            if let Some(draft) = self.drafts.get_mut(request_stream_id.as_str()) {
-                draft.token_task_in_flight = false;
-            } else if let Some(draft) = self
-                .completed_token_drafts
-                .get_mut(request_stream_id.as_str())
-            {
-                draft.token_task_in_flight = false;
-            }
-        }
-    }
-
-    /// Drains completed background token calculations and rejects results for stale byte revisions.
-    /// 排空已完成的后台 Token 计算，并拒绝过期字节修订的结果。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Monotonic progress events ready for immediate session projection.
-    /// 返回可立即投影到会话的单调进度事件。
-    pub(crate) fn drain_token_progress_events(&mut self) -> Vec<RuntimeEvent> {
-        let mut updated_requests = Vec::new();
-        let mut stale_request_ids = Vec::new();
-        while let Ok(result) = self.token_result_receiver.try_recv() {
-            match self.apply_token_estimate_result(result) {
-                ToolRequestTokenEstimateDisposition::Updated {
-                    request_stream_id,
-                    completed,
-                } => {
-                    updated_requests.push((request_stream_id, completed));
-                }
-                ToolRequestTokenEstimateDisposition::Stale(request_stream_id) => {
-                    stale_request_ids.push(request_stream_id);
-                }
-                ToolRequestTokenEstimateDisposition::Ignored => {}
-            }
-        }
-        let mut events = Vec::new();
-        for (request_stream_id, completed) in updated_requests {
-            let draft = if completed {
-                self.completed_token_drafts.get(&request_stream_id)
-            } else {
-                self.drafts.get(&request_stream_id)
-            };
-            if let Some(draft) = draft {
-                events.push(self.runtime_event_for_draft(
-                    RuntimeEventKind::ToolRequestProgress,
-                    &request_stream_id,
-                    draft,
-                    if completed { "ready" } else { "receiving" },
-                    None,
-                    None,
-                    None,
-                ));
-            }
-            if completed {
-                self.completed_token_drafts.remove(&request_stream_id);
-            }
-        }
-        stale_request_ids.sort_unstable();
-        stale_request_ids.dedup();
-        for request_stream_id in stale_request_ids {
-            self.schedule_token_estimate(&request_stream_id);
-        }
-        events
-    }
-
-    /// Returns whether a ready request is still waiting for its final background token result.
-    /// 返回是否仍有已就绪请求正在等待最终后台 Token 结果。
-    ///
-    /// # Returns
-    /// 返回值
-    /// `true` while at least one ready request must remain available for final token projection.
-    /// 至少一条已就绪请求仍需保留以投影最终 Token 时返回 `true`。
-    pub(crate) fn has_pending_ready_token_progress(&self) -> bool {
-        !self.completed_token_drafts.is_empty()
-    }
-
-    /// Applies one correlated token result without draining or scheduling additional channel work.
-    /// 应用一项已关联 Token 结果，但不排空或调度额外通道任务。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `result` carries one cumulative estimate and its exact source byte revision.
-    /// `result` 携带一项累计估算及其精确来源字节修订。
-    ///
-    /// # Returns
-    /// 返回值
-    /// The deterministic follow-up action selected from current request state.
-    /// 返回根据当前请求状态选择的确定性后续动作。
-    fn apply_token_estimate_result(
-        &mut self,
-        result: ToolRequestTokenEstimateResult,
-    ) -> ToolRequestTokenEstimateDisposition {
-        let completed = !self.drafts.contains_key(&result.request_stream_id);
-        let draft = if completed {
-            self.completed_token_drafts
-                .get_mut(&result.request_stream_id)
-        } else {
-            self.drafts.get_mut(&result.request_stream_id)
-        };
-        let Some(draft) = draft else {
-            return ToolRequestTokenEstimateDisposition::Ignored;
-        };
-        draft.token_task_in_flight = false;
-        if draft.arguments_len() != result.source_bytes {
-            return ToolRequestTokenEstimateDisposition::Stale(result.request_stream_id);
-        }
-        draft.estimated_tokens = result.estimated_tokens;
-        draft.token_precision = result.token_precision;
-        draft.revision = draft.revision.saturating_add(1);
-        ToolRequestTokenEstimateDisposition::Updated {
-            request_stream_id: result.request_stream_id,
-            completed,
-        }
-    }
-
     /// Builds one safe runtime event from the latest immutable request draft.
     /// 根据最新不可变请求草稿构建一条安全运行时事件。
     fn runtime_event_for_draft(
@@ -1029,109 +753,12 @@ impl ToolRequestStreamCoordinator {
             "tool_display_state": display_state,
             "received_bytes": draft.arguments_len(),
             "received_characters": draft.received_characters,
-            "estimated_tokens": draft.estimated_tokens,
-            "token_precision": draft.token_precision,
             "request_revision": draft.revision,
             "reason": reason,
             "preview": preview.map(tool_request_preview_json),
             "preview_diagnostic": preview_diagnostic,
         })))
     }
-}
-
-/// Starts one serialized background token worker for a request-stream coordinator.
-/// 为一个请求流协调器启动一条串行后台 Token 工作线程。
-///
-/// # Parameters
-/// 参数
-/// `model_id` selects the warmed tokenizer route used by every queued snapshot.
-/// `model_id` 选择所有排队快照共用的已预热 Tokenizer 路由。
-/// `token_budget_runtime` optionally supplies model-aware token counting.
-/// `token_budget_runtime` 可选提供模型感知 Token 统计。
-///
-/// # Returns
-/// 返回值
-/// A non-blocking task sender and the result receiver drained by the stream driver.
-/// 返回非阻塞任务发送器以及由流驱动排空的结果接收器。
-fn spawn_token_estimate_worker(
-    model_id: String,
-    token_budget_runtime: Option<Arc<TokenBudgetRuntime>>,
-) -> (
-    Sender<ToolRequestTokenEstimateTask>,
-    Receiver<ToolRequestTokenEstimateResult>,
-) {
-    let (task_sender, task_receiver) = channel::<ToolRequestTokenEstimateTask>();
-    let (result_sender, result_receiver) = channel::<ToolRequestTokenEstimateResult>();
-    // worker owns the receivers and shared estimator, so Provider streaming only clones and enqueues snapshots.
-    // worker 持有接收器与共享估算器，因此 Provider 流线程只负责克隆并投递快照。
-    let _ = std::thread::Builder::new()
-        .name(String::from("tool-token-estimate"))
-        .spawn(move || {
-            while let Ok(task) = task_receiver.recv() {
-                // argumentsJson is cloned from shared storage only after work reaches this background thread.
-                // argumentsJson 只会在任务进入该后台线程后从共享存储克隆。
-                let arguments_json = match task.arguments {
-                    ToolRequestTokenEstimateInput::Shared(assembler) => assembler.snapshot(),
-                    ToolRequestTokenEstimateInput::Owned(arguments_json) => arguments_json,
-                };
-                let source_bytes = arguments_json.len();
-                let model_estimate = token_budget_runtime
-                    .as_ref()
-                    .and_then(|runtime| runtime.estimate_text_tokens(&model_id, &arguments_json));
-                let estimated_tokens = model_estimate
-                    .unwrap_or_else(|| estimate_mixed_language_text_tokens(&arguments_json));
-                let token_precision = if model_estimate.is_some() {
-                    String::from("model")
-                } else {
-                    String::from("heuristic")
-                };
-                if result_sender
-                    .send(ToolRequestTokenEstimateResult {
-                        request_stream_id: task.request_stream_id,
-                        source_bytes,
-                        estimated_tokens,
-                        token_precision,
-                    })
-                    .is_err()
-                {
-                    break;
-                }
-            }
-        });
-    (task_sender, result_receiver)
-}
-
-/// Returns an immediate shared heuristic estimate for one bounded cumulative request prefix.
-/// 为一段有界累计请求前缀返回即时共享启发式估算。
-///
-/// # Parameters
-/// 参数
-/// `arguments_json` is the exact cumulative argument text available at the request boundary.
-/// `arguments_json` 是请求边界处可用的精确累计参数文本。
-///
-/// # Returns
-/// 返回值
-/// A shared heuristic estimate, or zero when the cumulative text is delegated entirely to the background worker.
-/// 返回共享启发式估算；当累计文本完全交给后台任务时返回零。
-fn immediate_cumulative_token_estimate(arguments_json: &str) -> usize {
-    immediate_cumulative_token_estimate_optional(arguments_json).unwrap_or_default()
-}
-
-/// Returns an immediate shared heuristic estimate only for cumulative text below the SSE-thread cost ceiling.
-/// 仅为低于 SSE 线程成本上限的累计文本返回即时共享启发式估算。
-///
-/// # Parameters
-/// 参数
-/// `arguments_json` is the complete ordered argument prefix received so far.
-/// `arguments_json` 是目前为止收到的完整有序参数前缀。
-///
-/// # Returns
-/// 返回值
-/// The cumulative shared heuristic estimate when bounded, otherwise `None` for background-only processing.
-/// 受控时返回累计共享启发式估算，否则返回 `None` 交由纯后台处理。
-fn immediate_cumulative_token_estimate_optional(arguments_json: &str) -> Option<usize> {
-    (arguments_json.len() <= MAX_SYNCHRONOUS_TOKEN_ESTIMATE_BYTES)
-        .then(|| estimate_mixed_language_text_tokens(arguments_json))
 }
 
 /// Feeds one raw argument fragment through the strict lexer and optional tool parser.
@@ -1395,12 +1022,10 @@ mod tests {
         coordinator
     }
 
-    /// Verifies background token completion produces a later monotonic progress revision.
-    /// 验证后台 Token 计算完成后会产生更晚的单调进度修订。
+    /// Verifies immediate progress reports Unicode scalar counts without tokenization.
+    /// 验证即时进度在不分词的情况下报告 Unicode 标量数量。
     #[test]
-    fn background_token_estimate_emits_dynamic_progress() {
-        // coordinator starts one recognized request and schedules its cumulative snapshot.
-        // coordinator 启动一条已识别请求并调度其累计快照。
+    fn immediate_progress_reports_unicode_scalar_count() {
         let mut coordinator = test_coordinator();
         let started = coordinator.apply(ToolRequestFragment::Detected {
             request_stream_id: String::from("stream-token"),
@@ -1409,12 +1034,6 @@ mod tests {
             initial_arguments: String::from("{\"text\":\"hello 世界\"}"),
             argument_assembler: None,
         });
-        let started_revision = started[0]
-            .metadata
-            .as_ref()
-            .and_then(|metadata| metadata.get("request_revision"))
-            .and_then(serde_json::Value::as_u64)
-            .expect("started revision should exist");
         // receivedCharacters counts visible Unicode scalars instead of UTF-8 storage bytes.
         // receivedCharacters 统计可见 Unicode 标量，而不是 UTF-8 存储字节。
         assert_eq!(
@@ -1425,63 +1044,6 @@ mod tests {
                 .and_then(serde_json::Value::as_u64),
             Some("{\"text\":\"hello 世界\"}".chars().count() as u64)
         );
-        // deadline bounds asynchronous test waiting without coupling to one scheduler tick.
-        // deadline 限制异步测试等待，同时不绑定某一次调度时机。
-        let deadline = Instant::now() + Duration::from_secs(1);
-        let progress = loop {
-            let events = coordinator.drain_token_progress_events();
-            if let Some(event) = events.into_iter().next() {
-                break event;
-            }
-            assert!(
-                Instant::now() < deadline,
-                "token worker should finish promptly"
-            );
-            std::thread::yield_now();
-        };
-        assert_eq!(progress.kind, RuntimeEventKind::ToolRequestProgress);
-        let metadata = progress.metadata.expect("progress metadata should exist");
-        assert!(
-            metadata["request_revision"]
-                .as_u64()
-                .is_some_and(|revision| revision > started_revision)
-        );
-        assert!(
-            metadata["estimated_tokens"]
-                .as_u64()
-                .is_some_and(|value| value > 0)
-        );
-    }
-
-    /// Verifies immediate heuristic progress is invariant to provider fragment boundaries.
-    /// 验证即时启发式进度不受 Provider 碎片边界影响。
-    #[test]
-    fn immediate_token_estimate_uses_cumulative_argument_prefix() {
-        // The two fragments each round to one token separately, while their four-byte union is one token.
-        // 两段碎片分别计算都会向上取整为一个 Token，而四字节合并文本只应为一个 Token。
-        let mut coordinator = test_coordinator();
-        coordinator.apply(ToolRequestFragment::Detected {
-            request_stream_id: String::from("stream-fragment-invariant"),
-            tool_call_id: String::from("call-fragment-invariant"),
-            tool_name: String::from("test_tool"),
-            initial_arguments: String::from("\""),
-            argument_assembler: None,
-        });
-        coordinator.apply(ToolRequestFragment::ArgumentsDelta {
-            request_stream_id: String::from("stream-fragment-invariant"),
-            delta: String::from("ab\""),
-        });
-
-        let draft = coordinator
-            .drafts
-            .get("stream-fragment-invariant")
-            .expect("active request should retain its cumulative argument prefix");
-        assert_eq!(draft.arguments_json, "\"ab\"");
-        assert_eq!(
-            draft.estimated_tokens,
-            estimate_mixed_language_text_tokens(&draft.arguments_json)
-        );
-        assert_eq!(draft.estimated_tokens, 1);
     }
 
     /// Verifies a large provider request and coordinator draft retain one shared cumulative allocation.
@@ -1516,143 +1078,6 @@ mod tests {
         assert_eq!(retained_assembler.len(), provider_assembler.len());
     }
 
-    /// Verifies a model-aware result replaces a higher heuristic value for the same byte revision.
-    /// 验证模型感知结果会在同一字节修订上替换更高的启发式值。
-    #[test]
-    fn model_token_result_overrides_higher_heuristic_estimate() {
-        // coordinator owns one exact byte revision whose heuristic is intentionally inflated.
-        // coordinator 持有一个精确字节修订，其启发式值被刻意抬高。
-        let mut coordinator = test_coordinator();
-        coordinator.apply(ToolRequestFragment::Detected {
-            request_stream_id: String::from("stream-model-override"),
-            tool_call_id: String::from("call-model-override"),
-            tool_name: String::from("test_tool"),
-            initial_arguments: String::from("{}"),
-            argument_assembler: None,
-        });
-        let draft = coordinator
-            .drafts
-            .get_mut("stream-model-override")
-            .expect("active request should exist");
-        draft.estimated_tokens = 100;
-        let source_bytes = draft.arguments_json.len();
-
-        let disposition = coordinator.apply_token_estimate_result(ToolRequestTokenEstimateResult {
-            request_stream_id: String::from("stream-model-override"),
-            source_bytes,
-            estimated_tokens: 1,
-            token_precision: String::from("model"),
-        });
-
-        assert!(matches!(
-            disposition,
-            ToolRequestTokenEstimateDisposition::Updated {
-                request_stream_id,
-                completed: false,
-            } if request_stream_id == "stream-model-override"
-        ));
-        let draft = coordinator
-            .drafts
-            .get("stream-model-override")
-            .expect("active request should remain available");
-        assert_eq!(draft.estimated_tokens, 1);
-        assert_eq!(draft.token_precision, "model");
-    }
-
-    /// Verifies a token result for an older byte snapshot is rejected and the latest text is rescheduled.
-    /// 验证旧字节快照的 Token 结果会被拒绝，并重新调度最新文本。
-    #[test]
-    fn stale_background_token_result_is_rejected_and_rescheduled() {
-        // coordinator owns one active request whose arguments advance after the stale source revision.
-        // coordinator 持有一条活动请求，其参数会在旧来源修订之后继续推进。
-        let mut coordinator = test_coordinator();
-        coordinator.apply(ToolRequestFragment::Detected {
-            request_stream_id: String::from("stream-stale"),
-            tool_call_id: String::from("call-stale"),
-            tool_name: String::from("test_tool"),
-            initial_arguments: String::from("{\"text\":\"a"),
-            argument_assembler: None,
-        });
-        coordinator.apply(ToolRequestFragment::ArgumentsDelta {
-            request_stream_id: String::from("stream-stale"),
-            delta: String::from("b\"}"),
-        });
-        let disposition = coordinator.apply_token_estimate_result(ToolRequestTokenEstimateResult {
-            request_stream_id: String::from("stream-stale"),
-            source_bytes: 12,
-            estimated_tokens: 999,
-            token_precision: String::from("model"),
-        });
-        assert!(matches!(
-            disposition,
-            ToolRequestTokenEstimateDisposition::Stale(request_stream_id)
-                if request_stream_id == "stream-stale"
-        ));
-        coordinator.schedule_token_estimate("stream-stale");
-        let draft = coordinator
-            .drafts
-            .get("stream-stale")
-            .expect("active request should remain available");
-        assert_ne!(draft.arguments_json.len(), 12);
-        assert_ne!(draft.estimated_tokens, 999);
-        assert!(draft.token_task_in_flight);
-    }
-
-    /// Verifies a final background estimate can update the same request after its ready boundary.
-    /// 验证最终后台估算可以在请求就绪边界之后继续更新同一请求。
-    #[test]
-    fn final_background_token_estimate_updates_ready_request() {
-        // coordinator completes with an authoritative replacement whose latest token result arrives afterward.
-        // coordinator 使用权威替换参数完成请求，而其最新 Token 结果随后到达。
-        let mut coordinator = test_coordinator();
-        coordinator.apply(ToolRequestFragment::Detected {
-            request_stream_id: String::from("stream-ready-token"),
-            tool_call_id: String::from("call-ready-token"),
-            tool_name: String::from("test_tool"),
-            initial_arguments: String::from("{\"text\":\"short\"}"),
-            argument_assembler: None,
-        });
-        let ready_events = coordinator.apply(ToolRequestFragment::Completed {
-            request_stream_id: String::from("stream-ready-token"),
-            canonical_tool_call_id: None,
-            final_arguments: Some(String::from("{\"text\":\"authoritative replacement\"}")),
-        });
-        assert!(
-            ready_events
-                .iter()
-                .any(|event| event.kind == RuntimeEventKind::ToolRequestReady)
-        );
-        let source_bytes = coordinator
-            .completed_token_drafts
-            .get("stream-ready-token")
-            .expect("ready request should await its final token result")
-            .arguments_json
-            .len();
-        let (result_sender, result_receiver) = channel();
-        coordinator.token_result_receiver = result_receiver;
-        result_sender
-            .send(ToolRequestTokenEstimateResult {
-                request_stream_id: String::from("stream-ready-token"),
-                source_bytes,
-                estimated_tokens: 99,
-                token_precision: String::from("model"),
-            })
-            .expect("test final result should enqueue");
-
-        let progress = coordinator.drain_token_progress_events();
-        assert!(matches!(
-            progress.as_slice(),
-            [event] if event.kind == RuntimeEventKind::ToolRequestProgress
-                && event.metadata.as_ref().and_then(|metadata| metadata["tool_display_state"].as_str()) == Some("ready")
-                && event.metadata.as_ref().and_then(|metadata| metadata["estimated_tokens"].as_u64()) == Some(99)
-        ));
-        assert!(
-            !coordinator
-                .completed_token_drafts
-                .contains_key("stream-ready-token")
-        );
-    }
-
     /// Builds one minimal request draft for direct preview-policy enforcement tests.
     /// 为直接测试预览策略强制执行构建一份最小请求草稿。
     fn preview_policy_draft() -> ToolRequestDraft {
@@ -1678,9 +1103,6 @@ mod tests {
                 redacted_json_paths: Vec::new(),
                 maximum_body_preview_bytes: 5,
             },
-            estimated_tokens: 0,
-            token_precision: String::from("heuristic"),
-            token_task_in_flight: false,
         }
     }
 

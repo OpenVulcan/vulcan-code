@@ -23,11 +23,6 @@ use super::*;
 /// `conversation_state` 是当前检查点对应的规范 Provider 会话状态。
 /// `last_successful_provider_usage` is the latest successful provider usage snapshot, when available.
 /// `last_successful_provider_usage` 是最近一次成功 Provider 调用的用量快照（如存在）。
-/// `provider_request_count` is the runtime-confirmed safe physical provider request count.
-/// `provider_request_count` 是运行时确认安全的真实 Provider 请求次数。
-/// `expected_goal_id` is the sole launch-context binding allowed to update live goal usage.
-/// `expected_goal_id` 是允许更新目标实时用量的唯一启动上下文绑定。
-///
 /// # Returns
 /// # 返回值
 /// This function returns no value; each projection failure is logged independently so canonical checkpoint application is always attempted.
@@ -39,7 +34,6 @@ pub(super) fn handle_conversation_checkpoint_stream_event(
     session_id: SessionId,
     conversation_state: SessionConversationState,
     last_successful_provider_usage: Option<ProviderUsageSnapshot>,
-    provider_request_count: usize,
 ) {
     // Live context budget usage is an optional projection; its failure must not block goal accounting or the canonical checkpoint.
     // 实时上下文预算用量是可选投影；其失败不得阻塞目标计量或规范检查点。
@@ -62,8 +56,6 @@ pub(super) fn handle_conversation_checkpoint_stream_event(
         controller_runtime,
         session_id,
         conversation_state,
-        last_successful_provider_usage,
-        provider_request_count,
     ) {
         eprintln!("[webui-service] apply checkpoint failed: {error}");
     }

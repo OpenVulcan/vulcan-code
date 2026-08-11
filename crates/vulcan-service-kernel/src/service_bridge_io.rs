@@ -203,6 +203,9 @@ pub fn spawn_webui_service_http_bridge(
         .name(String::from("vulcan-webui-http-bridge"))
         .spawn(move || {
             let runtime = match tokio::runtime::Builder::new_multi_thread()
+                // A distinct name separates bridge failures from the application service runtime.
+                // 独立名称用于区分桥接故障和应用 Service Runtime 故障。
+                .thread_name("vulcan-webui-bridge-runtime")
                 .enable_all()
                 .build()
             {
@@ -270,7 +273,7 @@ pub(crate) async fn run_webui_service_http_bridge(
     let rpc_dispatcher: WebuiServiceRpcDispatcher = Arc::new(move |method, params| {
         let event_emitter = rpc_event_emitter.clone();
         let state = rpc_state.clone();
-        Box::pin(async move { dispatch_service_rpc(event_emitter, state, method, params).await })
+        Box::pin(dispatch_service_rpc(event_emitter, state, method, params))
     });
     let inference_consumer_profile_id = String::from("vmm");
     let inference_access_registry =

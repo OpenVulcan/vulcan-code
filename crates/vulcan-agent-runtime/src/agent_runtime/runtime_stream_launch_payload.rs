@@ -7,10 +7,10 @@ use crate::agent_runtime::execution_models::{
     ExecutionPreparation, ExecutionPreparationRequest, ExecutionTurnStartMode,
 };
 use crate::agent_runtime::provider_request_telemetry::ProviderRequestTelemetryContext;
+use crate::agent_runtime::provider_transport_request_budget::ProviderUsageBudgetBaselineHandle;
 use crate::agent_runtime::runtime_stream_bootstrap::RuntimeStreamBootstrap;
 use crate::agent_runtime::runtime_stream_delta::RuntimeStreamDeltaState;
 use crate::agent_runtime::task_runtime::{TaskExecutionRuntimeContext, TaskRuntime};
-use crate::agent_runtime::token_budget_runtime::TokenBudgetRuntime;
 use crate::model::SessionId;
 use std::sync::Arc;
 use vulcan_context::RuntimeProviderLoweringRepairEvent;
@@ -56,9 +56,6 @@ pub struct RuntimeStreamLaunch {
     /// Shared resumable task runtime reused by the current execution turn.
     /// 被当前执行回合复用的共享可恢复任务运行时。
     pub(crate) task_runtime: Arc<TaskRuntime>,
-    /// Shared token-budget runtime reused for terminal budget backfills.
-    /// 用于终态预算回填的共享 Token 预算运行时。
-    pub(crate) token_budget_runtime: Arc<TokenBudgetRuntime>,
     /// Host-owned unified tool manager used by the transport layer.
     /// 供传输层使用的宿主自有统一工具管理器。
     pub(crate) tools_manager: VulcanToolsManager,
@@ -106,8 +103,13 @@ pub(crate) fn build_runtime_stream_launch_payload(
         controller_effective_prompt_for_launch(request, &bootstrap.core_snapshot);
     // providerTelemetryContext captures model and owner facts before preparation moves into the launch payload.
     // providerTelemetryContext 在执行准备移入启动载荷前捕获模型与归属事实。
-    let provider_telemetry_context =
-        ProviderRequestTelemetryContext::from_preparation(&bootstrap.preparation);
+    let provider_usage_budget_baseline = ProviderUsageBudgetBaselineHandle::new(
+        bootstrap.preparation.provider_usage_budget_baseline.clone(),
+    );
+    let provider_telemetry_context = ProviderRequestTelemetryContext::from_preparation(
+        &bootstrap.preparation,
+        provider_usage_budget_baseline,
+    );
     // provider_api_family preserves the canonical typed API family before preparation moves into the launch payload.
     // provider_api_family 在执行准备移入启动载荷前保留规范强类型 API 协议族。
     let protocol_profile_id = bootstrap
@@ -115,12 +117,6 @@ pub(crate) fn build_runtime_stream_launch_payload(
         .model_blueprint
         .protocol_profile_id
         .clone();
-    // modelId preserves the exact tokenizer route before preparation moves into the launch payload.
-    // modelId 在执行准备移入启动载荷前保留精确 Tokenizer 路由。
-    let model_id = bootstrap.preparation.model_blueprint.model_id.clone();
-    // streamTokenBudgetRuntime shares the warmed counter with tool request progress.
-    // streamTokenBudgetRuntime 与工具请求进度共享已预热统计器。
-    let stream_token_budget_runtime = bootstrap.token_budget_runtime.clone();
     // streamResolvedTools freezes parser capabilities before definitions move into the launch payload.
     // streamResolvedTools 在工具定义移入启动载荷前冻结解析器能力。
     let stream_resolved_tools = bootstrap.resolved_tool_definitions.clone();
@@ -132,7 +128,6 @@ pub(crate) fn build_runtime_stream_launch_payload(
         preparation: bootstrap.preparation,
         active_agent: bootstrap.active_agent,
         task_runtime: bootstrap.task_runtime,
-        token_budget_runtime: bootstrap.token_budget_runtime,
         tools_manager: bootstrap.tools_manager,
         resolved_tool_definitions: bootstrap.resolved_tool_definitions,
         discovery_events: bootstrap.discovery_events,
@@ -142,11 +137,7 @@ pub(crate) fn build_runtime_stream_launch_payload(
         system_preamble: bootstrap.system_preamble,
         core_snapshot: bootstrap.core_snapshot,
         stream_state: RuntimeStreamDeltaState::new(bootstrap.core_controller, protocol_profile_id)
-            .with_tool_request_stream(
-                model_id,
-                stream_token_budget_runtime,
-                &stream_resolved_tools,
-            )
+            .with_tool_request_stream(&stream_resolved_tools)
             .with_provider_request_telemetry_context(provider_telemetry_context),
         lowering_repair_events: bootstrap.lowering_repair_events,
         public_ai_runtime: bootstrap.public_ai_runtime,
@@ -272,6 +263,7 @@ mod tests {
     fn build_test_preparation() -> ExecutionPreparation {
         ExecutionPreparation {
             session_id: Uuid::nil(),
+            conversation_hook_turn_id: None,
             session_title: String::from("测试会话"),
             agent_id: String::from("default-agent"),
             agent_name: String::from("默认代理"),
@@ -325,6 +317,8 @@ mod tests {
             context_budget: None,
             context_compaction_policy: None,
             context_budget_override: None,
+            provider_usage_budget_baseline: None,
+            provider_usage_context_generation_id: None,
             context_assembly: None,
             context_baseline: None,
             context_request_mode: None,
@@ -369,6 +363,8 @@ mod tests {
             conversation_state: SessionConversationState::default(),
             context_compaction_policy: None,
             context_budget_override: None,
+            provider_usage_budget_baseline: None,
+            provider_usage_context_generation_id: None,
             context_window_prefill_input_tokens: None,
             execution_mode: String::from("Build"),
             temperature: Some(0.2),
@@ -438,9 +434,6 @@ mod tests {
             active_agent: None,
             public_ai_runtime: None,
             task_runtime: Arc::new(TaskRuntime::new()),
-            token_budget_runtime: Arc::new(TokenBudgetRuntime::initialize_from_resource_directory(
-                std::env::temp_dir(),
-            )),
             tools_manager: VulcanToolsManager::default(),
             resolved_tool_definitions: Vec::new(),
             discovery_events: Vec::new(),
@@ -513,9 +506,6 @@ mod tests {
             active_agent: None,
             public_ai_runtime: None,
             task_runtime: Arc::new(TaskRuntime::new()),
-            token_budget_runtime: Arc::new(TokenBudgetRuntime::initialize_from_resource_directory(
-                std::env::temp_dir(),
-            )),
             tools_manager: VulcanToolsManager::default(),
             resolved_tool_definitions: Vec::new(),
             discovery_events: Vec::new(),
@@ -743,9 +733,6 @@ mod tests {
             active_agent: None,
             public_ai_runtime: None,
             task_runtime: Arc::new(TaskRuntime::new()),
-            token_budget_runtime: Arc::new(TokenBudgetRuntime::initialize_from_resource_directory(
-                std::env::temp_dir(),
-            )),
             tools_manager: VulcanToolsManager::default(),
             resolved_tool_definitions: Vec::new(),
             discovery_events: Vec::new(),

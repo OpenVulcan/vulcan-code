@@ -6,7 +6,7 @@ use vulcan_service_api::ServiceEvent;
 use super::*;
 use crate::{
     apply_session_phase_to_state, emit_context_injection_changed_delta,
-    emit_service_event_with_trace, owning_project_id_for_session,
+    emit_service_event_with_trace, owning_project_id_for_session, persist_workspace_session_update,
     retain_hydrated_conversation_windows_for_workspace,
 };
 
@@ -853,7 +853,9 @@ pub(crate) fn spawn_webui_prompt_prepare_continue_task(
                     session_id,
                     &preparation_turn_id,
                     &error,
-                ) {
+                )
+                .await
+                {
                     eprintln!(
                         "[webui-service] cleanup failed WebUI prompt preparation failed: {cleanup_error}"
                     );
@@ -978,7 +980,7 @@ pub(crate) fn start_webui_precheck_or_continue(
 /// 返回值
 /// `Ok(())` after the failed state is projected and persisted.
 /// 失败状态完成投影与持久化后返回 `Ok(())`。
-pub(crate) fn mark_webui_prompt_preparation_failed(
+pub(crate) async fn mark_webui_prompt_preparation_failed(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     controller_runtime: &ControllerRuntimeHandle,
@@ -996,6 +998,9 @@ pub(crate) fn mark_webui_prompt_preparation_failed(
         .clone()
         .ok_or_else(|| String::from("workspace snapshot is not ready"))?;
     let now = current_unix_millis_text();
+    let terminal_at_ms = now
+        .parse::<i64>()
+        .map_err(|error| format!("解析提示词准备失败时间失败：{error}"))?;
     if let Some(runtime_state) = workspace_snapshot
         .session_runtime_state
         .get_mut(&session_id)
@@ -1011,6 +1016,43 @@ pub(crate) fn mark_webui_prompt_preparation_failed(
                 error.to_string(),
             ),
         )?;
+        if runtime_state.provider_call_ledger.in_flight_call_count() != 0 {
+            return Err(String::from(
+                "ERR_CONVERSATION_PREPARATION_FAILED_PROVIDER_CALL_STILL_ACTIVE",
+            ));
+        }
+        let canonical_tail_kind = runtime_state
+            .conversation_state
+            .records
+            .iter()
+            .rev()
+            .find(|record| {
+                record.visible
+                    && record.record_kind
+                        == vulcan_workbench_model::SessionMessageRecordKind::Transcript
+            })
+            .map(|record| match record.kind {
+                vulcan_workbench_model::SessionMessageKind::Assistant => "assistant",
+                vulcan_workbench_model::SessionMessageKind::User => "user",
+                vulcan_workbench_model::SessionMessageKind::Error => "error",
+            })
+            .unwrap_or("empty")
+            .to_string();
+        let continuation_eligible = canonical_tail_kind != "assistant";
+        if !runtime_state
+            .provider_call_ledger
+            .mark_continuation_terminal(
+                Some(failed_turn_id.to_string()),
+                String::from("preparation_failed"),
+                terminal_at_ms,
+                canonical_tail_kind,
+                continuation_eligible,
+            )
+        {
+            return Err(String::from(
+                "ERR_CONVERSATION_PREPARATION_FAILED_CONTINUATION_REVISION_EXHAUSTED",
+            ));
+        }
         runtime_state.updated_at = now.clone();
     }
     workspace_snapshot
@@ -1063,26 +1105,15 @@ pub(crate) fn mark_webui_prompt_preparation_failed(
         "workbench_phase_delta_emit",
         ServiceEvent::WorkbenchDelta(Box::new(event)),
     );
-    let state_for_persist = state.clone();
-    let controller_runtime_for_persist = controller_runtime.clone();
-    spawn_service_task(async move {
-        let snapshot = match current_workspace_snapshot_from_shared_state(&state_for_persist) {
-            Ok(Some(snapshot)) => snapshot,
-            Ok(None) => return,
-            Err(error) => {
-                eprintln!("[webui-service] precheck failed persist snapshot failed: {error}");
-                return;
-            }
-        };
-        spawn_workspace_session_persist_task(
-            state_for_persist,
-            controller_runtime_for_persist,
-            snapshot,
-            session_id,
-            Some(String::from("precheck_continue_failed")),
-        );
-    });
-    Ok(())
+    let snapshot = current_workspace_snapshot_from_shared_state(state)?
+        .ok_or_else(|| String::from("precheck failed persist snapshot is unavailable"))?;
+    persist_workspace_session_update(
+        Some(state),
+        controller_runtime.clone(),
+        &snapshot,
+        session_id,
+    )
+    .await
 }
 
 /// Abandons the exact failed prompt turn through the session's sole Core VMM controller.

@@ -8,22 +8,16 @@ use uuid::Uuid;
 use vulcan_agent_runtime::workbench_prompt_turn::{
     SharedPromptPrecheckPlan, SharedPromptTurnBeginInput, begin_shared_prompt_turn,
 };
-use vulcan_context::SessionConversationPayload;
 use vulcan_service_api::{
     ComposerAttachmentSummary, ServiceEvent, ServiceEventEmitter, SubmitConversationPromptAck,
     UpdateConversationRunPhaseDelta, WorkbenchDelta, WorkbenchDeltaEnvelope,
 };
-use vulcan_session_boundary::SessionBoundaryStateStore;
-use vulcan_session_core::SessionNodeId;
 use vulcan_workbench_model::{
     PendingSessionPromptSource, SessionId, SessionKnowledgeLibrarySelection,
-    SessionKnowledgeLibrarySelectionMode, SessionMessageKind, SessionMessageRecordKind,
-    SessionProviderToolTargetSelection, SessionRunPhase, SessionState,
+    SessionKnowledgeLibrarySelectionMode, SessionProviderToolTargetSelection, SessionRunPhase,
+    SessionState,
 };
-use vulcan_workspace_store::{
-    data_plane::ControllerRuntimeHandle,
-    workspace_store::{WorkspaceSegmentedSessionBoundaryStore, WorkspaceSnapshot},
-};
+use vulcan_workspace_store::workspace_store::WorkspaceSnapshot;
 
 use super::{
     ExistingSubmissionAdmissionAuthorization, PromptSessionMaterializationKind,
@@ -37,14 +31,15 @@ use super::{
     current_workspace_snapshot_from_shared_state, emit_materialized_session_message_delta,
     emit_pending_prompts_changed_delta, emit_service_event_with_trace,
     enqueue_webui_pending_prompt_from_submission, hydrate_retained_submission_session_if_needed,
-    is_active_session_run_phase, load_workspace_for_submission,
-    mark_webui_prompt_preparation_failed, mark_webui_prompt_snapshot_preparing,
-    materialize_prompt_session, owning_project_id_for_session, parse_prompt_session_target,
-    parse_session_id, persist_initial_submission_goal, prepare_submission_media,
+    load_workspace_for_submission, mark_webui_prompt_preparation_failed,
+    mark_webui_prompt_snapshot_preparing, materialize_prompt_session,
+    owning_project_id_for_session, parse_prompt_session_target, parse_session_id,
+    persist_initial_submission_goal, persist_workspace_session_update, prepare_submission_media,
     preserve_active_session_run_state, provider_tool_capability_key,
-    replace_conversation_messages_in_workbench_window, retain_slow_submission_diagnostic,
-    retained_submission_snapshot_has_session_context, retained_submission_snapshot_is_usable,
-    rollback_persisted_session_before_user_prompt, runtime_parts_from_state,
+    replace_conversation_messages_in_workbench_window, resolve_session_continuation_eligibility,
+    retain_slow_submission_diagnostic, retained_submission_snapshot_has_session_context,
+    retained_submission_snapshot_is_usable, rollback_persisted_session_before_user_prompt,
+    runtime_parts_from_state, session_continuation_runtime_blockers,
     session_has_blocking_system_prompt_work, session_process_public_ai_selection,
     snapshot_webui_context_before_user_prompt, spawn_service_task,
     spawn_workspace_session_persist_task, start_reserved_webui_session_kernel_user_turn,
@@ -80,16 +75,23 @@ pub(super) enum ExistingSessionHydrationPolicy {
     TrustRetainedSnapshot,
 }
 
-/// Selects whether a submission creates visible user input or replays retained provider state.
-/// 选择本次提交是创建可见用户输入还是重放保留的 Provider 状态。
+/// Selects whether a submission creates visible user input or continues retained provider state.
+/// 选择本次提交是创建可见用户输入还是继续保留的 Provider 状态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ConversationSubmissionMode {
     /// Normal composer submission authored by the user.
     /// 用户通过输入区发起的普通提交。
     UserPrompt,
-    /// Host-owned retry that must not append another canonical or visible user message.
-    /// 宿主拥有的重试，不追加新的规范用户消息或可见用户记录。
-    ProviderRetry,
+    /// Prompt-free continuation admitted by one exact terminal ledger generation.
+    /// 由精确终态账本代际准入的无提示词 Continue。
+    Continuation {
+        /// Exact continuation generation projected to the caller.
+        /// 投影给调用方的精确 Continue 代际。
+        expected_generation: u64,
+        /// Exact provider-call ledger revision projected to the caller.
+        /// 投影给调用方的精确 Provider 调用账本修订号。
+        expected_ledger_revision: u64,
+    },
 }
 
 impl ConversationSubmissionMode {
@@ -98,7 +100,7 @@ impl ConversationSubmissionMode {
     fn prompt_source(self) -> PendingSessionPromptSource {
         match self {
             Self::UserPrompt => PendingSessionPromptSource::UserFollowup,
-            Self::ProviderRetry => PendingSessionPromptSource::ProviderRetry,
+            Self::Continuation { .. } => PendingSessionPromptSource::Continuation,
         }
     }
 
@@ -106,6 +108,24 @@ impl ConversationSubmissionMode {
     /// 返回本模式是否应追加用户编写的会话记录。
     fn appends_user_records(self) -> bool {
         matches!(self, Self::UserPrompt)
+    }
+
+    /// Returns whether this submission is a prompt-free continuation.
+    /// 返回本次提交是否为无提示词 Continue。
+    fn is_continuation(self) -> bool {
+        matches!(self, Self::Continuation { .. })
+    }
+
+    /// Returns the exact continuation generation and ledger revision when applicable.
+    /// 在适用时返回精确 Continue 代际与账本修订号。
+    fn continuation_expectation(self) -> Option<(u64, u64)> {
+        match self {
+            Self::UserPrompt => None,
+            Self::Continuation {
+                expected_generation,
+                expected_ledger_revision,
+            } => Some((expected_generation, expected_ledger_revision)),
+        }
     }
 }
 
@@ -1138,76 +1158,36 @@ pub(crate) fn attach_client_submission_id_to_visible_user_record(
 /// `attachments` 包含要加入本回合的输入区附件摘要。
 /// `preauthorized_turn_admission` carries exact ownership from an outer destructive-edit transaction.
 /// `preauthorized_turn_admission` 携带外层破坏性编辑事务的精确所有权。
-/// Loads whether the durable session-boundary status is failed after a restart.
-/// 读取进程重启后持久化会话边界状态是否为失败。
+/// Continues one terminated conversation from retained canonical provider state without appending user input.
+/// 从保留的规范 Provider 状态继续已终止会话，且不追加用户输入。
 ///
 /// # Parameters
 /// 参数
-/// `controller_runtime` owns the segmented session data root.
-/// `controller_runtime` 持有分段会话数据根目录。
-/// `project_id` identifies the owning workspace project.
-/// `project_id` 标识所属工作区项目。
-/// `session_id` identifies the session boundary thread.
-/// `session_id` 标识会话边界线程。
-/// `session_title` supplies the store adapter's stable display title.
-/// `session_title` 提供存储适配器使用的稳定显示标题。
-///
-/// # Returns
-/// 返回值
-/// Whether the persisted thread status is failed when a boundary state exists, or `None` when absent.
-/// 存在边界状态时返回其是否为失败；没有边界状态的会话返回 `None`。
-fn load_persisted_session_boundary_failed(
-    controller_runtime: &ControllerRuntimeHandle,
-    project_id: &str,
-    session_id: SessionId,
-    session_title: &str,
-) -> Result<Option<bool>, String> {
-    let store = WorkspaceSegmentedSessionBoundaryStore::new(
-        controller_runtime.data_root.clone(),
-        project_id.to_string(),
-        session_id,
-        session_title.to_string(),
-    );
-    let Some(value) = store.load_state(SessionNodeId::from(session_id))? else {
-        return Ok(None);
-    };
-    let status = value
-        .get("status")
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| String::from("ERR_CONVERSATION_RETRY_BOUNDARY_STATE_INVALID"))?;
-    match status {
-        "idle" | "running" | "interrupted" => Ok(Some(false)),
-        "failed" => Ok(Some(true)),
-        _ => Err(String::from(
-            "ERR_CONVERSATION_RETRY_BOUNDARY_STATE_INVALID",
-        )),
-    }
-}
-
-/// Retries the latest failed provider turn from the retained canonical session state.
-/// 从保留的规范会话状态重试最近一次失败的 Provider 回合。
-///
-/// # Parameters
-/// 参数
-/// `app` emits the accepted retry state and subsequent runtime deltas.
-/// `app` 发出已接受的重试状态与后续运行时增量。
+/// `app` emits the accepted continuation state and subsequent runtime deltas.
+/// `app` 发出已接受的 Continue 状态与后续运行时增量。
 /// `state` owns the retained workspace and canonical conversation state.
 /// `state` 持有保留的工作区与规范会话状态。
-/// `conversation_id` identifies the failed WebUI conversation.
-/// `conversation_id` 标识失败的 WebUI 会话。
+/// `conversation_id` identifies the terminated WebUI conversation.
+/// `conversation_id` 标识已终止的 WebUI 会话。
+/// `expected_generation` is the exact continuation generation projected to the WebUI.
+/// `expected_generation` 是投影给 WebUI 的精确 Continue 代际。
+/// `expected_ledger_revision` is the exact provider-call ledger revision projected to the WebUI.
+/// `expected_ledger_revision` 是投影给 WebUI 的精确 Provider 调用账本修订号。
 ///
 /// # Returns
 /// 返回值
-/// A lightweight acknowledgement after the retained provider state is admitted for retry.
-/// 保留的 Provider 状态获准重试后的轻量确认信息。
-pub(super) async fn service_retry_conversation_request(
+/// A lightweight acknowledgement after the retained provider state is admitted for continuation.
+/// 保留的 Provider 状态获准继续后的轻量确认信息。
+pub(super) async fn service_continue_conversation(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     conversation_id: String,
+    expected_generation: u64,
+    expected_ledger_revision: u64,
 ) -> Result<SubmitConversationPromptAck, String> {
     let session_id = parse_session_id(&conversation_id)
-        .ok_or_else(|| String::from("ERR_CONVERSATION_RETRY_INVALID_CONVERSATION"))?;
-    let (prompt, run_phase, latest_visible_transcript_is_error, boundary_context) = {
+        .ok_or_else(|| String::from("ERR_CONVERSATION_CONTINUE_INVALID_CONVERSATION"))?;
+    {
         let guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -1218,89 +1198,20 @@ pub(super) async fn service_retry_conversation_request(
         let runtime_state = workspace
             .session_runtime_state
             .get(&session_id)
-            .ok_or_else(|| String::from("ERR_CONVERSATION_RETRY_RUNTIME_STATE_MISSING"))?;
-        // The last visible transcript record is the durable failure fact after a process restart.
-        // 进程重启后，最后一条可见转录记录是可持久化的失败事实。
-        let latest_visible_transcript_is_error = runtime_state
-            .conversation_state
-            .records
-            .iter()
-            .rev()
-            .find(|record| {
-                record.visible && record.record_kind == SessionMessageRecordKind::Transcript
-            })
-            .is_some_and(|record| record.kind == SessionMessageKind::Error);
+            .ok_or_else(|| String::from("ERR_CONVERSATION_CONTINUE_RUNTIME_STATE_MISSING"))?;
         let run_phase = workspace
             .session_run_phases
             .get(&session_id)
             .copied()
             .unwrap_or(SessionRunPhase::Idle);
-        let boundary_context = if !is_active_session_run_phase(run_phase)
-            && !matches!(
-                run_phase,
-                SessionRunPhase::Failed | SessionRunPhase::Stopped
-            ) {
-            let controller_runtime = guard
-                .controller_runtime
-                .clone()
-                .ok_or_else(|| String::from("ERR_CONVERSATION_RETRY_CONTROLLER_NOT_READY"))?;
-            let project_id = owning_project_id_for_session(workspace, session_id)
-                .ok_or_else(|| String::from("ERR_CONVERSATION_RETRY_PROJECT_NOT_FOUND"))?;
-            let session_title = workspace
-                .sessions
-                .iter()
-                .find(|session| session.id == session_id)
-                .map(|session| session.title.clone())
-                .ok_or_else(|| String::from("ERR_CONVERSATION_RETRY_SESSION_NOT_FOUND"))?;
-            Some((controller_runtime, project_id, session_title))
-        } else {
-            None
-        };
-        let prompt = runtime_state
-            .conversation_state
-            .messages
-            .iter()
-            .rev()
-            .find_map(|message| match &message.payload {
-                SessionConversationPayload::UserText { text, .. } => {
-                    let trimmed = text.trim();
-                    (!trimmed.is_empty()).then(|| trimmed.to_string())
-                }
-                _ => None,
-            })
-            .ok_or_else(|| String::from("ERR_CONVERSATION_RETRY_PROMPT_NOT_FOUND"))?;
-        (
-            prompt,
+        let blockers = session_continuation_runtime_blockers(&guard, workspace, session_id)?;
+        resolve_session_continuation_eligibility(
+            runtime_state,
             run_phase,
-            latest_visible_transcript_is_error,
-            boundary_context,
+            blockers,
+            Some((expected_generation, expected_ledger_revision)),
         )
-    };
-    let persisted_boundary_status = boundary_context
-        .as_ref()
-        .map(|(controller_runtime, project_id, session_title)| {
-            load_persisted_session_boundary_failed(
-                controller_runtime,
-                project_id,
-                session_id,
-                session_title,
-            )
-        })
-        .transpose()?;
-    let durable_failure_observed =
-        latest_visible_transcript_is_error || persisted_boundary_status == Some(Some(true));
-    // Active phases always reject retry; after restart, Idle or Ready may use the durable boundary failure.
-    // 活跃阶段始终拒绝重试；进程重启后，Idle 或 Ready 可依据持久化会话边界失败状态重试。
-    let phase_allows_retry = matches!(
-        run_phase,
-        SessionRunPhase::Failed | SessionRunPhase::Stopped
-    ) || (!is_active_session_run_phase(run_phase)
-        && durable_failure_observed);
-    if !phase_allows_retry {
-        return Err(String::from("ERR_CONVERSATION_RETRY_SESSION_NOT_FAILED"));
-    }
-    if !durable_failure_observed {
-        return Err(String::from("ERR_CONVERSATION_RETRY_FAILURE_NOT_FOUND"));
+        .map_err(String::from)?;
     }
 
     service_submit_conversation_prompt(
@@ -1309,7 +1220,7 @@ pub(super) async fn service_retry_conversation_request(
         Uuid::new_v4().to_string(),
         None,
         Some(conversation_id),
-        prompt,
+        String::new(),
         None,
         None,
         None,
@@ -1318,13 +1229,16 @@ pub(super) async fn service_retry_conversation_request(
         None,
         None,
         ExistingSessionHydrationPolicy::TrustRetainedSnapshot,
-        ConversationSubmissionMode::ProviderRetry,
+        ConversationSubmissionMode::Continuation {
+            expected_generation,
+            expected_ledger_revision,
+        },
     )
     .await
 }
 
-/// Submits one ordinary user prompt or one host-owned retry through the shared conversation pipeline.
-/// 通过共享会话流水线提交普通用户提示词或宿主拥有的重试请求。
+/// Submits one ordinary user prompt or one prompt-free continuation through the shared conversation pipeline.
+/// 通过共享会话流水线提交普通用户提示词或无提示词 Continue 请求。
 ///
 /// # Parameters
 /// `app` emits accepted workbench updates and runtime events.
@@ -1346,8 +1260,8 @@ pub(super) async fn service_retry_conversation_request(
 /// Returns a lightweight acknowledgement after queuing or starting the submitted prompt.
 /// 返回排队或启动提交提示词后的轻量确认信息。
 ///
-/// `submission_mode` selects ordinary user input or a host-owned provider-state retry.
-/// `submission_mode` 选择普通用户输入或宿主拥有的 Provider 状态重试。
+/// `submission_mode` selects ordinary user input or a revision-bound prompt-free continuation.
+/// `submission_mode` 选择普通用户输入或绑定修订号的无提示词 Continue。
 pub(super) async fn service_submit_conversation_prompt(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
@@ -1390,21 +1304,20 @@ pub(super) async fn service_submit_conversation_prompt(
         .into_iter()
         .map(composer_attachment_summary_to_core)
         .collect::<Result<Vec<_>, _>>()?;
-    if prompt.is_empty() && attachments.is_empty() {
+    if prompt.is_empty() && attachments.is_empty() && !submission_mode.is_continuation() {
         return Err(String::from("请输入任务指令。"));
+    }
+    if submission_mode.is_continuation() && !attachments.is_empty() {
+        return Err(String::from(
+            "ERR_CONVERSATION_CONTINUE_ATTACHMENTS_NOT_ALLOWED",
+        ));
     }
 
     // Measures runtime handle acquisition before workspace hydration begins.
     // 衡量工作区水合开始前获取运行时句柄的耗时。
     let runtime_parts_started_at = current_unix_millis_value();
-    let (
-        controller_runtime,
-        agent_runtime,
-        _luaskills_catalog,
-        _token_budget_runtime,
-        _mcp_catalog,
-        _logs,
-    ) = runtime_parts_from_state(&state)?;
+    let (controller_runtime, agent_runtime, _luaskills_catalog, _mcp_catalog, _logs) =
+        runtime_parts_from_state(&state)?;
     webui_submit_trace(
         "submit_prompt_runtime_parts_ready",
         format!(
@@ -1497,8 +1410,8 @@ pub(super) async fn service_submit_conversation_prompt(
     if let ExistingSubmissionQueueDecision::Queue { session_id } =
         evaluate_existing_submission_queue(&state, &workspace_snapshot, submission_session_id)?
     {
-        if submission_mode == ConversationSubmissionMode::ProviderRetry {
-            return Err(String::from("ERR_CONVERSATION_RETRY_SESSION_BUSY"));
+        if submission_mode.is_continuation() {
+            return Err(String::from("ERR_CONVERSATION_CONTINUE_SESSION_BUSY"));
         }
         return queue_existing_submission(
             &app,
@@ -1597,6 +1510,56 @@ pub(super) async fn service_submit_conversation_prompt(
     // session_id is copied from the authoritative materialization result after activation consumes its classification.
     // session_id 在激活阶段消费物化分类后，从权威物化结果中复制。
     let session_id = materialized_session.session_id;
+    if submission_mode == ConversationSubmissionMode::UserPrompt
+        && let Some(runtime_state) = workspace_snapshot
+            .session_runtime_state
+            .get_mut(&session_id)
+    {
+        let _ = runtime_state
+            .provider_call_ledger
+            .invalidate_continuation_for_submission(
+                client_submission_id.clone(),
+                i64::try_from(current_unix_millis_value()).unwrap_or(i64::MAX),
+            );
+    }
+    if let Some((expected_generation, expected_ledger_revision)) =
+        submission_mode.continuation_expectation()
+    {
+        let blockers = {
+            let guard = state
+                .lock()
+                .map_err(|error| format!("failed to lock service state: {error}"))?;
+            let retained_workspace = guard
+                .workspace_snapshot
+                .as_ref()
+                .ok_or_else(|| String::from("ERR_WORKSPACE_SNAPSHOT_NOT_READY"))?;
+            session_continuation_runtime_blockers(&guard, retained_workspace, session_id)?
+        };
+        let run_phase = workspace_snapshot
+            .session_run_phases
+            .get(&session_id)
+            .copied()
+            .unwrap_or(SessionRunPhase::Idle);
+        let runtime_state = workspace_snapshot
+            .session_runtime_state
+            .get_mut(&session_id)
+            .ok_or_else(|| String::from("ERR_CONVERSATION_CONTINUE_RUNTIME_STATE_MISSING"))?;
+        resolve_session_continuation_eligibility(
+            runtime_state,
+            run_phase,
+            blockers,
+            Some((expected_generation, expected_ledger_revision)),
+        )
+        .map_err(String::from)?;
+        let claimed_at_ms = i64::try_from(current_unix_millis_value())
+            .map_err(|_| String::from("ERR_CONVERSATION_CONTINUE_TIMESTAMP_OUT_OF_RANGE"))?;
+        runtime_state.provider_call_ledger.claim_continuation(
+            expected_generation,
+            expected_ledger_revision,
+            client_submission_id.clone(),
+            claimed_at_ms,
+        )?;
+    }
     // session_title borrows the authoritative title through the final activation commit.
     // session_title 借用权威标题直到最终激活提交完成。
     let session_title = materialized_session.session_title.as_str();
@@ -1774,15 +1737,46 @@ pub(super) async fn service_submit_conversation_prompt(
             current_unix_millis_value().saturating_sub(submit_total_started_at)
         ),
     );
-    // Acceptance persistence is scheduled from the bounded new-session slice before ACK; it never waits for VMM or Codebase preparation.
-    // 接纳持久化在 ACK 前从有界新会话切片调度；它绝不等待 VMM 或 Codebase 准备。
-    spawn_workspace_session_persist_task(
-        state.clone(),
-        controller_runtime.clone(),
-        workspace_snapshot.clone(),
-        session_id,
-        Some(String::from("submit_acceptance")),
-    );
+    // A continuation claim is a synchronous durable admission boundary; ordinary user submissions retain the bounded asynchronous ACK path.
+    // Continue 领取是同步持久化准入边界；普通用户提交继续使用有界异步 ACK 路径。
+    if submission_mode.is_continuation() {
+        if let Err(persist_error) = persist_workspace_session_update(
+            Some(&state),
+            controller_runtime.clone(),
+            &workspace_snapshot,
+            session_id,
+        )
+        .await
+        {
+            let cleanup_error = mark_webui_prompt_preparation_failed(
+                &app,
+                &state,
+                &controller_runtime,
+                &agent_runtime,
+                session_id,
+                &precheck_start.preparation_turn_id,
+                &persist_error,
+            )
+            .await
+            .err();
+            return Err(cleanup_error.map_or_else(
+                || format!("Continue 领取持久化失败：{persist_error}"),
+                |cleanup_error| {
+                    format!(
+                        "Continue 领取持久化失败：{persist_error}；失败清理也未完成：{cleanup_error}"
+                    )
+                },
+            ));
+        }
+    } else {
+        spawn_workspace_session_persist_task(
+            state.clone(),
+            controller_runtime.clone(),
+            workspace_snapshot.clone(),
+            session_id,
+            Some(String::from("submit_acceptance")),
+        );
+    }
     let revision = current_workbench_revision_from_state(&state)?;
     let acknowledgement_elapsed_ms =
         current_unix_millis_value().saturating_sub(submit_total_started_at);
@@ -1944,7 +1938,9 @@ pub(super) async fn service_submit_conversation_prompt(
                 session_id,
                 &preparation_turn_id,
                 &error,
-            ) {
+            )
+            .await
+            {
                 eprintln!(
                     "[webui-service] accepted submission preparation cleanup failed: {cleanup_error}"
                 );

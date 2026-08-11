@@ -103,7 +103,10 @@ pub(in crate::workspace_store) fn state_document_from_runtime_state(
         .map_err(|error| format!("Invalid canonical conversation record identity: {error}"))?;
     // Serialize only lightweight runtime metadata; canonical conversation history lives in append-only segments.
     // 仅序列化轻量运行时元数据；规范会话历史保存在追加式分段中。
-    let mut runtime_state_value = serde_json::to_value(runtime_state).map_err(to_store_error)?;
+    let mut runtime_state_value = serialize_session_runtime_state_entry(
+        runtime_state,
+        "serialize segmented runtime state failed: ",
+    )?;
     if let Some(runtime_state_object) = runtime_state_value.as_object_mut() {
         runtime_state_object.remove("conversation_state");
     }

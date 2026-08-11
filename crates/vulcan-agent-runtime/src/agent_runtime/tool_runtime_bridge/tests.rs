@@ -436,6 +436,7 @@ impl VulcanProviderAdapter for MockControllerProviderAdapter {
                 config.system_prompt.clone().clone(),
             ),
             prompt: String::from("controller-integration"),
+            prompt_in_history: false,
             history: snapshot.messages.clone(),
             temperature: config.temperature,
             max_turns: config.max_turns,

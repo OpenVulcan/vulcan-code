@@ -44,7 +44,6 @@ pub fn append_user_prompt_record_with_attachments(
     )
     .map_err(|error| format!("Invalid canonical user message identity: {error}"))?;
     draft_runtime_state.ui_state.unread = false;
-    draft_runtime_state.last_safe_provider_request_count = None;
     let record_id = build_session_record_message_id(
         session_id,
         now,

@@ -15,6 +15,88 @@ fn test_vmm_session_memory(session_id: SessionId) -> vulcan_vmm::VmmSessionMemor
         .expect("test VMM session owner should be valid")
 }
 
+/// Records one completed physical context-compaction call in a test runtime state.
+/// 在测试运行态中记录一次已经完成的上下文压缩物理调用。
+///
+/// # Parameters
+/// 参数
+/// `runtime_state` owns the durable call ledger and `execution_id` identifies the compaction execution.
+/// `runtime_state` 持有可靠调用账本，`execution_id` 标识压缩执行。
+///
+/// # Returns
+/// 返回值
+/// Returns no value and panics when the deterministic fixture violates ledger invariants.
+/// 不返回值；当确定性夹具违反账本约束时触发 panic。
+fn record_context_compaction_provider_call(
+    runtime_state: &mut SessionRuntimeStateEntry,
+    execution_id: &str,
+) {
+    let provider_call_id = format!("provider-call-{execution_id}");
+    let identity = vulcan_workbench_model::SessionProviderCallIdentity {
+        logical_request_id: format!("logical-request-{execution_id}"),
+        execution_id: execution_id.to_string(),
+        turn_id: None,
+        attempt_index: 0,
+        retry_number: 0,
+        owner_kind: String::from("context_compaction"),
+        owner_id: String::from("context-compaction"),
+        owner_name_snapshot: String::from("Context Compaction"),
+        operation: String::from("context_compaction"),
+        provider_id: String::from("provider-test"),
+        provider_name_snapshot: String::from("Provider Test"),
+        model_id: String::from("model-test"),
+        model_name_snapshot: String::from("Model Test"),
+        connection_id: String::from("connection-test"),
+        service_entry_id: String::from("public-api"),
+        protocol_profile_id: String::from("openai.responses"),
+        manifest_revision: 1,
+        manifest_generation: 1,
+        binding_source: String::from("system_manifest"),
+        binding_rule: Some(String::from("test-model-rule")),
+        route_revision: String::from("sha256:test-route"),
+        request_profiles: Vec::new(),
+        response_profiles: Vec::new(),
+    };
+    assert!(runtime_state.provider_call_ledger.observe_started(
+        vulcan_workbench_model::SessionProviderCallStarted {
+            provider_call_id: provider_call_id.clone(),
+            identity: identity.clone(),
+            prepared_at_ms: 1_780_000_000_050,
+            request_assembly_fingerprint: Some(String::from("sha256:test-request")),
+            context_generation_id: None,
+            context_start_record_id: None,
+            model_route_fingerprint: Some(String::from("sha256:test-route")),
+            toolset_fingerprint: None,
+            system_prompt_fingerprint: None,
+            request_text_measurement: None,
+            budget_accounting: None,
+        }
+    ));
+    assert!(runtime_state.provider_call_ledger.observe_completed(
+        vulcan_workbench_model::SessionProviderCallCompleted {
+            provider_call_id,
+            identity,
+            status: vulcan_workbench_model::SessionProviderCallStatus::Succeeded,
+            provider_usage_evidence: vulcan_workbench_model::SessionProviderUsageEvidence {
+                availability: vulcan_workbench_model::SessionProviderUsageAvailability::Missing,
+                provider_usage: None,
+            },
+            prepared_at_ms: 1_780_000_000_050,
+            dispatched_at_ms: Some(1_780_000_000_051),
+            first_event_at_ms: Some(1_780_000_000_052),
+            first_token_at_ms: Some(1_780_000_000_053),
+            completed_at_ms: 1_780_000_000_099,
+            dispatch_outcome: Some(String::from("dispatched")),
+            dispatch_outcome_known: Some(true),
+            semantic_output_observed: Some(true),
+            semantic_output_observed_known: Some(true),
+            replay_safe: Some(false),
+            error_category: None,
+            error_code: None,
+        }
+    ));
+}
+
 /// Returns whether text contains CJK characters.
 /// 返回文本是否包含 CJK 字符。
 fn contains_cjk_text(text: &str) -> bool {
@@ -86,6 +168,7 @@ fn webui_context_compaction_draft_prunes_expired_transient_injections_transactio
         .and_then(|group| group.items.values_mut().next())
         .expect("expired transient injection item should exist");
     expired_item.remaining_turns = Some(0);
+    record_context_compaction_provider_call(&mut active_runtime_state, "test-compaction-execution");
     let plan = CompactionPlan {
         source_messages: vec![messages[0].clone()],
         source_until_message_id: Some(String::from("user-1")),
@@ -180,13 +263,17 @@ fn webui_context_compaction_draft_keeps_status_markers_unanchored() {
         SessionMessageEntry::new(SessionMessageKind::User, "用户", "压缩后继续提问")
             .with_runtime_metadata("user-after", "1780000000003"),
     ];
-    let active_runtime_state = SessionRuntimeStateEntry {
+    let mut active_runtime_state = SessionRuntimeStateEntry {
         conversation_state: conversation_state_from_session_messages(&messages)
             .expect("valid replayed conversation identities"),
         live_context_budget_fingerprint: Some(String::from("budget-live")),
         live_context_assembly_fingerprint: Some(String::from("assembly-live")),
         ..SessionRuntimeStateEntry::default()
     };
+    record_context_compaction_provider_call(
+        &mut active_runtime_state,
+        "test-compaction-unanchored-execution",
+    );
     let plan = CompactionPlan {
         source_messages: vec![messages[0].clone()],
         source_until_message_id: Some(String::from("user-before")),
@@ -279,6 +366,10 @@ fn webui_context_compaction_draft_separates_manual_stats_and_auto_continuation()
         live_context_assembly_fingerprint: Some(String::from("assembly-live")),
         ..SessionRuntimeStateEntry::default()
     };
+    record_context_compaction_provider_call(
+        &mut active_runtime_state,
+        "test-compaction-manual-auto-execution",
+    );
     // active_vmm_session_memory models the committed controller state before either draft.
     // active_vmm_session_memory 模拟两个候选构建前已经提交的控制器状态。
     let mut active_vmm_session_memory = test_vmm_session_memory(session_id);

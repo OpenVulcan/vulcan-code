@@ -10,11 +10,12 @@ use crate::agent_runtime::provider_transport::build_provider_transport_execution
 use crate::agent_runtime::provider_transport_request::{
     ProviderRouteIdentity, ProviderTransportTurnStartMode,
 };
-use crate::agent_runtime::provider_transport_request_budget::ProviderRequestBudgetGuard;
+use crate::agent_runtime::provider_transport_request_budget::{
+    ProviderRequestBudgetGuard, ProviderUsageBudgetBaselineHandle,
+};
 use crate::agent_runtime::provider_transport_retry::ProviderRetryPolicy;
 use crate::agent_runtime::runtime_stream_intervention::RuntimePromptIntervention;
 use crate::agent_runtime::task_runtime::TaskRuntime;
-use crate::agent_runtime::token_budget_runtime::TokenBudgetRuntime;
 use crate::provider_config::ProviderConfigurationFile;
 use async_stream::stream;
 use futures_util::StreamExt;
@@ -147,10 +148,10 @@ pub(crate) fn execute_provider_prompt_stream(
     turn_start_mode: ProviderTransportTurnStartMode,
     core_snapshot: CoreConversationSnapshot,
     task_runtime: Arc<TaskRuntime>,
-    token_budget_runtime: Arc<TokenBudgetRuntime>,
     tools_manager: VulcanToolsManager,
     resolved_tools: Vec<ResolvedToolDefinition>,
     public_ai_runtime: Option<Arc<vulcan_provider_adapters::PublicAiRuntime>>,
+    provider_usage_budget_baseline: ProviderUsageBudgetBaselineHandle,
     prompt_intervention: Option<RuntimePromptIntervention>,
 ) -> ProviderDeltaStream {
     execute_provider_prompt_stream_with_capture_mode(
@@ -162,10 +163,10 @@ pub(crate) fn execute_provider_prompt_stream(
         turn_start_mode,
         core_snapshot,
         task_runtime,
-        token_budget_runtime,
         tools_manager,
         resolved_tools,
         public_ai_runtime,
+        Some(provider_usage_budget_baseline),
         false,
         prompt_intervention,
     )
@@ -182,7 +183,6 @@ pub(crate) fn execute_provider_prompt_capture_stream(
     turn_start_mode: ProviderTransportTurnStartMode,
     core_snapshot: CoreConversationSnapshot,
     task_runtime: Arc<TaskRuntime>,
-    token_budget_runtime: Arc<TokenBudgetRuntime>,
     tools_manager: VulcanToolsManager,
     resolved_tools: Vec<ResolvedToolDefinition>,
     public_ai_runtime: Option<Arc<vulcan_provider_adapters::PublicAiRuntime>>,
@@ -196,10 +196,10 @@ pub(crate) fn execute_provider_prompt_capture_stream(
         turn_start_mode,
         core_snapshot,
         task_runtime,
-        token_budget_runtime,
         tools_manager,
         resolved_tools,
         public_ai_runtime,
+        None,
         true,
         None,
     )
@@ -285,10 +285,10 @@ fn execute_provider_prompt_stream_with_capture_mode(
     turn_start_mode: ProviderTransportTurnStartMode,
     core_snapshot: CoreConversationSnapshot,
     task_runtime: Arc<TaskRuntime>,
-    token_budget_runtime: Arc<TokenBudgetRuntime>,
     tools_manager: VulcanToolsManager,
     resolved_tools: Vec<ResolvedToolDefinition>,
     public_ai_runtime: Option<Arc<vulcan_provider_adapters::PublicAiRuntime>>,
+    provider_usage_budget_baseline: Option<ProviderUsageBudgetBaselineHandle>,
     capture_only: bool,
     prompt_intervention: Option<RuntimePromptIntervention>,
 ) -> ProviderDeltaStream {
@@ -309,18 +309,31 @@ fn execute_provider_prompt_stream_with_capture_mode(
     // maxTurns 保持无限，因此只有模型返回无工具调用的响应才会结束 Provider 循环。
     let max_turns = resolve_runtime_default_max_turns_limit(active_agent);
     let model_id = preparation.model_blueprint.model_id.as_str();
-    let request_budget_guard = (!capture_only).then(|| {
-        ProviderRequestBudgetGuard::new(
+    let request_budget_guard = if capture_only {
+        None
+    } else {
+        let Some(provider_usage_budget_baseline) = provider_usage_budget_baseline else {
+            return one_shot_provider_error_stream(
+                "The Provider Usage budget baseline handle is missing.",
+            );
+        };
+        Some(ProviderRequestBudgetGuard::with_shared_baseline(
             preparation.model_blueprint.provider_id.clone(),
             preparation.model_blueprint.model_id.clone(),
             preparation.model_blueprint.protocol_profile_id.clone(),
+            preparation.model_blueprint.route_revision.clone(),
             preparation.model_blueprint.public_capabilities.clone(),
             preparation.model_blueprint.reasoning.clone(),
             preparation.context_compaction_policy,
             preparation.context_budget_override,
-            token_budget_runtime,
-        )
-    });
+            preparation
+                .context_budget
+                .as_ref()
+                .and_then(|budget| budget.auto_compact_prefill_input_tokens),
+            preparation.provider_usage_context_generation_id.clone(),
+            provider_usage_budget_baseline,
+        ))
+    };
     let retry_policy = if capture_only {
         ProviderRetryPolicy::disabled()
     } else {

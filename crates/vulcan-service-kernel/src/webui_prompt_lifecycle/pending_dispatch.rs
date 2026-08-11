@@ -34,7 +34,7 @@ pub(crate) async fn service_insert_pending_prompt(
     state: SharedServiceBridgeState,
     entry_id: String,
 ) -> Result<bool, String> {
-    let (controller_runtime, agent_runtime, _, _, _, _) = runtime_parts_from_state(&state)?;
+    let (controller_runtime, agent_runtime, _, _, _) = runtime_parts_from_state(&state)?;
     let selected_session_id = selected_session_id_from_state(&state)?;
     let mut workspace_snapshot =
         current_workspace_snapshot_from_state(&state)?.ok_or_else(|| {

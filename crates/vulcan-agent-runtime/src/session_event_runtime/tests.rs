@@ -552,10 +552,10 @@ fn terminal_report_preserves_streamed_records() {
     assert!(canonical_texts.contains(&"报告中的完整输出不应覆盖已流式记录。"));
 }
 
-/// Verifies terminal reports attach provider usage when they append the protocol assistant message.
-/// 验证终态报告追加协议助手消息时会携带 Provider 用量。
+/// Verifies terminal reports keep new assistant messages free of duplicated Provider usage.
+/// 验证终态报告不会向新助手消息重复写入 Provider 用量。
 #[test]
-fn terminal_report_attaches_usage_to_appended_assistant_message() {
+fn terminal_report_keeps_appended_assistant_usage_in_the_ledger_only() {
     let session_id = test_session_id();
     let mut runtime_state = SessionRuntimeStateEntry::default();
     append_user_prompt_record(&mut runtime_state, session_id, "2100", "只输出 abc")
@@ -577,13 +577,8 @@ fn terminal_report_attaches_usage_to_appended_assistant_message() {
             | SessionConversationPayload::UserText { .. }
             | SessionConversationPayload::ToolResult { .. }
             | SessionConversationPayload::AgentMessage { .. } => None,
-        })
-        .expect("terminal assistant message should carry usage");
-    assert_eq!(assistant_usage.input_tokens, Some(31));
-    assert_eq!(assistant_usage.output_tokens, Some(2));
-    assert_eq!(assistant_usage.reasoning_tokens, Some(1));
-    assert_eq!(assistant_usage.total_tokens, Some(34));
-    assert_eq!(assistant_usage.cached_input_tokens, Some(7));
+        });
+    assert!(assistant_usage.is_none());
 
     let turn_stats = latest_turn_stats(&runtime_state);
     assert_eq!(turn_stats.provider_call_count, 1);
@@ -594,10 +589,10 @@ fn terminal_report_attaches_usage_to_appended_assistant_message() {
     assert_eq!(turn_stats.cached_input_tokens, Some(7));
 }
 
-/// Verifies child-agent usage embedded in a parent terminal report stays display-separated.
-/// 验证父级终态报告内嵌的智能体用量会保持显示分离。
+/// Verifies child-agent usage is included once in totals and remains display-separated.
+/// 验证子代理用量只汇入总计一次并保持独立展示分组。
 #[test]
-fn terminal_report_keeps_embedded_subagent_usage_out_of_parent_totals() {
+fn terminal_report_includes_embedded_subagent_usage_once_in_parent_totals() {
     let session_id = test_session_id();
     let mut runtime_state = SessionRuntimeStateEntry::default();
     append_user_prompt_record(&mut runtime_state, session_id, "2150", "创建智能体")
@@ -610,7 +605,9 @@ fn terminal_report_keeps_embedded_subagent_usage_out_of_parent_totals() {
             trigger: Some(String::from("worker-a")),
             execution_profile: None,
             provider_id: Some(String::from("deepseek")),
+            provider_name_snapshot: Some(String::from("DeepSeek")),
             model_id: Some(String::from("deepseek-v4-pro")),
+            model_name_snapshot: Some(String::from("DeepSeek V4 Pro")),
             provider_call_count: 1,
             tool_call_count: 0,
             input_tokens: 100,
@@ -625,12 +622,12 @@ fn terminal_report_keeps_embedded_subagent_usage_out_of_parent_totals() {
         .expect("valid terminal report identities");
 
     let turn_stats = latest_turn_stats(&runtime_state);
-    assert_eq!(turn_stats.provider_call_count, 1);
-    assert_eq!(turn_stats.input_tokens, 31);
-    assert_eq!(turn_stats.output_tokens, 2);
-    assert_eq!(turn_stats.reasoning_tokens, 1);
-    assert_eq!(turn_stats.total_tokens, 34);
-    assert_eq!(turn_stats.cached_input_tokens, Some(7));
+    assert_eq!(turn_stats.provider_call_count, 2);
+    assert_eq!(turn_stats.input_tokens, 131);
+    assert_eq!(turn_stats.output_tokens, 27);
+    assert_eq!(turn_stats.reasoning_tokens, 6);
+    assert_eq!(turn_stats.total_tokens, 164);
+    assert_eq!(turn_stats.cached_input_tokens, Some(47));
     assert_eq!(turn_stats.usage_segments.len(), 2);
     let subagent_group = turn_stats
         .usage_groups
@@ -645,10 +642,10 @@ fn terminal_report_keeps_embedded_subagent_usage_out_of_parent_totals() {
     assert_eq!(subagent_group.cached_input_tokens, Some(40));
 }
 
-/// Verifies terminal reports fill missing usage on an existing terminal protocol message.
-/// 验证终态报告会为已有终态协议消息补齐缺失用量。
+/// Verifies terminal reports leave existing assistant usage empty while materializing Turn Stats.
+/// 验证终态报告在物化 Turn Stats 时仍保持已有助手消息用量为空。
 #[test]
-fn terminal_report_attaches_usage_to_existing_assistant_message() {
+fn terminal_report_keeps_existing_assistant_usage_in_the_ledger_only() {
     let session_id = test_session_id();
     let mut runtime_state = SessionRuntimeStateEntry::default();
     append_user_prompt_record(&mut runtime_state, session_id, "2200", "只输出 xyz")
@@ -687,12 +684,7 @@ fn terminal_report_attaches_usage_to_existing_assistant_message() {
         })
         .collect::<Vec<_>>();
     assert_eq!(assistant_messages.len(), 1);
-    let usage = assistant_messages[0]
-        .as_ref()
-        .expect("existing assistant message should receive usage");
-    assert_eq!(usage.input_tokens, Some(13));
-    assert_eq!(usage.output_tokens, Some(5));
-    assert_eq!(usage.total_tokens, Some(18));
+    assert!(assistant_messages[0].is_none());
 
     let turn_stats = latest_turn_stats(&runtime_state);
     assert_eq!(turn_stats.provider_call_count, 1);
@@ -883,7 +875,7 @@ fn terminal_report_backfills_usage_when_checkpoint_messages_lack_usage() {
         turn_stats.usage_segments[0].kind,
         SessionTurnUsageSegmentKind::AssistantResponse
     );
-    assert_eq!(turn_stats.usage_segments[0].provider_call_count, 0);
+    assert_eq!(turn_stats.usage_segments[0].provider_call_count, 1);
 }
 
 /// Verifies multi-call terminal reports use cumulative usage when checkpoint messages lost per-call usage.
@@ -1101,8 +1093,7 @@ fn tool_request_projection_preserves_one_card_through_execution() {
         "tool_name": "submit_plan",
         "tool_display_state": "receiving",
         "received_bytes": 9,
-        "estimated_tokens": 3,
-        "token_precision": "heuristic",
+        "received_characters": 9,
         "request_revision": 1,
     })));
     assert!(
@@ -1131,8 +1122,7 @@ fn tool_request_projection_preserves_one_card_through_execution() {
         "tool_name": "submit_plan",
         "tool_display_state": "receiving",
         "received_bytes": 64,
-        "estimated_tokens": 18,
-        "token_precision": "model",
+        "received_characters": 52,
         "request_revision": 2,
     })));
     assert!(append_runtime_event_projection_to_state(
@@ -1167,8 +1157,7 @@ fn tool_request_projection_preserves_one_card_through_execution() {
         "tool_name": "submit_plan",
         "tool_display_state": "ready",
         "received_bytes": 96,
-        "estimated_tokens": 27,
-        "token_precision": "model",
+        "received_characters": 80,
         "request_revision": 3,
     })));
     assert!(
@@ -1188,7 +1177,7 @@ fn tool_request_projection_preserves_one_card_through_execution() {
             .tool_call_record_ids
             .contains_key("pending-stream-1")
     );
-    let final_token_progress = RuntimeEvent::new(
+    let final_ready_progress = RuntimeEvent::new(
         RuntimeEventKind::ToolRequestProgress,
         "工具请求 · call-canonical-1 · submit_plan",
         String::new(),
@@ -1199,8 +1188,7 @@ fn tool_request_projection_preserves_one_card_through_execution() {
         "tool_name": "submit_plan",
         "tool_display_state": "ready",
         "received_bytes": 96,
-        "estimated_tokens": 31,
-        "token_precision": "model",
+        "received_characters": 80,
         "request_revision": 4,
     })));
     assert!(
@@ -1208,9 +1196,9 @@ fn tool_request_projection_preserves_one_card_through_execution() {
             &mut runtime_state,
             session_id,
             "3054",
-            &final_token_progress,
+            &final_ready_progress,
         )
-        .expect("final ready-state token progress should update the same card")
+        .expect("final ready-state byte/character progress should update the same card")
     );
 
     let started = RuntimeEvent::new(
@@ -1896,7 +1884,6 @@ fn user_prompt_append_is_atomic_on_duplicate_message_identity() {
     append_user_prompt_record(&mut runtime_state, session_id, "5000", "first")
         .expect("first prompt identity should be valid");
     runtime_state.ui_state.unread = true;
-    runtime_state.last_safe_provider_request_count = Some(7);
     runtime_state.updated_at = String::from("before-duplicate");
     // original_state captures the complete runtime transaction boundary before failure.
     // original_state 捕获失败前的完整运行态事务边界。

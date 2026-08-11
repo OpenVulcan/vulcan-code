@@ -39,8 +39,10 @@ pub(super) fn load_segmented_runtime_state(
             &state_document.runtime_state,
             &session_id.to_string(),
         )?;
-        serde_json::from_value::<SessionRuntimeStateEntry>(state_document.runtime_state)
-            .map_err(|error| format!("解析分段会话状态文件失败：{error}"))?
+        deserialize_session_runtime_state_entry(
+            state_document.runtime_state,
+            "解析分段会话状态文件失败：",
+        )?
     } else {
         SessionRuntimeStateEntry::default()
     };
@@ -69,7 +71,12 @@ pub(super) fn load_segmented_runtime_state(
     }
     validate_session_conversation_record_identities(&runtime_state.conversation_state.records)
         .map_err(|error| format!("Invalid canonical conversation record identity: {error}"))?;
-    let _ = sanitize_loaded_runtime_state_for_fresh_process(&mut runtime_state);
+    if sanitize_loaded_runtime_state_for_fresh_process(&mut runtime_state)? {
+        runtime_state.updated_at = current_unix_millis_text();
+        let migrated_state =
+            state_document_from_runtime_state(&session_id.to_string(), &runtime_state)?;
+        write_state(&session_dir, &migrated_state)?;
+    }
     Ok(Some(runtime_state))
 }
 

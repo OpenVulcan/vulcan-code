@@ -20,10 +20,8 @@ use crate::agent_runtime::provider_visible_agent_messages::append_provider_visib
 use crate::context_budget::{
     RequestContextCompactionBudgetSnapshotInput, build_request_context_compaction_budget_snapshot,
 };
-use crate::provider_usage::latest_provider_usage_from_conversation_state;
 use vulcan_context::{
-    ContextBaseline, ContextTokenEstimator, RuntimeProviderLoweringRepairEvent,
-    build_provider_request_context_assembly,
+    ContextBaseline, RuntimeProviderLoweringRepairEvent, build_provider_request_context_assembly,
 };
 use vulcan_core::controller::VulcanCoreController;
 use vulcan_core::types::{
@@ -209,7 +207,6 @@ pub(crate) async fn seed_runtime_request_snapshot(
     system_preamble: &str,
     prompt_layers: CoreProviderPromptLayers,
     resolved_tool_definitions: &[ResolvedToolDefinition],
-    token_estimator: Option<&dyn ContextTokenEstimator>,
     runtime_max_turns: Option<usize>,
     warnings: &mut Vec<String>,
 ) {
@@ -237,8 +234,6 @@ pub(crate) async fn seed_runtime_request_snapshot(
                 ),
             );
             let budget_started_at = after_precheck_unix_millis();
-            let observed_usage =
-                latest_provider_usage_from_conversation_state(&request.conversation_state);
             preparation.context_budget = Some(build_request_context_compaction_budget_snapshot(
                 RequestContextCompactionBudgetSnapshotInput {
                     provider_id: &preparation.model_blueprint.provider_id,
@@ -249,9 +244,15 @@ pub(crate) async fn seed_runtime_request_snapshot(
                     request_snapshot: &request_snapshot,
                     compaction_policy: preparation.context_compaction_policy,
                     context_budget_override: preparation.context_budget_override,
-                    observed_usage: observed_usage.as_ref(),
+                    observed_usage: None,
+                    accounted_input_tokens: None,
+                    accounting_source:
+                        crate::context_budget::ContextBudgetAccountingSource::CharacterEstimate,
+                    accounting_warning_code: Some(
+                        "provider_usage_baseline_pending_request_assembly",
+                    ),
+                    provider_anchor_call_id: None,
                     prefill_input_tokens: request.context_window_prefill_input_tokens,
-                    estimator: token_estimator,
                 },
             ));
             after_precheck_trace(

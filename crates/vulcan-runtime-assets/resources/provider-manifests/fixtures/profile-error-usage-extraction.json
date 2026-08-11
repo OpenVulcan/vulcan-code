@@ -1,0 +1,61 @@
+{
+  "schema_version": "provider-manifest-profile-fixture.v1",
+  "fixture_id": "profile-error-usage-extraction",
+  "base_manifest": "deepseek.json",
+  "fixture_kind": "usage",
+  "declaration": {
+    "profile_id": "fixture.error-usage.v1",
+    "description": "Executable failed-response usage extraction fixture",
+    "payload": {
+      "profile_id": "fixture.error-usage.v1",
+      "revision": 1,
+      "record_kind": "error_json_body",
+      "update_kind": "final",
+      "required_pointer": "/error/usage",
+      "bindings": [
+        {
+          "field": "input_tokens",
+          "pointers": [
+            "/error/usage/input_tokens"
+          ],
+          "encoding": "unsigned_integer"
+        },
+        {
+          "field": "output_tokens",
+          "pointers": [
+            "/error/usage/output_tokens"
+          ],
+          "encoding": "unsigned_integer"
+        },
+        {
+          "field": "total_tokens",
+          "pointers": [
+            "/error/usage/total_tokens"
+          ],
+          "encoding": "unsigned_integer"
+        }
+      ],
+      "derivations": []
+    }
+  },
+  "profile_id": "fixture.error-usage.v1",
+  "input": {
+    "error": {
+      "code": "request_aborted_after_billing",
+      "message": "The request failed after upstream processing.",
+      "usage": {
+        "input_tokens": 21,
+        "output_tokens": 3,
+        "total_tokens": 24
+      }
+    }
+  },
+  "record_kind": "error_json_body",
+  "expectations": {
+    "/usage/input_tokens/value": 21,
+    "/usage/output_tokens/value": 3,
+    "/usage/total_tokens/value": 24,
+    "/usage/update_kind": "final",
+    "/source_paths/input_tokens": "/error/usage/input_tokens"
+  }
+}

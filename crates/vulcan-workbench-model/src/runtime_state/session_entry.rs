@@ -282,22 +282,24 @@ pub struct SessionRuntimeStateEntry {
     pub tool_request_record_ids: BTreeMap<String, String>,
     /// Latest provider usage snapshot retained for budget calibration across turns.
     /// 为跨轮预算校准保留的最近一次 Provider 用量快照。
+    #[serde(default, skip_serializing)]
     pub last_provider_usage: Option<ProviderUsageSnapshot>,
     /// Latest successful provider usage snapshot captured from the final real provider turn.
     /// 从最终真实 Provider 回合中捕获到的最近一次成功用量快照。
+    #[serde(default, skip_serializing)]
     pub last_successful_provider_usage: Option<ProviderUsageSnapshot>,
-    /// Live physical Provider request accounting synchronized at every request boundary.
-    /// 在每个请求边界同步的实时物理 Provider 请求统计。
-    #[serde(default, skip_serializing_if = "SessionProviderUsageState::is_empty")]
-    pub provider_usage: SessionProviderUsageState,
+    /// Authoritative versioned ledger of every physical Provider call in this session.
+    /// 当前会话中每次物理 Provider 调用的权威版本化账本。
+    #[serde(
+        default,
+        alias = "provider_usage",
+        skip_serializing_if = "SessionProviderCallLedger::is_empty"
+    )]
+    pub provider_call_ledger: SessionProviderCallLedger,
     /// Absolute input-token baseline for the current BodyAfterPrefix compaction window.
     /// 当前 BodyAfterPrefix 压缩窗口使用的绝对输入 Token 基线。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_compact_prefill_input_tokens: Option<usize>,
-    /// Provider request count captured at the latest safe runtime checkpoint.
-    /// 最近一次安全运行时检查点捕获到的 Provider 请求次数。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_safe_provider_request_count: Option<usize>,
     /// Active precheck turn id that is allowed to continue into the provider request.
     /// 当前允许继续进入 Provider 请求的活跃 precheck 回合标识。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -309,6 +311,34 @@ pub struct SessionRuntimeStateEntry {
     /// Unix-millis text capturing when the runtime state was last refreshed.
     /// 捕获运行时状态最近刷新时间的 Unix 毫秒文本。
     pub updated_at: String,
+}
+
+impl SessionRuntimeStateEntry {
+    /// Moves deprecated top-level Provider usage summaries into the ledger's audit-only import.
+    /// 将已废弃的顶层 Provider 用量摘要迁入账本的仅审计导入区。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns whether legacy fields were consumed, or a precise migration conflict.
+    /// 返回是否消费了旧字段，或精确的迁移冲突。
+    pub fn migrate_legacy_provider_usage_summaries(&mut self) -> Result<bool, String> {
+        let last_usage = self.last_provider_usage.take();
+        let last_successful_usage = self.last_successful_provider_usage.take();
+        let had_legacy_summary = last_usage.is_some() || last_successful_usage.is_some();
+        match self
+            .provider_call_ledger
+            .import_legacy_runtime_usage_summaries(
+                last_usage.clone(),
+                last_successful_usage.clone(),
+            ) {
+            Ok(_) => Ok(had_legacy_summary),
+            Err(error) => {
+                self.last_provider_usage = last_usage;
+                self.last_successful_provider_usage = last_successful_usage;
+                Err(error)
+            }
+        }
+    }
 }
 
 /// Identifies one exact provider tool target selected for a session.

@@ -59,7 +59,7 @@ pub(super) async fn service_get_command_session_snapshot(
     command_session_id: String,
     owner_session_id: Option<String>,
 ) -> Result<CommandSessionSummary, String> {
-    let (_, agent_runtime, _, _, _, _) = runtime_parts_from_state(&state)?;
+    let (_, agent_runtime, _, _, _) = runtime_parts_from_state(&state)?;
     let command_session_id = parse_service_command_session_id(command_session_id)?;
     let snapshot = agent_runtime
         .command_session_runtime
@@ -155,7 +155,7 @@ fn load_service_command_session_action_context(
     command_session_id: String,
     owner_session_id: Option<String>,
 ) -> Result<CommandSessionActionContext, String> {
-    let (controller_runtime, agent_runtime, _, _, _, _) = runtime_parts_from_state(state)?;
+    let (controller_runtime, agent_runtime, _, _, _) = runtime_parts_from_state(state)?;
     let (command_session_id, owner_session_id) =
         resolve_service_command_session_ids(&agent_runtime, command_session_id, owner_session_id)?;
     Ok(CommandSessionActionContext {
@@ -333,7 +333,7 @@ pub(crate) fn emit_live_command_sessions_changed_delta(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
 ) -> Result<Vec<CommandSessionSummary>, String> {
-    let (controller_runtime, agent_runtime, _, _, _, _) = runtime_parts_from_state(state)?;
+    let (controller_runtime, agent_runtime, _, _, _) = runtime_parts_from_state(state)?;
     emit_command_sessions_changed_delta(app, state, &controller_runtime, &agent_runtime)
 }
 

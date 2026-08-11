@@ -197,7 +197,6 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
             Arc::clone(&agent_runtime.task_runtime),
             Arc::clone(&agent_runtime.question_runtime),
             Arc::clone(&agent_runtime.command_session_runtime),
-            Arc::clone(&agent_runtime.token_budget_runtime),
             Some(Arc::clone(&agent_runtime.public_ai_runtime)),
             request.clone(),
             Some(prompt_intervention),
@@ -298,83 +297,40 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                     }
                 }
                 ExecutionStreamEvent::ProviderRequestTelemetry(event) => {
-                    match event.kind {
-                        ProviderRequestTelemetryEventKind::Started => {
-                            active_provider_goal_id = match session_goal_id_for_provider_request(
-                                &task_state,
-                                event.session_id,
-                                execution_provider_goal_id.as_deref(),
-                            ) {
-                                Ok(goal_id) => {
-                                    if let Some(goal_id) = goal_id.as_ref() {
-                                        execution_provider_goal_id = Some(goal_id.clone());
-                                        // The retained task binding lets an immediate user stop pause a Goal created during this execution.
-                                        // 保留任务绑定使用户立即停止时也能暂停当前执行期间创建的目标。
-                                        match task_state.lock() {
-                                            Ok(mut guard) => {
-                                                let _ = bind_active_stream_task_goal_if_id(
-                                                    &mut guard,
-                                                    event.session_id,
-                                                    active_stream_task_id,
-                                                    goal_id.clone(),
-                                                );
-                                            }
-                                            Err(error) => {
-                                                eprintln!(
-                                                    "[webui-service] provider request goal task binding failed: {error}"
-                                                );
-                                            }
-                                        }
-                                    }
-                                    goal_id
-                                }
-                                Err(error) => {
-                                    eprintln!(
-                                        "[webui-service] provider request goal binding failed: {error}"
-                                    );
-                                    None
-                                }
-                            };
-                        }
-                        ProviderRequestTelemetryEventKind::Completed => {
-                            // completedGoalId is consumed exactly once with the physical request terminal event.
-                            // completedGoalId 随物理请求终态事件恰好消费一次。
-                            let completed_goal_id = active_provider_goal_id.take();
-                            if let (Some(goal_id), Some(usage)) =
-                                (completed_goal_id.as_deref(), event.completed_usage.as_ref())
-                            {
-                                match account_session_goal_provider_usage(
-                                    &task_state,
-                                    &controller_runtime,
-                                    event.session_id,
-                                    goal_id,
-                                    usage,
-                                )
-                                .await
-                                {
-                                    Ok(true) => {}
-                                    Ok(false) => {}
-                                    Err(error) => {
-                                        eprintln!(
-                                            "[webui-service] provider goal usage accounting failed: {error}"
-                                        );
-                                    }
-                                }
-                            }
-                        }
-                        ProviderRequestTelemetryEventKind::FirstToken
-                        | ProviderRequestTelemetryEventKind::Retrying => {}
-                    }
-                    if let Err(error) = process_provider_request_telemetry_event(
+                    if let Err(error) = handle_stream_provider_request_telemetry(
                         &task_state,
                         &controller_runtime,
-                        Some(&app),
+                        &app,
                         &mut provider_telemetry_guard,
                         event,
-                        "provider_usage_telemetry",
-                    ) {
+                        &mut active_provider_goal_id,
+                        &mut execution_provider_goal_id,
+                        active_stream_task_id,
+                        None,
+                    )
+                    .await
+                    {
                         eprintln!(
                             "[webui-service] provider usage telemetry state update failed: {error}"
+                        );
+                    }
+                }
+                ExecutionStreamEvent::ProviderRequestDurabilityBoundary { event, completion } => {
+                    if let Err(error) = handle_stream_provider_request_telemetry(
+                        &task_state,
+                        &controller_runtime,
+                        &app,
+                        &mut provider_telemetry_guard,
+                        event,
+                        &mut active_provider_goal_id,
+                        &mut execution_provider_goal_id,
+                        active_stream_task_id,
+                        Some(completion),
+                    )
+                    .await
+                    {
+                        eprintln!(
+                            "[webui-service] durable provider usage boundary failed: {error}"
                         );
                     }
                 }
@@ -471,7 +427,7 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                     session_id,
                     conversation_state,
                     last_successful_provider_usage,
-                    provider_request_count,
+                    ..
                 } => handle_conversation_checkpoint_stream_event(
                     &app,
                     &task_state,
@@ -479,7 +435,6 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                     session_id,
                     conversation_state,
                     last_successful_provider_usage,
-                    provider_request_count,
                 ),
                 ExecutionStreamEvent::ContextCompactionRequired {
                     session_id,
@@ -625,6 +580,7 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                 event,
                 "provider_usage_cancelled",
             )
+            .await
         {
             eprintln!("[webui-service] provider cancellation usage state update failed: {error}");
         }
@@ -675,6 +631,103 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
             ),
         }
     }
+}
+
+/// Applies one physical Provider telemetry event and releases its optional durable barrier.
+/// 应用一条物理 Provider 遥测事件并释放其可选可靠屏障。
+///
+/// # Parameters
+/// 参数
+/// The arguments retain exact session Goal ownership, telemetry order, and durable completion state.
+/// 参数保留精确的会话目标归属、遥测顺序与可靠完成状态。
+///
+/// # Returns
+/// 返回值
+/// Success only when authoritative session accounting and persistence succeed.
+/// 仅在权威会话记账与持久化成功时返回成功。
+#[allow(clippy::too_many_arguments)]
+async fn handle_stream_provider_request_telemetry(
+    state: &SharedServiceBridgeState,
+    controller_runtime: &ControllerRuntimeHandle,
+    app: &ServiceEventEmitter,
+    provider_telemetry_guard: &mut ProviderTelemetryHookGuard,
+    event: ProviderRequestTelemetryEvent,
+    active_provider_goal_id: &mut Option<String>,
+    execution_provider_goal_id: &mut Option<String>,
+    active_stream_task_id: Uuid,
+    completion: Option<ProviderRequestDurabilityCompletion>,
+) -> Result<(), String> {
+    match event.kind {
+        ProviderRequestTelemetryEventKind::Started => {
+            *active_provider_goal_id = match session_goal_id_for_provider_request(
+                state,
+                event.session_id,
+                execution_provider_goal_id.as_deref(),
+            ) {
+                Ok(goal_id) => {
+                    if let Some(goal_id) = goal_id.as_ref() {
+                        *execution_provider_goal_id = Some(goal_id.clone());
+                        // The retained task binding lets an immediate user stop pause a Goal created during this execution.
+                        // 保留任务绑定使用户立即停止时也能暂停当前执行期间创建的目标。
+                        match state.lock() {
+                            Ok(mut guard) => {
+                                let _ = bind_active_stream_task_goal_if_id(
+                                    &mut guard,
+                                    event.session_id,
+                                    active_stream_task_id,
+                                    goal_id.clone(),
+                                );
+                            }
+                            Err(error) => {
+                                eprintln!(
+                                    "[webui-service] provider request goal task binding failed: {error}"
+                                );
+                            }
+                        }
+                    }
+                    goal_id
+                }
+                Err(error) => {
+                    eprintln!("[webui-service] provider request goal binding failed: {error}");
+                    None
+                }
+            };
+        }
+        ProviderRequestTelemetryEventKind::Completed => {
+            // completedGoalId is consumed exactly once with the physical request terminal event.
+            // completedGoalId 随物理请求终态事件恰好消费一次。
+            let completed_goal_id = active_provider_goal_id.take();
+            if let (Some(goal_id), Some(usage)) =
+                (completed_goal_id.as_deref(), event.completed_usage.as_ref())
+                && let Err(error) = account_session_goal_provider_usage(
+                    state,
+                    controller_runtime,
+                    event.session_id,
+                    goal_id,
+                    usage,
+                )
+                .await
+            {
+                eprintln!("[webui-service] provider goal usage accounting failed: {error}");
+            }
+        }
+        ProviderRequestTelemetryEventKind::Dispatched
+        | ProviderRequestTelemetryEventKind::FirstToken
+        | ProviderRequestTelemetryEventKind::Retrying => {}
+    }
+    let result = process_provider_request_telemetry_event(
+        state,
+        controller_runtime,
+        Some(app),
+        provider_telemetry_guard,
+        event,
+        "provider_usage_telemetry",
+    )
+    .await;
+    if let Some(completion) = completion {
+        let _ = completion.complete(result.clone());
+    }
+    result
 }
 
 /// Resolves the non-widening knowledge access snapshot for one provider turn.

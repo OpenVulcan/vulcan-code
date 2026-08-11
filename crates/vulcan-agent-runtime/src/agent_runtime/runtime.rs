@@ -9,7 +9,6 @@ use crate::agent_runtime::config::{
 };
 use crate::agent_runtime::question_runtime::QuestionRuntime;
 use crate::agent_runtime::task_runtime::TaskRuntime;
-use crate::agent_runtime::token_budget_runtime::TokenBudgetRuntime;
 use crate::luaskills_runtime::{
     LuaSkillsRuntimeHandle, list_luaskills_tool_entries, luaskills_entry_args_schema,
     render_luaskills_entry_help_summary,
@@ -77,9 +76,6 @@ pub struct RuntimeFoundationSummary {
     /// Build warnings accumulated while materialising the foundation.
     /// 在构建基础架构时累计的警告集合。
     pub warnings: Vec<String>,
-    /// Token budget runtime initialization status.
-    /// Token 预算运行时初始化状态。
-    pub token_budget_status: String,
 }
 
 /// In-memory host runtime foundation built from the shared Vulcan configuration file.
@@ -124,9 +120,6 @@ pub struct RuntimeFoundation {
     /// Shared command-session runtime reused across turns so long-lived shell sessions can survive execution refreshes.
     /// 在多轮执行之间复用的共享命令会话运行时，使长生命周期 shell 会话能够穿越执行刷新继续存活。
     command_session_runtime: Arc<CommandSessionRuntime>,
-    /// Shared token budget runtime reused by context budget hot paths.
-    /// 被上下文预算热路径复用的共享 Token 预算运行时。
-    token_budget_runtime: Arc<TokenBudgetRuntime>,
     /// Process-local public AI registries, catalogs, clients, and secure credential boundary.
     /// 进程内公共 AI 注册表、目录、客户端与安全凭据边界。
     public_ai_runtime: Option<Arc<vulcan_provider_adapters::PublicAiRuntime>>,
@@ -165,7 +158,6 @@ impl RuntimeFoundation {
         task_runtime: Arc<TaskRuntime>,
         question_runtime: Arc<QuestionRuntime>,
         command_session_runtime: Arc<CommandSessionRuntime>,
-        token_budget_runtime: Arc<TokenBudgetRuntime>,
     ) -> Self {
         Self::build_from_optional_mcp_access_with_runtimes_and_plugins(
             config,
@@ -176,7 +168,6 @@ impl RuntimeFoundation {
             task_runtime,
             question_runtime,
             command_session_runtime,
-            token_budget_runtime,
         )
     }
 
@@ -191,7 +182,6 @@ impl RuntimeFoundation {
         task_runtime: Arc<TaskRuntime>,
         question_runtime: Arc<QuestionRuntime>,
         command_session_runtime: Arc<CommandSessionRuntime>,
-        token_budget_runtime: Arc<TokenBudgetRuntime>,
     ) -> Self {
         Self::build_with_task_runtime(
             config,
@@ -204,7 +194,6 @@ impl RuntimeFoundation {
             task_runtime,
             question_runtime,
             command_session_runtime,
-            token_budget_runtime,
         )
     }
 
@@ -219,7 +208,6 @@ impl RuntimeFoundation {
         task_runtime: Arc<TaskRuntime>,
         question_runtime: Arc<QuestionRuntime>,
         command_session_runtime: Arc<CommandSessionRuntime>,
-        token_budget_runtime: Arc<TokenBudgetRuntime>,
     ) -> Self {
         Self::build_with_task_runtime(
             config,
@@ -232,7 +220,6 @@ impl RuntimeFoundation {
             task_runtime,
             question_runtime,
             command_session_runtime,
-            token_budget_runtime,
         )
     }
 
@@ -255,7 +242,6 @@ impl RuntimeFoundation {
             Arc::new(TaskRuntime::new()),
             Arc::new(QuestionRuntime::new()),
             Arc::new(CommandSessionRuntime::new()),
-            Arc::new(TokenBudgetRuntime::pending()),
         )
     }
 
@@ -272,7 +258,6 @@ impl RuntimeFoundation {
         task_runtime: Arc<TaskRuntime>,
         question_runtime: Arc<QuestionRuntime>,
         command_session_runtime: Arc<CommandSessionRuntime>,
-        token_budget_runtime: Arc<TokenBudgetRuntime>,
     ) -> Self {
         let runtime_config = AgentRuntimeConfig::from_sources(config, agent_profile_catalog);
         let mut subagent_catalog = vulcan_task_session::load_subagent_catalog_from_roots(
@@ -349,7 +334,6 @@ impl RuntimeFoundation {
             task_runtime,
             question_runtime,
             command_session_runtime,
-            token_budget_runtime,
             public_ai_runtime: None,
         }
     }
@@ -426,7 +410,6 @@ impl RuntimeFoundation {
             configured_mcp_server_count: mcp_overview.summary_rows().len(),
             enabled_mcp_server_count: mcp_overview.active_summary_rows().len(),
             warnings: self.warnings.clone(),
-            token_budget_status: self.token_budget_runtime.status_row(),
         }
     }
 
@@ -507,12 +490,6 @@ impl RuntimeFoundation {
     /// 返回当前基础架构使用的共享命令会话运行时。
     pub fn command_session_runtime(&self) -> Arc<CommandSessionRuntime> {
         Arc::clone(&self.command_session_runtime)
-    }
-
-    /// Returns the shared token budget runtime used by the current foundation.
-    /// 返回当前基础架构使用的共享 Token 预算运行时。
-    pub fn token_budget_runtime(&self) -> Arc<TokenBudgetRuntime> {
-        Arc::clone(&self.token_budget_runtime)
     }
 
     /// Returns lightweight tool-policy rows for UI placeholder surfaces.

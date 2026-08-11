@@ -1146,6 +1146,10 @@ pub struct ProviderRequestSnapshot {
     /// Latest outgoing prompt message body attached to the request.
     /// 附加到请求中的最新出站提示消息正文。
     pub prompt: String,
+    /// Whether the latest prompt is already present in canonical history and must not be counted twice.
+    /// 最新提示是否已存在于规范历史中，因而不得重复计量。
+    #[serde(default)]
+    pub prompt_in_history: bool,
     /// Canonical history forwarded into the request.
     /// 传入请求的规范历史。
     pub history: Vec<ConversationMessage>,

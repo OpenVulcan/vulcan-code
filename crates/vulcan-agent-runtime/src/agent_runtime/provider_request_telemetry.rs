@@ -2,6 +2,11 @@
 //! 真实 Provider API 请求的低频结构化遥测。
 
 use crate::agent_runtime::execution_models::{ExecutionPreparation, ExecutionPromptPurpose};
+use crate::agent_runtime::provider_transport_request_budget::{
+    ProviderRequestBudgetEvidence, ProviderUsageBudgetBaselineHandle,
+    build_provider_request_budget_evidence,
+};
+use crate::context_budget::ContextBudgetSnapshot;
 use crate::model::SessionId;
 use serde::Serialize;
 use serde_json::{Value, to_value};
@@ -9,10 +14,15 @@ use time::{OffsetDateTime, UtcOffset};
 use uuid::Uuid;
 use vulcan_ai_contract::{AiExecutionError, AiTransportKind, DispatchOutcome, RetryAfterHint};
 use vulcan_core::types::{ProviderRequestSnapshot, ProviderUsageSnapshot};
+use vulcan_workbench_model::SessionProviderCallRecord;
 
 /// Hook point fired after one physical Provider request starts.
 /// 一次真实 Provider 请求开始后触发的 Hook 点。
 pub const HOOK_PROVIDER_REQUEST_STARTED: &str = "provider.request.started";
+
+/// Hook point fired after one physical Provider request is dispatched.
+/// 一次真实 Provider 请求完成网络分派后触发的 Hook 点。
+pub const HOOK_PROVIDER_REQUEST_DISPATCHED: &str = "provider.request.dispatched";
 
 /// Hook point fired after one physical Provider response exposes its first visible token.
 /// 一次真实 Provider 响应暴露首个可见 Token 后触发的 Hook 点。
@@ -96,6 +106,15 @@ pub(crate) struct ProviderRequestTelemetryContext {
     /// Current active agent display name.
     /// 当前激活代理显示名称。
     owner_name: String,
+    /// Optional canonical conversation turn identity.
+    /// 可选规范会话回合身份。
+    turn_id: Option<String>,
+    /// Active context generation frozen for this execution.
+    /// 为本次执行冻结的活动上下文代际。
+    context_generation_id: Option<String>,
+    /// Shared durable Usage baseline used by the next logical Provider request.
+    /// 下一次逻辑 Provider 请求使用的共享持久化用量基线。
+    provider_usage_budget_baseline: ProviderUsageBudgetBaselineHandle,
 }
 
 impl ProviderRequestTelemetryContext {
@@ -111,7 +130,10 @@ impl ProviderRequestTelemetryContext {
     /// 返回值
     /// Returns an immutable context with a new host execution identity.
     /// 返回带有新宿主执行身份的不可变上下文。
-    pub(crate) fn from_preparation(preparation: &ExecutionPreparation) -> Self {
+    pub(crate) fn from_preparation(
+        preparation: &ExecutionPreparation,
+        provider_usage_budget_baseline: ProviderUsageBudgetBaselineHandle,
+    ) -> Self {
         // ownerKind is derived from explicit purpose and subagent context, never from names.
         // ownerKind 从显式用途与子代理上下文派生，绝不根据名称猜测。
         let owner_kind = match preparation.prompt_purpose {
@@ -227,6 +249,9 @@ impl ProviderRequestTelemetryContext {
             operation,
             owner_id: preparation.agent_id.clone(),
             owner_name: preparation.agent_name.clone(),
+            turn_id: preparation.conversation_hook_turn_id.clone(),
+            context_generation_id: preparation.provider_usage_context_generation_id.clone(),
+            provider_usage_budget_baseline,
         }
     }
 
@@ -267,6 +292,9 @@ impl ProviderRequestTelemetryContext {
             operation: "conversation",
             owner_id: String::from("agent-1"),
             owner_name: String::from("Agent One"),
+            turn_id: Some(String::from("turn-1")),
+            context_generation_id: Some(String::from("context-1")),
+            provider_usage_budget_baseline: ProviderUsageBudgetBaselineHandle::new(None),
         }
     }
 }
@@ -278,6 +306,9 @@ pub enum ProviderRequestTelemetryEventKind {
     /// Physical request started.
     /// 真实请求已开始。
     Started,
+    /// Physical request was dispatched to the frozen route.
+    /// 真实请求已分派到冻结路由。
+    Dispatched,
     /// First visible token observed.
     /// 已观测到首个可见 Token。
     FirstToken,
@@ -300,6 +331,7 @@ impl ProviderRequestTelemetryEventKind {
     pub const fn hook_point(self) -> &'static str {
         match self {
             Self::Started => HOOK_PROVIDER_REQUEST_STARTED,
+            Self::Dispatched => HOOK_PROVIDER_REQUEST_DISPATCHED,
             Self::FirstToken => HOOK_PROVIDER_RESPONSE_FIRST_TOKEN,
             Self::Completed => HOOK_PROVIDER_REQUEST_COMPLETED,
             Self::Retrying => HOOK_PROVIDER_REQUEST_RETRYING,
@@ -323,6 +355,37 @@ pub struct ProviderRequestTelemetryEvent {
     /// Exact normalized usage carried by a terminal request when the provider reported any usage.
     /// 当供应商报告了任意用量时，由终态请求携带的精确标准化用量。
     pub completed_usage: Option<ProviderRequestCompletedUsage>,
+    /// Shared budget baseline handle excluded from the plugin-facing JSON payload.
+    /// 从面向插件的 JSON 载荷中排除的共享预算基线句柄。
+    provider_usage_budget_baseline: ProviderUsageBudgetBaselineHandle,
+}
+
+impl ProviderRequestTelemetryEvent {
+    /// Builds one detached telemetry event that does not participate in a live request-budget stream.
+    /// 构建一条不参与实时请求预算流的分离遥测事件。
+    pub fn detached(
+        kind: ProviderRequestTelemetryEventKind,
+        session_id: SessionId,
+        payload: Value,
+        completed_usage: Option<ProviderRequestCompletedUsage>,
+    ) -> Self {
+        Self {
+            kind,
+            session_id,
+            payload,
+            completed_usage,
+            provider_usage_budget_baseline: ProviderUsageBudgetBaselineHandle::new(None),
+        }
+    }
+
+    /// Replaces the next-request baseline after the owning ledger boundary is durable.
+    /// 在所属账本边界持久化后替换下一请求基线。
+    pub fn replace_durable_budget_baseline(
+        &self,
+        baseline: Option<SessionProviderCallRecord>,
+    ) -> Result<(), String> {
+        self.provider_usage_budget_baseline.replace(baseline)
+    }
 }
 
 /// Exact normalized token usage for one terminal physical provider request.
@@ -407,6 +470,9 @@ pub struct ProviderRequestTelemetryCancellationTracker {
     /// Session identity copied from the active started event.
     /// 从活动开始事件复制的会话身份。
     active_session_id: Option<SessionId>,
+    /// Shared baseline handle copied from the active started event.
+    /// 从活动开始事件复制的共享基线句柄。
+    active_budget_baseline: Option<ProviderUsageBudgetBaselineHandle>,
 }
 
 impl ProviderRequestTelemetryCancellationTracker {
@@ -427,6 +493,27 @@ impl ProviderRequestTelemetryCancellationTracker {
             ProviderRequestTelemetryEventKind::Started => {
                 self.active_started_payload = Some(event.payload.clone());
                 self.active_session_id = Some(event.session_id);
+                self.active_budget_baseline = Some(event.provider_usage_budget_baseline.clone());
+            }
+            ProviderRequestTelemetryEventKind::Dispatched => {
+                // Cancellation recovery keeps the exact dispatch boundary only for the active request.
+                // 取消恢复仅为当前活动请求保留精确分派边界。
+                let Some(active_payload) = self.active_started_payload.as_mut() else {
+                    return;
+                };
+                if active_payload.get("request_id") != event.payload.get("request_id") {
+                    return;
+                }
+                if let (Some(active_object), Some(event_object)) =
+                    (active_payload.as_object_mut(), event.payload.as_object())
+                {
+                    for field in ["dispatched_at_ms", "transport", "provider_request_id"] {
+                        active_object.insert(
+                            field.to_string(),
+                            event_object.get(field).cloned().unwrap_or(Value::Null),
+                        );
+                    }
+                }
             }
             ProviderRequestTelemetryEventKind::FirstToken => {
                 // activePayload is updated only when the request identity matches exactly.
@@ -465,6 +552,7 @@ impl ProviderRequestTelemetryCancellationTracker {
                 {
                     self.active_started_payload = None;
                     self.active_session_id = None;
+                    self.active_budget_baseline = None;
                 }
             }
             ProviderRequestTelemetryEventKind::Retrying => {}
@@ -485,6 +573,9 @@ impl ProviderRequestTelemetryCancellationTracker {
         // sessionId was captured from the same started event.
         // sessionId 从同一开始事件捕获。
         let session_id = self.active_session_id.take()?;
+        // budgetBaseline belongs to the same active started event.
+        // budgetBaseline 属于同一条活动开始事件。
+        let provider_usage_budget_baseline = self.active_budget_baseline.take()?;
         // completedAt is captured once for every derived duration field.
         // completedAt 为全部派生时长字段捕获一次。
         let completed_at_ms = current_unix_millis();
@@ -551,6 +642,7 @@ impl ProviderRequestTelemetryCancellationTracker {
             session_id,
             payload,
             completed_usage: None,
+            provider_usage_budget_baseline,
         })
     }
 }
@@ -590,6 +682,14 @@ impl ProviderRequestTelemetryTracker {
         self.context = Some(context);
     }
 
+    /// Returns the baseline handle shared with Provider request budgeting.
+    /// 返回与 Provider 请求预算共享的基线句柄。
+    pub(crate) fn budget_baseline_handle(&self) -> Option<ProviderUsageBudgetBaselineHandle> {
+        self.context
+            .as_ref()
+            .map(|context| context.provider_usage_budget_baseline.clone())
+    }
+
     /// Starts one physical request and closes any impossible overlapping request explicitly.
     /// 开始一次真实请求，并显式关闭任何不可能存在的重叠请求。
     ///
@@ -600,15 +700,21 @@ impl ProviderRequestTelemetryTracker {
     ///
     /// # Returns
     /// 返回值
-    /// Returns zero events without context, otherwise one started event plus an invariant failure when needed.
-    /// 缺少上下文时不返回事件；否则返回开始事件，并在需要时附带不变量失败事件。
+    /// Returns zero events without context, otherwise one started event plus an invariant failure when needed; unsafe request evidence returns a controlled error.
+    /// 缺少上下文时不返回事件；否则返回开始事件，并在需要时附带不变量失败事件；不安全的请求证据返回受控错误。
     pub(crate) fn start_request(
         &mut self,
         snapshot: &ProviderRequestSnapshot,
-    ) -> Vec<ProviderRequestTelemetryEvent> {
+        context_budget: Option<&ContextBudgetSnapshot>,
+    ) -> Result<Vec<ProviderRequestTelemetryEvent>, String> {
         let Some(context) = self.context.clone() else {
-            return Vec::new();
+            return Ok(Vec::new());
         };
+        let budget_evidence = build_provider_request_budget_evidence(
+            snapshot,
+            context.protocol_profile_id.as_str(),
+            context.route_revision.as_str(),
+        )?;
         // events preserves the terminal-before-next-start ordering for invariant violations.
         // events 在不变量违规时保留先终态、后新开始的顺序。
         let mut events = Vec::new();
@@ -646,11 +752,13 @@ impl ProviderRequestTelemetryTracker {
             semantic_output_observed: false,
             calendar_date: started_at.calendar_date,
             timezone_offset_minutes: started_at.timezone_offset_minutes,
+            budget_evidence,
+            context_budget: context_budget.cloned(),
         };
         self.next_attempt_index = self.next_attempt_index.saturating_add(1);
         events.push(build_started_event(&context, &active_request));
         self.active_request = Some(active_request);
-        events
+        Ok(events)
     }
 
     /// Records the first Provider event timestamp without emitting a high-frequency Hook.
@@ -673,10 +781,9 @@ impl ProviderRequestTelemetryTracker {
         http_status: Option<u16>,
         provider_request_id: Option<String>,
         rate_limit_headers: std::collections::BTreeMap<String, String>,
-    ) {
-        let Some(active_request) = self.active_request.as_mut() else {
-            return;
-        };
+    ) -> Option<ProviderRequestTelemetryEvent> {
+        let context = self.context.as_ref()?;
+        let active_request = self.active_request.as_mut()?;
         active_request.transport = Some(transport);
         active_request.dispatched_at_ms = Some(dispatched_at_ms);
         active_request.headers_at_ms = headers_at_ms;
@@ -686,6 +793,7 @@ impl ProviderRequestTelemetryTracker {
         if active_request.first_event_at_ms.is_none() {
             active_request.first_event_at_ms = headers_at_ms;
         }
+        Some(build_dispatched_event(context, active_request))
     }
 
     /// Records that the active request exposed replay-relevant semantic output.
@@ -870,6 +978,12 @@ struct ActiveProviderRequestTelemetry {
     /// Host-local UTC offset at request start.
     /// 请求开始时的宿主本地 UTC 偏移。
     timezone_offset_minutes: i32,
+    /// Stable non-sensitive evidence for budget baseline alignment.
+    /// 用于预算基线对齐的稳定非敏感证据。
+    budget_evidence: ProviderRequestBudgetEvidence,
+    /// Request-aligned context-budget decision made before dispatch.
+    /// 分派前作出的请求对齐上下文预算决策。
+    context_budget: Option<ContextBudgetSnapshot>,
 }
 
 /// Terminal state stored by the statistics fact table.
@@ -898,6 +1012,9 @@ struct ProviderTelemetryIdentityPayload<'a> {
     /// Host-generated execution identity.
     /// 宿主生成的执行身份。
     execution_id: &'a str,
+    /// Optional canonical conversation turn identity.
+    /// 可选规范会话回合身份。
+    turn_id: Option<&'a str>,
     /// Session identity.
     /// 会话身份。
     session_id: String,
@@ -1002,6 +1119,7 @@ fn identity_payload<'a>(
         schema_version: 1,
         request_id: &request.request_id,
         execution_id: &context.execution_id,
+        turn_id: context.turn_id.as_deref(),
         session_id: context.session_id.to_string(),
         project_id: None,
         workspace_id: Some(&context.workspace_id),
@@ -1045,8 +1163,83 @@ fn build_started_event(
             started_at_ms: request.started_at_ms,
             calendar_date: &request.calendar_date,
             timezone_offset_minutes: request.timezone_offset_minutes,
+            request_assembly_fingerprint: &request.budget_evidence.request_assembly_fingerprint,
+            context_generation_id: context.context_generation_id.as_deref(),
+            model_route_fingerprint: &request.budget_evidence.model_route_fingerprint,
+            toolset_fingerprint: &request.budget_evidence.toolset_fingerprint,
+            system_prompt_fingerprint: &request.budget_evidence.system_prompt_fingerprint,
+            request_character_count: request
+                .budget_evidence
+                .request_text_measurement
+                .character_count,
+            request_utf8_byte_count: request
+                .budget_evidence
+                .request_text_measurement
+                .utf8_byte_count,
+            request_structural_units: request
+                .budget_evidence
+                .request_text_measurement
+                .structural_units,
+            request_history_message_count: request
+                .budget_evidence
+                .request_text_measurement
+                .history_message_count,
+            request_prompt_in_history: request
+                .budget_evidence
+                .request_text_measurement
+                .prompt_in_history,
+            request_history_fingerprint: request
+                .budget_evidence
+                .request_text_measurement
+                .history_fingerprint
+                .as_deref(),
+            request_prefix_invariant_fingerprint: request
+                .budget_evidence
+                .request_text_measurement
+                .prefix_invariant_fingerprint
+                .as_deref(),
+            budget_accounting_source: request
+                .context_budget
+                .as_ref()
+                .map(|budget| budget.accounting_source.stable_key()),
+            budget_input_tokens: request
+                .context_budget
+                .as_ref()
+                .map(|budget| budget.active_context_tokens),
+            budget_total_tokens: request
+                .context_budget
+                .as_ref()
+                .map(|budget| budget.estimated_total_tokens),
+            budget_warning_code: request
+                .context_budget
+                .as_ref()
+                .and_then(|budget| budget.accounting_warning_code.as_deref()),
         }),
         completed_usage: None,
+        provider_usage_budget_baseline: context.provider_usage_budget_baseline.clone(),
+    }
+}
+
+/// Builds one dispatched event from the frozen identity and observed transport boundary.
+/// 根据冻结身份与已观测传输边界构建一条 dispatched 事件。
+fn build_dispatched_event(
+    context: &ProviderRequestTelemetryContext,
+    request: &ActiveProviderRequestTelemetry,
+) -> ProviderRequestTelemetryEvent {
+    ProviderRequestTelemetryEvent {
+        kind: ProviderRequestTelemetryEventKind::Dispatched,
+        session_id: context.session_id,
+        payload: serialize_payload(DispatchedPayload {
+            identity: identity_payload(context, request),
+            started_at_ms: request.started_at_ms,
+            dispatched_at_ms: request
+                .dispatched_at_ms
+                .expect("dispatched event requires an observed dispatch timestamp"),
+            transport: request.transport,
+            provider_request_id: request.provider_request_id.as_deref(),
+        }),
+        completed_usage: None,
+        provider_usage_budget_baseline: context.provider_usage_budget_baseline.clone(),
     }
 }
 
@@ -1067,6 +1260,7 @@ fn build_first_token_event(
             time_to_first_token_ms: elapsed_millis(request.started_at_ms, first_token_at_ms),
         }),
         completed_usage: None,
+        provider_usage_budget_baseline: context.provider_usage_budget_baseline.clone(),
     }
 }
 
@@ -1183,6 +1377,7 @@ fn build_completed_event(
             timezone_offset_minutes: request.timezone_offset_minutes,
         }),
         completed_usage,
+        provider_usage_budget_baseline: context.provider_usage_budget_baseline.clone(),
     }
 }
 
@@ -1292,6 +1487,7 @@ fn build_retrying_event(
             retrying_at_ms: current_unix_millis(),
         }),
         completed_usage: None,
+        provider_usage_budget_baseline: context.provider_usage_budget_baseline.clone(),
     }
 }
 
@@ -1312,6 +1508,76 @@ struct StartedPayload<'a> {
     /// Host-local UTC offset in minutes.
     /// 宿主本地 UTC 分钟偏移。
     timezone_offset_minutes: i32,
+    /// Request assembly digest without request content.
+    /// 不含请求正文的请求装配摘要。
+    request_assembly_fingerprint: &'a str,
+    /// Active context generation.
+    /// 活动上下文代际。
+    context_generation_id: Option<&'a str>,
+    /// Frozen route digest.
+    /// 冻结路由摘要。
+    model_route_fingerprint: &'a str,
+    /// Frozen toolset digest.
+    /// 冻结工具集摘要。
+    toolset_fingerprint: &'a str,
+    /// Frozen system-prompt digest.
+    /// 冻结系统提示摘要。
+    system_prompt_fingerprint: &'a str,
+    /// Unicode scalar count of the canonical request.
+    /// 规范请求的 Unicode 标量数量。
+    request_character_count: usize,
+    /// UTF-8 byte count of the canonical request.
+    /// 规范请求的 UTF-8 字节数量。
+    request_utf8_byte_count: usize,
+    /// Structural estimation units of the canonical request.
+    /// 规范请求的结构估算单位。
+    request_structural_units: usize,
+    /// Canonical history message count.
+    /// 规范历史消息数量。
+    request_history_message_count: usize,
+    /// Whether canonical history already contains the latest prompt.
+    /// 规范历史是否已经包含最新提示。
+    request_prompt_in_history: bool,
+    /// Canonical history digest.
+    /// 规范历史摘要。
+    request_history_fingerprint: Option<&'a str>,
+    /// Digest of request components that must remain stable for history-prefix reuse.
+    /// 规范历史前缀复用时必须保持稳定的请求组件摘要。
+    request_prefix_invariant_fingerprint: Option<&'a str>,
+    /// Stable budget-accounting source.
+    /// 稳定预算记账来源。
+    budget_accounting_source: Option<&'a str>,
+    /// Input tokens used for admission.
+    /// 准入使用的输入 Token。
+    budget_input_tokens: Option<usize>,
+    /// Total tokens including response reserves.
+    /// 包含响应预留的总 Token。
+    budget_total_tokens: Option<usize>,
+    /// Stable warning for non-exact accounting.
+    /// 非精确记账的稳定警告。
+    budget_warning_code: Option<&'a str>,
+}
+
+/// Dispatched-event payload.
+/// 请求已分派事件载荷。
+#[derive(Serialize)]
+struct DispatchedPayload<'a> {
+    /// Shared identity fields flattened into the payload.
+    /// 平铺到载荷中的共享身份字段。
+    #[serde(flatten)]
+    identity: ProviderTelemetryIdentityPayload<'a>,
+    /// Request start timestamp.
+    /// 请求开始时间戳。
+    started_at_ms: i64,
+    /// Exact transport dispatch timestamp.
+    /// 精确传输分派时间戳。
+    dispatched_at_ms: i64,
+    /// Exact observed transport.
+    /// 精确观测到的传输类型。
+    transport: Option<AiTransportKind>,
+    /// Provider request identity observed with response headers when available.
+    /// 若响应头已提供，则记录观测到的 Provider 请求身份。
+    provider_request_id: Option<&'a str>,
 }
 
 /// First-token event payload.
@@ -1530,7 +1796,9 @@ fn elapsed_millis(started_at_ms: i64, completed_at_ms: i64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use vulcan_core::types::{ProviderContinuation, ProviderPromptLayers};
+    use vulcan_core::types::{
+        ConversationMessage, ConversationPayload, ProviderContinuation, ProviderPromptLayers,
+    };
 
     /// Builds one exact tracker context without constructing unrelated execution preparation fields.
     /// 在不构造无关执行准备字段的前提下构建一个精确跟踪上下文。
@@ -1541,6 +1809,7 @@ mod tests {
         tracker.install_context(ProviderRequestTelemetryContext {
             execution_id: String::from("execution-1"),
             session_id: SessionId::nil(),
+            turn_id: None,
             workspace_id: String::from("workspace-1"),
             provider_name: String::from("Provider Name"),
             service_entry_id: String::from("public-api"),
@@ -1571,6 +1840,8 @@ mod tests {
             operation: "conversation",
             owner_id: String::from("agent-1"),
             owner_name: String::from("Agent One"),
+            context_generation_id: None,
+            provider_usage_budget_baseline: ProviderUsageBudgetBaselineHandle::new(None),
         });
         tracker
     }
@@ -1584,6 +1855,7 @@ mod tests {
             system_prompt: String::new(),
             prompt_layers: ProviderPromptLayers::default(),
             prompt: String::new(),
+            prompt_in_history: false,
             history: Vec::new(),
             temperature: None,
             max_turns: 1,
@@ -1601,7 +1873,9 @@ mod tests {
         // tracker owns the lifecycle under test.
         // tracker 持有待测生命周期。
         let mut tracker = test_tracker();
-        let started = tracker.start_request(&test_request_snapshot());
+        let started = tracker
+            .start_request(&test_request_snapshot(), None)
+            .expect("request evidence should build");
         assert_eq!(started.len(), 1);
         assert_eq!(started[0].kind, ProviderRequestTelemetryEventKind::Started);
         assert_eq!(started[0].payload["provider_key"], "provider-key");
@@ -1633,6 +1907,27 @@ mod tests {
             "DeepInfra endpoint"
         );
         assert_eq!(started[0].payload["model_key"], "model-key");
+        assert_eq!(started[0].payload["request_prompt_in_history"], false);
+        let dispatched = tracker
+            .observe_transport(
+                AiTransportKind::Http,
+                100,
+                Some(101),
+                Some(200),
+                Some(String::from("upstream-request")),
+                std::collections::BTreeMap::new(),
+            )
+            .expect("active request should emit dispatched telemetry");
+        assert_eq!(
+            dispatched.kind,
+            ProviderRequestTelemetryEventKind::Dispatched
+        );
+        assert_eq!(dispatched.payload["dispatched_at_ms"], 100);
+        assert_eq!(dispatched.payload["transport"], "http");
+        assert_eq!(
+            dispatched.payload["provider_request_id"],
+            "upstream-request"
+        );
         assert!(tracker.observe_first_token().is_some());
         assert!(tracker.observe_first_token().is_none());
         let completed = tracker
@@ -1669,6 +1964,33 @@ mod tests {
         assert!(tracker.complete_success(None).is_none());
     }
 
+    /// Verifies Started telemetry preserves the canonical prompt-ownership fact used by Provider anchor deltas.
+    /// 验证 Started 遥测会保留 Provider 锚点增量所依赖的规范提示词归属事实。
+    #[test]
+    fn started_telemetry_preserves_prompt_in_history() {
+        let mut tracker = test_tracker();
+        let mut snapshot = test_request_snapshot();
+        snapshot.prompt = String::from("continue");
+        snapshot.prompt_in_history = true;
+        snapshot.history.push(ConversationMessage {
+            id: String::from("user-1"),
+            payload: ConversationPayload::UserText {
+                text: String::from("continue"),
+                attachments: Vec::new(),
+            },
+        });
+
+        let started = tracker
+            .start_request(&snapshot, None)
+            .expect("request evidence should build");
+
+        assert_eq!(started.len(), 1);
+        assert_eq!(started[0].payload["request_prompt_in_history"], true);
+        assert_eq!(started[0].payload["request_history_message_count"], 1);
+        assert!(started[0].payload["request_history_fingerprint"].is_string());
+        assert!(started[0].payload["request_prefix_invariant_fingerprint"].is_string());
+    }
+
     /// Verifies every physical request receives a unique trace while retaining one frozen route.
     /// 验证每次物理请求获得唯一追踪身份，同时保留同一份冻结路由。
     #[test]
@@ -1681,8 +2003,12 @@ mod tests {
         let mut second_tracker = test_tracker();
         // firstStarted and secondStarted retain the emitted immutable start facts.
         // firstStarted 与 secondStarted 保留发出的不可变启动事实。
-        let first_started = first_tracker.start_request(&test_request_snapshot());
-        let second_started = second_tracker.start_request(&test_request_snapshot());
+        let first_started = first_tracker
+            .start_request(&test_request_snapshot(), None)
+            .expect("first request evidence should build");
+        let second_started = second_tracker
+            .start_request(&test_request_snapshot(), None)
+            .expect("second request evidence should build");
 
         assert_ne!(
             first_started[0].payload["request_id"], second_started[0].payload["request_id"],
@@ -1706,7 +2032,9 @@ mod tests {
         // tracker owns one physical request whose provider returned no accounting fields.
         // tracker 持有一次 Provider 未返回任何计量字段的物理请求。
         let mut tracker = test_tracker();
-        tracker.start_request(&test_request_snapshot());
+        tracker
+            .start_request(&test_request_snapshot(), None)
+            .expect("request evidence should build");
         let completed = tracker
             .complete_success(Some(&ProviderUsageSnapshot::default()))
             .expect("active request should complete");
@@ -1846,7 +2174,9 @@ mod tests {
         // tracker owns the lifecycle under test.
         // tracker 持有待测生命周期。
         let mut tracker = test_tracker();
-        tracker.start_request(&test_request_snapshot());
+        tracker
+            .start_request(&test_request_snapshot(), None)
+            .expect("request evidence should build");
         let events = tracker.complete_failure(
             true,
             1,
@@ -1861,7 +2191,9 @@ mod tests {
         assert_eq!(events[0].payload["status"], "failed");
         assert_eq!(events[1].kind, ProviderRequestTelemetryEventKind::Retrying);
         assert_eq!(events[1].payload["retry_number"], 1);
-        let next_started = tracker.start_request(&test_request_snapshot());
+        let next_started = tracker
+            .start_request(&test_request_snapshot(), None)
+            .expect("retry request evidence should build");
         assert_eq!(next_started[0].payload["retry_count"], 1);
     }
 
@@ -1870,7 +2202,9 @@ mod tests {
     #[test]
     fn failed_request_retains_reported_partial_usage() {
         let mut tracker = test_tracker();
-        tracker.start_request(&test_request_snapshot());
+        tracker
+            .start_request(&test_request_snapshot(), None)
+            .expect("request evidence should build");
         let usage = ProviderUsageSnapshot {
             input_tokens: Some(13),
             output_tokens: Some(2),
@@ -1914,7 +2248,10 @@ mod tests {
         let mut cancellation = ProviderRequestTelemetryCancellationTracker::default();
         // started is the sole request identity source for the cancellation result.
         // started 是取消结果唯一的请求身份来源。
-        let started = tracker.start_request(&test_request_snapshot()).remove(0);
+        let started = tracker
+            .start_request(&test_request_snapshot(), None)
+            .expect("request evidence should build")
+            .remove(0);
         cancellation.observe(&started);
         // firstToken preserves exact first-token timing when cancellation happens later.
         // firstToken 在随后发生取消时保留精确首 Token 时间。

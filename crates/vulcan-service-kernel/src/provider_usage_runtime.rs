@@ -5,6 +5,10 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 use vulcan_ai_contract::AccountUsageSnapshot;
 use vulcan_provider_adapters::{AccountUsageQueryKind, PersistedAiConfiguration, PublicAiRuntime};
+use vulcan_workbench_model::{
+    SessionProviderBudgetAccounting, SessionProviderBudgetAccountingSource,
+    SessionProviderCallLedger, SessionProviderCallRecord, SessionProviderRequestTextMeasurement,
+};
 use vulcan_workspace_store::workspace_store::{
     ProviderAccountUsageSnapshotRecord, ProviderPricingProfileRecord,
     ProviderRateLimitSnapshotRecord, ProviderUsageAttemptRecord, ProviderUsageDashboard,
@@ -119,6 +123,155 @@ fn current_provider_usage_unix_millis() -> i64 {
     i64::try_from(OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000).unwrap_or(i64::MAX)
 }
 
+/// Exact in-memory state required to undo a Provider boundary whose durable write failed.
+/// 可靠写入失败时撤销 Provider 边界所需的精确内存状态。
+#[derive(Debug, Clone)]
+struct ProviderUsageBoundaryRollback {
+    /// Whether the session lives in the archived runtime-state map.
+    /// 会话是否位于归档运行态映射中。
+    archived: bool,
+    /// Whether the owning runtime-state entry existed before the attempted boundary.
+    /// 尝试写入边界前所属运行态条目是否已经存在。
+    previous_runtime_state_existed: bool,
+    /// Ledger value that was authoritative before the attempted mutation.
+    /// 尝试变更前的权威账本值。
+    previous_ledger: SessionProviderCallLedger,
+    /// Runtime timestamp that accompanied the previous ledger.
+    /// 与旧账本配套的运行态时间戳。
+    previous_updated_at: String,
+}
+
+/// Captures one session ledger immediately before applying a durable Provider boundary.
+/// 在应用可靠 Provider 边界前立即捕获一个会话账本。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the authoritative workspace and `session_id` selects the exact owner.
+/// `state` 持有权威工作区，`session_id` 选择精确归属。
+///
+/// # Returns
+/// 返回值
+/// Returns the rollback facts or an explicit workspace-lock/readiness error.
+/// 返回回滚事实，或显式的工作区锁定/就绪错误。
+fn capture_provider_usage_boundary_rollback(
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+) -> Result<ProviderUsageBoundaryRollback, String> {
+    let guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    let workspace = guard
+        .workspace_snapshot
+        .as_ref()
+        .ok_or_else(|| String::from("workspace snapshot is not ready"))?;
+    let archived = workspace
+        .archived_sessions
+        .iter()
+        .any(|session| session.id == session_id);
+    let runtime_state = if archived {
+        workspace.archived_session_runtime_state.get(&session_id)
+    } else {
+        workspace.session_runtime_state.get(&session_id)
+    };
+    Ok(ProviderUsageBoundaryRollback {
+        archived,
+        previous_runtime_state_existed: runtime_state.is_some(),
+        previous_ledger: runtime_state
+            .map(|runtime_state| runtime_state.provider_call_ledger.clone())
+            .unwrap_or_default(),
+        previous_updated_at: runtime_state
+            .map(|runtime_state| runtime_state.updated_at.clone())
+            .unwrap_or_default(),
+    })
+}
+
+/// Restores only the attempted ledger mutation after durable persistence fails.
+/// 在可靠持久化失败后仅恢复本次尝试的账本变更。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the current workspace, `session_id` selects the owner, `attempted_ledger` proves
+/// no newer ledger mutation intervened, and `rollback` supplies the exact previous values.
+/// `state` 持有当前工作区，`session_id` 选择归属，`attempted_ledger` 证明没有更新账本变更插入，
+/// `rollback` 提供精确旧值。
+///
+/// # Returns
+/// 返回值
+/// Returns success after the precise rollback, or a fail-closed concurrency error.
+/// 在精确回滚后返回成功，或返回封闭失败的并发错误。
+fn restore_provider_usage_boundary_after_persist_failure(
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    attempted_ledger: &SessionProviderCallLedger,
+    rollback: ProviderUsageBoundaryRollback,
+) -> Result<(), String> {
+    let mut guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state for Provider rollback: {error}"))?;
+    let workspace = guard
+        .workspace_snapshot
+        .as_mut()
+        .ok_or_else(|| String::from("workspace snapshot disappeared during Provider rollback"))?;
+    let runtime_state_map = if rollback.archived {
+        &mut workspace.archived_session_runtime_state
+    } else {
+        &mut workspace.session_runtime_state
+    };
+    if !rollback.previous_runtime_state_existed {
+        let current_ledger = runtime_state_map
+            .get(&session_id)
+            .map(|runtime_state| &runtime_state.provider_call_ledger)
+            .ok_or_else(|| {
+                format!(
+                    "Provider rollback could not find newly created runtime state for session `{session_id}`"
+                )
+            })?;
+        if current_ledger != attempted_ledger {
+            return Err(String::from(
+                "Provider ledger advanced before a newly created runtime state could be rolled back",
+            ));
+        }
+        runtime_state_map.remove(&session_id);
+        return Ok(());
+    }
+    let runtime_state = runtime_state_map.get_mut(&session_id).ok_or_else(|| {
+        format!("Provider rollback lost the pre-existing runtime state for session `{session_id}`")
+    })?;
+    restore_provider_usage_runtime_state_after_persist_failure(
+        runtime_state,
+        attempted_ledger,
+        rollback,
+    )
+}
+
+/// Restores one runtime entry only when it still contains the exact attempted ledger.
+/// 仅当运行态条目仍包含精确尝试账本时才执行恢复。
+///
+/// # Parameters
+/// 参数
+/// `runtime_state` is the current session entry, `attempted_ledger` is the failed write value,
+/// and `rollback` owns the exact previous ledger and timestamp.
+/// `runtime_state` 是当前会话条目，`attempted_ledger` 是写入失败的值，`rollback` 持有精确旧账本与时间戳。
+///
+/// # Returns
+/// 返回值
+/// Returns success after restoration or rejects a newer intervening ledger mutation.
+/// 在恢复后返回成功，或拒绝覆盖其间发生的更新账本变更。
+fn restore_provider_usage_runtime_state_after_persist_failure(
+    runtime_state: &mut SessionRuntimeStateEntry,
+    attempted_ledger: &SessionProviderCallLedger,
+    rollback: ProviderUsageBoundaryRollback,
+) -> Result<(), String> {
+    if &runtime_state.provider_call_ledger != attempted_ledger {
+        return Err(String::from(
+            "Provider ledger advanced before a failed durable boundary could be rolled back",
+        ));
+    }
+    runtime_state.provider_call_ledger = rollback.previous_ledger;
+    runtime_state.updated_at = rollback.previous_updated_at;
+    Ok(())
+}
+
 /// Applies one Provider request telemetry event to the authoritative session runtime state.
 /// 将一条 Provider 请求遥测事件应用到权威会话运行态。
 ///
@@ -138,7 +291,7 @@ pub(crate) fn apply_provider_request_usage_telemetry(
     event: &ProviderRequestTelemetryEvent,
 ) -> Result<Option<WorkspaceSnapshot>, String> {
     let provider_call_id = telemetry_string(event, "request_id")?;
-    let owner_kind = telemetry_string(event, "owner_kind")?;
+    let identity = provider_call_identity_from_event(event)?;
     let changed_snapshot = {
         let mut guard = state
             .lock()
@@ -148,28 +301,158 @@ pub(crate) fn apply_provider_request_usage_telemetry(
             .as_mut()
             .ok_or_else(|| String::from("workspace snapshot is not ready"))?;
         let runtime_state = session_runtime_state_mut(workspace, event.session_id);
+        // The context-start identity is frozen with the prepared call before any network dispatch.
+        // 上下文起始身份会在任何网络分派前随 prepared 调用一起冻结。
+        let context_start_record_id = runtime_state.context_start_message_id.clone();
         let changed = match event.kind {
             ProviderRequestTelemetryEventKind::Started => {
-                runtime_state.provider_usage.observe_started(
+                let started = SessionProviderCallStarted {
                     provider_call_id,
-                    owner_kind,
-                    telemetry_i64(event, "started_at_ms"),
+                    identity,
+                    prepared_at_ms: telemetry_required_i64(event, "started_at_ms")?,
+                    request_assembly_fingerprint: telemetry_optional_string(
+                        event,
+                        "request_assembly_fingerprint",
+                    ),
+                    context_generation_id: telemetry_optional_string(
+                        event,
+                        "context_generation_id",
+                    ),
+                    context_start_record_id,
+                    model_route_fingerprint: telemetry_optional_string(
+                        event,
+                        "model_route_fingerprint",
+                    ),
+                    toolset_fingerprint: telemetry_optional_string(event, "toolset_fingerprint"),
+                    system_prompt_fingerprint: telemetry_optional_string(
+                        event,
+                        "system_prompt_fingerprint",
+                    ),
+                    request_text_measurement: Some(SessionProviderRequestTextMeasurement {
+                        character_count: telemetry_required_usize(
+                            event,
+                            "request_character_count",
+                        )?,
+                        utf8_byte_count: telemetry_required_usize(
+                            event,
+                            "request_utf8_byte_count",
+                        )?,
+                        structural_units: telemetry_required_usize(
+                            event,
+                            "request_structural_units",
+                        )?,
+                        history_message_count: telemetry_required_usize(
+                            event,
+                            "request_history_message_count",
+                        )?,
+                        prompt_in_history: telemetry_required_bool(
+                            event,
+                            "request_prompt_in_history",
+                        )?,
+                        history_fingerprint: telemetry_optional_string(
+                            event,
+                            "request_history_fingerprint",
+                        ),
+                        prefix_invariant_fingerprint: telemetry_optional_string(
+                            event,
+                            "request_prefix_invariant_fingerprint",
+                        ),
+                    }),
+                    budget_accounting: budget_accounting_from_started_event(event)?,
+                };
+                let changed = runtime_state
+                    .provider_call_ledger
+                    .observe_started(started.clone());
+                if !changed
+                    && !runtime_state
+                        .provider_call_ledger
+                        .started_event_is_idempotent(&started)
+                {
+                    return Err(format!(
+                        "Provider call `{}` repeated Started with conflicting immutable facts",
+                        started.provider_call_id
+                    ));
+                }
+                changed
+            }
+            ProviderRequestTelemetryEventKind::FirstToken => {
+                runtime_state.provider_call_ledger.observe_first_event(
+                    provider_call_id.as_str(),
+                    telemetry_i64(event, "first_event_at_ms"),
+                    telemetry_i64(event, "first_token_at_ms"),
                 )
+            }
+            ProviderRequestTelemetryEventKind::Dispatched => {
+                let changed = runtime_state.provider_call_ledger.observe_dispatched(
+                    provider_call_id.as_str(),
+                    telemetry_required_i64(event, "dispatched_at_ms")?,
+                );
+                let dispatch_is_already_persisted = runtime_state
+                    .provider_call_ledger
+                    .calls
+                    .get(provider_call_id.as_str())
+                    .is_some_and(|record| {
+                        record.status
+                            == vulcan_workbench_model::SessionProviderCallStatus::Dispatched
+                    });
+                if !changed && !dispatch_is_already_persisted {
+                    return Err(format!(
+                        "Provider call `{provider_call_id}` could not advance to dispatched state"
+                    ));
+                }
+                changed
             }
             ProviderRequestTelemetryEventKind::Completed => {
-                runtime_state.provider_usage.observe_completed(
+                let status_text = telemetry_string(event, "status")?;
+                let dispatch_outcome = telemetry_optional_string(event, "dispatch_outcome");
+                let (_, dispatch_outcome_known) =
+                    dispatch_facts(status_text.as_str(), dispatch_outcome.as_deref());
+                if !runtime_state
+                    .provider_call_ledger
+                    .calls
+                    .contains_key(provider_call_id.as_str())
+                {
+                    return Err(format!(
+                        "Provider call `{provider_call_id}` reached Completed without a durably retained Started boundary"
+                    ));
+                }
+                let completed = SessionProviderCallCompleted {
                     provider_call_id,
-                    owner_kind,
-                    completed_segment_status(event)?,
-                    provider_usage_snapshot_from_event(event),
-                    telemetry_i64(event, "started_at_ms"),
-                    telemetry_i64(event, "completed_at_ms"),
-                    telemetry_optional_string(event, "error_category"),
-                    telemetry_optional_string(event, "error_code"),
-                )
+                    identity,
+                    status: completed_call_status(status_text.as_str())?,
+                    provider_usage_evidence: provider_usage_evidence_from_event(event),
+                    prepared_at_ms: telemetry_required_i64(event, "started_at_ms")?,
+                    dispatched_at_ms: telemetry_i64(event, "dispatched_at_ms"),
+                    first_event_at_ms: telemetry_i64(event, "first_event_at_ms"),
+                    first_token_at_ms: telemetry_i64(event, "first_token_at_ms"),
+                    completed_at_ms: telemetry_required_i64(event, "completed_at_ms")?,
+                    dispatch_outcome,
+                    dispatch_outcome_known: Some(dispatch_outcome_known),
+                    semantic_output_observed: telemetry_optional_bool(
+                        event,
+                        "semantic_output_observed",
+                    ),
+                    semantic_output_observed_known: Some(true),
+                    replay_safe: telemetry_optional_bool(event, "replay_safe"),
+                    error_category: telemetry_optional_string(event, "error_category"),
+                    error_code: telemetry_optional_string(event, "error_code"),
+                };
+                let changed = runtime_state
+                    .provider_call_ledger
+                    .observe_completed(completed.clone());
+                if !changed
+                    && !runtime_state
+                        .provider_call_ledger
+                        .completed_event_is_idempotent(&completed)
+                {
+                    return Err(format!(
+                        "Provider call `{}` repeated Completed with conflicting terminal facts",
+                        completed.provider_call_id
+                    ));
+                }
+                changed
             }
-            ProviderRequestTelemetryEventKind::FirstToken
-            | ProviderRequestTelemetryEventKind::Retrying => false,
+            ProviderRequestTelemetryEventKind::Retrying => false,
         };
         if !changed {
             return Ok(None);
@@ -202,7 +485,7 @@ pub(crate) fn apply_provider_request_usage_telemetry(
 /// 返回值
 /// Returns an error only when authoritative state accounting or WebUI projection fails; Hook delivery remains best-effort.
 /// 仅当权威状态统计或 WebUI 投影失败时返回错误；Hook 投递仍保持尽力而为。
-pub(crate) fn process_provider_request_telemetry_event(
+pub(crate) async fn process_provider_request_telemetry_event(
     state: &SharedServiceBridgeState,
     controller_runtime: &ControllerRuntimeHandle,
     app: Option<&ServiceEventEmitter>,
@@ -213,32 +496,191 @@ pub(crate) fn process_provider_request_telemetry_event(
     let session_id = event.session_id;
     let is_usage_boundary = matches!(
         event.kind,
-        ProviderRequestTelemetryEventKind::Started | ProviderRequestTelemetryEventKind::Completed
+        ProviderRequestTelemetryEventKind::Started
+            | ProviderRequestTelemetryEventKind::Dispatched
+            | ProviderRequestTelemetryEventKind::FirstToken
+            | ProviderRequestTelemetryEventKind::Completed
     );
     let accounting_result = if is_usage_boundary {
+        let rollback = capture_provider_usage_boundary_rollback(state, session_id)?;
         // Keep accounting errors separate so the ordered Hook event is still delivered.
         // 将状态记账错误与 Hook 事件投递分离，确保有序 Hook 事件仍然发送。
-        (|| {
-            let changed_snapshot = apply_provider_request_usage_telemetry(state, &event)?;
-            if let Some(snapshot) = changed_snapshot {
-                spawn_workspace_session_persist_task(
-                    state.clone(),
-                    controller_runtime.clone(),
-                    snapshot,
-                    session_id,
-                    Some(persist_reason.to_string()),
-                );
+        match apply_provider_request_usage_telemetry(state, &event) {
+            Err(error) => Err(error),
+            Ok(changed_snapshot) => {
+                let persistence_result = if let Some(snapshot) = changed_snapshot {
+                    let attempted_ledger = snapshot
+                        .session_runtime_state
+                        .get(&session_id)
+                        .or_else(|| snapshot.archived_session_runtime_state.get(&session_id))
+                        .map(|runtime_state| runtime_state.provider_call_ledger.clone())
+                        .ok_or_else(|| {
+                            format!(
+                                "Session `{session_id}` lost its Provider ledger before persistence."
+                            )
+                        })?;
+                    persist_provider_call_boundary(
+                        state,
+                        controller_runtime,
+                        &snapshot,
+                        session_id,
+                    )
+                    .await
+                    .map_err(|error| {
+                        format!(
+                            "{persist_reason}: failed to durably persist Provider call boundary: {error}"
+                        )
+                    })
+                    .and_then(|()| {
+                        if event.kind == ProviderRequestTelemetryEventKind::Completed {
+                            event.replace_durable_budget_baseline(
+                                durable_provider_usage_baseline(&snapshot, session_id)?,
+                            )?;
+                        }
+                        Ok(())
+                    })
+                    .or_else(|error| {
+                        restore_provider_usage_boundary_after_persist_failure(
+                            state,
+                            session_id,
+                            &attempted_ledger,
+                            rollback,
+                        )
+                        .map_err(|rollback_error| {
+                            format!("{error}; in-memory Provider rollback failed: {rollback_error}")
+                        })?;
+                        Err(error)
+                    })
+                } else {
+                    Ok(())
+                };
+                persistence_result.and_then(|()| {
+                    if let Some(app) = app {
+                        emit_session_addons_changed_delta(app, state, session_id)?;
+                    }
+                    Ok(())
+                })
             }
-            if let Some(app) = app {
-                emit_session_addons_changed_delta(app, state, session_id)?;
-            }
-            Ok(())
-        })()
+        }
     } else {
         Ok(())
     };
     provider_telemetry_guard.forward(event);
     accounting_result
+}
+
+/// Resolves the exact stable call record named by one durably persisted session ledger.
+/// 解析一份已持久化会话账本所指向的精确稳定调用记录。
+fn durable_provider_usage_baseline(
+    workspace_snapshot: &WorkspaceSnapshot,
+    session_id: SessionId,
+) -> Result<Option<SessionProviderCallRecord>, String> {
+    let ledger = &workspace_snapshot
+        .session_runtime_state
+        .get(&session_id)
+        .ok_or_else(|| format!("Session `{session_id}` has no projected Provider call ledger."))?
+        .provider_call_ledger;
+    let Some(baseline_ref) = ledger.last_stable_context_baseline.as_ref() else {
+        return Ok(None);
+    };
+    ledger
+        .calls
+        .get(baseline_ref.provider_call_id.as_str())
+        .cloned()
+        .map(Some)
+        .ok_or_else(|| {
+            format!(
+                "Session `{session_id}` Provider baseline `{}` is missing from its durable ledger.",
+                baseline_ref.provider_call_id
+            )
+        })
+}
+
+/// Persists one physical-call boundary into the exact owning session store.
+/// 将一次物理调用边界持久化到精确所属的会话存储。
+///
+/// # Parameters
+/// 参数
+/// `state` supplies the resident TaskRuntime when the owner is a child task.
+/// `state` 在所有者是子任务时提供常驻 TaskRuntime。
+/// `controller_runtime` owns ordinary WebUI session persistence.
+/// `controller_runtime` 持有普通 WebUI 会话持久化能力。
+/// `workspace_snapshot` contains the already-projected ledger revision.
+/// `workspace_snapshot` 包含已完成投影的账本修订版。
+/// `session_id` is the exact main-session or TaskSession owner.
+/// `session_id` 是精确的主会话或 TaskSession 所有者。
+///
+/// # Returns
+/// 返回值
+/// Returns only after the owner-specific durable boundary has completed.
+/// 仅在所属会话的专用持久化边界完成后返回。
+async fn persist_provider_call_boundary(
+    state: &SharedServiceBridgeState,
+    controller_runtime: &ControllerRuntimeHandle,
+    workspace_snapshot: &WorkspaceSnapshot,
+    session_id: SessionId,
+) -> Result<(), String> {
+    if workspace_snapshot_contains_regular_session(workspace_snapshot, session_id) {
+        return persist_workspace_session_update(
+            Some(state),
+            controller_runtime.clone(),
+            workspace_snapshot,
+            session_id,
+        )
+        .await;
+    }
+    let provider_call_ledger = workspace_snapshot
+        .session_runtime_state
+        .get(&session_id)
+        .ok_or_else(|| format!("TaskSession `{session_id}` has no projected runtime state."))?
+        .provider_call_ledger
+        .clone();
+    let task_runtime = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?
+        .agent_runtime
+        .as_ref()
+        .map(|runtime| runtime.task_runtime.clone())
+        .ok_or_else(|| {
+            format!(
+                "TaskSession `{session_id}` has no installed TaskRuntime for Usage persistence."
+            )
+        })?;
+    task_runtime.persist_task_provider_call_ledger(session_id, &provider_call_ledger)
+}
+
+/// Persists one started or terminal Provider boundary and always releases its execution gate.
+/// 持久化一个 Provider 开始或终态边界，并始终释放其执行闸门。
+///
+/// # Parameters
+/// 参数
+/// The arguments are the same authoritative telemetry inputs plus the single-use completion handle.
+/// 参数为相同的权威遥测输入以及一次性完成句柄。
+///
+/// # Returns
+/// 返回值
+/// Returns the exact accounting or persistence result delivered to the waiting Provider runtime.
+/// 返回传递给等待中 Provider 运行时的精确记账或持久化结果。
+pub(crate) async fn process_provider_request_durability_boundary(
+    state: &SharedServiceBridgeState,
+    controller_runtime: &ControllerRuntimeHandle,
+    app: Option<&ServiceEventEmitter>,
+    provider_telemetry_guard: &mut ProviderTelemetryHookGuard,
+    event: ProviderRequestTelemetryEvent,
+    completion: ProviderRequestDurabilityCompletion,
+    persist_reason: &str,
+) -> Result<(), String> {
+    let result = process_provider_request_telemetry_event(
+        state,
+        controller_runtime,
+        app,
+        provider_telemetry_guard,
+        event,
+        persist_reason,
+    )
+    .await;
+    let _ = completion.complete(result.clone());
+    result
 }
 
 /// Persists one terminal physical Provider attempt in the native controller-backed ledger.
@@ -481,6 +923,165 @@ fn telemetry_required_i64(event: &ProviderRequestTelemetryEvent, key: &str) -> R
         .ok_or_else(|| format!("provider telemetry payload is missing integer {key}"))
 }
 
+/// Reads one required unsigned 32-bit integer from the versioned telemetry payload.
+/// 从版本化遥测载荷读取一个必需的无符号 32 位整数。
+fn telemetry_required_u32(event: &ProviderRequestTelemetryEvent, key: &str) -> Result<u32, String> {
+    let value = event
+        .payload
+        .get(key)
+        .and_then(Value::as_u64)
+        .ok_or_else(|| format!("provider telemetry payload is missing unsigned integer {key}"))?;
+    u32::try_from(value).map_err(|_| format!("provider telemetry payload field {key} exceeds u32"))
+}
+
+/// Reads one required unsigned 64-bit integer from the versioned telemetry payload.
+/// 从版本化遥测载荷读取一个必需的无符号 64 位整数。
+fn telemetry_required_u64(event: &ProviderRequestTelemetryEvent, key: &str) -> Result<u64, String> {
+    event
+        .payload
+        .get(key)
+        .and_then(Value::as_u64)
+        .ok_or_else(|| format!("provider telemetry payload is missing unsigned integer {key}"))
+}
+
+/// Reads one required host-sized unsigned integer from the telemetry payload.
+/// 从遥测载荷读取一个必需的宿主尺寸无符号整数。
+fn telemetry_required_usize(
+    event: &ProviderRequestTelemetryEvent,
+    key: &str,
+) -> Result<usize, String> {
+    let value = telemetry_required_u64(event, key)?;
+    usize::try_from(value)
+        .map_err(|_| format!("provider telemetry payload field {key} exceeds usize"))
+}
+
+/// Reads one required boolean from the versioned telemetry payload.
+/// 从版本化遥测载荷读取一个必需布尔值。
+fn telemetry_required_bool(
+    event: &ProviderRequestTelemetryEvent,
+    key: &str,
+) -> Result<bool, String> {
+    event
+        .payload
+        .get(key)
+        .and_then(Value::as_bool)
+        .ok_or_else(|| format!("provider telemetry field `{key}` must be a boolean"))
+}
+
+/// Projects request-admission accounting without converting it into Provider usage evidence.
+/// 投影请求准入记账且不把它转换为 Provider 用量证据。
+fn budget_accounting_from_started_event(
+    event: &ProviderRequestTelemetryEvent,
+) -> Result<Option<SessionProviderBudgetAccounting>, String> {
+    let Some(source) = telemetry_optional_string(event, "budget_accounting_source") else {
+        return Ok(None);
+    };
+    let source = match source.as_str() {
+        "provider_reported" => SessionProviderBudgetAccountingSource::ProviderReported,
+        "provider_anchor_plus_character_delta" => {
+            SessionProviderBudgetAccountingSource::ProviderAnchorPlusCharacterDelta
+        }
+        "character_estimate" => SessionProviderBudgetAccountingSource::CharacterEstimate,
+        value => {
+            return Err(format!(
+                "unknown Provider request budget accounting source: {value}"
+            ));
+        }
+    };
+    Ok(Some(SessionProviderBudgetAccounting {
+        source,
+        input_tokens: event
+            .payload
+            .get("budget_input_tokens")
+            .and_then(Value::as_u64)
+            .map(usize::try_from)
+            .transpose()
+            .map_err(|_| String::from("budget_input_tokens exceeds usize"))?,
+        output_tokens: None,
+        total_tokens: event
+            .payload
+            .get("budget_total_tokens")
+            .and_then(Value::as_u64)
+            .map(usize::try_from)
+            .transpose()
+            .map_err(|_| String::from("budget_total_tokens exceeds usize"))?,
+        warning_code: telemetry_optional_string(event, "budget_warning_code"),
+    }))
+}
+
+/// Parses one ordered projection-profile revision array from its exact telemetry key.
+/// 从精确遥测键解析一组有序投影 Profile 修订。
+fn telemetry_profile_revisions(
+    event: &ProviderRequestTelemetryEvent,
+    key: &str,
+) -> Result<Vec<SessionProviderProfileRevision>, String> {
+    let values = event
+        .payload
+        .get(key)
+        .and_then(Value::as_array)
+        .ok_or_else(|| format!("provider telemetry payload is missing array {key}"))?;
+    values
+        .iter()
+        .enumerate()
+        .map(|(index, value)| {
+            let profile_id = value
+                .get("profile_id")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    format!("provider telemetry payload {key}[{index}] is missing profile_id")
+                })?
+                .to_string();
+            let revision = value
+                .get("revision")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| {
+                    format!("provider telemetry payload {key}[{index}] is missing revision")
+                })?;
+            Ok(SessionProviderProfileRevision {
+                profile_id,
+                revision,
+            })
+        })
+        .collect()
+}
+
+/// Projects the exact typed telemetry identity into one immutable session-ledger identity.
+/// 将精确强类型遥测身份投影为不可变会话账本身份。
+fn provider_call_identity_from_event(
+    event: &ProviderRequestTelemetryEvent,
+) -> Result<SessionProviderCallIdentity, String> {
+    let execution_id = telemetry_string(event, "execution_id")?;
+    Ok(SessionProviderCallIdentity {
+        // The current telemetry contract defines execution_id as the logical run shared by attempts.
+        // 当前遥测契约将 execution_id 定义为多个 attempt 共享的逻辑运行身份。
+        logical_request_id: execution_id.clone(),
+        execution_id,
+        turn_id: telemetry_optional_string(event, "turn_id"),
+        attempt_index: telemetry_required_u32(event, "attempt_index")?,
+        retry_number: telemetry_required_u32(event, "retry_count")?,
+        owner_kind: telemetry_string(event, "owner_kind")?,
+        owner_id: telemetry_string(event, "owner_id")?,
+        owner_name_snapshot: telemetry_string(event, "owner_name")?,
+        operation: telemetry_string(event, "operation")?,
+        provider_id: telemetry_string(event, "provider_key")?,
+        provider_name_snapshot: telemetry_string(event, "provider_name")?,
+        model_id: telemetry_string(event, "model_key")?,
+        model_name_snapshot: telemetry_string(event, "model_name")?,
+        connection_id: telemetry_string(event, "connection_id")?,
+        service_entry_id: telemetry_string(event, "service_entry_id")?,
+        protocol_profile_id: telemetry_string(event, "protocol_profile_id")?,
+        manifest_revision: telemetry_required_u64(event, "manifest_revision")?,
+        manifest_generation: telemetry_required_u64(event, "manifest_generation")?,
+        binding_source: telemetry_string(event, "binding_source")?,
+        binding_rule: telemetry_optional_string(event, "binding_rule_id"),
+        route_revision: telemetry_string(event, "route_revision")?,
+        request_profiles: telemetry_profile_revisions(event, "request_profiles")?,
+        response_profiles: telemetry_profile_revisions(event, "response_profiles")?,
+    })
+}
+
 /// Converts one optional host token count into an exact SQLite integer without saturation.
 /// 将一个可选宿主 Token 数精确转换为 SQLite 整数且不进行饱和处理。
 fn usage_i64(value: Option<usize>, field: &str) -> Result<Option<i64>, String> {
@@ -546,17 +1147,32 @@ fn dispatch_facts(status: &str, dispatch_outcome: Option<&str>) -> (bool, bool) 
     (dispatched, known)
 }
 
-/// Converts the exact terminal payload status into the persisted segment state.
-/// 将精确终态载荷状态转换为持久化分段状态。
-fn completed_segment_status(
-    event: &ProviderRequestTelemetryEvent,
-) -> Result<SessionProviderUsageSegmentStatus, String> {
-    match telemetry_string(event, "status")?.as_str() {
-        "succeeded" => Ok(SessionProviderUsageSegmentStatus::Succeeded),
-        "failed" | "cancelled" => Ok(SessionProviderUsageSegmentStatus::Failed),
+/// Converts the exact terminal payload status into the persisted call state.
+/// 将精确终态载荷状态转换为持久化调用状态。
+fn completed_call_status(status: &str) -> Result<SessionProviderCallStatus, String> {
+    match status {
+        "succeeded" => Ok(SessionProviderCallStatus::Succeeded),
+        "failed" => Ok(SessionProviderCallStatus::Failed),
+        "cancelled" => Ok(SessionProviderCallStatus::Cancelled),
         status => Err(format!(
             "unknown provider telemetry terminal status: {status}"
         )),
+    }
+}
+
+/// Converts typed terminal usage into Provider-only ledger evidence.
+/// 将强类型终态用量转换为仅含 Provider 事实的账本证据。
+fn provider_usage_evidence_from_event(
+    event: &ProviderRequestTelemetryEvent,
+) -> SessionProviderUsageEvidence {
+    let availability = match usage_availability(event.completed_usage.as_ref()) {
+        "final" => SessionProviderUsageAvailability::Final,
+        "partial" => SessionProviderUsageAvailability::Partial,
+        _ => SessionProviderUsageAvailability::Missing,
+    };
+    SessionProviderUsageEvidence {
+        availability,
+        provider_usage: provider_usage_snapshot_from_event(event),
     }
 }
 
@@ -595,20 +1211,155 @@ fn provider_usage_snapshot_from_event(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
+
+    /// Shell host used by isolated Provider ledger service-state tests.
+    /// 隔离 Provider 账本服务状态测试使用的宿主壳。
+    struct ProviderUsageTestShellHost;
+
+    impl ServiceShellHost for ProviderUsageTestShellHost {
+        /// Rejects local path opening because Provider ledger tests never invoke shell integration.
+        /// 拒绝打开本地路径，因为 Provider 账本测试不会调用壳集成。
+        fn open_path(&self, _path: &str) -> Result<(), String> {
+            Err(String::from(
+                "path opening is unavailable in Provider usage tests",
+            ))
+        }
+
+        /// Rejects URL opening because Provider ledger tests never invoke browser integration.
+        /// 拒绝打开 URL，因为 Provider 账本测试不会调用浏览器集成。
+        fn open_url(&self, _url: &str) -> Result<(), String> {
+            Err(String::from(
+                "URL opening is unavailable in Provider usage tests",
+            ))
+        }
+    }
+
+    /// Builds shared service state with an empty workspace for one candidate TaskSession.
+    /// 为一个候选 TaskSession 构建带空工作区的共享服务状态。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `session_id` becomes the selected placeholder identity without declaring a regular session.
+    /// `session_id` 成为选中占位身份，但不声明普通会话。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A shared state whose runtime maps are empty before the first Provider boundary.
+    /// 返回在首个 Provider 边界前运行态映射为空的共享状态。
+    fn provider_usage_test_state(session_id: SessionId) -> SharedServiceBridgeState {
+        let state = create_service_bridge_state(Arc::new(ProviderUsageTestShellHost));
+        let workspace = WorkspaceSnapshot {
+            task_projects: Vec::new(),
+            archived_task_projects: Vec::new(),
+            sessions: Vec::new(),
+            archived_sessions: Vec::new(),
+            session_messages: BTreeMap::new(),
+            archived_session_messages: BTreeMap::new(),
+            session_compactions: BTreeMap::new(),
+            archived_session_compactions: BTreeMap::new(),
+            session_runtime_state: BTreeMap::new(),
+            archived_session_runtime_state: BTreeMap::new(),
+            session_run_phases: BTreeMap::new(),
+            expanded_task_projects: BTreeSet::new(),
+            selected_session: session_id,
+            hydrated_session_ids: BTreeSet::new(),
+        };
+        state
+            .lock()
+            .expect("test service state should lock")
+            .workspace_snapshot = Some(workspace);
+        state
+    }
+
+    /// Builds one complete telemetry payload shared by started and completed event tests.
+    /// 构建开始与完成事件测试共享的一份完整遥测载荷。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `status` supplies a terminal status only for completed events.
+    /// `status` 仅为完成事件提供终态。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A privacy-safe payload satisfying the current typed telemetry contract.
+    /// 返回满足当前强类型遥测契约且不含敏感信息的载荷。
+    fn provider_usage_test_payload(status: Option<&str>) -> Value {
+        let mut payload = serde_json::json!({
+            "request_id": "call-1",
+            "execution_id": "execution-1",
+            "attempt_index": 0,
+            "retry_count": 0,
+            "owner_kind": "subagent",
+            "owner_id": "task-1",
+            "owner_name": "Task One",
+            "operation": "conversation",
+            "provider_key": "provider-1",
+            "provider_name": "Provider One",
+            "model_key": "model-1",
+            "model_name": "Model One",
+            "connection_id": "connection-1",
+            "service_entry_id": "public-api",
+            "protocol_profile_id": "openai.responses",
+            "manifest_revision": 1,
+            "manifest_generation": 1,
+            "binding_source": "system_manifest",
+            "route_revision": "sha256:route",
+            "request_profiles": [],
+            "response_profiles": [],
+            "started_at_ms": 1,
+            "request_character_count": 10,
+            "request_utf8_byte_count": 10,
+            "request_structural_units": 1,
+            "request_history_message_count": 1,
+            "request_prompt_in_history": true
+        });
+        if let Some(status) = status {
+            payload["status"] = Value::String(status.to_string());
+            payload["completed_at_ms"] = Value::from(2);
+            payload["semantic_output_observed"] = Value::Bool(status == "succeeded");
+        }
+        payload
+    }
+
+    /// Builds one detached Provider telemetry event for service-state accounting tests.
+    /// 为服务状态记账测试构建一条分离的 Provider 遥测事件。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `kind` selects the lifecycle boundary, `session_id` selects its owner, and `status` is terminal-only.
+    /// `kind` 选择生命周期边界，`session_id` 选择归属，`status` 仅用于终态。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A detached event with no Provider Usage payload.
+    /// 返回不含 Provider Usage 载荷的分离事件。
+    fn provider_usage_test_event(
+        kind: ProviderRequestTelemetryEventKind,
+        session_id: SessionId,
+        status: Option<&str>,
+    ) -> ProviderRequestTelemetryEvent {
+        ProviderRequestTelemetryEvent::detached(
+            kind,
+            session_id,
+            provider_usage_test_payload(status),
+            None,
+        )
+    }
 
     /// Verifies telemetry usage conversion preserves separate cached and uncached inputs.
     /// 验证遥测用量转换会保留缓存与非缓存输入分项。
     #[test]
     fn telemetry_usage_snapshot_preserves_input_components() {
-        let event = ProviderRequestTelemetryEvent {
-            kind: ProviderRequestTelemetryEventKind::Completed,
-            session_id: SessionId::new_v4(),
-            payload: serde_json::json!({
+        let event = ProviderRequestTelemetryEvent::detached(
+            ProviderRequestTelemetryEventKind::Completed,
+            SessionId::new_v4(),
+            serde_json::json!({
                 "request_id": "call-1",
                 "owner_kind": "main_agent",
                 "status": "succeeded",
             }),
-            completed_usage: Some(
+            Some(
                 vulcan_agent_runtime::agent_runtime::provider_request_telemetry::ProviderRequestCompletedUsage {
                     uncached_input_tokens: Some(4),
                     cached_input_tokens: Some(6),
@@ -628,7 +1379,7 @@ mod tests {
                     ..Default::default()
                 },
             ),
-        };
+        );
         let usage = provider_usage_snapshot_from_event(&event).expect("usage should exist");
         assert_eq!(usage.input_tokens, None);
         assert_eq!(usage.uncached_input_tokens, Some(4));
@@ -668,5 +1419,189 @@ mod tests {
         usage.update_kind = Some(vulcan_ai_contract::UsageUpdateKind::Final);
         assert_eq!(usage_availability(Some(&usage)), "final");
         assert_eq!(usage_availability(None), "missing");
+    }
+
+    /// Verifies live completion requires a retained start and conflicting duplicates fail closed.
+    /// 验证实时完成事件必须已有保留的开始边界，且冲突重复事件会封闭失败。
+    #[test]
+    fn live_provider_boundaries_require_exact_idempotent_lifecycle_facts() {
+        let session_id = SessionId::new_v4();
+        let state = provider_usage_test_state(session_id);
+        let started =
+            provider_usage_test_event(ProviderRequestTelemetryEventKind::Started, session_id, None);
+        let completed = provider_usage_test_event(
+            ProviderRequestTelemetryEventKind::Completed,
+            session_id,
+            Some("succeeded"),
+        );
+
+        let missing_start_error = apply_provider_request_usage_telemetry(&state, &completed)
+            .expect_err("completed event without started boundary must fail");
+        assert!(missing_start_error.contains("without a durably retained Started boundary"));
+        assert!(
+            apply_provider_request_usage_telemetry(&state, &started)
+                .expect("first started event should apply")
+                .is_some()
+        );
+        assert!(
+            apply_provider_request_usage_telemetry(&state, &started)
+                .expect("exact repeated started event should be idempotent")
+                .is_none()
+        );
+
+        let mut conflicting_started = started.clone();
+        conflicting_started.payload["model_key"] = Value::String(String::from("model-2"));
+        let started_error = apply_provider_request_usage_telemetry(&state, &conflicting_started)
+            .expect_err("conflicting repeated started event must fail");
+        assert!(started_error.contains("conflicting immutable facts"));
+
+        assert!(
+            apply_provider_request_usage_telemetry(&state, &completed)
+                .expect("first completed event should apply")
+                .is_some()
+        );
+        assert!(
+            apply_provider_request_usage_telemetry(&state, &completed)
+                .expect("exact repeated completed event should be idempotent")
+                .is_none()
+        );
+
+        let conflicting_completed = provider_usage_test_event(
+            ProviderRequestTelemetryEventKind::Completed,
+            session_id,
+            Some("failed"),
+        );
+        let completed_error =
+            apply_provider_request_usage_telemetry(&state, &conflicting_completed)
+                .expect_err("conflicting repeated completed event must fail");
+        assert!(completed_error.contains("conflicting terminal facts"));
+    }
+
+    /// Verifies rollback removes a runtime entry created only for the failed boundary.
+    /// 验证回滚会删除仅为失败边界临时创建的运行态条目。
+    #[test]
+    fn failed_boundary_removes_new_runtime_state_entry() {
+        let session_id = SessionId::new_v4();
+        let state = provider_usage_test_state(session_id);
+        let rollback = capture_provider_usage_boundary_rollback(&state, session_id)
+            .expect("empty runtime map should still produce rollback facts");
+        assert!(!rollback.previous_runtime_state_existed);
+        let started =
+            provider_usage_test_event(ProviderRequestTelemetryEventKind::Started, session_id, None);
+        let changed_snapshot = apply_provider_request_usage_telemetry(&state, &started)
+            .expect("started event should create projected task state")
+            .expect("started event should change the workspace");
+        let attempted_ledger = changed_snapshot
+            .session_runtime_state
+            .get(&session_id)
+            .expect("new task runtime state should exist")
+            .provider_call_ledger
+            .clone();
+
+        restore_provider_usage_boundary_after_persist_failure(
+            &state,
+            session_id,
+            &attempted_ledger,
+            rollback,
+        )
+        .expect("failed boundary should remove its temporary runtime state");
+        let guard = state.lock().expect("test service state should lock");
+        assert!(
+            !guard
+                .workspace_snapshot
+                .as_ref()
+                .expect("test workspace should remain installed")
+                .session_runtime_state
+                .contains_key(&session_id)
+        );
+    }
+
+    /// Verifies a failed durable write rolls back only the exact attempted ledger revision.
+    /// 验证可靠写入失败只会回滚精确的尝试账本修订。
+    #[test]
+    fn failed_durable_boundary_rollback_is_exact_and_fail_closed() {
+        let previous_ledger = SessionProviderCallLedger::default();
+        let mut attempted_ledger = previous_ledger.clone();
+        assert!(attempted_ledger.observe_started(
+            vulcan_workbench_model::SessionProviderCallStarted {
+                provider_call_id: String::from("rollback-call"),
+                identity: vulcan_workbench_model::SessionProviderCallIdentity {
+                    logical_request_id: String::from("rollback-logical"),
+                    execution_id: String::from("rollback-execution"),
+                    turn_id: Some(String::from("rollback-turn")),
+                    attempt_index: 0,
+                    retry_number: 0,
+                    owner_kind: String::from("main_agent"),
+                    owner_id: String::from("main-agent"),
+                    owner_name_snapshot: String::from("Main Agent"),
+                    operation: String::from("conversation"),
+                    provider_id: String::from("provider"),
+                    provider_name_snapshot: String::from("Provider"),
+                    model_id: String::from("model"),
+                    model_name_snapshot: String::from("Model"),
+                    connection_id: String::from("connection"),
+                    service_entry_id: String::from("public-api"),
+                    protocol_profile_id: String::from("responses"),
+                    manifest_revision: 1,
+                    manifest_generation: 1,
+                    binding_source: String::from("system_manifest"),
+                    binding_rule: None,
+                    route_revision: String::from("route"),
+                    request_profiles: Vec::new(),
+                    response_profiles: Vec::new(),
+                },
+                prepared_at_ms: 1,
+                request_assembly_fingerprint: None,
+                context_generation_id: None,
+                context_start_record_id: None,
+                model_route_fingerprint: None,
+                toolset_fingerprint: None,
+                system_prompt_fingerprint: None,
+                request_text_measurement: None,
+                budget_accounting: None,
+            }
+        ));
+        let rollback = ProviderUsageBoundaryRollback {
+            archived: false,
+            previous_runtime_state_existed: true,
+            previous_ledger: previous_ledger.clone(),
+            previous_updated_at: String::from("before"),
+        };
+        let mut runtime_state = SessionRuntimeStateEntry {
+            provider_call_ledger: attempted_ledger.clone(),
+            updated_at: String::from("attempted"),
+            ..SessionRuntimeStateEntry::default()
+        };
+
+        restore_provider_usage_runtime_state_after_persist_failure(
+            &mut runtime_state,
+            &attempted_ledger,
+            rollback.clone(),
+        )
+        .expect("exact attempted ledger should roll back");
+        assert_eq!(runtime_state.provider_call_ledger, previous_ledger);
+        assert_eq!(runtime_state.updated_at, "before");
+
+        let mut advanced_runtime_state = SessionRuntimeStateEntry {
+            provider_call_ledger: attempted_ledger.clone(),
+            ..SessionRuntimeStateEntry::default()
+        };
+        assert!(
+            advanced_runtime_state
+                .provider_call_ledger
+                .observe_dispatched("rollback-call", 2)
+        );
+        let advanced_snapshot = advanced_runtime_state.provider_call_ledger.clone();
+        let error = restore_provider_usage_runtime_state_after_persist_failure(
+            &mut advanced_runtime_state,
+            &attempted_ledger,
+            rollback,
+        )
+        .expect_err("newer ledger state must not be overwritten");
+        assert!(error.contains("advanced"));
+        assert_eq!(
+            advanced_runtime_state.provider_call_ledger,
+            advanced_snapshot
+        );
     }
 }

@@ -11,7 +11,7 @@ use super::{
     ManifestCredentialProfile, ManifestDirectoryVisibility, ManifestDisplay, ManifestEntryKind,
     ManifestModelCatalog, ManifestProtocolRoute, ManifestProvenance, ManifestServiceEntry,
     ModelDefaults, ModelDefaultsOverlay, ModelSourcePolicy, ProvenanceStatus, ProviderManifestV1,
-    UnknownModelPolicy,
+    UnknownModelPolicy, UsageProfileDeclaration,
 };
 use crate::{
     CredentialDirectoryVisibility, ProviderCategory, ProviderDescriptor, ProviderKind, ServiceEntry,
@@ -46,11 +46,12 @@ pub fn legacy_custom_descriptor_to_manifest(
         ));
     }
 
-    let services = provider
+    let mut services = provider
         .service_entries
         .iter()
         .map(convert_service_entry)
         .collect::<Vec<_>>();
+    let usage_profiles = materialize_standard_usage_profiles(&mut services);
     // catalogMembershipPolicy preserves descriptor-v0 discovery authority. Those records carried
     // no exact model declarations, so DeclaredOnly would erase every successfully discovered model
     // immediately after standalone-manifest migration.
@@ -157,7 +158,7 @@ pub fn legacy_custom_descriptor_to_manifest(
             provenance_ref: None,
         },
         model_rules: Vec::new(),
-        usage_profiles: Vec::new(),
+        usage_profiles,
         request_profiles: Vec::new(),
         response_profiles: Vec::new(),
         upload_channels: Vec::new(),
@@ -171,6 +172,100 @@ pub fn legacy_custom_descriptor_to_manifest(
             verified_at: None,
         },
     })
+}
+
+/// Compares the descriptor-owned custom-provider facts while excluding Manifest-owned profiles.
+/// 比较描述符持有的自定义供应商事实，同时排除 Manifest 持有的 Profile。
+///
+/// # Parameters
+/// 参数
+/// `manifest_descriptor` is the descriptor compiled from the complete standalone Manifest.
+/// `manifest_descriptor` 是从完整独立 Manifest 编译出的描述符。
+/// `activated_descriptor` is the UI/configuration projection activated for the same provider.
+/// `activated_descriptor` 是为同一供应商激活的 UI/配置投影。
+///
+/// # Returns
+/// 返回值
+/// `true` only when every descriptor-owned fact matches. Usage, request, and response Profile
+/// payloads are excluded because their stable references and payloads are owned exclusively by
+/// the standalone Manifest and intentionally do not round-trip through the descriptor editor.
+/// 仅当全部描述符持有事实一致时返回 `true`。用量、请求与响应 Profile 载荷被排除，因为其
+/// 稳定引用和载荷仅由独立 Manifest 持有，且刻意不经过描述符编辑器往返。
+pub fn custom_manifest_matches_activated_descriptor(
+    manifest_descriptor: &ProviderDescriptor,
+    activated_descriptor: &ProviderDescriptor,
+) -> bool {
+    let mut manifest_projection = manifest_descriptor.clone();
+    let mut activated_projection = activated_descriptor.clone();
+    clear_manifest_owned_protocol_profiles(&mut manifest_projection);
+    clear_manifest_owned_protocol_profiles(&mut activated_projection);
+    manifest_projection == activated_projection
+}
+
+/// Clears protocol payloads whose authority belongs to the standalone custom Manifest.
+/// 清除权威归属于独立自定义 Manifest 的协议载荷。
+///
+/// # Parameters
+/// 参数
+/// `descriptor` is a temporary comparison projection and is never published.
+/// `descriptor` 是临时比较投影，绝不会被发布。
+///
+/// # Returns
+/// 返回值
+/// This function mutates the temporary projection and returns no value.
+/// 此函数修改临时投影且不返回值。
+fn clear_manifest_owned_protocol_profiles(descriptor: &mut ProviderDescriptor) {
+    for service_entry in &mut descriptor.service_entries {
+        for route in &mut service_entry.protocol_routes {
+            route.usage_extraction_profiles.clear();
+            route.request_projection_profiles.clear();
+            route.response_projection_profiles.clear();
+        }
+    }
+}
+
+/// Materializes protocol-specific standard Usage profiles into one standalone custom manifest.
+/// 将协议专属标准用量 Profile 物化到一份独立自定义 Manifest 中。
+///
+/// `services` contains the exact custom service routes and is updated with explicit profile refs.
+/// `services` 包含精确自定义服务路由，并会被写入显式 Profile 引用。
+/// Returns de-duplicated named payload declarations owned by the same provider document.
+/// 返回由同一供应商文档持有的去重具名载荷声明。
+fn materialize_standard_usage_profiles(
+    services: &mut [ManifestServiceEntry],
+) -> Vec<UsageProfileDeclaration> {
+    let mut declarations = Vec::<UsageProfileDeclaration>::new();
+    for service in services {
+        for route in &mut service.protocol_routes {
+            let Some(protocol) = crate::execution::upstream_protocol_for_profile_id(
+                route.protocol_profile_id.as_str(),
+            ) else {
+                continue;
+            };
+            let profiles = vulcan_llm_core::standard_usage_profiles(protocol);
+            route.usage_profile_refs = profiles
+                .iter()
+                .map(|profile| profile.profile_id.clone())
+                .collect();
+            for payload in profiles {
+                if declarations
+                    .iter()
+                    .any(|declaration| declaration.profile_id == payload.profile_id)
+                {
+                    continue;
+                }
+                declarations.push(UsageProfileDeclaration {
+                    profile_id: payload.profile_id.clone(),
+                    description: format!(
+                        "Materialized standard Usage compatibility for protocol `{}`.",
+                        route.protocol_profile_id
+                    ),
+                    payload: Some(payload),
+                });
+            }
+        }
+    }
+    declarations
 }
 
 /// Converts one service entry.

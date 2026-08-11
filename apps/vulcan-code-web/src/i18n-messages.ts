@@ -365,8 +365,8 @@ export type TranslationKey =
   | "conversation.systemError.true"
   | "conversation.systemError.false"
   | "conversation.systemError.raw"
-  | "conversation.systemError.retry"
-  | "conversation.systemError.retrying"
+  | "conversation.continue"
+  | "conversation.continuing"
   | "conversation.metadata.type"
   | "conversation.metadata.status"
   | "conversation.metadata.tool"
@@ -395,6 +395,11 @@ export type TranslationKey =
   | "conversation.process.stoppedAfter"
   | "conversation.process.stopped"
   | "conversation.process.duration"
+  | "conversation.process.providerUsageBadge"
+  | "conversation.process.providerUsageActive"
+  | "conversation.process.providerUsageLifetime"
+  | "conversation.process.providerUsageInherited"
+  | "conversation.process.providerUsageUnknown"
   | "conversation.toolSequence.summary"
   | "conversation.toolSequence.runningSummary"
   | "conversation.action.editPrompt"
@@ -638,7 +643,7 @@ export type TranslationKey =
   | "conversationActions.noProjectForSend"
   | "conversationActions.previewCannotSend"
   | "conversationActions.previewCannotCompact"
-  | "conversationActions.previewCannotRetry"
+  | "conversationActions.previewCannotContinue"
   | "conversationActions.modelSwitched"
   | "projectActions.vmmSaved"
   | "projectActions.openRequested"
@@ -2986,8 +2991,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.systemError.true": "是",
     "conversation.systemError.false": "否",
     "conversation.systemError.raw": "查看原始错误",
-    "conversation.systemError.retry": "重试",
-    "conversation.systemError.retrying": "重试中",
+    "conversation.continue": "继续",
+    "conversation.continuing": "继续中",
     "conversation.metadata.type": "类型",
     "conversation.metadata.status": "状态",
     "conversation.metadata.tool": "工具",
@@ -3016,6 +3021,11 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.process.stoppedAfter": "你在 {duration} 后停止了",
     "conversation.process.stopped": "你已停止本轮工作",
     "conversation.process.duration": "持续 {duration}",
+    "conversation.process.providerUsageBadge": "当前分支 Provider API {calls} 次 · {inFlight} 进行中 · Token {tokens}",
+    "conversation.process.providerUsageActive": "当前活动分支：{calls} 次，Token {tokens}，未知 Usage {unknown} 次",
+    "conversation.process.providerUsageLifetime": "本会话实际生命周期：{calls} 次，Token {tokens}",
+    "conversation.process.providerUsageInherited": "分叉继承（未重复计费）：{calls} 次，Token {tokens}",
+    "conversation.process.providerUsageUnknown": "未知",
     "conversation.toolSequence.summary": "已执行 {count} 次工具调用",
     "conversation.toolSequence.runningSummary": "已执行 {completed} 次调用，正在调用 {running} 个工具",
     "conversation.action.editPrompt": "编辑用户输入",
@@ -3259,7 +3269,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversationActions.noProjectForSend": "当前会话没有明确关联项目，无法发送。",
     "conversationActions.previewCannotSend": "浏览器预览模式下无法发送真实会话。",
     "conversationActions.previewCannotCompact": "浏览器预览模式下无法执行真实上下文压缩。",
-    "conversationActions.previewCannotRetry": "浏览器预览模式下无法重试真实会话。",
+    "conversationActions.previewCannotContinue": "浏览器预览模式下无法继续真实会话。",
     "conversationActions.modelSwitched": "当前模型已切换为 {model}（{provider}）。",
     "projectActions.vmmSaved": "已保存项目 VMM 设置。",
     "projectActions.openRequested": "已请求打开项目目录：{project}",
@@ -5604,8 +5614,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.systemError.true": "Yes",
     "conversation.systemError.false": "No",
     "conversation.systemError.raw": "View raw error",
-    "conversation.systemError.retry": "Retry",
-    "conversation.systemError.retrying": "Retrying",
+    "conversation.continue": "Continue",
+    "conversation.continuing": "Continuing",
     "conversation.metadata.type": "Type",
     "conversation.metadata.status": "Status",
     "conversation.metadata.tool": "Tool",
@@ -5634,6 +5644,11 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.process.stoppedAfter": "You stopped after {duration}",
     "conversation.process.stopped": "You stopped this turn",
     "conversation.process.duration": "Duration {duration}",
+    "conversation.process.providerUsageBadge": "Current branch Provider API {calls} · {inFlight} in progress · Tokens {tokens}",
+    "conversation.process.providerUsageActive": "Active branch: {calls} calls, tokens {tokens}, unknown Usage {unknown}",
+    "conversation.process.providerUsageLifetime": "Calls made in this session: {calls}, tokens {tokens}",
+    "conversation.process.providerUsageInherited": "Inherited by fork (not billed again): {calls}, tokens {tokens}",
+    "conversation.process.providerUsageUnknown": "unknown",
     "conversation.toolSequence.summary": "Ran {count} tool calls",
     "conversation.toolSequence.runningSummary": "Ran {completed} calls, running {running} tools",
     "conversation.action.editPrompt": "Edit user input",
@@ -5877,7 +5892,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversationActions.noProjectForSend": "The current conversation is not linked to a project, so it cannot be sent.",
     "conversationActions.previewCannotSend": "Real conversations cannot be sent in browser preview mode.",
     "conversationActions.previewCannotCompact": "Real context compaction cannot run in browser preview mode.",
-    "conversationActions.previewCannotRetry": "Real conversations cannot be retried in browser preview mode.",
+    "conversationActions.previewCannotContinue": "Real conversations cannot be continued in browser preview mode.",
     "conversationActions.modelSwitched": "Current model switched to {model} ({provider}).",
     "projectActions.vmmSaved": "Project VMM settings saved.",
     "projectActions.openRequested": "Requested to open project directory: {project}",

@@ -8,7 +8,24 @@ pub(super) fn publish_task_finished_to_parent(
     outcome: &TaskExecutionOutcome,
     detail: &str,
 ) {
-    let event = build_task_finished_parent_runtime_event(request, outcome, detail);
+    let persisted_turn_stats = match task_runtime
+        .persisted_task_turn_stats(request.task_id, request.execution_id.as_str())
+    {
+        Ok(turn_stats) => turn_stats,
+        Err(error) => {
+            eprintln!(
+                "[task-runtime] failed to load persisted Turn Stats for task {} execution {}: {error}",
+                request.task_id, request.execution_id
+            );
+            None
+        }
+    };
+    let event = build_task_finished_parent_runtime_event_with_turn_stats(
+        request,
+        outcome,
+        detail,
+        persisted_turn_stats.as_ref(),
+    );
     // error is the terminal delivery failure that cannot propagate beyond the detached background owner.
     // error 是无法越过分离后台所有者继续传播的终态投递失败。
     if let Err(error) = task_runtime.publish_detached_task_event(
@@ -26,14 +43,31 @@ pub(super) fn publish_task_finished_to_parent(
     }
 }
 
-/// Builds a terminal child-task lifecycle event for the parent session.
-/// 为父级会话构建终态子任务生命周期事件。
-pub(super) fn build_task_finished_parent_runtime_event(
+/// Builds one completed parent event with an optional ledger-materialized child statistic.
+/// 构建一条可携带账本物化子统计的完成父事件。
+///
+/// # Parameters
+/// 参数
+/// `request` identifies the exact child execution and parent relationship.
+/// `request` 标识精确的子执行及父级关系。
+/// `outcome` retains legacy execution counters and result content.
+/// `outcome` 保留旧版执行计数与结果内容。
+/// `detail` is the human-readable lifecycle explanation.
+/// `detail` 是人类可读的生命周期说明。
+/// `turn_stats` is the preferred inclusive ledger-derived contribution source.
+/// `turn_stats` 是首选的账本派生包容性贡献来源。
+///
+/// # Returns
+/// 返回值
+/// Returns one DelegateFinished event ready for the exact parent runtime.
+/// 返回一条可投递给精确父运行时的 DelegateFinished 事件。
+fn build_task_finished_parent_runtime_event_with_turn_stats(
     request: &TaskExecutionRequest,
     outcome: &TaskExecutionOutcome,
     detail: &str,
+    turn_stats: Option<&PersistedTaskTurnStats>,
 ) -> RuntimeEvent {
-    let finished_payload = build_task_host_payload(
+    let mut finished_payload = build_task_host_payload(
         request,
         outcome.execution_status.as_str(),
         outcome.provider_turns_executed,
@@ -43,6 +77,15 @@ pub(super) fn build_task_finished_parent_runtime_event(
         outcome.usage_segments.as_slice(),
         current_unix_millis_text(),
     );
+    if let Some(turn_stats) = turn_stats
+        && let Some(payload) = finished_payload.as_object_mut()
+    {
+        payload.insert(String::from("turn_stats"), json!(&turn_stats.stats));
+        payload.insert(
+            String::from("source_turn_stats_record_id"),
+            Value::from(turn_stats.record_id.clone()),
+        );
+    }
     build_task_delegate_runtime_event(
         RuntimeEventKind::DelegateFinished,
         request,
@@ -58,7 +101,23 @@ pub(super) fn publish_task_failure_to_parent(
     request: &TaskExecutionRequest,
     error: &str,
 ) {
-    let event = build_task_failure_parent_runtime_event(request, error);
+    let persisted_turn_stats = match task_runtime
+        .persisted_task_turn_stats(request.task_id, request.execution_id.as_str())
+    {
+        Ok(turn_stats) => turn_stats,
+        Err(load_error) => {
+            eprintln!(
+                "[task-runtime] failed to load failed Turn Stats for task {} execution {}: {load_error}",
+                request.task_id, request.execution_id
+            );
+            None
+        }
+    };
+    let event = build_task_failure_parent_runtime_event_with_turn_stats(
+        request,
+        error,
+        persisted_turn_stats.as_ref(),
+    );
     // publish_error is the failed terminal delivery that cannot propagate beyond the detached background owner.
     // publish_error 是无法越过分离后台所有者继续传播的失败终态投递错误。
     if let Err(publish_error) = task_runtime.publish_detached_task_event(
@@ -76,13 +135,28 @@ pub(super) fn publish_task_failure_to_parent(
     }
 }
 
-/// Builds a failed child-task lifecycle event for the parent session.
-/// 为父级会话构建失败子任务生命周期事件。
-pub(super) fn build_task_failure_parent_runtime_event(
+/// Builds one failed parent event with an optional ledger-materialized child statistic.
+/// 构建一条可携带账本物化子统计的失败父事件。
+///
+/// # Parameters
+/// 参数
+/// `request` identifies the exact failed child execution.
+/// `request` 标识精确的失败子执行。
+/// `error` is the explicit terminal failure text.
+/// `error` 是显式终态失败文本。
+/// `turn_stats` is the optional persisted statistic containing failed-call Usage.
+/// `turn_stats` 是可选的持久化统计，其中包含失败调用 Usage。
+///
+/// # Returns
+/// 返回值
+/// Returns one DelegateFinished event that preserves failure accounting.
+/// 返回一条保留失败记账的 DelegateFinished 事件。
+fn build_task_failure_parent_runtime_event_with_turn_stats(
     request: &TaskExecutionRequest,
     error: &str,
+    turn_stats: Option<&PersistedTaskTurnStats>,
 ) -> RuntimeEvent {
-    let finished_payload = build_task_host_payload(
+    let mut finished_payload = build_task_host_payload(
         request,
         "failed",
         0,
@@ -92,6 +166,15 @@ pub(super) fn build_task_failure_parent_runtime_event(
         &[],
         current_unix_millis_text(),
     );
+    if let Some(turn_stats) = turn_stats
+        && let Some(payload) = finished_payload.as_object_mut()
+    {
+        payload.insert(String::from("turn_stats"), json!(&turn_stats.stats));
+        payload.insert(
+            String::from("source_turn_stats_record_id"),
+            Value::from(turn_stats.record_id.clone()),
+        );
+    }
     build_task_delegate_runtime_event(
         RuntimeEventKind::DelegateFinished,
         request,

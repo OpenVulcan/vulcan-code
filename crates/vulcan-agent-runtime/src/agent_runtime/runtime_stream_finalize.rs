@@ -14,9 +14,7 @@ use crate::context_budget::{
 use crate::conversation_protocol::SessionConversationState;
 use crate::model::SessionId;
 use serde_json::Value;
-use vulcan_context::{
-    ContextBaseline, ContextTokenEstimator, build_provider_request_context_assembly,
-};
+use vulcan_context::{ContextBaseline, build_provider_request_context_assembly};
 use vulcan_core::types::{
     CoreEvent as CoreControllerEvent, ProviderRequestSnapshot as CoreProviderRequestSnapshot,
     ProviderUsageSnapshot as CoreProviderUsageSnapshot,
@@ -27,7 +25,6 @@ use vulcan_core::types::{
 pub(crate) fn apply_latest_request_snapshot(
     preparation: &mut ExecutionPreparation,
     request_snapshot: Option<&CoreProviderRequestSnapshot>,
-    token_estimator: Option<&dyn ContextTokenEstimator>,
 ) {
     let Some(request_snapshot) = request_snapshot else {
         return;
@@ -48,11 +45,21 @@ pub(crate) fn apply_latest_request_snapshot(
             compaction_policy: preparation.context_compaction_policy,
             context_budget_override: preparation.context_budget_override,
             observed_usage,
+            accounted_input_tokens: observed_usage
+                .and_then(|usage| vulcan_context::observed_input_tokens_from_usage(Some(usage))),
+            accounting_source: if observed_usage.is_some() {
+                crate::context_budget::ContextBudgetAccountingSource::ProviderReported
+            } else {
+                crate::context_budget::ContextBudgetAccountingSource::CharacterEstimate
+            },
+            accounting_warning_code: observed_usage
+                .is_none()
+                .then_some("provider_usage_baseline_unavailable"),
+            provider_anchor_call_id: None,
             prefill_input_tokens: preparation
                 .context_budget
                 .as_ref()
                 .and_then(|budget| budget.auto_compact_prefill_input_tokens),
-            estimator: token_estimator,
         },
     ));
     let context_assembly = build_provider_request_context_assembly(request_snapshot);
@@ -178,18 +185,13 @@ pub(crate) fn build_failure_terminal_events(
     mcp_discovery_errors: Vec<String>,
     warnings: Vec<String>,
     stream_state: &mut RuntimeStreamDeltaState,
-    token_estimator: Option<&dyn ContextTokenEstimator>,
     error: String,
 ) -> Vec<ExecutionStreamEvent> {
     let mut events = Vec::new();
     if let Some(thinking_completed_event) = stream_state.complete_pending_thinking(session_id) {
         events.push(thinking_completed_event);
     }
-    apply_latest_request_snapshot(
-        &mut preparation,
-        stream_state.latest_request_snapshot(),
-        token_estimator,
-    );
+    apply_latest_request_snapshot(&mut preparation, stream_state.latest_request_snapshot());
     apply_latest_wire_request_json(&mut preparation, stream_state.latest_wire_request_json());
     let last_safe_conversation_state = stream_state.take_final_conversation_state();
     let last_successful_provider_usage = stream_state.take_last_successful_provider_usage();
@@ -227,18 +229,13 @@ pub(crate) fn build_success_terminal_events(
     mcp_discovery_errors: Vec<String>,
     warnings: Vec<String>,
     stream_state: &mut RuntimeStreamDeltaState,
-    token_estimator: Option<&dyn ContextTokenEstimator>,
 ) -> Vec<ExecutionStreamEvent> {
     let mut events = Vec::new();
     if let Some(thinking_completed_event) = stream_state.complete_pending_thinking(session_id) {
         events.push(thinking_completed_event);
     }
 
-    apply_latest_request_snapshot(
-        &mut preparation,
-        stream_state.latest_request_snapshot(),
-        token_estimator,
-    );
+    apply_latest_request_snapshot(&mut preparation, stream_state.latest_request_snapshot());
     apply_latest_wire_request_json(&mut preparation, stream_state.latest_wire_request_json());
 
     // visibleOutput preserves a genuinely absent assistant message when the run only requested tools.
@@ -302,6 +299,7 @@ mod tests {
     fn build_test_preparation() -> ExecutionPreparation {
         ExecutionPreparation {
             session_id: Uuid::nil(),
+            conversation_hook_turn_id: None,
             session_title: String::from("测试会话"),
             agent_id: String::from("default-agent"),
             agent_name: String::from("默认代理"),
@@ -355,6 +353,8 @@ mod tests {
             context_budget: None,
             context_compaction_policy: None,
             context_budget_override: None,
+            provider_usage_budget_baseline: None,
+            provider_usage_context_generation_id: None,
             context_assembly: None,
             context_baseline: None,
             context_request_mode: None,
@@ -405,6 +405,7 @@ mod tests {
                 String::from("system prompt").clone(),
             ),
             prompt: String::from("effective prompt"),
+            prompt_in_history: false,
             history: Vec::new(),
             temperature: Some(0.2),
             max_turns: 4,
@@ -474,7 +475,6 @@ mod tests {
             Vec::new(),
             vec![String::from("warning")],
             &mut stream_state,
-            None,
         );
 
         assert!(matches!(
@@ -522,7 +522,6 @@ mod tests {
             Vec::new(),
             Vec::new(),
             &mut stream_state,
-            None,
         );
 
         assert!(matches!(
@@ -567,7 +566,6 @@ mod tests {
             vec![String::from("mcp-error")],
             vec![String::from("warning")],
             &mut stream_state,
-            None,
             String::from("provider failed"),
         );
 
@@ -611,7 +609,7 @@ mod tests {
             ..ContextBudgetSnapshot::default()
         });
 
-        apply_latest_request_snapshot(&mut preparation, Some(&build_request_snapshot()), None);
+        apply_latest_request_snapshot(&mut preparation, Some(&build_request_snapshot()));
 
         let context_budget = preparation
             .context_budget

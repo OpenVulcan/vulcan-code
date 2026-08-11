@@ -81,6 +81,30 @@ pub struct ConversationSummary {
     /// 纯展示用分叉来源标记。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fork_source: Option<ConversationForkSourceSummary>,
+    /// Prompt-free continuation admission state for the canonical terminal boundary.
+    /// 规范终止边界的无提示词 Continue 准入状态。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub continuation: Option<ConversationContinuationSummary>,
+}
+
+/// Minimal revisioned continuation state exposed to the WebUI.
+/// 暴露给 WebUI 的最小带修订 Continue 状态。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationContinuationSummary {
+    /// Whether the backend currently considers continuation eligible.
+    /// 后端当前是否认为 Continue 可用。
+    pub eligible: bool,
+    /// Exact continuation generation required by the claim RPC.
+    /// 领取 RPC 所需的精确 Continue 代际。
+    pub generation: u64,
+    /// Exact ledger revision required by the claim RPC.
+    /// 领取 RPC 所需的精确账本修订号。
+    pub expected_ledger_revision: u64,
+    /// Stable reason recorded by the terminal continuation boundary.
+    /// 终止 Continue 边界记录的稳定原因。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 /// Describes one conversation-level action marker for cross-session navigation.
@@ -800,6 +824,23 @@ pub struct SessionProviderUsageCallSummary {
     pub error_code: Option<String>,
 }
 
+/// Aggregates one explicit Provider usage scope without mixing branch or billing semantics.
+/// 汇总一个明确的 Provider 用量口径，不混合分支或账单语义。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionProviderUsageAggregateSummary {
+    /// Number of physical calls in this exact scope.
+    /// 当前精确口径中的物理调用数量。
+    pub provider_call_count: usize,
+    /// Number of terminal calls without usable Provider usage in this scope.
+    /// 当前口径中没有可用 Provider 用量的终态调用数量。
+    pub unknown_usage_call_count: usize,
+    /// Provider-reported cumulative usage in this scope.
+    /// 当前口径中的 Provider 实测累计用量。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<SessionProviderUsageTokenSummary>,
+}
+
 /// Projects per-session Provider request counts and token usage at every physical request boundary.
 /// 在每个物理请求边界投影会话级 Provider 请求计数与 Token 用量。
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
@@ -822,6 +863,15 @@ pub struct SessionProviderUsageSummary {
     /// 全部终态请求的可用用量累计值。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cumulative_usage: Option<SessionProviderUsageTokenSummary>,
+    /// Current active branch, including inherited calls that still belong to its context.
+    /// 当前活动分支，包含仍属于其上下文的继承调用。
+    pub active_branch: SessionProviderUsageAggregateSummary,
+    /// Calls physically produced during this session lifetime, including superseded edit branches.
+    /// 此会话生命周期内真实产生的调用，包含编辑后被取代的分支。
+    pub lifetime: SessionProviderUsageAggregateSummary,
+    /// Calls inherited from the source session by a fork and not billed again here.
+    /// 分叉自源会话继承且未在当前会话重复计费的调用。
+    pub inherited: SessionProviderUsageAggregateSummary,
     /// Latest physical request lifecycle projection.
     /// 最近一次物理请求的生命周期投影。
     #[serde(default, skip_serializing_if = "Option::is_none")]

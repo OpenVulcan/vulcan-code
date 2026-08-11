@@ -4,8 +4,8 @@
 use super::*;
 use vulcan_agent_runtime::agent_runtime::question_runtime::QuestionRequest;
 use vulcan_service_api::{
-    ConversationAttentionSummary, ConversationSummary, SessionProviderUsageCallSummary,
-    SessionProviderUsageSummary, SessionProviderUsageTokenSummary,
+    ConversationAttentionSummary, ConversationSummary, SessionProviderUsageAggregateSummary,
+    SessionProviderUsageCallSummary, SessionProviderUsageSummary, SessionProviderUsageTokenSummary,
 };
 
 /// Projects persisted physical Provider usage facts into the browser-facing session summary.
@@ -23,41 +23,135 @@ use vulcan_service_api::{
 pub(crate) fn session_provider_usage_summary_from_runtime_state(
     runtime_state: &SessionRuntimeStateEntry,
 ) -> Option<SessionProviderUsageSummary> {
-    let usage_state = &runtime_state.provider_usage;
-    if usage_state.is_empty() {
+    let ledger = &runtime_state.provider_call_ledger;
+    if ledger.is_empty() {
         return None;
     }
-    let latest_call = usage_state
-        .segments
+    let active_records = ledger.active_calls_in_sequence();
+    let lifetime_records = ledger
+        .calls_in_sequence()
+        .into_iter()
+        .filter(|record| !record.inherited_from_fork)
+        .collect::<Vec<_>>();
+    let inherited_records = ledger
+        .calls_in_sequence()
+        .into_iter()
+        .filter(|record| record.inherited_from_fork)
+        .collect::<Vec<_>>();
+    let active_branch = session_provider_usage_aggregate(&active_records);
+    let lifetime = session_provider_usage_aggregate(&lifetime_records);
+    let inherited = session_provider_usage_aggregate(&inherited_records);
+    let latest_call = active_records
         .last()
-        .map(|segment| SessionProviderUsageCallSummary {
-            provider_call_id: segment.provider_call_id.clone(),
-            owner_kind: segment.owner_kind.clone(),
-            status: session_provider_usage_status_key(segment.status).to_string(),
-            usage: segment
-                .usage
+        .map(|record| SessionProviderUsageCallSummary {
+            provider_call_id: record.provider_call_id.clone(),
+            owner_kind: record.identity.owner_kind.clone(),
+            status: session_provider_usage_status_key(record.status).to_string(),
+            usage: record
+                .provider_usage_evidence
+                .provider_usage
                 .as_ref()
                 .and_then(session_provider_usage_tokens),
-            started_at_ms: segment.started_at_ms,
-            completed_at_ms: segment.completed_at_ms,
-            error_category: segment.error_category.clone(),
-            error_code: segment.error_code.clone(),
+            started_at_ms: Some(record.prepared_at_ms),
+            completed_at_ms: record.completed_at_ms,
+            error_category: record.error_category.clone(),
+            error_code: record.error_code.clone(),
         });
+    let last_usage = ledger.last_usage();
+    let cumulative_usage = ledger.cumulative_usage();
     Some(SessionProviderUsageSummary {
-        provider_call_count: usage_state.provider_call_count,
-        in_flight_call_count: usage_state.in_flight_call_count,
-        unknown_usage_call_count: usage_state.unknown_usage_call_count,
-        last_usage: usage_state
-            .last_usage
+        provider_call_count: active_branch.provider_call_count,
+        in_flight_call_count: active_records
+            .iter()
+            .filter(|record| !record.status.is_terminal())
+            .count(),
+        unknown_usage_call_count: active_branch.unknown_usage_call_count,
+        last_usage: last_usage.as_ref().and_then(session_provider_usage_tokens),
+        cumulative_usage: cumulative_usage
             .as_ref()
             .and_then(session_provider_usage_tokens),
-        cumulative_usage: usage_state
-            .cumulative_usage
-            .as_ref()
-            .and_then(session_provider_usage_tokens),
+        active_branch,
+        lifetime,
+        inherited,
         latest_call,
-        usage_revision: usage_state.usage_revision,
+        usage_revision: ledger.revision,
     })
+}
+
+/// Aggregates exact Provider-reported usage for one preselected session scope.
+/// 为一个预先选定的会话口径汇总精确的 Provider 实测用量。
+///
+/// # Parameters
+/// 参数
+/// `records` contains only records belonging to the requested branch or billing scope.
+/// `records` 仅包含属于目标分支或账单口径的记录。
+///
+/// # Returns
+/// 返回值
+/// Returns physical-call count, unknown terminal count, and cumulative real usage.
+/// 返回物理调用数、未知终态数与累计真实用量。
+fn session_provider_usage_aggregate(
+    records: &[&vulcan_workbench_model::SessionProviderCallRecord],
+) -> SessionProviderUsageAggregateSummary {
+    let mut usage = ProviderUsageSnapshot::default();
+    let mut observed_usage = false;
+    let mut unknown_usage_call_count = 0_usize;
+    for record in records {
+        if record.status.is_terminal()
+            && record.provider_usage_evidence.availability
+                == vulcan_workbench_model::SessionProviderUsageAvailability::Missing
+        {
+            unknown_usage_call_count = unknown_usage_call_count.saturating_add(1);
+        }
+        let Some(record_usage) = record.provider_usage_evidence.provider_usage.as_ref() else {
+            continue;
+        };
+        if session_provider_usage_tokens(record_usage).is_none() {
+            continue;
+        }
+        observed_usage = true;
+        add_provider_usage_dimension(&mut usage.input_tokens, record_usage.input_tokens);
+        add_provider_usage_dimension(
+            &mut usage.uncached_input_tokens,
+            record_usage.uncached_input_tokens,
+        );
+        add_provider_usage_dimension(
+            &mut usage.cached_input_tokens,
+            record_usage.cached_input_tokens,
+        );
+        add_provider_usage_dimension(
+            &mut usage.cache_creation_input_tokens,
+            record_usage.cache_creation_input_tokens,
+        );
+        add_provider_usage_dimension(&mut usage.output_tokens, record_usage.output_tokens);
+        add_provider_usage_dimension(&mut usage.reasoning_tokens, record_usage.reasoning_tokens);
+        add_provider_usage_dimension(&mut usage.total_tokens, record_usage.total_tokens);
+    }
+    SessionProviderUsageAggregateSummary {
+        provider_call_count: records.len(),
+        unknown_usage_call_count,
+        usage: observed_usage
+            .then(|| session_provider_usage_tokens(&usage))
+            .flatten(),
+    }
+}
+
+/// Saturating-adds one optional Provider usage dimension without converting missing to zero.
+/// 对一个可选 Provider 用量维度执行饱和累加，且不把缺失值转换为零。
+///
+/// # Parameters
+/// 参数
+/// `target` is the cumulative dimension and `value` is one call's reported value.
+/// `target` 是累计维度，`value` 是单次调用报告的值。
+///
+/// # Returns
+/// 返回值
+/// Returns no value and mutates only when the Provider reported this dimension.
+/// 不返回值，仅当 Provider 报告该维度时才修改累计值。
+fn add_provider_usage_dimension(target: &mut Option<usize>, value: Option<usize>) {
+    if let Some(value) = value {
+        *target = Some(target.unwrap_or_default().saturating_add(value));
+    }
 }
 
 /// Applies live Provider API call counts to the selected session goal summary.
@@ -100,11 +194,15 @@ fn session_provider_usage_tokens(
 
 /// Returns the stable WebUI status key for one persisted Provider request segment.
 /// 返回持久化 Provider 请求分段的稳定 WebUI 状态键。
-fn session_provider_usage_status_key(status: SessionProviderUsageSegmentStatus) -> &'static str {
+fn session_provider_usage_status_key(status: SessionProviderCallStatus) -> &'static str {
     match status {
-        SessionProviderUsageSegmentStatus::InFlight => "in_flight",
-        SessionProviderUsageSegmentStatus::Succeeded => "succeeded",
-        SessionProviderUsageSegmentStatus::Failed => "failed",
+        SessionProviderCallStatus::Prepared => "prepared",
+        SessionProviderCallStatus::Dispatched => "dispatched",
+        SessionProviderCallStatus::Succeeded => "succeeded",
+        SessionProviderCallStatus::Failed => "failed",
+        SessionProviderCallStatus::Cancelled => "cancelled",
+        SessionProviderCallStatus::TimedOut => "timed_out",
+        SessionProviderCallStatus::Interrupted => "interrupted",
     }
 }
 
@@ -760,6 +858,136 @@ mod tests {
     use vulcan_service_api::PendingPromptsChangedDelta;
     use vulcan_vmm::{ContextItem, VmmRecallBatch};
 
+    /// Appends one deterministic terminal Provider call for session-panel scope tests.
+    /// 为会话面板口径测试追加一条确定性的 Provider 终态调用。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `ledger` is the authoritative test ledger, `call_id` is unique, and `total_tokens` is reported usage.
+    /// `ledger` 是权威测试账本，`call_id` 唯一，`total_tokens` 是报告用量。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns no value and asserts both lifecycle transitions are accepted.
+    /// 不返回值，并断言两个生命周期转换均被接受。
+    fn append_session_panel_usage_call(
+        ledger: &mut vulcan_workbench_model::SessionProviderCallLedger,
+        call_id: &str,
+        total_tokens: usize,
+    ) {
+        let identity = vulcan_workbench_model::SessionProviderCallIdentity {
+            logical_request_id: format!("execution-{call_id}"),
+            execution_id: format!("execution-{call_id}"),
+            turn_id: Some(format!("turn-{call_id}")),
+            attempt_index: 0,
+            retry_number: 0,
+            owner_kind: String::from("main_agent"),
+            owner_id: String::from("session"),
+            owner_name_snapshot: String::from("主代理"),
+            operation: String::from("conversation"),
+            provider_id: String::from("provider"),
+            provider_name_snapshot: String::from("Provider"),
+            model_id: String::from("model"),
+            model_name_snapshot: String::from("Model"),
+            connection_id: String::from("connection"),
+            service_entry_id: String::from("public-api"),
+            protocol_profile_id: String::from("responses"),
+            manifest_revision: 1,
+            manifest_generation: 1,
+            binding_source: String::from("manifest"),
+            binding_rule: None,
+            route_revision: String::from("route"),
+            request_profiles: Vec::new(),
+            response_profiles: Vec::new(),
+        };
+        assert!(
+            ledger.observe_started(vulcan_workbench_model::SessionProviderCallStarted {
+                provider_call_id: call_id.to_string(),
+                identity: identity.clone(),
+                prepared_at_ms: 1,
+                request_assembly_fingerprint: None,
+                context_generation_id: None,
+                context_start_record_id: None,
+                model_route_fingerprint: None,
+                toolset_fingerprint: None,
+                system_prompt_fingerprint: None,
+                request_text_measurement: None,
+                budget_accounting: None,
+            })
+        );
+        assert!(
+            ledger.observe_completed(vulcan_workbench_model::SessionProviderCallCompleted {
+                provider_call_id: call_id.to_string(),
+                identity,
+                status: vulcan_workbench_model::SessionProviderCallStatus::Succeeded,
+                provider_usage_evidence: vulcan_workbench_model::SessionProviderUsageEvidence {
+                    availability: vulcan_workbench_model::SessionProviderUsageAvailability::Final,
+                    provider_usage: Some(ProviderUsageSnapshot {
+                        total_tokens: Some(total_tokens),
+                        ..ProviderUsageSnapshot::default()
+                    }),
+                },
+                prepared_at_ms: 1,
+                dispatched_at_ms: Some(2),
+                first_event_at_ms: Some(3),
+                first_token_at_ms: Some(3),
+                completed_at_ms: 4,
+                dispatch_outcome: Some(String::from("dispatched")),
+                dispatch_outcome_known: Some(true),
+                semantic_output_observed: Some(true),
+                semantic_output_observed_known: Some(true),
+                replay_safe: Some(false),
+                error_category: None,
+                error_code: None,
+            })
+        );
+    }
+
+    /// Verifies active, lifetime, and inherited Provider scopes never mix counts or tokens.
+    /// 验证活动分支、会话生命周期与分叉继承口径不会混合调用数或 Token。
+    #[test]
+    fn provider_usage_summary_separates_active_lifetime_and_inherited_scopes() {
+        let mut runtime_state = SessionRuntimeStateEntry::default();
+        append_session_panel_usage_call(&mut runtime_state.provider_call_ledger, "inherited", 5);
+        append_session_panel_usage_call(&mut runtime_state.provider_call_ledger, "current", 10);
+        append_session_panel_usage_call(&mut runtime_state.provider_call_ledger, "superseded", 20);
+        runtime_state
+            .provider_call_ledger
+            .calls
+            .get_mut("inherited")
+            .expect("inherited fixture call should exist")
+            .inherited_from_fork = true;
+        let superseded = runtime_state
+            .provider_call_ledger
+            .calls
+            .get_mut("superseded")
+            .expect("superseded fixture call should exist");
+        superseded.active_branch_member = false;
+        superseded.superseded_by_edit_generation = Some(1);
+
+        let summary = session_provider_usage_summary_from_runtime_state(&runtime_state)
+            .expect("non-empty ledger should project usage scopes");
+        assert_eq!(summary.provider_call_count, 2);
+        assert_eq!(summary.active_branch.provider_call_count, 2);
+        assert_eq!(
+            summary
+                .active_branch
+                .usage
+                .and_then(|usage| usage.total_tokens),
+            Some(15)
+        );
+        assert_eq!(summary.lifetime.provider_call_count, 2);
+        assert_eq!(
+            summary.lifetime.usage.and_then(|usage| usage.total_tokens),
+            Some(30)
+        );
+        assert_eq!(summary.inherited.provider_call_count, 1);
+        assert_eq!(
+            summary.inherited.usage.and_then(|usage| usage.total_tokens),
+            Some(5)
+        );
+    }
+
     /// Verifies a pending-question registry failure cannot be projected as an empty request list.
     /// 验证待回答问题注册表失败无法被投影为空请求列表。
     #[test]
@@ -815,6 +1043,7 @@ mod tests {
             attention: None,
             project_id: None,
             fork_source: None,
+            continuation: None,
         }
     }
 

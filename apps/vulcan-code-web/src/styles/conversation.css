@@ -39,3 +39,28 @@
   pointer-events: none;
 }
 
+.conversation-continue-button {
+  min-height: 36px;
+  padding: 0 16px;
+  border: 1px solid color-mix(in srgb, var(--accent-primary) 48%, var(--border-subtle));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface-elevated) 94%, transparent);
+  color: var(--text-primary);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 16%);
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.conversation-continue-button:hover:not(:disabled) {
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
+}
+
+.conversation-continue-button:disabled {
+  cursor: wait;
+  opacity: 0.62;
+}
+

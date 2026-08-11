@@ -106,18 +106,12 @@ pub(crate) async fn service_generate_git_commit_message(
     let summary_input = build_git_commit_summary_input(
         &repository_root,
         request.include_unstaged,
-        &model_id,
-        agent_runtime.token_budget_runtime.estimator(),
         plugin_runtime.as_ref(),
         session_id,
     )
     .await?;
     let prompt = build_git_commit_summary_prompt(&summary_input, &extra_prompt);
-    let estimated_input_tokens = estimate_git_commit_prompt_tokens(
-        &model_id,
-        &prompt,
-        agent_runtime.token_budget_runtime.estimator(),
-    );
+    let estimated_input_tokens = estimate_git_commit_prompt_tokens(&prompt);
     // repository_root_text keeps the owned repository path alive across the async model call.
     // repository_root_text 在异步模型调用期间保持仓库路径所有权有效。
     let repository_root_text = repository_root.to_string_lossy().into_owned();
@@ -215,8 +209,6 @@ struct GitCommitContextHookPayload {
 async fn build_git_commit_summary_input(
     repository_root: &Path,
     include_unstaged: bool,
-    model_id: &str,
-    estimator: Option<&dyn vulcan_context::ContextTokenEstimator>,
     plugin_runtime: Option<&vulcan_plugin_runtime::VulcanPluginRuntimeManager>,
     session_id: SessionId,
 ) -> Result<GitCommitSummaryInput, String> {
@@ -261,7 +253,7 @@ async fn build_git_commit_summary_input(
     )
     .await?;
     let full_content = render_git_commit_context_payload(&transformed_payload);
-    let token_estimate = estimate_git_commit_prompt_tokens(model_id, &full_content, estimator);
+    let token_estimate = estimate_git_commit_prompt_tokens(&full_content);
     if token_estimate <= GIT_COMMIT_SUMMARY_DIFF_TOKEN_BUDGET {
         return Ok(GitCommitSummaryInput {
             content: full_content,
@@ -518,15 +510,8 @@ fn build_git_commit_summary_prompt(input: &GitCommitSummaryInput, extra_prompt: 
 
 /// Estimates text tokens for Git commit-message prompt budgeting.
 /// 为 Git 提交信息提示预算估算文本 Token 数。
-fn estimate_git_commit_prompt_tokens(
-    model_id: &str,
-    text: &str,
-    estimator: Option<&dyn vulcan_context::ContextTokenEstimator>,
-) -> usize {
-    estimator
-        .and_then(|estimator| estimator.estimate_text_tokens(model_id, text))
-        .unwrap_or_else(|| estimate_mixed_language_text_tokens(text))
-        .max(1usize)
+fn estimate_git_commit_prompt_tokens(text: &str) -> usize {
+    estimate_mixed_language_text_tokens(text).max(1usize)
 }
 
 /// Runs the internal provider request that generates a Git commit message.
@@ -553,6 +538,8 @@ async fn run_git_commit_summary_model(
         model_id_override: None,
         connection_id_override: None,
         provider_route_lease_identity: None,
+        provider_usage_budget_baseline: None,
+        provider_usage_context_generation_id: None,
         provider_tool_selections_override: Default::default(),
         subagent_prompt_context: None,
         task_session_store_root: None,
@@ -600,7 +587,6 @@ async fn run_git_commit_summary_model(
         Arc::clone(&agent_runtime.task_runtime),
         Arc::clone(&agent_runtime.question_runtime),
         Arc::clone(&agent_runtime.command_session_runtime),
-        Arc::clone(&agent_runtime.token_budget_runtime),
         Some(Arc::clone(&agent_runtime.public_ai_runtime)),
         request,
         None,
@@ -623,7 +609,20 @@ async fn run_git_commit_summary_model(
                     &mut provider_telemetry_guard,
                     event,
                     "git_commit_summary_provider_usage_telemetry",
-                )?;
+                )
+                .await?;
+            }
+            ExecutionStreamEvent::ProviderRequestDurabilityBoundary { event, completion } => {
+                crate::process_provider_request_durability_boundary(
+                    &state,
+                    &controller_runtime,
+                    None,
+                    &mut provider_telemetry_guard,
+                    event,
+                    completion,
+                    "git_commit_summary_provider_usage_durability_boundary",
+                )
+                .await?;
             }
             ExecutionStreamEvent::Finished(report) => {
                 if let Some(event) = provider_telemetry_guard.take_cancelled_event() {
@@ -634,7 +633,8 @@ async fn run_git_commit_summary_model(
                         &mut provider_telemetry_guard,
                         event,
                         "git_commit_summary_provider_usage_cancelled",
-                    )?;
+                    )
+                    .await?;
                 }
                 if let Some(error) = report.error.as_ref() {
                     return Err(error.clone());
@@ -652,7 +652,8 @@ async fn run_git_commit_summary_model(
             &mut provider_telemetry_guard,
             event,
             "git_commit_summary_provider_usage_cancelled",
-        )?;
+        )
+        .await?;
     }
     Err(String::from(
         "git commit summary stream ended without a terminal report.",

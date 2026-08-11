@@ -9,13 +9,14 @@ use vulcan_workbench_model::{SessionRunPhase, SessionState};
 use vulcan_workspace_store::workspace_store::WorkspaceSnapshot;
 
 use crate::{
-    MaterializedPromptSession, PromptSessionMaterializationKind, SharedServiceBridgeState,
-    conversation_fork_source_summary_from_session, emit_service_event_with_trace,
-    emit_workbench_event, ensure_webui_session_runtime_state, is_active_session_run_phase,
-    pending_question_snapshots_from_agent_runtime, refresh_conversation_attention_summary,
-    restore_webui_runtime_controls_for_session, session_plan_mode_summary_from_runtime_state,
-    session_summary_project_id_owned, sync_workbench_runtime_control_fields_locked,
-    workspace_session_summary_for_session,
+    MaterializedPromptSession, PromptSessionMaterializationKind,
+    SessionContinuationRuntimeBlockers, SharedServiceBridgeState,
+    conversation_continuation_summary, conversation_fork_source_summary_from_session,
+    emit_service_event_with_trace, emit_workbench_event, ensure_webui_session_runtime_state,
+    is_active_session_run_phase, pending_question_snapshots_from_agent_runtime,
+    refresh_conversation_attention_summary, restore_webui_runtime_controls_for_session,
+    session_plan_mode_summary_from_runtime_state, session_summary_project_id_owned,
+    sync_workbench_runtime_control_fields_locked, workspace_session_summary_for_session,
 };
 
 /// Initializes one materialized session inside the detached submission workspace.
@@ -228,6 +229,16 @@ pub(crate) fn commit_materialized_submission_activation(
         attention: None,
         project_id: session_summary_project_id_owned(session),
         fork_source: conversation_fork_source_summary_from_session(session),
+        continuation: workspace_snapshot
+            .session_runtime_state
+            .get(&session_id)
+            .and_then(|runtime_state| {
+                conversation_continuation_summary(
+                    runtime_state,
+                    run_phase,
+                    SessionContinuationRuntimeBlockers::default(),
+                )
+            }),
     };
     // revision and event payloads are produced from the same exclusive shared-state transaction.
     // revision 与事件载荷由同一个独占共享状态事务产生。

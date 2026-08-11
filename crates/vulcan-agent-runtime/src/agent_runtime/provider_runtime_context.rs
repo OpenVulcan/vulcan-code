@@ -1256,6 +1256,7 @@ mod tests {
     ) -> ExecutionPreparation {
         ExecutionPreparation {
             session_id: SessionId::nil(),
+            conversation_hook_turn_id: None,
             session_title: String::from("test"),
             agent_id: String::from("default"),
             agent_name: String::from("Default"),
@@ -1291,6 +1292,8 @@ mod tests {
             context_budget: Option::<ContextBudgetSnapshot>::None,
             context_compaction_policy: None,
             context_budget_override: None,
+            provider_usage_budget_baseline: None,
+            provider_usage_context_generation_id: None,
             context_assembly: Option::<ContextAssembly>::None,
             context_baseline: Option::<ContextBaseline>::None,
             context_request_mode: None,

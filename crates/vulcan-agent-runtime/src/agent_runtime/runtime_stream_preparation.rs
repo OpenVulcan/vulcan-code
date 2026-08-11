@@ -16,7 +16,6 @@ use crate::agent_runtime::runtime_stream_preparation_resources::{
     RuntimePreparationResources, build_runtime_preparation_resources,
 };
 use crate::agent_runtime::task_runtime::TaskRuntime;
-use crate::agent_runtime::token_budget_runtime::TokenBudgetRuntime;
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
 use crate::provider_config::ProviderConfigurationFile;
 use crate::tooling::CommandSessionRuntime;
@@ -71,7 +70,6 @@ pub(crate) fn prepare_runtime_launch_input(
     task_runtime: Arc<TaskRuntime>,
     question_runtime: Arc<QuestionRuntime>,
     command_session_runtime: Arc<CommandSessionRuntime>,
-    token_budget_runtime: Arc<TokenBudgetRuntime>,
     public_ai_runtime: Option<Arc<vulcan_provider_adapters::PublicAiRuntime>>,
     request: ExecutionPreparationRequest,
 ) -> Result<RuntimePreparedLaunchInput, ExecutionRunReport> {
@@ -84,7 +82,6 @@ pub(crate) fn prepare_runtime_launch_input(
         task_runtime,
         question_runtime,
         command_session_runtime,
-        token_budget_runtime,
         public_ai_runtime,
         request,
     );

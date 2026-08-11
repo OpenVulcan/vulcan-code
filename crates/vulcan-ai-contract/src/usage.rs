@@ -451,39 +451,6 @@ fn combined_usage_source(left: UsageValueSource, right: UsageValueSource) -> Usa
     }
 }
 
-/// Carries one provider-authoritative count of an input request.
-/// 承载一次由供应商权威统计的输入请求 Token 数。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct InputTokenCount {
-    /// Total input tokens counted by the provider.
-    /// 供应商统计的输入 Token 总数。
-    pub total_tokens: u64,
-    /// Tokens attributed to cached input when the provider reports them.
-    /// 供应商报告时归属于缓存输入的 Token 数。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cached_tokens: Option<u64>,
-    /// Per-modality token counts for the full input.
-    /// 完整输入按模态拆分的 Token 数。
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub modality_details: Vec<ModalityTokenCount>,
-    /// Per-modality token counts for cached input.
-    /// 缓存输入按模态拆分的 Token 数。
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub cached_modality_details: Vec<ModalityTokenCount>,
-}
-
-/// Carries one provider-reported modality token count without narrowing future modality names.
-/// 承载一个供应商报告的模态 Token 数，并保留未来模态名称的扩展能力。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ModalityTokenCount {
-    /// Exact provider modality identifier.
-    /// 供应商返回的精确模态标识。
-    pub modality: String,
-    /// Token count attributed to this modality.
-    /// 归属于该模态的 Token 数。
-    pub token_count: u64,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

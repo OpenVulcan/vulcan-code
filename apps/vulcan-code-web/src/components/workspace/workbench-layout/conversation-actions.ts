@@ -14,7 +14,7 @@ import {
   openSubagentPanel,
   removePendingPrompt,
   reorderPendingPrompts,
-  retryConversationRequest,
+  continueConversation,
   stopCommandSession,
   stopConversationRun,
   stopSubagentTask,
@@ -322,13 +322,21 @@ const handleStopConversationRun = React.useCallback(async (): Promise<boolean> =
   }
 }, [mergeWorkbenchWithLocalCaches, requestStopConversationRunChoice, selectedConversation?.id, setWorkbenchState]);
 
-// handleRetryConversationRequest retries a failed conversation through the retained service execution state.
-// handleRetryConversationRequest 通过服务端保留的执行状态重试失败会话。
-const handleRetryConversationRequest = React.useCallback(async (conversationId: string): Promise<boolean> => {
+// handleContinueConversation continues a terminated conversation through the revision-bound retained state.
+// handleContinueConversation 通过绑定修订号的保留状态继续已终止会话。
+const handleContinueConversation = React.useCallback(async (
+  conversationId: string,
+  expectedGeneration: number,
+  expectedLedgerRevision: number,
+): Promise<boolean> => {
   try {
-    const response = await retryConversationRequest(conversationId);
+    const response = await continueConversation(
+      conversationId,
+      expectedGeneration,
+      expectedLedgerRevision,
+    );
     if (!response) {
-      toast.info(translate("conversationActions.previewCannotRetry"));
+      toast.info(translate("conversationActions.previewCannotContinue"));
       return false;
     }
     return true;
@@ -724,7 +732,7 @@ const handleSelectWorkbenchThinkingDisplayMode = React.useCallback(async (mode: 
     handleSubmitConversationPrompt,
     handleInsertPendingPrompt,
     handleStopConversationRun,
-    handleRetryConversationRequest,
+    handleContinueConversation,
     handleCancelConversationSubmission,
     handleCompactSelectedConversationContext,
     handleOpenSubagentPanel,

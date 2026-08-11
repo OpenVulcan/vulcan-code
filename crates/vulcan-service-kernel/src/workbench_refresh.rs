@@ -24,9 +24,6 @@ pub(crate) struct WorkbenchRuntimeProjection<'a> {
     /// Structured MCP states captured from the same extension generation as the plugin catalog.
     /// 从与插件目录相同扩展代次捕获的结构化 MCP 状态。
     pub(crate) mcp_server_states: &'a [vulcan_agent_runtime::mcp::McpRuntimeServerState],
-    /// Token budget runtime used by module and context usage summaries.
-    /// 模块与上下文用量摘要使用的 Token 预算运行时。
-    pub(crate) token_budget_runtime: &'a TauriTokenBudgetRuntime,
     /// MCP runtime catalog snapshot already cached by the service state.
     /// 服务状态中已缓存的 MCP 运行时目录快照。
     pub(crate) mcp_catalog: &'a TauriMcpRuntimeCatalog,
@@ -98,7 +95,6 @@ async fn refresh_workbench_snapshot_with_selected_session(
     let (
         controller_runtime,
         luaskills_catalog,
-        token_budget_runtime,
         mcp_catalog,
         logs,
         preserved_workspace_run_state,
@@ -115,9 +111,6 @@ async fn refresh_workbench_snapshot_with_selected_session(
             String::from("service is still starting; controller runtime is not ready")
         })?;
         let luaskills_catalog = cached_luaskills_catalog_from_state(&guard);
-        let token_budget_runtime = guard.token_budget_runtime.clone().ok_or_else(|| {
-            String::from("service is still starting; token budget runtime is not ready")
-        })?;
         let mcp_catalog = cached_mcp_catalog_from_state(&guard);
         let logs = guard.startup.recent_logs.clone();
         let active_kernel_sessions = active_kernel_session_ids(&guard);
@@ -138,7 +131,6 @@ async fn refresh_workbench_snapshot_with_selected_session(
         (
             controller_runtime,
             luaskills_catalog,
-            token_budget_runtime,
             mcp_catalog,
             logs,
             preserved_workspace_run_state,
@@ -265,7 +257,6 @@ async fn refresh_workbench_snapshot_with_selected_session(
         luaskills_catalog: &luaskills_catalog,
         vulcan_plugin_catalog: vulcan_plugin_catalog.as_deref(),
         mcp_server_states: &mcp_server_states,
-        token_budget_runtime: &token_budget_runtime,
         mcp_catalog: &mcp_catalog,
         provider_configuration: &provider_configuration,
         public_ai_runtime: agent_runtime_for_status
@@ -746,6 +737,9 @@ pub(crate) fn detached_task_event_label(event: &DetachedTaskRuntimeEvent) -> &'s
             ExecutionStreamEvent::ProviderRequestTelemetry(_),
         ) => "child.provider_request_telemetry",
         DetachedTaskRuntimeEvent::ChildExecution(
+            ExecutionStreamEvent::ProviderRequestDurabilityBoundary { .. },
+        ) => "child.provider_request_durability_boundary",
+        DetachedTaskRuntimeEvent::ChildExecution(
             ExecutionStreamEvent::ProviderLoweringRepair { .. },
         ) => "child.provider_lowering_repair",
         DetachedTaskRuntimeEvent::ChildExecution(ExecutionStreamEvent::RequestReady { .. }) => {
@@ -802,7 +796,6 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
         luaskills_catalog,
         vulcan_plugin_catalog,
         mcp_server_states,
-        token_budget_runtime,
         mcp_catalog,
         provider_configuration,
         public_ai_runtime,
@@ -960,16 +953,14 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
             }
         })
         .collect::<Vec<_>>();
+    // projected_command_sessions is shared by continuation gating and the final workbench payload.
+    // projected_command_sessions 由 Continue 门禁与最终工作台载荷共享。
+    let projected_command_sessions = command_sessions(controller, command_session_runtime);
     WorkbenchSnapshot {
         revision: 0,
         app_version: env!("CARGO_PKG_VERSION").to_string(),
         ui_locale: provider_configuration.ui_locale.clone(),
-        modules: runtime_modules(
-            controller,
-            luaskills_catalog,
-            token_budget_runtime,
-            mcp_catalog,
-        ),
+        modules: runtime_modules(controller, luaskills_catalog, mcp_catalog),
         projects: workspace
             .task_projects
             .iter()
@@ -1027,6 +1018,38 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
                     ),
                     project_id: session_summary_project_id_owned(session),
                     fork_source: conversation_fork_source_summary_from_session(session),
+                    continuation: workspace.session_runtime_state.get(&session.id).and_then(
+                        |runtime_state| {
+                            let session_id_text = session.id.to_string();
+                            conversation_continuation_summary(
+                                runtime_state,
+                                run_phase,
+                                SessionContinuationRuntimeBlockers {
+                                    session_is_running: session.status == SessionState::Running,
+                                    has_pending_question: pending_questions
+                                        .iter()
+                                        .any(|question| question.session_id == session_id_text),
+                                    has_running_command_session: projected_command_sessions
+                                        .iter()
+                                        .any(|command_session| {
+                                            command_session.owner_session_id.as_deref()
+                                                == Some(session_id_text.as_str())
+                                                && command_session.status == "running"
+                                        }),
+                                    has_running_task: subagent_navigation.as_ref().is_some_and(
+                                        |navigation| {
+                                            navigation.parent_conversation_id == session_id_text
+                                                && navigation
+                                                    .tasks
+                                                    .iter()
+                                                    .any(|task| task.is_running)
+                                        },
+                                    ),
+                                    ..SessionContinuationRuntimeBlockers::default()
+                                },
+                            )
+                        },
+                    ),
                 }
             })
             .collect(),
@@ -1059,6 +1082,7 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
                 attention: None,
                 project_id: session_summary_project_id_owned(session),
                 fork_source: conversation_fork_source_summary_from_session(session),
+                continuation: None,
             })
             .collect(),
         selected_conversation_id,
@@ -1148,7 +1172,7 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
             selected_runtime_state,
             managed_vmm_runtime.as_ref(),
         ),
-        command_sessions: command_sessions(controller, command_session_runtime),
+        command_sessions: projected_command_sessions,
         logs: logs
             .iter()
             .enumerate()

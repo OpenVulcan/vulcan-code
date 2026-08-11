@@ -71,13 +71,6 @@ fn apply_terminal_execution_report_to_draft(
     if let Some(conversation_state) = report.conversation_state.clone() {
         apply_checkpoint_conversation_state(runtime_state, conversation_state, now)?;
     }
-    if let Some(usage) = report.last_successful_provider_usage.clone() {
-        runtime_state.last_provider_usage = Some(usage.clone());
-        runtime_state.last_successful_provider_usage = Some(usage);
-    }
-    if report.provider_request_count > 0 {
-        runtime_state.last_safe_provider_request_count = Some(report.provider_request_count);
-    }
     if is_success {
         complete_open_tool_records(
             runtime_state,
@@ -116,6 +109,11 @@ fn apply_terminal_execution_report_to_draft(
     } else {
         SessionTurnStatsStatus::Failed
     };
+    // The terminal transcript boundary closes every retry attempt in the latest logical execution.
+    // 终态转录边界会闭合最近一次逻辑执行中的所有重试 attempt。
+    let _ = runtime_state
+        .provider_call_ledger
+        .assign_closing_record_id_to_latest_execution(closing_record_id.clone());
     append_terminal_turn_stats_record(
         runtime_state,
         session_id,
@@ -259,7 +257,7 @@ fn ensure_terminal_success_assistant_message(
     ) {
         return Ok(());
     }
-    append_terminal_assistant_text_message(runtime_state, session_id, now, assistant_output, report)
+    append_terminal_assistant_text_message(runtime_state, session_id, now, assistant_output)
 }
 
 /// Returns whether a suffix of canonical assistant messages preserves the terminal output and attaches missing final usage.
@@ -332,14 +330,6 @@ fn terminal_assistant_messages_accept_usage(
     if !output_matched {
         return false;
     }
-    let SessionConversationPayload::Assistant { usage, .. } =
-        &mut messages[terminal_assistant_index].payload
-    else {
-        return false;
-    };
-    if usage.is_none() {
-        *usage = report.last_successful_provider_usage.clone().map(Box::new);
-    }
     true
 }
 
@@ -356,9 +346,6 @@ fn terminal_assistant_messages_accept_usage(
 /// `now` 是当前 Unix 毫秒时间戳文本。
 /// `assistant_output` is the normalized terminal assistant text.
 /// `assistant_output` 是规范化后的终态助手文本。
-/// `report` carries the latest successful provider usage for this run.
-/// `report` 携带本次运行最近一次成功 Provider 用量。
-///
 /// # Returns
 /// 返回值
 /// Returns success after atomic append, or the exact canonical message identity failure.
@@ -368,7 +355,6 @@ fn append_terminal_assistant_text_message(
     session_id: SessionId,
     now: &str,
     assistant_output: &str,
-    report: &ExecutionRunReport,
 ) -> Result<(), String> {
     append_session_conversation_message(
         &mut runtime_state.conversation_state,
@@ -379,7 +365,7 @@ fn append_terminal_assistant_text_message(
                 reasoning: String::new(),
                 provider_message_id: None,
                 provider_message_state: None,
-                usage: report.last_successful_provider_usage.clone().map(Box::new),
+                usage: None,
                 tool_calls: Vec::new(),
             },
         },
@@ -476,22 +462,23 @@ fn append_terminal_turn_stats_record(
     provider_usage_fallback: Option<&vulcan_core::types::ProviderUsageSnapshot>,
     usage_segments: Vec<SessionTurnUsageSegment>,
 ) -> Result<Option<String>, String> {
-    let Some(mut turn_stats) = build_session_turn_stats_from_state_with_segments(
+    let Some(mut turn_stats) = build_session_turn_stats_from_state_with_ledger_and_segments(
         &runtime_state.conversation_state,
+        &runtime_state.provider_call_ledger,
         closing_record_id,
         status,
-        provider_request_count_override,
         turn_kind,
-        Vec::new(),
+        usage_segments,
     ) else {
         return Ok(None);
     };
-    merge_terminal_provider_usage_fallback(
-        &mut turn_stats,
-        provider_request_count_override,
-        provider_usage_fallback,
-    );
-    merge_terminal_explicit_usage_segments(&mut turn_stats, usage_segments);
+    if turn_stats.source_ledger_revision == 0 {
+        merge_terminal_provider_usage_fallback(
+            &mut turn_stats,
+            provider_request_count_override,
+            provider_usage_fallback,
+        );
+    }
     let record_id = build_session_record_message_id(
         session_id,
         now,
@@ -524,7 +511,7 @@ fn merge_terminal_provider_usage_fallback(
     provider_request_count_override: Option<usize>,
     provider_usage_fallback: Option<&vulcan_core::types::ProviderUsageSnapshot>,
 ) {
-    if terminal_turn_stats_has_token_usage(turn_stats) {
+    if terminal_turn_stats_has_assistant_token_usage(turn_stats) {
         return;
     }
     let Some(provider_usage) = provider_usage_fallback else {
@@ -561,31 +548,24 @@ fn remove_empty_assistant_usage_segments(turn_stats: &mut SessionTurnStats) {
     });
 }
 
-/// Merges explicit embedded usage segments after the normal assistant-response usage is settled.
-/// 在常规助手响应统计稳定后，合并显式嵌入的用量分段。
-fn merge_terminal_explicit_usage_segments(
-    turn_stats: &mut SessionTurnStats,
-    usage_segments: Vec<SessionTurnUsageSegment>,
-) {
-    for segment in usage_segments {
-        merge_explicit_usage_segment_into_turn_stats(turn_stats, &segment);
-        turn_stats.usage_segments.push(segment);
-    }
-}
-
 /// Returns whether one terminal statistics snapshot already contains concrete token usage.
 /// 判断终态统计快照是否已经包含明确 Token 用量。
-fn terminal_turn_stats_has_token_usage(turn_stats: &SessionTurnStats) -> bool {
-    turn_stats.input_tokens > 0
-        || turn_stats.output_tokens > 0
-        || turn_stats.reasoning_tokens > 0
-        || turn_stats.total_tokens > 0
-        || turn_stats
-            .cached_input_tokens
-            .is_some_and(|cached_input_tokens| cached_input_tokens > 0)
-        || turn_stats
-            .cache_creation_input_tokens
-            .is_some_and(|cache_creation_input_tokens| cache_creation_input_tokens > 0)
+/// Reports whether the main assistant group already contains token evidence.
+/// 判断主助手分组是否已经包含 Token 事实。
+fn terminal_turn_stats_has_assistant_token_usage(turn_stats: &SessionTurnStats) -> bool {
+    turn_stats.usage_segments.iter().any(|segment| {
+        segment.kind == SessionTurnUsageSegmentKind::AssistantResponse
+            && (segment.input_tokens > 0
+                || segment.output_tokens > 0
+                || segment.reasoning_tokens > 0
+                || segment.total_tokens > 0
+                || segment
+                    .cached_input_tokens
+                    .is_some_and(|cached_input_tokens| cached_input_tokens > 0)
+                || segment
+                    .cache_creation_input_tokens
+                    .is_some_and(|cache_creation_input_tokens| cache_creation_input_tokens > 0))
+    })
 }
 
 /// Appends one hidden derived session record with the same metadata shape used by the workbench.

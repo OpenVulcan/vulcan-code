@@ -21,8 +21,8 @@ use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant, SystemTime};
 use vulcan_ai_contract::{
     AiErrorCategory, AiExecutionError, AiExecutionRequest, AiStreamEvent, AiStreamStateMachine,
-    AiTransportKind, ContentItem, DispatchOutcome, InputTokenCount, ModelParameterValue,
-    PromptCachePolicy, ResourceKind, RetryAfterHint, RetryAfterSource, StructuredOutputPolicy,
+    AiTransportKind, ContentItem, DispatchOutcome, ModelParameterValue, PromptCachePolicy,
+    ResourceKind, RetryAfterHint, RetryAfterSource, StructuredOutputPolicy,
     canonicalize_codex_responses_replay_items, is_replayable_codex_responses_item,
 };
 use vulcan_ai_protocols::{
@@ -30,8 +30,7 @@ use vulcan_ai_protocols::{
     CLAUDE_CODE_MESSAGES_PROFILE_ID, GEMINI_GENERATE_CONTENT_PROFILE_ID,
     GEMINI_INTERACTIONS_PROFILE_ID, GOOGLE_CODE_ASSIST_PROFILE_ID, OPENAI_CHAT_PROFILE_ID,
     OPENAI_CODEX_RESPONSES_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID, ProtocolConversionError,
-    ProtocolStreamFraming, decode_gemini_count_tokens_response, encode_gemini_count_tokens_request,
-    gemini_replay_signature_payload, wrap_openai_reasoning_signature,
+    ProtocolStreamFraming, gemini_replay_signature_payload, wrap_openai_reasoning_signature,
 };
 use vulcan_llm_core::{
     AnthropicReasoningMode, CostCalculator, DEFAULT_RESPONSES_WEBSOCKET_MAX_AGE,
@@ -1823,116 +1822,6 @@ impl ProviderExecutionClient {
         result
     }
 
-    /// Counts one complete Gemini API request with the provider-authoritative tokenizer.
-    /// 使用供应商权威 Tokenizer 统计一个完整 Gemini API 请求。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `route` must be the verified public Gemini GenerateContent route, `request` is the
-    /// immutable provider-neutral request, and `secret` is its exact selected credential.
-    /// `route` 必须是已验证的公共 Gemini GenerateContent 路由，`request` 是不可变的
-    /// 供应商无关请求，`secret` 是其精确选定凭据。
-    ///
-    /// # Returns
-    /// 返回值
-    /// The exact provider count and modality details, or a controlled pre-dispatch,
-    /// transport, HTTP, or protocol failure.
-    /// 返回精确供应商统计与模态明细，或受控的分派前、传输、HTTP 或协议错误。
-    pub async fn count_input_tokens(
-        &self,
-        route: &ProviderExecutionRoute,
-        request: &AiExecutionRequest,
-        secret: &CredentialExecutionSecret,
-    ) -> Result<InputTokenCount, ProviderExecutionFailure> {
-        if route.protocol_route.protocol_profile_id
-            != vulcan_ai_protocols::GEMINI_GENERATE_CONTENT_PROFILE_ID
-        {
-            return Err(pre_dispatch_failure(
-                "Provider-authoritative CountTokens is only registered for the public Gemini GenerateContent route.",
-            ));
-        }
-        validate_request_policy(route, request)?;
-        let transport = self
-            .protocols
-            .transport_profile(route.protocol_route.protocol_profile_id.as_str())
-            .map_err(llm_core_protocol_failure)?;
-        let encoded = encode_gemini_count_tokens_request(request).map_err(protocol_failure)?;
-        let url = route.request_url(encoded.path.as_str());
-        let headers = execution_headers(route, &encoded.headers, secret)?;
-        let response = tokio::time::timeout(
-            Duration::from_millis(transport.response_headers_timeout_ms),
-            self.http
-                .post(url.as_str())
-                .headers(headers)
-                .json(&encoded.body)
-                .send(),
-        )
-        .await
-        .map_err(|_| {
-            transport_failure(format!(
-                "Provider CountTokens request to `{url}` exceeded the registered {} ms response-header timeout.",
-                transport.response_headers_timeout_ms
-            ))
-        })?
-        .map_err(|error| {
-            http_send_transport_failure(
-                &error,
-                format!("Provider CountTokens request to `{url}` failed: {error}"),
-            )
-        })?;
-        let status = response.status();
-        if !status.is_success() {
-            let retry_after = parse_retry_after_headers(response.headers(), SystemTime::now());
-            let body = read_bounded_response_text(
-                response,
-                transport.max_error_body_bytes,
-                url.as_str(),
-                status.as_u16(),
-                retry_after.clone(),
-                Duration::from_millis(transport.stream_idle_timeout_ms),
-            )
-            .await?;
-            return Err(sanitize_provider_execution_failure(
-                http_failure(status.as_u16(), retry_after, body.as_str()),
-                secret,
-            ));
-        }
-        let content_type = response
-            .headers()
-            .get(reqwest::header::CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok())
-            .unwrap_or_default();
-        if !content_type
-            .split(';')
-            .next()
-            .is_some_and(|value| value.trim().eq_ignore_ascii_case("application/json"))
-        {
-            return Err(response_headers_protocol_failure(format!(
-                "Provider CountTokens response from `{url}` must use application/json, got `{content_type}`."
-            )));
-        }
-        let body = read_bounded_response_text(
-            response,
-            transport.max_frame_bytes,
-            url.as_str(),
-            status.as_u16(),
-            None,
-            Duration::from_millis(transport.stream_idle_timeout_ms),
-        )
-        .await?;
-        let body = serde_json::from_str::<Value>(&body).map_err(|error| {
-            protocol_failure(ProtocolConversionError::new(format!(
-                "Gemini CountTokens response JSON is invalid: {error}"
-            )))
-        })?;
-        crate::provider_manifest::validate_runtime_json_bounds(
-            &body,
-            "Gemini CountTokens response",
-        )
-        .map_err(|error| protocol_failure(ProtocolConversionError::new(error)))?;
-        decode_gemini_count_tokens_response(&body).map_err(protocol_failure)
-    }
-
     /// Starts one immutable execution without protocol or account fallback.
     /// 启动一次不可变执行，不进行协议或账号回退。
     ///
@@ -2517,6 +2406,11 @@ impl ProviderExecutionClient {
                 provider_request_id,
                 rate_limit_headers,
             };
+            // usage_profiles and accumulator are initialized before status handling so failed bodies can report billable usage.
+            // usage_profiles 与累加器在状态处理前初始化，使失败正文也能报告已计费用量。
+            let usage_profiles = route.protocol_route.usage_extraction_profiles.clone();
+            let profiled_usage_enabled = !usage_profiles.is_empty();
+            let mut usage_accumulator = UsageAccumulator::default();
             let response = if status.is_success() {
                 response
             } else {
@@ -2531,6 +2425,17 @@ impl ProviderExecutionClient {
                     Duration::from_millis(transport.stream_idle_timeout_ms),
                 )
                 .await?;
+                for mut usage_event in extract_profiled_usage_events(
+                    &usage_profiles,
+                    UsageRecordKind::ErrorJsonBody,
+                    body.as_str(),
+                    &mut usage_accumulator,
+                )
+                .map_err(protocol_failure)?
+                {
+                    apply_local_cost_estimate(&route, &mut usage_event);
+                    yield usage_event;
+                }
                 let body = project_response_record_text(&response_profiles, body.as_str())
                     .map_err(protocol_failure)?;
                 Err(http_failure(
@@ -2554,9 +2459,6 @@ impl ProviderExecutionClient {
                 .map_err(llm_core_protocol_failure)?;
             let mut parser = IncrementalFrameParser::new(transport);
             let mut bytes = response.bytes_stream();
-            let usage_profiles = route.protocol_route.usage_extraction_profiles.clone();
-            let profiled_usage_enabled = !usage_profiles.is_empty();
-            let mut usage_accumulator = UsageAccumulator::default();
             let mut profiled_usage_gate = ProfiledUsageEventGate::default();
             let mut semantic_output_observed = false;
             let mut first_chunk_observed = false;
@@ -2888,7 +2790,11 @@ fn extract_profiled_usage_events(
     data: &str,
     accumulator: &mut UsageAccumulator,
 ) -> Result<Vec<AiStreamEvent>, ProtocolConversionError> {
-    if profiles.is_empty() || data.trim() == "[DONE]" {
+    if !profiles
+        .iter()
+        .any(|profile| profile.record_kind == record_kind)
+        || data.trim() == "[DONE]"
+    {
         return Ok(Vec::new());
     }
     let value: Value = serde_json::from_str(data).map_err(|error| {
@@ -7932,6 +7838,76 @@ mod tests {
             .stage(vec![overflow])
             .expect_err("usage staging beyond the ceiling must fail closed");
         assert!(error.message.contains("256-event limit"));
+    }
+
+    /// Verifies failed-response profiles extract exact usage before error formatting discards structure.
+    /// 验证失败响应 Profile 会在错误格式化丢失结构前提取精确用量。
+    #[test]
+    fn error_json_body_profile_extracts_billable_usage() {
+        let profiles = vec![UsageExtractionProfile {
+            profile_id: String::from("test.error-usage.v1"),
+            revision: 1,
+            record_kind: UsageRecordKind::ErrorJsonBody,
+            update_kind: vulcan_ai_contract::UsageUpdateKind::Final,
+            event_type_pointer: None,
+            event_type_value: None,
+            required_pointer: Some(String::from("/error/usage")),
+            bindings: vec![vulcan_llm_core::UsageFieldBinding {
+                field: vulcan_llm_core::UsageField::InputTokens,
+                pointers: vec![String::from("/error/usage/input_tokens")],
+                encoding: vulcan_llm_core::UsageValueEncoding::UnsignedInteger,
+            }],
+            derivations: Vec::new(),
+        }];
+        let mut accumulator = UsageAccumulator::default();
+
+        let events = extract_profiled_usage_events(
+            &profiles,
+            UsageRecordKind::ErrorJsonBody,
+            r#"{"error":{"usage":{"input_tokens":17}}}"#,
+            &mut accumulator,
+        )
+        .expect("registered error JSON should extract");
+
+        let AiStreamEvent::UsageUpdated { usage } = &events[0] else {
+            panic!("error usage extraction should emit one usage event");
+        };
+        assert_eq!(
+            usage.input_tokens,
+            vulcan_ai_contract::UsageValue::Known {
+                value: 17,
+                source: vulcan_ai_contract::UsageValueSource::Reported,
+            }
+        );
+    }
+
+    /// Verifies unregistered error records leave plain-text provider errors unchanged.
+    /// 验证未注册错误记录不会改变纯文本 Provider 错误。
+    #[test]
+    fn unregistered_error_usage_kind_does_not_parse_plain_text() {
+        let profiles = vec![UsageExtractionProfile {
+            profile_id: String::from("test.success-usage.v1"),
+            revision: 1,
+            record_kind: UsageRecordKind::JsonBody,
+            update_kind: vulcan_ai_contract::UsageUpdateKind::Final,
+            event_type_pointer: None,
+            event_type_value: None,
+            required_pointer: None,
+            bindings: Vec::new(),
+            derivations: Vec::new(),
+        }];
+        let mut accumulator = UsageAccumulator::default();
+
+        assert!(
+            extract_profiled_usage_events(
+                &profiles,
+                UsageRecordKind::ErrorJsonBody,
+                "gateway timeout",
+                &mut accumulator,
+            )
+            .expect("unregistered record kinds should be ignored before JSON parsing")
+            .is_empty()
+        );
     }
 
     /// Verifies an emitted usage fact closes the transparent-replay safety window.

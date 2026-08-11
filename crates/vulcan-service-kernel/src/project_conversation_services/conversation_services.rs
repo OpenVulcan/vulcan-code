@@ -643,6 +643,7 @@ mod tests {
             attention: None,
             project_id: Some(String::from("project-a")),
             fork_source: None,
+            continuation: None,
         };
         // workbench supplies the authoritative lifecycle domain after refresh commit.
         // workbench 提供刷新提交后的权威生命周期领域。

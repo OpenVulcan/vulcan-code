@@ -1,5 +1,7 @@
 use super::*;
-use crate::{SessionTurnStats, SessionTurnStatsKind, SessionTurnUsageSegmentKind};
+use crate::{
+    SessionTurnStats, SessionTurnStatsKind, SessionTurnStatsStatus, SessionTurnUsageSegmentKind,
+};
 
 #[test]
 fn parses_task_session_payload_into_subagent_state() {
@@ -901,6 +903,64 @@ fn subagent_feedback_display_records_builds_visible_rows_and_stats() {
         SessionTurnUsageSegmentKind::SubagentTask
     );
     assert_eq!(stats.usage_groups.len(), 1);
+}
+
+/// Verifies new feedback prefers the typed inclusive statistic and preserves its source identity.
+/// 验证新反馈优先使用强类型包容性统计并保留其来源身份。
+#[test]
+fn subagent_feedback_prefers_typed_turn_stats_over_legacy_segments() {
+    let parent_session_id = SessionId::new_v4();
+    let task_id = SessionId::new_v4();
+    let state = test_subagent_state(parent_session_id, task_id, SubagentTaskRunState::Completed);
+    let typed_turn_stats = SessionTurnStats {
+        status: SessionTurnStatsStatus::Completed,
+        turn_kind: SessionTurnStatsKind::UserTurn,
+        provider_call_count: 3,
+        unknown_usage_call_count: 1,
+        input_tokens: 210,
+        output_tokens: 40,
+        reasoning_tokens: 10,
+        total_tokens: 260,
+        source_ledger_revision: 9,
+        child_contribution_revision: 7,
+        ..SessionTurnStats::default()
+    };
+    let metadata = json!({
+        "kind": SUBAGENT_TASK_KIND,
+        "payload": {
+            "task_id": "typed-worker",
+            (SUBAGENT_TASK_ID_KEY): task_id.to_string(),
+            "execution_id": "typed-worker-run-1",
+            "turn_stats": typed_turn_stats,
+            "source_turn_stats_record_id": "task-turn-stats-9",
+            "usage_segments": [{
+                "kind": "subagent_task",
+                "provider_call_count": 99,
+                "input_tokens": 999,
+                "output_tokens": 999,
+                "reasoning_tokens": 0,
+                "total_tokens": 1998
+            }]
+        }
+    });
+
+    let records =
+        subagent_feedback_display_records_from_tool_metadata(parent_session_id, &metadata, &state)
+            .expect("typed feedback records should build");
+
+    assert_eq!(
+        records.source_turn_stats_record_id.as_deref(),
+        Some("task-turn-stats-9")
+    );
+    assert_eq!(
+        records.turn_stats.turn_kind,
+        SessionTurnStatsKind::SubagentFeedback
+    );
+    assert_eq!(records.turn_stats.provider_call_count, 3);
+    assert_eq!(records.turn_stats.unknown_usage_call_count, 1);
+    assert_eq!(records.turn_stats.input_tokens, 210);
+    assert_eq!(records.turn_stats.source_ledger_revision, 9);
+    assert_eq!(records.turn_stats.child_contribution_revision, 7);
 }
 
 /// Verifies child-agent feedback de-duplication keys require both task and execution identity.

@@ -538,9 +538,6 @@ export function ConversationProcessGroup(props: {
   // Copies transcript text using the shell-provided clipboard path.
   // 使用外壳提供的剪贴板路径复制转录文本。
   onCopyText: (text: string) => Promise<void> | void;
-  // Retries the owning conversation from the retained service execution state.
-  // 从服务端保留的执行状态重试所属会话。
-  onRetryConversationRequest?: (conversationId: string) => Promise<boolean>;
   // Opens one backend-backed user prompt edit flow.
   // 打开单个后端支持的用户提示词编辑流程。
   onEditUserPrompt?: (conversationId: string, messageId: string) => Promise<void> | void;
@@ -629,10 +626,37 @@ export function ConversationProcessGroup(props: {
   const durationLabel = formatWorkProcessDuration(displayedDurationMs, locale);
   const headerText = durationLabel ? `${t("conversation.process.header")} ${durationLabel}` : t("conversation.process.header");
   const providerUsage = props.sessionProviderUsage;
-  const providerUsageTotal = providerUsage?.cumulativeUsage?.totalTokens ?? providerUsage?.lastUsage?.totalTokens;
+  // activeProviderUsage keeps the legacy projection readable while new snapshots expose explicit scopes.
+  // activeProviderUsage 在新快照暴露明确口径的同时保持旧投影可读。
+  const activeProviderUsage = providerUsage?.activeBranch ?? (providerUsage
+    ? {
+        providerCallCount: providerUsage.providerCallCount,
+        unknownUsageCallCount: providerUsage.unknownUsageCallCount,
+        usage: providerUsage.cumulativeUsage,
+      }
+    : null);
+  const providerUsageTotal = activeProviderUsage?.usage?.totalTokens ?? providerUsage?.lastUsage?.totalTokens;
+  const providerUsageUnknown = t("conversation.process.providerUsageUnknown");
   const providerUsageLabel = providerUsage
-    ? `Provider API ${providerUsage.providerCallCount} 次 · ${providerUsage.inFlightCallCount} 进行中 · Token ${providerUsageTotal ?? "?"}`
+    ? t("conversation.process.providerUsageBadge")
+      .replace("{calls}", String(activeProviderUsage?.providerCallCount ?? 0))
+      .replace("{inFlight}", String(providerUsage.inFlightCallCount))
+      .replace("{tokens}", String(providerUsageTotal ?? providerUsageUnknown))
     : null;
+  const providerUsageTitle = providerUsage
+    ? [
+        t("conversation.process.providerUsageActive")
+          .replace("{calls}", String(activeProviderUsage?.providerCallCount ?? 0))
+          .replace("{tokens}", String(providerUsageTotal ?? providerUsageUnknown))
+          .replace("{unknown}", String(activeProviderUsage?.unknownUsageCallCount ?? 0)),
+        t("conversation.process.providerUsageLifetime")
+          .replace("{calls}", String(providerUsage.lifetime?.providerCallCount ?? activeProviderUsage?.providerCallCount ?? 0))
+          .replace("{tokens}", String(providerUsage.lifetime?.usage?.totalTokens ?? providerUsageTotal ?? providerUsageUnknown)),
+        t("conversation.process.providerUsageInherited")
+          .replace("{calls}", String(providerUsage.inherited?.providerCallCount ?? 0))
+          .replace("{tokens}", String(providerUsage.inherited?.usage?.totalTokens ?? 0)),
+      ].join("\n")
+    : undefined;
   const stoppedText = durationLabel
     ? t("conversation.process.stoppedAfter").replace("{duration}", durationLabel)
     : t("conversation.process.stopped");
@@ -658,7 +682,6 @@ export function ConversationProcessGroup(props: {
       sessionRunning={props.sessionRunning}
       expandedUserPromptIds={props.expandedUserPromptIds}
       onCopyText={props.onCopyText}
-      onRetryConversationRequest={props.onRetryConversationRequest}
       onEditUserPrompt={props.onEditUserPrompt}
       userPromptEditDisabled={props.userPromptEditDisabled}
       onOpenDetail={props.onOpenDetail}
@@ -700,7 +723,7 @@ export function ConversationProcessGroup(props: {
         <Clock3 className="work-process-icon" size={14} />
         <span>{headerText}</span>
         {providerUsageLabel ? (
-          <span className="work-process-provider-usage" title="实时 Provider API 调用与 Token 统计">
+          <span className="work-process-provider-usage" title={providerUsageTitle}>
             {providerUsageLabel}
           </span>
         ) : null}
@@ -721,7 +744,6 @@ export function ConversationProcessGroup(props: {
             sessionRunning={props.sessionRunning}
             expandedUserPromptIds={props.expandedUserPromptIds}
             onCopyText={props.onCopyText}
-            onRetryConversationRequest={props.onRetryConversationRequest}
             onEditUserPrompt={props.onEditUserPrompt}
             userPromptEditDisabled={props.userPromptEditDisabled}
             onOpenDetail={props.onOpenDetail}
@@ -755,7 +777,6 @@ export function ConversationProcessGroup(props: {
             sessionRunning={props.sessionRunning}
             expandedUserPromptIds={props.expandedUserPromptIds}
             onCopyText={props.onCopyText}
-            onRetryConversationRequest={props.onRetryConversationRequest}
             onEditUserPrompt={props.onEditUserPrompt}
             userPromptEditDisabled={props.userPromptEditDisabled}
             onOpenDetail={props.onOpenDetail}
@@ -856,9 +877,6 @@ export function ConversationRenderItemView(props: {
   // Copies transcript text using the shell-provided clipboard path.
   // 使用外壳提供的剪贴板路径复制转录文本。
   onCopyText: (text: string) => Promise<void> | void;
-  // Retries the owning conversation from the retained service execution state.
-  // 从服务端保留的执行状态重试所属会话。
-  onRetryConversationRequest?: (conversationId: string) => Promise<boolean>;
   // Opens one backend-backed user prompt edit flow.
   // 打开单个后端支持的用户提示词编辑流程。
   onEditUserPrompt?: (conversationId: string, messageId: string) => Promise<void> | void;
@@ -1089,7 +1107,6 @@ export function ConversationRenderItemView(props: {
           pendingPlanArtifact={props.pendingPlanArtifact}
           onCopyText={props.onCopyText}
           onToolPresentationExpandedChange={props.onToolPresentationExpandedChange}
-          onRetryConversationRequest={props.onRetryConversationRequest}
           onPlanArtifactExecute={props.onPlanArtifactExecute}
           onPlanArtifactSuggest={props.onPlanArtifactSuggest}
           onPlanArtifactCancel={props.onPlanArtifactCancel}

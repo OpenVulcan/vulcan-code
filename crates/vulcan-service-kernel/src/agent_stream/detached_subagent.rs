@@ -150,6 +150,7 @@ pub(crate) fn maybe_start_webui_detached_subagent_task_listener(
                 event,
                 "detached_provider_usage_cancelled",
             )
+            .await
         {
             eprintln!(
                 "[webui-service] detached provider cancellation usage update failed: {error}"
@@ -277,6 +278,28 @@ pub(crate) async fn handle_webui_detached_subagent_task_event(
                 )?;
             } else {
                 release_runtime_event_projection_barrier_after_attempt(&event)?;
+            }
+            if listener_is_current && is_finished && !parent_is_regular_session {
+                // A nested parent is a TaskSession, so its new inclusive child contribution must reach the task checkpoint before the parent resumes.
+                // 嵌套父级属于 TaskSession，因此新的包容性子贡献必须在父级恢复前写入任务检查点。
+                let parent_provider_call_ledger = state
+                    .lock()
+                    .map_err(|error| format!("failed to lock service state: {error}"))?
+                    .workspace_snapshot
+                    .as_ref()
+                    .and_then(|workspace| workspace.session_runtime_state.get(&parent_session_id))
+                    .map(|runtime_state| runtime_state.provider_call_ledger.clone())
+                    .ok_or_else(|| {
+                        format!(
+                            "Nested parent TaskSession `{parent_session_id}` has no runtime ledger after child completion."
+                        )
+                    })?;
+                agent_runtime
+                    .task_runtime
+                    .persist_task_provider_call_ledger(
+                        parent_session_id,
+                        &parent_provider_call_ledger,
+                    )?;
             }
             let mut mailbox_delivery_error: Option<String> = None;
             if is_finished {
@@ -651,6 +674,19 @@ pub(crate) async fn handle_webui_detached_child_execution_event(
                 event,
                 "detached_provider_usage_telemetry",
             )
+            .await
+        }
+        ExecutionStreamEvent::ProviderRequestDurabilityBoundary { event, completion } => {
+            process_provider_request_durability_boundary(
+                state,
+                controller_runtime,
+                Some(app),
+                provider_telemetry_guard,
+                event,
+                completion,
+                "detached_provider_usage_durability_boundary",
+            )
+            .await
         }
         ExecutionStreamEvent::ProviderLoweringRepair { session_id, event } => {
             record_webui_provider_lowering_repair(controller_runtime, session_id, event)
@@ -696,16 +732,13 @@ pub(crate) async fn handle_webui_detached_child_execution_event(
         ExecutionStreamEvent::ConversationCheckpoint {
             session_id,
             conversation_state,
-            last_successful_provider_usage,
-            provider_request_count,
+            ..
         } => apply_conversation_checkpoint(
             app,
             state,
             controller_runtime,
             session_id,
             conversation_state,
-            last_successful_provider_usage,
-            provider_request_count,
         ),
         ExecutionStreamEvent::ContextCompactionRequired {
             session_id,
@@ -717,8 +750,6 @@ pub(crate) async fn handle_webui_detached_child_execution_event(
             controller_runtime,
             session_id,
             conversation_state,
-            None,
-            0,
         ),
         ExecutionStreamEvent::Finished(report) => {
             let _ = agent_runtime;
@@ -917,7 +948,6 @@ mod tests {
             knowledge_runtime: None,
             luaskills_runtime: None,
             cached_luaskills_catalog: None,
-            token_budget_runtime: None,
             mcp_runtime: None,
             cached_mcp_catalog: None,
             provider_manifest_sync: None,

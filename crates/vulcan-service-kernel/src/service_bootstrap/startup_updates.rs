@@ -53,12 +53,7 @@ pub(crate) fn update_luaskills_bootstrap_progress(
                         "VLDB/controller 数据平面已就绪",
                     ),
                     ("luaskills", StartupStepStatus::Running, message),
-                    (
-                        "token-budget",
-                        StartupStepStatus::Pending,
-                        "等待 LuaSkills 就绪",
-                    ),
-                    ("mcp", StartupStepStatus::Pending, "等待 Token 预算运行时"),
+                    ("mcp", StartupStepStatus::Pending, "等待 LuaSkills 就绪"),
                     ("plugins", StartupStepStatus::Pending, "等待插件目录初始化"),
                     (
                         "workspace",
@@ -103,12 +98,7 @@ pub(crate) fn update_managed_runtime_bootstrap_progress(
                         StartupStepStatus::Running,
                         progress.message.as_str(),
                     ),
-                    (
-                        "token-budget",
-                        StartupStepStatus::Pending,
-                        "等待 LuaSkills 就绪",
-                    ),
-                    ("mcp", StartupStepStatus::Pending, "等待 Token 预算运行时"),
+                    ("mcp", StartupStepStatus::Pending, "等待 LuaSkills 就绪"),
                     ("plugins", StartupStepStatus::Pending, "等待插件目录初始化"),
                     (
                         "workspace",
@@ -181,7 +171,6 @@ pub(crate) fn startup_failure_steps(
         "service-process",
         "vldb",
         "luaskills",
-        "token-budget",
         "mcp",
         "plugins",
         "workspace",
@@ -226,7 +215,6 @@ pub(crate) fn startup_ready_message(step_id: &str) -> String {
         "service-process" => "Tauri 本地服务桥接已启动",
         "vldb" => "VLDB/controller 数据平面已就绪",
         "luaskills" => "LuaSkills 引擎与技能目录已就绪",
-        "token-budget" => "Token 预算运行时已初始化",
         "mcp" => "MCP Runtime 已初始化",
         "plugins" => "插件目录与已启用运行时已就绪",
         "workspace" => "项目与会话索引已载入",

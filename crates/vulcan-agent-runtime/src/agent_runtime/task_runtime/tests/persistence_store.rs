@@ -1619,7 +1619,7 @@ fn store_task_outcome_persists_segmented_task_session_artifacts() {
     let outcome = TaskExecutionOutcome {
         task_id,
         controller_config: controller_config.clone(),
-        resolved_config,
+        resolved_config: resolved_config.clone(),
         snapshot,
         provider_turns_executed: 1,
         tool_calls_processed: 0,
@@ -1628,6 +1628,117 @@ fn store_task_outcome_persists_segmented_task_session_artifacts() {
         execution_status: TaskExecutionStatus::Completed,
         usage_segments: vec![usage_segment],
     };
+
+    task_runtime
+        .sessions
+        .write()
+        .expect("task sessions should be writable")
+        .insert(
+            task_id,
+            TaskSessionRecord {
+                task_id,
+                public_task_id: invocation.public_task_id.clone(),
+                origin_session_id: root_session_id,
+                parent_task_id: None,
+                depth: 1,
+                description: invocation.description.clone(),
+                subagent: invocation.subagent.clone(),
+                invocation_config: invocation.invocation_config.clone(),
+                display_title: invocation.display_title.clone(),
+                controller_config: Some(controller_config.clone()),
+                agent_prompt_snapshot: None,
+                snapshot: invocation.snapshot.clone(),
+                last_prompt: invocation.prompt.clone(),
+                last_result_text: String::new(),
+                created_at: String::from("1000"),
+                updated_at: String::from("1000"),
+                last_status: String::from("running"),
+                execution_id: Some(invocation.execution_id.clone()),
+                stop_reason: None,
+            },
+        );
+    let task_store = SegmentedTaskSessionStore::new(temp_dir.path());
+    task_store
+        .create_task_session(persisted_task_metadata(
+            root_session_id,
+            task_id,
+            ParentSessionRef::MainSession {
+                root_session_id: SessionNodeId::from(root_session_id),
+            },
+            invocation.public_task_id.as_str(),
+            invocation.display_title.as_str(),
+            resolved_config.clone(),
+            1000,
+        ))
+        .expect("running task metadata should exist before Provider Usage persistence");
+    let provider_call_identity = vulcan_workbench_model::SessionProviderCallIdentity {
+        logical_request_id: String::from("task-request-1"),
+        execution_id: invocation.execution_id.clone(),
+        turn_id: Some(String::from("task-turn-1")),
+        attempt_index: 0,
+        retry_number: 0,
+        owner_kind: String::from("subagent"),
+        owner_id: task_id.to_string(),
+        owner_name_snapshot: String::from("reviewer"),
+        operation: String::from("conversation"),
+        provider_id: String::from("provider"),
+        provider_name_snapshot: String::from("Provider"),
+        model_id: String::from("model"),
+        model_name_snapshot: String::from("Model"),
+        connection_id: String::from("connection"),
+        service_entry_id: String::from("public-api"),
+        protocol_profile_id: String::from("openai_responses"),
+        manifest_revision: 1,
+        manifest_generation: 1,
+        binding_source: String::from("system_manifest"),
+        binding_rule: Some(String::from("model-rule")),
+        route_revision: String::from("route-revision"),
+        request_profiles: Vec::new(),
+        response_profiles: Vec::new(),
+    };
+    let mut provider_call_ledger = vulcan_workbench_model::SessionProviderCallLedger::default();
+    assert!(provider_call_ledger.advance_context_generation(String::from("task-generation")));
+    assert!(provider_call_ledger.observe_started(
+        vulcan_workbench_model::SessionProviderCallStarted {
+            provider_call_id: String::from("task-call-1"),
+            identity: provider_call_identity.clone(),
+            prepared_at_ms: 1000,
+            request_assembly_fingerprint: Some(String::from("assembly")),
+            context_generation_id: Some(String::from("task-generation")),
+            context_start_record_id: None,
+            model_route_fingerprint: Some(String::from("model-route")),
+            toolset_fingerprint: Some(String::from("tools")),
+            system_prompt_fingerprint: Some(String::from("system")),
+            request_text_measurement: None,
+            budget_accounting: None,
+        }
+    ));
+    assert!(provider_call_ledger.observe_completed(
+        vulcan_workbench_model::SessionProviderCallCompleted {
+            provider_call_id: String::from("task-call-1"),
+            identity: provider_call_identity,
+            status: vulcan_workbench_model::SessionProviderCallStatus::Succeeded,
+            provider_usage_evidence: vulcan_workbench_model::SessionProviderUsageEvidence {
+                availability: vulcan_workbench_model::SessionProviderUsageAvailability::Final,
+                provider_usage: Some(provider_usage.clone()),
+            },
+            prepared_at_ms: 1000,
+            dispatched_at_ms: Some(1001),
+            first_event_at_ms: Some(1002),
+            first_token_at_ms: Some(1003),
+            completed_at_ms: 1100,
+            dispatch_outcome: Some(String::from("dispatched")),
+            dispatch_outcome_known: Some(true),
+            semantic_output_observed: Some(true),
+            semantic_output_observed_known: Some(true),
+            replay_safe: Some(false),
+            error_category: None,
+            error_code: None,
+        }
+    ));
+    task_runtime
+        .persist_task_provider_call_ledger(task_id, &provider_call_ledger)
+        .expect("task Provider call ledger should persist before outcome");
 
     task_runtime
         .store_task_outcome(root_session_id, &invocation, &outcome)
@@ -1692,10 +1803,39 @@ fn store_task_outcome_persists_segmented_task_session_artifacts() {
     assert_eq!(turn_stats.total_tokens, 130);
     assert_eq!(turn_stats.cached_input_tokens, Some(40));
     assert_eq!(turn_stats.cache_creation_input_tokens, Some(7));
+    assert_eq!(turn_stats.unknown_usage_call_count, 0);
     assert_eq!(turn_stats.usage_segments.len(), 1);
     assert_eq!(
         turn_stats.usage_segments[0].kind,
         SessionTurnUsageSegmentKind::AssistantResponse
+    );
+    let runtime_checkpoint = store
+        .load_runtime_checkpoint(SessionNodeId::from(task_id))
+        .expect("runtime checkpoint should load")
+        .expect("runtime checkpoint should exist");
+    let persisted_provider_call_ledger: vulcan_workbench_model::SessionProviderCallLedger =
+        serde_json::from_value(runtime_checkpoint.payload["provider_call_ledger"].clone())
+            .expect("persisted task Provider call ledger should deserialize");
+    let closing_record_id = stats_record
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("turn_closing_record_id"))
+        .and_then(Value::as_str)
+        .expect("task Turn Stats should preserve its closing record identity");
+    assert_eq!(
+        persisted_provider_call_ledger.revision,
+        provider_call_ledger.revision + 1
+    );
+    assert_eq!(
+        persisted_provider_call_ledger
+            .calls
+            .get("task-call-1")
+            .and_then(|call| call.closing_record_id.as_deref()),
+        Some(closing_record_id)
+    );
+    assert_eq!(
+        turn_stats.source_ledger_revision,
+        persisted_provider_call_ledger.revision
     );
 
     let task_dir = store
@@ -2733,7 +2873,7 @@ fn store_running_task_persists_start_metadata_and_registry_segments() {
     ))
     .expect("root metadata should parse");
     assert_eq!(root_metadata["tasks"][0]["status"], "running");
-    assert_eq!(root_metadata["tasks"][0]["line_count"], 4);
+    assert_eq!(root_metadata["tasks"][0]["line_count"], 2);
 
     let registry = task_runtime
         .subagent_registry_snapshot()
@@ -2743,7 +2883,7 @@ fn store_running_task_persists_start_metadata_and_registry_segments() {
         .expect("running registry entry should exist");
     assert_eq!(entry.status, SubagentStatus::Running);
     assert_eq!(entry.segments.len(), 1);
-    assert_eq!(entry.segments[0].line_count, 4);
+    assert_eq!(entry.segments[0].line_count, 2);
     assert!(entry.result_summary.is_none());
 }
 

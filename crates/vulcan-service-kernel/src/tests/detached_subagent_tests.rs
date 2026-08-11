@@ -123,7 +123,6 @@ fn task_session_execution_report_fast_path_skips_completion_hook() {
         knowledge_runtime: None,
         luaskills_runtime: None,
         cached_luaskills_catalog: None,
-        token_budget_runtime: None,
         mcp_runtime: None,
         cached_mcp_catalog: None,
         provider_manifest_sync: None,
@@ -618,14 +617,19 @@ async fn context_compaction_hook_lock_failure_preserves_committed_outcome() {
         workspace
             .session_messages
             .insert(session_id, messages.clone());
-        workspace.session_runtime_state.insert(
-            session_id,
-            SessionRuntimeStateEntry {
-                conversation_state: conversation_state_from_session_messages(&messages)
-                    .expect("fixture messages should have stable runtime identities"),
-                ..SessionRuntimeStateEntry::default()
-            },
+        let mut runtime_state = SessionRuntimeStateEntry {
+            conversation_state: conversation_state_from_session_messages(&messages)
+                .expect("fixture messages should have stable runtime identities"),
+            ..SessionRuntimeStateEntry::default()
+        };
+        record_completed_test_provider_call(
+            &mut runtime_state,
+            "context_compaction",
+            "committed-compaction-execution",
         );
+        workspace
+            .session_runtime_state
+            .insert(session_id, runtime_state);
         workspace
             .session_run_phases
             .insert(session_id, SessionRunPhase::Preparing);
@@ -2581,7 +2585,6 @@ fn subagent_completion_feedback_keeps_parent_hook_turn_open() {
             .session_runtime_state
             .entry(parent_session_id)
             .or_default();
-        runtime_state.last_safe_provider_request_count = Some(2);
         runtime_state
             .conversation_state
             .messages
@@ -2899,6 +2902,14 @@ fn subagent_completion_queues_session_mailbox_during_wait_agent() {
     service_state
         .parent_sessions_waiting_for_subagents
         .insert(parent_session_id);
+    service_state.subagent_parent_turn_bindings.insert(
+        SubagentExecutionKey::new(task_session_id, "test-execution-wait-worker"),
+        WebuiSubagentParentTurnBinding {
+            parent_session_id,
+            source_generation: 4,
+            parent_turn_id: Some(String::from("parent-turn-wait")),
+        },
+    );
     let state = Arc::new(Mutex::new(service_state));
     let event = test_delegate_finished_event(task_session_id, "image-b", "生成完成：b.jpg");
 
@@ -3279,6 +3290,22 @@ fn wait_agent_feedback_suppresses_independent_parent_feedback_rows() {
             current_unix_millis_u64(),
         )
         .expect("wait scope should register");
+    service_state.subagent_parent_turn_bindings.insert(
+        SubagentExecutionKey::new(task_session_id, "test-execution-wait-worker"),
+        WebuiSubagentParentTurnBinding {
+            parent_session_id,
+            source_generation: 4,
+            parent_turn_id: Some(String::from("parent-turn-wait")),
+        },
+    );
+    service_state.subagent_parent_turn_bindings.insert(
+        SubagentExecutionKey::new(second_task_session_id, "test-execution-wait-worker-b"),
+        WebuiSubagentParentTurnBinding {
+            parent_session_id,
+            source_generation: 4,
+            parent_turn_id: Some(String::from("parent-turn-wait")),
+        },
+    );
     let state = Arc::new(Mutex::new(service_state));
     let runtime = test_agent_runtime_bridge();
     let app = ServiceEventEmitter::new(Vec::new());
@@ -3376,6 +3403,23 @@ fn wait_agent_feedback_suppresses_independent_parent_feedback_rows() {
     assert!(
         feedback_rows.is_empty(),
         "wait_agent-owned feedback must stay inside the wait_agent tool result instead of creating separate parent rows"
+    );
+    let parent_ledger = &guard
+        .workspace_snapshot
+        .as_ref()
+        .expect("workspace should exist")
+        .session_runtime_state
+        .get(&parent_session_id)
+        .expect("parent runtime state should exist")
+        .provider_call_ledger;
+    assert_eq!(parent_ledger.child_contributions.len(), 2);
+    assert_eq!(
+        parent_ledger
+            .child_contributions
+            .values()
+            .map(|contribution| contribution.provider_call_count)
+            .sum::<usize>(),
+        5
     );
 }
 

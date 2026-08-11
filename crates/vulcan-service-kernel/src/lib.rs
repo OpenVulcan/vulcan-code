@@ -46,7 +46,7 @@ use vulcan_agent_runtime::{
     agent_runtime::{
         context_injection_runtime::context_injection_panel_cards_for_kind,
         conversation_hooks::{ConversationHookRuntime, ConversationTurnCompletionStatus},
-        events::{RuntimeEvent, RuntimeEventKind},
+        events::{ProviderRequestDurabilityCompletion, RuntimeEvent, RuntimeEventKind},
         extension_generation::ExtensionGeneration,
         prompt_composer_runtime::invalidate_runtime_prompt_luaskill_catalog_cache,
         provider_request_telemetry::{
@@ -55,7 +55,6 @@ use vulcan_agent_runtime::{
         },
         question_runtime::{PendingQuestionChangeCallback, QuestionRuntime},
         task_runtime::{DetachedTaskRuntimeEvent, TaskRuntime},
-        token_budget_runtime::TokenBudgetRuntime,
         vmm_hooks::VmmHookRuntimeHandle,
     },
     conversation_protocol::{
@@ -80,7 +79,7 @@ use vulcan_agent_runtime::{
     },
     stream_runtime_run_with_intervention_plugins_and_public_ai,
     tooling::{CommandSessionRuntime, command_session_runtime::CommandSessionInputEvent},
-    turn_stats::build_session_turn_stats_from_state_with_segments,
+    turn_stats::build_session_turn_stats_from_state_with_ledger_and_segments,
 };
 use vulcan_context::{
     ContextBudgetSeverity, ContextBudgetSnapshot, SessionConversationRecord, append_record,
@@ -153,7 +152,9 @@ use vulcan_workbench_model::{
     PendingSessionPromptEntry, PendingSessionPromptSource, SUBAGENT_TASK_STOPPED_SUMMARY_TEXT,
     SelectedSubagentTaskPanel, SessionAddonNamespace, SessionAddonState, SessionId,
     SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind, SessionPlanArtifactState,
-    SessionPlanModeState, SessionProviderUsageSegmentStatus, SessionRunPhase,
+    SessionPlanModeState, SessionProviderCallCompleted, SessionProviderCallIdentity,
+    SessionProviderCallStarted, SessionProviderCallStatus, SessionProviderProfileRevision,
+    SessionProviderUsageAvailability, SessionProviderUsageEvidence, SessionRunPhase,
     SessionRuntimeControls, SessionRuntimeStateEntry, SessionState, SessionSummary,
     SessionTitleSource, SessionTodolistItem, SessionTodolistItemStatus, SessionTodolistState,
     SessionTurnStatsKind, SessionTurnStatsStatus, SessionTurnUsageSegment, SessionWorkMode,
@@ -193,6 +194,7 @@ mod command_sessions;
 pub mod configured_inference;
 mod context_compaction;
 mod conversation_actions;
+mod conversation_continuation;
 mod conversation_display;
 mod conversation_history;
 mod conversation_message_projection;
@@ -279,6 +281,7 @@ use context_compaction::{
     webui_context_compaction_plan_from_conversation_state,
 };
 use conversation_actions::*;
+use conversation_continuation::*;
 use conversation_display::*;
 use conversation_history::{
     HydratedConversationWindowState, hydrated_conversation_window_summaries,
@@ -294,8 +297,8 @@ use conversation_history::{
 use conversation_message_projection::*;
 use conversation_run_services::*;
 use conversation_submission::{
-    ConversationSubmissionMode, service_retry_conversation_request,
-    service_submit_conversation_prompt, service_submit_user_prompt_edit,
+    ConversationSubmissionMode, service_continue_conversation, service_submit_conversation_prompt,
+    service_submit_user_prompt_edit,
 };
 #[cfg(test)]
 use execution_report_memory::apply_task_session_execution_report_to_memory;
@@ -432,7 +435,6 @@ use workspace_session_persistence::*;
 
 use vulcan_service_runtime::luaskills_bridge::{TauriLuaSkillsCatalog, TauriLuaSkillsHandle};
 use vulcan_service_runtime::mcp_bridge::{TauriMcpRuntimeCatalog, TauriMcpRuntimeHandle};
-use vulcan_service_runtime::token_budget_bridge::TauriTokenBudgetRuntime;
 
 /// Creates the initial shared service state used by any host shell.
 /// 创建任意宿主壳使用的初始共享服务状态。
@@ -475,7 +477,6 @@ pub fn create_service_bridge_state(
         knowledge_runtime: None,
         luaskills_runtime: None,
         cached_luaskills_catalog: None,
-        token_budget_runtime: None,
         mcp_runtime: None,
         cached_mcp_catalog: None,
         provider_manifest_sync: None,

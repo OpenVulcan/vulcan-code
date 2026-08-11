@@ -105,7 +105,6 @@ pub(crate) fn command_session_summary_from_snapshot(
 pub(crate) fn runtime_modules(
     controller: &ControllerRuntimeHandle,
     luaskills_catalog: &TauriLuaSkillsCatalog,
-    token_budget_runtime: &TauriTokenBudgetRuntime,
     mcp_catalog: &TauriMcpRuntimeCatalog,
 ) -> Vec<RuntimeModuleSnapshot> {
     vec![
@@ -137,12 +136,6 @@ pub(crate) fn runtime_modules(
             ),
         ),
         runtime_module(
-            "token-budget",
-            "Token Budget",
-            token_budget_status(token_budget_runtime),
-            token_budget_runtime.status_row().as_str(),
-        ),
-        runtime_module(
             "mcp",
             "MCP Runtime",
             if mcp_catalog.enabled_server_count == 0 || mcp_catalog.connected_server_count > 0 {
@@ -167,18 +160,6 @@ pub(crate) fn runtime_modules(
             "项目与会话快照已恢复",
         ),
     ]
-}
-
-/// Resolves the startup status for token budget runtime diagnostics.
-/// 解析 Token 预算运行时诊断对应的启动状态。
-pub(crate) fn token_budget_status(
-    token_budget_runtime: &TauriTokenBudgetRuntime,
-) -> StartupStepStatus {
-    if token_budget_runtime.is_available() {
-        StartupStepStatus::Ready
-    } else {
-        StartupStepStatus::Warning
-    }
 }
 
 /// Creates one runtime module snapshot.

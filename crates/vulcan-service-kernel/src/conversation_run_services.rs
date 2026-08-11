@@ -62,14 +62,8 @@ pub(crate) async fn service_compact_selected_conversation_context(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
 ) -> Result<WorkbenchSnapshot, String> {
-    let (
-        controller_runtime,
-        agent_runtime,
-        luaskills_catalog,
-        token_budget_runtime,
-        mcp_catalog,
-        logs,
-    ) = runtime_parts_from_state(&state)?;
+    let (controller_runtime, agent_runtime, luaskills_catalog, mcp_catalog, logs) =
+        runtime_parts_from_state(&state)?;
     let selected_session_id = selected_session_id_from_state(&state)?;
     webui_trace(
         "context_compaction_requested",
@@ -162,7 +156,6 @@ pub(crate) async fn service_compact_selected_conversation_context(
             state: &state,
             controller_runtime: &controller_runtime,
             luaskills_catalog: &luaskills_catalog,
-            token_budget_runtime: &token_budget_runtime,
             mcp_catalog: &mcp_catalog,
             provider_configuration: &agent_runtime.provider_configuration,
             public_ai_runtime: Some(agent_runtime.public_ai_runtime.as_ref()),
@@ -225,14 +218,8 @@ pub(crate) async fn service_stop_conversation_run(
     let target_session_id = parse_session_id(conversation_id.trim())
         .ok_or_else(|| format!("无效的停止目标会话标识：{conversation_id}"))?;
     ensure_regular_session_exists(&state, target_session_id, "停止")?;
-    let (
-        controller_runtime,
-        agent_runtime,
-        luaskills_catalog,
-        token_budget_runtime,
-        mcp_catalog,
-        logs,
-    ) = runtime_parts_from_state(&state)?;
+    let (controller_runtime, agent_runtime, luaskills_catalog, mcp_catalog, logs) =
+        runtime_parts_from_state(&state)?;
     let mode = mode.unwrap_or_default();
     webui_trace(
         "stop_conversation_requested",
@@ -271,23 +258,23 @@ pub(crate) async fn service_stop_conversation_run(
         stop_webui_session_kernel_generation(&mut guard, target_session_id)
     };
     let had_active_stream_task = active_task.is_some();
-    if let Some(active_task) = active_task {
-        active_task.abort();
+    let active_task_join_error = if let Some(active_task) = active_task {
+        active_task.abort_and_wait().await.err()
+    } else {
+        None
+    };
+    // workspaceSnapshot is cloned only after task teardown so the cancellation guard's terminal ledger fact is included.
+    // workspaceSnapshot 仅在任务清理后克隆，确保包含取消守卫写入的终态账本事实。
+    let mut workspace_snapshot = current_workspace_snapshot_from_shared_state(&state)?
+        .ok_or_else(|| String::from("停止运行时工作区尚未就绪。"))?;
+    let now = current_unix_millis_text();
+    if let Some(runtime_state) = workspace_snapshot
+        .session_runtime_state
+        .get_mut(&target_session_id)
+    {
+        seal_active_streaming_records_in_state(runtime_state, &now);
     }
-    let mut workspace_snapshot = with_workspace_mutation_and_full_workbench_rebuild_for_cold_path(
-        &app,
-        &state,
-        |workspace| {
-            // now seals every active row before the stop snapshot becomes authoritative.
-            // now 在停止快照成为权威状态前封口全部活跃行。
-            let now = current_unix_millis_text();
-            if let Some(runtime_state) = workspace.session_runtime_state.get_mut(&target_session_id)
-            {
-                seal_active_streaming_records_in_state(runtime_state, &now);
-            }
-            mark_webui_session_stop_requested_in_workspace(workspace, target_session_id);
-        },
-    )?;
+    mark_webui_session_stop_requested_in_workspace(&mut workspace_snapshot, target_session_id);
     let running_subagent_task_states = if stop_running_subagents {
         let mut guard = state
             .lock()
@@ -374,13 +361,19 @@ pub(crate) async fn service_stop_conversation_run(
         }
         drop(goal_transition_guard);
     }
+    persist_workspace_session_update(
+        Some(&state),
+        controller_runtime.clone(),
+        &workspace_snapshot,
+        target_session_id,
+    )
+    .await?;
     let workbench =
         store_and_emit_full_workbench_snapshot_for_cold_refresh(FullWorkbenchColdRefreshRequest {
             app: &app,
             state: &state,
             controller_runtime: &controller_runtime,
             luaskills_catalog: &luaskills_catalog,
-            token_budget_runtime: &token_budget_runtime,
             mcp_catalog: &mcp_catalog,
             provider_configuration: &agent_runtime.provider_configuration,
             public_ai_runtime: Some(agent_runtime.public_ai_runtime.as_ref()),
@@ -388,39 +381,8 @@ pub(crate) async fn service_stop_conversation_run(
             logs: &logs,
             subagent_navigation_mode: SubagentNavigationRefreshMode::Rebuild,
         })?;
-    if did_stop_work {
-        let state_for_persist = state.clone();
-        let controller_runtime_for_persist = controller_runtime.clone();
-        spawn_service_task(async move {
-            let snapshot = match current_workspace_snapshot_from_shared_state(&state_for_persist) {
-                Ok(Some(snapshot)) => snapshot,
-                Ok(None) => return,
-                Err(error) => {
-                    eprintln!(
-                        "[webui-service] stopped conversation persist snapshot failed: {error}"
-                    );
-                    return;
-                }
-            };
-            if !snapshot
-                .session_runtime_state
-                .contains_key(&target_session_id)
-            {
-                return;
-            }
-            if let Err(error) = persist_workspace_session_update(
-                Some(&state_for_persist),
-                controller_runtime_for_persist,
-                &snapshot,
-                target_session_id,
-            )
-            .await
-            {
-                eprintln!(
-                    "[webui-service] stopped conversation background persist failed: {error}"
-                );
-            }
-        });
+    if let Some(error) = active_task_join_error {
+        eprintln!("[webui-service] stopped conversation task teardown warning: {error}");
     }
     Ok(StopConversationRunResponse::Stopped {
         workbench: Box::new(workbench),

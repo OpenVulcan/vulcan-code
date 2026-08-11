@@ -119,9 +119,13 @@ export interface ChatAreaProps {
   // Stops the currently running conversation.
   // 停止当前运行中的会话。
   onStopConversationRun: () => Promise<boolean>;
-  // Retries a failed conversation from the retained service execution state.
-  // 从服务端保留的执行状态重试失败会话。
-  onRetryConversationRequest?: (conversationId: string) => Promise<boolean>;
+  // Continues a terminated conversation from one exact retained ledger generation.
+  // 从精确保留账本代际继续已终止会话。
+  onContinueConversation?: (
+    conversationId: string,
+    expectedGeneration: number,
+    expectedLedgerRevision: number,
+  ) => Promise<boolean>;
   // Opens a subagent transcript in the right context panel.
   // 在右侧上下文面板中打开子代理转录。
   onOpenSubagentPanel: (parentConversationId: string, taskId: string) => Promise<boolean>;

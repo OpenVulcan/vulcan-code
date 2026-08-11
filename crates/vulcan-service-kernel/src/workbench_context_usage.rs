@@ -29,10 +29,16 @@ pub(crate) fn context_usage_snapshot_from_runtime_state(
             context_budget.usage_percent(),
             context_budget.severity.display_label(),
         ));
+        tooltip_rows.push(format!("输入窗口：{}", context_budget.usage_label()));
         tooltip_rows.push(format!(
-            "输入窗口（API实测/本地估算）：{}",
-            context_budget.usage_label()
+            "预算来源：{}",
+            context_budget.accounting_source.display_label()
         ));
+        if let Some(warning_code) = context_budget.accounting_warning_code.as_deref() {
+            tooltip_rows.push(format!(
+                "用量提示：当前值不是精确 Provider 用量（{warning_code}）。"
+            ));
+        }
         tooltip_rows.extend(context_budget_breakdown_rows(context_budget));
         tooltip_rows.push(format!(
             "预留：输出 {} · 推理 {} · 压缩 {}",
@@ -51,7 +57,9 @@ pub(crate) fn context_usage_snapshot_from_runtime_state(
             tooltip_rows.push(format!("最近 API：{}", provider_usage_label(usage)));
         }
     } else {
-        tooltip_rows.push(String::from("请求拆分：暂无历史用量，等待预算引擎计算"));
+        tooltip_rows.push(String::from(
+            "请求拆分：暂无历史用量，下一次请求将先显示字符粗估",
+        ));
     }
 
     tooltip_rows.push(if runtime_state.last_compaction_id.is_some() {
@@ -94,9 +102,8 @@ pub(crate) fn historical_context_budget_snapshot_from_runtime_state(
     model_capabilities: Option<&vulcan_ai_contract::ModelCapabilities>,
 ) -> Option<ContextBudgetSnapshot> {
     let observed_usage = runtime_state
-        .last_successful_provider_usage
-        .as_ref()
-        .or(runtime_state.last_provider_usage.as_ref())
+        .provider_call_ledger
+        .last_usage()
         .filter(|usage| usage.has_any_tokens())?;
     let provider_id = runtime_state.active_provider_id.as_deref()?;
     let model_id = runtime_state.active_model_id.as_deref()?;
@@ -125,7 +132,7 @@ pub(crate) fn historical_context_budget_snapshot_from_runtime_state(
             .saturating_add(window_policy.fallback_buffer_tokens)
             .min(effective_context_window.unwrap_or(raw_window))
     });
-    let input_tokens = vulcan_context::observed_input_tokens_from_usage(Some(observed_usage))
+    let input_tokens = vulcan_context::observed_input_tokens_from_usage(Some(&observed_usage))
         .or(observed_usage.total_tokens)
         .unwrap_or_default();
     let active_context_tokens = observed_usage.total_tokens.unwrap_or(input_tokens);
@@ -182,6 +189,13 @@ pub(crate) fn historical_context_budget_snapshot_from_runtime_state(
         }),
         usage_ratio,
         observed_usage: Some(observed_usage.clone()),
+        accounting_source: vulcan_context::ContextBudgetAccountingSource::ProviderReported,
+        accounting_warning_code: None,
+        provider_anchor_call_id: runtime_state
+            .provider_call_ledger
+            .last_stable_context_baseline
+            .as_ref()
+            .map(|baseline| baseline.provider_call_id.clone()),
         severity: effective_context_window
             .zip(auto_compact_limit)
             .map(|(hard_limit, auto_limit)| {
@@ -221,9 +235,11 @@ pub(crate) fn context_budget_breakdown_rows(context_budget: &ContextBudgetSnapsh
         ("当前", context_budget.estimated_prompt_tokens),
         ("工具", context_budget.estimated_tool_tokens),
     ];
-    let raw_total: usize = raw_parts.iter().map(|(_, value)| *value).sum();
+    let raw_total = raw_parts
+        .iter()
+        .fold(0_usize, |total, (_, value)| total.saturating_add(*value));
     let prediction_row = format!(
-        "预测拆分（预算器）：{}",
+        "预测拆分（字符估算）：{}",
         context_budget_token_breakdown_text(&raw_parts, None)
     );
 
@@ -337,7 +353,7 @@ mod tests {
             context_budget_breakdown_rows(&context_budget),
             vec![
                 String::from("说明：API实测为准；拆分已按实测输入比例校准。"),
-                String::from("预测拆分（预算器）：系统 10 / 历史 30 / 当前 20 / 工具 40"),
+                String::from("预测拆分（字符估算）：系统 10 / 历史 30 / 当前 20 / 工具 40"),
                 String::from("校准拆分（实测）：系统 20 / 历史 60 / 当前 40 / 工具 80"),
             ]
         );
@@ -353,7 +369,7 @@ mod tests {
         assert_eq!(
             context_budget_breakdown_rows(&context_budget),
             vec![String::from(
-                "预测拆分（预算器）：系统 10 / 历史 30 / 当前 20 / 工具 40"
+                "预测拆分（字符估算）：系统 10 / 历史 30 / 当前 20 / 工具 40"
             )]
         );
     }

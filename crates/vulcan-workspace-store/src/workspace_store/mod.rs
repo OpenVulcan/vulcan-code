@@ -29,10 +29,14 @@ mod git_preferences;
 mod goal_store;
 mod persistence;
 mod provider_billing;
+mod runtime_state_codec;
 mod segmented_session_store;
 mod session_addon_store;
 mod session_load;
 
+use self::runtime_state_codec::{
+    deserialize_session_runtime_state_entry, serialize_session_runtime_state_entry,
+};
 pub use self::segmented_session_store::find_segmented_session_directory_for_task_store_created_at;
 use self::segmented_session_store::{
     SegmentPolicy, SegmentedSessionCreateRequest, SegmentedSessionEventInput,

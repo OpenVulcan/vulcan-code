@@ -10,7 +10,6 @@ use crate::agent_runtime::provider_transport_request::ProviderTransportTurnStart
 use crate::agent_runtime::question_runtime::QuestionRuntime;
 use crate::agent_runtime::runtime_stream_launch::prepare_runtime_stream_launch_with_plugins_and_public_ai;
 use crate::agent_runtime::task_runtime::TaskRuntime;
-use crate::agent_runtime::token_budget_runtime::TokenBudgetRuntime;
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
 use crate::mcp::{McpRuntimeAccess, configured_mcp_runtime_access};
 use crate::provider_config::ProviderConfigurationFile;
@@ -38,8 +37,6 @@ use std::sync::Arc;
 /// `question_runtime` 是宿主工具使用的共享提问运行时。
 /// `command_session_runtime` is the shared command-session runtime used by shell tools.
 /// `command_session_runtime` 是 shell 工具使用的共享命令会话运行时。
-/// `token_budget_runtime` is the shared token-budget runtime used by request assembly.
-/// `token_budget_runtime` 是请求装配使用的共享 token 预算运行时。
 /// `public_ai_runtime` owns the process-local catalogs, routes, and credential boundary.
 /// `public_ai_runtime` 持有进程内目录、路由与凭据边界。
 /// `request` is the simulated execution request to assemble.
@@ -57,7 +54,6 @@ pub async fn capture_runtime_provider_wire_request(
     task_runtime: Arc<TaskRuntime>,
     question_runtime: Arc<QuestionRuntime>,
     command_session_runtime: Arc<CommandSessionRuntime>,
-    token_budget_runtime: Arc<TokenBudgetRuntime>,
     public_ai_runtime: Arc<vulcan_provider_adapters::PublicAiRuntime>,
     request: ExecutionPreparationRequest,
 ) -> Result<Value, String> {
@@ -71,7 +67,6 @@ pub async fn capture_runtime_provider_wire_request(
         task_runtime,
         question_runtime,
         command_session_runtime,
-        token_budget_runtime,
         Some(public_ai_runtime),
         request,
     )
@@ -94,7 +89,6 @@ pub async fn capture_runtime_provider_wire_request(
         },
         launch.core_snapshot,
         launch.task_runtime,
-        launch.token_budget_runtime,
         launch.tools_manager,
         launch.resolved_tool_definitions,
         launch.public_ai_runtime,

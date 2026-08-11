@@ -2,7 +2,7 @@
 //! subagent event ingest 辅助逻辑。
 
 use super::*;
-use vulcan_workbench_model::SubagentFeedbackDisplayRecords;
+use vulcan_workbench_model::{SessionChildUsageContribution, SubagentFeedbackDisplayRecords};
 
 /// Consumes one delegate runtime event into the WebUI subagent cache and child transcript state.
 /// 将一条委派运行时事件吸收到 WebUI 子代理缓存与子会话转录状态中。
@@ -320,9 +320,6 @@ fn append_webui_subagent_feedback_records_if_missing(
     projection_policy: SubagentFeedbackParentProjectionPolicy,
     parent_turn_binding: Option<&WebuiSubagentParentTurnBinding>,
 ) -> Result<bool, String> {
-    if projection_policy == SubagentFeedbackParentProjectionPolicy::SkipAll {
-        return Ok(false);
-    }
     let now = current_unix_millis_text();
     let task_id_text = state.task_id.to_string();
     let mut runtime_state = workspace_snapshot
@@ -334,20 +331,18 @@ fn append_webui_subagent_feedback_records_if_missing(
             ..SessionRuntimeStateEntry::default()
         });
     let execution_id = subagent_feedback_execution_id_from_tool_metadata(metadata)?;
-    if runtime_state
-        .conversation_state
-        .records
-        .iter()
-        .any(|record| {
-            subagent_feedback_record_matches(
-                record.metadata.as_ref(),
-                &task_id_text,
-                execution_id.as_str(),
-            )
-        })
-    {
-        return Ok(false);
-    }
+    let display_records_already_exist =
+        runtime_state
+            .conversation_state
+            .records
+            .iter()
+            .any(|record| {
+                subagent_feedback_record_matches(
+                    record.metadata.as_ref(),
+                    &task_id_text,
+                    execution_id.as_str(),
+                )
+            });
 
     let mut display_records =
         subagent_feedback_display_records_from_tool_metadata(parent_session_id, metadata, state)?;
@@ -356,18 +351,63 @@ fn append_webui_subagent_feedback_records_if_missing(
     {
         attach_parent_turn_binding_to_subagent_feedback_records(&mut display_records, binding);
     }
-    if projection_policy == SubagentFeedbackParentProjectionPolicy::AppendFeedbackAndStats {
+    let should_append_display_records = projection_policy
+        == SubagentFeedbackParentProjectionPolicy::AppendFeedbackAndStats
+        && !display_records_already_exist;
+    let mut projected_stats_record_id = None;
+    if should_append_display_records {
         append_webui_session_message_entry_to_state(
             &mut runtime_state,
             parent_session_id,
             display_records.feedback_entry,
         )?;
+        projected_stats_record_id = Some(append_webui_session_message_entry_to_state(
+            &mut runtime_state,
+            parent_session_id,
+            display_records.stats_entry,
+        )?);
     }
-    append_webui_session_message_entry_to_state(
-        &mut runtime_state,
-        parent_session_id,
-        display_records.stats_entry,
-    )?;
+    let mut contribution_changed = false;
+    if let Some(binding) = parent_turn_binding
+        && binding.parent_session_id == parent_session_id
+        && let Some(parent_turn_id) = binding.parent_turn_id.as_ref()
+    {
+        let turn_stats = &display_records.turn_stats;
+        let inclusive_usage = (turn_stats.provider_call_count
+            > turn_stats.unknown_usage_call_count)
+            .then(|| ProviderUsageSnapshot {
+                input_tokens: Some(turn_stats.input_tokens),
+                output_tokens: Some(turn_stats.output_tokens),
+                reasoning_tokens: Some(turn_stats.reasoning_tokens),
+                total_tokens: Some(turn_stats.total_tokens),
+                cached_input_tokens: turn_stats.cached_input_tokens,
+                cache_creation_input_tokens: turn_stats.cache_creation_input_tokens,
+                ..ProviderUsageSnapshot::default()
+            });
+        contribution_changed = runtime_state
+            .provider_call_ledger
+            .observe_child_contribution(SessionChildUsageContribution {
+                task_id: task_id_text,
+                execution_id: display_records.execution_id,
+                parent_turn_id: parent_turn_id.clone(),
+                revision: turn_stats
+                    .source_ledger_revision
+                    .max(turn_stats.child_contribution_revision)
+                    .max(binding.source_generation)
+                    .max(1),
+                status: String::from("final"),
+                inclusive_usage,
+                provider_call_count: turn_stats.provider_call_count,
+                unknown_usage_call_count: turn_stats.unknown_usage_call_count,
+                source_turn_stats_record_id: display_records
+                    .source_turn_stats_record_id
+                    .or(projected_stats_record_id),
+            });
+    }
+
+    if !should_append_display_records && !contribution_changed {
+        return Ok(false);
+    }
 
     let runtime_state_snapshot = runtime_state.clone();
     workspace_snapshot

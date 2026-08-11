@@ -82,7 +82,9 @@ pub(crate) async fn stream_webui_context_compaction_execution(
                     &mut output_message_id,
                     &mut provider_telemetry_guard,
                     event,
-                ) {
+                )
+                .await
+                {
                     eprintln!(
                         "[webui-service] context compaction stream projection failed: {error}"
                     );
@@ -113,6 +115,7 @@ pub(crate) async fn stream_webui_context_compaction_execution(
             event,
             "context_compaction_provider_usage_cancelled",
         )
+        .await
     {
         eprintln!(
             "[webui-service] context compaction provider cancellation usage update failed: {error}"
@@ -341,7 +344,7 @@ pub(crate) fn spawn_webui_context_compaction_task(
 
 /// Applies one prompt-compaction stream event to the retained WebUI transcript.
 /// 将一条提示词压缩流事件应用到保留的 WebUI 转录状态。
-pub(crate) fn apply_webui_context_compaction_stream_event(
+pub(crate) async fn apply_webui_context_compaction_stream_event(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     controller_runtime: &ControllerRuntimeHandle,
@@ -368,6 +371,19 @@ pub(crate) fn apply_webui_context_compaction_stream_event(
                 event,
                 "context_compaction_provider_usage_telemetry",
             )
+            .await
+        }
+        ExecutionStreamEvent::ProviderRequestDurabilityBoundary { event, completion } => {
+            crate::process_provider_request_durability_boundary(
+                state,
+                controller_runtime,
+                Some(app),
+                provider_telemetry_guard,
+                event,
+                completion,
+                "context_compaction_provider_usage_durability_boundary",
+            )
+            .await
         }
         ExecutionStreamEvent::WireRequestReady { .. } => Ok(()),
         ExecutionStreamEvent::RequestStarted { .. } => {

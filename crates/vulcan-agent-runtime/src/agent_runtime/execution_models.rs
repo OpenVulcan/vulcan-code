@@ -294,6 +294,12 @@ pub struct ExecutionPreparationRequest {
     /// 当前会话供应商路由租约预期的持久化非秘密身份。
     pub provider_route_lease_identity:
         Option<vulcan_workbench_model::SessionProviderRouteLeaseIdentity>,
+    /// Latest session-ledger Provider usage baseline matching the frozen route.
+    /// 与冻结路由匹配的最近会话账本 Provider 用量基线。
+    pub provider_usage_budget_baseline: Option<vulcan_workbench_model::SessionProviderCallRecord>,
+    /// Active session context generation used to reject stale usage anchors.
+    /// 用于拒绝过期用量锚点的活动会话上下文代际。
+    pub provider_usage_context_generation_id: Option<String>,
     /// Optional session-selected provider tool targets keyed by semantic capability.
     /// 按语义能力索引的可选会话级供应商工具目标选择。
     pub provider_tool_selections_override: Option<
@@ -503,6 +509,9 @@ pub struct ExecutionPreparation {
     /// Active session identifier.
     /// 当前激活会话标识。
     pub session_id: SessionId,
+    /// Immutable conversation turn identifier when this execution owns one user-visible turn.
+    /// 当本次执行拥有一个用户可见回合时使用的不可变会话回合标识。
+    pub conversation_hook_turn_id: Option<String>,
     /// Active session title.
     /// 当前激活会话标题。
     pub session_title: String,
@@ -608,6 +617,12 @@ pub struct ExecutionPreparation {
     /// Request-level input-token budget limit used when building request budgets and budget guards.
     /// 构建请求预算与预算守卫时使用的请求级输入 Token 预算上限。
     pub context_budget_override: Option<usize>,
+    /// Latest session-ledger Provider usage baseline matching the frozen route.
+    /// 与冻结路由匹配的最近会话账本 Provider 用量基线。
+    pub provider_usage_budget_baseline: Option<vulcan_workbench_model::SessionProviderCallRecord>,
+    /// Active session context generation used to reject stale usage anchors.
+    /// 用于拒绝过期用量锚点的活动会话上下文代际。
+    pub provider_usage_context_generation_id: Option<String>,
     /// Optional layered context assembly captured from the final provider-facing request shape.
     /// 从最终面向 Provider 的请求形态捕获到的可选分层上下文装配结果。
     pub context_assembly: Option<ContextAssembly>,

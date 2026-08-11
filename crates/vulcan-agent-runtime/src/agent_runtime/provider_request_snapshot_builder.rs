@@ -70,6 +70,7 @@ pub(crate) async fn build_core_provider_request_snapshot(
         preparation.model_blueprint.protocol_profile_id.clone(),
         preparation.model_blueprint.model_id.clone(),
         preview_prompt,
+        true,
         None,
         tool_schemas,
     );

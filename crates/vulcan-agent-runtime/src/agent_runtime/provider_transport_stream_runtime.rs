@@ -1,6 +1,7 @@
 //! Host-controlled provider streaming runtime wrapper for shared controller execution.
 //! 面向共享控制器执行的宿主控制 Provider 流式运行时包装模块。
 
+use crate::agent_runtime::events::provider_request_durability_barrier;
 use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
 use crate::agent_runtime::provider_request_bridge_conversation::core_snapshot_to_session_conversation_state;
 use crate::agent_runtime::provider_stream::{ProviderDeltaStream, ProviderStreamDelta};
@@ -30,6 +31,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::task::AbortHandle;
+use vulcan_ai_contract::AiExecutionError;
 use vulcan_core::controller::VulcanCoreController;
 use vulcan_core::provider::VulcanStreamingProviderAdapter;
 use vulcan_core::tool::AllowAllToolPolicy;
@@ -37,6 +39,45 @@ use vulcan_core::types::{
     ControllerConfig as CoreControllerConfig, ConversationSnapshot as CoreConversationSnapshot,
     CoreError, ProviderTurnResponse as CoreProviderTurnResponse,
 };
+
+/// Emits one failed physical-call boundary and waits for durable session persistence.
+/// 发出一个失败物理调用边界并等待会话可靠持久化。
+///
+/// # Parameters
+/// 参数
+/// All fields are exact retry and failure facts already produced by the host retry state machine.
+/// 全部字段均为宿主重试状态机已经产生的精确重试与失败事实。
+///
+/// # Returns
+/// 返回值
+/// Success only after the service durably persists the terminal call record.
+/// 仅在服务可靠持久化终态调用记录后返回成功。
+#[allow(clippy::too_many_arguments)]
+async fn send_durable_request_failure(
+    sender: &ProviderLiveDeltaSender,
+    will_retry: bool,
+    retry_number: u32,
+    max_retries: u32,
+    delay_ms: u64,
+    error_category: String,
+    error: Option<Box<AiExecutionError>>,
+) -> Result<(), String> {
+    let (completion, receiver) = provider_request_durability_barrier();
+    sender
+        .send(Ok(ProviderStreamDelta::RequestFailedDurable {
+            will_retry,
+            retry_number,
+            max_retries,
+            delay_ms,
+            error_category,
+            error,
+            completion,
+        }))
+        .map_err(|_| String::from("Provider stream closed before terminal persistence."))?;
+    receiver
+        .await
+        .map_err(|_| String::from("Host dropped the Provider terminal persistence barrier."))?
+}
 
 /// Prepared adapter launch inputs handed to one concrete Provider adapter constructor after the shared runtime wrapper consumes controller-only fields.
 /// 在共享运行时包装器消费控制器专用字段后，交给具体 Provider 适配器构造过程的已准备输入对象。
@@ -370,14 +411,20 @@ where
                                     last_successful_provider_usage,
                                 )
                             });
-                            let _ = task_sender.send(Ok(ProviderStreamDelta::RequestFailed {
-                                will_retry: false,
-                                retry_number: 0,
-                                max_retries: completed_retries,
-                                delay_ms: 0,
-                                error_category: String::from("context_compaction_required"),
-                                error: None,
-                            }));
+                            if let Err(persist_error) = send_durable_request_failure(
+                                &task_sender,
+                                false,
+                                0,
+                                completed_retries,
+                                0,
+                                String::from("context_compaction_required"),
+                                None,
+                            )
+                            .await
+                            {
+                                let _ = task_sender.send(Err(persist_error));
+                                break;
+                            }
                             // finalDelta follows request failure so checkpoint projection cannot close the attempt as successful.
                             // finalDelta 位于请求失败之后，避免检查点投影把该 attempt 关闭为成功。
                             let _ = task_sender.send(final_delta);
@@ -418,14 +465,20 @@ where
                                     last_successful_provider_usage,
                                 )
                             });
-                            let _ = task_sender.send(Ok(ProviderStreamDelta::RequestFailed {
-                                will_retry: false,
-                                retry_number: 0,
-                                max_retries: completed_retries,
-                                delay_ms: 0,
-                                error_category: String::from("context_length_exceeded"),
-                                error: structured_provider_failure(&error),
-                            }));
+                            if let Err(persist_error) = send_durable_request_failure(
+                                &task_sender,
+                                false,
+                                0,
+                                completed_retries,
+                                0,
+                                String::from("context_length_exceeded"),
+                                structured_provider_failure(&error),
+                            )
+                            .await
+                            {
+                                let _ = task_sender.send(Err(persist_error));
+                                break;
+                            }
                             // finalDelta follows request failure so checkpoint projection cannot close the attempt as successful.
                             // finalDelta 位于请求失败之后，避免检查点投影把该 attempt 关闭为成功。
                             let _ = task_sender.send(final_delta);
@@ -473,15 +526,18 @@ where
                             let delay_seconds = delay_ms.div_ceil(1_000);
                             // failedRequestDelta closes the exact physical request before the retry wait begins.
                             // failedRequestDelta 在重试等待开始前关闭精确的真实请求。
-                            let failed_request_delta = ProviderStreamDelta::RequestFailed {
-                                will_retry: true,
-                                retry_number: decision.retry_number,
-                                max_retries: decision.max_retries,
+                            if send_durable_request_failure(
+                                &task_sender,
+                                true,
+                                decision.retry_number,
+                                decision.max_retries,
                                 delay_ms,
-                                error_category: String::from("retryable_provider_transport_error"),
-                                error: structured_provider_failure(&error),
-                            };
-                            if task_sender.send(Ok(failed_request_delta)).is_err() {
+                                String::from("retryable_provider_transport_error"),
+                                structured_provider_failure(&error),
+                            )
+                            .await
+                            .is_err()
+                            {
                                 break;
                             }
                             // retryDetail exposes the exact finite host budget for every automatic retry.
@@ -524,15 +580,20 @@ where
                             controller.last_successful_provider_usage().cloned();
                         // failedRequestDelta closes the exact physical request before terminal stream teardown.
                         // failedRequestDelta 在终态流清理前关闭精确的真实请求。
-                        let failed_request_delta = ProviderStreamDelta::RequestFailed {
-                            will_retry: false,
-                            retry_number: 0,
-                            max_retries: completed_retries,
-                            delay_ms: 0,
-                            error_category: String::from("provider_transport_error"),
-                            error: structured_provider_failure(&error),
-                        };
-                        let _ = task_sender.send(Ok(failed_request_delta));
+                        if let Err(persist_error) = send_durable_request_failure(
+                            &task_sender,
+                            false,
+                            0,
+                            completed_retries,
+                            0,
+                            String::from("provider_transport_error"),
+                            structured_provider_failure(&error),
+                        )
+                        .await
+                        {
+                            let _ = task_sender.send(Err(persist_error));
+                            break;
+                        }
                         // Preserve only the controller snapshot before the terminal error is reported.
                         // 只保留终态错误上报前的控制器快照，避免把损坏调用的流式输出写入上下文。
                         // final_delta preserves the last valid controller state only when its message identities remain canonical.
@@ -927,6 +988,7 @@ mod tests {
             system_prompt: String::new(),
             prompt_layers: vulcan_core::types::ProviderPromptLayers::default(),
             prompt: String::from("test prompt"),
+            prompt_in_history: false,
             history: Vec::new(),
             temperature: None,
             max_turns: 1,

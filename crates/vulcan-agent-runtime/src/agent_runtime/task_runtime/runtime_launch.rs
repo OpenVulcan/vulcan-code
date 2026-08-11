@@ -73,6 +73,19 @@ pub(super) fn build_task_runtime_preparation_request(
     );
     request.tool_exposure_override = resolved_config.effective_config.tool_exposure.clone();
     clear_parent_request_runtime_state_for_task_session(&mut request);
+    if let Some(provider_call_ledger) = context
+        .foundation
+        .task_runtime()
+        .task_provider_call_ledger(invocation.task_id)?
+    {
+        request.provider_usage_budget_baseline = provider_call_ledger
+            .last_stable_context_baseline
+            .as_ref()
+            .and_then(|baseline| provider_call_ledger.calls.get(&baseline.provider_call_id))
+            .cloned();
+        request.provider_usage_context_generation_id =
+            provider_call_ledger.active_context_generation_id;
+    }
     let mirror_subagent =
         resolved_config.effective_config.subagent_mode.as_deref() == Some(SUBAGENT_MODE_MIRROR);
     apply_child_tool_policy(&mut request, mirror_subagent);
@@ -114,6 +127,8 @@ fn clear_parent_request_runtime_state_for_task_session(request: &mut ExecutionPr
     // TaskSession 是独立租约所有者。即使子任务继承相同供应商与模型，父级持久化身份也只
     // 作用于另一个会话 ID。
     request.provider_route_lease_identity = None;
+    request.provider_usage_budget_baseline = None;
+    request.provider_usage_context_generation_id = None;
     request.tool_request_rejection_reason = None;
     request.tool_request_rejection_all_tools = false;
     request.tool_request_rejection_tool_ids.clear();

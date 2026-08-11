@@ -3,21 +3,14 @@
 
 use crate::{
     CONTEXT_BUDGET_COMPACTION_RATIO, CONTEXT_BUDGET_OVERFLOW_RATIO, CONTEXT_BUDGET_WARNING_RATIO,
-    ContextBudgetSeverity, ContextBudgetSnapshot, ContextCompactionPolicy, ContextWindowUsageScope,
+    ContextBudgetAccountingSource, ContextBudgetSeverity, ContextBudgetSnapshot,
+    ContextCompactionPolicy, ContextWindowUsageScope,
 };
 use vulcan_core::types::{
     ConversationMessage as CoreConversationMessage, ConversationPayload as CoreConversationPayload,
     ProviderRequestSnapshot as CoreProviderRequestSnapshot,
     ProviderRequestToolSchema as CoreProviderRequestToolSchema, ProviderUsageSnapshot,
 };
-
-/// Host-provided model-aware text token estimator used by context budget calculation.
-/// 宿主提供的模型感知文本 Token 估算器，用于上下文预算计算。
-pub trait ContextTokenEstimator: Send + Sync {
-    /// Estimates one text payload for the active model and returns `None` when the estimator cannot serve the request.
-    /// 为当前模型估算单段文本；当估算器无法处理该请求时返回 `None`。
-    fn estimate_text_tokens(&self, model_id: &str, text: &str) -> Option<usize>;
-}
 
 /// Coarse reasoning-effort bucket used by context-budget reserves.
 /// 上下文预算预留使用的粗粒度推理强度分桶。
@@ -175,6 +168,18 @@ pub struct RequestContextBudgetSnapshotInput<'a> {
     /// Optional provider-observed usage used to calibrate estimates.
     /// 用于校准估算值的可选 Provider 实测用量。
     pub observed_usage: Option<&'a ProviderUsageSnapshot>,
+    /// Optional authoritative input-token accounting already aligned to this exact request.
+    /// 已与当前精确请求对齐的可选权威输入 Token 记账值。
+    pub accounted_input_tokens: Option<usize>,
+    /// Explicit provenance and quality of `accounted_input_tokens`.
+    /// `accounted_input_tokens` 的明确来源与质量。
+    pub accounting_source: ContextBudgetAccountingSource,
+    /// Stable warning code when the accounting source is not exact Provider evidence.
+    /// 记账来源不是精确 Provider 证据时的稳定警告码。
+    pub accounting_warning_code: Option<&'a str>,
+    /// Physical Provider call used as the accounting anchor, when present.
+    /// 存在时作为记账锚点的物理 Provider 调用。
+    pub provider_anchor_call_id: Option<&'a str>,
     /// Absolute input-token baseline captured at the start of the current compaction window.
     /// 当前压缩窗口开始时捕获的绝对输入 Token 基线。
     pub prefill_input_tokens: Option<usize>,
@@ -183,13 +188,10 @@ pub struct RequestContextBudgetSnapshotInput<'a> {
 /// Optional controls for request-facing budget snapshot construction.
 /// 面向请求的预算快照构造可选控制项。
 #[derive(Clone, Copy, Default)]
-pub struct RequestContextBudgetSnapshotOptions<'a> {
+pub struct RequestContextBudgetSnapshotOptions {
     /// Optional compaction policy used to reserve summary budget.
     /// 用于预留摘要预算的可选压缩策略。
     pub compaction_policy: Option<ContextCompactionPolicy>,
-    /// Optional host token estimator.
-    /// 可选宿主 Token 估算器。
-    pub estimator: Option<&'a dyn ContextTokenEstimator>,
 }
 
 /// Builds one exact request-facing budget snapshot from the final provider request snapshot.
@@ -204,7 +206,7 @@ pub fn build_request_context_budget_snapshot(
 /// 使用可选压缩策略与宿主 Token 估算器构建一份面向真实请求的预算快照。
 pub fn build_request_context_budget_snapshot_with_options(
     input: RequestContextBudgetSnapshotInput<'_>,
-    options: RequestContextBudgetSnapshotOptions<'_>,
+    options: RequestContextBudgetSnapshotOptions,
 ) -> ContextBudgetSnapshot {
     let RequestContextBudgetSnapshotInput {
         provider_id,
@@ -214,6 +216,10 @@ pub fn build_request_context_budget_snapshot_with_options(
         reasoning,
         request_snapshot,
         observed_usage,
+        accounted_input_tokens,
+        accounting_source,
+        accounting_warning_code,
+        provider_anchor_call_id,
         prefill_input_tokens,
     } = input;
     let reserved_reasoning_tokens = reasoning_token_reserve(reasoning);
@@ -230,68 +236,75 @@ pub fn build_request_context_budget_snapshot_with_options(
         .compaction_policy
         .map(|policy| policy.auto)
         .unwrap_or(false);
-    let estimated_system_tokens = estimate_text_tokens_for_model(
-        model_id,
-        options.estimator,
-        &request_snapshot.system_prompt,
-    );
+    let estimated_system_tokens =
+        estimate_text_tokens_from_characters(&request_snapshot.system_prompt);
     let estimated_history_tokens = request_snapshot
         .history
         .iter()
-        .map(|message| estimate_core_message_tokens(model_id, options.estimator, message))
-        .sum();
-    let estimated_prompt_tokens =
-        estimate_text_tokens_for_model(model_id, options.estimator, &request_snapshot.prompt);
+        .fold(0_usize, |total, message| {
+            total.saturating_add(estimate_core_message_tokens(message))
+        });
+    let estimated_prompt_tokens = if request_snapshot.prompt_in_history {
+        0
+    } else {
+        estimate_text_tokens_from_characters(&request_snapshot.prompt)
+    };
     let estimated_tool_tokens = request_snapshot
         .tool_schemas
         .iter()
-        .map(|schema| estimate_tool_schema_tokens(model_id, options.estimator, schema))
-        .sum();
+        .fold(0_usize, |total, definition| {
+            total.saturating_add(estimate_tool_schema_tokens(definition))
+        });
     let estimated_input_tokens = estimated_system_tokens
-        + estimated_history_tokens
-        + estimated_prompt_tokens
-        + estimated_tool_tokens;
-    let calibrated_input_tokens =
-        calibrated_input_token_estimate(estimated_input_tokens, observed_usage);
+        .saturating_add(estimated_history_tokens)
+        .saturating_add(estimated_prompt_tokens)
+        .saturating_add(estimated_tool_tokens);
+    let calibrated_input_tokens = accounted_input_tokens.unwrap_or(estimated_input_tokens);
     // The hard-window admission always uses the complete active context.
     // 硬窗口准入始终使用完整活动上下文。
     let active_context_tokens = context_tokens_for_scope(
-        estimated_input_tokens,
-        observed_usage,
+        calibrated_input_tokens,
         ContextWindowUsageScope::Total,
         None,
     );
     // The configured scope only changes the automatic-compaction line.
     // 配置的计量范围只改变自动压缩线。
     let auto_compact_context_tokens = context_tokens_for_scope(
-        estimated_input_tokens,
-        observed_usage,
+        calibrated_input_tokens,
         window_policy.auto_compact_scope,
         prefill_input_tokens,
     );
     let estimated_total_tokens = active_context_tokens
-        + reserved_reasoning_tokens
-        + reserved_output_tokens
-        + reserved_compaction_tokens;
+        .saturating_add(reserved_reasoning_tokens)
+        .saturating_add(reserved_output_tokens)
+        .saturating_add(reserved_compaction_tokens);
     let raw_context_limit = capabilities.effective_input_limit();
     let effective_context_window = raw_context_limit.map(|limit| {
         let percentage = usize::from(window_policy.effective_context_window_percent);
         limit.saturating_mul(percentage).saturating_div(100).max(1)
     });
-    let auto_compact_limit = raw_context_limit.map(|raw_window| {
-        let percentage_limit = raw_window
+    let percentage_limit = raw_context_limit.map(|raw_window| {
+        raw_window
             .saturating_mul(usize::from(window_policy.auto_compact_percent))
             .saturating_div(100)
-            .max(1);
-        let explicit_limit = window_policy
-            .auto_compact_token_limit
-            .and_then(|limit| usize::try_from(limit).ok());
-        let compact_line = explicit_limit
-            .map(|limit| limit.min(percentage_limit))
-            .unwrap_or(percentage_limit);
-        compact_line
-            .saturating_add(window_policy.fallback_buffer_tokens)
-            .min(effective_context_window.unwrap_or(raw_window))
+            .max(1)
+    });
+    let explicit_limit = window_policy
+        .auto_compact_token_limit
+        .and_then(|limit| usize::try_from(limit).ok());
+    let compact_line = match (percentage_limit, explicit_limit) {
+        (Some(percentage), Some(explicit)) => Some(percentage.min(explicit)),
+        (Some(percentage), None) => Some(percentage),
+        (None, Some(explicit)) => Some(explicit),
+        (None, None) => None,
+    };
+    let auto_compact_limit = compact_line.map(|line| {
+        let buffered_line = line.saturating_add(window_policy.fallback_buffer_tokens);
+        if let Some(hard_window) = effective_context_window {
+            buffered_line.min(hard_window)
+        } else {
+            buffered_line
+        }
     });
     let usage_ratio = effective_context_window
         .map(|limit| active_context_tokens as f32 / limit.max(1) as f32)
@@ -338,6 +351,9 @@ pub fn build_request_context_budget_snapshot_with_options(
         estimated_total_tokens,
         usage_ratio,
         observed_usage: observed_usage.cloned(),
+        accounting_source,
+        accounting_warning_code: accounting_warning_code.map(str::to_string),
+        provider_anchor_call_id: provider_anchor_call_id.map(str::to_string),
         severity,
     }
 }
@@ -469,20 +485,11 @@ pub fn context_budget_severity_for_ratio(usage_ratio: f32) -> ContextBudgetSever
 /// Resolves the active context token count from the selected Codex usage scope.
 /// 根据选定的 Codex 用量范围解析活动上下文 Token 数。
 fn context_tokens_for_scope(
-    estimated_input_tokens: usize,
-    observed_usage: Option<&ProviderUsageSnapshot>,
+    accounted_input_tokens: usize,
     scope: ContextWindowUsageScope,
     prefill_input_tokens: Option<usize>,
 ) -> usize {
-    let active_context_tokens = observed_usage
-        .and_then(|usage| usage.total_tokens)
-        .map(|total_tokens| {
-            let observed_input_tokens =
-                observed_input_tokens_from_usage(observed_usage).unwrap_or(total_tokens);
-            total_tokens
-                .saturating_add(estimated_input_tokens.saturating_sub(observed_input_tokens))
-        })
-        .unwrap_or(estimated_input_tokens);
+    let active_context_tokens = accounted_input_tokens;
     if matches!(scope, ContextWindowUsageScope::BodyAfterPrefix) {
         // Codex treats an unknown prefill baseline as the current active context, so the first
         // request in a new compaction window contributes zero body tokens until usage is observed.
@@ -516,10 +523,7 @@ pub fn context_budget_severity_for_limits_with_compaction_context(
     auto_compact_limit: Option<usize>,
     auto_compact_context_tokens: usize,
 ) -> ContextBudgetSeverity {
-    let Some(hard_window) = effective_context_window else {
-        return ContextBudgetSeverity::Healthy;
-    };
-    if active_context_tokens >= hard_window {
+    if effective_context_window.is_some_and(|hard_window| active_context_tokens >= hard_window) {
         return ContextBudgetSeverity::Overflow;
     }
     if auto_compact_limit.is_some_and(|limit| auto_compact_context_tokens >= limit) {
@@ -549,98 +553,77 @@ fn resolve_output_token_reserve(capabilities: &ContextBudgetCapabilities) -> usi
     capabilities.effective_output_limit().unwrap_or(384000usize)
 }
 
-/// Estimates one provider-visible message with an optional model-aware estimator.
-/// 使用可选模型感知估算器估算一条 Provider 可见消息。
-fn estimate_core_message_tokens(
-    model_id: &str,
-    estimator: Option<&dyn ContextTokenEstimator>,
-    message: &CoreConversationMessage,
-) -> usize {
+/// Estimates one Provider-visible message using the stable character-level fallback.
+/// 使用稳定字符级回退估算一条 Provider 可见消息。
+fn estimate_core_message_tokens(message: &CoreConversationMessage) -> usize {
     match &message.payload {
         CoreConversationPayload::UserText { text, attachments } => {
-            estimate_text_tokens_for_model(model_id, estimator, text)
-                + attachments
-                    .iter()
-                    .map(|attachment| {
+            estimate_text_tokens_from_characters(text)
+                .saturating_add(attachments.iter().fold(0_usize, |total, attachment| {
+                    total.saturating_add(
                         256usize
-                            + estimate_text_tokens_for_model(
-                                model_id,
-                                estimator,
+                            .saturating_add(estimate_text_tokens_from_characters(
                                 &attachment.file_name,
-                            )
-                            + estimate_text_tokens_for_model(
-                                model_id,
-                                estimator,
+                            ))
+                            .saturating_add(estimate_text_tokens_from_characters(
                                 &attachment.mime_type,
-                            )
-                    })
-                    .sum::<usize>()
-                + 12usize
+                            )),
+                    )
+                }))
+                .saturating_add(12usize)
         }
         CoreConversationPayload::Assistant {
             text,
             reasoning,
             tool_calls,
             ..
-        } => {
-            estimate_text_tokens_for_model(model_id, estimator, text)
-                + estimate_text_tokens_for_model(model_id, estimator, reasoning)
-                + tool_calls
-                    .iter()
-                    .map(|tool_call| {
-                        estimate_text_tokens_for_model(model_id, estimator, &tool_call.tool_name)
-                            + serde_json::to_string(&tool_call.arguments)
-                                .map(|arguments| {
-                                    estimate_text_tokens_for_model(model_id, estimator, &arguments)
-                                })
-                                .unwrap_or_default()
-                            + 24usize
-                    })
-                    .sum::<usize>()
-                + 16usize
-        }
+        } => estimate_text_tokens_from_characters(text)
+            .saturating_add(estimate_text_tokens_from_characters(reasoning))
+            .saturating_add(tool_calls.iter().fold(0_usize, |total, tool_call| {
+                total.saturating_add(
+                    estimate_text_tokens_from_characters(&tool_call.tool_name)
+                        .saturating_add(
+                            serde_json::to_string(&tool_call.arguments)
+                                .map(|arguments| estimate_text_tokens_from_characters(&arguments))
+                                .unwrap_or_default(),
+                        )
+                        .saturating_add(24usize),
+                )
+            }))
+            .saturating_add(16usize),
         CoreConversationPayload::ToolResult { text, .. } => {
-            estimate_text_tokens_for_model(model_id, estimator, text) + 12usize
+            estimate_text_tokens_from_characters(text).saturating_add(12usize)
         }
         CoreConversationPayload::AgentMessage { .. } => message
             .payload
             .agent_message_model_text()
-            .map(|text| estimate_text_tokens_for_model(model_id, estimator, &text) + 16usize)
+            .map(|text| estimate_text_tokens_from_characters(&text).saturating_add(16usize))
             .unwrap_or(16usize),
     }
 }
 
-/// Estimates one provider-visible tool schema with an optional model-aware estimator.
-/// 使用可选模型感知估算器估算一条 Provider 可见工具 schema。
-fn estimate_tool_schema_tokens(
-    model_id: &str,
-    estimator: Option<&dyn ContextTokenEstimator>,
-    definition: &CoreProviderRequestToolSchema,
-) -> usize {
-    estimate_text_tokens_for_model(model_id, estimator, &definition.id)
-        + estimate_text_tokens_for_model(model_id, estimator, &definition.name)
-        + estimate_text_tokens_for_model(model_id, estimator, &definition.description)
-        + serde_json::to_string(&definition.parameters_schema)
-            .map(|parameters| estimate_text_tokens_for_model(model_id, estimator, &parameters))
-            .unwrap_or_default()
-        + 32usize
+/// Estimates one Provider-visible tool schema using the stable character-level fallback.
+/// 使用稳定字符级回退估算一条 Provider 可见工具 schema。
+fn estimate_tool_schema_tokens(definition: &CoreProviderRequestToolSchema) -> usize {
+    estimate_text_tokens_from_characters(&definition.id)
+        .saturating_add(estimate_text_tokens_from_characters(&definition.name))
+        .saturating_add(estimate_text_tokens_from_characters(
+            &definition.description,
+        ))
+        .saturating_add(
+            serde_json::to_string(&definition.parameters_schema)
+                .map(|parameters| estimate_text_tokens_from_characters(&parameters))
+                .unwrap_or_default(),
+        )
+        .saturating_add(32usize)
 }
 
-/// Estimates text tokens with a host estimator and falls back to the local lightweight heuristic.
-/// 使用宿主估算器估算文本 Token，并在不可用时回退到本地轻量启发式。
-fn estimate_text_tokens_for_model(
-    model_id: &str,
-    estimator: Option<&dyn ContextTokenEstimator>,
-    text: &str,
-) -> usize {
+/// Estimates text tokens only with the non-panicking character-level fallback.
+/// 仅使用不会发生 panic 的字符级回退估算文本 Token。
+fn estimate_text_tokens_from_characters(text: &str) -> usize {
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return 0;
-    }
-    if let Some(estimated_tokens) =
-        estimator.and_then(|estimator| estimator.estimate_text_tokens(model_id, trimmed))
-    {
-        return estimated_tokens.max(1usize);
     }
     estimate_mixed_language_text_tokens(trimmed).max(1usize)
 }
@@ -652,21 +635,21 @@ pub fn estimate_mixed_language_text_tokens(text: &str) -> usize {
     let mut tokens = 0usize;
     for character in text.chars() {
         if character.is_ascii() {
-            ascii_run += 1;
+            ascii_run = ascii_run.saturating_add(1);
             continue;
         }
         if ascii_run > 0 {
-            tokens += ascii_run.div_ceil(4usize);
+            tokens = tokens.saturating_add(ascii_run.div_ceil(4usize));
             ascii_run = 0;
         }
-        tokens += if is_cjk_character(character) {
+        tokens = tokens.saturating_add(if is_cjk_character(character) {
             1usize
         } else {
             2usize
-        };
+        });
     }
     if ascii_run > 0 {
-        tokens += ascii_run.div_ceil(4usize);
+        tokens = tokens.saturating_add(ascii_run.div_ceil(4usize));
     }
     tokens
 }
@@ -701,20 +684,37 @@ mod tests {
     /// 验证中文文本按接近每个可见字符一个 Token 估算。
     #[test]
     fn estimate_text_tokens_counts_chinese_characters_one_to_one() {
-        assert_eq!(
-            estimate_text_tokens_for_model("test-model", None, "你好世界"),
-            4
-        );
+        assert_eq!(estimate_text_tokens_from_characters("你好世界"), 4);
     }
 
     /// Verifies ASCII text still uses the compact four-character heuristic.
     /// 验证 ASCII 文本仍使用紧凑的四字符启发式估算。
     #[test]
     fn estimate_text_tokens_keeps_ascii_four_to_one() {
-        assert_eq!(
-            estimate_text_tokens_for_model("test-model", None, "abcdefgh"),
-            2
-        );
+        assert_eq!(estimate_text_tokens_from_characters("abcdefgh"), 2);
+    }
+
+    /// Verifies one-megabyte CJK and ASCII inputs remain iterative, deterministic, and overflow-safe.
+    /// 验证一 MiB 的中日韩与 ASCII 输入保持迭代、确定且不会发生算术溢出。
+    #[test]
+    fn character_estimate_handles_one_megabyte_language_extremes() {
+        let ascii = "a".repeat(1_048_576);
+        let cjk = "你".repeat(1_048_576);
+
+        assert_eq!(estimate_mixed_language_text_tokens(&ascii), 262_144);
+        assert_eq!(estimate_mixed_language_text_tokens(&cjk), 1_048_576);
+    }
+
+    /// Verifies a ten-megabyte mixed CJK, ASCII, and emoji payload completes without recursion or panic.
+    /// 验证十 MiB 的中日韩、ASCII 与表情混合载荷无需递归且不会 panic。
+    #[test]
+    fn character_estimate_handles_ten_megabyte_mixed_text() {
+        // Each repeated unit is exactly eight UTF-8 bytes and contributes four conservative tokens.
+        // 每个重复单元恰好占八个 UTF-8 字节，并贡献四个保守 Token。
+        let mixed = "a你🙂".repeat(1_310_720);
+
+        assert_eq!(mixed.len(), 10_485_760);
+        assert_eq!(estimate_mixed_language_text_tokens(&mixed), 5_242_880);
     }
 
     /// Verifies provider-observed usage overrides local mixed-language estimates.
@@ -735,19 +735,13 @@ mod tests {
         assert_eq!(calibrated_input_token_estimate(10, Some(&usage)), 128);
     }
 
-    /// Verifies total-scope usage advances with newly estimated local input after an observed provider total.
-    /// 验证总量范围会在 Provider 已报告总量后，随着新估算的本地输入增量同步前进。
+    /// Verifies total-scope usage consumes the already aligned accounting input.
+    /// 验证总量范围直接使用已对齐的会计输入值。
     #[test]
-    fn active_context_tokens_adds_local_delta_to_provider_total() {
-        let usage = ProviderUsageSnapshot {
-            input_tokens: Some(100),
-            total_tokens: Some(140),
-            ..Default::default()
-        };
-
+    fn active_context_tokens_uses_aligned_total_scope_input() {
         assert_eq!(
-            context_tokens_for_scope(175, Some(&usage), ContextWindowUsageScope::Total, None),
-            215
+            context_tokens_for_scope(175, ContextWindowUsageScope::Total, None),
+            175
         );
     }
 
@@ -755,20 +749,9 @@ mod tests {
     /// 验证前缀后正文范围会减去 Codex 的绝对前缀基线。
     #[test]
     fn active_context_tokens_body_scope_subtracts_prefill_baseline() {
-        let usage = ProviderUsageSnapshot {
-            input_tokens: Some(100),
-            total_tokens: Some(140),
-            ..Default::default()
-        };
-
         assert_eq!(
-            context_tokens_for_scope(
-                175,
-                Some(&usage),
-                ContextWindowUsageScope::BodyAfterPrefix,
-                Some(100),
-            ),
-            115
+            context_tokens_for_scope(175, ContextWindowUsageScope::BodyAfterPrefix, Some(100),),
+            75
         );
     }
 
@@ -776,19 +759,8 @@ mod tests {
     /// 验证未知前缀基线会让新正文窗口从零开始。
     #[test]
     fn active_context_tokens_body_scope_defaults_unknown_prefill_to_current_total() {
-        let usage = ProviderUsageSnapshot {
-            input_tokens: Some(100),
-            total_tokens: Some(140),
-            ..Default::default()
-        };
-
         assert_eq!(
-            context_tokens_for_scope(
-                175,
-                Some(&usage),
-                ContextWindowUsageScope::BodyAfterPrefix,
-                None
-            ),
+            context_tokens_for_scope(175, ContextWindowUsageScope::BodyAfterPrefix, None),
             0
         );
     }

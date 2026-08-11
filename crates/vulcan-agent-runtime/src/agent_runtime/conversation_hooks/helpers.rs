@@ -75,6 +75,12 @@ pub(crate) fn host_hook_point_descriptors() -> Vec<HookPointDescriptor> {
         )
         .with_default_scope(HookScope::Session),
         HookPointDescriptor::new(
+            crate::agent_runtime::provider_request_telemetry::HOOK_PROVIDER_REQUEST_DISPATCHED,
+            [HookMode::Observe, HookMode::Effect],
+            "Runs after one physical Provider API request is dispatched.",
+        )
+        .with_default_scope(HookScope::Session),
+        HookPointDescriptor::new(
             crate::agent_runtime::provider_request_telemetry::HOOK_PROVIDER_RESPONSE_FIRST_TOKEN,
             [HookMode::Observe, HookMode::Effect],
             "Runs after one physical Provider response exposes its first visible token.",
@@ -282,7 +288,7 @@ pub(super) fn pending_prompt_source_event_kind(source: PendingSessionPromptSourc
         PendingSessionPromptSource::UserInterrupt => "user_interrupt",
         PendingSessionPromptSource::SessionMailbox => "session_mailbox",
         PendingSessionPromptSource::GoalContinuation => "goal_continuation",
-        PendingSessionPromptSource::ProviderRetry => "provider_retry",
+        PendingSessionPromptSource::Continuation => "continuation",
     }
 }
 

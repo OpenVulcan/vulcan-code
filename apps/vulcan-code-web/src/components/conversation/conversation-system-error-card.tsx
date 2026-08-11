@@ -1,5 +1,4 @@
-import React from "react";
-import { ChevronRight, CircleAlert, RefreshCw } from "lucide-react";
+import { ChevronRight, CircleAlert } from "lucide-react";
 
 import { StatusPill } from "@/components/shared/status";
 import { useI18n } from "@/i18n";
@@ -72,18 +71,12 @@ export interface SystemProviderError {
   structured: Record<string, unknown>;
 }
 
-// SystemErrorCardProps describes the optional host action attached to one system error card.
-// SystemErrorCardProps 描述一张系统错误卡片可选绑定的宿主操作。
+// SystemErrorCardProps describes the structured failure rendered by one system error card.
+// SystemErrorCardProps 描述一张系统错误卡片渲染的结构化失败。
 export interface SystemErrorCardProps {
   // Parsed provider failure shown in the transcript.
   // 转录区中展示的已解析 Provider 失败信息。
   error: SystemProviderError;
-  // Retries the failed request from the service-owned execution state.
-  // 从服务端持有的执行状态重试失败请求。
-  onRetry?: () => Promise<void> | void;
-  // Whether the retry request is currently being submitted.
-  // 重试请求当前是否正在提交。
-  retrying?: boolean;
 }
 
 // SYSTEM_PROVIDER_ERROR_PREFIX identifies the canonical public-contract failure prefix.
@@ -302,25 +295,6 @@ export function formatSystemProviderErrorJson(error: SystemProviderError): strin
 // SystemErrorCard 渲染紧凑错误摘要与可展开的元数据面板。
 export function SystemErrorCard(props: SystemErrorCardProps) {
   const { t } = useI18n();
-  // localRetrying keeps the card disabled until the service-owned retry request settles.
-  // localRetrying 让卡片在服务端重试请求结束前保持禁用状态。
-  const [localRetrying, setLocalRetrying] = React.useState(false);
-  // retrying combines the host-provided state with the card-local request lifecycle.
-  // retrying 合并外部传入状态与卡片本地请求生命周期。
-  const retrying = localRetrying || props.retrying === true;
-  // handleRetry guards duplicate clicks and delegates retry ownership to the service layer.
-  // handleRetry 防止重复点击，并将重试控制权交给服务层。
-  const handleRetry = React.useCallback(async () => {
-    if (!props.onRetry || retrying) {
-      return;
-    }
-    setLocalRetrying(true);
-    try {
-      await props.onRetry();
-    } finally {
-      setLocalRetrying(false);
-    }
-  }, [props.onRetry, retrying]);
   const fields: Array<{ label: string; value: string }> = [
     { label: t("conversation.systemError.category"), value: props.error.category },
     { label: t("conversation.systemError.stage"), value: props.error.stage },
@@ -370,17 +344,6 @@ export function SystemErrorCard(props: SystemErrorCardProps) {
             <strong>{t("conversation.systemError.title")}</strong>
           </div>
           <div className="system-error-actions">
-            {props.onRetry ? (
-              <button
-                className="system-error-retry"
-                disabled={retrying}
-                onClick={() => void handleRetry()}
-                type="button"
-              >
-                <RefreshCw aria-hidden="true" className={retrying ? "is-spinning" : undefined} size={14} />
-                {retrying ? t("conversation.systemError.retrying") : t("conversation.systemError.retry")}
-              </button>
-            ) : null}
             <StatusPill status="error" label={t("conversation.systemError.status")} />
           </div>
         </div>

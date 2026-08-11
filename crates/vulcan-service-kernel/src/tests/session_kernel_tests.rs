@@ -31,6 +31,7 @@ fn insert_test_workbench_conversation(state: &mut ServiceBridgeState, session_id
         attention: None,
         project_id: Some(String::from("project-a")),
         fork_source: None,
+        continuation: None,
     });
 }
 

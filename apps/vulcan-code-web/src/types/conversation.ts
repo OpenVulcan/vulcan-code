@@ -76,6 +76,26 @@ export interface ConversationSummary {
   // Display-only fork source marker.
   // 纯展示用分叉来源标记。
   forkSource?: ConversationForkSourceSummary | null;
+  // Revisioned prompt-free continuation admission state.
+  // 带修订的无提示词 Continue 准入状态。
+  continuation?: ConversationContinuationSummary | null;
+}
+
+// ConversationContinuationSummary is the exact backend claim token for Continue.
+// ConversationContinuationSummary 是 Continue 使用的精确后端领取令牌。
+export interface ConversationContinuationSummary {
+  // Whether the canonical terminal boundary may continue without a new prompt.
+  // 规范终止边界是否允许在没有新提示词时继续。
+  eligible: boolean;
+  // Exact continuation generation.
+  // 精确 Continue 代际。
+  generation: number;
+  // Exact session Provider ledger revision.
+  // 精确会话 Provider 账本修订号。
+  expectedLedgerRevision: number;
+  // Stable reason recorded by the terminal continuation boundary.
+  // 终止 Continue 边界记录的稳定原因。
+  reason?: string | null;
 }
 
 // ConversationAttentionSummary describes one conversation-level action marker.
@@ -499,6 +519,20 @@ export interface SessionProviderUsageCallSummary {
   errorCode?: string | null;
 }
 
+// SessionProviderUsageAggregateSummary preserves one exact branch or billing scope.
+// SessionProviderUsageAggregateSummary 保留一个精确的分支或账单统计口径。
+export interface SessionProviderUsageAggregateSummary {
+  // Number of physical calls in this scope.
+  // 当前口径内的物理调用数量。
+  providerCallCount: number;
+  // Number of terminal calls without usable Provider usage.
+  // 当前口径内没有可用 Provider 用量的终态调用数量。
+  unknownUsageCallCount: number;
+  // Provider-reported cumulative usage in this scope.
+  // 当前口径内 Provider 实测累计用量。
+  usage?: SessionProviderUsageTokenSummary | null;
+}
+
 // SessionProviderUsageSummary carries live physical Provider accounting for one conversation.
 // SessionProviderUsageSummary 携带单个会话的实时物理 Provider 统计。
 export interface SessionProviderUsageSummary {
@@ -517,6 +551,15 @@ export interface SessionProviderUsageSummary {
   // Cumulative usable usage across terminal requests.
   // 全部终态请求的可用用量累计值。
   cumulativeUsage?: SessionProviderUsageTokenSummary | null;
+  // Current active branch, including inherited context calls.
+  // 当前活动分支，包含继承的上下文调用。
+  activeBranch: SessionProviderUsageAggregateSummary;
+  // Calls physically produced in this session, including superseded edit branches.
+  // 此会话真实产生的调用，包含编辑后被取代的分支。
+  lifetime: SessionProviderUsageAggregateSummary;
+  // Calls inherited by a fork and not billed again in this session.
+  // 分叉继承且未在当前会话重复计费的调用。
+  inherited: SessionProviderUsageAggregateSummary;
   // Latest physical request lifecycle.
   // 最近一次物理请求生命周期。
   latestCall?: SessionProviderUsageCallSummary | null;

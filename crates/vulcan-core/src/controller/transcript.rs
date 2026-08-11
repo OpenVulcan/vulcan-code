@@ -276,7 +276,9 @@ impl VulcanCoreController {
                 reasoning: response.assistant_reasoning.clone(),
                 provider_message_id: response.provider_message_id.clone(),
                 provider_message_state: response.provider_message_state.clone(),
-                usage: response.usage.clone().map(Box::new),
+                // Physical-call Usage is persisted once by the session Provider ledger.
+                // 物理调用用量仅由会话 Provider 账本持久化一次。
+                usage: None,
                 tool_calls: response.tool_calls.clone(),
             },
         });
@@ -290,7 +292,7 @@ impl VulcanCoreController {
                 visible: true,
                 title: String::from("模型输出"),
                 body: response.assistant_text.clone(),
-                metadata: response.usage.as_ref().map(build_provider_usage_metadata),
+                metadata: None,
                 created_at: timestamp.clone(),
             });
         }

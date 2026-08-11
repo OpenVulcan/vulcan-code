@@ -32,12 +32,6 @@ pub(crate) fn fallback_workbench_snapshot(logs: &[String]) -> WorkbenchSnapshot 
                 "等待真实启动流程",
             ),
             runtime_module(
-                "token-budget",
-                "Token Budget",
-                StartupStepStatus::Pending,
-                "等待真实启动流程",
-            ),
-            runtime_module(
                 "mcp",
                 "MCP Runtime",
                 StartupStepStatus::Pending,

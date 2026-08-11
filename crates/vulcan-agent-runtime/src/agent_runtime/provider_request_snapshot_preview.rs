@@ -29,6 +29,9 @@ pub(crate) struct CoreRequestPreviewProviderAdapter {
     /// Latest outgoing prompt body attached to the snapshot request.
     /// 附着在快照请求中的最新出站提示词正文。
     prompt: String,
+    /// Whether the prompt is already retained in the canonical history supplied to the adapter.
+    /// 提示词是否已经保留在提供给适配器的规范历史中。
+    prompt_in_history: bool,
     /// Serialized request headers captured from the active provider blueprint.
     /// 从当前 Provider 蓝图捕获的序列化请求头。
     request_headers: Option<Value>,
@@ -45,6 +48,7 @@ impl CoreRequestPreviewProviderAdapter {
         protocol_profile_id: String,
         model_id: String,
         prompt: String,
+        prompt_in_history: bool,
         request_headers: Option<Value>,
         tool_schemas: Vec<CoreProviderRequestToolSchema>,
     ) -> Self {
@@ -53,6 +57,7 @@ impl CoreRequestPreviewProviderAdapter {
             protocol_profile_id,
             model_id,
             prompt,
+            prompt_in_history,
             request_headers,
             tool_schemas,
         }
@@ -93,6 +98,7 @@ impl VulcanProviderAdapter for CoreRequestPreviewProviderAdapter {
                 config.prompt_layers.clone()
             },
             prompt: self.prompt.clone(),
+            prompt_in_history: self.prompt_in_history,
             history: core_messages_to_provider_visible_history(&snapshot.messages),
             temperature: config.temperature,
             max_turns: config.max_turns,

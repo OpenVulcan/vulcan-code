@@ -1,4 +1,5 @@
 import React from "react";
+import { Play } from "lucide-react";
 import {
   ChatAreaComposerDockLayer,
   composerAttachmentMedia,
@@ -108,6 +109,46 @@ export function ChatArea(props: ChatAreaProps) {
     onSelectMode: props.onSelectWorkbenchThinkingDisplayMode,
   });
   const selectedConversation = props.workbench.conversations.find((conversation) => conversation.id === props.selectedConversationId);
+  // continuationClaimKey suppresses duplicate claims until the authoritative workbench revision changes.
+  // continuationClaimKey 在权威工作台修订变化前阻止重复领取 Continue。
+  const [continuationClaimKey, setContinuationClaimKey] = React.useState<string | null>(null);
+  const continuation = selectedConversation?.continuation;
+  const activeContinuationKey = selectedConversation && continuation
+    ? `${selectedConversation.id}:${continuation.generation}:${continuation.expectedLedgerRevision}`
+    : null;
+  React.useEffect(() => {
+    if (!continuation?.eligible || continuationClaimKey !== activeContinuationKey) {
+      setContinuationClaimKey(null);
+    }
+  }, [activeContinuationKey, continuation?.eligible, continuationClaimKey]);
+  // handleContinueConversation claims one exact terminal generation without synthesizing user input.
+  // handleContinueConversation 在不伪造用户输入的情况下领取一个精确终止代际。
+  const handleContinueConversation = React.useCallback(async () => {
+    if (
+      !selectedConversation
+      || !continuation?.eligible
+      || !props.onContinueConversation
+      || activeContinuationKey === null
+      || continuationClaimKey === activeContinuationKey
+    ) {
+      return;
+    }
+    setContinuationClaimKey(activeContinuationKey);
+    const accepted = await props.onContinueConversation(
+      selectedConversation.id,
+      continuation.generation,
+      continuation.expectedLedgerRevision,
+    );
+    if (!accepted) {
+      setContinuationClaimKey(null);
+    }
+  }, [
+    activeContinuationKey,
+    continuation,
+    continuationClaimKey,
+    props.onContinueConversation,
+    selectedConversation,
+  ]);
   const subagentNavigation = props.workbench.subagentNavigation?.parentConversationId === props.selectedConversationId
     ? props.workbench.subagentNavigation
     : null;
@@ -891,7 +932,6 @@ export function ChatArea(props: ChatAreaProps) {
         hasMoreHistory={props.conversationHasMoreHistory}
         historyLoading={props.conversationHistoryLoading}
         onLoadMoreHistory={props.onLoadConversationHistory}
-        onRetryConversationRequest={props.onRetryConversationRequest}
         parentConversationId={props.selectedConversationId ?? null}
         workspacePath={selectedProject?.path ?? null}
         commandSessions={visibleCommandSessions}
@@ -909,7 +949,22 @@ export function ChatArea(props: ChatAreaProps) {
         onExpandedStateChange={handleExpandedStateChange}
         onRetainTurnHeights={retainSurfaceTurnHeights}
         onTurnHeightChange={handleTurnHeightChange}
-        footer={null}
+        footer={selectedConversation
+          && continuation?.eligible
+          && !conversationIsRunning(selectedConversation)
+          && props.onContinueConversation ? (
+            <button
+              className="conversation-continue-button"
+              disabled={continuationClaimKey === activeContinuationKey}
+              onClick={() => void handleContinueConversation()}
+              type="button"
+            >
+              <Play aria-hidden="true" size={15} />
+              {continuationClaimKey === activeContinuationKey
+                ? t("conversation.continuing")
+                : t("conversation.continue")}
+            </button>
+          ) : null}
         suppressEmptyPlaceholder={isEmptyConversation || isMaterializingConversationSurface}
         onCopyText={props.onCopyText}
         onEditUserPrompt={userPromptEdit.open}

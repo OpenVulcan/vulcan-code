@@ -517,12 +517,10 @@ async fn load_workspace_snapshot_with_runtime_state(
                         &state_document.runtime_state,
                         &row.id,
                     )?;
-                    let mut runtime_state = serde_json::from_value::<SessionRuntimeStateEntry>(
+                    let mut runtime_state = deserialize_session_runtime_state_entry(
                         state_document.runtime_state,
-                    )
-                    .map_err(|error| {
-                        format!("解析分段会话 `{}` 的 state.json 失败：{error}", row.id)
-                    })?;
+                        format!("解析分段会话 `{}` 的 state.json 失败：", row.id),
+                    )?;
                     reject_historical_vmm_profile_context_injection(&runtime_state, &row.id)?;
                     if runtime_state.updated_at.trim().is_empty()
                         && !state_document.updated_at.trim().is_empty()
@@ -540,7 +538,12 @@ async fn load_workspace_snapshot_with_runtime_state(
                 );
             }
             if let Some(mut runtime_state) = runtime_state {
-                let _ = sanitize_loaded_runtime_state_for_fresh_process(&mut runtime_state);
+                if sanitize_loaded_runtime_state_for_fresh_process(&mut runtime_state)? {
+                    runtime_state.updated_at = current_unix_millis_text();
+                    let state_document =
+                        state_document_from_runtime_state(&session_id.to_string(), &runtime_state)?;
+                    write_state(&session_dir, &state_document)?;
+                }
                 runtime_state_map.insert(session_id, runtime_state);
             }
         }
@@ -846,8 +849,83 @@ fn normalize_workspace_project_path_text(path: &str) -> String {
 /// 是否清理了任何临时字段。
 pub(super) fn sanitize_loaded_runtime_state_for_fresh_process(
     runtime_state: &mut SessionRuntimeStateEntry,
-) -> bool {
-    runtime_state.active_precheck_turn_id.take().is_some()
+) -> Result<bool, String> {
+    let mut changed = runtime_state.migrate_legacy_provider_usage_summaries()?;
+    changed |= runtime_state.active_precheck_turn_id.take().is_some();
+    let completed_at_ms = current_unix_millis_text()
+        .parse::<i64>()
+        .map_err(|error| format!("解析宿主生成的 Unix 毫秒时间失败：{error}"))?;
+    let terminal_execution_id = runtime_state
+        .provider_call_ledger
+        .active_calls_in_sequence()
+        .into_iter()
+        .rev()
+        .find(|record| !record.status.is_terminal())
+        .map(|record| record.identity.execution_id.clone())
+        .or_else(|| {
+            runtime_state
+                .provider_call_ledger
+                .continuation
+                .claimed_execution_id
+                .clone()
+        });
+    let orphaned_continuation_claim = runtime_state
+        .provider_call_ledger
+        .continuation
+        .claimed_at_ms
+        .is_some();
+    if (terminal_execution_id.is_some() || orphaned_continuation_claim)
+        && runtime_state.provider_call_ledger.revision == u64::MAX
+    {
+        return Err(String::from(
+            "无法恢复未闭合 Provider 调用或孤立 Continue 领取：会话调用账本修订号已耗尽。",
+        ));
+    }
+    let interrupted_call_count = runtime_state
+        .provider_call_ledger
+        .close_open_calls_as_interrupted(completed_at_ms);
+    changed |= interrupted_call_count > 0;
+    if interrupted_call_count > 0 || orphaned_continuation_claim {
+        let tail_kind = runtime_state
+            .conversation_state
+            .records
+            .iter()
+            .rev()
+            .find(|record| {
+                record.visible
+                    && record.record_kind
+                        == vulcan_workbench_model::SessionMessageRecordKind::Transcript
+            })
+            .map(|record| match record.kind {
+                vulcan_workbench_model::SessionMessageKind::Assistant => "assistant",
+                vulcan_workbench_model::SessionMessageKind::User => "user",
+                vulcan_workbench_model::SessionMessageKind::Error => "error",
+            })
+            .unwrap_or("empty")
+            .to_string();
+        let eligible = tail_kind != "assistant"
+            && runtime_state.provider_call_ledger.in_flight_call_count() == 0;
+        let continuation_changed = runtime_state
+            .provider_call_ledger
+            .mark_continuation_terminal(
+                terminal_execution_id,
+                if interrupted_call_count > 0 {
+                    String::from("interrupted_after_restart")
+                } else {
+                    String::from("continuation_interrupted_after_restart")
+                },
+                completed_at_ms,
+                tail_kind,
+                eligible,
+            );
+        if !continuation_changed {
+            return Err(String::from(
+                "无法恢复 Continue 状态：会话调用账本修订号或 Continue 代际已耗尽。",
+            ));
+        }
+        changed = true;
+    }
+    Ok(changed)
 }
 
 /// Ensures a project summary exists and owns the provided session id exactly once.

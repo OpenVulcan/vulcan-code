@@ -296,6 +296,7 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
     let tool_descriptors = resolved_tools.descriptors;
     let preparation = ExecutionPreparation {
         session_id: request.session_id,
+        conversation_hook_turn_id: request.conversation_hook_turn_id.clone(),
         session_title: request.session_title.clone(),
         agent_id: active_agent.id.clone(),
         agent_name: active_agent.name.clone(),
@@ -339,6 +340,8 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         context_budget: None,
         context_compaction_policy: Some(resolved_context_compaction_policy),
         context_budget_override: request.context_budget_override,
+        provider_usage_budget_baseline: request.provider_usage_budget_baseline.clone(),
+        provider_usage_context_generation_id: request.provider_usage_context_generation_id.clone(),
         context_assembly: None,
         context_baseline: None,
         context_request_mode: None,

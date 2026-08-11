@@ -352,7 +352,6 @@ pub(crate) fn runtime_parts_from_state(
         ControllerRuntimeHandle,
         AgentRuntimeBridge,
         TauriLuaSkillsCatalog,
-        Arc<TauriTokenBudgetRuntime>,
         TauriMcpRuntimeCatalog,
         Vec<String>,
     ),
@@ -369,15 +368,11 @@ pub(crate) fn runtime_parts_from_state(
         .clone()
         .ok_or_else(|| String::from("service is still starting; agent runtime is not ready"))?;
     let luaskills_catalog = cached_luaskills_catalog_from_state(&guard);
-    let token_budget_runtime = guard.token_budget_runtime.clone().ok_or_else(|| {
-        String::from("service is still starting; token budget runtime is not ready")
-    })?;
     let mcp_catalog = cached_mcp_catalog_from_state(&guard);
     Ok((
         controller_runtime,
         agent_runtime,
         luaskills_catalog,
-        token_budget_runtime,
         mcp_catalog,
         guard.startup.recent_logs.clone(),
     ))
@@ -815,11 +810,8 @@ pub(crate) fn stop_webui_session_work(
     append_webui_session_message_entry_to_state(
         &mut runtime_state,
         session_id,
-        SessionMessageEntry::new(SessionMessageKind::Assistant, "执行已停止", stop_body),
+        SessionMessageEntry::new(SessionMessageKind::Error, "执行已停止", stop_body),
     )?;
-    let provider_request_count = runtime_state
-        .last_safe_provider_request_count
-        .filter(|count| *count > 0);
     let mut terminated_entry = SessionMessageEntry::hidden(
         SessionMessageKind::Assistant,
         SessionMessageRecordKind::TurnTerminated,
@@ -832,15 +824,48 @@ pub(crate) fn stop_webui_session_work(
         session_id,
         terminated_entry,
     )?;
+    // The explicit stopped boundary owns the calls from the latest execution before stats materialize.
+    // 显式停止边界会在统计物化前归属最近一次执行的调用。
+    let _ = runtime_state
+        .provider_call_ledger
+        .assign_closing_record_id_to_latest_execution(terminated_message_id.clone());
     let _ = append_webui_session_turn_stats_to_state(
         &mut runtime_state,
         session_id,
         &terminated_message_id,
         SessionTurnStatsStatus::Stopped,
-        provider_request_count,
+        None,
         SessionTurnStatsKind::UserTurn,
         Vec::new(),
     )?;
+    let terminal_execution_id = runtime_state
+        .provider_call_ledger
+        .active_calls_in_sequence()
+        .into_iter()
+        .next_back()
+        .map(|record| record.identity.execution_id.clone());
+    let terminal_at_ms = now
+        .parse::<i64>()
+        .map_err(|_| String::from("ERR_CONVERSATION_CONTINUE_TERMINAL_TIMESTAMP_INVALID"))?;
+    if runtime_state.provider_call_ledger.in_flight_call_count() > 0 {
+        return Err(String::from(
+            "ERR_CONVERSATION_CONTINUE_PROVIDER_CALL_STILL_ACTIVE",
+        ));
+    }
+    if !runtime_state
+        .provider_call_ledger
+        .mark_continuation_terminal(
+            terminal_execution_id,
+            String::from("stopped"),
+            terminal_at_ms,
+            String::from("error"),
+            true,
+        )
+    {
+        return Err(String::from(
+            "ERR_CONVERSATION_CONTINUE_LEDGER_REVISION_EXHAUSTED",
+        ));
+    }
     let runtime_state_snapshot = runtime_state.clone();
     workspace_snapshot
         .session_runtime_state
@@ -922,15 +947,15 @@ pub(crate) fn append_webui_session_turn_stats_to_state(
     session_id: SessionId,
     closing_record_id: &str,
     status: SessionTurnStatsStatus,
-    provider_request_count_override: Option<usize>,
+    _provider_request_count_override: Option<usize>,
     turn_kind: SessionTurnStatsKind,
     usage_segments: Vec<SessionTurnUsageSegment>,
 ) -> Result<Option<String>, String> {
-    let Some(turn_stats) = build_session_turn_stats_from_state_with_segments(
+    let Some(turn_stats) = build_session_turn_stats_from_state_with_ledger_and_segments(
         &runtime_state.conversation_state,
+        &runtime_state.provider_call_ledger,
         closing_record_id,
         status,
-        provider_request_count_override,
         turn_kind,
         usage_segments,
     ) else {

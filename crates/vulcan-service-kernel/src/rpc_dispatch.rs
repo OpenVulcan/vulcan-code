@@ -219,7 +219,7 @@ mod tests {
         let declared_method_count = declared_method_count + knowledge_base::RPC_METHODS.len();
         assert_eq!(methods.len(), declared_method_count);
         assert!(methods.contains("service_submit_conversation_prompt"));
-        assert!(methods.contains("service_retry_conversation_request"));
+        assert!(methods.contains("service_continue_conversation"));
         assert!(methods.contains("service_set_vulcan_plugin_enabled"));
         assert!(methods.contains("service_update_local_plugin"));
         assert!(methods.contains("service_set_plugin_mcp_secret"));

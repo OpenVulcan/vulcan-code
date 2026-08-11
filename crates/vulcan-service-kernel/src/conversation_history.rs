@@ -1,10 +1,7 @@
 //! Conversation history loading and lazy hydration routes.
 //! 会话历史加载与懒水合路由。
 
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    sync::Arc,
-};
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::session_hydration::{
     PreservedWorkspaceRunState, capture_preserved_workspace_run_state_for_session_hydration,
@@ -23,8 +20,8 @@ use vulcan_workspace_store::workspace_store::{SessionHistoryPage, WorkspaceSnaps
 use super::{
     AgentRuntimeBridge, ContextBudgetSnapshot, ControllerRuntimeHandle, ProviderConfigurationFile,
     SELECTED_SESSION_TURN_LOAD_LIMIT, SharedServiceBridgeState, TauriLuaSkillsCatalog,
-    TauriMcpRuntimeCatalog, TauriTokenBudgetRuntime, WorkbenchRuntimeProjection,
-    active_kernel_session_ids, active_surface_messages_from_workspace_and_state,
+    TauriMcpRuntimeCatalog, WorkbenchRuntimeProjection, active_kernel_session_ids,
+    active_surface_messages_from_workspace_and_state,
     apply_hydration_to_selected_workspace_snapshot,
     apply_webui_unclosed_subagent_surface_preload_once, cached_luaskills_catalog_from_state,
     cached_mcp_catalog_from_state, conversation_messages_from_session, current_unix_millis_value,
@@ -59,9 +56,6 @@ struct HydratedSessionProjectionContext {
     /// Cached LuaSkills catalog projected into the rebuilt workbench.
     /// 投影进重建工作台的 LuaSkills 缓存目录。
     luaskills_catalog: TauriLuaSkillsCatalog,
-    /// Token-budget runtime projected into context usage summaries.
-    /// 投影到上下文用量摘要中的 Token 预算运行时。
-    token_budget_runtime: Arc<TauriTokenBudgetRuntime>,
     /// Cached MCP catalog projected into the rebuilt workbench.
     /// 投影进重建工作台的 MCP 缓存目录。
     mcp_catalog: TauriMcpRuntimeCatalog,
@@ -551,9 +545,6 @@ fn capture_hydrated_session_projection_context(
             .unwrap_or_default();
         HydratedSessionProjectionContext {
             luaskills_catalog: cached_luaskills_catalog_from_state(&guard),
-            token_budget_runtime: guard.token_budget_runtime.clone().ok_or_else(|| {
-                String::from("service is still starting; token budget runtime is not ready")
-            })?,
             mcp_catalog: cached_mcp_catalog_from_state(&guard),
             logs: guard.startup.recent_logs.clone(),
             provider_configuration,
@@ -938,7 +929,6 @@ pub(super) async fn load_hydrated_session_workbench(
         luaskills_catalog: &projection_context.luaskills_catalog,
         vulcan_plugin_catalog: vulcan_plugin_catalog.as_deref(),
         mcp_server_states: &mcp_server_states,
-        token_budget_runtime: &projection_context.token_budget_runtime,
         mcp_catalog: &projection_context.mcp_catalog,
         provider_configuration: &projection_context.provider_configuration,
         public_ai_runtime: projection_context

@@ -963,6 +963,21 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
             }
         }
     }
+    let provider_usage_budget_baseline = runtime_state
+        .provider_route_lease
+        .as_ref()
+        .and_then(|lease| {
+            runtime_state
+                .provider_call_ledger
+                .latest_budget_baseline_for_route(
+                    lease.provider_id.as_str(),
+                    lease.model_id.as_str(),
+                    lease.connection_id.as_str(),
+                    lease.protocol_profile_id.as_str(),
+                    lease.route_revision.as_str(),
+                )
+        })
+        .cloned();
     let request = ExecutionPreparationRequest {
         session_id,
         managed_codebase_memory: None,
@@ -977,6 +992,11 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
         model_id_override: None,
         connection_id_override: None,
         provider_route_lease_identity: runtime_state.provider_route_lease.clone(),
+        provider_usage_budget_baseline,
+        provider_usage_context_generation_id: runtime_state
+            .provider_call_ledger
+            .active_context_generation_id
+            .clone(),
         provider_tool_selections_override: runtime_state.provider_tool_settings_initialized.then(
             || {
                 runtime_state
@@ -998,7 +1018,7 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
         prompt: request_prompt,
         output_style_snapshot: applied_output_style_snapshot(runtime_state),
         provider_visible_agent_messages: input.start.provider_visible_agent_messages,
-        turn_start_mode: (input.start.source == PendingSessionPromptSource::ProviderRetry)
+        turn_start_mode: (input.start.source == PendingSessionPromptSource::Continuation)
             .then_some(ExecutionTurnStartMode::SeededProviderInput),
         conversation_state: runtime_state.conversation_state.clone(),
         context_compaction_policy: None,

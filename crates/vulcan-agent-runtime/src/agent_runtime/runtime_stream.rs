@@ -9,7 +9,6 @@ use crate::agent_runtime::question_runtime::QuestionRuntime;
 use crate::agent_runtime::runtime_stream_driver::drive_runtime_stream_launch;
 use crate::agent_runtime::runtime_stream_intervention::RuntimePromptIntervention;
 use crate::agent_runtime::task_runtime::TaskRuntime;
-use crate::agent_runtime::token_budget_runtime::TokenBudgetRuntime;
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
 use crate::mcp::{McpRuntimeAccess, configured_mcp_runtime_access};
 use crate::provider_config::ProviderConfigurationFile;
@@ -28,7 +27,6 @@ pub fn stream_runtime_run(
     task_runtime: Arc<TaskRuntime>,
     question_runtime: Arc<QuestionRuntime>,
     command_session_runtime: Arc<CommandSessionRuntime>,
-    token_budget_runtime: Arc<TokenBudgetRuntime>,
     request: ExecutionPreparationRequest,
 ) -> impl Stream<Item = ExecutionStreamEvent> + Send + 'static {
     stream_runtime_run_with_intervention(
@@ -39,7 +37,6 @@ pub fn stream_runtime_run(
         task_runtime,
         question_runtime,
         command_session_runtime,
-        token_budget_runtime,
         request,
         None,
     )
@@ -55,7 +52,6 @@ pub fn stream_runtime_run_with_intervention(
     task_runtime: Arc<TaskRuntime>,
     question_runtime: Arc<QuestionRuntime>,
     command_session_runtime: Arc<CommandSessionRuntime>,
-    token_budget_runtime: Arc<TokenBudgetRuntime>,
     request: ExecutionPreparationRequest,
     prompt_intervention: Option<RuntimePromptIntervention>,
 ) -> impl Stream<Item = ExecutionStreamEvent> + Send + 'static {
@@ -70,7 +66,6 @@ pub fn stream_runtime_run_with_intervention(
         task_runtime,
         question_runtime,
         command_session_runtime,
-        token_budget_runtime,
         request,
         prompt_intervention,
     )
@@ -87,7 +82,6 @@ pub fn stream_runtime_run_with_intervention_and_plugins(
     task_runtime: Arc<TaskRuntime>,
     question_runtime: Arc<QuestionRuntime>,
     command_session_runtime: Arc<CommandSessionRuntime>,
-    token_budget_runtime: Arc<TokenBudgetRuntime>,
     request: ExecutionPreparationRequest,
     prompt_intervention: Option<RuntimePromptIntervention>,
 ) -> impl Stream<Item = ExecutionStreamEvent> + Send + 'static {
@@ -100,7 +94,6 @@ pub fn stream_runtime_run_with_intervention_and_plugins(
         task_runtime,
         question_runtime,
         command_session_runtime,
-        token_budget_runtime,
         None,
         request,
         prompt_intervention,
@@ -119,7 +112,6 @@ pub fn stream_runtime_run_with_intervention_plugins_and_public_ai(
     task_runtime: Arc<TaskRuntime>,
     question_runtime: Arc<QuestionRuntime>,
     command_session_runtime: Arc<CommandSessionRuntime>,
-    token_budget_runtime: Arc<TokenBudgetRuntime>,
     public_ai_runtime: Option<Arc<vulcan_provider_adapters::PublicAiRuntime>>,
     request: ExecutionPreparationRequest,
     prompt_intervention: Option<RuntimePromptIntervention>,
@@ -142,7 +134,6 @@ pub fn stream_runtime_run_with_intervention_plugins_and_public_ai(
         task_runtime,
         question_runtime,
         command_session_runtime,
-        token_budget_runtime,
         public_ai_runtime,
         request,
         prompt_intervention,
@@ -176,7 +167,6 @@ fn stream_runtime_run_with_access(
     task_runtime: Arc<TaskRuntime>,
     question_runtime: Arc<QuestionRuntime>,
     command_session_runtime: Arc<CommandSessionRuntime>,
-    token_budget_runtime: Arc<TokenBudgetRuntime>,
     public_ai_runtime: Option<Arc<vulcan_provider_adapters::PublicAiRuntime>>,
     request: ExecutionPreparationRequest,
     prompt_intervention: Option<RuntimePromptIntervention>,
@@ -191,7 +181,6 @@ fn stream_runtime_run_with_access(
             task_runtime,
             question_runtime,
             command_session_runtime,
-            token_budget_runtime,
             public_ai_runtime,
             request,
         ).await {

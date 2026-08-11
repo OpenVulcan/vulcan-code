@@ -660,7 +660,6 @@ pub(crate) fn build_webui_context_compaction_job_request(
         task_runtime: Arc::clone(&agent_runtime.task_runtime),
         question_runtime: Arc::clone(&agent_runtime.question_runtime),
         command_session_runtime: Arc::clone(&agent_runtime.command_session_runtime),
-        token_budget_runtime: Arc::clone(&agent_runtime.token_budget_runtime),
     })
 }
 

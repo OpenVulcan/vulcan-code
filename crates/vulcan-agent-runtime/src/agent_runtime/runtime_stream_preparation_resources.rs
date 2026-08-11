@@ -7,7 +7,6 @@ use crate::agent_runtime::execution_models::ExecutionPreparationRequest;
 use crate::agent_runtime::question_runtime::QuestionRuntime;
 use crate::agent_runtime::runtime::RuntimeFoundation;
 use crate::agent_runtime::task_runtime::TaskRuntime;
-use crate::agent_runtime::token_budget_runtime::TokenBudgetRuntime;
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
 use crate::provider_config::ProviderConfigurationFile;
 use crate::tooling::CommandSessionRuntime;
@@ -38,7 +37,6 @@ pub(crate) fn build_runtime_preparation_resources(
     task_runtime: Arc<TaskRuntime>,
     question_runtime: Arc<QuestionRuntime>,
     command_session_runtime: Arc<CommandSessionRuntime>,
-    token_budget_runtime: Arc<TokenBudgetRuntime>,
     public_ai_runtime: Option<Arc<vulcan_provider_adapters::PublicAiRuntime>>,
     request: ExecutionPreparationRequest,
 ) -> RuntimePreparationResources {
@@ -52,7 +50,6 @@ pub(crate) fn build_runtime_preparation_resources(
             task_runtime,
             question_runtime,
             command_session_runtime,
-            token_budget_runtime,
         );
     if let Some(public_ai_runtime) = public_ai_runtime {
         foundation.install_public_ai_runtime(public_ai_runtime);

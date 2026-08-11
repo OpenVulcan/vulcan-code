@@ -64,6 +64,74 @@ fn runtime_state_deserializes_without_conversation_state() {
     ));
 }
 
+/// Verifies the real v1 duplicate layout merges sparse top-level usage into richer ledger evidence.
+/// 验证真实 v1 重复布局会把稀疏顶层用量兼容合并到更丰富的账本证据中。
+#[test]
+fn runtime_state_migrates_compatible_duplicate_legacy_usage() {
+    let rich_usage = ProviderUsageSnapshot {
+        input_tokens: Some(9_000),
+        uncached_input_tokens: Some(8_243),
+        output_tokens: Some(100),
+        total_tokens: Some(9_100),
+        ..ProviderUsageSnapshot::default()
+    };
+    let sparse_usage = ProviderUsageSnapshot {
+        input_tokens: Some(9_000),
+        output_tokens: Some(100),
+        total_tokens: Some(9_100),
+        ..ProviderUsageSnapshot::default()
+    };
+    let mut value = serde_json::to_value(SessionRuntimeStateEntry::default())
+        .expect("default runtime state should serialize");
+    let object = value
+        .as_object_mut()
+        .expect("runtime state should serialize as an object");
+    object.insert(
+        String::from("provider_usage"),
+        serde_json::json!({
+            "last_usage": rich_usage,
+            "usage_revision": 1
+        }),
+    );
+    object.insert(
+        String::from("last_provider_usage"),
+        serde_json::to_value(sparse_usage.clone()).expect("sparse usage should serialize"),
+    );
+    object.insert(
+        String::from("last_successful_provider_usage"),
+        serde_json::to_value(sparse_usage).expect("successful usage should serialize"),
+    );
+    let mut restored: SessionRuntimeStateEntry =
+        serde_json::from_value(value).expect("legacy runtime state should deserialize");
+
+    assert!(
+        restored
+            .migrate_legacy_provider_usage_summaries()
+            .expect("compatible duplicate usage should migrate")
+    );
+    assert!(restored.last_provider_usage.is_none());
+    assert!(restored.last_successful_provider_usage.is_none());
+    let legacy_import = restored
+        .provider_call_ledger
+        .legacy_import
+        .as_ref()
+        .expect("legacy import evidence should remain available");
+    assert_eq!(
+        legacy_import
+            .last_usage
+            .as_ref()
+            .and_then(|usage| usage.uncached_input_tokens),
+        Some(8_243)
+    );
+    assert_eq!(
+        legacy_import
+            .last_successful_usage
+            .as_ref()
+            .and_then(|usage| usage.input_tokens),
+        Some(9_000)
+    );
+}
+
 /// Verifies ordinary runtime-state documents have no VMM ownership field.
 /// 验证普通运行态文档不存在 VMM 所有权字段。
 #[test]

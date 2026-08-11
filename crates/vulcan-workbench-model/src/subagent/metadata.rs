@@ -54,6 +54,12 @@ pub struct SubagentFeedbackDisplayRecords {
     /// Display-only statistics row that contains the child-agent turn usage.
     /// 包含智能体轮次用量的仅显示统计行。
     pub stats_entry: SessionMessageEntry,
+    /// Strongly typed inclusive statistics used for parent-ledger contribution materialization.
+    /// 用于父账本贡献物化的强类型包容性统计。
+    pub turn_stats: SessionTurnStats,
+    /// Canonical child Turn Stats record that produced the inclusive contribution.
+    /// 产生包容性贡献的规范子任务 Turn Stats 记录。
+    pub source_turn_stats_record_id: Option<String>,
 }
 
 /// Task mirror metadata update parts used to repair a parent spawn-agent tool card.
@@ -90,9 +96,14 @@ pub fn subagent_feedback_display_records_from_tool_metadata(
     state: &SubagentTaskPanelState,
 ) -> Result<SubagentFeedbackDisplayRecords, String> {
     let execution_id = subagent_feedback_execution_id_from_tool_metadata(metadata)?;
-    let usage_segments = subagent_feedback_usage_segments_from_tool_metadata(metadata)?;
     let status = subagent_feedback_stats_status(state.run_state);
-    let turn_stats = subagent_feedback_turn_stats(status, usage_segments);
+    let turn_stats = subagent_feedback_turn_stats_from_tool_metadata(metadata, status)?;
+    let source_turn_stats_record_id = task_session_payload_from_tool_metadata(metadata)
+        .and_then(|payload| payload.get("source_turn_stats_record_id"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
     let task_id_text = state.task_id.to_string();
     let result_text = state.result_text.trim();
     let feedback_payload = json!({
@@ -157,6 +168,8 @@ pub fn subagent_feedback_display_records_from_tool_metadata(
         execution_id,
         feedback_entry,
         stats_entry,
+        turn_stats,
+        source_turn_stats_record_id,
     })
 }
 
@@ -272,6 +285,39 @@ fn subagent_feedback_usage_segments_from_tool_metadata(
     };
     serde_json::from_value::<Vec<SessionTurnUsageSegment>>(usage_segments.clone())
         .map_err(|error| format!("failed to parse subagent feedback usage segments: {error}"))
+}
+
+/// Reads the strongly typed child statistic, with legacy segment reconstruction for old sessions.
+/// 读取强类型子统计，并仅为旧会话保留分段重建兼容。
+///
+/// # Parameters
+/// 参数
+/// `metadata` is the exact delegate-finished or wait-agent result metadata.
+/// `metadata` 是精确的委派完成或 wait-agent 结果元数据。
+/// `status` is the current terminal panel status projected for the parent.
+/// `status` 是投影给父级的当前终态面板状态。
+///
+/// # Returns
+/// 返回值
+/// Returns the ledger-derived inclusive statistic when present, otherwise a legacy reconstruction.
+/// 存在时返回账本派生的包容性统计，否则返回旧版重建结果。
+fn subagent_feedback_turn_stats_from_tool_metadata(
+    metadata: &Value,
+    status: SessionTurnStatsStatus,
+) -> Result<SessionTurnStats, String> {
+    if let Some(turn_stats) = task_session_payload_from_tool_metadata(metadata)
+        .and_then(|payload| payload.get("turn_stats"))
+    {
+        let mut turn_stats = serde_json::from_value::<SessionTurnStats>(turn_stats.clone())
+            .map_err(|error| format!("failed to parse subagent feedback Turn Stats: {error}"))?;
+        turn_stats.status = status;
+        turn_stats.turn_kind = SessionTurnStatsKind::SubagentFeedback;
+        return Ok(turn_stats);
+    }
+    Ok(subagent_feedback_turn_stats(
+        status,
+        subagent_feedback_usage_segments_from_tool_metadata(metadata)?,
+    ))
 }
 
 /// Maps one child-agent panel state into the terminal status used by display-only statistics.

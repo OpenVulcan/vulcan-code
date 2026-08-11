@@ -6,6 +6,89 @@ use super::*;
 #[cfg(debug_assertions)]
 use vulcan_agent_runtime::agent_runtime::task_runtime::DebugSubagentRegistryEntrySeed;
 
+/// Records one completed physical Provider call in a service-kernel test runtime state.
+/// 在 Service Kernel 测试运行态中记录一次已经完成的 Provider 物理调用。
+///
+/// # Parameters
+/// 参数
+/// `runtime_state` owns the durable call ledger, `owner_kind` selects the execution category, and `execution_id` identifies one logical execution.
+/// `runtime_state` 持有可靠调用账本，`owner_kind` 选择执行类别，`execution_id` 标识一次逻辑执行。
+///
+/// # Returns
+/// 返回值
+/// Returns no value and panics when the deterministic fixture violates ledger invariants.
+/// 不返回值；当确定性夹具违反账本约束时触发 panic。
+pub(super) fn record_completed_test_provider_call(
+    runtime_state: &mut SessionRuntimeStateEntry,
+    owner_kind: &str,
+    execution_id: &str,
+) {
+    let provider_call_id = format!("provider-call-{execution_id}");
+    let identity = vulcan_workbench_model::SessionProviderCallIdentity {
+        logical_request_id: format!("logical-request-{execution_id}"),
+        execution_id: execution_id.to_string(),
+        turn_id: None,
+        attempt_index: 0,
+        retry_number: 0,
+        owner_kind: owner_kind.to_string(),
+        owner_id: owner_kind.to_string(),
+        owner_name_snapshot: owner_kind.to_string(),
+        operation: owner_kind.to_string(),
+        provider_id: String::from("provider-test"),
+        provider_name_snapshot: String::from("Provider Test"),
+        model_id: String::from("model-test"),
+        model_name_snapshot: String::from("Model Test"),
+        connection_id: String::from("connection-test"),
+        service_entry_id: String::from("public-api"),
+        protocol_profile_id: String::from("openai.responses"),
+        manifest_revision: 1,
+        manifest_generation: 1,
+        binding_source: String::from("system_manifest"),
+        binding_rule: Some(String::from("test-model-rule")),
+        route_revision: String::from("sha256:test-route"),
+        request_profiles: Vec::new(),
+        response_profiles: Vec::new(),
+    };
+    assert!(runtime_state.provider_call_ledger.observe_started(
+        vulcan_workbench_model::SessionProviderCallStarted {
+            provider_call_id: provider_call_id.clone(),
+            identity: identity.clone(),
+            prepared_at_ms: 1_780_000_000_050,
+            request_assembly_fingerprint: Some(String::from("sha256:test-request")),
+            context_generation_id: None,
+            context_start_record_id: None,
+            model_route_fingerprint: Some(String::from("sha256:test-route")),
+            toolset_fingerprint: None,
+            system_prompt_fingerprint: None,
+            request_text_measurement: None,
+            budget_accounting: None,
+        }
+    ));
+    assert!(runtime_state.provider_call_ledger.observe_completed(
+        vulcan_workbench_model::SessionProviderCallCompleted {
+            provider_call_id,
+            identity,
+            status: vulcan_workbench_model::SessionProviderCallStatus::Succeeded,
+            provider_usage_evidence: vulcan_workbench_model::SessionProviderUsageEvidence {
+                availability: vulcan_workbench_model::SessionProviderUsageAvailability::Missing,
+                provider_usage: None,
+            },
+            prepared_at_ms: 1_780_000_000_050,
+            dispatched_at_ms: Some(1_780_000_000_051),
+            first_event_at_ms: Some(1_780_000_000_052),
+            first_token_at_ms: Some(1_780_000_000_053),
+            completed_at_ms: 1_780_000_000_099,
+            dispatch_outcome: Some(String::from("dispatched")),
+            dispatch_outcome_known: Some(true),
+            semantic_output_observed: Some(true),
+            semantic_output_observed_known: Some(true),
+            replay_safe: Some(false),
+            error_category: None,
+            error_code: None,
+        }
+    ));
+}
+
 /// Owns one temporary segmented-session project directory created under the service data root.
 /// 持有一个创建在服务数据根目录下的临时分段会话项目目录。
 pub(super) struct TestSegmentedProjectRoot {
@@ -328,7 +411,6 @@ pub(super) fn test_service_state_with_parent_session(
         knowledge_runtime: None,
         luaskills_runtime: None,
         cached_luaskills_catalog: None,
-        token_budget_runtime: None,
         mcp_runtime: None,
         cached_mcp_catalog: None,
         provider_manifest_sync: None,
@@ -554,7 +636,6 @@ pub(super) fn test_agent_runtime_bridge() -> AgentRuntimeBridge {
         task_runtime: Arc::new(TaskRuntime::new()),
         question_runtime: Arc::new(QuestionRuntime::new()),
         command_session_runtime: Arc::new(CommandSessionRuntime::new()),
-        token_budget_runtime: Arc::new(TokenBudgetRuntime::pending()),
         conversation_hook_runtime: Arc::new(Mutex::new(ConversationHookRuntime::new())),
         vmm_hook_runtime: VmmHookRuntimeHandle::new(
             vulcan_agent_runtime::agent_runtime::vmm_hooks::VmmHookConfigSnapshot::default(),

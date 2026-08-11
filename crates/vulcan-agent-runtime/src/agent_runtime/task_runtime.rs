@@ -28,12 +28,13 @@ use crate::agent_runtime::tool_runtime_bridge::{
 use crate::conversation_protocol::{SessionConversationRecord, SessionConversationState};
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
 use crate::model::{
-    SessionId, SessionMessageKind, SessionMessageRecordKind, SessionTurnStats,
-    SessionTurnStatsKind, SessionTurnStatsStatus, SessionTurnUsageSegment,
+    SessionId, SessionMessageKind, SessionMessageRecordKind, SessionProviderCallLedger,
+    SessionTurnStats, SessionTurnStatsKind, SessionTurnStatsStatus, SessionTurnUsageSegment,
     SessionTurnUsageSegmentKind, build_session_record_message_id,
 };
 use crate::provider_config::{PersistedPromptSkillState, ProviderConfigurationFile};
 use crate::turn_stats::{
+    build_session_turn_stats_from_state_with_ledger_owner_and_segments,
     build_session_turn_stats_from_state_with_segments, merge_usage_segment_into_turn_stats,
 };
 use async_stream::stream;
@@ -406,6 +407,18 @@ struct TaskExecutionCompletion {
     /// Whether the terminal provider request indicated that context compaction should run.
     /// 终态 Provider 请求是否表明应执行上下文压缩。
     should_compact_context: bool,
+}
+
+/// Persisted child Turn Stats together with its canonical source record identity.
+/// 带有规范来源记录身份的持久化子任务 Turn Stats。
+#[derive(Debug, Clone)]
+struct PersistedTaskTurnStats {
+    /// Canonical TaskSession record that owns the materialized statistic.
+    /// 持有该物化统计的规范 TaskSession 记录。
+    record_id: String,
+    /// Ledger-derived inclusive statistic stored in that record.
+    /// 保存在该记录中的账本派生包容性统计。
+    stats: SessionTurnStats,
 }
 
 /// Stable terminal status produced by one task execution attempt.

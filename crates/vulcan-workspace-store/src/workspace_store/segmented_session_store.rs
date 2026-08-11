@@ -1,7 +1,7 @@
 //! Segmented append-only session storage used by the new Vulcan session fact source.
 //! Vulcan 新会话事实源使用的分段追加式会话存储。
 
-use super::current_unix_millis_text;
+use super::{current_unix_millis_text, serialize_session_runtime_state_entry};
 use crate::conversation_protocol::{
     SessionConversationState, conversation_state_from_session_messages,
     conversation_state_to_session_messages,

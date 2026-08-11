@@ -1,6 +1,7 @@
 //! Vulcan public-contract adapter for the existing host tool controller.
 //! 面向现有宿主工具控制器的 Vulcan 公共契约适配器。
 
+use crate::agent_runtime::events::provider_request_durability_barrier;
 use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
 use crate::agent_runtime::provider_request_bridge_conversation::build_core_conversation_snapshot;
 use crate::agent_runtime::provider_stream::ProviderDeltaStream;
@@ -259,6 +260,10 @@ pub(crate) struct VulcanPublicContractRequest {
     /// Exact canonical snapshot used by the request budget guard.
     /// 请求预算门使用的精确规范快照。
     pub(crate) budget: CoreProviderRequestSnapshot,
+    /// Host context-budget decision captured from this exact canonical request.
+    /// 从当前精确规范请求捕获的宿主上下文预算决策。
+    #[serde(skip)]
+    pub(crate) context_budget: Option<crate::context_budget::ContextBudgetSnapshot>,
 }
 
 impl VulcanPublicContractAdapter {
@@ -517,6 +522,7 @@ impl VulcanProviderAdapter for VulcanPublicContractAdapter {
             system_prompt,
             prompt_layers: config.provider_prompt_layers_with_persistent_injection(),
             prompt,
+            prompt_in_history: true,
             history: snapshot.messages.clone(),
             temperature: config.temperature,
             max_turns: config.max_turns,
@@ -535,7 +541,11 @@ impl VulcanProviderAdapter for VulcanPublicContractAdapter {
             request_headers: None,
             continuation: snapshot.continuation.clone(),
         };
-        Ok(VulcanPublicContractRequest { public, budget })
+        Ok(VulcanPublicContractRequest {
+            public,
+            budget,
+            context_budget: None,
+        })
     }
 
     async fn execute_request(
@@ -624,13 +634,38 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
     where
         S: VulcanProviderDeltaSink,
     {
-        let VulcanPublicContractRequest { public, budget } = request;
+        let VulcanPublicContractRequest {
+            public,
+            budget,
+            context_budget,
+        } = request;
+        let (prepared_completion, prepared_receiver) = provider_request_durability_barrier();
         self.live_sender
-            .send(Ok(ProviderStreamDelta::RequestSnapshot(budget)))
+            .send(Ok(ProviderStreamDelta::RequestPrepared {
+                snapshot: budget,
+                context_budget,
+                completion: prepared_completion,
+            }))
             .map_err(|_| {
                 provider_failure(
                     self.provider_id(),
                     "The provider request stream closed before dispatch.",
+                )
+            })?;
+        prepared_receiver
+            .await
+            .map_err(|_| {
+                provider_failure(
+                    self.provider_id(),
+                    "The host dropped the Provider start persistence barrier before dispatch.",
+                )
+            })?
+            .map_err(|error| {
+                provider_failure(
+                    self.provider_id(),
+                    &format!(
+                        "The Provider request was not dispatched because its start record could not be persisted: {error}"
+                    ),
                 )
             })?;
         let execution_id = uuid::Uuid::new_v4().to_string();
@@ -674,6 +709,53 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
                     self.model_id(),
                 );
             }
+            let event = match event {
+                AiStreamEvent::TransportObserved {
+                    transport,
+                    dispatched_at_ms,
+                    headers_at_ms,
+                    http_status,
+                    provider_request_id,
+                    rate_limit_headers,
+                } => {
+                    let (dispatched_completion, dispatched_receiver) =
+                        provider_request_durability_barrier();
+                    self.live_sender
+                        .send(Ok(ProviderStreamDelta::TransportObserved {
+                            transport,
+                            dispatched_at_ms,
+                            headers_at_ms,
+                            http_status,
+                            provider_request_id,
+                            rate_limit_headers,
+                            completion: dispatched_completion,
+                        }))
+                        .map_err(|_| {
+                            provider_failure(
+                                self.provider_id(),
+                                "The provider request stream closed before dispatch persistence.",
+                            )
+                        })?;
+                    dispatched_receiver
+                        .await
+                        .map_err(|_| {
+                            provider_failure(
+                                self.provider_id(),
+                                "The host dropped the Provider dispatch persistence barrier.",
+                            )
+                        })?
+                        .map_err(|error| {
+                            provider_failure(
+                                self.provider_id(),
+                                &format!(
+                                    "The Provider request was dispatched but its dispatched state could not be persisted: {error}"
+                                ),
+                            )
+                        })?;
+                    continue;
+                }
+                event => event,
+            };
             let usage_updated = matches!(event, AiStreamEvent::UsageUpdated { .. });
             response.apply_event(self.provider_id(), &self.live_sender, sink, event)?;
             if usage_updated && let Some(usage) = response.usage.as_ref() {
@@ -682,7 +764,37 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
                 )));
             }
         }
-        response.finish()
+        let final_usage = response.usage.as_ref().map(public_usage_to_core);
+        let final_response = response.finish()?;
+        let (completed_completion, completed_receiver) = provider_request_durability_barrier();
+        self.live_sender
+            .send(Ok(ProviderStreamDelta::RequestSucceeded {
+                usage: final_usage,
+                completion: completed_completion,
+            }))
+            .map_err(|_| {
+                provider_failure(
+                    self.provider_id(),
+                    "The provider request stream closed before terminal persistence.",
+                )
+            })?;
+        completed_receiver
+            .await
+            .map_err(|_| {
+                provider_failure(
+                    self.provider_id(),
+                    "The host dropped the Provider terminal persistence barrier.",
+                )
+            })?
+            .map_err(|error| {
+                provider_failure(
+                    self.provider_id(),
+                    &format!(
+                        "The Provider response completed but its terminal record could not be persisted: {error}"
+                    ),
+                )
+            })?;
+        Ok(final_response)
     }
 }
 
@@ -962,21 +1074,17 @@ impl PublicTurnAccumulator {
     {
         match event {
             AiStreamEvent::TransportObserved {
-                transport,
-                dispatched_at_ms,
-                headers_at_ms,
-                http_status,
-                provider_request_id,
-                rate_limit_headers,
+                transport: _,
+                dispatched_at_ms: _,
+                headers_at_ms: _,
+                http_status: _,
+                provider_request_id: _,
+                rate_limit_headers: _,
             } => {
-                let _ = live_sender.send(Ok(ProviderStreamDelta::TransportObserved {
-                    transport,
-                    dispatched_at_ms,
-                    headers_at_ms,
-                    http_status,
-                    provider_request_id,
-                    rate_limit_headers,
-                }));
+                return Err(provider_failure(
+                    provider_id,
+                    "TransportObserved must pass through the dispatch persistence barrier.",
+                ));
             }
             AiStreamEvent::ResponseMetadataUpdated { continuation } => {
                 if let Some(existing) = self.provider_message_id.as_deref()

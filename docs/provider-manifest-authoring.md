@@ -302,6 +302,27 @@ Profile 是供应商通用规则与模型覆盖的主要承载方式：
 4. fixture 同时断言规范化统计与 provenance；
 5. 若供应商不同模型返回不同字段，分别用 Exact 规则引用不同 Profile。
 
+Usage Profile 必须按真实承载面声明 `record_kind`：
+
+- `json_body`：成功的非流式 JSON 响应；
+- `sse_event`：SSE 流事件；
+- `web_socket_frame`：WebSocket 帧；
+- `error_json_body`：HTTP 或协议失败时保留下来的 JSON 错误正文。
+
+错误正文中的 Usage 不等于请求成功。宿主会独立保存失败终态与真实 Usage；不得把失败响应改写成成功，
+也不得因失败而丢弃已计费用量。新增 `error_json_body` Profile 时必须复制脱敏错误 fixture，并同时断言
+`usage`、`source_paths`、`update_kind` 与错误状态。仓库内的
+`fixtures/profile-error-usage-extraction.json` 是可执行参考。
+
+若 Provider 只有在请求中显式要求时才返回 Usage，应通过当前协议路由引用的 `request_profile_refs`
+写入精确字段，例如 OpenAI Chat 流式接口的 `/stream_options/include_usage=true`。请求开关与返回提取
+必须各自有 fixture；禁止在宿主传输代码中为供应商或模型写硬编码字段。
+
+自定义供应商的每个协议路由分别声明 `usage_profile_refs`、`request_profile_refs` 和
+`response_profile_refs`。模型覆盖只能通过该模型命中的 Exact/Regex 规则替换引用；一个协议的 Usage
+路径不得作为另一协议的候选 fallback。Profile 未命中或字段不存在时记录为 `missing`，由会话预算层
+显示字符粗估警告，不允许改试其他协议，也不允许轮询猜测字段。
+
 ## 7. Operation、Provider Tool 与 Upload Channel
 
 当前宿主执行原语是封闭集合：

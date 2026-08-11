@@ -5587,11 +5587,11 @@ fn internal_inference_native_usage_event(
             facts.execution_id
         )
     })?;
-    Ok(ProviderRequestTelemetryEvent {
-        kind: ProviderRequestTelemetryEventKind::Completed,
+    Ok(ProviderRequestTelemetryEvent::detached(
+        ProviderRequestTelemetryEventKind::Completed,
         session_id,
         payload,
-        completed_usage: Some(ProviderRequestCompletedUsage {
+        Some(ProviderRequestCompletedUsage {
             update_kind: Some(facts.usage.update_kind),
             input_tokens: usage_value_usize(&facts.usage.input_tokens)?,
             uncached_input_tokens: usage_value_usize(&facts.usage.uncached_input_tokens)?,
@@ -5615,7 +5615,7 @@ fn internal_inference_native_usage_event(
             pricing_profile: facts.usage.pricing_profile.clone(),
             billing_details: facts.usage.billing_details.clone(),
         }),
-    })
+    ))
 }
 
 /// Converts one known usage value into the host token-width without saturating.

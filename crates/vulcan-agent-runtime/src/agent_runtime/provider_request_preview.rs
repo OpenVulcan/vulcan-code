@@ -604,6 +604,7 @@ mod tests {
     fn provider_request_preview_renders_protocol_profile_summary_line() {
         let preparation = ExecutionPreparation {
             session_id: Uuid::nil(),
+            conversation_hook_turn_id: None,
             session_title: String::from("接口族预览测试"),
             agent_id: String::from("main"),
             agent_name: String::from("Main Agent"),
@@ -659,6 +660,8 @@ mod tests {
             context_budget: None,
             context_compaction_policy: None,
             context_budget_override: None,
+            provider_usage_budget_baseline: None,
+            provider_usage_context_generation_id: None,
             context_assembly: None,
             context_baseline: None,
             context_request_mode: Some(ContextRequestMode::Full {
@@ -682,6 +685,7 @@ mod tests {
                 String::from("system prompt").clone(),
             ),
             prompt: String::from("preview prompt"),
+            prompt_in_history: false,
             history: Vec::new(),
             temperature: Some(0.2),
             max_turns: 8,

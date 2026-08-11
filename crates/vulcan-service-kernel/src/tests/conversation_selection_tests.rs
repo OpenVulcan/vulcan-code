@@ -50,6 +50,7 @@ fn test_conversation_summary(session_id: SessionId, title: &str) -> Conversation
         attention: None,
         project_id: Some(String::from("project-a")),
         fork_source: None,
+        continuation: None,
     }
 }
 

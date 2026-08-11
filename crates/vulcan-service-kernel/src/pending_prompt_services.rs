@@ -229,7 +229,7 @@ pub(super) async fn service_edit_pending_prompt(
     state: SharedServiceBridgeState,
     entry_id: String,
 ) -> Result<PendingPromptSummary, String> {
-    let (controller_runtime, _, _, _, _, _) = runtime_parts_from_state(&state)?;
+    let (controller_runtime, _, _, _, _) = runtime_parts_from_state(&state)?;
     let selected_session_id = selected_session_id_from_state(&state)?;
     apply_pending_prompt_queue_service_mutation(
         &app,
@@ -278,7 +278,7 @@ pub(super) async fn service_remove_pending_prompt(
     state: SharedServiceBridgeState,
     entry_id: String,
 ) -> Result<bool, String> {
-    let (controller_runtime, _, _, _, _, _) = runtime_parts_from_state(&state)?;
+    let (controller_runtime, _, _, _, _) = runtime_parts_from_state(&state)?;
     let selected_session_id = selected_session_id_from_state(&state)?;
     apply_pending_prompt_queue_service_mutation(
         &app,
@@ -337,7 +337,7 @@ pub(super) async fn service_reorder_pending_prompts(
     dragged_entry_id: String,
     target_entry_id: Option<String>,
 ) -> Result<bool, String> {
-    let (controller_runtime, _, _, _, _, _) = runtime_parts_from_state(&state)?;
+    let (controller_runtime, _, _, _, _) = runtime_parts_from_state(&state)?;
     let selected_session_id = conversation_id
         .as_deref()
         .and_then(parse_session_id)

@@ -540,6 +540,7 @@ mod tests {
             system_prompt: String::from("system"),
             prompt_layers: ProviderPromptLayers::default(),
             prompt: String::from("prompt"),
+            prompt_in_history: false,
             history: vec![ConversationMessage {
                 id: String::from("m1"),
                 payload: ConversationPayload::UserText {

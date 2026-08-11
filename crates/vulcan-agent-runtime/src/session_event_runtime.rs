@@ -20,8 +20,8 @@ use crate::{
     },
     skills::{SessionDerivedRecord, SessionDerivedSkillChain, SummarySkillInput},
     turn_stats::{
-        build_session_turn_stats_from_state_with_segments,
-        merge_explicit_usage_segment_into_turn_stats, merge_usage_segment_into_turn_stats,
+        build_session_turn_stats_from_state_with_ledger_and_segments,
+        merge_usage_segment_into_turn_stats,
     },
 };
 

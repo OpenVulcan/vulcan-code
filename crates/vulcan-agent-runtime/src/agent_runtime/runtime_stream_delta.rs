@@ -1,9 +1,12 @@
 //! Runtime streaming delta processing helpers and mutable loop state.
 //! 运行时流式增量处理辅助逻辑与可变循环状态模块。
 
-use crate::agent_runtime::events::{ExecutionStreamEvent, RuntimeEvent};
+use crate::agent_runtime::events::{
+    ExecutionStreamEvent, ProviderRequestDurabilityCompletion, RuntimeEvent,
+};
 use crate::agent_runtime::provider_request_telemetry::{
-    ProviderRequestTelemetryContext, ProviderRequestTelemetryTracker,
+    ProviderRequestTelemetryContext, ProviderRequestTelemetryEvent,
+    ProviderRequestTelemetryEventKind, ProviderRequestTelemetryTracker,
 };
 use crate::agent_runtime::provider_stream::ProviderStreamDelta;
 use crate::agent_runtime::provider_stream_projection::{
@@ -11,13 +14,12 @@ use crate::agent_runtime::provider_stream_projection::{
     reset_current_thinking_phase_tracking, runtime_event_to_core_event,
     take_current_thinking_phase_completed_event,
 };
-use crate::agent_runtime::token_budget_runtime::TokenBudgetRuntime;
+use crate::agent_runtime::provider_transport_request_budget::ProviderUsageBudgetBaselineHandle;
 use crate::agent_runtime::tool_request_stream::ToolRequestStreamCoordinator;
 use crate::conversation_protocol::SessionConversationState;
 use crate::model::SessionId;
 use serde_json::Value;
 use std::mem;
-use std::sync::Arc;
 use vulcan_core::controller::VulcanCoreController;
 use vulcan_core::types::{
     ProviderRequestSnapshot as CoreProviderRequestSnapshot,
@@ -126,15 +128,11 @@ impl RuntimeStreamDeltaState {
         }
     }
 
-    /// Installs model-aware services used by tool request argument progress.
-    /// 安装工具请求参数进度使用的模型感知服务。
+    /// Installs the frozen tool snapshot used by streamed request progress.
+    /// 安装流式请求进度使用的冻结工具快照。
     ///
     /// # Parameters
     /// 参数
-    /// `model_id` selects the tokenizer route for streamed arguments.
-    /// `model_id` 为流式参数选择 Tokenizer 路由。
-    /// `token_budget_runtime` is the shared warmed token runtime from bootstrap.
-    /// `token_budget_runtime` 是启动阶段提供的共享已预热 Token 运行时。
     /// `resolved_tools` is the frozen tool snapshot used for exact request parser routing.
     /// `resolved_tools` 是用于精确请求解析器路由的冻结工具快照。
     ///
@@ -144,12 +142,9 @@ impl RuntimeStreamDeltaState {
     /// 返回更新后的运行时流状态。
     pub(crate) fn with_tool_request_stream(
         mut self,
-        model_id: impl Into<String>,
-        token_budget_runtime: Arc<TokenBudgetRuntime>,
         resolved_tools: &[ResolvedToolDefinition],
     ) -> Self {
-        self.tool_request_stream =
-            ToolRequestStreamCoordinator::new(model_id, token_budget_runtime, resolved_tools);
+        self.tool_request_stream = ToolRequestStreamCoordinator::new(resolved_tools);
         self
     }
 
@@ -171,6 +166,14 @@ impl RuntimeStreamDeltaState {
     ) -> Self {
         self.provider_request_telemetry.install_context(context);
         self
+    }
+
+    /// Returns the durable Usage baseline handle shared by telemetry and request budgeting.
+    /// 返回遥测与请求预算共享的持久化用量基线句柄。
+    pub(crate) fn provider_usage_budget_baseline_handle(
+        &self,
+    ) -> Option<ProviderUsageBudgetBaselineHandle> {
+        self.provider_request_telemetry.budget_baseline_handle()
     }
 
     /// Returns the immutable host-owned controller captured by the loop state.
@@ -284,40 +287,6 @@ impl RuntimeStreamDeltaState {
             &mut self.thinking_visible_output,
             &mut self.thinking_completed_emitted,
         );
-    }
-
-    /// Drains completed background tool-request token estimates into visible execution events.
-    /// 将已完成的后台工具请求 Token 估算排空为可见执行事件。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `session_id` identifies the session that owns every projected request card.
-    /// `session_id` 标识拥有全部投影请求卡片的会话。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Ordered request-progress events with stale worker revisions already rejected.
-    /// 返回已拒绝过期后台修订的有序请求进度事件。
-    pub(crate) fn drain_tool_request_token_progress(
-        &mut self,
-        session_id: SessionId,
-    ) -> Vec<ExecutionStreamEvent> {
-        let runtime_events = self.tool_request_stream.drain_token_progress_events();
-        runtime_events
-            .into_iter()
-            .flat_map(|event| self.process_runtime_event(session_id, event))
-            .collect()
-    }
-
-    /// Returns whether any ready tool request still awaits its final token progress projection.
-    /// 返回是否仍有已就绪工具请求等待最终 Token 进度投影。
-    ///
-    /// # Returns
-    /// 返回值
-    /// `true` when the stream driver should briefly keep draining the background token worker.
-    /// 当流驱动应短暂继续排空后台 Token worker 时返回 `true`。
-    pub(crate) fn has_pending_ready_tool_request_token_progress(&self) -> bool {
-        self.tool_request_stream.has_pending_ready_token_progress()
     }
 
     /// Applies one provider thinking delta to controller state and returns one visible event when new normalized text appears.
@@ -485,12 +454,57 @@ pub(crate) fn process_provider_stream_delta(
             state.provider_request_count = state.provider_request_count.saturating_add(1);
             // events begins with telemetry so an effect Hook can observe the request before UI timing markers.
             // events 以遥测开始，使 Effect Hook 能在界面计时标记前观测请求。
-            let mut events = state
+            let telemetry_events = match state
                 .provider_request_telemetry
-                .start_request(&snapshot)
+                .start_request(&snapshot, None)
+            {
+                Ok(events) => events,
+                Err(error) => {
+                    state.terminal_error = Some(format!(
+                        "Provider request evidence validation failed before dispatch: {error}"
+                    ));
+                    return Vec::new();
+                }
+            };
+            let mut events = telemetry_events
                 .into_iter()
                 .map(ExecutionStreamEvent::ProviderRequestTelemetry)
                 .collect::<Vec<_>>();
+            events.extend([
+                ExecutionStreamEvent::ProviderRequestCheckpoint {
+                    session_id,
+                    provider_family: state.protocol_profile_id.clone(),
+                    snapshot,
+                },
+                ExecutionStreamEvent::RequestReady { session_id },
+                ExecutionStreamEvent::RequestStarted { session_id },
+            ]);
+            events
+        }
+        Ok(ProviderStreamDelta::RequestPrepared {
+            snapshot,
+            context_budget,
+            completion,
+        }) => {
+            state.active_provider_usage = None;
+            state.latest_request_snapshot = Some(snapshot.clone());
+            state.provider_request_count = state.provider_request_count.saturating_add(1);
+            let telemetry_events = match state
+                .provider_request_telemetry
+                .start_request(&snapshot, context_budget.as_ref())
+            {
+                Ok(events) => events,
+                Err(error) => {
+                    let error = format!(
+                        "Provider request evidence validation failed before dispatch: {error}"
+                    );
+                    let _ = completion.complete(Err(error.clone()));
+                    state.terminal_error = Some(error);
+                    return Vec::new();
+                }
+            };
+            let mut events =
+                provider_request_events_with_durability_boundary(telemetry_events, completion);
             events.extend([
                 ExecutionStreamEvent::ProviderRequestCheckpoint {
                     session_id,
@@ -509,16 +523,21 @@ pub(crate) fn process_provider_stream_delta(
             http_status,
             provider_request_id,
             rate_limit_headers,
+            completion,
         }) => {
-            state.provider_request_telemetry.observe_transport(
-                transport,
-                dispatched_at_ms,
-                headers_at_ms,
-                http_status,
-                provider_request_id,
-                rate_limit_headers,
-            );
-            Vec::new()
+            let telemetry_events = state
+                .provider_request_telemetry
+                .observe_transport(
+                    transport,
+                    dispatched_at_ms,
+                    headers_at_ms,
+                    http_status,
+                    provider_request_id,
+                    rate_limit_headers,
+                )
+                .into_iter()
+                .collect();
+            provider_request_events_with_durability_boundary(telemetry_events, completion)
         }
         Ok(ProviderStreamDelta::WireRequest(request_json)) => {
             state.latest_wire_request_json = Some(request_json);
@@ -544,6 +563,15 @@ pub(crate) fn process_provider_stream_delta(
             state.active_provider_usage = Some(usage);
             Vec::new()
         }
+        Ok(ProviderStreamDelta::RequestSucceeded { usage, completion }) => {
+            state.active_provider_usage = usage;
+            let events = state
+                .provider_request_telemetry
+                .complete_success(state.active_provider_usage.as_ref())
+                .into_iter()
+                .collect::<Vec<_>>();
+            provider_request_events_with_durability_boundary(events, completion)
+        }
         Ok(ProviderStreamDelta::RequestFailed {
             will_retry,
             retry_number,
@@ -565,6 +593,26 @@ pub(crate) fn process_provider_stream_delta(
             .into_iter()
             .map(ExecutionStreamEvent::ProviderRequestTelemetry)
             .collect(),
+        Ok(ProviderStreamDelta::RequestFailedDurable {
+            will_retry,
+            retry_number,
+            max_retries,
+            delay_ms,
+            error_category,
+            error,
+            completion,
+        }) => {
+            let events = state.provider_request_telemetry.complete_failure(
+                will_retry,
+                retry_number,
+                max_retries,
+                delay_ms,
+                &error_category,
+                error.as_deref(),
+                state.active_provider_usage.as_ref(),
+            );
+            provider_request_events_with_durability_boundary(events, completion)
+        }
         Ok(ProviderStreamDelta::LoweringRepair(event)) => {
             vec![ExecutionStreamEvent::ProviderLoweringRepair { session_id, event }]
         }
@@ -622,6 +670,57 @@ pub(crate) fn process_provider_stream_delta(
             telemetry_events
         }
     }
+}
+
+/// Converts one started or terminal telemetry event into a durable execution barrier.
+/// 将一条开始或终态遥测事件转换为可靠执行屏障。
+///
+/// # Parameters
+/// 参数
+/// `telemetry_events` are the ordered events produced by the physical-call tracker.
+/// `telemetry_events` 是物理调用跟踪器产生的有序事件。
+/// `completion` is released by the service after session-state persistence.
+/// `completion` 在服务完成会话状态持久化后释放。
+///
+/// # Returns
+/// 返回值
+/// Returns ordered execution events with exactly one durable started or terminal boundary.
+/// 返回包含恰好一个可靠开始或终态边界的有序执行事件。
+fn provider_request_events_with_durability_boundary(
+    telemetry_events: Vec<ProviderRequestTelemetryEvent>,
+    completion: ProviderRequestDurabilityCompletion,
+) -> Vec<ExecutionStreamEvent> {
+    let boundary_index = telemetry_events.iter().rposition(|event| {
+        matches!(
+            event.kind,
+            ProviderRequestTelemetryEventKind::Started
+                | ProviderRequestTelemetryEventKind::Dispatched
+                | ProviderRequestTelemetryEventKind::Completed
+        )
+    });
+    let Some(boundary_index) = boundary_index else {
+        let _ = completion.complete(Err(String::from(
+            "Provider durability boundary did not contain a prepared, dispatched, or terminal telemetry event.",
+        )));
+        return telemetry_events
+            .into_iter()
+            .map(ExecutionStreamEvent::ProviderRequestTelemetry)
+            .collect();
+    };
+    telemetry_events
+        .into_iter()
+        .enumerate()
+        .map(|(index, event)| {
+            if index == boundary_index {
+                ExecutionStreamEvent::ProviderRequestDurabilityBoundary {
+                    event,
+                    completion: completion.clone(),
+                }
+            } else {
+                ExecutionStreamEvent::ProviderRequestTelemetry(event)
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -754,6 +853,7 @@ mod tests {
                 String::from("system"),
             ),
             prompt: String::from("prompt"),
+            prompt_in_history: false,
             history: Vec::new(),
             temperature: Some(0.1),
             max_turns: 4,

@@ -47,9 +47,6 @@ pub(crate) struct AgentRuntimeBridge {
     /// Shared command-session runtime used by shell session tools.
     /// shell 会话工具使用的共享命令会话运行时。
     pub(crate) command_session_runtime: Arc<CommandSessionRuntime>,
-    /// Shared token-budget runtime used by context assembly.
-    /// 上下文装配使用的共享 Token 预算运行时。
-    pub(crate) token_budget_runtime: Arc<TokenBudgetRuntime>,
     /// Shared conversation hook runtime used to mirror WebUI turn assembly semantics.
     /// 用于复刻 WebUI 回合组装语义的共享会话 hook 运行时。
     pub(crate) conversation_hook_runtime: Arc<Mutex<ConversationHookRuntime>>,
@@ -346,9 +343,6 @@ pub struct ServiceBridgeState {
     /// Cached LuaSkills catalog captured during startup or explicit refresh.
     /// 启动或显式刷新时捕获的 LuaSkills 目录缓存。
     pub(crate) cached_luaskills_catalog: Option<TauriLuaSkillsCatalog>,
-    /// Long-lived token budget runtime handle.
-    /// 长生命周期 Token 预算运行时句柄。
-    pub(crate) token_budget_runtime: Option<Arc<TauriTokenBudgetRuntime>>,
     /// Long-lived MCP runtime handle.
     /// 长生命周期 MCP 运行时句柄。
     pub(crate) mcp_runtime: Option<TauriMcpRuntimeHandle>,
@@ -550,13 +544,30 @@ impl ActiveStreamTask {
         self.session_goal_id = Some(session_goal_id);
     }
 
-    /// Aborts the retained asynchronous task.
-    /// 中止保留的异步任务。
+    /// Aborts the retained asynchronous task and waits until its owned guards are dropped.
+    /// 中止保留的异步任务并等待其拥有的守卫完成析构。
     ///
     /// # Returns
     /// 返回值
-    /// Returns nothing after forwarding cancellation to the Tokio task handle.
-    /// 将取消请求转发给 Tokio 任务句柄后无返回值。
+    /// Returns after cancellation teardown, or reports a non-cancellation join failure.
+    /// 在取消清理完成后返回，或报告非取消类任务联接失败。
+    pub(crate) async fn abort_and_wait(self) -> Result<(), String> {
+        self.handle.abort();
+        match self.handle.await {
+            Ok(()) => Ok(()),
+            Err(error) if error.is_cancelled() => Ok(()),
+            Err(error) => Err(format!("停止活动执行任务时联接失败：{error}")),
+        }
+    }
+
+    /// Requests cancellation without consuming the retained task entry.
+    /// 在不消费保留任务条目的前提下请求取消。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns no value after forwarding cancellation to Tokio.
+    /// 将取消请求转发给 Tokio 后无返回值。
+    #[cfg(test)]
     pub(crate) fn abort(&self) {
         self.handle.abort();
     }

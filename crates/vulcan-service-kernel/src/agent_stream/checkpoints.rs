@@ -337,6 +337,7 @@ mod tests {
                 String::from("system"),
             ),
             prompt: String::from("prompt"),
+            prompt_in_history: false,
             history: Vec::new(),
             temperature: None,
             max_turns: 2,

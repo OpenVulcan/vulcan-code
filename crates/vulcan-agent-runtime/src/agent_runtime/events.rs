@@ -6,11 +6,71 @@ use crate::agent_runtime::provider_request_telemetry::ProviderRequestTelemetryEv
 use crate::conversation_protocol::SessionConversationState;
 use crate::model::SessionId;
 use serde_json::Value;
+use std::sync::{Arc, Mutex};
+use tokio::sync::oneshot;
 use vulcan_context::RuntimeProviderLoweringRepairEvent;
 use vulcan_core::types::{
     ProviderRequestSnapshot as CoreProviderRequestSnapshot,
     ProviderUsageSnapshot as CoreProviderUsageSnapshot,
 };
+
+/// Shared single-use sender backing one Provider durability completion handle.
+/// 支撑单个 Provider 可靠完成句柄的共享一次性发送端。
+type SharedProviderRequestDurabilitySender =
+    Arc<Mutex<Option<oneshot::Sender<Result<(), String>>>>>;
+
+/// Cloneable completion half of one Provider-call durable persistence barrier.
+/// 单次 Provider 调用可靠持久化屏障的可克隆完成端。
+#[derive(Debug, Clone)]
+pub struct ProviderRequestDurabilityCompletion {
+    /// Single-use completion sender shared across cloned stream events.
+    /// 在克隆流事件之间共享的一次性完成发送端。
+    sender: SharedProviderRequestDurabilitySender,
+}
+
+impl ProviderRequestDurabilityCompletion {
+    /// Completes the durable barrier exactly once with the host persistence result.
+    /// 使用宿主持久化结果恰好一次完成可靠屏障。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `result` is success only after the session state write is durable.
+    /// `result` 仅在会话状态写入可靠完成后才为成功。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns `true` for the first completion and `false` for duplicates or poisoned state.
+    /// 首次完成返回 `true`，重复完成或锁中毒时返回 `false`。
+    pub fn complete(&self, result: Result<(), String>) -> bool {
+        let Ok(mut guard) = self.sender.lock() else {
+            return false;
+        };
+        let Some(sender) = guard.take() else {
+            return false;
+        };
+        sender.send(result).is_ok()
+    }
+}
+
+/// Builds the completion and wait halves of one Provider-call durable persistence barrier.
+/// 构建单次 Provider 调用可靠持久化屏障的完成端与等待端。
+///
+/// # Returns
+/// 返回值
+/// Returns a cloneable host completion handle and a single Provider-side receiver.
+/// 返回可克隆的宿主完成句柄与单个 Provider 侧接收端。
+pub(crate) fn provider_request_durability_barrier() -> (
+    ProviderRequestDurabilityCompletion,
+    oneshot::Receiver<Result<(), String>>,
+) {
+    let (sender, receiver) = oneshot::channel();
+    (
+        ProviderRequestDurabilityCompletion {
+            sender: Arc::new(Mutex::new(Some(sender))),
+        },
+        receiver,
+    )
+}
 
 /// High-level runtime event kinds emitted by the compose foundation.
 /// compose 基础架构发出的高层运行时事件类型。
@@ -146,6 +206,16 @@ pub enum ExecutionStreamEvent {
     /// Low-frequency structured telemetry for one physical Provider request.
     /// 单次真实 Provider 请求的低频结构化遥测。
     ProviderRequestTelemetry(ProviderRequestTelemetryEvent),
+    /// Provider telemetry boundary that must be durably persisted before execution may continue.
+    /// Provider 遥测边界；执行继续前必须可靠持久化。
+    ProviderRequestDurabilityBoundary {
+        /// Exact started or terminal physical-call telemetry event.
+        /// 精确的物理调用开始或终态遥测事件。
+        event: ProviderRequestTelemetryEvent,
+        /// Completion handle released by the service only after durable persistence.
+        /// 仅在可靠持久化后由服务释放的完成句柄。
+        completion: ProviderRequestDurabilityCompletion,
+    },
     /// Visible assistant thinking delta that should stay outside future context.
     /// 应保持在未来上下文之外的可见思考增量。
     ThinkingDelta {

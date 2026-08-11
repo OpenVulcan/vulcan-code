@@ -187,40 +187,6 @@
   font: inherit;
 }
 
-.system-error-retry {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  min-height: 26px;
-  padding: 4px 8px;
-  border: 1px solid color-mix(in oklch, var(--destructive) 45%, var(--border));
-  border-radius: 5px;
-  background: transparent;
-  color: var(--destructive);
-  font-size: 12px;
-  line-height: 1.2;
-}
-
-.system-error-retry:not(:disabled):hover,
-.system-error-retry:not(:disabled):focus-visible {
-  background: color-mix(in oklch, var(--destructive) 10%, transparent);
-}
-
-.system-error-retry:disabled {
-  cursor: wait;
-  opacity: 0.7;
-}
-
-.is-spinning {
-  animation: system-error-spin 800ms linear infinite;
-}
-
-@keyframes system-error-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
 @media (max-width: 560px) {
   .system-error-fields {
     grid-template-columns: minmax(0, 1fr);

@@ -100,10 +100,18 @@ pub struct SessionTurnUsageSegment {
     /// 与该分段关联的可选 Provider 标识。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_id: Option<String>,
+    /// Provider display name frozen when the represented call occurred.
+    /// 所代表调用发生时冻结的 Provider 显示名称。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_name_snapshot: Option<String>,
     /// Optional model identifier associated with the segment.
     /// 与该分段关联的可选模型标识。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_id: Option<String>,
+    /// Model display name frozen when the represented call occurred.
+    /// 所代表调用发生时冻结的模型显示名称。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_name_snapshot: Option<String>,
     /// Provider call count represented by this segment.
     /// 该分段代表的 Provider 调用次数。
     #[serde(default)]
@@ -161,7 +169,9 @@ impl SessionTurnUsageSegment {
             trigger: None,
             execution_profile: None,
             provider_id: None,
+            provider_name_snapshot: None,
             model_id: None,
+            model_name_snapshot: None,
             provider_call_count,
             tool_call_count: 0,
             input_tokens,
@@ -339,6 +349,22 @@ pub struct SessionTurnStats {
     /// 在整个轮次内聚合得到的 Provider 调用次数。
     #[serde(default)]
     pub provider_call_count: usize,
+    /// Provider calls whose response contained no usable Provider Usage.
+    /// 响应中没有可用 Provider Usage 的 Provider 调用数量。
+    #[serde(default)]
+    pub unknown_usage_call_count: usize,
+    /// Provider-call ledger revision used to materialize this view.
+    /// 物化当前视图时使用的 Provider 调用账本修订号。
+    #[serde(default)]
+    pub source_ledger_revision: u64,
+    /// Highest child-contribution revision used to materialize this view.
+    /// 物化当前视图时使用的最高子代理贡献修订号。
+    #[serde(default)]
+    pub child_contribution_revision: u64,
+    /// Whether budget-only estimates were observed but excluded from Provider Usage totals.
+    /// 是否观测到已排除在 Provider Usage 汇总之外的预算估算。
+    #[serde(default)]
+    pub contains_estimated_budget: bool,
     /// Number of tool-call records aggregated inside the whole turn.
     /// 在整个轮次内聚合得到的工具调用记录数量。
     #[serde(default)]
@@ -558,7 +584,9 @@ mod tests {
             trigger: None,
             execution_profile: None,
             provider_id: None,
+            provider_name_snapshot: None,
             model_id: None,
+            model_name_snapshot: None,
             provider_call_count: 1,
             tool_call_count: 0,
             input_tokens: 10,
@@ -573,7 +601,9 @@ mod tests {
             trigger: None,
             execution_profile: None,
             provider_id: None,
+            provider_name_snapshot: None,
             model_id: None,
+            model_name_snapshot: None,
             provider_call_count: 2,
             tool_call_count: 1,
             input_tokens: 20,

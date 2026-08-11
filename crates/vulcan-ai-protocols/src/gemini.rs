@@ -5,10 +5,10 @@ use crate::{EncodedWireRequest, ProtocolConversionError, ProtocolProfile, Protoc
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 use vulcan_ai_contract::{
-    AiExecutionRequest, AiMessage, AiStreamEvent, ContentItem, InputTokenCount, MessageRole,
-    ModalityTokenCount, NativeToolKind, ParallelToolCallPolicy, PromptCachePolicy,
-    ReasoningOutputPolicy, RequestUsage, StructuredOutputPolicy, ToolCall, ToolCallProgress,
-    ToolChoicePolicy, UsageValue, UsageValueSource, derive_uncached_input,
+    AiExecutionRequest, AiMessage, AiStreamEvent, ContentItem, MessageRole, NativeToolKind,
+    ParallelToolCallPolicy, PromptCachePolicy, ReasoningOutputPolicy, RequestUsage,
+    StructuredOutputPolicy, ToolCall, ToolCallProgress, ToolChoicePolicy, UsageValue,
+    UsageValueSource, derive_uncached_input,
 };
 
 /// Stable profile identifier for Gemini GenerateContent.
@@ -37,143 +37,6 @@ pub fn gemini_replay_signature_payload(signature: &str) -> Option<&str> {
 /// Encodes and decodes the provider-independent Gemini GenerateContent wire contract.
 /// 编解码供应商无关的 Gemini GenerateContent Wire 契约。
 pub struct GeminiGenerateContentProfile;
-
-/// Encodes one Gemini GenerateContent request for the provider-authoritative CountTokens method.
-/// 将一个 Gemini GenerateContent 请求编码为供应商权威的 CountTokens 方法请求。
-///
-/// # Parameters
-/// 参数
-/// `request` is the same immutable public request that would be dispatched for generation.
-/// `request` 是生成请求将要分派的同一个不可变公共请求。
-///
-/// # Returns
-/// 返回值
-/// The exact CountTokens request preserving system instructions, tools, contents, and resources.
-/// 返回保留系统指令、工具、内容与资源的精确 CountTokens 请求。
-pub fn encode_gemini_count_tokens_request(
-    request: &AiExecutionRequest,
-) -> Result<EncodedWireRequest, ProtocolConversionError> {
-    let generation = GeminiGenerateContentProfile.encode(request)?;
-    Ok(EncodedWireRequest {
-        path: format!("/models/{}:countTokens", request.model_id),
-        headers: generation.headers,
-        body: json!({
-            "generateContentRequest": generation.body,
-        }),
-    })
-}
-
-/// Decodes one Gemini CountTokens response into the provider-neutral token-count contract.
-/// 将一个 Gemini CountTokens 响应解码为供应商无关的 Token 统计契约。
-///
-/// # Parameters
-/// 参数
-/// `body` is the successful JSON response returned by `models.countTokens`.
-/// `body` 是 `models.countTokens` 返回的成功 JSON 响应。
-///
-/// # Returns
-/// 返回值
-/// The exact total, cached count, and modality details or a controlled protocol failure.
-/// 返回精确总数、缓存数与模态明细，或受控协议错误。
-pub fn decode_gemini_count_tokens_response(
-    body: &Value,
-) -> Result<InputTokenCount, ProtocolConversionError> {
-    let total_tokens = body
-        .get("totalTokens")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| {
-            ProtocolConversionError::new(
-                "Gemini CountTokens response did not contain unsigned `totalTokens`.",
-            )
-        })?;
-    let cached_tokens = optional_unsigned_field(body, "cachedContentTokenCount")?;
-    Ok(InputTokenCount {
-        total_tokens,
-        cached_tokens,
-        modality_details: decode_modality_token_counts(body, "promptTokensDetails")?,
-        cached_modality_details: decode_modality_token_counts(body, "cacheTokensDetails")?,
-    })
-}
-
-/// Reads one optional unsigned integer from a Gemini response object.
-/// 从 Gemini 响应对象读取一个可选无符号整数。
-///
-/// # Parameters
-/// 参数
-/// `body` is the response object and `field` is the exact registered field name.
-/// `body` 是响应对象，`field` 是精确注册字段名。
-///
-/// # Returns
-/// 返回值
-/// `None` when absent, the exact value when valid, or a protocol error for a wrong type.
-/// 字段缺失时返回 `None`，有效时返回精确值，类型错误时返回协议错误。
-fn optional_unsigned_field(
-    body: &Value,
-    field: &str,
-) -> Result<Option<u64>, ProtocolConversionError> {
-    body.get(field)
-        .map(|value| {
-            value.as_u64().ok_or_else(|| {
-                ProtocolConversionError::new(format!(
-                    "Gemini CountTokens response field `{field}` must be an unsigned integer."
-                ))
-            })
-        })
-        .transpose()
-}
-
-/// Decodes one exact Gemini modality-token detail array.
-/// 解码一个精确的 Gemini 模态 Token 明细数组。
-///
-/// # Parameters
-/// 参数
-/// `body` is the response object and `field` identifies the full-input or cache detail list.
-/// `body` 是响应对象，`field` 标识完整输入或缓存明细列表。
-///
-/// # Returns
-/// 返回值
-/// Ordered provider modality counts, or a strict protocol failure for malformed data.
-/// 返回有序供应商模态统计，数据损坏时返回严格协议错误。
-fn decode_modality_token_counts(
-    body: &Value,
-    field: &str,
-) -> Result<Vec<ModalityTokenCount>, ProtocolConversionError> {
-    let Some(value) = body.get(field) else {
-        return Ok(Vec::new());
-    };
-    let values = value.as_array().ok_or_else(|| {
-        ProtocolConversionError::new(format!(
-            "Gemini CountTokens response field `{field}` must be an array."
-        ))
-    })?;
-    values
-        .iter()
-        .enumerate()
-        .map(|(index, value)| {
-            let modality = value
-                .get("modality")
-                .and_then(Value::as_str)
-                .filter(|value| !value.trim().is_empty())
-                .ok_or_else(|| {
-                    ProtocolConversionError::new(format!(
-                        "Gemini CountTokens response `{field}[{index}]` did not contain `modality`."
-                    ))
-                })?;
-            let token_count = value
-                .get("tokenCount")
-                .and_then(Value::as_u64)
-                .ok_or_else(|| {
-                    ProtocolConversionError::new(format!(
-                        "Gemini CountTokens response `{field}[{index}]` did not contain unsigned `tokenCount`."
-                    ))
-                })?;
-            Ok(ModalityTokenCount {
-                modality: modality.to_string(),
-                token_count,
-            })
-        })
-        .collect()
-}
 
 impl ProtocolProfile for GeminiGenerateContentProfile {
     /// Returns the stable Gemini profile identifier.
@@ -1115,90 +978,6 @@ mod tests {
             .encode(&request)
             .expect_err("unregistered native image generation should fail");
         assert!(error.to_string().contains("image-generation"));
-    }
-
-    /// Verifies CountTokens preserves the complete GenerateContent input inside its exact envelope.
-    /// 验证 CountTokens 会在精确封装中保留完整 GenerateContent 输入。
-    #[test]
-    fn count_tokens_encodes_complete_generate_content_request() {
-        let request = AiExecutionRequest {
-            operation: AiOperation::ConversationRespond,
-            model_id: String::from("gemini-model"),
-            cache_scope_id: None,
-            continuation: None,
-            messages: vec![
-                AiMessage {
-                    role: MessageRole::System,
-                    content: vec![ContentItem::Text {
-                        text: String::from("Follow instructions."),
-                    }],
-                    provider_context_items: Vec::new(),
-                },
-                AiMessage {
-                    role: MessageRole::User,
-                    content: vec![ContentItem::Text {
-                        text: String::from("hello"),
-                    }],
-                    provider_context_items: Vec::new(),
-                },
-            ],
-            tools: vec![ToolDefinition {
-                name: String::from("lookup"),
-                description: String::from("Lookup"),
-                input_schema: json!({"type":"object"}),
-                strict: false,
-            }],
-            native_tools: Vec::new(),
-            tool_choice: Default::default(),
-            parallel_tool_calls: Default::default(),
-            structured_output: Default::default(),
-            stop_sequences: Vec::new(),
-            prompt_cache: PromptCachePolicy::ProviderDefault,
-            reasoning_effort: None,
-            reasoning_output: Default::default(),
-            model_parameters: BTreeMap::new(),
-            resources: Vec::new(),
-            output_token_limit: Some(128),
-        };
-        let encoded =
-            encode_gemini_count_tokens_request(&request).expect("count request should encode");
-        assert_eq!(encoded.path, "/models/gemini-model:countTokens");
-        assert_eq!(
-            encoded.body["generateContentRequest"]["systemInstruction"]["parts"][0]["text"],
-            "Follow instructions."
-        );
-        assert_eq!(
-            encoded.body["generateContentRequest"]["contents"][0]["parts"][0]["text"],
-            "hello"
-        );
-        assert_eq!(
-            encoded.body["generateContentRequest"]["tools"][0]["functionDeclarations"][0]["name"],
-            "lookup"
-        );
-        assert!(encoded.body.get("contents").is_none());
-    }
-
-    /// Verifies CountTokens decodes exact totals and both provider modality detail arrays.
-    /// 验证 CountTokens 会解码精确总数与两组供应商模态明细。
-    #[test]
-    fn count_tokens_decodes_total_cache_and_modalities() {
-        let decoded = decode_gemini_count_tokens_response(&json!({
-            "totalTokens": 321,
-            "cachedContentTokenCount": 100,
-            "promptTokensDetails": [
-                {"modality": "TEXT", "tokenCount": 21},
-                {"modality": "IMAGE", "tokenCount": 300}
-            ],
-            "cacheTokensDetails": [
-                {"modality": "TEXT", "tokenCount": 100}
-            ]
-        }))
-        .expect("count response should decode");
-        assert_eq!(decoded.total_tokens, 321);
-        assert_eq!(decoded.cached_tokens, Some(100));
-        assert_eq!(decoded.modality_details[1].modality, "IMAGE");
-        assert_eq!(decoded.modality_details[1].token_count, 300);
-        assert_eq!(decoded.cached_modality_details[0].token_count, 100);
     }
 
     /// Verifies Gemini stream output, tool identity, and usage normalize into public events.

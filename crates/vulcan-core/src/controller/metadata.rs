@@ -161,14 +161,6 @@ pub(super) fn build_tool_result_metadata(result: &ToolInvocationResult) -> Value
     base
 }
 
-/// Builds one stable JSON metadata object for a provider usage snapshot.
-/// 为一份 Provider 用量快照构建稳定 JSON 元数据对象。
-pub(super) fn build_provider_usage_metadata(usage: &crate::types::ProviderUsageSnapshot) -> Value {
-    json!({
-        "provider_usage": usage,
-    })
-}
-
 /// Merges one host metadata object into the base metadata object without dropping existing controller fields.
 /// 将一份宿主元数据对象合并到基础元数据对象中，同时不丢失控制器原有字段。
 pub(super) fn merge_metadata_objects(

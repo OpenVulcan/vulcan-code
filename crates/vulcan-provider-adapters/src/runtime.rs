@@ -1302,7 +1302,10 @@ fn build_activated_provider_manifest_catalog(
             crate::provider_manifest::ManifestOwnership::Custom,
         )
         .map_err(|error| format!("Custom provider manifest `{provider_id}` is invalid: {error}"))?;
-        if compiled.provider() != descriptor {
+        if !crate::provider_manifest::custom_manifest_matches_activated_descriptor(
+            compiled.provider(),
+            descriptor,
+        ) {
             return Err(format!(
                 "Custom provider manifest `{provider_id}` does not match its activated provider descriptor."
             ));
@@ -15143,6 +15146,42 @@ mod tests {
         assert!(
             isolated_error.contains("No published catalog exists"),
             "{isolated_error}"
+        );
+    }
+
+    /// Verifies custom descriptor matching excludes only standalone-Manifest Profile payloads.
+    /// 验证自定义描述符匹配仅排除独立 Manifest 的 Profile 载荷。
+    #[test]
+    fn custom_manifest_descriptor_match_excludes_only_manifest_owned_profiles() {
+        let provider = multi_protocol_custom_definition(
+            "custom:manifest-descriptor-match",
+            &[crate::CustomProviderProtocol::OpenAiChat],
+        );
+        let manifest = crate::provider_manifest::legacy_custom_descriptor_to_manifest(&provider)
+            .expect("custom descriptor should project to one manifest");
+        let compiled = crate::provider_manifest::compile_manifest(
+            &manifest,
+            crate::provider_manifest::ManifestOwnership::Custom,
+        )
+        .expect("projected custom manifest should compile");
+
+        assert!(
+            crate::provider_manifest::custom_manifest_matches_activated_descriptor(
+                compiled.provider(),
+                &provider,
+            ),
+            "manifest-owned standard Usage payloads must not create a false descriptor mismatch"
+        );
+
+        let mut conflicting_provider = provider.clone();
+        conflicting_provider.service_entries[0].base_url =
+            String::from("https://conflicting.example.invalid/v1");
+        assert!(
+            !crate::provider_manifest::custom_manifest_matches_activated_descriptor(
+                compiled.provider(),
+                &conflicting_provider,
+            ),
+            "descriptor-owned service facts must remain fail-closed"
         );
     }
 

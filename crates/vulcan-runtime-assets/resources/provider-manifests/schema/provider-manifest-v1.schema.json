@@ -1517,7 +1517,7 @@
       "properties": {
         "profile_id": {"type": "string"},
         "revision": {"type": "integer", "minimum": 0},
-        "record_kind": {"enum": ["json_body", "sse_event", "web_socket_frame"]},
+        "record_kind": {"enum": ["json_body", "error_json_body", "sse_event", "web_socket_frame"]},
         "update_kind": {"enum": ["snapshot", "delta", "final"]},
         "event_type_pointer": {"type": "string"},
         "event_type_value": {"type": "string"},

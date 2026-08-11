@@ -16,7 +16,6 @@ use vulcan_agent_runtime::{
         extension_generation::ExtensionGeneration,
         question_runtime::QuestionRuntime,
         task_runtime::TaskRuntime,
-        token_budget_runtime::TokenBudgetRuntime,
         vmm_hooks::{VmmHookConfigSnapshot, VmmHookRuntimeHandle, register_builtin_vmm_hooks},
         vulcan_plugin_hooks::synchronize_vulcan_plugin_hooks,
     },
@@ -40,8 +39,7 @@ use super::{
     mark_webui_service_discovery_failed, mark_webui_service_discovery_ready,
     mark_webui_service_discovery_starting, native_tool_summaries_from_agent_runtime,
     normalized_workspace_path_text_from_path, pending_question_snapshots_from_agent_runtime,
-    subagent_navigation_snapshot_from_cached_state, token_budget_status, workbench_from_runtime,
-    workspace_root,
+    subagent_navigation_snapshot_from_cached_state, workbench_from_runtime, workspace_root,
 };
 
 mod error;
@@ -159,12 +157,7 @@ fn run_service_bootstrap(
                     "正在初始化 VLDB/controller 数据平面",
                 ),
                 ("luaskills", StartupStepStatus::Pending, "等待 VLDB 就绪"),
-                (
-                    "token-budget",
-                    StartupStepStatus::Pending,
-                    "等待 LuaSkills 就绪",
-                ),
-                ("mcp", StartupStepStatus::Pending, "等待 Token 预算运行时"),
+                ("mcp", StartupStepStatus::Pending, "等待 LuaSkills 就绪"),
                 ("plugins", StartupStepStatus::Pending, "等待插件目录初始化"),
                 (
                     "workspace",
@@ -177,6 +170,9 @@ fn run_service_bootstrap(
 
     let runtime = Arc::new(
         tokio::runtime::Builder::new_multi_thread()
+            // A stable runtime-specific name makes fatal worker diagnostics attributable.
+            // 稳定的运行时专属名称使致命工作线程诊断可以精确归因。
+            .thread_name("vulcan-service-runtime")
             .enable_all()
             .build()
             .map_err(|error| {
@@ -235,12 +231,7 @@ fn run_service_bootstrap(
                         StartupStepStatus::Running,
                         "正在初始化 LuaSkills 引擎与技能根",
                     ),
-                    (
-                        "token-budget",
-                        StartupStepStatus::Pending,
-                        "等待 LuaSkills 就绪",
-                    ),
-                    ("mcp", StartupStepStatus::Pending, "等待 Token 预算运行时"),
+                    ("mcp", StartupStepStatus::Pending, "等待 MCP Runtime"),
                     ("plugins", StartupStepStatus::Pending, "等待插件目录初始化"),
                     (
                         "workspace",
@@ -326,8 +317,8 @@ fn run_service_bootstrap(
         runtime.handle().clone(),
         event_emitter.clone(),
     )?;
-    // pluginPrewarmTask overlaps the cold System VM creation cost with independent token-budget and MCP initialization.
-    // pluginPrewarmTask 将冷启动 System VM 的创建成本与独立的 Token 预算及 MCP 初始化并行重叠。
+    // pluginPrewarmTask overlaps the cold System VM creation cost with independent MCP initialization.
+    // pluginPrewarmTask 将冷启动 System VM 的创建成本与独立的 MCP 初始化并行重叠。
     let plugin_prewarm_runtime = vulcan_plugin_runtime.clone();
     let plugin_prewarm_task = runtime.spawn(async move {
         // prewarmStarted measures only plugin work and excludes later MCP join delay.
@@ -338,58 +329,6 @@ fn run_service_bootstrap(
             .await;
         (result, prewarm_started.elapsed())
     });
-
-    update_startup(
-        state,
-        event_emitter,
-        "bootstrapping-token-budget",
-        &logs,
-        |now| {
-            startup_steps_with_status(
-                now,
-                &[
-                    (
-                        "service-process",
-                        StartupStepStatus::Ready,
-                        "Tauri 本地服务桥接已启动",
-                    ),
-                    (
-                        "vldb",
-                        StartupStepStatus::Ready,
-                        "VLDB/controller 数据平面已就绪",
-                    ),
-                    (
-                        "luaskills",
-                        luaskills_step_status.clone(),
-                        luaskills_step_message.as_str(),
-                    ),
-                    (
-                        "token-budget",
-                        StartupStepStatus::Running,
-                        "正在初始化 Token 预算运行时",
-                    ),
-                    ("mcp", StartupStepStatus::Pending, "等待 Token 预算运行时"),
-                    (
-                        "plugins",
-                        StartupStepStatus::Running,
-                        "正在后台预热已启用插件 Hook 运行时",
-                    ),
-                    (
-                        "workspace",
-                        StartupStepStatus::Pending,
-                        "等待工作区数据库载入",
-                    ),
-                ],
-            )
-        },
-    );
-
-    let token_budget_runtime =
-        vulcan_service_runtime::token_budget_bridge::TauriTokenBudgetRuntime::initialize();
-    logs.push(format!(
-        "[webui-service] token budget: {}",
-        token_budget_runtime.status_row()
-    ));
 
     update_startup(state, event_emitter, "bootstrapping-mcp", &logs, |now| {
         startup_steps_with_status(
@@ -409,11 +348,6 @@ fn run_service_bootstrap(
                     "luaskills",
                     luaskills_step_status.clone(),
                     luaskills_step_message.as_str(),
-                ),
-                (
-                    "token-budget",
-                    token_budget_status(&token_budget_runtime),
-                    token_budget_runtime.status_row().as_str(),
                 ),
                 (
                     "mcp",
@@ -478,11 +412,6 @@ fn run_service_bootstrap(
                         "luaskills",
                         luaskills_step_status.clone(),
                         luaskills_step_message.as_str(),
-                    ),
-                    (
-                        "token-budget",
-                        token_budget_status(&token_budget_runtime),
-                        token_budget_runtime.status_row().as_str(),
                     ),
                     ("mcp", StartupStepStatus::Ready, "MCP Runtime 已初始化"),
                     (
@@ -588,11 +517,6 @@ fn run_service_bootstrap(
                         luaskills_step_message.as_str(),
                     ),
                     (
-                        "token-budget",
-                        token_budget_status(&token_budget_runtime),
-                        token_budget_runtime.status_row().as_str(),
-                    ),
-                    (
                         "mcp",
                         StartupStepStatus::Running,
                         "正在初始化 Agent MCP Runtime",
@@ -640,12 +564,6 @@ fn run_service_bootstrap(
                 format!("Agent MCP Runtime 初始化失败：{error}"),
             )
         })?;
-    let agent_token_budget_runtime = Arc::new(
-        TokenBudgetRuntime::initialize_from_resource_directory_with_backend(
-            token_budget_runtime.resource_directory().to_path_buf(),
-            token_budget_runtime.backend(),
-        ),
-    );
     let vmm_hook_runtime = VmmHookRuntimeHandle::new(VmmHookConfigSnapshot::default());
     let mut conversation_hook_runtime = ConversationHookRuntime::new();
     register_builtin_vmm_hooks(
@@ -873,7 +791,6 @@ fn run_service_bootstrap(
         task_runtime: Arc::new(TaskRuntime::new()),
         question_runtime: Arc::new(QuestionRuntime::new()),
         command_session_runtime: Arc::new(CommandSessionRuntime::new()),
-        token_budget_runtime: agent_token_budget_runtime,
         conversation_hook_runtime: Arc::new(Mutex::new(conversation_hook_runtime)),
         vmm_hook_runtime,
     };
@@ -898,7 +815,7 @@ fn run_service_bootstrap(
         )
     })?;
     logs.push(String::from(
-        "[webui-service] agent runtime bridge ready: provider/LuaSkills/MCP/token-budget handles are mounted",
+        "[webui-service] agent runtime bridge ready: provider/LuaSkills/MCP handles are mounted",
     ));
 
     update_startup(state, event_emitter, "loading-workspace", &logs, |now| {
@@ -919,11 +836,6 @@ fn run_service_bootstrap(
                     "luaskills",
                     luaskills_step_status.clone(),
                     luaskills_step_message.as_str(),
-                ),
-                (
-                    "token-budget",
-                    token_budget_status(&token_budget_runtime),
-                    token_budget_runtime.status_row().as_str(),
                 ),
                 ("mcp", StartupStepStatus::Ready, "MCP Runtime 已初始化"),
                 (
@@ -1009,11 +921,6 @@ fn run_service_bootstrap(
                     luaskills_step_status.clone(),
                     luaskills_step_message.as_str(),
                 ),
-                (
-                    "token-budget",
-                    token_budget_status(&token_budget_runtime),
-                    token_budget_runtime.status_row().as_str(),
-                ),
                 ("mcp", StartupStepStatus::Ready, "MCP Runtime 已初始化"),
                 (
                     "plugins",
@@ -1092,7 +999,6 @@ fn run_service_bootstrap(
             luaskills_catalog: &luaskills_catalog,
             vulcan_plugin_catalog: Some(vulcan_plugin_catalog.as_ref()),
             mcp_server_states: &mcp_server_states,
-            token_budget_runtime: &token_budget_runtime,
             mcp_catalog: &mcp_catalog,
             provider_configuration: &provider_configuration,
             public_ai_runtime: Some(agent_runtime.public_ai_runtime.as_ref()),
@@ -1125,7 +1031,6 @@ fn run_service_bootstrap(
         guard.knowledge_runtime = Some(knowledge_runtime);
         guard.luaskills_runtime = luaskills_runtime;
         guard.cached_luaskills_catalog = Some(luaskills_catalog);
-        guard.token_budget_runtime = Some(token_budget_runtime);
         guard.mcp_runtime = Some(mcp_runtime);
         guard.cached_mcp_catalog = Some(mcp_catalog);
         workbench

@@ -11,6 +11,7 @@ use super::*;
 use crate::conversation_protocol::SessionProviderContinuationState;
 use crate::model::{SessionAddonNamespace, SessionAddonState, SessionRuntimeControls};
 use vulcan_context::{SessionConversationRecord, SessionMessageKind};
+use vulcan_core::types::ProviderUsageSnapshot;
 use vulcan_session_boundary::{
     SessionBoundaryEvent, SessionBoundaryEventKind, SessionEventScope, SessionEventVisibility,
     SessionLifecycleBeginRequest, SessionLifecycleFinishRequest, SessionLifecycleHook,
@@ -42,7 +43,8 @@ fn loaded_runtime_state_drops_process_scoped_precheck_latch() {
         ..SessionRuntimeStateEntry::default()
     };
 
-    let changed = sanitize_loaded_runtime_state_for_fresh_process(&mut runtime_state);
+    let changed = sanitize_loaded_runtime_state_for_fresh_process(&mut runtime_state)
+        .expect("runtime state sanitization should succeed");
 
     assert!(changed);
     assert_eq!(
@@ -54,6 +56,218 @@ fn loaded_runtime_state_drops_process_scoped_precheck_latch() {
         Some("message-1")
     );
     assert!(runtime_state.active_precheck_turn_id.is_none());
+}
+
+/// Verifies legacy top-level usage becomes audit-only ledger evidence and is not written again.
+/// 验证旧版顶层用量会转为账本仅审计证据且不会再次写出。
+#[test]
+fn loaded_runtime_state_migrates_top_level_usage_into_ledger_audit_evidence() {
+    let last_usage = ProviderUsageSnapshot {
+        input_tokens: Some(80),
+        output_tokens: Some(20),
+        total_tokens: Some(100),
+        ..ProviderUsageSnapshot::default()
+    };
+    let successful_usage = ProviderUsageSnapshot {
+        input_tokens: Some(70),
+        output_tokens: Some(10),
+        total_tokens: Some(80),
+        ..ProviderUsageSnapshot::default()
+    };
+    let mut runtime_state = SessionRuntimeStateEntry {
+        last_provider_usage: Some(last_usage.clone()),
+        last_successful_provider_usage: Some(successful_usage.clone()),
+        ..SessionRuntimeStateEntry::default()
+    };
+
+    assert!(
+        sanitize_loaded_runtime_state_for_fresh_process(&mut runtime_state)
+            .expect("legacy usage migration should succeed")
+    );
+    assert!(runtime_state.last_provider_usage.is_none());
+    assert!(runtime_state.last_successful_provider_usage.is_none());
+    let legacy = runtime_state
+        .provider_call_ledger
+        .legacy_import
+        .as_ref()
+        .expect("legacy audit evidence should be retained");
+    assert_eq!(legacy.last_usage.as_ref(), Some(&last_usage));
+    assert_eq!(
+        legacy.last_successful_usage.as_ref(),
+        Some(&successful_usage)
+    );
+    let serialized = serde_json::to_value(&runtime_state).expect("runtime state should serialize");
+    let serialized = serialized
+        .as_object()
+        .expect("runtime state should serialize as an object");
+    assert!(!serialized.contains_key("last_provider_usage"));
+    assert!(!serialized.contains_key("last_successful_provider_usage"));
+    assert!(
+        !sanitize_loaded_runtime_state_for_fresh_process(&mut runtime_state)
+            .expect("completed migration should be idempotent")
+    );
+}
+
+/// Verifies restart recovery closes in-flight calls once and exposes Continue only for a non-assistant tail.
+/// 验证重启恢复只闭合一次未完成调用，并且仅对非 Assistant 尾部开放 Continue。
+#[test]
+fn loaded_runtime_state_closes_in_flight_calls_and_restores_continuation_once() {
+    let mut runtime_state = SessionRuntimeStateEntry::default();
+    runtime_state
+        .conversation_state
+        .records
+        .push(SessionConversationRecord {
+            id: String::from("user-tail"),
+            kind: SessionMessageKind::User,
+            record_kind: SessionMessageRecordKind::Transcript,
+            visible: true,
+            title: String::from("用户指令"),
+            body: String::from("继续处理"),
+            metadata: None,
+            created_at: String::from("100"),
+        });
+    assert!(runtime_state.provider_call_ledger.observe_started(
+        vulcan_workbench_model::SessionProviderCallStarted {
+            provider_call_id: String::from("call-restart"),
+            identity: vulcan_workbench_model::SessionProviderCallIdentity {
+                logical_request_id: String::from("execution-restart"),
+                execution_id: String::from("execution-restart"),
+                turn_id: Some(String::from("turn-restart")),
+                attempt_index: 0,
+                retry_number: 0,
+                owner_kind: String::from("main_agent"),
+                owner_id: String::from("session-restart"),
+                owner_name_snapshot: String::from("主代理"),
+                operation: String::from("conversation"),
+                provider_id: String::from("provider"),
+                provider_name_snapshot: String::from("Provider"),
+                model_id: String::from("model"),
+                model_name_snapshot: String::from("Model"),
+                connection_id: String::from("connection"),
+                service_entry_id: String::from("public-api"),
+                protocol_profile_id: String::from("responses"),
+                manifest_revision: 1,
+                manifest_generation: 1,
+                binding_source: String::from("manifest"),
+                binding_rule: None,
+                route_revision: String::from("route-1"),
+                request_profiles: Vec::new(),
+                response_profiles: Vec::new(),
+            },
+            prepared_at_ms: 100,
+            request_assembly_fingerprint: None,
+            context_generation_id: None,
+            context_start_record_id: Some(String::from("user-tail")),
+            model_route_fingerprint: None,
+            toolset_fingerprint: None,
+            system_prompt_fingerprint: None,
+            request_text_measurement: None,
+            budget_accounting: None,
+        }
+    ));
+
+    assert!(
+        sanitize_loaded_runtime_state_for_fresh_process(&mut runtime_state)
+            .expect("restart reconciliation should succeed")
+    );
+    let recovered = &runtime_state.provider_call_ledger.calls["call-restart"];
+    assert_eq!(
+        recovered.status,
+        vulcan_workbench_model::SessionProviderCallStatus::Interrupted
+    );
+    assert_eq!(
+        recovered.error_category.as_deref(),
+        Some("process_interrupted")
+    );
+    assert!(runtime_state.provider_call_ledger.continuation.eligible);
+    assert_eq!(
+        runtime_state
+            .provider_call_ledger
+            .continuation
+            .canonical_tail_kind
+            .as_deref(),
+        Some("user")
+    );
+    let recovery_generation = runtime_state.provider_call_ledger.continuation.generation;
+    assert!(
+        !sanitize_loaded_runtime_state_for_fresh_process(&mut runtime_state)
+            .expect("idempotent restart reconciliation should succeed")
+    );
+    assert_eq!(
+        runtime_state.provider_call_ledger.continuation.generation,
+        recovery_generation
+    );
+}
+
+/// Verifies restart recovery converts a persisted Continue claim with no dispatched Provider call into a fresh terminal generation.
+/// 验证重启恢复会把已持久化但未派发 Provider 调用的 Continue 领取转换为新的终止代际。
+#[test]
+fn loaded_runtime_state_recovers_orphaned_continuation_claim_once() {
+    let mut runtime_state = SessionRuntimeStateEntry::default();
+    runtime_state
+        .conversation_state
+        .records
+        .push(SessionConversationRecord {
+            id: String::from("error-tail"),
+            kind: SessionMessageKind::Error,
+            record_kind: SessionMessageRecordKind::Transcript,
+            visible: true,
+            title: String::from("Provider 错误"),
+            body: String::from("请求尚未派发"),
+            metadata: None,
+            created_at: String::from("100"),
+        });
+    assert!(
+        runtime_state
+            .provider_call_ledger
+            .mark_continuation_terminal(
+                Some(String::from("failed-execution")),
+                String::from("failed"),
+                100,
+                String::from("error"),
+                true,
+            )
+    );
+    let claimed_generation = runtime_state.provider_call_ledger.continuation.generation;
+    let claimed_revision = runtime_state
+        .provider_call_ledger
+        .continuation
+        .expected_ledger_revision;
+    runtime_state
+        .provider_call_ledger
+        .claim_continuation(
+            claimed_generation,
+            claimed_revision,
+            String::from("continue-submission"),
+            101,
+        )
+        .expect("continuation claim should succeed");
+
+    assert!(
+        sanitize_loaded_runtime_state_for_fresh_process(&mut runtime_state)
+            .expect("orphaned continuation recovery should succeed")
+    );
+    let recovered = &runtime_state.provider_call_ledger.continuation;
+    assert!(recovered.eligible);
+    assert_eq!(recovered.generation, claimed_generation + 1);
+    assert_eq!(
+        recovered.terminal_reason.as_deref(),
+        Some("continuation_interrupted_after_restart")
+    );
+    assert_eq!(
+        recovered.terminal_execution_id.as_deref(),
+        Some("continue-submission")
+    );
+    assert!(recovered.claimed_at_ms.is_none());
+    let recovery_generation = recovered.generation;
+    assert!(
+        !sanitize_loaded_runtime_state_for_fresh_process(&mut runtime_state)
+            .expect("orphaned continuation recovery should be idempotent")
+    );
+    assert_eq!(
+        runtime_state.provider_call_ledger.continuation.generation,
+        recovery_generation
+    );
 }
 
 /// Verifies persistence preview snippets keep line joining, fallback compaction, and truncation rules.

@@ -13,6 +13,18 @@ use vulcan_ai_contract::{
 
 use crate::LlmCoreError;
 
+/// Maximum number of explicit JSON Pointer aliases accepted by one usage profile.
+/// 单个用量 Profile 允许接受的显式 JSON Pointer 别名总数上限。
+const USAGE_PROFILE_MAX_POINTERS: usize = 64;
+
+/// Maximum UTF-8 byte length accepted for one usage JSON Pointer.
+/// 单个用量 JSON Pointer 允许接受的 UTF-8 字节长度上限。
+const USAGE_PROFILE_POINTER_MAX_BYTES: usize = 512;
+
+/// Maximum segment depth accepted for one usage JSON Pointer.
+/// 单个用量 JSON Pointer 允许接受的分段深度上限。
+const USAGE_PROFILE_POINTER_MAX_DEPTH: usize = 16;
+
 /// Identifies the raw transport record consumed by one usage profile.
 /// 标识一个用量 Profile 所消费的原始传输记录。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -21,6 +33,9 @@ pub enum UsageRecordKind {
     /// Complete non-streaming JSON response body.
     /// 完整的非流式 JSON 响应正文。
     JsonBody,
+    /// Complete bounded JSON body returned with an unsuccessful HTTP status.
+    /// 非成功 HTTP 状态返回的完整受限 JSON 正文。
+    ErrorJsonBody,
     /// One complete server-sent event payload.
     /// 一条完整的 SSE 事件负载。
     SseEvent,
@@ -124,7 +139,7 @@ pub struct UsageFieldBinding {
 
 /// Declares one provider-approved derivation between reported dimensions.
 /// 声明一个供应商认可的已报告维度推导关系。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UsageDerivation {
     /// Copies provider-reported input tokens into the uncached-input dimension.
@@ -179,6 +194,72 @@ pub struct UsageExtractionProfile {
     pub derivations: Vec<UsageDerivation>,
 }
 
+/// Reports whether one usage JSON Pointer is syntactically valid and within fixed resource bounds.
+/// 报告一个用量 JSON Pointer 是否语法有效且位于固定资源边界内。
+///
+/// `pointer` is the manifest-declared absolute JSON Pointer to validate.
+/// `pointer` 是待校验的 Manifest 声明绝对 JSON Pointer。
+/// Returns `true` only when its length, depth, NUL content, and escape sequences are valid.
+/// 仅当其长度、深度、NUL 内容与转义序列均有效时返回 `true`。
+fn is_bounded_usage_json_pointer(pointer: &str) -> bool {
+    if pointer.is_empty()
+        || !pointer.starts_with('/')
+        || pointer.contains('\0')
+        || pointer.len() > USAGE_PROFILE_POINTER_MAX_BYTES
+        || pointer.split('/').skip(1).count() > USAGE_PROFILE_POINTER_MAX_DEPTH
+    {
+        return false;
+    }
+    let bytes = pointer.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'~' {
+            if index + 1 >= bytes.len() || !matches!(bytes[index + 1], b'0' | b'1') {
+                return false;
+            }
+            index += 2;
+        } else {
+            index += 1;
+        }
+    }
+    true
+}
+
+/// Reports whether one extraction encoding is valid for the normalized usage destination field.
+/// 报告一个提取编码是否适用于规范化用量目标字段。
+///
+/// `field` identifies the normalized destination and `encoding` identifies the accepted JSON value.
+/// `field` 标识规范化目标，`encoding` 标识可接受的 JSON 值。
+/// Returns `true` only for the closed field/encoding combinations supported by the extractor.
+/// 仅对提取器支持的封闭字段与编码组合返回 `true`。
+fn usage_encoding_matches_field(field: UsageField, encoding: UsageValueEncoding) -> bool {
+    match field {
+        UsageField::InputTokens
+        | UsageField::UncachedInputTokens
+        | UsageField::OutputTokens
+        | UsageField::ReasoningTokens
+        | UsageField::CacheReadTokens
+        | UsageField::CacheWriteTokens
+        | UsageField::CacheWriteFiveMinuteTokens
+        | UsageField::CacheWriteOneHourTokens
+        | UsageField::AudioInputTokens
+        | UsageField::AudioOutputTokens
+        | UsageField::TotalTokens => matches!(
+            encoding,
+            UsageValueEncoding::UnsignedInteger | UsageValueEncoding::UnsignedIntegerString
+        ),
+        UsageField::ReportedCost | UsageField::ReportedCostUsd => {
+            encoding == UsageValueEncoding::Decimal
+        }
+        UsageField::ResponseModel | UsageField::ResponseId => {
+            encoding == UsageValueEncoding::String
+        }
+        UsageField::BillingDetails => {
+            encoding == UsageValueEncoding::AlibabaResponsesBillingDetails
+        }
+    }
+}
+
 impl UsageExtractionProfile {
     /// Validates one profile before it can be frozen into a route.
     /// 在 Profile 冻结到路由前对其进行校验。
@@ -191,8 +272,14 @@ impl UsageExtractionProfile {
         if self.profile_id.trim().is_empty() {
             return Err(LlmCoreError::new("Usage profile id must not be empty."));
         }
+        if self.revision == 0 {
+            return Err(LlmCoreError::new(
+                "Usage profile revision must be greater than zero.",
+            ));
+        }
         match (&self.event_type_pointer, &self.event_type_value) {
-            (Some(pointer), Some(value)) if pointer.starts_with('/') && !value.is_empty() => {}
+            (Some(pointer), Some(value))
+                if is_bounded_usage_json_pointer(pointer) && !value.is_empty() => {}
             (None, None) => {}
             _ => {
                 return Err(LlmCoreError::new(
@@ -203,7 +290,7 @@ impl UsageExtractionProfile {
         if self
             .required_pointer
             .as_ref()
-            .is_some_and(|pointer| !pointer.starts_with('/'))
+            .is_some_and(|pointer| !is_bounded_usage_json_pointer(pointer))
         {
             return Err(LlmCoreError::new(
                 "Usage required JSON Pointer must start with `/`.",
@@ -211,6 +298,16 @@ impl UsageExtractionProfile {
         }
         let mut fields = BTreeSet::new();
         let mut pointers = BTreeSet::new();
+        let total_pointer_count = self
+            .bindings
+            .iter()
+            .map(|binding| binding.pointers.len())
+            .sum::<usize>();
+        if total_pointer_count > USAGE_PROFILE_MAX_POINTERS {
+            return Err(LlmCoreError::new(format!(
+                "Usage profile registers {total_pointer_count} JSON Pointers; the maximum is {USAGE_PROFILE_MAX_POINTERS}."
+            )));
+        }
         for binding in &self.bindings {
             if !fields.insert(binding.field) {
                 return Err(LlmCoreError::new(format!(
@@ -224,10 +321,16 @@ impl UsageExtractionProfile {
                     binding.field
                 )));
             }
+            if !usage_encoding_matches_field(binding.field, binding.encoding) {
+                return Err(LlmCoreError::new(format!(
+                    "Usage field `{:?}` is incompatible with encoding `{:?}`.",
+                    binding.field, binding.encoding
+                )));
+            }
             for pointer in &binding.pointers {
-                if !pointer.starts_with('/') {
+                if !is_bounded_usage_json_pointer(pointer) {
                     return Err(LlmCoreError::new(format!(
-                        "Usage JSON Pointer `{pointer}` must start with `/`."
+                        "Usage JSON Pointer `{pointer}` is invalid or exceeds the bounded pointer limits."
                     )));
                 }
                 if !pointers.insert(pointer.as_str()) {
@@ -236,6 +339,22 @@ impl UsageExtractionProfile {
                     )));
                 }
             }
+        }
+        let mut derivations = BTreeSet::new();
+        for derivation in &self.derivations {
+            if !derivations.insert(*derivation) {
+                return Err(LlmCoreError::new(format!(
+                    "Usage derivation `{derivation:?}` is registered more than once."
+                )));
+            }
+        }
+        if derivations.contains(&UsageDerivation::InputFromDisjointDimensions)
+            && (derivations.contains(&UsageDerivation::UncachedInputFromInput)
+                || derivations.contains(&UsageDerivation::UncachedInputFromInputMinusCacheRead))
+        {
+            return Err(LlmCoreError::new(
+                "Usage derivations form a circular input/uncached-input dependency.",
+            ));
         }
         Ok(())
     }
@@ -339,7 +458,7 @@ pub fn alibaba_responses_usage_profiles() -> Vec<UsageExtractionProfile> {
         .map(|mut profile| {
             profile.profile_id = format!("alibaba.{}", profile.profile_id);
             let pointer = match profile.record_kind {
-                UsageRecordKind::JsonBody => "/usage/x_details",
+                UsageRecordKind::JsonBody | UsageRecordKind::ErrorJsonBody => "/usage/x_details",
                 UsageRecordKind::SseEvent | UsageRecordKind::WebSocketFrame => {
                     "/response/usage/x_details"
                 }
@@ -633,7 +752,7 @@ pub fn openrouter_chat_usage_profiles() -> Vec<UsageExtractionProfile> {
 /// 构建 Anthropic message-start 与 message-delta 用量 Profile。
 fn anthropic_usage_profiles() -> Vec<UsageExtractionProfile> {
     let body_bindings = vec![
-        token_binding(UsageField::InputTokens, "/usage/input_tokens"),
+        token_binding(UsageField::UncachedInputTokens, "/usage/input_tokens"),
         token_binding(
             UsageField::CacheReadTokens,
             "/usage/cache_read_input_tokens",
@@ -665,7 +784,6 @@ fn anthropic_usage_profiles() -> Vec<UsageExtractionProfile> {
             required_pointer: Some(String::from("/usage")),
             bindings: body_bindings.clone(),
             derivations: vec![
-                UsageDerivation::UncachedInputFromInput,
                 UsageDerivation::CacheWriteFromDurations,
                 UsageDerivation::InputFromDisjointDimensions,
             ],
@@ -680,7 +798,6 @@ fn anthropic_usage_profiles() -> Vec<UsageExtractionProfile> {
             required_pointer: Some(String::from("/message/usage")),
             bindings: prefix_bindings(body_bindings, "/message"),
             derivations: vec![
-                UsageDerivation::UncachedInputFromInput,
                 UsageDerivation::CacheWriteFromDurations,
                 UsageDerivation::InputFromDisjointDimensions,
             ],
@@ -944,6 +1061,9 @@ impl UsageObservation {
                     }
                 }
                 UsageDerivation::InputFromDisjointDimensions => {
+                    if !matches!(self.usage.input_tokens, UsageValue::Unknown) {
+                        continue;
+                    }
                     let input = derive_usage_sum(
                         derive_usage_sum(
                             self.usage.uncached_input_tokens,
@@ -1584,6 +1704,82 @@ mod tests {
         }
     }
 
+    /// Verifies revision zero cannot enter the manifest-driven usage runtime.
+    /// 验证修订号零无法进入 Manifest 驱动的用量运行时。
+    #[test]
+    fn usage_profile_revision_zero_is_rejected() {
+        let mut profile = responses_profile();
+        profile.revision = 0;
+
+        let error = profile
+            .validate()
+            .expect_err("revision zero must be rejected");
+
+        assert!(error.to_string().contains("greater than zero"));
+    }
+
+    /// Verifies pointer bounds, escape syntax, and field encodings are validated before activation.
+    /// 验证指针边界、转义语法与字段编码会在激活前接受校验。
+    #[test]
+    fn usage_profile_rejects_invalid_pointer_and_encoding_contracts() {
+        let mut invalid_pointer = responses_profile();
+        invalid_pointer.bindings[0].pointers = vec![String::from("/usage/~2invalid")];
+        assert!(invalid_pointer.validate().is_err());
+
+        let mut invalid_encoding = responses_profile();
+        invalid_encoding.bindings[0].encoding = UsageValueEncoding::String;
+        assert!(invalid_encoding.validate().is_err());
+    }
+
+    /// Verifies derived input never overwrites an input-token value reported directly by the Provider.
+    /// 验证推导输入绝不会覆盖 Provider 直接报告的输入 Token 值。
+    #[test]
+    fn disjoint_input_derivation_preserves_reported_input() {
+        let profile = UsageExtractionProfile {
+            profile_id: String::from("test.disjoint-input.final.v1"),
+            revision: 1,
+            record_kind: UsageRecordKind::JsonBody,
+            update_kind: UsageUpdateKind::Final,
+            event_type_pointer: None,
+            event_type_value: None,
+            required_pointer: Some(String::from("/usage")),
+            bindings: vec![
+                token_binding(UsageField::InputTokens, "/usage/input"),
+                token_binding(UsageField::UncachedInputTokens, "/usage/uncached"),
+                token_binding(UsageField::CacheReadTokens, "/usage/cache_read"),
+                token_binding(UsageField::CacheWriteTokens, "/usage/cache_write"),
+            ],
+            derivations: vec![UsageDerivation::InputFromDisjointDimensions],
+        };
+
+        let observation = profile
+            .extract(
+                UsageRecordKind::JsonBody,
+                &json!({
+                    "usage": {
+                        "input": 99,
+                        "uncached": 10,
+                        "cache_read": 20,
+                        "cache_write": 30
+                    }
+                }),
+            )
+            .expect("usage should parse")
+            .expect("record should match");
+
+        assert_eq!(
+            observation.usage.input_tokens,
+            UsageValue::Known {
+                value: 99,
+                source: UsageValueSource::Reported,
+            }
+        );
+        assert_eq!(
+            observation.source_paths[&UsageField::InputTokens],
+            "/usage/input"
+        );
+    }
+
     #[test]
     fn explicit_profile_preserves_missing_and_source_paths() {
         let observation = responses_profile()
@@ -2010,7 +2206,7 @@ mod tests {
             observation.usage.uncached_input_tokens,
             UsageValue::Known {
                 value: 20,
-                source: UsageValueSource::Derived,
+                source: UsageValueSource::Reported,
             }
         );
         assert_eq!(

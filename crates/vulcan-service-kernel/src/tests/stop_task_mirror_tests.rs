@@ -3,15 +3,82 @@
 
 use super::*;
 
+/// Seeds terminal physical Provider calls into the v2 ledger for stop-projection tests.
+/// 为停止投影测试向 v2 账本播种终态物理 Provider 调用。
+fn seed_terminal_provider_calls(runtime_state: &mut SessionRuntimeStateEntry, count: usize) {
+    for index in 0..count {
+        let provider_call_id = format!("stop-call-{index}");
+        let identity = vulcan_workbench_model::SessionProviderCallIdentity {
+            logical_request_id: format!("stop-logical-{index}"),
+            execution_id: String::from("stop-execution"),
+            turn_id: Some(String::from("stop-turn")),
+            attempt_index: u32::try_from(index).expect("test attempt index should fit u32"),
+            retry_number: 0,
+            owner_kind: String::from("main_agent"),
+            owner_id: String::from("main-agent"),
+            owner_name_snapshot: String::from("Main Agent"),
+            operation: String::from("conversation"),
+            provider_id: String::from("provider"),
+            provider_name_snapshot: String::from("Provider"),
+            model_id: String::from("model"),
+            model_name_snapshot: String::from("Model"),
+            connection_id: String::from("connection"),
+            service_entry_id: String::from("public-api"),
+            protocol_profile_id: String::from("openai_responses"),
+            manifest_revision: 1,
+            manifest_generation: 1,
+            binding_source: String::from("system_manifest"),
+            binding_rule: Some(String::from("stop-rule")),
+            route_revision: String::from("route-revision"),
+            request_profiles: Vec::new(),
+            response_profiles: Vec::new(),
+        };
+        assert!(runtime_state.provider_call_ledger.observe_started(
+            vulcan_workbench_model::SessionProviderCallStarted {
+                provider_call_id: provider_call_id.clone(),
+                identity: identity.clone(),
+                prepared_at_ms: i64::try_from(index).expect("test timestamp should fit i64"),
+                request_assembly_fingerprint: None,
+                context_generation_id: None,
+                context_start_record_id: None,
+                model_route_fingerprint: None,
+                toolset_fingerprint: None,
+                system_prompt_fingerprint: None,
+                request_text_measurement: None,
+                budget_accounting: None,
+            }
+        ));
+        assert!(runtime_state.provider_call_ledger.observe_completed(
+            vulcan_workbench_model::SessionProviderCallCompleted {
+                provider_call_id,
+                identity,
+                status: vulcan_workbench_model::SessionProviderCallStatus::Cancelled,
+                provider_usage_evidence:
+                    vulcan_workbench_model::SessionProviderUsageEvidence::default(),
+                prepared_at_ms: i64::try_from(index).expect("test timestamp should fit i64"),
+                dispatched_at_ms: Some(1),
+                first_event_at_ms: None,
+                first_token_at_ms: None,
+                completed_at_ms: 2,
+                dispatch_outcome: Some(String::from("dispatched")),
+                dispatch_outcome_known: Some(true),
+                semantic_output_observed: Some(false),
+                semantic_output_observed_known: Some(true),
+                replay_safe: Some(true),
+                error_category: Some(String::from("host_cancelled")),
+                error_code: Some(String::from("stopped")),
+            }
+        ));
+    }
+}
+
 /// Verifies WebUI stop projects the same stopped turn records as the WebUI transcript chain.
 /// 验证 WebUI 停止流程投影与 WebUI 转录链条一致的已停止轮次记录。
 #[test]
 fn webui_stop_session_work_appends_stopped_turn_projection_once() {
     let session_id = SessionId::new_v4();
-    let mut runtime_state = SessionRuntimeStateEntry {
-        last_safe_provider_request_count: Some(2),
-        ..SessionRuntimeStateEntry::default()
-    };
+    let mut runtime_state = SessionRuntimeStateEntry::default();
+    seed_terminal_provider_calls(&mut runtime_state, 2);
     let user_entry =
         SessionMessageEntry::new(SessionMessageKind::User, "用户指令", "运行一个长任务")
             .with_runtime_metadata("user-1", "1000");
@@ -94,6 +161,15 @@ fn webui_stop_session_work_appends_stopped_turn_projection_once() {
     assert_eq!(turn_stats.title, "Turn Stats · stopped");
     assert!(turn_stats.body.contains("状态：已中止"));
     assert!(turn_stats.body.contains("Provider 调用：2"));
+    let continuation = &workspace_snapshot
+        .session_runtime_state
+        .get(&session_id)
+        .expect("stopped runtime state should exist")
+        .provider_call_ledger
+        .continuation;
+    assert!(continuation.eligible);
+    assert_eq!(continuation.terminal_reason.as_deref(), Some("stopped"));
+    assert_eq!(continuation.canonical_tail_kind.as_deref(), Some("error"));
     let stopped_message_count = messages.len();
 
     let did_stop_again = stop_webui_session_work(&mut workspace_snapshot, session_id, false, false)
@@ -107,15 +183,85 @@ fn webui_stop_session_work_appends_stopped_turn_projection_once() {
     assert_eq!(messages_after_second_stop.len(), stopped_message_count);
 }
 
+/// Verifies Continue is never materialized while a physical Provider call remains open.
+/// 验证物理 Provider 调用仍未闭合时绝不会物化 Continue。
+#[test]
+fn webui_stop_session_work_rejects_open_provider_call() {
+    let session_id = SessionId::new_v4();
+    let mut runtime_state = SessionRuntimeStateEntry::default();
+    seed_terminal_provider_calls(&mut runtime_state, 1);
+    let mut identity = runtime_state.provider_call_ledger.calls["stop-call-0"]
+        .identity
+        .clone();
+    identity.logical_request_id = String::from("open-logical");
+    identity.execution_id = String::from("open-execution");
+    identity.attempt_index = 1;
+    assert!(runtime_state.provider_call_ledger.observe_started(
+        vulcan_workbench_model::SessionProviderCallStarted {
+            provider_call_id: String::from("open-call"),
+            identity,
+            prepared_at_ms: 3,
+            request_assembly_fingerprint: None,
+            context_generation_id: None,
+            context_start_record_id: None,
+            model_route_fingerprint: None,
+            toolset_fingerprint: None,
+            system_prompt_fingerprint: None,
+            request_text_measurement: None,
+            budget_accounting: None,
+        }
+    ));
+    let mut workspace_snapshot = WorkspaceSnapshot {
+        task_projects: Vec::new(),
+        archived_task_projects: Vec::new(),
+        sessions: vec![SessionSummary::new(
+            session_id,
+            Some(String::from("project-a")),
+            "停止测试",
+            "正在运行",
+            SessionState::Running,
+            0,
+            0,
+            "刚刚",
+        )],
+        archived_sessions: Vec::new(),
+        session_messages: BTreeMap::new(),
+        archived_session_messages: BTreeMap::new(),
+        session_compactions: BTreeMap::new(),
+        archived_session_compactions: BTreeMap::new(),
+        session_runtime_state: BTreeMap::from([(session_id, runtime_state)]),
+        archived_session_runtime_state: BTreeMap::new(),
+        session_run_phases: BTreeMap::from([(session_id, SessionRunPhase::Requesting)]),
+        expanded_task_projects: BTreeSet::new(),
+        selected_session: session_id,
+        hydrated_session_ids: BTreeSet::new(),
+    };
+
+    let error = stop_webui_session_work(&mut workspace_snapshot, session_id, true, false)
+        .expect_err("open Provider calls must block stopped Continue projection");
+
+    assert_eq!(
+        error,
+        "ERR_CONVERSATION_CONTINUE_PROVIDER_CALL_STILL_ACTIVE"
+    );
+    assert!(
+        workspace_snapshot
+            .session_runtime_state
+            .get(&session_id)
+            .expect("runtime state should remain available")
+            .provider_call_ledger
+            .continuation
+            .is_empty()
+    );
+}
+
 /// Verifies a kernel-active turn still receives a stopped projection when its stream handle is gone.
 /// 验证内核活动回合即使流句柄已丢失也仍会收到停止投影。
 #[test]
 fn webui_stop_session_work_uses_kernel_active_state_without_stream_handle() {
     let session_id = SessionId::new_v4();
-    let runtime_state = SessionRuntimeStateEntry {
-        last_safe_provider_request_count: Some(1),
-        ..SessionRuntimeStateEntry::default()
-    };
+    let mut runtime_state = SessionRuntimeStateEntry::default();
+    seed_terminal_provider_calls(&mut runtime_state, 1);
     let mut workspace_snapshot = WorkspaceSnapshot {
         task_projects: Vec::new(),
         archived_task_projects: Vec::new(),

@@ -1,6 +1,7 @@
 //! Shared provider-stream channel types reused by the executor, transport adapters, and protocol bridge helpers.
 //! 供执行器、传输适配器与协议桥接辅助逻辑复用的共享 Provider 流式通道类型。
 
+use crate::agent_runtime::events::ProviderRequestDurabilityCompletion;
 use crate::agent_runtime::events::RuntimeEvent;
 use crate::agent_runtime::tool_request_stream::ToolRequestFragment;
 use crate::conversation_protocol::SessionConversationState;
@@ -25,6 +26,19 @@ pub(crate) enum ProviderStreamDelta {
     /// Structured request snapshot captured right before the next provider request is dispatched.
     /// 在下一次 Provider 请求真正发出前捕获的结构化请求快照。
     RequestSnapshot(CoreProviderRequestSnapshot),
+    /// Structured request snapshot whose durable start record must be acknowledged before dispatch.
+    /// 结构化请求快照；分派前必须确认其开始记录已可靠持久化。
+    RequestPrepared {
+        /// Exact Provider-neutral request snapshot.
+        /// 精确 Provider 中立请求快照。
+        snapshot: CoreProviderRequestSnapshot,
+        /// Context-budget decision made from this exact request before dispatch.
+        /// 根据当前精确请求在分派前作出的上下文预算决策。
+        context_budget: Option<crate::context_budget::ContextBudgetSnapshot>,
+        /// Host completion released after the session state write succeeds.
+        /// 会话状态写入成功后由宿主释放的完成句柄。
+        completion: ProviderRequestDurabilityCompletion,
+    },
     /// Final provider-specific HTTP request JSON captured immediately before network dispatch.
     /// 在网络发送前捕获到的最终 Provider 专用 HTTP 请求 JSON。
     WireRequest(Value),
@@ -49,6 +63,9 @@ pub(crate) enum ProviderStreamDelta {
         /// Fixed-allowlist rate-limit response headers.
         /// 固定允许列表内的限流响应头。
         rate_limit_headers: BTreeMap<String, String>,
+        /// Host completion released after the dispatched state is durably persisted.
+        /// dispatched 状态可靠持久化后由宿主释放的完成句柄。
+        completion: ProviderRequestDurabilityCompletion,
     },
     /// Assistant thinking delta returned by the provider stream.
     /// Provider 流返回的助手思考增量。
@@ -65,6 +82,16 @@ pub(crate) enum ProviderStreamDelta {
     /// Latest accumulated normalized usage for the active physical Provider request.
     /// 当前活动真实 Provider 请求的最新累计规范化用量。
     UsageUpdated(CoreProviderUsageSnapshot),
+    /// Successful physical request boundary that must be durable before the controller continues.
+    /// 成功物理请求边界；控制器继续前必须可靠持久化。
+    RequestSucceeded {
+        /// Final normalized Provider usage when supplied.
+        /// Provider 提供时的最终规范化用量。
+        usage: Option<CoreProviderUsageSnapshot>,
+        /// Host completion released after terminal session-state persistence.
+        /// 终态会话状态持久化后由宿主释放的完成句柄。
+        completion: ProviderRequestDurabilityCompletion,
+    },
     /// Terminal failure metadata for the currently active physical Provider request.
     /// 当前活动真实 Provider 请求的终态失败元数据。
     RequestFailed {
@@ -86,6 +113,31 @@ pub(crate) enum ProviderStreamDelta {
         /// Structured provider failure facts retained without parsing display text.
         /// 无需解析展示文本即可保留的结构化供应商失败事实。
         error: Option<Box<AiExecutionError>>,
+    },
+    /// Failed physical request boundary that must be durable before retry or teardown.
+    /// 失败物理请求边界；重试或清理前必须可靠持久化。
+    RequestFailedDurable {
+        /// Whether the transport will start another attempt.
+        /// 传输层是否会开始另一次尝试。
+        will_retry: bool,
+        /// One-based retry number, or zero when no retry follows.
+        /// 从一开始的重试序号；不继续重试时为零。
+        retry_number: u32,
+        /// Effective finite retry ceiling, or zero when no retry follows.
+        /// 有效有限重试上限；不继续重试时为零。
+        max_retries: u32,
+        /// Retry delay in milliseconds, or zero when no retry follows.
+        /// 重试延迟毫秒数；不继续重试时为零。
+        delay_ms: u64,
+        /// Stable redacted failure category.
+        /// 稳定脱敏失败类别。
+        error_category: String,
+        /// Structured provider failure facts retained without parsing display text.
+        /// 无需解析展示文本即可保留的结构化供应商失败事实。
+        error: Option<Box<AiExecutionError>>,
+        /// Host completion released after terminal session-state persistence.
+        /// 终态会话状态持久化后由宿主释放的完成句柄。
+        completion: ProviderRequestDurabilityCompletion,
     },
     /// Provider lowering repair, downgrade, or rejection emitted for runtime audit.
     /// 为运行时审计发出的 Provider 转换修复、降级或拒绝事件。

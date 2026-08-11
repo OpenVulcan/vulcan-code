@@ -507,10 +507,16 @@ pub(crate) fn build_webui_context_compaction_draft(
         &summary_message_id,
         execution.compaction_result.policy,
     );
-    // A committed compaction starts a new context-usage epoch; the compact request remains in turn statistics only.
-    // 已提交压缩开启新的上下文用量纪元；压缩请求本身仅保留在本轮统计中。
-    draft_runtime_state.last_provider_usage = None;
-    draft_runtime_state.last_successful_provider_usage = None;
+    // A committed compaction starts a new context generation and invalidates the previous request anchor.
+    // 已提交压缩开启新的上下文代际，并使旧请求锚点失效。
+    if !draft_runtime_state
+        .provider_call_ledger
+        .advance_context_generation(format!("context_generation:{}", checkpoint.id))
+    {
+        return Err(String::from(
+            "上下文压缩无法推进 Provider 调用账本代际，已拒绝提交候选状态。",
+        ));
+    }
     draft_runtime_state.auto_compact_prefill_input_tokens = None;
     set_webui_context_compaction_section_metadata_in_state(
         &mut draft_runtime_state,
@@ -531,6 +537,21 @@ pub(crate) fn build_webui_context_compaction_draft(
         provider_request_count,
         execution.input_prune_report.as_ref(),
     )?;
+    // The compaction terminal record closes every physical attempt in the compaction execution.
+    // 压缩终态记录会闭合本次压缩执行中的所有物理 attempt。
+    if provider_request_count > 0 {
+        let assigned_call_count = draft_runtime_state
+            .provider_call_ledger
+            .assign_closing_record_id_to_latest_execution_for_owner(
+                terminal_record_id.clone(),
+                Some("context_compaction"),
+            );
+        if assigned_call_count == 0 {
+            return Err(String::from(
+                "上下文压缩未找到可闭合的 Provider 物理调用，已拒绝提交候选状态。",
+            ));
+        }
+    }
     if trigger != AUTO_CONTEXT_COMPACTION_TRIGGER {
         // usage_segment retains the exact manual compaction execution cost inside the candidate state.
         // usage_segment 在候选状态内部保留手动压缩执行的精确成本。

@@ -502,13 +502,24 @@ fn document_from_configuration(
         Some(provider_manifest) => provider_manifest.clone(),
         None => vulcan_provider_adapters::legacy_custom_descriptor_to_manifest(descriptor)?,
     };
+    let generated_compatibility_manifest =
+        vulcan_provider_adapters::legacy_custom_descriptor_to_manifest(descriptor)?;
     let compiled = vulcan_provider_adapters::compile_manifest(
         &provider_manifest,
         ManifestOwnership::Custom,
     )
     .map_err(|error| format!("Custom provider manifest `{provider_id}` is invalid: {error}"))?;
-    if compiled.provider() != descriptor {
-        let generated = vulcan_provider_adapters::legacy_custom_descriptor_to_manifest(descriptor)?;
+    let descriptor_changed =
+        !vulcan_provider_adapters::custom_manifest_matches_activated_descriptor(
+            compiled.provider(),
+            descriptor,
+        );
+    if descriptor_changed {
+        let mut generated = generated_compatibility_manifest.clone();
+        preserve_existing_protocol_profile_refs(
+            &provider_manifest.services,
+            &mut generated.services,
+        );
         provider_manifest.display = generated.display;
         provider_manifest.credential_registration = generated.credential_registration;
         provider_manifest.services = generated.services;
@@ -516,7 +527,20 @@ fn document_from_configuration(
             generated.model_defaults.supported_protocols;
         provider_manifest.model_defaults.selected_protocol =
             generated.model_defaults.selected_protocol;
-        provider_manifest.revision = provider_manifest.revision.saturating_add(1);
+        provider_manifest.revision =
+            next_manifest_revision(provider_id, provider_manifest.revision)?;
+    }
+    let usage_refs_changed = materialize_missing_standard_usage_refs(
+        &generated_compatibility_manifest.services,
+        &mut provider_manifest.services,
+    );
+    let usage_profiles_changed = merge_missing_usage_profile_declarations(
+        &mut provider_manifest.usage_profiles,
+        generated_compatibility_manifest.usage_profiles,
+    );
+    if !descriptor_changed && (usage_refs_changed || usage_profiles_changed) {
+        provider_manifest.revision =
+            next_manifest_revision(provider_id, provider_manifest.revision)?;
     }
     let local_overrides = local_overrides_from_configuration(configuration, provider_id);
     let document = CustomProviderManifestDocumentV1 {
@@ -526,6 +550,129 @@ fn document_from_configuration(
     };
     validate_document(provider_id, &document)?;
     Ok(document)
+}
+
+/// Advances one custom Manifest revision without allowing identity reuse after exhaustion.
+/// 推进一份自定义 Manifest 修订，且不允许在耗尽后复用身份。
+///
+/// # Parameters
+/// 参数
+/// `provider_id` identifies the standalone custom provider and scopes the controlled diagnostic.
+/// `provider_id` 标识独立自定义供应商并限定受控诊断范围。
+/// `current_revision` is the revision whose content is about to change.
+/// `current_revision` 是内容即将发生变化的当前修订。
+///
+/// # Returns
+/// 返回值
+/// The exact next revision, or a fail-closed error when the unsigned range is exhausted.
+/// 返回精确下一修订；无符号范围耗尽时返回失败关闭错误。
+fn next_manifest_revision(provider_id: &str, current_revision: u64) -> Result<u64, String> {
+    current_revision.checked_add(1).ok_or_else(|| {
+        format!(
+            "Standalone custom manifest `{provider_id}` cannot advance beyond revision {current_revision}."
+        )
+    })
+}
+
+/// Preserves advanced protocol-level Profile refs for routes that survive a descriptor edit.
+/// 为在描述符编辑后仍存在的路由保留高级协议级 Profile 引用。
+///
+/// `existing_services` is the standalone Manifest authority before the UI-owned descriptor edit.
+/// `existing_services` 是 UI 持有的描述符编辑前的独立 Manifest 权威。
+/// `generated_services` contains updated connection facts and receives matching advanced refs.
+/// `generated_services` 包含更新后的连接事实，并接收匹配路由的高级引用。
+/// The function mutates matching generated routes and returns no value.
+/// 此函数会修改匹配的生成路由且不返回值。
+fn preserve_existing_protocol_profile_refs(
+    existing_services: &[vulcan_provider_adapters::provider_manifest::ManifestServiceEntry],
+    generated_services: &mut [vulcan_provider_adapters::provider_manifest::ManifestServiceEntry],
+) {
+    for generated_service in generated_services {
+        let Some(existing_service) = existing_services.iter().find(|existing_service| {
+            existing_service.service_entry_id == generated_service.service_entry_id
+        }) else {
+            continue;
+        };
+        for generated_route in &mut generated_service.protocol_routes {
+            let Some(existing_route) = existing_service
+                .protocol_routes
+                .iter()
+                .find(|route| route.protocol_profile_id == generated_route.protocol_profile_id)
+            else {
+                continue;
+            };
+            if !existing_route.usage_profile_refs.is_empty() {
+                generated_route.usage_profile_refs = existing_route.usage_profile_refs.clone();
+            }
+            generated_route.request_profile_refs = existing_route.request_profile_refs.clone();
+            generated_route.response_profile_refs = existing_route.response_profile_refs.clone();
+        }
+    }
+}
+
+/// Materializes standard Usage refs only on routes that do not already declare provider rules.
+/// 仅在尚未声明供应商规则的路由上物化标准用量引用。
+///
+/// `generated_services` owns the protocol-specific compatibility refs generated from the descriptor.
+/// `generated_services` 持有根据描述符生成的协议专属兼容引用。
+/// `target_services` is the standalone Manifest and retains every non-empty user-owned ref list.
+/// `target_services` 是独立 Manifest，并保留每个非空的用户持有引用列表。
+/// Returns whether at least one previously implicit route gained explicit compatibility refs.
+/// 返回是否至少有一条原先隐式的路由获得显式兼容引用。
+fn materialize_missing_standard_usage_refs(
+    generated_services: &[vulcan_provider_adapters::provider_manifest::ManifestServiceEntry],
+    target_services: &mut [vulcan_provider_adapters::provider_manifest::ManifestServiceEntry],
+) -> bool {
+    let mut changed = false;
+    for target_service in target_services {
+        let Some(generated_service) = generated_services.iter().find(|generated_service| {
+            generated_service.service_entry_id == target_service.service_entry_id
+        }) else {
+            continue;
+        };
+        for target_route in &mut target_service.protocol_routes {
+            if !target_route.usage_profile_refs.is_empty() {
+                continue;
+            }
+            let Some(generated_route) = generated_service
+                .protocol_routes
+                .iter()
+                .find(|route| route.protocol_profile_id == target_route.protocol_profile_id)
+            else {
+                continue;
+            };
+            target_route.usage_profile_refs = generated_route.usage_profile_refs.clone();
+            changed = changed || !target_route.usage_profile_refs.is_empty();
+        }
+    }
+    changed
+}
+
+/// Adds newly materialized standard Usage declarations without replacing user-owned profiles.
+/// 添加新物化的标准用量声明，同时不替换用户持有的 Profile。
+///
+/// `existing` owns the current standalone definitions and `generated` contains compatibility defaults.
+/// `existing` 持有当前独立定义，`generated` 包含兼容默认值。
+/// Existing stable IDs win; only absent declarations are appended in deterministic route order.
+/// 已存在的稳定标识优先；仅按确定性路由顺序追加缺失声明。
+/// Returns whether any missing declaration was appended.
+/// 返回是否追加了任何缺失声明。
+fn merge_missing_usage_profile_declarations(
+    existing: &mut Vec<vulcan_provider_adapters::provider_manifest::UsageProfileDeclaration>,
+    generated: Vec<vulcan_provider_adapters::provider_manifest::UsageProfileDeclaration>,
+) -> bool {
+    let mut changed = false;
+    for declaration in generated {
+        if existing
+            .iter()
+            .any(|current| current.profile_id == declaration.profile_id)
+        {
+            continue;
+        }
+        existing.push(declaration);
+        changed = true;
+    }
+    changed
 }
 
 /// Validates one complete custom document and its exact file identity.
@@ -1700,6 +1847,20 @@ mod tests {
         assert!(!parsed.legacy_descriptor_v0);
         assert_eq!(&parsed.document, &document);
         assert!(
+            !parsed.document.provider_manifest.usage_profiles.is_empty(),
+            "standalone custom manifests must materialize standard Usage profiles"
+        );
+        assert!(
+            !parsed.document.provider_manifest.services[0].protocol_routes[0]
+                .usage_profile_refs
+                .is_empty()
+                && parsed.document.provider_manifest.services[0].protocol_routes[0]
+                    .usage_profile_refs
+                    .iter()
+                    .all(|profile_id| !profile_id.trim().is_empty()),
+            "each compatible protocol route must persist explicit Usage profile refs"
+        );
+        assert!(
             parsed
                 .document
                 .provider_manifest
@@ -1743,6 +1904,82 @@ mod tests {
                 .and_then(|overrides| overrides.output_limit),
             Some(2048)
         );
+    }
+
+    /// Verifies a UI-owned descriptor edit preserves advanced per-protocol Usage profile refs.
+    /// 验证 UI 持有的描述符编辑会保留高级协议级用量 Profile 引用。
+    #[test]
+    fn descriptor_edit_preserves_existing_protocol_usage_profiles() {
+        let provider_id = "custom:profile-preservation";
+        let descriptor = custom_descriptor(provider_id);
+        let mut existing_manifest =
+            vulcan_provider_adapters::legacy_custom_descriptor_to_manifest(&descriptor)
+                .expect("baseline custom manifest should build");
+        let mut custom_declaration = existing_manifest
+            .usage_profiles
+            .first()
+            .cloned()
+            .expect("standard Usage declaration should exist");
+        custom_declaration.profile_id = String::from("custom.responses.usage.v7");
+        custom_declaration
+            .payload
+            .as_mut()
+            .expect("Usage payload should exist")
+            .profile_id = custom_declaration.profile_id.clone();
+        existing_manifest.usage_profiles = vec![custom_declaration.clone()];
+        existing_manifest.services[0].protocol_routes[0].usage_profile_refs =
+            vec![custom_declaration.profile_id.clone()];
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration
+            .custom_providers
+            .insert(provider_id.to_string(), descriptor.clone());
+        configuration
+            .custom_provider_manifests
+            .insert(provider_id.to_string(), existing_manifest);
+
+        let document = document_from_configuration(&configuration, provider_id, &descriptor)
+            .expect("edited custom document should preserve advanced profiles");
+
+        assert_eq!(
+            document.provider_manifest.services[0].protocol_routes[0].usage_profile_refs,
+            vec![String::from("custom.responses.usage.v7")]
+        );
+        assert!(
+            document
+                .provider_manifest
+                .usage_profiles
+                .iter()
+                .any(|declaration| declaration.profile_id == "custom.responses.usage.v7")
+        );
+        assert!(
+            document.provider_manifest.usage_profiles.len() > 1,
+            "standard declarations remain available for later protocol additions"
+        );
+    }
+
+    /// Verifies a changed custom Manifest cannot reuse the terminal unsigned revision.
+    /// 验证发生变化的自定义 Manifest 不能复用无符号修订终值。
+    #[test]
+    fn custom_manifest_revision_exhaustion_fails_closed() {
+        let provider_id = "custom:revision-exhaustion";
+        let descriptor = custom_descriptor(provider_id);
+        let mut existing_manifest =
+            vulcan_provider_adapters::legacy_custom_descriptor_to_manifest(&descriptor)
+                .expect("baseline custom manifest should build");
+        existing_manifest.revision = u64::MAX;
+        existing_manifest.display.name = String::from("Outdated display name");
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration
+            .custom_providers
+            .insert(provider_id.to_string(), descriptor.clone());
+        configuration
+            .custom_provider_manifests
+            .insert(provider_id.to_string(), existing_manifest);
+
+        let error = document_from_configuration(&configuration, provider_id, &descriptor)
+            .expect_err("revision exhaustion must reject changed content");
+
+        assert!(error.contains("cannot advance beyond revision"), "{error}");
     }
 
     /// Verifies central persistence drops provider-owned definitions while retaining connection-owned state.

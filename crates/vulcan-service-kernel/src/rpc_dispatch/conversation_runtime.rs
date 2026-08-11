@@ -12,7 +12,7 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_session_history_page",
     "service_session_tool_detail",
     "service_submit_conversation_prompt",
-    "service_retry_conversation_request",
+    "service_continue_conversation",
     "service_cancel_conversation_submission",
     "service_stop_conversation_run",
     "service_stop_command_session",
@@ -109,11 +109,13 @@ pub(super) async fn dispatch(
             )
             .await,
         ),
-        "service_retry_conversation_request" => rpc_json_result(
-            service_retry_conversation_request(
+        "service_continue_conversation" => rpc_json_result(
+            service_continue_conversation(
                 app,
                 state,
                 rpc_required_param(params, "conversationId")?,
+                rpc_required_param(params, "expectedGeneration")?,
+                rpc_required_param(params, "expectedLedgerRevision")?,
             )
             .await,
         ),

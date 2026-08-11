@@ -19,7 +19,6 @@ use crate::agent_runtime::runtime_stream_driver::drive_runtime_stream_launch;
 use crate::agent_runtime::runtime_stream_launch::prepare_runtime_stream_launch_with_plugins_and_public_ai;
 use crate::agent_runtime::runtime_stream_launch_payload::build_runtime_stream_launch_payload;
 use crate::agent_runtime::task_runtime::TaskRuntime;
-use crate::agent_runtime::token_budget_runtime::TokenBudgetRuntime;
 use crate::agent_runtime::{
     ExecutionPreparationRequest, ExecutionPromptPurpose, ExecutionRunReport, ExecutionStreamEvent,
     ExtensionGeneration,
@@ -351,9 +350,6 @@ pub struct PromptCompactionJobRequest {
     /// Shared command-session runtime reused by the execution foundation.
     /// 供执行基础架构复用的共享命令会话运行时。
     pub command_session_runtime: Arc<CommandSessionRuntime>,
-    /// Shared token budget runtime reused by the execution foundation.
-    /// 供执行基础架构复用的共享 Token 预算运行时。
-    pub token_budget_runtime: Arc<TokenBudgetRuntime>,
 }
 
 /// Immutable request payload required to execute one prompt-based compaction job from an already resolved runtime foundation.
@@ -528,6 +524,7 @@ fn prompt_compaction_progress_for_runtime_event(
             Some(prompt_compaction_progress("output_delta"))
         }
         ExecutionStreamEvent::ProviderRequestTelemetry(_)
+        | ExecutionStreamEvent::ProviderRequestDurabilityBoundary { .. }
         | ExecutionStreamEvent::RuntimeEvent { .. }
         | ExecutionStreamEvent::ConversationCheckpoint { .. }
         | ExecutionStreamEvent::ContextCompactionRequired { .. }
@@ -926,7 +923,6 @@ pub fn stream_prompt_compaction_job(
                 Arc::clone(&request.task_runtime),
                 Arc::clone(&request.question_runtime),
                 Arc::clone(&request.command_session_runtime),
-                Arc::clone(&request.token_budget_runtime),
             );
             foundation.install_public_ai_runtime(Arc::clone(&request.public_ai_runtime));
             Some(foundation)
@@ -1025,7 +1021,6 @@ pub fn stream_prompt_compaction_job(
                 Arc::clone(&request.task_runtime),
                 Arc::clone(&request.question_runtime),
                 Arc::clone(&request.command_session_runtime),
-                Arc::clone(&request.token_budget_runtime),
                 Some(Arc::clone(&request.public_ai_runtime)),
                 launch_request,
             )
@@ -1389,6 +1384,8 @@ fn build_prompt_compaction_launch_request(
         connection_id_override: model_target.map(|target| target.connection_id.clone()),
         provider_route_lease_identity: model_target
             .map(|target| target.provider_route_lease_identity.clone()),
+        provider_usage_budget_baseline: None,
+        provider_usage_context_generation_id: None,
         provider_tool_selections_override: launch_context.provider_tool_selections_override.clone(),
         subagent_prompt_context: launch_context.subagent_prompt_context.clone(),
         task_session_store_root: launch_context.task_session_store_root.clone(),

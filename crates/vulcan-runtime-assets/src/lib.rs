@@ -119,10 +119,6 @@ const RESOURCES_DIR_NAME: &str = "resources";
 /// 打包 output 构建使用的相对配置目录名称。
 const CONFIG_DIR_NAME: &str = "config";
 
-/// Relative tokenizer resource directory name nested below the packaged resources root.
-/// 位于打包资源根目录下的相对 tokenizer 资源目录名称。
-const TOKENIZERS_DIR_NAME: &str = "tokenizers";
-
 /// Relative prompt skills resource directory name nested below the packaged resources root.
 /// 位于打包资源根目录下的相对提示词技能资源目录名称。
 const PROMPT_SKILLS_DIR_NAME: &str = "prompt-skills";
@@ -192,12 +188,6 @@ pub fn source_config_directory() -> PathBuf {
         .join("..")
         .join("..")
         .join("config")
-}
-
-/// Returns the effective tokenizer resource directory for the current process.
-/// 返回当前进程使用的生效 tokenizer 资源目录路径。
-pub fn resolve_tokenizer_resource_directory() -> PathBuf {
-    resolve_app_resources_directory().join(TOKENIZERS_DIR_NAME)
 }
 
 /// Returns the effective packaged system prompt skills directory for the current process.

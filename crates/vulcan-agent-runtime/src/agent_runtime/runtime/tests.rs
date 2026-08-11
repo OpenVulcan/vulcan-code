@@ -351,7 +351,6 @@ fn runtime_foundation_does_not_implicitly_refresh_plugin_catalog() {
         Arc::new(crate::agent_runtime::task_runtime::TaskRuntime::new()),
         Arc::new(crate::agent_runtime::question_runtime::QuestionRuntime::new()),
         Arc::new(crate::tooling::CommandSessionRuntime::new()),
-        Arc::new(crate::agent_runtime::token_budget_runtime::TokenBudgetRuntime::pending()),
     );
     // captured is the exact generation frozen into this execution foundation.
     // captured 是冻结到该执行基础中的精确代次。

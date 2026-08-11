@@ -13,7 +13,6 @@ use crate::agent_runtime::runtime_stream_preparation::{
     RuntimePreparedLaunchInput, prepare_runtime_launch_input,
 };
 use crate::agent_runtime::task_runtime::{TaskExecutionRuntimeContext, TaskRuntime};
-use crate::agent_runtime::token_budget_runtime::TokenBudgetRuntime;
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
 use crate::mcp::McpRuntimeAccess;
 use crate::provider_config::ProviderConfigurationFile;
@@ -45,7 +44,6 @@ pub async fn prepare_runtime_stream_launch(
     task_runtime: Arc<TaskRuntime>,
     question_runtime: Arc<QuestionRuntime>,
     command_session_runtime: Arc<CommandSessionRuntime>,
-    token_budget_runtime: Arc<TokenBudgetRuntime>,
     public_ai_runtime: Arc<vulcan_provider_adapters::PublicAiRuntime>,
     request: ExecutionPreparationRequest,
 ) -> Result<RuntimeStreamLaunch, ExecutionRunReport> {
@@ -58,7 +56,6 @@ pub async fn prepare_runtime_stream_launch(
         task_runtime,
         question_runtime,
         command_session_runtime,
-        token_budget_runtime,
         Some(public_ai_runtime),
         request,
     )
@@ -76,7 +73,6 @@ pub async fn prepare_runtime_stream_launch_with_plugins(
     task_runtime: Arc<TaskRuntime>,
     question_runtime: Arc<QuestionRuntime>,
     command_session_runtime: Arc<CommandSessionRuntime>,
-    token_budget_runtime: Arc<TokenBudgetRuntime>,
     request: ExecutionPreparationRequest,
 ) -> Result<RuntimeStreamLaunch, ExecutionRunReport> {
     prepare_runtime_stream_launch_with_plugins_and_public_ai(
@@ -88,7 +84,6 @@ pub async fn prepare_runtime_stream_launch_with_plugins(
         task_runtime,
         question_runtime,
         command_session_runtime,
-        token_budget_runtime,
         None,
         request,
     )
@@ -107,7 +102,6 @@ pub async fn prepare_runtime_stream_launch_with_plugins_and_public_ai(
     task_runtime: Arc<TaskRuntime>,
     question_runtime: Arc<QuestionRuntime>,
     command_session_runtime: Arc<CommandSessionRuntime>,
-    token_budget_runtime: Arc<TokenBudgetRuntime>,
     public_ai_runtime: Option<Arc<vulcan_provider_adapters::PublicAiRuntime>>,
     request: ExecutionPreparationRequest,
 ) -> Result<RuntimeStreamLaunch, ExecutionRunReport> {
@@ -120,7 +114,6 @@ pub async fn prepare_runtime_stream_launch_with_plugins_and_public_ai(
         task_runtime,
         question_runtime,
         command_session_runtime,
-        token_budget_runtime,
         public_ai_runtime,
         request,
     )?;

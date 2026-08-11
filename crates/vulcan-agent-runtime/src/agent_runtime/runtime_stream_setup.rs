@@ -60,6 +60,7 @@ mod tests {
     fn build_test_preparation() -> ExecutionPreparation {
         ExecutionPreparation {
             session_id: Uuid::nil(),
+            conversation_hook_turn_id: None,
             session_title: String::from("测试会话"),
             agent_id: String::from("default-agent"),
             agent_name: String::from("默认代理"),
@@ -113,6 +114,8 @@ mod tests {
             context_budget: None,
             context_compaction_policy: None,
             context_budget_override: None,
+            provider_usage_budget_baseline: None,
+            provider_usage_context_generation_id: None,
             context_assembly: None,
             context_baseline: None,
             context_request_mode: None,

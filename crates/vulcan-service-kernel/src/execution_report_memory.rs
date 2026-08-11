@@ -8,9 +8,13 @@ use vulcan_agent_runtime::{
     },
     conversation_protocol::SessionConversationState,
 };
-use vulcan_core::types::ProviderUsageSnapshot;
-use vulcan_service_api::{ConversationRunOutcome, ServiceEventEmitter};
-use vulcan_workbench_model::{SessionId, SessionRunPhase, SessionRuntimeStateEntry, SessionState};
+use vulcan_service_api::{
+    ConversationRunOutcome, ConversationSummaryChangedDelta, ServiceEventEmitter,
+};
+use vulcan_workbench_model::{
+    SessionId, SessionMessageKind, SessionMessageRecordKind, SessionRunPhase,
+    SessionRuntimeStateEntry, SessionState,
+};
 use vulcan_workspace_store::{
     data_plane::ControllerRuntimeHandle, workspace_store::WorkspaceSnapshot,
 };
@@ -26,11 +30,13 @@ use super::{
     active_session_summary_for_session_mut, apply_checkpoint_conversation_state,
     apply_terminal_execution_report_to_state, apply_vmm_writeback_effects_to_runtime_state,
     build_conversation_messages_patched_delta, build_vmm_hook_config_snapshot,
-    context_usage_snapshot_from_runtime_state, conversation_messages_from_session,
-    current_unix_millis_text, current_unix_millis_value, emit_service_event_with_trace,
-    merge_runtime_state_records_into_display_messages, owning_project_id_for_session,
-    persist_workspace_session_update, replace_conversation_messages_in_workbench_window,
-    replace_task_display_messages_with_runtime_state_records, spawn_service_task,
+    context_usage_snapshot_from_runtime_state, conversation_continuation_summary,
+    conversation_messages_from_session, current_unix_millis_text, current_unix_millis_value,
+    emit_service_event_with_trace, merge_runtime_state_records_into_display_messages,
+    owning_project_id_for_session, persist_workspace_session_update,
+    replace_conversation_messages_in_workbench_window,
+    replace_task_display_messages_with_runtime_state_records,
+    session_continuation_runtime_blockers, spawn_service_task,
     spawn_workspace_session_persist_task, sync_hydrated_session_dialogue_ready_marker,
     task_display_prompt_anchor_from_workspace, webui_trace, webui_trace_if_slow,
     webui_turn_completion_gate_from_state, workbench_surface_matches_conversation,
@@ -53,11 +59,6 @@ use super::{
 /// `session_id` 标识接收检查点的会话。
 /// `conversation_state` is the runtime conversation state captured by the provider stream.
 /// `conversation_state` 是 provider 流捕获的运行时对话状态。
-/// `last_successful_provider_usage` records the latest provider usage when present.
-/// `last_successful_provider_usage` 在存在时记录最近一次成功 provider 用量。
-/// `provider_request_count` records the safe provider request count for continuation.
-/// `provider_request_count` 记录续跑可用的安全 provider 请求次数。
-///
 /// # Returns
 /// 返回值
 /// Returns `Ok(())` after memory mutation and any required persistence tasks are scheduled.
@@ -68,8 +69,6 @@ pub(super) fn apply_conversation_checkpoint(
     controller_runtime: &ControllerRuntimeHandle,
     session_id: SessionId,
     conversation_state: SessionConversationState,
-    last_successful_provider_usage: Option<ProviderUsageSnapshot>,
-    provider_request_count: usize,
 ) -> Result<(), String> {
     let (is_main_session, workspace_snapshot, context_usage_event) = {
         let mut guard = state
@@ -96,25 +95,19 @@ pub(super) fn apply_conversation_checkpoint(
                     ..SessionRuntimeStateEntry::default()
                 });
             apply_checkpoint_conversation_state(&mut runtime_state, conversation_state, &now)?;
-            if let Some(usage) = last_successful_provider_usage {
-                if runtime_state
+            if let Some(usage) = runtime_state.provider_call_ledger.last_usage()
+                && runtime_state
                     .active_context_window_policy
                     .is_some_and(|policy| {
                         policy.auto_compact_scope
                             == vulcan_context::ContextWindowUsageScope::BodyAfterPrefix
                     })
-                    && runtime_state.auto_compact_prefill_input_tokens.is_none()
-                {
-                    // Codex captures the first successful input usage as the absolute body-window baseline.
-                    // Codex 将首次成功输入用量捕获为正文窗口的绝对基线。
-                    runtime_state.auto_compact_prefill_input_tokens =
-                        vulcan_context::budget::observed_input_tokens_from_usage(Some(&usage));
-                }
-                runtime_state.last_provider_usage = Some(usage.clone());
-                runtime_state.last_successful_provider_usage = Some(usage);
-            }
-            if provider_request_count > 0 {
-                runtime_state.last_safe_provider_request_count = Some(provider_request_count);
+                && runtime_state.auto_compact_prefill_input_tokens.is_none()
+            {
+                // Codex captures the first successful input usage as the absolute body-window baseline.
+                // Codex 将首次成功输入用量捕获为正文窗口的绝对基线。
+                runtime_state.auto_compact_prefill_input_tokens =
+                    vulcan_context::budget::observed_input_tokens_from_usage(Some(&usage));
             }
             let runtime_state_snapshot = runtime_state.clone();
             workspace
@@ -790,6 +783,7 @@ pub(super) fn apply_execution_report_to_memory(
             if workspace.selected_session != session_id {
                 runtime_state.ui_state.unread = true;
             }
+            refresh_terminal_continuation_state(&mut runtime_state, apply_result.is_success, &now)?;
             let runtime_state_snapshot = runtime_state.clone();
             workspace
                 .session_runtime_state
@@ -902,6 +896,58 @@ pub(super) fn apply_execution_report_to_memory(
     })
 }
 
+/// Rebuilds prompt-free continuation eligibility from the canonical terminal state.
+/// 根据规范终止状态重建无提示词 Continue 资格。
+fn refresh_terminal_continuation_state(
+    runtime_state: &mut SessionRuntimeStateEntry,
+    is_success: bool,
+    terminal_at: &str,
+) -> Result<(), String> {
+    let terminal_at_ms = terminal_at
+        .parse::<i64>()
+        .map_err(|_| String::from("ERR_CONVERSATION_CONTINUE_TERMINAL_TIMESTAMP_INVALID"))?;
+    let tail_kind = runtime_state
+        .conversation_state
+        .records
+        .iter()
+        .rev()
+        .find(|record| record.visible && record.record_kind == SessionMessageRecordKind::Transcript)
+        .map(|record| match record.kind {
+            SessionMessageKind::Assistant => "assistant",
+            SessionMessageKind::User => "user",
+            SessionMessageKind::Error => "error",
+        })
+        .unwrap_or("empty")
+        .to_string();
+    let terminal_execution_id = runtime_state
+        .provider_call_ledger
+        .active_calls_in_sequence()
+        .into_iter()
+        .next_back()
+        .map(|record| record.identity.execution_id.clone());
+    let eligible =
+        tail_kind != "assistant" && runtime_state.provider_call_ledger.in_flight_call_count() == 0;
+    if !runtime_state
+        .provider_call_ledger
+        .mark_continuation_terminal(
+            terminal_execution_id,
+            if is_success {
+                String::from("completed_non_assistant_tail")
+            } else {
+                String::from("failed")
+            },
+            terminal_at_ms,
+            tail_kind,
+            eligible,
+        )
+    {
+        return Err(String::from(
+            "ERR_CONVERSATION_CONTINUE_LEDGER_REVISION_EXHAUSTED",
+        ));
+    }
+    Ok(())
+}
+
 /// Emits terminal-report deltas without rebuilding the full workbench snapshot.
 /// 在不重建完整工作台快照的情况下发出终态报告增量。
 ///
@@ -979,6 +1025,19 @@ fn emit_terminal_execution_report_workbench_deltas(
         } else {
             None
         };
+        let continuation_blockers =
+            session_continuation_runtime_blockers(&guard, workspace, session_id)?;
+        let continuation =
+            workspace
+                .session_runtime_state
+                .get(&session_id)
+                .and_then(|runtime_state| {
+                    conversation_continuation_summary(
+                        runtime_state,
+                        run_phase,
+                        continuation_blockers,
+                    )
+                });
         let mut events = Vec::new();
         let phase_event = terminal_report_workbench_delta_envelope(
             &mut guard,
@@ -989,16 +1048,29 @@ fn emit_terminal_execution_report_workbench_deltas(
                 last_updated_label: Some(String::from("now")),
             }),
         );
+        let mut changed_conversation = None;
         for conversation in &mut guard.workbench.conversations {
             if conversation.id == conversation_id {
                 conversation.run_phase = run_phase.to_string();
                 conversation.status = status_label.to_string();
                 conversation.last_updated_label = String::from("刚刚");
                 conversation.last_updated_at = current_unix_millis_text();
+                conversation.continuation = continuation.clone();
+                changed_conversation = Some(conversation.clone());
                 break;
             }
         }
         events.push(phase_event);
+        if let Some(conversation) = changed_conversation {
+            let selected_conversation_id = guard.workbench.selected_conversation_id.clone();
+            events.push(terminal_report_workbench_delta_envelope(
+                &mut guard,
+                WorkbenchDelta::ConversationSummaryChanged(ConversationSummaryChangedDelta {
+                    conversation,
+                    selected_conversation_id,
+                }),
+            ));
+        }
         if surface_matches {
             if let Some(message_patch) = build_conversation_messages_patched_delta(
                 &conversation_id,

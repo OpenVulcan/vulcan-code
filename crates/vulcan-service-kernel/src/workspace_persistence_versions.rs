@@ -602,9 +602,6 @@ pub(crate) struct FullWorkbenchColdRefreshRequest<'a> {
     /// Provides the LuaSkills catalog projected into the workbench snapshot.
     /// 提供需要投影到工作台快照中的 LuaSkills 目录。
     pub(crate) luaskills_catalog: &'a TauriLuaSkillsCatalog,
-    /// Provides token-budget runtime data for model context displays.
-    /// 提供模型上下文显示需要的 token 预算运行时数据。
-    pub(crate) token_budget_runtime: &'a TauriTokenBudgetRuntime,
     /// Provides MCP server and tool summaries for the workbench snapshot.
     /// 提供工作台快照需要的 MCP 服务与工具摘要。
     pub(crate) mcp_catalog: &'a TauriMcpRuntimeCatalog,
@@ -707,7 +704,6 @@ pub(crate) fn store_and_emit_full_workbench_snapshot_for_cold_refresh(
         state,
         controller_runtime,
         luaskills_catalog,
-        token_budget_runtime,
         mcp_catalog,
         provider_configuration,
         public_ai_runtime,
@@ -821,7 +817,6 @@ pub(crate) fn store_and_emit_full_workbench_snapshot_for_cold_refresh(
         luaskills_catalog,
         vulcan_plugin_catalog: vulcan_plugin_catalog.as_deref(),
         mcp_server_states: &mcp_server_states,
-        token_budget_runtime,
         mcp_catalog,
         provider_configuration,
         public_ai_runtime,

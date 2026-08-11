@@ -1070,7 +1070,7 @@ impl TaskRuntime {
         error_text: Option<&str>,
         outcome: Option<&TaskExecutionOutcome>,
     ) {
-        let event = build_subagent_mailbox_event(
+        let mut event = build_subagent_mailbox_event(
             invocation,
             status,
             current_unix_millis_u64(),
@@ -1078,6 +1078,29 @@ impl TaskRuntime {
             error_text,
             outcome,
         );
+        match self.persisted_task_turn_stats(invocation.task_id, invocation.execution_id.as_str()) {
+            Ok(Some(turn_stats)) => {
+                if let Some(payload) = event.payload.as_object_mut() {
+                    payload.insert(String::from("turn_stats"), json!(turn_stats.stats));
+                    payload.insert(
+                        String::from("source_turn_stats_record_id"),
+                        Value::from(turn_stats.record_id),
+                    );
+                } else {
+                    eprintln!(
+                        "[task-runtime] mailbox payload is not an object for task {} execution {}",
+                        invocation.task_id, invocation.execution_id
+                    );
+                }
+            }
+            Ok(None) => {}
+            Err(error) => {
+                eprintln!(
+                    "[task-runtime] failed to load mailbox Turn Stats for task {} execution {}: {error}",
+                    invocation.task_id, invocation.execution_id
+                );
+            }
+        }
         if let Err(error) = self.subagent_mailbox.push_event(event) {
             eprintln!(
                 "[task-runtime] failed to publish subagent mailbox event for task {}: {error}",
@@ -1185,6 +1208,16 @@ impl TaskRuntime {
                     metadata
                 }
             };
+            // The TaskSession index must exist before any segmented runtime document is loaded.
+            // 在加载任何分段运行时文档之前，TaskSession 索引必须已经存在。
+            let previous_runtime_checkpoint = store
+                .load_runtime_checkpoint(task_session_id)
+                .map_err(|error| error.message)?;
+            let mut persisted_provider_call_ledger = previous_runtime_checkpoint
+                .as_ref()
+                .map(task_provider_call_ledger_from_runtime_checkpoint)
+                .transpose()?
+                .flatten();
             persisted_status = resolve_persisted_task_session_status(metadata.status, status);
             if persisted_status != status {
                 return Ok(persisted_status);
@@ -1276,7 +1309,7 @@ impl TaskRuntime {
                     &mut conversation_state,
                     invocation.prompt.as_str(),
                 );
-                if let Some(outcome) = outcome {
+                if !persisted_status.is_active() {
                     let initial_execution_started_at_ms = (!invocation.is_resumed)
                         .then(|| record.created_at.parse::<u64>().ok())
                         .flatten();
@@ -1284,8 +1317,11 @@ impl TaskRuntime {
                         &mut conversation_state,
                         record.task_id,
                         now_ms,
-                        status,
+                        persisted_status,
+                        result_text.or(error_text).unwrap_or_default(),
+                        invocation.execution_id.as_str(),
                         outcome,
+                        persisted_provider_call_ledger.as_mut(),
                         initial_execution_started_at_ms,
                     )?;
                 }
@@ -1330,21 +1366,221 @@ impl TaskRuntime {
                     .map_err(|error| error.message)?;
             }
 
+            let mut runtime_checkpoint_payload = json!({
+                "task_id": record.public_task_id,
+                "display_title": record.display_title,
+                "updated_at": now_ms,
+            });
+            if let Some(provider_call_ledger) = persisted_provider_call_ledger.as_ref() {
+                runtime_checkpoint_payload["provider_call_ledger"] =
+                    serde_json::to_value(provider_call_ledger).map_err(|error| {
+                        format!("Failed to serialize the task Provider call ledger: {error}")
+                    })?;
+            }
             store
                 .save_runtime_checkpoint(SessionRuntimeCheckpoint {
                     node_id: task_session_id,
                     status: status_name_for_task_session_status(persisted_status).to_string(),
                     last_sequence: event_sequence,
-                    payload: json!({
-                        "task_id": record.public_task_id,
-                        "display_title": record.display_title,
-                        "updated_at": now_ms,
-                    }),
+                    payload: runtime_checkpoint_payload,
                 })
                 .map_err(|error| error.message)?;
         }
 
         Ok(persisted_status)
+    }
+
+    /// Persists the complete physical-call ledger for one resident child task.
+    /// 为一个常驻子任务持久化完整物理调用账本。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `task_id` identifies the exact TaskSession that owns the calls.
+    /// `task_id` 标识拥有这些调用的精确 TaskSession。
+    /// `provider_call_ledger` is the fully projected, revisioned ledger snapshot.
+    /// `provider_call_ledger` 是完成投影并带修订号的账本快照。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns only after the TaskSession runtime checkpoint durably contains the ledger.
+    /// 仅在 TaskSession 运行时检查点持久包含账本后返回。
+    pub fn persist_task_provider_call_ledger(
+        &self,
+        task_id: SessionId,
+        provider_call_ledger: &SessionProviderCallLedger,
+    ) -> Result<(), String> {
+        let transaction_lock = self.task_execution_state_lock(task_id)?;
+        let _transaction = transaction_lock.lock().map_err(|_| {
+            format!("The task execution transaction is locked for task `{task_id}`.")
+        })?;
+        let record = self
+            .sessions
+            .read()
+            .map_err(|_| String::from("The task-session registry is locked and cannot read."))?
+            .get(&task_id)
+            .cloned()
+            .ok_or_else(|| {
+                format!("TaskSession `{task_id}` does not exist for Usage persistence.")
+            })?;
+        let store = self
+            .task_session_store_for_root(record.origin_session_id)?
+            .ok_or_else(|| {
+                format!(
+                    "TaskSession `{task_id}` has no configured segmented store for Usage persistence."
+                )
+            })?;
+        let task_session_id = SessionNodeId::from(task_id);
+        let previous_checkpoint = store
+            .load_runtime_checkpoint(task_session_id)
+            .map_err(|error| error.message)?;
+        let now_ms = current_unix_millis_u64();
+        let mut checkpoint = previous_checkpoint.unwrap_or_else(|| SessionRuntimeCheckpoint {
+            node_id: task_session_id,
+            status: record.last_status.clone(),
+            last_sequence: now_ms,
+            payload: json!({
+                "task_id": record.public_task_id,
+                "display_title": record.display_title,
+                "updated_at": now_ms,
+            }),
+        });
+        if checkpoint.node_id != task_session_id {
+            return Err(format!(
+                "TaskSession `{task_id}` runtime checkpoint belongs to `{}`.",
+                checkpoint.node_id
+            ));
+        }
+        let payload = checkpoint.payload.as_object_mut().ok_or_else(|| {
+            format!("TaskSession `{task_id}` runtime checkpoint payload is not an object.")
+        })?;
+        payload.insert(
+            String::from("provider_call_ledger"),
+            serde_json::to_value(provider_call_ledger).map_err(|error| {
+                format!("Failed to serialize the task Provider call ledger: {error}")
+            })?,
+        );
+        payload.insert(String::from("updated_at"), Value::from(now_ms));
+        checkpoint.last_sequence = checkpoint.last_sequence.max(now_ms);
+        store
+            .save_runtime_checkpoint(checkpoint)
+            .map_err(|error| error.message)
+    }
+
+    /// Loads the persisted physical-call ledger for one resident child task.
+    /// 加载一个常驻子任务的持久化物理调用账本。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `task_id` identifies the exact TaskSession checkpoint owner.
+    /// `task_id` 标识精确的 TaskSession 检查点所有者。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns no ledger for a legacy or non-persistent task and rejects malformed stored data.
+    /// 对旧版或非持久化任务返回空值，并拒绝损坏的已存储数据。
+    pub(super) fn task_provider_call_ledger(
+        &self,
+        task_id: SessionId,
+    ) -> Result<Option<SessionProviderCallLedger>, String> {
+        let record = self
+            .sessions
+            .read()
+            .map_err(|_| String::from("The task-session registry is locked and cannot read."))?
+            .get(&task_id)
+            .cloned();
+        // A newly spawned TaskSession has no durable ledger until its first running snapshot is stored.
+        // 新生成的 TaskSession 在首次运行快照持久化前没有持久账本。
+        let Some(record) = record else {
+            return Ok(None);
+        };
+        let Some(store) = self.task_session_store_for_root(record.origin_session_id)? else {
+            return Ok(None);
+        };
+        let checkpoint = store
+            .load_runtime_checkpoint(SessionNodeId::from(task_id))
+            .map_err(|error| error.message)?;
+        checkpoint
+            .as_ref()
+            .map(task_provider_call_ledger_from_runtime_checkpoint)
+            .transpose()
+            .map(Option::flatten)
+    }
+
+    /// Loads the ledger-materialized Turn Stats for one exact child execution.
+    /// 加载一个精确子执行由账本物化得到的 Turn Stats。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `task_id` identifies the TaskSession context document.
+    /// `task_id` 标识 TaskSession 上下文文档。
+    /// `execution_id` selects the exact terminal materialization across resumes.
+    /// `execution_id` 在多次续跑中选择精确的终态物化结果。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns no value only when the task has no segmented store or no matching legacy node.
+    /// 仅当任务没有分段存储或没有匹配的旧版节点时返回空值。
+    pub(super) fn persisted_task_turn_stats(
+        &self,
+        task_id: SessionId,
+        execution_id: &str,
+    ) -> Result<Option<PersistedTaskTurnStats>, String> {
+        let record = self
+            .sessions
+            .read()
+            .map_err(|_| String::from("The task-session registry is locked and cannot read."))?
+            .get(&task_id)
+            .cloned()
+            .ok_or_else(|| format!("TaskSession `{task_id}` does not exist for stats loading."))?;
+        let Some(store) = self.task_session_store_for_root(record.origin_session_id)? else {
+            return Ok(None);
+        };
+        let Some(context) = store
+            .load_context(SessionNodeId::from(task_id))
+            .map_err(|error| error.message)?
+        else {
+            return Ok(None);
+        };
+        let conversation_state =
+            serde_json::from_value::<SessionConversationState>(context.conversation_state)
+                .map_err(|error| format!("TaskSession `{task_id}` context is invalid: {error}"))?;
+        let stats_record = conversation_state
+            .records
+            .iter()
+            .rev()
+            .filter(|record| record.record_kind == SessionMessageRecordKind::TurnStats)
+            .find(|record| {
+                record
+                    .metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.get("task_execution_id"))
+                    .and_then(Value::as_str)
+                    == Some(execution_id)
+            })
+            .map(|record| {
+                let turn_stats = record
+                    .metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.get("turn_stats"))
+                    .ok_or_else(|| {
+                        format!(
+                            "TaskSession `{task_id}` Turn Stats record `{}` has no typed payload.",
+                            record.id
+                        )
+                    })?;
+                let stats = serde_json::from_value::<SessionTurnStats>(turn_stats.clone())
+                    .map_err(|error| {
+                    format!(
+                        "TaskSession `{task_id}` Turn Stats for execution `{execution_id}` are invalid: {error}"
+                    )
+                })?;
+                Ok::<PersistedTaskTurnStats, String>(PersistedTaskTurnStats {
+                    record_id: record.id.clone(),
+                    stats,
+                })
+            })
+            .transpose()?;
+        Ok(stats_record)
     }
 
     /// Builds one segmented TaskSession store for the given root session when a host configured it.
@@ -1941,6 +2177,34 @@ fn normalized_task_context_prompt(value: &str) -> Option<String> {
     (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
+/// Reads the versioned Provider call ledger from one TaskSession runtime checkpoint.
+/// 从一个 TaskSession 运行时检查点读取带版本的 Provider 调用账本。
+///
+/// # Parameters
+/// 参数
+/// `checkpoint` is the exact persisted runtime checkpoint for the child task.
+/// `checkpoint` 是子任务对应的精确持久化运行时检查点。
+///
+/// # Returns
+/// 返回值
+/// Returns no ledger for legacy checkpoints and rejects malformed new ledger payloads.
+/// 旧检查点返回无账本，新账本载荷损坏时显式拒绝。
+fn task_provider_call_ledger_from_runtime_checkpoint(
+    checkpoint: &SessionRuntimeCheckpoint,
+) -> Result<Option<SessionProviderCallLedger>, String> {
+    let Some(provider_call_ledger) = checkpoint.payload.get("provider_call_ledger") else {
+        return Ok(None);
+    };
+    serde_json::from_value(provider_call_ledger.clone())
+        .map(Some)
+        .map_err(|error| {
+            format!(
+                "TaskSession `{}` Provider call ledger is invalid: {error}",
+                checkpoint.node_id
+            )
+        })
+}
+
 /// Appends terminal turn statistics to the persisted child-agent context document.
 /// 向持久化的子代理上下文文档追加终态轮次统计。
 ///
@@ -1954,19 +2218,37 @@ fn normalized_task_context_prompt(value: &str) -> Option<String> {
 /// `now_ms` 是与任务状态事件共用的持久化时间戳。
 /// `status` is the terminal task status being saved.
 /// `status` 是正在保存的终态任务状态。
-/// `outcome` carries provider counts, tool counts, usage segments, and final output.
-/// `outcome` 携带 Provider 次数、工具次数、用量分段与最终输出。
+/// `final_output_text` is the completed output or explicit terminal error text.
+/// `final_output_text` 是完成输出或显式终态错误文本。
+/// `execution_id` is the exact child execution used for idempotent materialization.
+/// `execution_id` 是用于幂等物化的精确子执行标识。
+/// `outcome` carries legacy aggregate counters when a complete outcome exists.
+/// `outcome` 在完整结果存在时携带旧版聚合计数。
+/// `provider_call_ledger` is the preferred physical-call authority for new sessions.
+/// `provider_call_ledger` 是新会话首选的物理调用权威。
+/// `initial_execution_started_at_ms` bounds first-run duration to task creation.
+/// `initial_execution_started_at_ms` 将首次执行耗时限制在任务创建之后。
 fn append_task_context_turn_stats_record(
     conversation_state: &mut SessionConversationState,
     task_id: SessionId,
     now_ms: u64,
     status: TaskSessionStatus,
-    outcome: &TaskExecutionOutcome,
+    final_output_text: &str,
+    execution_id: &str,
+    outcome: Option<&TaskExecutionOutcome>,
+    provider_call_ledger: Option<&mut SessionProviderCallLedger>,
     initial_execution_started_at_ms: Option<u64>,
 ) -> Result<(), String> {
-    if outcome
-        .final_assistant_message_id
-        .as_deref()
+    if conversation_state.records.iter().any(|record| {
+        record.record_kind == SessionMessageRecordKind::TurnStats
+            && record
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("task_execution_id"))
+                .and_then(Value::as_str)
+                == Some(execution_id)
+    }) || outcome
+        .and_then(|outcome| outcome.final_assistant_message_id.as_deref())
         .is_some_and(|final_message_id| {
             conversation_state.records.iter().any(|record| {
                 record.record_kind == SessionMessageRecordKind::TurnStats
@@ -1992,8 +2274,8 @@ fn append_task_context_turn_stats_record(
             record_kind: SessionMessageRecordKind::SummaryOutput,
             visible: false,
             title: String::from("Summary"),
-            body: outcome.final_output_text.clone(),
-            metadata: Some(json!({ "preview": outcome.final_output_text.clone() })),
+            body: final_output_text.to_string(),
+            metadata: Some(json!({ "preview": final_output_text })),
             created_at: now.clone(),
         },
     )
@@ -2007,35 +2289,55 @@ fn append_task_context_turn_stats_record(
         conversation_state,
         summary_record_id.as_str(),
     );
-    let record_turn_stats = build_session_turn_stats_from_state_with_segments(
-        &stats_conversation_state,
-        summary_record_id.as_str(),
-        status,
-        Some(outcome.provider_turns_executed),
-        SessionTurnStatsKind::UserTurn,
-        Vec::new(),
-    );
-    let task_context_usage_segments = task_context_usage_segments_from_outcome(outcome);
-    let turn_stats = if record_turn_stats
-        .as_ref()
-        .is_some_and(task_turn_stats_has_token_usage)
-        || task_context_usage_segments.is_empty()
-    {
-        record_turn_stats
-    } else if let Some(record_turn_stats) = record_turn_stats {
-        Some(merge_task_usage_segments_into_record_stats(
-            record_turn_stats,
-            task_context_usage_segments,
-        ))
+    let turn_stats = if let Some(provider_call_ledger) = provider_call_ledger {
+        // The task terminal record must own the exact calls used by its rebuildable Turn Stats node.
+        // 子任务终态记录必须绑定其可重建 Turn Stats 节点实际使用的精确调用。
+        let _ = provider_call_ledger.assign_closing_record_id_to_latest_execution_for_owner(
+            summary_record_id.clone(),
+            Some("subagent"),
+        );
+        build_session_turn_stats_from_state_with_ledger_owner_and_segments(
+            &stats_conversation_state,
+            &*provider_call_ledger,
+            summary_record_id.as_str(),
+            status,
+            SessionTurnStatsKind::UserTurn,
+            "subagent",
+            Vec::new(),
+        )
     } else {
-        build_session_turn_stats_from_state_with_segments(
+        let record_turn_stats = build_session_turn_stats_from_state_with_segments(
             &stats_conversation_state,
             summary_record_id.as_str(),
             status,
-            None,
+            outcome.map(|outcome| outcome.provider_turns_executed),
             SessionTurnStatsKind::UserTurn,
-            task_context_usage_segments,
-        )
+            Vec::new(),
+        );
+        let task_context_usage_segments = outcome
+            .map(task_context_usage_segments_from_outcome)
+            .unwrap_or_default();
+        if record_turn_stats
+            .as_ref()
+            .is_some_and(task_turn_stats_has_token_usage)
+            || task_context_usage_segments.is_empty()
+        {
+            record_turn_stats
+        } else if let Some(record_turn_stats) = record_turn_stats {
+            Some(merge_task_usage_segments_into_record_stats(
+                record_turn_stats,
+                task_context_usage_segments,
+            ))
+        } else {
+            build_session_turn_stats_from_state_with_segments(
+                &stats_conversation_state,
+                summary_record_id.as_str(),
+                status,
+                None,
+                SessionTurnStatsKind::UserTurn,
+                task_context_usage_segments,
+            )
+        }
     };
     let Some(mut turn_stats) = turn_stats else {
         return Ok(());
@@ -2059,7 +2361,9 @@ fn append_task_context_turn_stats_record(
             metadata: Some(json!({
                 "turn_stats": turn_stats,
                 "turn_closing_record_id": summary_record_id,
-                "task_final_assistant_message_id": outcome.final_assistant_message_id,
+                "task_execution_id": execution_id,
+                "task_final_assistant_message_id": outcome
+                    .and_then(|outcome| outcome.final_assistant_message_id.as_deref()),
             })),
             created_at: now,
         },

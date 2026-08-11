@@ -26,7 +26,6 @@ vulcan-mcp-runtime.workspace = true
 vulcan-luaskills-config.workspace = true
 vulcan-provider-config.workspace = true
 vulcan-runtime-assets.workspace = true
-vulcan-token-counter.workspace = true
 vulcan-vmm.workspace = true
 vulcan-workspace-store.workspace = true
 xz2.workspace = true
