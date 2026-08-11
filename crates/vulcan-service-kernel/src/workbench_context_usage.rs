@@ -12,6 +12,12 @@ pub(crate) fn context_usage_snapshot_from_runtime_state(
     model_capabilities: Option<&vulcan_ai_contract::ModelCapabilities>,
 ) -> Option<ContextUsageSnapshot> {
     let runtime_state = runtime_state?;
+    // providerUsage gates the surface on a completed usable Provider observation, not on a draft or optimistic user message.
+    // providerUsage 依据已完成且可用的 Provider 观测控制界面，而不是草稿或乐观用户消息。
+    let _provider_usage = runtime_state
+        .provider_call_ledger
+        .last_usage()
+        .filter(|usage| usage.has_any_tokens())?;
     let historical_context_budget;
     let context_budget = if let Some(context_budget) = live_context_budgets.get(&session_id) {
         Some(context_budget)
@@ -68,19 +74,154 @@ pub(crate) fn context_usage_snapshot_from_runtime_state(
         String::from("压缩状态：尚未触发")
     });
 
+    let used_tokens = context_budget
+        .map(|budget| budget.active_context_tokens)
+        .unwrap_or_default();
+    let usage_basis_points = context_budget
+        .filter(|budget| budget.effective_context_window.is_some())
+        .map(|budget| context_usage_basis_points(budget.usage_ratio))
+        .unwrap_or_default();
     Some(ContextUsageSnapshot {
         percent: context_budget
             .map(|budget| budget.usage_percent().round() as u8)
             .unwrap_or(0),
+        usage_basis_points,
+        used_tokens,
+        max_tokens: context_budget.and_then(|budget| budget.effective_context_window),
+        cache_hit_basis_points: context_usage_cache_hit_basis_points(runtime_state),
+        breakdown: context_usage_breakdown(runtime_state, used_tokens),
         severity: context_budget
             .map(context_budget_severity_key)
             .unwrap_or_else(|| String::from("unknown")),
         baseline_matches_active_runtime: context_budget
             .map(|budget| budget.baseline_matches_active_runtime)
             .unwrap_or(true),
-        tooltip_title: String::from("上下文占用"),
+        tooltip_title: String::from("上下文容量"),
         tooltip_rows,
     })
+}
+
+/// Converts a clamped context ratio into integer basis points.
+/// 将已钳制的上下文比例转换为整数万分比。
+fn context_usage_basis_points(usage_ratio: f32) -> u16 {
+    (usage_ratio * 10_000.0).round().clamp(0.0, 10_000.0) as u16
+}
+
+/// Calculates cumulative active-branch cache-hit rate from Provider facts only.
+/// 仅根据 Provider 事实计算活动分支累计缓存命中率。
+fn context_usage_cache_hit_basis_points(runtime_state: &SessionRuntimeStateEntry) -> Option<u16> {
+    let usage = runtime_state.provider_call_ledger.cumulative_usage()?;
+    let cached_input_tokens = usage.cached_input_tokens?;
+    let input_tokens = vulcan_context::observed_input_tokens_from_usage(Some(&usage))?;
+    if input_tokens == 0 {
+        return Some(0);
+    }
+    let basis_points = (cached_input_tokens.min(input_tokens) as u128)
+        .saturating_mul(10_000)
+        .saturating_div(input_tokens as u128);
+    u16::try_from(basis_points).ok()
+}
+
+/// Builds calibrated context rows from the latest active request measurement.
+/// 根据最近一次活动请求测量构建校准后的上下文分类行。
+fn context_usage_breakdown(
+    runtime_state: &SessionRuntimeStateEntry,
+    used_tokens: usize,
+) -> Vec<ContextUsageBreakdownItem> {
+    let Some(measurement) = runtime_state
+        .provider_call_ledger
+        .active_calls_in_sequence()
+        .into_iter()
+        .rev()
+        .filter(|record| {
+            !record.status.is_terminal()
+                || record
+                    .provider_usage_evidence
+                    .provider_usage
+                    .as_ref()
+                    .is_some_and(|usage| usage.has_any_tokens())
+        })
+        .find_map(|record| record.request_text_measurement.as_ref())
+    else {
+        return Vec::new();
+    };
+    let Some(breakdown) = measurement.context_breakdown.as_ref() else {
+        return Vec::new();
+    };
+    context_usage_breakdown_items(breakdown, used_tokens)
+}
+
+/// Converts one persisted request measurement into ordered calibrated display rows.
+/// 将一份持久化请求测量转换为有序校准展示行。
+fn context_usage_breakdown_items(
+    breakdown: &vulcan_workbench_model::SessionProviderRequestContextBreakdown,
+    used_tokens: usize,
+) -> Vec<ContextUsageBreakdownItem> {
+    let categories = [
+        ("messages", "消息", breakdown.message_units),
+        ("system-tools", "系统工具", breakdown.system_tool_units),
+        ("mcp-tools", "MCP 工具", breakdown.mcp_tool_units),
+        ("other", "其他", breakdown.other_units),
+        ("skills", "技能", breakdown.skill_units),
+        ("system-prompt", "系统提示词", breakdown.system_prompt_units),
+    ];
+    let non_zero_categories = categories
+        .into_iter()
+        .filter(|(_, _, units)| *units > 0)
+        .collect::<Vec<_>>();
+    let units = non_zero_categories
+        .iter()
+        .map(|(_, _, units)| *units)
+        .collect::<Vec<_>>();
+    let token_shares = proportional_integer_shares(used_tokens, &units);
+    let basis_point_shares = proportional_integer_shares(10_000, &units);
+    non_zero_categories
+        .into_iter()
+        .enumerate()
+        .map(|(index, (kind, label, _))| ContextUsageBreakdownItem {
+            kind: kind.to_string(),
+            label: label.to_string(),
+            tokens: token_shares[index],
+            basis_points: u16::try_from(basis_point_shares[index]).unwrap_or_default(),
+        })
+        .collect()
+}
+
+/// Distributes one integer total by weights while preserving the exact total.
+/// 按权重分配整数总量，同时保持分配结果精确等于总量。
+fn proportional_integer_shares(total: usize, weights: &[usize]) -> Vec<usize> {
+    let total_weight = weights
+        .iter()
+        .fold(0_u128, |sum, weight| sum.saturating_add(*weight as u128));
+    if total_weight == 0 {
+        return vec![0; weights.len()];
+    }
+    let mut shares = weights
+        .iter()
+        .map(|weight| {
+            (total as u128)
+                .saturating_mul(*weight as u128)
+                .saturating_div(total_weight) as usize
+        })
+        .collect::<Vec<_>>();
+    let mut remainders = weights
+        .iter()
+        .enumerate()
+        .map(|(index, weight)| {
+            (
+                index,
+                (total as u128).saturating_mul(*weight as u128) % total_weight,
+            )
+        })
+        .collect::<Vec<_>>();
+    remainders.sort_by(|left, right| right.1.cmp(&left.1).then(left.0.cmp(&right.0)));
+    let assigned = shares
+        .iter()
+        .fold(0_usize, |sum, share| sum.saturating_add(*share));
+    for (index, _) in remainders.into_iter().take(total.saturating_sub(assigned)) {
+        shares[index] = shares[index].saturating_add(1);
+    }
+    shares
 }
 
 /// Builds one historical context-budget snapshot from the last persisted provider usage.
@@ -135,7 +276,7 @@ pub(crate) fn historical_context_budget_snapshot_from_runtime_state(
     let input_tokens = vulcan_context::observed_input_tokens_from_usage(Some(&observed_usage))
         .or(observed_usage.total_tokens)
         .unwrap_or_default();
-    let active_context_tokens = observed_usage.total_tokens.unwrap_or(input_tokens);
+    let active_context_tokens = input_tokens;
     let auto_compact_context_tokens = match window_policy.auto_compact_scope {
         vulcan_context::ContextWindowUsageScope::Total => active_context_tokens,
         vulcan_context::ContextWindowUsageScope::BodyAfterPrefix => active_context_tokens
@@ -371,6 +512,64 @@ mod tests {
             vec![String::from(
                 "预测拆分（字符估算）：系统 10 / 历史 30 / 当前 20 / 工具 40"
             )]
+        );
+    }
+
+    /// Verifies a draft or first optimistic message cannot reveal the usage control before Provider usage exists.
+    /// 验证草稿或首条乐观消息在 Provider 用量产生前无法显示占用控件。
+    #[test]
+    fn context_usage_snapshot_stays_hidden_before_first_provider_usage() {
+        let session_id = SessionId::new_v4();
+        let runtime_state = SessionRuntimeStateEntry::default();
+        let live_context_budgets = BTreeMap::from([(session_id, test_context_budget_snapshot())]);
+
+        assert!(
+            context_usage_snapshot_from_runtime_state(
+                session_id,
+                Some(&runtime_state),
+                &live_context_budgets,
+                None,
+            )
+            .is_none()
+        );
+    }
+
+    /// Verifies detailed rows preserve the Provider-calibrated token and percentage totals.
+    /// 验证明细行保持 Provider 校准后的 Token 与百分比总量。
+    #[test]
+    fn context_usage_breakdown_items_preserve_calibrated_totals() {
+        let breakdown = vulcan_workbench_model::SessionProviderRequestContextBreakdown {
+            message_units: 70,
+            system_tool_units: 10,
+            mcp_tool_units: 8,
+            skill_units: 4,
+            system_prompt_units: 3,
+            other_units: 5,
+        };
+
+        let items = context_usage_breakdown_items(&breakdown, 12_345);
+
+        assert_eq!(items.iter().map(|item| item.tokens).sum::<usize>(), 12_345);
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| usize::from(item.basis_points))
+                .sum::<usize>(),
+            10_000
+        );
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| item.kind.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "messages",
+                "system-tools",
+                "mcp-tools",
+                "other",
+                "skills",
+                "system-prompt",
+            ]
         );
     }
 }

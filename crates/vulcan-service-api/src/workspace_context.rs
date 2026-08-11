@@ -157,6 +157,25 @@ pub struct ContextInjectionItemSummary {
     pub updated_at: Option<String>,
 }
 
+/// Describes one calibrated category inside the context-usage card.
+/// 描述上下文占用卡片中的单个校准分类。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextUsageBreakdownItem {
+    /// Stable category key consumed by WebUI styling.
+    /// WebUI 样式消费的稳定分类键。
+    pub kind: String,
+    /// User-facing category label.
+    /// 面向用户的分类标签。
+    pub label: String,
+    /// Provider-calibrated token count assigned to this category.
+    /// 分配给该分类的 Provider 校准 Token 数。
+    pub tokens: usize,
+    /// Share of used context in basis points from zero through ten thousand.
+    /// 占已使用上下文的比例，单位为万分之一，范围为零到一万。
+    pub basis_points: u16,
+}
+
 /// Summarizes context token usage for the selected session composer.
 /// 汇总当前选中会话输入区的上下文 Token 占用。
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
@@ -165,6 +184,26 @@ pub struct ContextUsageSnapshot {
     /// Rounded usage percent shown inside the orb.
     /// 圆盘中显示的四舍五入占用百分比。
     pub percent: u8,
+    /// Precise window usage in basis points from zero through ten thousand.
+    /// 精确窗口占用比例，单位为万分之一，范围为零到一万。
+    #[serde(default)]
+    pub usage_basis_points: u16,
+    /// Provider-calibrated active context tokens.
+    /// Provider 校准后的活动上下文 Token 数。
+    #[serde(default)]
+    pub used_tokens: usize,
+    /// Effective context window when the active model declares one.
+    /// 当前模型声明时的有效上下文窗口。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<usize>,
+    /// Cumulative active-branch cache hit rate in basis points.
+    /// 活动分支累计缓存命中率，单位为万分之一。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_hit_basis_points: Option<u16>,
+    /// Calibrated category rows; empty means compact legacy display.
+    /// 校准后的分类行；为空时表示使用旧会话紧凑展示。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub breakdown: Vec<ContextUsageBreakdownItem>,
     /// Severity key used by WebUI styling.
     /// WebUI 样式使用的严重级别键。
     pub severity: String,

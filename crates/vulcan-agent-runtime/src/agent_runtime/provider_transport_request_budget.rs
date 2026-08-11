@@ -19,7 +19,10 @@ use vulcan_core::types::{
     ProviderRequestSnapshot as CoreProviderRequestSnapshot,
     ProviderTurnResponse as CoreProviderTurnResponse,
 };
-use vulcan_workbench_model::{SessionProviderCallRecord, SessionProviderRequestTextMeasurement};
+use vulcan_workbench_model::{
+    SessionProviderCallRecord, SessionProviderRequestContextBreakdown,
+    SessionProviderRequestTextMeasurement,
+};
 
 /// Stable non-sensitive evidence derived from one exact canonical Provider request.
 /// 从单个精确规范 Provider 请求派生的稳定非敏感证据。
@@ -223,8 +226,86 @@ pub(crate) fn build_provider_request_budget_evidence(
             prompt_in_history: snapshot.prompt_in_history,
             history_fingerprint: Some(history_fingerprint),
             prefix_invariant_fingerprint: Some(prefix_invariant_fingerprint),
+            context_breakdown: Some(build_request_context_breakdown(snapshot, distinct_prompt)?),
         },
     })
+}
+
+/// Builds non-sensitive request-category weights from exact structured request ownership.
+/// 根据精确结构化请求归属构建非敏感请求分类权重。
+fn build_request_context_breakdown(
+    snapshot: &CoreProviderRequestSnapshot,
+    distinct_prompt: Option<&str>,
+) -> Result<SessionProviderRequestContextBreakdown, String> {
+    // breakdown keeps display categories separate without treating character weights as Provider facts.
+    // breakdown 保持展示分类分离，同时不把字符权重冒充 Provider 事实。
+    let mut breakdown = SessionProviderRequestContextBreakdown {
+        message_units: serialized_character_units(&(distinct_prompt, &snapshot.history))?,
+        ..SessionProviderRequestContextBreakdown::default()
+    };
+    if snapshot.prompt_layers.is_empty() {
+        breakdown.system_prompt_units = text_character_units(&[snapshot.system_prompt.as_str()]);
+    } else {
+        breakdown.system_prompt_units = text_character_units(&[
+            snapshot.prompt_layers.system.as_str(),
+            snapshot.prompt_layers.developer.as_str(),
+        ]);
+        breakdown.system_tool_units =
+            text_character_units(&[snapshot.prompt_layers.tool_guidance.as_str()]);
+        breakdown.other_units =
+            text_character_units(&[snapshot.prompt_layers.runtime_context.as_str()]);
+    }
+    for tool in &snapshot.tool_schemas {
+        // toolUnits measures the exact projected schema, including its stable source metadata.
+        // toolUnits 测量精确投影后的 Schema，并包含其稳定来源元数据。
+        let tool_units = serialized_character_units(tool)?;
+        match tool.source_kind.as_str() {
+            "native" | "vulcan_managed" | "vulcan_plugin" | "ai_host_binding" => {
+                breakdown.system_tool_units =
+                    breakdown.system_tool_units.saturating_add(tool_units);
+            }
+            "mcp" => {
+                breakdown.mcp_tool_units = breakdown.mcp_tool_units.saturating_add(tool_units);
+            }
+            "luaskills" => {
+                breakdown.skill_units = breakdown.skill_units.saturating_add(tool_units);
+            }
+            _ => {
+                breakdown.other_units = breakdown.other_units.saturating_add(tool_units);
+            }
+        }
+    }
+    breakdown.other_units = breakdown
+        .other_units
+        .saturating_add(serialized_character_units(&(
+            &snapshot.additional_params,
+            &snapshot.continuation,
+            snapshot.temperature.map(f64::to_bits),
+            snapshot.max_turns,
+        ))?);
+    Ok(breakdown)
+}
+
+/// Counts visible text units with the same blank-line separators used by prompt rendering.
+/// 按提示词渲染使用的空行分隔统计可见文本权重。
+fn text_character_units(parts: &[&str]) -> usize {
+    let non_empty_parts = parts
+        .iter()
+        .map(|part| part.trim())
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    let body_units = non_empty_parts.iter().fold(0_usize, |sum, part| {
+        sum.saturating_add(part.chars().count())
+    });
+    body_units.saturating_add(non_empty_parts.len().saturating_sub(1).saturating_mul(2))
+}
+
+/// Counts Unicode scalar units in one validated structured request component.
+/// 统计单个已校验结构化请求组件中的 Unicode 标量权重。
+fn serialized_character_units(value: &impl Serialize) -> Result<usize, String> {
+    serde_json::to_string(value)
+        .map(|serialized| serialized.chars().count())
+        .map_err(|error| format!("Provider request breakdown serialization failed: {error}"))
 }
 
 /// Returns a SHA-256 identity for one serializable non-secret value.
@@ -713,6 +794,42 @@ mod tests {
         }
     }
 
+    /// Verifies exact tool ownership is retained in non-sensitive request category weights.
+    /// 验证精确工具归属会保留在非敏感请求分类权重中。
+    #[test]
+    fn request_context_breakdown_separates_system_mcp_and_skill_tools() {
+        let mut request = request_snapshot(Vec::new());
+        request.prompt_layers = ProviderPromptLayers {
+            system: String::from("system"),
+            developer: String::from("developer"),
+            tool_guidance: String::from("tool guidance"),
+            runtime_context: String::from("runtime context"),
+        };
+        request.tool_schemas = ["native", "mcp", "luaskills"]
+            .into_iter()
+            .map(
+                |source_kind| vulcan_core::types::ProviderRequestToolSchema {
+                    id: format!("{source_kind}-tool"),
+                    name: format!("{source_kind}_tool"),
+                    description: String::from("tool"),
+                    source_kind: source_kind.to_string(),
+                    source_label: source_kind.to_string(),
+                    parameters_schema: serde_json::json!({"type": "object"}),
+                },
+            )
+            .collect();
+
+        let breakdown = build_request_context_breakdown(&request, Some(request.prompt.as_str()))
+            .expect("request category measurement should serialize");
+
+        assert!(breakdown.message_units > 0);
+        assert!(breakdown.system_prompt_units > 0);
+        assert!(breakdown.system_tool_units > 0);
+        assert!(breakdown.mcp_tool_units > 0);
+        assert!(breakdown.skill_units > 0);
+        assert!(breakdown.other_units > 0);
+    }
+
     /// Builds one completed durable Provider call that exactly describes the supplied request.
     /// 构建一条精确描述给定请求的已完成持久化 Provider 调用。
     ///
@@ -1088,6 +1205,7 @@ mod tests {
                 id: String::from("deep-tool"),
                 name: String::from("deep_tool"),
                 description: String::from("Deep schema rejection fixture"),
+                source_kind: String::from("native"),
                 source_label: String::from("test"),
                 parameters_schema,
             });

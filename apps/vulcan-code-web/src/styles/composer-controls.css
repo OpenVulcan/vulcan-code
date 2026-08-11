@@ -99,7 +99,7 @@
 
 .context-usage-orb {
   --context-usage-track: color-mix(in oklch, var(--muted-foreground) 24%, transparent);
-  --context-usage-progress-color: color-mix(in oklch, var(--muted-foreground) 82%, var(--foreground) 18%);
+  --context-usage-progress-color: color-mix(in oklch, #4d9cff 76%, var(--foreground) 24%);
   width: 14px;
   height: 14px;
   flex: 0 0 14px;
@@ -117,21 +117,190 @@
   cursor: default;
 }
 
+.context-usage-orb[data-threshold-state="warning"] {
+  --context-usage-progress-color: color-mix(in oklch, #d7a84f 52%, #4d9cff 48%);
+}
+
+.context-usage-orb[data-threshold-state="critical"] {
+  --context-usage-progress-color: color-mix(in oklch, #d77b64 58%, #4d9cff 42%);
+}
+
+.context-usage-orb[data-threshold-state="full"] {
+  --context-usage-progress-color: color-mix(in oklch, #d76d61 72%, var(--foreground) 28%);
+}
+
 .context-usage-tooltip {
-  display: grid;
-  gap: 4px;
-  max-width: 360px;
+  width: min(320px, calc(100vw - 24px));
+  max-width: none;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+  border: 1px solid rgb(255 255 255 / 8%);
+  border-radius: 12px;
+  background: #252525;
+  color: #f4f4f4;
+  padding: 13px 12px 12px;
+  box-shadow: 0 14px 38px rgb(0 0 0 / 34%);
+  white-space: normal;
 }
 
-.context-usage-tooltip strong {
-  color: inherit;
-  font-size: 12px;
+.context-usage-card-header,
+.context-usage-breakdown-row,
+.context-usage-cache-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
 }
 
-.context-usage-tooltip span {
-  color: inherit;
+.context-usage-card-header strong {
+  color: #f4f4f4;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.context-usage-card-header span {
+  color: rgb(244 244 244 / 54%);
   font-size: 11px;
-  line-height: 1.35;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.context-usage-progress-track {
+  position: relative;
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 8%);
+}
+
+.context-usage-progress-fill {
+  position: relative;
+  z-index: 2;
+  height: 100%;
+  display: flex;
+  overflow: hidden;
+  border-radius: inherit;
+  background: #4d9cff;
+  transition: width 180ms ease;
+}
+
+.context-usage-segment {
+  min-width: 1px;
+  height: 100%;
+}
+
+.context-usage-segment.kind-messages,
+.context-usage-dot.kind-messages {
+  background: #4d9cff;
+}
+
+.context-usage-segment.kind-system-tools,
+.context-usage-dot.kind-system-tools {
+  background: #4684be;
+}
+
+.context-usage-segment.kind-mcp-tools,
+.context-usage-dot.kind-mcp-tools {
+  background: #416f99;
+}
+
+.context-usage-segment.kind-other,
+.context-usage-dot.kind-other {
+  background: #3c6080;
+}
+
+.context-usage-segment.kind-skills,
+.context-usage-dot.kind-skills {
+  background: #385774;
+}
+
+.context-usage-segment.kind-system-prompt,
+.context-usage-dot.kind-system-prompt {
+  background: #344c66;
+}
+
+.context-usage-threshold-zone,
+.context-usage-threshold-marker {
+  position: absolute;
+  z-index: 3;
+  top: 0;
+  bottom: 0;
+  pointer-events: none;
+}
+
+.context-usage-threshold-zone.threshold-90 {
+  left: 90%;
+  width: 5%;
+  background: rgb(215 168 79 / 12%);
+}
+
+.context-usage-threshold-zone.threshold-95 {
+  left: 95%;
+  width: 5%;
+  background: rgb(215 123 100 / 14%);
+}
+
+.context-usage-threshold-marker {
+  width: 1px;
+  background: rgb(255 255 255 / 12%);
+}
+
+.context-usage-threshold-marker.marker-90 {
+  left: 90%;
+}
+
+.context-usage-threshold-marker.marker-95 {
+  left: 95%;
+}
+
+.context-usage-threshold-marker.marker-100 {
+  right: 0;
+  background: rgb(215 109 97 / 42%);
+}
+
+.context-usage-breakdown {
+  display: grid;
+  gap: 8px;
+}
+
+.context-usage-breakdown-row,
+.context-usage-cache-row {
+  color: rgb(244 244 244 / 52%);
+  font-size: 11px;
+  line-height: 1.25;
+}
+
+.context-usage-breakdown-row > span:last-child,
+.context-usage-cache-row strong {
+  color: rgb(244 244 244 / 88%);
+  font-variant-numeric: tabular-nums;
+  font-weight: 560;
+}
+
+.context-usage-breakdown-label {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.context-usage-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 8px;
+  border-radius: 999px;
+}
+
+.context-usage-cache-row {
+  border-top: 1px solid rgb(255 255 255 / 8%);
+  padding-top: 10px;
+}
+
+.context-usage-cache-row strong {
+  font-size: 11px;
 }
 
 .composer-control-tooltip {

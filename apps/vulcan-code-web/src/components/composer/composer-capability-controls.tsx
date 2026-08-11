@@ -43,6 +43,7 @@ import {
   savePublicAiSessionProviderToolSelections,
 } from "@/service/settings-actions-service";
 import type {
+  ContextUsageBreakdownItem,
   ContextUsageSnapshot,
   PublicAiProviderToolCapabilityKind,
   PublicAiProviderToolTargetSnapshot,
@@ -58,17 +59,25 @@ export function ContextUsageOrb(props: {
   // 服务投影出的上下文占用快照。
   snapshot: ContextUsageSnapshot | null;
 }) {
-  // t translates fallback labels when the runtime has not prepared a budget yet.
-  // t 在运行时尚未准备预算时翻译回退标签。
-  const { t } = useI18n();
-  const percent = Math.max(0, Math.min(100, Math.round(props.snapshot?.percent ?? 0)));
-  const severity = props.snapshot?.severity ?? "unknown";
-  const title = props.snapshot?.tooltipTitle || t("contextUsage.title");
-  const rows = props.snapshot?.tooltipRows.length
-    ? props.snapshot.tooltipRows
-    : [t("contextUsage.waiting")];
+  if (!props.snapshot) {
+    return null;
+  }
+  const snapshot = props.snapshot;
+  const breakdown = contextUsageBreakdown(snapshot);
+  const usageBasisPoints = contextUsageBasisPoints(snapshot);
+  const percent = usageBasisPoints / 100;
+  const title = snapshot.tooltipTitle || "上下文容量";
+  const detailVisible = breakdown.length > 0;
+  const thresholdState = percent >= 100
+    ? "full"
+    : percent >= 95
+      ? "critical"
+      : percent >= 90
+        ? "warning"
+        : "normal";
   const style = {
     "--context-usage-progress": `${percent * 3.6}deg`,
+    "--context-usage-percent": `${percent}%`,
   } as React.CSSProperties;
 
   return (
@@ -76,19 +85,145 @@ export function ContextUsageOrb(props: {
       <TooltipTrigger asChild>
         <button
           aria-label={title}
-          className={cn("context-usage-orb", `severity-${severity}`)}
+          className={cn("context-usage-orb", `severity-${snapshot.severity}`)}
+          data-threshold-state={thresholdState}
           style={style}
           type="button"
         />
       </TooltipTrigger>
-      <TooltipContent align="end" className="context-usage-tooltip" side="top">
-        <strong>{title}</strong>
-        {rows.map((row, index) => (
-          <span key={`${row}-${index}`}>{row}</span>
-        ))}
+      <TooltipContent
+        align="end"
+        className="context-usage-tooltip"
+        showArrow={false}
+        side="top"
+        sideOffset={8}
+      >
+        <div className="context-usage-card-header">
+          <strong>{title}</strong>
+          <span>{formatContextUsageTotal(snapshot)}</span>
+        </div>
+        <ContextUsageProgressBar
+          breakdown={breakdown}
+          usageBasisPoints={usageBasisPoints}
+        />
+        {detailVisible ? (
+          <div className="context-usage-breakdown">
+            {breakdown.map((item) => (
+              <div className="context-usage-breakdown-row" key={item.kind}>
+                <span className="context-usage-breakdown-label">
+                  <i className={`context-usage-dot kind-${item.kind}`} />
+                  {item.label}
+                </span>
+                <span>{formatBasisPoints(item.basisPoints)}</span>
+              </div>
+            ))}
+          </div>
+        ) : null}
+        <div className="context-usage-cache-row">
+          <span>平均缓存命中率</span>
+          <strong>
+            {snapshot.cacheHitBasisPoints == null
+              ? "暂无数据"
+              : formatBasisPoints(snapshot.cacheHitBasisPoints)}
+          </strong>
+        </div>
       </TooltipContent>
     </Tooltip>
   );
+}
+
+// ContextUsageProgressBar renders used, unused, category, and threshold states in one track.
+// ContextUsageProgressBar 在同一轨道中渲染已用、未用、分类及阈值状态。
+function ContextUsageProgressBar(props: {
+  // Normalized category rows for the active snapshot.
+  // 当前快照的标准化分类行。
+  breakdown: ContextUsageBreakdownItem[];
+  // Normalized context usage in basis points.
+  // 标准化后的上下文占用万分比。
+  usageBasisPoints: number;
+}) {
+  const percent = props.usageBasisPoints / 100;
+  return (
+    <div
+      aria-label={`上下文已使用 ${percent.toFixed(1)}%`}
+      className="context-usage-progress-track"
+      role="progressbar"
+      aria-valuemax={100}
+      aria-valuemin={0}
+      aria-valuenow={percent}
+    >
+      <div className="context-usage-threshold-zone threshold-90" />
+      <div className="context-usage-threshold-zone threshold-95" />
+      <div className="context-usage-progress-fill" style={{ width: `${percent}%` }}>
+        {props.breakdown.length > 0
+          ? props.breakdown.map((item) => (
+              <span
+                className={`context-usage-segment kind-${item.kind}`}
+                key={item.kind}
+                style={{ width: `${item.basisPoints / 100}%` }}
+              />
+            ))
+          : null}
+      </div>
+      <i className="context-usage-threshold-marker marker-90" />
+      <i className="context-usage-threshold-marker marker-95" />
+      <i className="context-usage-threshold-marker marker-100" />
+    </div>
+  );
+}
+
+// contextUsageBasisPoints normalizes both current and legacy service snapshots.
+// contextUsageBasisPoints 标准化当前版与旧版服务快照中的上下文占用比例。
+function contextUsageBasisPoints(snapshot: ContextUsageSnapshot): number {
+  const value = typeof snapshot.usageBasisPoints === "number"
+    && Number.isFinite(snapshot.usageBasisPoints)
+    ? snapshot.usageBasisPoints
+    : snapshot.percent * 100;
+  return Math.max(0, Math.min(10_000, Math.round(value)));
+}
+
+// contextUsageBreakdown returns an empty legacy breakdown when the service omits the field.
+// contextUsageBreakdown 在服务未提供字段时返回空的旧版分类明细。
+function contextUsageBreakdown(snapshot: ContextUsageSnapshot): ContextUsageBreakdownItem[] {
+  return Array.isArray(snapshot.breakdown) ? snapshot.breakdown : [];
+}
+
+// formatContextUsageTotal renders the compact current-window summary.
+// formatContextUsageTotal 渲染紧凑的当前窗口摘要。
+function formatContextUsageTotal(snapshot: ContextUsageSnapshot): string {
+  const usageBasisPoints = contextUsageBasisPoints(snapshot);
+  if (typeof snapshot.usedTokens !== "number" || !Number.isFinite(snapshot.usedTokens)) {
+    return formatBasisPoints(usageBasisPoints);
+  }
+  const used = formatContextTokenCount(snapshot.usedTokens);
+  if (typeof snapshot.maxTokens !== "number" || !Number.isFinite(snapshot.maxTokens)) {
+    return `${used} Token`;
+  }
+  return `${used}/${formatContextTokenCount(snapshot.maxTokens)} (${formatBasisPoints(usageBasisPoints)})`;
+}
+
+// formatContextTokenCount formats large token counts with Chinese ten-thousand and hundred-million units.
+// formatContextTokenCount 使用中文万与亿单位格式化较大的 Token 数量。
+function formatContextTokenCount(value: number): string {
+  if (value >= 100_000_000) {
+    return `${formatCompactDecimal(value / 100_000_000)}亿`;
+  }
+  if (value >= 10_000) {
+    return `${formatCompactDecimal(value / 10_000)}万`;
+  }
+  return Math.max(0, Math.round(value)).toLocaleString("zh-CN");
+}
+
+// formatCompactDecimal keeps one meaningful decimal without a redundant trailing zero.
+// formatCompactDecimal 保留一位有效小数并移除多余的尾随零。
+function formatCompactDecimal(value: number): string {
+  return value.toFixed(1).replace(/\.0$/u, "");
+}
+
+// formatBasisPoints formats integer basis points as a one-decimal percentage.
+// formatBasisPoints 将整数万分比格式化为一位小数百分比。
+function formatBasisPoints(value: number): string {
+  return `${(Math.max(0, Math.min(10_000, value)) / 100).toFixed(1)}%`;
 }
 
 // ComposerAiCapabilityControl owns one materialized session snapshot with separate switches, models, and accounts.

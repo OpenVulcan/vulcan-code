@@ -1155,6 +1155,13 @@ fn build_started_event(
     context: &ProviderRequestTelemetryContext,
     request: &ActiveProviderRequestTelemetry,
 ) -> ProviderRequestTelemetryEvent {
+    // contextBreakdown carries only non-sensitive request-category weights.
+    // contextBreakdown 仅携带非敏感请求分类权重。
+    let context_breakdown = request
+        .budget_evidence
+        .request_text_measurement
+        .context_breakdown
+        .as_ref();
     ProviderRequestTelemetryEvent {
         kind: ProviderRequestTelemetryEventKind::Started,
         session_id: context.session_id,
@@ -1198,6 +1205,12 @@ fn build_started_event(
                 .request_text_measurement
                 .prefix_invariant_fingerprint
                 .as_deref(),
+            request_message_units: context_breakdown.map(|value| value.message_units),
+            request_system_tool_units: context_breakdown.map(|value| value.system_tool_units),
+            request_mcp_tool_units: context_breakdown.map(|value| value.mcp_tool_units),
+            request_skill_units: context_breakdown.map(|value| value.skill_units),
+            request_system_prompt_units: context_breakdown.map(|value| value.system_prompt_units),
+            request_other_units: context_breakdown.map(|value| value.other_units),
             budget_accounting_source: request
                 .context_budget
                 .as_ref()
@@ -1544,6 +1557,30 @@ struct StartedPayload<'a> {
     /// Digest of request components that must remain stable for history-prefix reuse.
     /// 规范历史前缀复用时必须保持稳定的请求组件摘要。
     request_prefix_invariant_fingerprint: Option<&'a str>,
+    /// Character-level weight of canonical messages.
+    /// 规范消息的字符级权重。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    request_message_units: Option<usize>,
+    /// Character-level weight of host and bundled tools.
+    /// 宿主及随包工具的字符级权重。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    request_system_tool_units: Option<usize>,
+    /// Character-level weight of MCP tools.
+    /// MCP 工具的字符级权重。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    request_mcp_tool_units: Option<usize>,
+    /// Character-level weight of LuaSkills tools.
+    /// LuaSkills 工具的字符级权重。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    request_skill_units: Option<usize>,
+    /// Character-level weight of system instructions.
+    /// 系统指令的字符级权重。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    request_system_prompt_units: Option<usize>,
+    /// Character-level weight of remaining request context.
+    /// 其余请求上下文的字符级权重。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    request_other_units: Option<usize>,
     /// Stable budget-accounting source.
     /// 稳定预算记账来源。
     budget_accounting_source: Option<&'a str>,

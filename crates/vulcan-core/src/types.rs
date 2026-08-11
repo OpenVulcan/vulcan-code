@@ -1186,6 +1186,10 @@ pub struct ProviderRequestToolSchema {
     /// Human-readable tool description exposed to the provider.
     /// 暴露给 Provider 的人类可读工具描述。
     pub description: String,
+    /// Stable machine-readable source kind used by non-sensitive request accounting.
+    /// 非敏感请求记账使用的稳定机器可读来源类型。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub source_kind: String,
     /// Stable tool source label used for diagnostics and UI inspection.
     /// 用于诊断与界面检查的稳定工具来源标签。
     pub source_label: String,

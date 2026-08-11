@@ -236,6 +236,47 @@ pub struct SessionProviderRequestTextMeasurement {
     /// 规范历史前缀复用时必须保持不变的请求组件摘要。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prefix_invariant_fingerprint: Option<String>,
+    /// Optional category weights used to project a calibrated context-usage breakdown.
+    /// 用于投影校准后上下文占用明细的可选分类权重。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_breakdown: Option<SessionProviderRequestContextBreakdown>,
+}
+
+/// Non-sensitive character-level weights for one Provider-visible request.
+/// 单次 Provider 可见请求的非敏感字符级分类权重。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionProviderRequestContextBreakdown {
+    /// Canonical history and the distinct current prompt.
+    /// 规范历史与未包含在历史中的当前提示词。
+    pub message_units: usize,
+    /// Host-owned and bundled tool schemas plus tool guidance.
+    /// 宿主自有及随包工具 Schema 与工具指引。
+    pub system_tool_units: usize,
+    /// MCP-discovered tool schemas.
+    /// MCP 发现的工具 Schema。
+    pub mcp_tool_units: usize,
+    /// LuaSkills tool schemas.
+    /// LuaSkills 工具 Schema。
+    pub skill_units: usize,
+    /// Provider, agent, developer, personality, and output-style instructions.
+    /// Provider、智能体、开发者、人格与输出风格指令。
+    pub system_prompt_units: usize,
+    /// Runtime context, continuation metadata, and remaining structured request data.
+    /// 运行时上下文、续接元数据与其余结构化请求数据。
+    pub other_units: usize,
+}
+
+impl SessionProviderRequestContextBreakdown {
+    /// Returns the saturating sum used as the exact proportional denominator.
+    /// 返回作为精确比例分母的饱和分类权重总和。
+    pub fn total_units(&self) -> usize {
+        self.message_units
+            .saturating_add(self.system_tool_units)
+            .saturating_add(self.mcp_tool_units)
+            .saturating_add(self.skill_units)
+            .saturating_add(self.system_prompt_units)
+            .saturating_add(self.other_units)
+    }
 }
 
 /// Complete compact record for one physical Provider call.

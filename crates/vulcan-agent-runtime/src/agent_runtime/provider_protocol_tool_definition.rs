@@ -1,6 +1,7 @@
 //! Host-owned tool-definition protocol used by provider transport and request bridge layers.
 //! 供 Provider 传输与请求桥接层使用的宿主自有工具定义协议。
 
+use crate::agent_runtime::provider_request_snapshot_support::{tool_source_key, tool_source_label};
 use serde_json::Value;
 use vulcan_tools_manager::ResolvedToolDefinition;
 #[cfg(test)]
@@ -16,6 +17,12 @@ pub(crate) struct ProviderToolDefinition {
     /// Human-readable tool description exposed to the model.
     /// 暴露给模型的人类可读工具描述。
     pub description: String,
+    /// Stable machine-readable source kind retained through transport projection.
+    /// 贯穿传输投影保留的稳定机器可读来源类型。
+    pub source_kind: String,
+    /// Human-readable source label retained for diagnostics.
+    /// 为诊断保留的人类可读来源标签。
+    pub source_label: String,
     /// JSON Schema describing the tool arguments.
     /// 描述工具参数的 JSON Schema。
     pub parameters: Value,
@@ -29,6 +36,8 @@ pub(crate) fn resolved_tool_definition_to_provider_tool_definition(
     ProviderToolDefinition {
         name: definition.descriptor.id.clone(),
         description: definition.descriptor.description.clone(),
+        source_kind: tool_source_key(definition.descriptor.source).to_string(),
+        source_label: tool_source_label(definition.descriptor.source).to_string(),
         parameters: definition.parameters_schema.clone(),
     }
 }

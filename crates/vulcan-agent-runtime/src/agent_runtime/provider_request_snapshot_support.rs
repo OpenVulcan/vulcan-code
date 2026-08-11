@@ -15,3 +15,16 @@ pub(crate) fn tool_source_label(source: VulcanToolSourceKind) -> &'static str {
         VulcanToolSourceKind::AiHostBinding => "AI 专用回退",
     }
 }
+
+/// Returns the stable machine key retained in request measurements.
+/// 返回请求测量中保留的稳定机器键。
+pub(crate) const fn tool_source_key(source: VulcanToolSourceKind) -> &'static str {
+    match source {
+        VulcanToolSourceKind::Native => "native",
+        VulcanToolSourceKind::VulcanManaged => "vulcan_managed",
+        VulcanToolSourceKind::VulcanPlugin => "vulcan_plugin",
+        VulcanToolSourceKind::LuaSkills => "luaskills",
+        VulcanToolSourceKind::Mcp => "mcp",
+        VulcanToolSourceKind::AiHostBinding => "ai_host_binding",
+    }
+}

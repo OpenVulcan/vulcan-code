@@ -200,12 +200,44 @@ export interface ContextInjectionSnapshot {
   staticCards: ContextInjectionCardSummary[];
 }
 
-// ContextUsageSnapshot describes the composer context usage orb state.
-// ContextUsageSnapshot 描述输入区上下文占用圆盘状态。
+// ContextUsageBreakdownItem describes one calibrated row in the context-usage card.
+// ContextUsageBreakdownItem 描述上下文占用卡片中的单个校准行。
+export interface ContextUsageBreakdownItem {
+  // Stable category key consumed by CSS.
+  // CSS 消费的稳定分类键。
+  kind: string;
+  // User-facing category label.
+  // 面向用户的分类标签。
+  label: string;
+  // Provider-calibrated tokens assigned to this category.
+  // 分配给该分类的 Provider 校准 Token 数。
+  tokens: number;
+  // Share of used context in basis points.
+  // 占已使用上下文的比例，单位为万分之一。
+  basisPoints: number;
+}
+
+// ContextUsageSnapshot describes the composer context usage card state.
+// ContextUsageSnapshot 描述输入区上下文占用卡片状态。
 export interface ContextUsageSnapshot {
   // Rounded usage percent shown inside the orb.
   // 圆盘中显示的四舍五入占用百分比。
   percent: number;
+  // Precise window usage in basis points.
+  // 精确窗口占用比例，单位为万分之一。
+  usageBasisPoints?: number | null;
+  // Provider-calibrated active context tokens.
+  // Provider 校准后的活动上下文 Token 数。
+  usedTokens?: number | null;
+  // Effective context window when declared by the active model.
+  // 当前模型声明时的有效上下文窗口。
+  maxTokens?: number | null;
+  // Active-branch cumulative cache hit rate in basis points.
+  // 活动分支累计缓存命中率，单位为万分之一。
+  cacheHitBasisPoints?: number | null;
+  // Calibrated category rows; empty means compact legacy display.
+  // 校准后的分类行；为空时表示旧会话紧凑展示。
+  breakdown?: ContextUsageBreakdownItem[] | null;
   // Severity key used by WebUI styling.
   // WebUI 样式使用的严重级别键。
   severity: string;

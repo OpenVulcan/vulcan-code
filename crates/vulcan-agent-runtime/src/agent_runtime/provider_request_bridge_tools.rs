@@ -1,7 +1,7 @@
 //! Tool-definition bridge helpers reused by provider request snapshots and low-level transport dispatch.
 //! 供 Provider 请求快照与低层传输分发复用的工具定义桥接辅助逻辑。
 
-use crate::agent_runtime::provider_request_snapshot_support::tool_source_label;
+use crate::agent_runtime::provider_request_snapshot_support::{tool_source_key, tool_source_label};
 use vulcan_core::types::ProviderRequestToolSchema as CoreProviderRequestToolSchema;
 use vulcan_tools_manager::ResolvedToolDefinition;
 
@@ -14,6 +14,7 @@ pub(crate) fn resolved_tool_definition_to_core_tool_schema(
         id: definition.descriptor.id.clone(),
         name: definition.descriptor.name.clone(),
         description: definition.descriptor.description.clone(),
+        source_kind: tool_source_key(definition.descriptor.source).to_string(),
         source_label: tool_source_label(definition.descriptor.source).to_string(),
         parameters_schema: definition.parameters_schema.clone(),
     }

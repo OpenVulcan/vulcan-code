@@ -7,7 +7,8 @@ use vulcan_ai_contract::AccountUsageSnapshot;
 use vulcan_provider_adapters::{AccountUsageQueryKind, PersistedAiConfiguration, PublicAiRuntime};
 use vulcan_workbench_model::{
     SessionProviderBudgetAccounting, SessionProviderBudgetAccountingSource,
-    SessionProviderCallLedger, SessionProviderCallRecord, SessionProviderRequestTextMeasurement,
+    SessionProviderCallLedger, SessionProviderCallRecord, SessionProviderRequestContextBreakdown,
+    SessionProviderRequestTextMeasurement,
 };
 use vulcan_workspace_store::workspace_store::{
     ProviderAccountUsageSnapshotRecord, ProviderPricingProfileRecord,
@@ -357,6 +358,7 @@ pub(crate) fn apply_provider_request_usage_telemetry(
                             event,
                             "request_prefix_invariant_fingerprint",
                         ),
+                        context_breakdown: request_context_breakdown_from_started_event(event)?,
                     }),
                     budget_accounting: budget_accounting_from_started_event(event)?,
                 };
@@ -1006,6 +1008,32 @@ fn budget_accounting_from_started_event(
             .transpose()
             .map_err(|_| String::from("budget_total_tokens exceeds usize"))?,
         warning_code: telemetry_optional_string(event, "budget_warning_code"),
+    }))
+}
+
+/// Projects optional request-category weights from one Started telemetry event.
+/// 从单条 Started 遥测事件投影可选请求分类权重。
+fn request_context_breakdown_from_started_event(
+    event: &ProviderRequestTelemetryEvent,
+) -> Result<Option<SessionProviderRequestContextBreakdown>, String> {
+    const KEYS: [&str; 6] = [
+        "request_message_units",
+        "request_system_tool_units",
+        "request_mcp_tool_units",
+        "request_skill_units",
+        "request_system_prompt_units",
+        "request_other_units",
+    ];
+    if KEYS.iter().all(|key| event.payload.get(*key).is_none()) {
+        return Ok(None);
+    }
+    Ok(Some(SessionProviderRequestContextBreakdown {
+        message_units: telemetry_required_usize(event, KEYS[0])?,
+        system_tool_units: telemetry_required_usize(event, KEYS[1])?,
+        mcp_tool_units: telemetry_required_usize(event, KEYS[2])?,
+        skill_units: telemetry_required_usize(event, KEYS[3])?,
+        system_prompt_units: telemetry_required_usize(event, KEYS[4])?,
+        other_units: telemetry_required_usize(event, KEYS[5])?,
     }))
 }
 

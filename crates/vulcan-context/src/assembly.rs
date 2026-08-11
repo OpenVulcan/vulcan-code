@@ -554,6 +554,7 @@ mod tests {
                 id: String::from("tool-1"),
                 name: String::from("tool-1"),
                 description: String::from("tool"),
+                source_kind: String::from("native"),
                 source_label: String::from("native"),
                 parameters_schema: json!({"type":"object","properties":{}}),
             }],

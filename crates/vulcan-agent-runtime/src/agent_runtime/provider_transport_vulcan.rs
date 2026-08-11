@@ -221,6 +221,9 @@ pub(crate) struct VulcanPublicContractAdapter {
     /// Model-visible host tool definitions.
     /// 模型可见的宿主工具定义。
     tools: Vec<ToolDefinition>,
+    /// Source kind and label kept in the same order as the projected tool definitions.
+    /// 与投影后工具定义保持同序的来源类型与标签。
+    tool_sources: Vec<(String, String)>,
     /// Provider-native tools declared by the exact discovered model route.
     /// 精确发现模型路由声明的供应商原生工具。
     provider_native_tools: Vec<NativeToolKind>,
@@ -300,6 +303,12 @@ impl VulcanPublicContractAdapter {
         workspace_path: String,
         live_sender: ProviderLiveDeltaSender,
     ) -> Self {
+        // toolSources preserves exact source ownership before protocol projection removes host metadata.
+        // toolSources 在协议投影移除宿主元数据前保留精确来源归属。
+        let tool_sources = tools
+            .iter()
+            .map(|tool| (tool.source_kind.clone(), tool.source_label.clone()))
+            .collect();
         // publicTools applies the same route-bound schema projection used by standalone remote compaction.
         // publicTools 应用与独立远端压缩相同的路由绑定 Schema 投影。
         let public_tools = project_public_tool_definitions(&route, model_id.as_str(), tools);
@@ -310,6 +319,7 @@ impl VulcanPublicContractAdapter {
             secret,
             client,
             tools: public_tools,
+            tool_sources,
             provider_native_tools,
             output_token_limit,
             prompt_cache,
@@ -529,13 +539,17 @@ impl VulcanProviderAdapter for VulcanPublicContractAdapter {
             tool_schemas: self
                 .tools
                 .iter()
-                .map(|tool| CoreProviderRequestToolSchema {
-                    id: tool.name.clone(),
-                    name: tool.name.clone(),
-                    description: tool.description.clone(),
-                    source_label: String::from("host"),
-                    parameters_schema: tool.input_schema.clone(),
-                })
+                .zip(self.tool_sources.iter())
+                .map(
+                    |(tool, (source_kind, source_label))| CoreProviderRequestToolSchema {
+                        id: tool.name.clone(),
+                        name: tool.name.clone(),
+                        description: tool.description.clone(),
+                        source_kind: source_kind.clone(),
+                        source_label: source_label.clone(),
+                        parameters_schema: tool.input_schema.clone(),
+                    },
+                )
                 .collect(),
             additional_params: None,
             request_headers: None,
