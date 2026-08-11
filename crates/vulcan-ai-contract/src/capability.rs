@@ -149,12 +149,6 @@ pub struct ModelCapabilities {
     /// 此精确路由的强类型重排能力。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rerank: Option<RerankCapabilities>,
-    /// Tool-calling support level.
-    /// 工具调用支持级别。
-    pub tool_calling: CapabilitySupport,
-    /// Parallel tool-calling support level.
-    /// 并行工具调用支持级别。
-    pub parallel_tool_calling: CapabilitySupport,
     /// Reasoning-content support level.
     /// 推理内容支持级别。
     pub reasoning: CapabilitySupport,
@@ -205,8 +199,6 @@ impl Default for ModelCapabilities {
             output_resources: Vec::new(),
             embedding: None,
             rerank: None,
-            tool_calling: CapabilitySupport::Unknown,
-            parallel_tool_calling: CapabilitySupport::Unknown,
             reasoning: CapabilitySupport::Unknown,
             provider_native_tools: Vec::new(),
             reasoning_control: ReasoningControlMode::Unknown,

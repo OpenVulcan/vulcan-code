@@ -33,7 +33,6 @@ function settingsFixture(): PublicAiSettingsSnapshot {
       reasoning: "native",
       reasoning_control: "effort_selection",
       reasoning_efforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
-      tool_calling: "native",
     },
     modelCapabilityOverrides: {},
     modelCapabilityOverrideRecords: [],

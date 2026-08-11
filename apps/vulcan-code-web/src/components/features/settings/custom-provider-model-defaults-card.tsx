@@ -75,11 +75,6 @@ export function CustomProviderModelDefaultsCard(props: CustomProviderModelDefaul
   const [reasoningEfforts, setReasoningEfforts] = React.useState<string[]>(
     visibleReasoningEfforts(props.defaults),
   )
-  // toolCallingEnabled is the explicit provider-wide tool-calling policy.
-  // toolCallingEnabled 是显式供应商级工具调用策略。
-  const [toolCallingEnabled, setToolCallingEnabled] = React.useState(
-    props.defaults.tool_calling !== "unsupported",
-  )
   // contextWindowPolicy is the provider-wide sparse Codex threshold layer.
   // contextWindowPolicy 是供应商级稀疏 Codex 阈值层。
   const [contextWindowPolicy, setContextWindowPolicy] = React.useState(props.defaults.context_window_policy)
@@ -101,7 +96,6 @@ export function CustomProviderModelDefaultsCard(props: CustomProviderModelDefaul
     setInputResources(defaults.input_resources ?? [])
     setReasoningEnabled(reasoningIsEnabled(defaults))
     setReasoningEfforts(visibleReasoningEfforts(defaults))
-    setToolCallingEnabled(defaults.tool_calling !== "unsupported")
     setContextWindowPolicy(defaults.context_window_policy)
     setRequestProjection(normalizeRequestProjection(defaults.request_projection))
     setError(null)
@@ -116,10 +110,9 @@ export function CustomProviderModelDefaultsCard(props: CustomProviderModelDefaul
     reasoning: reasoningEnabled ? "native" : "unsupported",
     reasoning_control: reasoningEnabled ? "effort_selection" : "fixed_off",
     reasoning_efforts: reasoningEnabled ? reasoningEfforts : ["none"],
-    tool_calling: toolCallingEnabled ? "native" : "unsupported",
     context_window_policy: contextWindowPolicy,
     request_projection: requestProjection,
-  }), [contextLimit, contextWindowPolicy, inputResources, outputLimit, reasoningEfforts, reasoningEnabled, requestProjection, toolCallingEnabled])
+  }), [contextLimit, contextWindowPolicy, inputResources, outputLimit, reasoningEfforts, reasoningEnabled, requestProjection])
   // dirty is true only while visible values differ semantically from the authoritative snapshot.
   // dirty 仅在可见值与权威快照存在语义差异时为真。
   const dirty = !directProviderModelSettingsEqual(currentSettings, props.defaults)
@@ -233,7 +226,7 @@ export function CustomProviderModelDefaultsCard(props: CustomProviderModelDefaul
             </p>
           </fieldset>
         </div>
-        <div className="grid gap-3 sm:grid-cols-2">
+        <div className="grid gap-3">
           <fieldset className="space-y-3 rounded-lg border p-3">
             <legend className="px-1 text-xs font-medium">{t("settings.customModels.reasoning")}</legend>
             <label className="flex items-center justify-between gap-3 text-sm">
@@ -268,19 +261,6 @@ export function CustomProviderModelDefaultsCard(props: CustomProviderModelDefaul
                 </label>
               ))}
             </div>
-          </fieldset>
-          <fieldset className="rounded-lg border p-3">
-            <legend className="px-1 text-xs font-medium">{t("settings.customModels.toolCalling")}</legend>
-            <label className="flex items-center justify-between gap-3 text-sm">
-              <span>{t(toolCallingEnabled ? "settings.customModels.enabled" : "settings.customModels.disabled")}</span>
-              <Switch
-                checked={toolCallingEnabled}
-                onCheckedChange={setToolCallingEnabled}
-              />
-            </label>
-            <p className="mt-2 text-xs text-muted-foreground">
-              {t("settings.customModels.toolCallingDefaultDescription")}
-            </p>
           </fieldset>
         </div>
         <ReasoningProjectionEditor

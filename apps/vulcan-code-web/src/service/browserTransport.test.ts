@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { closeWebSocketWhenReady } from "@/service/browserTransport";
+import {
+  closeWebSocketWhenReady,
+  waitForWebSocketOpen,
+} from "@/service/browserTransport";
 
 // BrowserSocketFixture models the WebSocket states required by close lifecycle tests.
 // BrowserSocketFixture 模拟关闭生命周期测试所需的 WebSocket 状态。
@@ -42,6 +45,12 @@ class BrowserSocketFixture extends EventTarget {
     this.readyState = this.OPEN;
     this.dispatchEvent(new Event("open"));
   }
+
+  // fail rejects the simulated opening handshake through the browser error event.
+  // fail 通过浏览器 error 事件拒绝模拟的建连握手。
+  fail(): void {
+    this.dispatchEvent(new Event("error"));
+  }
 }
 
 describe("closeWebSocketWhenReady", () => {
@@ -66,5 +75,33 @@ describe("closeWebSocketWhenReady", () => {
     shouldClose = false;
     socket.open();
     expect(socket.closeCalls).toBe(0);
+  });
+});
+
+describe("waitForWebSocketOpen", () => {
+  // Verifies event subscriptions cannot report readiness while the socket is still connecting.
+  // 验证事件订阅不会在套接字仍处于建连状态时报告就绪。
+  it("waits for the opening handshake", async () => {
+    const socket = new BrowserSocketFixture();
+    let resolved = false;
+    const readiness = waitForWebSocketOpen(socket as unknown as WebSocket).then(() => {
+      resolved = true;
+    });
+
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+    socket.open();
+    await readiness;
+    expect(resolved).toBe(true);
+  });
+
+  // Verifies a failed handshake rejects bootstrap instead of exposing an event-blind workbench.
+  // 验证失败握手会拒绝启动，而不是暴露无法接收事件的工作台。
+  it("rejects a failed opening handshake", async () => {
+    const socket = new BrowserSocketFixture();
+    const readiness = waitForWebSocketOpen(socket as unknown as WebSocket);
+
+    socket.fail();
+    await expect(readiness).rejects.toThrow("connection failed");
   });
 });

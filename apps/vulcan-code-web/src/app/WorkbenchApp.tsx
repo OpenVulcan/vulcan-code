@@ -103,6 +103,9 @@ export function WorkbenchApp(props: {
   // workbenchRevisionRef records the newest backend workbench revision accepted by the client.
   // workbenchRevisionRef 记录客户端已经接受的最新后端工作台版本。
   const workbenchRevisionRef = React.useRef(0);
+  // workbenchBaselineReadyRef prevents event deltas from being applied before one authoritative snapshot establishes their revision base.
+  // workbenchBaselineReadyRef 防止事件增量在权威快照建立版本基线前被应用。
+  const workbenchBaselineReadyRef = React.useRef(false);
   // appLocaleRef keeps provider-outside app toasts aligned with the latest service locale.
   // appLocaleRef 让 Provider 外部的应用提示对齐最近一次服务语言。
   const appLocaleRef = React.useRef<LocaleCode>(webuiAppLocale(props.initialStartup.uiLocale));
@@ -204,10 +207,39 @@ export function WorkbenchApp(props: {
       }
     }
 
+    // applyAuthoritativeWorkbenchSnapshot establishes one revision baseline and then drains events received after it.
+    // applyAuthoritativeWorkbenchSnapshot 建立一个版本基线，随后排空在其后收到的事件。
+    function applyAuthoritativeWorkbenchSnapshot(payload: WorkbenchSnapshot): boolean {
+      const revision = payload.revision ?? 0;
+      if (
+        workbenchBaselineReadyRef.current
+        && workbenchRevisionRef.current !== 0
+        && revision <= workbenchRevisionRef.current
+      ) {
+        console.debug("Ignored stale workbench snapshot.", {
+          revision,
+          currentRevision: workbenchRevisionRef.current,
+        });
+        return false;
+      }
+      discardBufferedDeltasThroughRevision(revision);
+      clearDeltaGapTimer();
+      workbenchRevisionRef.current = revision;
+      workbenchBaselineReadyRef.current = true;
+      workbenchSnapshotSeqRef.current += 1;
+      liveStreamStore.rebaseWorkbenchSnapshot(payload);
+      liveStreamStore.flushNotifications();
+      setWorkbench(payload);
+      workbenchRef.current = payload;
+      drainContiguousDeltas();
+      scheduleDeltaGapRecovery();
+      return true;
+    }
+
     // hasDeltaGap returns true when received deltas are waiting behind a missing generation.
     // hasDeltaGap 在已收到增量仍被缺失 generation 阻塞时返回 true。
     function hasDeltaGap(): boolean {
-      if (workbenchDeltaPendingRef.current.size === 0) {
+      if (!workbenchBaselineReadyRef.current || workbenchDeltaPendingRef.current.size === 0) {
         return false;
       }
       return !workbenchDeltaPendingRef.current.has(workbenchRevisionRef.current + 1);
@@ -216,6 +248,9 @@ export function WorkbenchApp(props: {
     // drainContiguousDeltas moves generation-contiguous deltas into the React flush queue.
     // drainContiguousDeltas 将 generation 连续的增量移动到 React 刷新队列。
     function drainContiguousDeltas() {
+      if (!workbenchBaselineReadyRef.current) {
+        return;
+      }
       let drained = false;
       let nextGeneration = workbenchRevisionRef.current + 1;
       while (workbenchDeltaPendingRef.current.has(nextGeneration)) {
@@ -262,14 +297,12 @@ export function WorkbenchApp(props: {
           return;
         }
         const revision = recoveredWorkbench.revision ?? 0;
-        if (revision > workbenchRevisionRef.current || workbenchRevisionRef.current === 0) {
-          liveStreamStore.rebaseWorkbenchSnapshot(recoveredWorkbench);
-          liveStreamStore.flushNotifications();
-          discardBufferedDeltasThroughRevision(revision);
-          workbenchRevisionRef.current = Math.max(workbenchRevisionRef.current, revision);
-          workbenchSnapshotSeqRef.current += 1;
-          setWorkbench(recoveredWorkbench);
-          drainContiguousDeltas();
+        if (
+          !workbenchBaselineReadyRef.current
+          || revision > workbenchRevisionRef.current
+        ) {
+          applyAuthoritativeWorkbenchSnapshot(recoveredWorkbench);
+          shouldRetryRecovery = hasDeltaGap();
         } else if (hasDeltaGap()) {
           shouldRetryRecovery = true;
         }
@@ -307,6 +340,7 @@ export function WorkbenchApp(props: {
       workbenchDeltaPendingRef.current.clear();
       workbenchDeltaRecoveringRef.current = false;
       workbenchRevisionRef.current = 0;
+      workbenchBaselineReadyRef.current = false;
       workbenchSnapshotSeqRef.current += 1;
       setWorkbenchDelta(null);
     }
@@ -331,15 +365,7 @@ export function WorkbenchApp(props: {
         // A workbench event may have delivered a newer full snapshot while the HTTP reload was in flight.
         // HTTP 重载进行期间，工作台事件可能已经送达更新的全量快照。
         if (snapshotSequence === workbenchSnapshotSeqRef.current) {
-          const revision = nextWorkbench.revision ?? 0;
-          liveStreamStore.rebaseWorkbenchSnapshot(nextWorkbench);
-          liveStreamStore.flushNotifications();
-          discardBufferedDeltasThroughRevision(revision);
-          workbenchRevisionRef.current = revision;
-          workbenchSnapshotSeqRef.current += 1;
-          setWorkbench(nextWorkbench);
-          workbenchRef.current = nextWorkbench;
-          drainContiguousDeltas();
+          applyAuthoritativeWorkbenchSnapshot(nextWorkbench);
         }
         toast.success(
           webuiAppTranslation(appLocaleRef.current, "app.serviceConnectionRestored"),
@@ -437,17 +463,6 @@ export function WorkbenchApp(props: {
     // bootstrap 在隔离启动门确认启动就绪后加载第一份工作台快照。
     async function bootstrap() {
       try {
-        const nextWorkbench = await loadWorkbenchSnapshot();
-        if (!cancelled) {
-          retryDelayMs = 500;
-          setError(null);
-          workbenchSnapshotSeqRef.current += 1;
-          workbenchRevisionRef.current = Math.max(workbenchRevisionRef.current, nextWorkbench.revision ?? 0);
-          liveStreamStore.rebaseWorkbenchSnapshot(nextWorkbench);
-          liveStreamStore.flushNotifications();
-          setWorkbench(nextWorkbench);
-          workbenchRef.current = nextWorkbench;
-        }
         if (hasServiceRuntime()) {
           const subscriptions = await Promise.all([
             serviceClient.subscribe<StartupSnapshot>("startup", (payload) => {
@@ -457,23 +472,7 @@ export function WorkbenchApp(props: {
             }),
             serviceClient.subscribe<WorkbenchSnapshot>("workbench", (payload) => {
               if (!cancelled) {
-                const revision = payload.revision ?? 0;
-                if (revision <= workbenchRevisionRef.current && workbenchRevisionRef.current !== 0) {
-                  console.debug("Ignored stale workbench snapshot.", {
-                    revision,
-                    currentRevision: workbenchRevisionRef.current,
-                  });
-                  return;
-                }
-                discardBufferedDeltasThroughRevision(revision);
-                clearDeltaGapTimer();
-                workbenchRevisionRef.current = revision;
-                workbenchSnapshotSeqRef.current += 1;
-                liveStreamStore.rebaseWorkbenchSnapshot(payload);
-                liveStreamStore.flushNotifications();
-                setWorkbench(payload);
-                workbenchRef.current = payload;
-                drainContiguousDeltas();
+                applyAuthoritativeWorkbenchSnapshot(payload);
               }
             }),
             serviceClient.subscribe<WorkbenchDeltaEnvelope>("workbench.delta", (payload) => {
@@ -507,7 +506,19 @@ export function WorkbenchApp(props: {
             };
           }
         }
+        // The first authoritative snapshot is loaded only after every event subscription is ready.
+        // 第一份权威快照仅在全部事件订阅就绪后加载。
+        const nextWorkbench = await loadWorkbenchSnapshot();
+        if (!cancelled) {
+          retryDelayMs = 500;
+          setError(null);
+          applyAuthoritativeWorkbenchSnapshot(nextWorkbench);
+        }
       } catch (nextError) {
+        // A failed bootstrap attempt must release any subscriptions before retrying.
+        // 启动尝试失败后必须先释放全部订阅，再进行重试。
+        unlisten?.();
+        unlisten = null;
         if (!cancelled && scheduleBootstrapRetry(nextError)) {
           setError(null);
           return;

@@ -55,7 +55,6 @@ function modelFixture(id: string, displayName: string, contextLimit: number): Pu
       reasoning: "unknown",
       reasoning_control: "unknown",
       reasoning_efforts: [],
-      tool_calling: "unknown",
       prompt_cache: {
         provider_default_behavior: "Provider default.",
         supports_managed_explicit: false,
@@ -140,7 +139,6 @@ function snapshotFixture(): PublicAiSettingsSnapshot {
       reasoning: "native",
       reasoning_control: "effort_selection",
       reasoning_efforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
-      tool_calling: "native",
     },
     customModelTemplateDecisionRecords: [],
     customModelConnectionAvailabilityRecords: [

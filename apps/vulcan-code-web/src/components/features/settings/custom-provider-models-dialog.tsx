@@ -1630,10 +1630,6 @@ function CapabilityOverridesEditor(props: { onSaved: (snapshot: PublicAiSettings
   // reasoningEnabled projects the paired support and control contract into one clear switch.
   // reasoningEnabled 将配对的支持与控制契约投影为一个清晰开关。
   const reasoningEnabled = draft.reasoning !== "unsupported" && draft.reasoning_control !== "fixed_off"
-  // toolCallingEnabled projects tool support into one direct switch.
-  // toolCallingEnabled 将工具支持投影为一个直接开关。
-  const toolCallingEnabled = draft.tool_calling !== "unsupported"
-
   return (
     <div className="space-y-4 rounded-lg border p-4">
       <div className="flex items-center justify-between gap-3">
@@ -1662,7 +1658,6 @@ function CapabilityOverridesEditor(props: { onSaved: (snapshot: PublicAiSettings
         <label className="flex items-center justify-between gap-3 text-sm font-medium"><span>{t("settings.customModels.reasoning")}</span><Switch checked={reasoningEnabled} onCheckedChange={(checked) => updateDraft(["reasoning", "reasoning_control", "reasoning_efforts"], (current) => ({ ...current, reasoning: checked ? "native" : "unsupported", reasoning_control: checked ? "effort_selection" : "fixed_off", reasoning_efforts: checked ? [...OPENAI_DIRECT_REASONING_EFFORTS] : ["none"] }))} /></label>
         {reasoningEnabled ? <div className="flex flex-wrap gap-2">{OPENAI_DIRECT_REASONING_EFFORTS.map((effort) => <label className="flex items-center gap-2 rounded-md border px-3 py-2 text-sm" key={effort}><Checkbox checked={(draft.reasoning_efforts ?? []).includes(effort)} disabled={effort !== "none" && (draft.reasoning_efforts ?? []).includes(effort) && (draft.reasoning_efforts ?? []).filter((item) => item !== "none").length === 1} onCheckedChange={(checked) => updateDraft("reasoning_efforts", (current) => ({ ...current, reasoning_efforts: checked ? [...(current.reasoning_efforts ?? []), effort] : (current.reasoning_efforts ?? []).filter((item) => item !== effort) }))} />{t(REASONING_EFFORT_LABEL_KEYS[effort])}</label>)}</div> : null}
       </div>
-      <label className="flex items-center justify-between gap-3 rounded-lg border p-3 text-sm font-medium"><span>{t("settings.customModels.toolCalling")}</span><Switch checked={toolCallingEnabled} onCheckedChange={(checked) => updateDraft("tool_calling", (current) => ({ ...current, tool_calling: checked ? "native" : "unsupported" }))} /></label>
       <ReasoningProjectionEditor
         efforts={draft.reasoning_efforts?.length ? draft.reasoning_efforts : ["none"]}
         onChange={(request_projection) => updateDraft("request_projection", (current) => ({ ...current, request_projection }))}
@@ -1852,7 +1847,7 @@ function ManualModelDialog(props: {
 // newManualModel creates identity and advanced behavior only; defaults and templates fill basic fields.
 // newManualModel 仅创建身份与高级行为；基础字段由默认值和模板填充。
 function newManualModel(modelId: string, displayName: string): PublicAiCustomModelDefinition {
-  return { id: modelId, display_name: displayName, enabled: true, capabilities: { operations: ["conversation_respond"], input_resources: [], output_resources: [], evidence_revision: "user.manual-model.v2", reasoning: "unknown", reasoning_control: "unknown", reasoning_efforts: [], tool_calling: "unknown", parallel_tool_calling: "unknown", prompt_cache: { provider_default_behavior: "Follow provider defaults without host-injected cache controls.", supports_managed_explicit: false, supported_ttl_options: [] }, model_parameters: [] }, request_projection: structuredClone(EMPTY_PROJECTION) }
+  return { id: modelId, display_name: displayName, enabled: true, capabilities: { operations: ["conversation_respond"], input_resources: [], output_resources: [], evidence_revision: "user.manual-model.v2", reasoning: "unknown", reasoning_control: "unknown", reasoning_efforts: [], prompt_cache: { provider_default_behavior: "Follow provider defaults without host-injected cache controls.", supports_managed_explicit: false, supported_ttl_options: [] }, model_parameters: [] }, request_projection: structuredClone(EMPTY_PROJECTION) }
 }
 
 // capabilitySource resolves the strongest visible source for one account and capability field.

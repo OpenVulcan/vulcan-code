@@ -550,14 +550,6 @@ pub struct ManifestCapabilityPatch {
         skip_serializing_if = "Option::is_none"
     )]
     pub rerank: Option<Option<RerankCapabilities>>,
-    /// Tool-calling support; omitted inherits.
-    /// 工具调用支持；省略则继承。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tool_calling: Option<CapabilitySupport>,
-    /// Parallel tool-calling support; omitted inherits.
-    /// 并行工具调用支持；省略则继承。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parallel_tool_calling: Option<CapabilitySupport>,
     /// Reasoning-content support; omitted inherits.
     /// 推理内容支持；省略则继承。
     #[serde(default, skip_serializing_if = "Option::is_none")]

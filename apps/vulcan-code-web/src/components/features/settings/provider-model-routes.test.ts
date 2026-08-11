@@ -79,7 +79,6 @@ function catalogFixture(connectionId: string): PublicAiConnectionCatalog {
       capabilities: {
         evidence_revision: "test",
         reasoning: "unsupported",
-        tool_calling: "unsupported",
         prompt_cache: {
           provider_default_behavior: "provider_default",
           supports_managed_explicit: false,

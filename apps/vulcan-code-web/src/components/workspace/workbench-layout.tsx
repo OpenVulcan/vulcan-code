@@ -920,6 +920,7 @@ export function WorkbenchLayout(props: {
     conversationLoadError,
     conversationHistoryLoadingIds,
     handleLoadConversationHistory,
+    invalidateConversationHydration,
   } = useConversationHydration({
     selectedConversationId,
     draftConversationId: draftConversation?.id ?? null,
@@ -1048,6 +1049,7 @@ export function WorkbenchLayout(props: {
     workbenchStateRef,
     requestStopConversationRunChoice,
     subagentSurfaceMessageCacheRef,
+    invalidateConversationHydration,
   });
 
   // handleConversationMenuAction executes conversation-tree context menu commands.

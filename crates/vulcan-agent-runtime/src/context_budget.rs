@@ -166,7 +166,6 @@ fn map_capabilities(capabilities: &ModelCapabilities) -> ContextBudgetCapabiliti
         context_limit,
         input_limit: context_limit,
         output_limit,
-        supports_tool_call: capabilities.tool_calling.is_supported(),
         supports_temperature: capabilities
             .model_parameters
             .iter()

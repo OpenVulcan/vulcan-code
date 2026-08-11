@@ -269,7 +269,6 @@ export interface PublicAiModelCapabilityOverrides {
   reasoning?: string;
   reasoning_control?: string;
   reasoning_efforts?: string[];
-  tool_calling?: string;
   // Optional sparse Codex context-window policy for this provider or model layer.
   // 此供应商或模型层的可选稀疏 Codex 上下文窗口策略。
   // Null explicitly removes a previously persisted sparse policy from this layer.
@@ -299,7 +298,6 @@ export interface PublicAiCustomProviderModelDefaults {
   reasoning: string;
   reasoning_control: string;
   reasoning_efforts: string[];
-  tool_calling: string;
   // Provider-wide sparse Codex context-window defaults.
   // 供应商级稀疏 Codex 上下文窗口默认值。
   context_window_policy?: PublicAiContextWindowPolicyOverrides;
@@ -488,7 +486,6 @@ export interface PublicAiModelCapabilities {
   reasoning: string;
   reasoning_control?: string;
   reasoning_efforts?: string[];
-  tool_calling: string;
   prompt_cache: PublicAiPromptCacheCapability;
   model_parameters: PublicAiModelParameterDefinition[];
   embedding?: PublicAiEmbeddingCapabilities;

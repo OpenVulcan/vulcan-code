@@ -454,7 +454,7 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
   },
   settings: [
     { id: "runtime", label: "Runtime", description: "Core Service, LuaSkills, VLDB, and MCP", items: ["Startup mode", "Runtime directory", "MCP tool policy"] },
-    { id: "providers", label: "Models & Providers", description: "Model providers, defaults, tool support, and reasoning configuration", items: ["Default provider", "Default model", "Tool calls", "Reasoning effort"] },
+    { id: "providers", label: "Models & Providers", description: "Model providers, access, defaults, and reasoning configuration", items: ["Default provider", "Default model", "Model access", "Reasoning effort"] },
     { id: "remote", label: "Remote Access", description: "Future browser, mobile, and remote-client access to Core Service", items: ["Bind address", "Access token", "Remote switch", "Audit log"] },
   ],
   providers: [],

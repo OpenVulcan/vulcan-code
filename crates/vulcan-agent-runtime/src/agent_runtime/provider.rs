@@ -107,12 +107,6 @@ impl ProviderRuntimeBlueprint {
             .unwrap_or_else(|| String::from("由运行时自动解析"))
     }
 
-    /// Returns whether the active model accepts direct tool exposure for the current turn.
-    /// 返回当前激活模型是否接受本轮直接暴露工具。
-    pub fn supports_tool_call(&self) -> bool {
-        self.public_capabilities.tool_calling.is_supported()
-    }
-
     /// Returns whether the active model accepts explicit temperature overrides.
     /// 返回当前激活模型是否接受显式温度覆盖。
     pub fn supports_temperature(&self) -> bool {

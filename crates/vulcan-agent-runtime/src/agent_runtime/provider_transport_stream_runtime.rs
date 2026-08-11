@@ -638,6 +638,25 @@ where
     })
 }
 
+/// Reports whether one normalized delta starts a new physical Provider request.
+/// 报告一条规范化增量是否开始了一次新的真实 Provider 请求。
+///
+/// # Parameters
+/// 参数
+/// `delta` is the next normalized Provider stream delta.
+/// `delta` 是下一条规范化 Provider 流增量。
+///
+/// # Returns
+/// 返回值
+/// `true` for the durable public request boundary and the retained legacy snapshot boundary.
+/// 对可靠公共请求边界及保留的旧快照边界返回 `true`。
+fn provider_delta_starts_physical_request(delta: &ProviderStreamDelta) -> bool {
+    matches!(
+        delta,
+        ProviderStreamDelta::RequestPrepared { .. } | ProviderStreamDelta::RequestSnapshot(_)
+    )
+}
+
 /// Updates retry safety at the boundary of each physical Provider request.
 /// 在每次真实 Provider 请求边界更新重试安全状态。
 ///
@@ -651,7 +670,7 @@ fn observe_provider_request_retry_safety(
     unsafe_delta_seen: &mut bool,
     delta: &ProviderStreamDelta,
 ) {
-    if matches!(delta, ProviderStreamDelta::RequestSnapshot(_)) {
+    if provider_delta_starts_physical_request(delta) {
         *unsafe_delta_seen = false;
         return;
     }
@@ -723,7 +742,7 @@ fn observe_provider_request_retry_reset(
     completed_retries: &mut u32,
     delta: &ProviderStreamDelta,
 ) {
-    if !matches!(delta, ProviderStreamDelta::RequestSnapshot(_)) {
+    if !provider_delta_starts_physical_request(delta) {
         return;
     }
     if *physical_request_seen {
@@ -999,10 +1018,26 @@ mod tests {
         }
     }
 
+    /// Builds the durable request boundary emitted by the active public-contract path.
+    /// 构建当前公共契约路径实际发出的可靠请求边界。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A request-prepared delta with a valid persistence completion handle.
+    /// 返回带有效持久化完成句柄的请求已准备增量。
+    fn test_request_prepared_delta() -> ProviderStreamDelta {
+        let (completion, _receiver) = provider_request_durability_barrier();
+        ProviderStreamDelta::RequestPrepared {
+            snapshot: test_request_snapshot(),
+            context_budget: None,
+            completion,
+        }
+    }
+
     /// Verifies a new physical Provider request clears output emitted by earlier successful requests from the retry-safety decision.
     /// 验证新的真实 Provider 请求会从重试安全判定中清除更早成功请求已经发出的输出。
     #[test]
-    fn physical_request_snapshot_resets_retry_safety() {
+    fn durable_physical_request_boundary_resets_retry_safety() {
         // unsafeDeltaSeen models visible output emitted by one earlier successful physical request.
         // unsafeDeltaSeen 模拟更早一次成功真实请求已经发出的可见输出。
         let mut unsafe_delta_seen = false;
@@ -1014,7 +1049,7 @@ mod tests {
 
         observe_provider_request_retry_safety(
             &mut unsafe_delta_seen,
-            &ProviderStreamDelta::RequestSnapshot(test_request_snapshot()),
+            &test_request_prepared_delta(),
         );
         assert!(!unsafe_delta_seen);
     }
@@ -1033,14 +1068,14 @@ mod tests {
         observe_provider_request_retry_reset(
             &mut physical_request_seen,
             &mut completed_retries,
-            &ProviderStreamDelta::RequestSnapshot(test_request_snapshot()),
+            &test_request_prepared_delta(),
         );
         assert_eq!(completed_retries, 3);
 
         observe_provider_request_retry_reset(
             &mut physical_request_seen,
             &mut completed_retries,
-            &ProviderStreamDelta::RequestSnapshot(test_request_snapshot()),
+            &test_request_prepared_delta(),
         );
         assert_eq!(completed_retries, 0);
     }

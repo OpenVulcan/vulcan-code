@@ -13,6 +13,10 @@ const EXTERNAL_URL_OPENED: &str = "opened";
 /// 请求可信界面进行明确用户确认时返回的稳定服务结果。
 const EXTERNAL_URL_CONFIRMATION_REQUIRED: &str = "confirmation_required";
 
+/// Explicit worker-stack capacity reserved for deeply nested agent stream polling on the WebUI bridge runtime.
+/// 为 WebUI 桥接运行时中的深层智能体流轮询显式预留的工作线程栈容量。
+const WEBUI_SERVICE_WORKER_STACK_BYTES: usize = 8 * 1024 * 1024;
+
 /// Lifetime of one protected VMM inference access grant.
 /// 一项受保护 VMM 推理访问授权的生存期。
 const VMM_INFERENCE_GRANT_LIFETIME: std::time::Duration =
@@ -206,6 +210,7 @@ pub fn spawn_webui_service_http_bridge(
                 // A distinct name separates bridge failures from the application service runtime.
                 // 独立名称用于区分桥接故障和应用 Service Runtime 故障。
                 .thread_name("vulcan-webui-bridge-runtime")
+                .thread_stack_size(WEBUI_SERVICE_WORKER_STACK_BYTES)
                 .enable_all()
                 .build()
             {

@@ -21,8 +21,6 @@ function modelFixture(id: string): PublicAiCustomModelDefinition {
       reasoning: "unknown",
       reasoning_control: "unknown",
       reasoning_efforts: [],
-      tool_calling: "unknown",
-      parallel_tool_calling: "unknown",
       prompt_cache: {
         provider_default_behavior: "test",
         supports_managed_explicit: false,

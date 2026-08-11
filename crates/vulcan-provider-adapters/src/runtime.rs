@@ -10332,12 +10332,6 @@ fn apply_custom_model_advanced_declaration(
     declared: &ModelCapabilities,
     resolved: &mut ModelCapabilities,
 ) {
-    if declared.tool_calling != vulcan_ai_contract::CapabilitySupport::Unknown {
-        resolved.tool_calling = declared.tool_calling;
-    }
-    if declared.parallel_tool_calling != vulcan_ai_contract::CapabilitySupport::Unknown {
-        resolved.parallel_tool_calling = declared.parallel_tool_calling;
-    }
     if declared.reasoning != vulcan_ai_contract::CapabilitySupport::Unknown {
         resolved.reasoning = declared.reasoning;
     }
@@ -10361,9 +10355,7 @@ fn apply_custom_model_advanced_declaration(
             resolved.model_parameters.push(parameter.clone());
         }
     }
-    if declared.tool_calling != vulcan_ai_contract::CapabilitySupport::Unknown
-        || declared.parallel_tool_calling != vulcan_ai_contract::CapabilitySupport::Unknown
-        || declared.reasoning != vulcan_ai_contract::CapabilitySupport::Unknown
+    if declared.reasoning != vulcan_ai_contract::CapabilitySupport::Unknown
         || declared.reasoning_control != vulcan_ai_contract::ReasoningControlMode::Unknown
         || !declared.reasoning_efforts.is_empty()
         || declared.prompt_cache != vulcan_ai_contract::PromptCacheCapability::default()
@@ -13185,10 +13177,6 @@ mod tests {
         assert_eq!(model.capabilities.context_limit, Some(200_000));
         assert_eq!(model.capabilities.output_limit, Some(32_768));
         assert_eq!(
-            model.capabilities.tool_calling,
-            vulcan_ai_contract::CapabilitySupport::Native
-        );
-        assert_eq!(
             model.capabilities.reasoning,
             vulcan_ai_contract::CapabilitySupport::Native
         );
@@ -13441,10 +13429,10 @@ mod tests {
         assert!(model.capabilities.output_resources.is_empty());
     }
 
-    /// Verifies system defaults outrank conservative source flags until a user explicitly disables them.
-    /// 验证系统默认值会覆盖保守来源标记，直到用户显式关闭相应能力。
+    /// Verifies system reasoning defaults outrank conservative source flags.
+    /// 验证系统思考默认值会覆盖保守来源标记。
     #[test]
-    fn custom_provider_system_baseline_enables_reasoning_and_tool_calling() {
+    fn custom_provider_system_baseline_enables_reasoning() {
         let configuration = PersistedAiConfiguration::default();
         let mut catalog = crate::parse_openai_model_catalog(
             "custom-account",
@@ -13460,8 +13448,6 @@ mod tests {
         source_capabilities.reasoning = vulcan_ai_contract::CapabilitySupport::Unsupported;
         source_capabilities.reasoning_control = vulcan_ai_contract::ReasoningControlMode::FixedOff;
         source_capabilities.reasoning_efforts = vec![vulcan_ai_contract::ReasoningEffort::None];
-        source_capabilities.tool_calling = vulcan_ai_contract::CapabilitySupport::Unsupported;
-
         apply_model_catalog_overlays(&configuration, "custom:test", &mut catalog)
             .expect("system baseline should resolve");
 
@@ -13490,10 +13476,6 @@ mod tests {
                 vulcan_ai_contract::ReasoningEffort::Max,
             ]
         );
-        assert_eq!(
-            capabilities.tool_calling,
-            vulcan_ai_contract::CapabilitySupport::Native
-        );
     }
 
     /// Verifies a custom Gemini variant does not inherit OpenAI-only reasoning levels.
@@ -13509,13 +13491,12 @@ mod tests {
         assert_eq!(baseline.reasoning, CapabilitySupport::Unknown);
         assert_eq!(baseline.reasoning_control, ReasoningControlMode::Unknown);
         assert!(baseline.reasoning_efforts.is_empty());
-        assert_eq!(baseline.tool_calling, CapabilitySupport::Native);
     }
 
-    /// Verifies an explicit provider setting can disable the system reasoning and tool defaults.
-    /// 验证显式供应商设置可以关闭系统默认的思考与工具能力。
+    /// Verifies an explicit provider setting can disable the system reasoning defaults.
+    /// 验证显式供应商设置可以关闭系统默认的思考能力。
     #[test]
-    fn explicit_provider_settings_can_disable_system_reasoning_and_tools() {
+    fn explicit_provider_settings_can_disable_system_reasoning() {
         let mut configuration = PersistedAiConfiguration::default();
         configuration.custom_provider_model_defaults.insert(
             String::from("custom:test"),
@@ -13523,7 +13504,6 @@ mod tests {
                 reasoning: vulcan_ai_contract::CapabilitySupport::Unsupported,
                 reasoning_control: vulcan_ai_contract::ReasoningControlMode::FixedOff,
                 reasoning_efforts: vec![vulcan_ai_contract::ReasoningEffort::None],
-                tool_calling: vulcan_ai_contract::CapabilitySupport::Unsupported,
                 ..crate::CustomProviderModelDefaults::default()
             },
         );
@@ -13554,16 +13534,12 @@ mod tests {
             capabilities.reasoning_efforts,
             vec![vulcan_ai_contract::ReasoningEffort::None]
         );
-        assert_eq!(
-            capabilities.tool_calling,
-            vulcan_ai_contract::CapabilitySupport::Unsupported
-        );
     }
 
-    /// Verifies one direct model layer outranks disabled provider reasoning and tool settings.
-    /// 验证一层直接模型设置会覆盖供应商层已关闭的思考与工具设置。
+    /// Verifies one direct model layer outranks disabled provider reasoning settings.
+    /// 验证一层直接模型设置会覆盖供应商层已关闭的思考设置。
     #[test]
-    fn direct_model_settings_outrank_provider_reasoning_and_tool_settings() {
+    fn direct_model_settings_outrank_provider_reasoning_settings() {
         let mut configuration = PersistedAiConfiguration::default();
         configuration.custom_provider_model_defaults.insert(
             String::from("custom:test"),
@@ -13571,7 +13547,6 @@ mod tests {
                 reasoning: vulcan_ai_contract::CapabilitySupport::Unsupported,
                 reasoning_control: vulcan_ai_contract::ReasoningControlMode::FixedOff,
                 reasoning_efforts: vec![vulcan_ai_contract::ReasoningEffort::None],
-                tool_calling: vulcan_ai_contract::CapabilitySupport::Unsupported,
                 ..crate::CustomProviderModelDefaults::default()
             },
         );
@@ -13585,7 +13560,6 @@ mod tests {
                     vulcan_ai_contract::ReasoningEffort::Medium,
                     vulcan_ai_contract::ReasoningEffort::High,
                 ]),
-                tool_calling: Some(vulcan_ai_contract::CapabilitySupport::Native),
                 ..crate::ModelCapabilityOverrides::default()
             },
         );
@@ -13601,7 +13575,6 @@ mod tests {
                         reasoning: vulcan_ai_contract::CapabilitySupport::Unsupported,
                         reasoning_control: vulcan_ai_contract::ReasoningControlMode::FixedOff,
                         reasoning_efforts: vec![vulcan_ai_contract::ReasoningEffort::None],
-                        tool_calling: vulcan_ai_contract::CapabilitySupport::Unsupported,
                         evidence_revision: String::from("manual-advanced.v1"),
                         ..ModelCapabilities::default()
                     },
@@ -13639,10 +13612,6 @@ mod tests {
                 vulcan_ai_contract::ReasoningEffort::Medium,
                 vulcan_ai_contract::ReasoningEffort::High,
             ]
-        );
-        assert_eq!(
-            capabilities.tool_calling,
-            vulcan_ai_contract::CapabilitySupport::Native
         );
     }
 
@@ -13701,7 +13670,6 @@ mod tests {
                         context_limit: Some(1_024),
                         output_limit: Some(512),
                         input_resources: vec![vulcan_ai_contract::ResourceKind::File],
-                        tool_calling: vulcan_ai_contract::CapabilitySupport::Native,
                         reasoning: vulcan_ai_contract::CapabilitySupport::Native,
                         reasoning_control:
                             vulcan_ai_contract::ReasoningControlMode::EffortSelection,
@@ -13749,10 +13717,6 @@ mod tests {
             vec![vulcan_ai_contract::ResourceKind::Image]
         );
         assert!(model.capabilities.output_resources.is_empty());
-        assert_eq!(
-            model.capabilities.tool_calling,
-            vulcan_ai_contract::CapabilitySupport::Native
-        );
         assert_eq!(
             model.capabilities.reasoning_control,
             vulcan_ai_contract::ReasoningControlMode::EffortSelection

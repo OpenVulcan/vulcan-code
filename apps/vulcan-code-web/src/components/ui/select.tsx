@@ -57,30 +57,36 @@ function SelectTrigger({
   )
 }
 
+// SelectContentProps exposes content options while reserving global placement rules.
+// SelectContentProps 开放内容配置，同时保留全局统一的定位规则。
+interface SelectContentProps extends Omit<
+  React.ComponentProps<typeof SelectPrimitive.Content>,
+  "align" | "avoidCollisions" | "position" | "side" | "sideOffset"
+> {}
+
+// SelectContent always opens below the trigger and never flips over the selected field.
+// SelectContent 始终在触发框下方展开，禁止翻转并覆盖已选择字段。
 function SelectContent({
   className,
   children,
-  position = "item-aligned",
-  align = "center",
   ...props
-}: React.ComponentProps<typeof SelectPrimitive.Content>) {
+}: SelectContentProps) {
   return (
     <SelectPrimitive.Portal>
       <SelectPrimitive.Content
         data-slot="select-content"
-        data-align-trigger={position === "item-aligned"}
-        className={cn("relative z-50 max-h-(--radix-select-content-available-height) min-w-36 origin-(--radix-select-content-transform-origin) overflow-x-hidden overflow-y-auto rounded-lg bg-popover text-popover-foreground shadow-md ring-1 ring-foreground/10 duration-100 data-[align-trigger=true]:animate-none data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95", position ==="popper"&&"data-[side=bottom]:translate-y-1 data-[side=left]:-translate-x-1 data-[side=right]:translate-x-1 data-[side=top]:-translate-y-1", className )}
-        position={position}
-        align={align}
+        className={cn("relative z-50 max-h-(--radix-select-content-available-height) min-w-36 origin-(--radix-select-content-transform-origin) overflow-x-hidden overflow-y-auto rounded-lg bg-popover text-popover-foreground shadow-md ring-1 ring-foreground/10 duration-100 data-[side=bottom]:slide-in-from-top-2 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95", className)}
+        position="popper"
+        side="bottom"
+        align="start"
+        sideOffset={4}
+        avoidCollisions={false}
         {...props}
       >
         <SelectScrollUpButton />
         <SelectPrimitive.Viewport
-          data-position={position}
-          className={cn(
-            "data-[position=popper]:h-(--radix-select-trigger-height) data-[position=popper]:w-full data-[position=popper]:min-w-(--radix-select-trigger-width)",
-            position === "popper" && ""
-          )}
+          data-position="popper"
+          className="w-full min-w-(--radix-select-trigger-width)"
         >
           {children}
         </SelectPrimitive.Viewport>

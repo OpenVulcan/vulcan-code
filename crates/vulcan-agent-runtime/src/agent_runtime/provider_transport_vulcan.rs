@@ -638,6 +638,27 @@ fn build_public_continuation(
     })
 }
 
+/// Reports whether one public stream event is an explicit protocol terminal boundary.
+/// 报告一项公共流事件是否为显式协议终态边界。
+///
+/// # Parameters
+/// 参数
+/// `event` is the normalized provider event produced by the selected protocol decoder.
+/// `event` 是所选协议解码器产出的规范化 Provider 事件。
+///
+/// # Returns
+/// 返回值
+/// `true` for completed, failed, or cancelled responses; otherwise `false`.
+/// 对已完成、失败或已取消响应返回 `true`，否则返回 `false`。
+fn public_stream_event_is_terminal(event: &AiStreamEvent) -> bool {
+    matches!(
+        event,
+        AiStreamEvent::ResponseCompleted
+            | AiStreamEvent::ResponseFailed { .. }
+            | AiStreamEvent::ResponseCancelled
+    )
+}
+
 #[async_trait]
 impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
     async fn execute_request_streaming<S>(
@@ -770,12 +791,18 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
                 }
                 event => event,
             };
-            let usage_updated = matches!(event, AiStreamEvent::UsageUpdated { .. });
+            // terminalEvent closes the normalized response at its explicit protocol boundary instead of waiting for transport EOF.
+            // terminalEvent 在显式协议终态边界关闭规范化响应，而不是继续等待传输 EOF。
+            let terminal_event = public_stream_event_is_terminal(&event);
+            let usage_updated = matches!(&event, AiStreamEvent::UsageUpdated { .. });
             response.apply_event(self.provider_id(), &self.live_sender, sink, event)?;
             if usage_updated && let Some(usage) = response.usage.as_ref() {
                 let _ = self.live_sender.send(Ok(ProviderStreamDelta::UsageUpdated(
                     public_usage_to_core(usage),
                 )));
+            }
+            if terminal_event {
+                break;
             }
         }
         let final_usage = response.usage.as_ref().map(public_usage_to_core);
@@ -2270,6 +2297,23 @@ mod tests {
         fn push_delta(&mut self, delta: ProviderTurnDelta) {
             self.deltas.push(delta);
         }
+    }
+
+    /// Verifies explicit response completion terminates the adapter without requiring transport EOF.
+    /// 验证显式响应完成会终止适配器，而不要求传输层先到达 EOF。
+    #[test]
+    fn response_completion_is_a_protocol_terminal_boundary() {
+        assert!(public_stream_event_is_terminal(
+            &AiStreamEvent::ResponseCompleted
+        ));
+        assert!(public_stream_event_is_terminal(
+            &AiStreamEvent::ResponseCancelled
+        ));
+        assert!(!public_stream_event_is_terminal(
+            &AiStreamEvent::ResponseStarted {
+                execution_id: String::from("response-1"),
+            }
+        ));
     }
 
     /// Verifies split Anthropic usage events retain start-event cache fields and terminal output fields.

@@ -1,0 +1,28 @@
+/* Defines the first semantic aliases for the unified visual foundation. */
+/* 定义统一视觉基础的第一批语义别名。 */
+:root {
+  --vcn-surface-page: var(--background);
+  --vcn-surface-panel: var(--card);
+  --vcn-surface-subtle: var(--muted);
+  --vcn-surface-floating: var(--popover);
+  --vcn-surface-toolbar: color-mix(in oklch, var(--muted) 34%, var(--background));
+  --vcn-content-primary: var(--foreground);
+  --vcn-content-secondary: var(--muted-foreground);
+  --vcn-content-danger: var(--destructive);
+  --vcn-border-default: var(--border);
+  --vcn-border-subtle: color-mix(in oklch, var(--border) 62%, transparent);
+  --vcn-focus-ring: var(--ring);
+  --vcn-radius-sm: 6px;
+  --vcn-radius-md: 8px;
+  --vcn-radius-lg: 12px;
+  --vcn-control-height-xs: 24px;
+  --vcn-control-height-sm: 28px;
+  --vcn-control-height-md: 32px;
+  --vcn-control-height-lg: 36px;
+  --vcn-space-1: 4px;
+  --vcn-space-2: 8px;
+  --vcn-space-3: 12px;
+  --vcn-space-4: 16px;
+  --vcn-space-5: 20px;
+  --vcn-shadow-floating: 0 12px 32px color-mix(in oklch, var(--foreground) 12%, transparent);
+}

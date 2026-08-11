@@ -461,7 +461,7 @@ export function ModelAccountPickerControl(props: {
               <SelectValue />
             </SelectTrigger>
           </HoverCardTrigger>
-          <SelectContent align="start" className="model-picker-account-content" position="popper">
+          <SelectContent className="model-picker-account-content">
             {props.accounts.map((account) => (
               <SelectItem key={account.connectionId} value={account.connectionId}>
                 {account.accountName}

@@ -759,12 +759,7 @@ impl ExecutionPreparation {
             format!("工作区：{}", self.workspace_path),
             format!("上下文：{} 条历史消息", self.context_history_count),
             format!(
-                "能力：工具调用 {} · 温度覆盖 {}",
-                if self.model_blueprint.supports_tool_call() {
-                    "支持"
-                } else {
-                    "不支持"
-                },
+                "能力：温度覆盖 {}",
                 if self.model_blueprint.supports_temperature() {
                     "支持"
                 } else {

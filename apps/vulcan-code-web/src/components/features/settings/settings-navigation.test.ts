@@ -32,4 +32,13 @@ describe("settingsSubAreaGroups", () => {
       "context-basics",
     ]);
   });
+
+  // Exposes the visible acceptance surface from the system settings group.
+  // 从系统设置分组公开可见的视觉验收页面。
+  it("exposes the visual lab from system settings", () => {
+    const groups = settingsSubAreaGroups(testTranslator);
+    const system = groups.find((group) => group.id === "system");
+
+    expect(system?.items.map((item) => item.id)).toContain("visual-lab");
+  });
 });

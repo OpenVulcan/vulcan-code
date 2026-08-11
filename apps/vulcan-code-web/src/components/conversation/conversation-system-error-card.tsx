@@ -87,6 +87,10 @@ const SYSTEM_PROVIDER_ERROR_PREFIX = "Vulcan 公共契约流式执行失败：pr
 // SYSTEM_PROVIDER_ERROR_FAILURE_MARKER 分隔 Provider 标识与 JSON 失败对象。
 const SYSTEM_PROVIDER_ERROR_FAILURE_MARKER = " failure: ";
 
+// SYSTEM_PROVIDER_ERROR_ROUTE_MARKER starts the exact diagnostic suffix appended after the JSON failure object.
+// SYSTEM_PROVIDER_ERROR_ROUTE_MARKER 标识追加在 JSON 失败对象后的精确路由诊断后缀起点。
+const SYSTEM_PROVIDER_ERROR_ROUTE_MARKER = "。 [provider_route: ";
+
 // SYSTEM_PROVIDER_ERROR_FIELD_NAMES lists fields emitted by the legacy text formatter.
 // SYSTEM_PROVIDER_ERROR_FIELD_NAMES 列出旧文本格式化器发出的字段。
 const SYSTEM_PROVIDER_ERROR_FIELD_NAMES = new Set([
@@ -130,6 +134,34 @@ function retryAfterMilliseconds(value: unknown): string | null {
   return isRecord(value) ? scalarText(value.delay_milliseconds) : null;
 }
 
+// structuredProviderDisplayMessage derives a non-empty summary only from normalized failure facts.
+// structuredProviderDisplayMessage 仅从规范化失败事实派生非空摘要。
+function structuredProviderDisplayMessage(
+  structured: Record<string, unknown>,
+  category: string,
+  stage: string,
+): string {
+  const explicitMessage = stringValue(structured.message)
+    ?? stringValue(structured.upstream_message);
+  if (explicitMessage) {
+    return explicitMessage;
+  }
+  const httpStatus = scalarText(structured.http_status);
+  return [httpStatus ? `HTTP ${httpStatus}` : null, category, stage]
+    .filter((value): value is string => Boolean(value))
+    .join(" · ");
+}
+
+// providerFailurePayload removes only the registered route suffix before parsing the canonical JSON object.
+// providerFailurePayload 仅在解析规范 JSON 对象前移除已登记的路由后缀。
+function providerFailurePayload(structuredBody: string): string {
+  const routeMarkerIndex = structuredBody.lastIndexOf(SYSTEM_PROVIDER_ERROR_ROUTE_MARKER);
+  if (routeMarkerIndex < 0 || !structuredBody.endsWith("]")) {
+    return structuredBody;
+  }
+  return structuredBody.slice(0, routeMarkerIndex).trim();
+}
+
 // buildStructuredError creates the shared card model from the exact JSON object.
 // buildStructuredError 根据精确 JSON 对象创建卡片共用模型。
 function buildStructuredError(
@@ -142,10 +174,12 @@ function buildStructuredError(
   const dispatchOutcome = stringValue(structured.dispatch_outcome);
   const semanticOutputObserved = booleanValue(structured.semantic_output_observed);
   const retryable = booleanValue(structured.retryable);
-  const message = stringValue(structured.message);
-  if (!category || !stage || !dispatchOutcome || semanticOutputObserved === null || retryable === null || !message) {
+  if (!category || !stage || !dispatchOutcome || semanticOutputObserved === null || retryable === null) {
     return null;
   }
+  // message remains present even when an upstream 5xx response supplied empty text fields.
+  // message 即使在上游 5xx 返回空文本字段时也保持可展示。
+  const message = structuredProviderDisplayMessage(structured, category, stage);
 
   return {
     raw,
@@ -250,8 +284,11 @@ export function parseSystemProviderError(body: string): SystemProviderError | nu
   const structuredBody = normalizedBody.slice(
     failureMarkerIndex + SYSTEM_PROVIDER_ERROR_FAILURE_MARKER.length,
   ).trim();
+  // structuredPayload excludes the separately formatted route context while raw retains it for inspection.
+  // structuredPayload 排除独立格式化的路由上下文，raw 仍为技术查看保留完整内容。
+  const structuredPayload = providerFailurePayload(structuredBody);
   try {
-    const parsed = JSON.parse(structuredBody) as unknown;
+    const parsed = JSON.parse(structuredPayload) as unknown;
     if (isRecord(parsed)) {
       const structuredError = buildStructuredError(normalizedBody, provider, parsed);
       if (structuredError) {
@@ -265,7 +302,7 @@ export function parseSystemProviderError(body: string): SystemProviderError | nu
 
   const values: Record<string, string> = {};
   const messageParts: string[] = [];
-  for (const rawPart of structuredBody.split(" | ")) {
+  for (const rawPart of structuredPayload.split(" | ")) {
     const part = rawPart.trim();
     const separatorIndex = part.indexOf("=");
     const fieldName = separatorIndex > 0 ? part.slice(0, separatorIndex).trim() : "";

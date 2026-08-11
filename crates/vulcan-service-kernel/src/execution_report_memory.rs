@@ -11,10 +11,7 @@ use vulcan_agent_runtime::{
 use vulcan_service_api::{
     ConversationRunOutcome, ConversationSummaryChangedDelta, ServiceEventEmitter,
 };
-use vulcan_workbench_model::{
-    SessionId, SessionMessageKind, SessionMessageRecordKind, SessionRunPhase,
-    SessionRuntimeStateEntry, SessionState,
-};
+use vulcan_workbench_model::{SessionId, SessionRunPhase, SessionRuntimeStateEntry, SessionState};
 use vulcan_workspace_store::{
     data_plane::ControllerRuntimeHandle, workspace_store::WorkspaceSnapshot,
 };
@@ -30,11 +27,11 @@ use super::{
     active_session_summary_for_session_mut, apply_checkpoint_conversation_state,
     apply_terminal_execution_report_to_state, apply_vmm_writeback_effects_to_runtime_state,
     build_conversation_messages_patched_delta, build_vmm_hook_config_snapshot,
-    context_usage_snapshot_from_runtime_state, conversation_continuation_summary,
-    conversation_messages_from_session, current_unix_millis_text, current_unix_millis_value,
-    emit_service_event_with_trace, merge_runtime_state_records_into_display_messages,
-    owning_project_id_for_session, persist_workspace_session_update,
-    replace_conversation_messages_in_workbench_window,
+    canonical_conversation_tail_kind, context_usage_snapshot_from_runtime_state,
+    conversation_continuation_summary, conversation_messages_from_session,
+    current_unix_millis_text, current_unix_millis_value, emit_service_event_with_trace,
+    merge_runtime_state_records_into_display_messages, owning_project_id_for_session,
+    persist_workspace_session_update, replace_conversation_messages_in_workbench_window,
     replace_task_display_messages_with_runtime_state_records,
     session_continuation_runtime_blockers, spawn_service_task,
     spawn_workspace_session_persist_task, sync_hydrated_session_dialogue_ready_marker,
@@ -607,6 +604,10 @@ pub(super) fn apply_execution_report_to_memory(
     report: ExecutionRunReport,
 ) -> Result<TerminalReportMemoryApply, String> {
     let session_id = report.session_id;
+    webui_trace(
+        "execution_report_apply_enter",
+        format!("session={session_id}"),
+    );
     let report_is_regular_session = {
         let guard = state
             .lock()
@@ -636,11 +637,19 @@ pub(super) fn apply_execution_report_to_memory(
     };
     // vmm_controller is the sole terminal TTL state owner for this session.
     // vmm_controller 是该会话终态 TTL 状态的唯一所有者。
+    webui_trace(
+        "execution_report_vmm_controller_open_start",
+        format!("session={session_id}"),
+    );
     let vmm_controller = vmm_controller_registry.get_or_open(
         &controller_runtime.data_root,
         session_id,
         &current_unix_millis_text(),
     )?;
+    webui_trace(
+        "execution_report_vmm_controller_open_finished",
+        format!("session={session_id}"),
+    );
     let prompt_purpose = report
         .preparation
         .as_ref()
@@ -650,7 +659,15 @@ pub(super) fn apply_execution_report_to_memory(
     // Measures completion-gate inspection for active hooks and descendant subagents.
     // 衡量完成闸门对活跃 hook 与后代子代理的检查耗时。
     let completion_gate_started_at = current_unix_millis_value();
+    webui_trace(
+        "execution_report_completion_gate_start",
+        format!("session={session_id}"),
+    );
     let completion_gate = webui_turn_completion_gate_from_state(state, agent_runtime, session_id)?;
+    webui_trace(
+        "execution_report_completion_gate_finished",
+        format!("session={session_id}"),
+    );
     webui_trace_if_slow(
         "execution_report_completion_gate_slow",
         completion_gate_started_at,
@@ -660,6 +677,10 @@ pub(super) fn apply_execution_report_to_memory(
     // Measures in-memory workspace mutation for the terminal execution report.
     // 衡量终态执行报告写入内存工作区的耗时。
     let workspace_apply_started_at = current_unix_millis_value();
+    webui_trace(
+        "execution_report_workspace_apply_start",
+        format!("session={session_id}"),
+    );
     let (workspace_snapshot, terminal_run_phase, terminal_status_label, vmm_lifecycle_events) = {
         let mut guard = state
             .lock()
@@ -730,6 +751,10 @@ pub(super) fn apply_execution_report_to_memory(
             };
             // hook_commit makes logical-turn ownership explicit before any workspace mutation is installed.
             // hook_commit 在安装任何工作区变更前显式提交逻辑回合所有权。
+            webui_trace(
+                "execution_report_terminal_hook_start",
+                format!("session={session_id}"),
+            );
             let hook_commit = commit_terminal_conversation_hook(
                 agent_runtime,
                 TerminalConversationHookRequest {
@@ -761,6 +786,10 @@ pub(super) fn apply_execution_report_to_memory(
                     Ok(())
                 },
             )?;
+            webui_trace(
+                "execution_report_terminal_hook_finished",
+                format!("session={session_id}"),
+            );
             if let TerminalConversationHookCommit::Completion { turn_id, request } = hook_commit {
                 completion_request = Some(request);
                 if consumes_vmm_ttl {
@@ -851,6 +880,10 @@ pub(super) fn apply_execution_report_to_memory(
         workspace_apply_started_at,
         format!("session={session_id}"),
     );
+    webui_trace(
+        "execution_report_terminal_deltas_start",
+        format!("session={session_id}"),
+    );
     emit_terminal_execution_report_workbench_deltas(
         app,
         state,
@@ -858,6 +891,10 @@ pub(super) fn apply_execution_report_to_memory(
         terminal_run_phase,
         terminal_status_label.as_str(),
     )?;
+    webui_trace(
+        "execution_report_terminal_deltas_finished",
+        format!("session={session_id}"),
+    );
     webui_trace(
         "execution_report_applied",
         format!(
@@ -906,17 +943,7 @@ fn refresh_terminal_continuation_state(
     let terminal_at_ms = terminal_at
         .parse::<i64>()
         .map_err(|_| String::from("ERR_CONVERSATION_CONTINUE_TERMINAL_TIMESTAMP_INVALID"))?;
-    let tail_kind = runtime_state
-        .conversation_state
-        .records
-        .iter()
-        .rev()
-        .find(|record| record.visible && record.record_kind == SessionMessageRecordKind::Transcript)
-        .map(|record| match record.kind {
-            SessionMessageKind::Assistant => "assistant",
-            SessionMessageKind::User => "user",
-            SessionMessageKind::Error => "error",
-        })
+    let tail_kind = canonical_conversation_tail_kind(runtime_state)
         .unwrap_or("empty")
         .to_string();
     let terminal_execution_id = runtime_state
@@ -931,8 +958,10 @@ fn refresh_terminal_continuation_state(
         .provider_call_ledger
         .mark_continuation_terminal(
             terminal_execution_id,
-            if is_success {
+            if is_success && eligible {
                 String::from("completed_non_assistant_tail")
+            } else if is_success {
+                String::from("completed")
             } else {
                 String::from("failed")
             },
@@ -1273,6 +1302,42 @@ pub(super) fn spawn_conversation_completion_hook_task(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vulcan_agent_runtime::conversation_protocol::conversation_state_from_session_messages;
+    use vulcan_workbench_model::{
+        SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind,
+    };
+
+    /// Verifies a successful final AssistantOutput closes the turn without granting prompt-free continuation.
+    /// 验证成功的最终 AssistantOutput 会闭合回合且不会授予无提示词继续资格。
+    #[test]
+    fn completed_assistant_output_disables_continuation() {
+        // assistant_output models the durable final response emitted by the normal Provider success path.
+        // assistant_output 模拟正常 Provider 成功路径生成的持久最终回复。
+        let mut assistant_output =
+            SessionMessageEntry::new(SessionMessageKind::Assistant, "Answer", "complete")
+                .with_runtime_metadata("assistant-1", "1000");
+        assistant_output.record_kind = SessionMessageRecordKind::AssistantOutput;
+        // runtime_state owns the canonical record stream inspected by terminal continuation projection.
+        // runtime_state 持有终态继续投影检查的规范记录流。
+        let mut runtime_state = SessionRuntimeStateEntry {
+            conversation_state: conversation_state_from_session_messages(&[assistant_output])
+                .expect("assistant output must project into canonical conversation state"),
+            ..SessionRuntimeStateEntry::default()
+        };
+
+        refresh_terminal_continuation_state(&mut runtime_state, true, "1000")
+            .expect("successful terminal projection must update continuation state");
+
+        // continuation is the authoritative prompt-free continuation lifecycle after terminal projection.
+        // continuation 是终态投影后的权威无提示词继续生命周期。
+        let continuation = &runtime_state.provider_call_ledger.continuation;
+        assert!(!continuation.eligible);
+        assert_eq!(
+            continuation.canonical_tail_kind.as_deref(),
+            Some("assistant")
+        );
+        assert_eq!(continuation.terminal_reason.as_deref(), Some("completed"));
+    }
 
     /// Verifies terminal hook ownership selects one exclusive action for every outcome.
     /// 验证终态 Hook 所有权为每种结果选择唯一互斥操作。

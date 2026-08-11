@@ -257,10 +257,8 @@ pub(super) async fn maybe_start_session_goal_continuation_if_idle(
     };
     let workspace_path = workspace_path_for_session(&workspace_snapshot, session_id);
     let start = {
-        let mut hook_runtime = agent_runtime
-            .conversation_hook_runtime
-            .lock()
-            .map_err(|error| format!("会话 hook runtime 加锁失败：{error}"))?;
+        // Service state always precedes the shared Hook runtime in the cross-runtime lock order.
+        // 跨运行时锁顺序中，服务状态始终先于共享 Hook 运行时。
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -269,6 +267,10 @@ pub(super) async fn maybe_start_session_goal_continuation_if_idle(
             session_id,
             goal_dispatch_version,
         )?;
+        let mut hook_runtime = agent_runtime
+            .conversation_hook_runtime
+            .lock()
+            .map_err(|error| format!("会话 hook runtime 加锁失败：{error}"))?;
         let start = begin_shared_prompt_turn(
             &mut workspace_snapshot,
             &mut hook_runtime,

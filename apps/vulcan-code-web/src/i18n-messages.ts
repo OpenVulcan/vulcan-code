@@ -1822,6 +1822,7 @@ export type TranslationKey =
   | "settings.aiMusicCover"
   | "settings.mcpServers"
   | "settings.runtimeDiagnostics"
+  | "settings.visualLab"
   | "settings.gitCommit"
   | "settings.promptComposer"
   | "settings.aboutLicenses"
@@ -1845,6 +1846,7 @@ export type TranslationKey =
   | "settings.aiMusicCover.description"
   | "settings.mcpServers.description"
   | "settings.runtimeDiagnostics.description"
+  | "settings.visualLab.description"
   | "settings.diagnostics.logs"
   | "settings.diagnostics.startupStatus"
   | "settings.diagnostics.waitingStatus"
@@ -2040,8 +2042,6 @@ export type TranslationKey =
   | "settings.customModels.output"
   | "settings.customModels.behavior"
   | "settings.customModels.behaviorHint"
-  | "settings.customModels.toolCalling"
-  | "settings.customModels.parallelTools"
   | "settings.customModels.reasoning"
   | "settings.customModels.reasoningControl"
   | "settings.customModels.supportUnknown"
@@ -2088,7 +2088,6 @@ export type TranslationKey =
   | "settings.customModels.defaultsSave"
   | "settings.customModels.fixedTextOutput"
   | "settings.customModels.fixedTextOutputDescription"
-  | "settings.customModels.toolCallingDefaultDescription"
   | "settings.customModels.templateSearching"
   | "settings.customModels.templateUpdateAvailable"
   | "settings.customModels.templateUpdateDescription"
@@ -4448,6 +4447,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.aiMusicCover": "音乐翻唱",
     "settings.mcpServers": "MCP 服务器",
     "settings.runtimeDiagnostics": "运行诊断",
+    "settings.visualLab": "视觉实验室",
     "settings.gitCommit": "Git 提交",
     "settings.promptComposer": "提示词组合",
     "settings.aboutLicenses": "关于与许可证",
@@ -4471,6 +4471,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.aiMusicCover.description": "音乐翻唱能力的启用状态与可用目标。",
     "settings.mcpServers.description": "MCP Runtime、服务连接、工具、提示词与资源状态。",
     "settings.runtimeDiagnostics.description": "启动链路、运行时模块与诊断日志。",
+    "settings.visualLab.description": "统一视觉变量、普通组件与产品定制组件的固定验收入口。",
     "settings.diagnostics.logs": "诊断日志",
     "settings.diagnostics.startupStatus": "启动状态",
     "settings.diagnostics.waitingStatus": "等待状态更新",
@@ -4666,8 +4667,6 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.customModels.output": "输出资源",
     "settings.customModels.behavior": "工具与思考",
     "settings.customModels.behaviorHint": "严格声明供应商实际支持形态；未知不会被当作支持。",
-    "settings.customModels.toolCalling": "工具调用",
-    "settings.customModels.parallelTools": "并行工具调用",
     "settings.customModels.reasoning": "思考支持",
     "settings.customModels.reasoningControl": "思考控制方式",
     "settings.customModels.supportUnknown": "尚未声明",
@@ -4714,7 +4713,6 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.customModels.defaultsSave": "保存供应商设置",
     "settings.customModels.fixedTextOutput": "固定文本输出",
     "settings.customModels.fixedTextOutputDescription": "通用对话供应商只支持文本输出；图片等专用输出由原生系统供应商声明。",
-    "settings.customModels.toolCallingDefaultDescription": "工具调用默认开启；仅在供应商或模型明确不支持时关闭。",
     "settings.customModels.templateSearching": "正在本地能力库中检查精确模型匹配…",
     "settings.customModels.templateUpdateAvailable": "公共能力模板已有新版本",
     "settings.customModels.templateUpdateDescription": "当前模型继续使用已确认的旧快照；只有点击应用更新后才会切换到新版本。",
@@ -7071,6 +7069,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.aiMusicCover": "Music cover",
     "settings.mcpServers": "MCP servers",
     "settings.runtimeDiagnostics": "Runtime diagnostics",
+    "settings.visualLab": "Visual Lab",
     "settings.gitCommit": "Git commit",
     "settings.promptComposer": "Prompt composer",
     "settings.aboutLicenses": "About and licenses",
@@ -7094,6 +7093,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.aiMusicCover.description": "Music-cover capability state and available targets.",
     "settings.mcpServers.description": "MCP runtime, server connections, tools, prompts, and resources.",
     "settings.runtimeDiagnostics.description": "Startup flow, runtime modules, and diagnostic logs.",
+    "settings.visualLab.description": "A stable acceptance surface for unified visual tokens, ordinary controls, and product components.",
     "settings.diagnostics.logs": "Diagnostic logs",
     "settings.diagnostics.startupStatus": "Startup status",
     "settings.diagnostics.waitingStatus": "Waiting for status update",
@@ -7289,8 +7289,6 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.customModels.output": "Output resources",
     "settings.customModels.behavior": "Tools and reasoning",
     "settings.customModels.behaviorHint": "Declare only behavior the provider actually supports. Unknown is never treated as supported.",
-    "settings.customModels.toolCalling": "Tool calling",
-    "settings.customModels.parallelTools": "Parallel tool calling",
     "settings.customModels.reasoning": "Reasoning support",
     "settings.customModels.reasoningControl": "Reasoning control",
     "settings.customModels.supportUnknown": "Not declared",
@@ -7337,7 +7335,6 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.customModels.defaultsSave": "Save provider settings",
     "settings.customModels.fixedTextOutput": "Fixed text output",
     "settings.customModels.fixedTextOutputDescription": "Generic conversation providers support text output only; native system providers declare dedicated image and other output capabilities.",
-    "settings.customModels.toolCallingDefaultDescription": "Tool calling is enabled by default and should be disabled only when the provider or model explicitly does not support it.",
     "settings.customModels.templateSearching": "Checking the local capability library for an exact model match…",
     "settings.customModels.templateUpdateAvailable": "A newer common capability template is available",
     "settings.customModels.templateUpdateDescription": "This model keeps its reviewed snapshot until you explicitly apply the newer revision.",

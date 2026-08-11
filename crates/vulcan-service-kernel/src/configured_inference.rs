@@ -25,10 +25,10 @@ use vulcan_ai_contract::{
     DispatchOutcome, EmbeddingInputContent, EmbeddingRequest, EmbeddingResponse,
     ExecutionRouteSnapshot, InferenceCallerContext, InferenceCapabilitySnapshot,
     InferenceOperationCapability, InferencePermission, InferenceUsageScope, ModelCapabilities,
-    ModelParameterValue, NativeToolKind, ParallelToolCallPolicy, PromptCachePolicy,
-    ReasoningControlMode, ReasoningEffort, RequestUsage, RerankRequest, RerankResponse,
-    ResourceKind, ResponsesExecutionOutputItem, ResponsesExecutionRequest,
-    ResponsesExecutionResult, StructuredOutputPolicy, ToolCall, ToolChoicePolicy, UsageValue,
+    ModelParameterValue, NativeToolKind, PromptCachePolicy, ReasoningControlMode, ReasoningEffort,
+    RequestUsage, RerankRequest, RerankResponse, ResourceKind, ResponsesExecutionOutputItem,
+    ResponsesExecutionRequest, ResponsesExecutionResult, StructuredOutputPolicy, ToolCall,
+    ToolChoicePolicy, UsageValue,
 };
 use vulcan_ai_protocols::{
     ANTHROPIC_MESSAGES_PROFILE_ID, ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID,
@@ -4137,29 +4137,6 @@ fn validate_responses_model_capabilities(
         }
     }
 
-    let has_tool_semantics = !request.tools.is_empty()
-        || !request.native_tools.is_empty()
-        || !matches!(request.tool_choice, ToolChoicePolicy::Auto)
-        || !matches!(
-            request.parallel_tool_calls,
-            ParallelToolCallPolicy::ProviderDefault
-        );
-    if has_tool_semantics && !capabilities.tool_calling.is_supported() {
-        return Err(ConfiguredInferenceError::new(
-            ConfiguredInferenceErrorCategory::Contract,
-            "The selected model route does not explicitly support tool calling.",
-        ));
-    }
-
-    if matches!(request.parallel_tool_calls, ParallelToolCallPolicy::Allowed)
-        && !capabilities.parallel_tool_calling.is_supported()
-    {
-        return Err(ConfiguredInferenceError::new(
-            ConfiguredInferenceErrorCategory::Contract,
-            "The selected model route does not explicitly support parallel tool calling.",
-        ));
-    }
-
     if let ToolChoicePolicy::Specific { tool_name } = &request.tool_choice
         && !tool_names.contains(tool_name.as_str())
     {
@@ -5790,6 +5767,7 @@ mod tests {
     };
     use vulcan_ai_contract::{
         INFERENCE_CONTRACT_VERSION, InferenceCallerBudget, InferenceUsageScope,
+        ParallelToolCallPolicy,
     };
     use vulcan_provider_adapters::{
         InferenceProfile, InferenceRouteBinding, InferenceRouteConfiguration,
@@ -5883,10 +5861,10 @@ mod tests {
         assert_ne!(first, responses_cache_scope_id(&another_caller, &request));
     }
 
-    /// Verifies function-tool semantics require an explicitly tool-capable route.
-    /// 验证函数工具语义要求路由显式声明工具能力。
+    /// Verifies function-tool semantics do not depend on a model capability declaration.
+    /// 验证函数工具语义不依赖模型能力声明。
     #[test]
-    fn responses_capability_validation_rejects_undeclared_tool_calling() {
+    fn responses_capability_validation_accepts_function_tools() {
         let mut request = test_responses_request();
         request.tools.push(vulcan_ai_contract::ToolDefinition {
             name: String::from("lookup"),
@@ -5895,11 +5873,8 @@ mod tests {
             strict: true,
         });
 
-        let error = validate_responses_model_capabilities(&request, &ModelCapabilities::default())
-            .expect_err("unknown tool support must not be treated as available");
-
-        assert_eq!(error.category, ConfiguredInferenceErrorCategory::Contract);
-        assert!(error.message.contains("tool calling"));
+        validate_responses_model_capabilities(&request, &ModelCapabilities::default())
+            .expect("conversation models always accept function-tool semantics");
     }
 
     /// Verifies selected function names must resolve to one unique declared tool.
@@ -5910,10 +5885,7 @@ mod tests {
         request.tool_choice = ToolChoicePolicy::Specific {
             tool_name: String::from("missing"),
         };
-        let capabilities = ModelCapabilities {
-            tool_calling: vulcan_ai_contract::CapabilitySupport::Native,
-            ..ModelCapabilities::default()
-        };
+        let capabilities = ModelCapabilities::default();
 
         let error = validate_responses_model_capabilities(&request, &capabilities)
             .expect_err("an unknown specific tool must be rejected");
@@ -5928,7 +5900,6 @@ mod tests {
         let mut request = test_responses_request();
         request.native_tools.push(NativeToolKind::ImageGeneration);
         let capabilities = ModelCapabilities {
-            tool_calling: vulcan_ai_contract::CapabilitySupport::Native,
             provider_native_tools: vec![NativeToolKind::ImageGeneration],
             ..ModelCapabilities::default()
         };

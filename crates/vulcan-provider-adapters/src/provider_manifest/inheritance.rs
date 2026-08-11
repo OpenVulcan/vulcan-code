@@ -115,14 +115,6 @@ pub fn apply_capability_patch(
         target.rerank = rerank.clone();
         written.push("rerank");
     }
-    if let Some(tool_calling) = patch.tool_calling {
-        target.tool_calling = tool_calling;
-        written.push("tool_calling");
-    }
-    if let Some(parallel_tool_calling) = patch.parallel_tool_calling {
-        target.parallel_tool_calling = parallel_tool_calling;
-        written.push("parallel_tool_calling");
-    }
     if let Some(reasoning) = patch.reasoning {
         target.reasoning = reasoning;
         written.push("reasoning");

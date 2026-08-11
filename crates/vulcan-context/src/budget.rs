@@ -64,9 +64,6 @@ pub struct ContextBudgetCapabilities {
     /// Optional provider/model output-token limit.
     /// Provider/Model 可选输出 Token 上限。
     pub output_limit: Option<usize>,
-    /// Whether the selected model declares tool-calling support.
-    /// 当前选中模型是否声明支持工具调用能力。
-    pub supports_tool_call: bool,
     /// Whether the selected model accepts explicit temperature overrides.
     /// 当前选中模型是否接受显式温度覆盖。
     pub supports_temperature: bool,
@@ -439,14 +436,13 @@ pub fn build_context_budget_fingerprint(
         .collect::<Vec<_>>()
         .join(",");
     format!(
-        "{}|{}|{}|ctx={:?}|in={:?}|out={:?}|tool={}|temp={}|attach={}|reason={:?}|it={}|ot={}|tools={}|ai={}|compact={}",
+        "{}|{}|{}|ctx={:?}|in={:?}|out={:?}|temp={}|attach={}|reason={:?}|it={}|ot={}|tools={}|ai={}|compact={}",
         provider_id,
         model_id,
         protocol_profile_id,
         capabilities.context_limit,
         capabilities.input_limit,
         capabilities.output_limit,
-        capabilities.supports_tool_call,
         capabilities.supports_temperature,
         capabilities.supports_attachment,
         reasoning_effort,

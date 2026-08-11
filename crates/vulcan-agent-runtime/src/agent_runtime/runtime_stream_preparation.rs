@@ -11,6 +11,9 @@ use crate::agent_runtime::execution_preparation::{
 };
 use crate::agent_runtime::question_runtime::QuestionRuntime;
 use crate::agent_runtime::runtime::RuntimeFoundation;
+use crate::agent_runtime::runtime_stream_bootstrap_core::{
+    after_precheck_trace, after_precheck_unix_millis,
+};
 use crate::agent_runtime::runtime_stream_preparation_failure::build_preparation_failure_report;
 use crate::agent_runtime::runtime_stream_preparation_resources::{
     RuntimePreparationResources, build_runtime_preparation_resources,
@@ -73,6 +76,16 @@ pub(crate) fn prepare_runtime_launch_input(
     public_ai_runtime: Option<Arc<vulcan_provider_adapters::PublicAiRuntime>>,
     request: ExecutionPreparationRequest,
 ) -> Result<RuntimePreparedLaunchInput, ExecutionRunReport> {
+    // preparationStartedAt measures the complete synchronous launch-preparation boundary.
+    // preparationStartedAt 测量完整同步启动准备边界。
+    let preparation_started_at = after_precheck_unix_millis();
+    after_precheck_trace(
+        "after_precheck_24_runtime_preparation_enter",
+        format!("session={}", request.session_id),
+    );
+    // resourcesStartedAt isolates runtime-foundation construction from later execution preparation.
+    // resourcesStartedAt 将运行时基础设施构建与后续执行准备隔离计时。
+    let resources_started_at = after_precheck_unix_millis();
     let resources = build_runtime_preparation_resources(
         config,
         agent_profile_catalog,
@@ -85,6 +98,17 @@ pub(crate) fn prepare_runtime_launch_input(
         public_ai_runtime,
         request,
     );
+    after_precheck_trace(
+        "after_precheck_24a_preparation_resources_ready",
+        format!(
+            "session={} elapsed_ms={}",
+            resources.request.session_id,
+            after_precheck_unix_millis().saturating_sub(resources_started_at)
+        ),
+    );
+    // executionPreparationStartedAt isolates tool and provider preparation after foundation construction.
+    // executionPreparationStartedAt 将基础设施构建后的工具及供应商准备隔离计时。
+    let execution_preparation_started_at = after_precheck_unix_millis();
     let prepared = match prepare_execution_with_tool_snapshot(
         &resources.foundation,
         resources.luaskills_runtime.clone(),
@@ -99,6 +123,16 @@ pub(crate) fn prepare_runtime_launch_input(
             ));
         }
     };
+    after_precheck_trace(
+        "after_precheck_25_execution_preparation_ready",
+        format!(
+            "session={} tools={} elapsed_ms={} elapsed_ms_since_preparation={}",
+            resources.request.session_id,
+            prepared.tool_snapshot.resolved_tool_definitions.len(),
+            after_precheck_unix_millis().saturating_sub(execution_preparation_started_at),
+            after_precheck_unix_millis().saturating_sub(preparation_started_at)
+        ),
+    );
 
     Ok(RuntimePreparedLaunchInput::from_resources(
         resources,

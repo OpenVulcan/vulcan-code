@@ -4,8 +4,11 @@
 use crate::agent_profile::AgentProfileCatalog;
 use crate::agent_runtime::ExtensionGeneration;
 use crate::agent_runtime::events::ExecutionStreamEvent;
-use crate::agent_runtime::execution_models::ExecutionPreparationRequest;
+use crate::agent_runtime::execution_models::{ExecutionPreparationRequest, ExecutionRunReport};
 use crate::agent_runtime::question_runtime::QuestionRuntime;
+use crate::agent_runtime::runtime_stream_bootstrap_core::{
+    after_precheck_trace, after_precheck_trace_enabled,
+};
 use crate::agent_runtime::runtime_stream_driver::drive_runtime_stream_launch;
 use crate::agent_runtime::runtime_stream_intervention::RuntimePromptIntervention;
 use crate::agent_runtime::task_runtime::TaskRuntime;
@@ -172,18 +175,103 @@ fn stream_runtime_run_with_access(
     prompt_intervention: Option<RuntimePromptIntervention>,
 ) -> impl Stream<Item = ExecutionStreamEvent> + Send + 'static {
     stream! {
-        let launch = match crate::agent_runtime::runtime_stream_launch::prepare_runtime_stream_launch_with_plugins_and_public_ai(
-            &config,
-            &agent_profile_catalog,
-            luaskills_runtime.clone(),
-            vulcan_plugin_runtime.clone(),
-            extension_generation,
-            task_runtime,
-            question_runtime,
-            command_session_runtime,
-            public_ai_runtime,
-            request,
-        ).await {
+        // launchSessionId keeps non-sensitive correlation available after the request moves into the lazy future.
+        // launchSessionId 在请求移入惰性 Future 后继续提供非敏感关联标识。
+        let launch_session_id = request.session_id;
+        // launchResult uses an isolated scheduler task only while tracing so the experiment can distinguish nested poll-stack pressure without changing normal execution semantics.
+        // launchResult 仅在追踪时使用独立调度任务，使实验能够区分嵌套轮询栈压力且不改变正常执行语义。
+        let launch_result = if after_precheck_trace_enabled() {
+            after_precheck_trace(
+                "after_precheck_23b0_isolated_launch_future_construct_enter",
+                format!("session={launch_session_id}"),
+            );
+            // isolatedConfig owns the Provider configuration across the diagnostic task boundary.
+            // isolatedConfig 跨诊断任务边界持有 Provider 配置。
+            let isolated_config = config.clone();
+            // isolatedAgentProfileCatalog owns the agent catalog across the diagnostic task boundary.
+            // isolatedAgentProfileCatalog 跨诊断任务边界持有智能体目录。
+            let isolated_agent_profile_catalog = agent_profile_catalog.clone();
+            // isolatedLaunchFuture resets the Tokio poll call stack while retaining the exact launch inputs.
+            // isolatedLaunchFuture 在保留精确启动输入的同时重置 Tokio 轮询调用栈。
+            let isolated_launch_future = async move {
+                crate::agent_runtime::runtime_stream_launch::prepare_runtime_stream_launch_with_plugins_and_public_ai(
+                    &isolated_config,
+                    &isolated_agent_profile_catalog,
+                    luaskills_runtime.clone(),
+                    vulcan_plugin_runtime.clone(),
+                    extension_generation,
+                    task_runtime,
+                    question_runtime,
+                    command_session_runtime,
+                    public_ai_runtime,
+                    request,
+                )
+                .await
+            };
+            after_precheck_trace(
+                "after_precheck_23b1_isolated_launch_future_constructed",
+                format!(
+                    "session={} future_size_bytes={}",
+                    launch_session_id,
+                    std::mem::size_of_val(&isolated_launch_future)
+                ),
+            );
+            // boxedIsolatedLaunchFuture moves the oversized concrete Future to the heap before it crosses the Tokio spawn boundary.
+            // boxedIsolatedLaunchFuture 在超大具体 Future 跨越 Tokio 启动边界前将其移入堆内存。
+            let boxed_isolated_launch_future = Box::pin(isolated_launch_future);
+            after_precheck_trace(
+                "after_precheck_23b2_isolated_launch_future_boxed",
+                format!(
+                    "session={} boxed_future_size_bytes={}",
+                    launch_session_id,
+                    std::mem::size_of_val(&boxed_isolated_launch_future)
+                ),
+            );
+            // isolatedLaunchTask lets Tokio poll the boxed launch Future from a fresh scheduler boundary.
+            // isolatedLaunchTask 使 Tokio 从新的调度边界轮询装箱后的启动 Future。
+            let isolated_launch_task = tokio::spawn(boxed_isolated_launch_future);
+            after_precheck_trace(
+                "after_precheck_23b3_isolated_launch_task_spawned",
+                format!("session={launch_session_id}"),
+            );
+            match isolated_launch_task.await {
+                Ok(result) => {
+                    after_precheck_trace(
+                        "after_precheck_23b4_isolated_launch_task_joined",
+                        format!("session={launch_session_id}"),
+                    );
+                    result
+                }
+                Err(error) => Err(ExecutionRunReport::failure(
+                    launch_session_id,
+                    None,
+                    0,
+                    None,
+                    None,
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    None,
+                    format!("The isolated runtime launch task failed: {error}"),
+                )),
+            }
+        } else {
+            crate::agent_runtime::runtime_stream_launch::prepare_runtime_stream_launch_with_plugins_and_public_ai(
+                &config,
+                &agent_profile_catalog,
+                luaskills_runtime,
+                vulcan_plugin_runtime,
+                extension_generation,
+                task_runtime,
+                question_runtime,
+                command_session_runtime,
+                public_ai_runtime,
+                request,
+            )
+            .await
+        };
+        let launch = match launch_result {
             Ok(launch) => launch,
             Err(report) => {
                 yield ExecutionStreamEvent::Finished(report);
@@ -195,5 +283,26 @@ fn stream_runtime_run_with_access(
         while let Some(event) = runtime_stream.next().await {
             yield event;
         }
+    }
+}
+
+#[cfg(test)]
+mod stack_size_diagnostics {
+    //! Runtime launch type-size diagnostics for stack-boundary regression analysis.
+    //! 用于栈边界回归分析的运行时启动类型大小诊断。
+
+    use crate::agent_runtime::execution_models::ExecutionRunReport;
+    use crate::agent_runtime::runtime_stream_launch_payload::RuntimeStreamLaunch;
+
+    /// Prints exact launch output sizes so diagnostics can distinguish Future storage from output storage.
+    /// 打印精确启动输出大小，使诊断能够区分 Future 存储与输出存储。
+    #[test]
+    fn reports_runtime_launch_output_type_sizes() {
+        eprintln!(
+            "runtime_stream_launch_bytes={} execution_run_report_bytes={} launch_result_bytes={}",
+            std::mem::size_of::<RuntimeStreamLaunch>(),
+            std::mem::size_of::<ExecutionRunReport>(),
+            std::mem::size_of::<Result<RuntimeStreamLaunch, ExecutionRunReport>>()
+        );
     }
 }

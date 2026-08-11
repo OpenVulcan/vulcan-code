@@ -26,6 +26,7 @@ export type SettingsSubAreaId =
   | "ai-music-cover"
   | "mcp-servers"
   | "runtime-diagnostics"
+  | "visual-lab"
   | "notifications"
   | "git-commit"
   | "prompt-composer"

@@ -7,6 +7,9 @@ use crate::agent_runtime::execution_models::{
 use crate::agent_runtime::provider::resolve_public_ai_provider_blueprint;
 use crate::agent_runtime::provider_stream_projection::truncate_preview;
 use crate::agent_runtime::runtime::RuntimeFoundation;
+use crate::agent_runtime::runtime_stream_bootstrap_core::{
+    after_precheck_trace, after_precheck_unix_millis,
+};
 use crate::conversation_protocol::collect_host_visible_attachments;
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
 use crate::provider_config::ProviderConfigurationFile;
@@ -66,6 +69,13 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
     config: &ProviderConfigurationFile,
     request: &ExecutionPreparationRequest,
 ) -> Result<PreparedExecution, String> {
+    // preparationStartedAt measures the complete synchronous execution-preparation boundary.
+    // preparationStartedAt 测量完整同步执行准备边界。
+    let preparation_started_at = after_precheck_unix_millis();
+    after_precheck_trace(
+        "after_precheck_25a_execution_preparation_enter",
+        format!("session={}", request.session_id),
+    );
     let active_agent = match request.execution_agent_id.as_deref() {
         Some(agent_id) => foundation
             .agent_definition(agent_id)
@@ -81,8 +91,26 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
             active_agent.name
         ));
     }
+    after_precheck_trace(
+        "after_precheck_25a1_active_agent_ready",
+        format!(
+            "session={} agent_id={}",
+            request.session_id, active_agent.id
+        ),
+    );
 
     let tool_exposure = resolve_execution_tool_exposure(foundation, &active_agent.id, request);
+    after_precheck_trace(
+        "after_precheck_25a2_tool_exposure_ready",
+        format!(
+            "session={} native={} luaskills={} luaskills_dispatch={} mcp={}",
+            request.session_id,
+            tool_exposure.native_tool_ids.len(),
+            tool_exposure.luaskills_tools.len(),
+            tool_exposure.luaskills_dispatch_tools.len(),
+            tool_exposure.mcp_tools.len()
+        ),
+    );
     let public_ai_runtime = foundation
         .public_ai_runtime()
         .ok_or_else(|| String::from("The service has not installed the public AI runtime."))?;
@@ -98,6 +126,16 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         request.model_id_override.as_deref(),
         request.connection_id_override.as_deref(),
     )?;
+    after_precheck_trace(
+        "after_precheck_25a3_provider_blueprint_ready",
+        format!(
+            "session={} provider={} model={} protocol={}",
+            request.session_id,
+            model_blueprint.provider_id,
+            model_blueprint.model_id,
+            model_blueprint.protocol_profile_id
+        ),
+    );
     // contextWindowPolicySnapshot freezes system/provider/model defaults at the safe turn boundary.
     // contextWindowPolicySnapshot 在安全回合边界冻结系统、供应商与模型默认值。
     let public_ai_configuration = public_ai_runtime.configuration_snapshot()?;
@@ -107,6 +145,10 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
             model_blueprint.model_id.as_str(),
             request.context_compaction_policy,
         );
+    after_precheck_trace(
+        "after_precheck_25a4_provider_configuration_ready",
+        format!("session={}", request.session_id),
+    );
     let mut warnings = Vec::new();
     let workspace_path = normalize_workspace_path_text(&request.workspace_path);
     let conversation_attachments = collect_host_visible_attachments(&request.conversation_state);
@@ -115,8 +157,20 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
     let prompt_skill_user_root = Some(vulcan_prompt_skills::configured_user_skill_root(
         &prompt_skills_global_config,
     ));
+    after_precheck_trace(
+        "after_precheck_25a5_prompt_skill_catalog_load_enter",
+        format!("session={}", request.session_id),
+    );
     let mut prompt_skill_catalog =
         vulcan_prompt_skills::load_prompt_skills(&prompt_skills_global_config);
+    after_precheck_trace(
+        "after_precheck_25a6_prompt_skill_catalog_loaded",
+        format!(
+            "session={} errors={}",
+            request.session_id,
+            prompt_skill_catalog.errors.len()
+        ),
+    );
     if let Some(plugin_catalog) = foundation.vulcan_plugin_catalog() {
         // A published plugin snapshot is part of the execution contract; invariant failures must not degrade silently.
         // 已发布插件快照属于执行契约的一部分；不变量失败不得静默降级。
@@ -136,6 +190,14 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         &prompt_skills_global_config,
         &prompt_skills_project_config_from_request(request),
         &prompt_skills_session_config_from_request(request),
+    );
+    after_precheck_trace(
+        "after_precheck_25a7_prompt_skills_resolved",
+        format!(
+            "session={} resolved={}",
+            request.session_id,
+            prompt_skills.len()
+        ),
     );
     // Agent-owned visibility policy is independent from plugin lifecycle ownership and user state overrides.
     // 智能体自有可见性策略独立于插件生命周期归属及用户状态覆盖。
@@ -193,6 +255,14 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         &request.provider_tool_selections_override,
         suppress_external_web_search,
     )?;
+    after_precheck_trace(
+        "after_precheck_25a8_provider_tool_candidates_ready",
+        format!(
+            "session={} candidates={}",
+            request.session_id,
+            provider_tool_candidates.len()
+        ),
+    );
     let tools_manager = build_vulcan_tools_manager(
         foundation.task_runtime(),
         foundation.question_runtime(),
@@ -220,7 +290,20 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         session_vmm.clone(),
         request.vmm_runtime_ready,
     );
+    after_precheck_trace(
+        "after_precheck_25a9_tools_manager_ready",
+        format!("session={}", request.session_id),
+    );
     let mut resolved_tools = tools_manager.resolve_for_execution_mode(&request.execution_mode);
+    after_precheck_trace(
+        "after_precheck_25a10_tools_resolved",
+        format!(
+            "session={} descriptors={} definitions={}",
+            request.session_id,
+            resolved_tools.descriptors.len(),
+            resolved_tools.definitions.len()
+        ),
+    );
     if !request.execution_mode.eq_ignore_ascii_case("plan") {
         remove_resolved_tool(&mut resolved_tools, SUBMIT_PLAN_TOOL_ID);
     }
@@ -264,15 +347,6 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         warnings.push(reasoning_note.clone());
     }
 
-    if !model_blueprint.supports_tool_call() && !resolved_tools.descriptors.is_empty() {
-        warnings.push(format!(
-            "当前模型 `{}` 未声明工具调用能力，本轮已自动隐藏 {} 个工具。",
-            model_blueprint.model_name,
-            resolved_tools.descriptors.len()
-        ));
-        resolved_tools.descriptors.clear();
-        resolved_tools.definitions.clear();
-    }
     append_codebase_tool_routing_prompt(
         &mut prompt_skill_developer_segment,
         &resolved_tools.descriptors,
@@ -359,6 +433,15 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         tools_manager,
         resolved_tool_definitions,
     };
+    after_precheck_trace(
+        "after_precheck_25a11_execution_preparation_complete",
+        format!(
+            "session={} tools={} elapsed_ms={}",
+            request.session_id,
+            tool_snapshot.resolved_tool_definitions.len(),
+            after_precheck_unix_millis().saturating_sub(preparation_started_at)
+        ),
+    );
 
     Ok(PreparedExecution {
         preparation,

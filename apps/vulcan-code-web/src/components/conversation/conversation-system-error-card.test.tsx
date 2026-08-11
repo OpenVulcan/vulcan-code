@@ -34,6 +34,30 @@ const SYSTEM_ERROR_BODY = `Vulcan 公共契约流式执行失败：provider cust
 // LEGACY_SYSTEM_ERROR_BODY 保障迁移期间已经持久化的旧文本失败仍可渲染。
 const LEGACY_SYSTEM_ERROR_BODY = "Vulcan 公共契约流式执行失败：provider custom:78958aba28114a6babbe55c4e4b5ef1c failure: category=Unclassified | stage=stream | dispatch_outcome=Dispatched | semantic_output_observed=false | retryable=false | upstream_code=server_is_overloaded | Our servers are currently overloaded. Please try again later.";
 
+// EMPTY_MESSAGE_502_BODY mirrors an upstream 502 that supplies retry metadata but no display text.
+// EMPTY_MESSAGE_502_BODY 对应携带重试元数据但没有展示文本的上游 502。
+const EMPTY_MESSAGE_502_BODY = `Vulcan 公共契约流式执行失败：provider apikeyfun failure: ${JSON.stringify({
+  category: "provider_unavailable",
+  subcategory: "http",
+  stage: "response_headers",
+  http_status: 502,
+  transport: "http",
+  upstream_message: "",
+  provider_id: "apikeyfun",
+  entry_id: "public-api",
+  model_id: "gpt-5.6-luna",
+  message: "",
+  dispatch_outcome: "dispatched",
+  semantic_output_observed: false,
+  side_effect_observed: false,
+  terminal: true,
+  retryable: true,
+  retry_after: {
+    delay_milliseconds: 60_000,
+    source: "header_seconds",
+  },
+})}。 [provider_route: provider=apikeyfun, model=gpt-5.6-luna, protocol=openai-chat-completions.v1, manifest_revision=0, manifest_generation=2, request_profiles=[], response_profiles=[]]`;
+
 describe("system provider error card", () => {
   it("parses canonical provider failure fields without losing the upstream message", () => {
     const error = parseSystemProviderError(SYSTEM_ERROR_BODY);
@@ -58,6 +82,20 @@ describe("system provider error card", () => {
       category: "Unclassified",
       dispatchOutcome: "Dispatched",
       upstreamCode: "server_is_overloaded",
+    });
+  });
+
+  // Verifies empty upstream messages retain the structured card and exact retry facts.
+  // 验证空上游消息仍会保留结构化卡片与精确重试事实。
+  it("keeps retryable 502 failures card-ready when message fields are empty", () => {
+    expect(parseSystemProviderError(EMPTY_MESSAGE_502_BODY)).toMatchObject({
+      provider: "apikeyfun",
+      category: "provider_unavailable",
+      stage: "response_headers",
+      httpStatus: "502",
+      retryable: true,
+      retryAfterMs: "60000",
+      message: "HTTP 502 · provider_unavailable · response_headers",
     });
   });
 

@@ -24,7 +24,6 @@ export function resolveDirectCustomProviderDefaults(
     reasoning: source.reasoning,
     reasoning_control: source.reasoning_control,
     reasoning_efforts: [...source.reasoning_efforts],
-    tool_calling: source.tool_calling,
     // contextWindowPolicy keeps the provider-level Codex threshold layer intact when other fields are edited.
     // contextWindowPolicy 在编辑其他字段时保持供应商级 Codex 阈值层不丢失。
     context_window_policy: source.context_window_policy,
@@ -69,9 +68,6 @@ export function directCustomModelSettingsDraft(row: CustomProviderModelRow): Pub
     reasoning_efforts: reasoningEnabled
       ? projectOpenAiReasoningEfforts(inheritedEfforts)
       : ["none"],
-    tool_calling: (row.capabilityOverrides?.tool_calling ?? capabilities?.tool_calling) === "unsupported"
-      ? "unsupported"
-      : "native",
     // contextWindowPolicy is owned only when this exact model already has a sparse override.
     // contextWindowPolicy 仅在该精确模型已有稀疏覆盖时由模型层持有。
     context_window_policy: row.capabilityOverrides?.context_window_policy ?? undefined,
@@ -99,7 +95,6 @@ function normalizeDirectProviderModelSettings(settings: PublicAiModelCapabilityO
     reasoning: settings.reasoning ?? null,
     reasoningControl: settings.reasoning_control ?? null,
     reasoningEfforts: [...(settings.reasoning_efforts ?? [])].sort(),
-    toolCalling: settings.tool_calling ?? null,
     contextWindowPolicy: settings.context_window_policy ?? null,
     requestProjection: settings.request_projection ?? null,
   }

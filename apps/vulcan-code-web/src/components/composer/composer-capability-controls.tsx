@@ -862,7 +862,7 @@ export function ComposerSelectControl(props: {
       ) : (
         trigger
       )}
-      <SelectContent align="start" className="composer-select-content" position="popper">
+      <SelectContent className="composer-select-content">
         {props.options.map((option) => (
           <SelectItem className="composer-select-item" key={option.value} value={option.value}>
             <span className="composer-select-item-copy">

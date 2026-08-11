@@ -938,6 +938,41 @@ mod tests {
         assert_eq!(decision.reason, "Provider unavailable");
     }
 
+    /// Verifies the reported APIKEY.FUN 502 remains retryable with empty text and a capped Retry-After delay.
+    /// 验证已报告的 APIKEY.FUN 502 在文本为空且 Retry-After 受上限约束时仍可重试。
+    #[test]
+    fn retryable_502_with_empty_message_uses_same_route_retry_budget() {
+        let mut error = structured_provider_error(AiErrorCategory::ProviderUnavailable, true);
+        let VulcanCoreError::ProviderFailure {
+            details: Some(details),
+            ..
+        } = &mut error
+        else {
+            panic!("structured error expected");
+        };
+        details.subcategory = Some(String::from("http"));
+        details.http_status = Some(502);
+        details.upstream_message = Some(String::new());
+        details.message = String::new();
+        details.retry_after = Some(RetryAfterHint {
+            delay_milliseconds: 60_000,
+            source: RetryAfterSource::HeaderSeconds,
+        });
+
+        // runtimePolicy mirrors the built-in policy used whenever the persisted retry block is omitted.
+        // runtimePolicy 对应持久化 retry 配置块省略时使用的内置策略。
+        let runtime_policy =
+            ProviderRetryPolicy::from_config(&PersistedProviderRetryConfiguration::default());
+        let decision = runtime_policy
+            .next_retry(&error, 0, false)
+            .expect("safe dispatched 502 should retry");
+
+        assert_eq!(decision.retry_number, 1);
+        assert_eq!(decision.max_retries, 5);
+        assert_eq!(decision.delay, Duration::from_millis(30_000));
+        assert_eq!(decision.reason, "Provider unavailable");
+    }
+
     /// Verifies a normalized provider overload enters the configured transient retry budget.
     /// 验证归一化后的供应商过载错误会进入已配置的瞬态重试预算。
     #[test]

@@ -71,10 +71,6 @@ pub struct CustomProviderModelDefaults {
     /// 供应商级可选思考档位。
     #[serde(default = "default_custom_provider_reasoning_efforts")]
     pub reasoning_efforts: Vec<ReasoningEffort>,
-    /// Provider-wide tool-calling support applied above catalog declarations.
-    /// 应用于目录声明之上的供应商级工具调用支持状态。
-    #[serde(default = "default_custom_provider_tool_calling")]
-    pub tool_calling: CapabilitySupport,
     /// Provider-wide sparse Codex context-window defaults.
     /// 供应商级稀疏 Codex 上下文窗口默认值。
     #[serde(
@@ -100,7 +96,6 @@ impl Default for CustomProviderModelDefaults {
             reasoning: default_custom_provider_reasoning(),
             reasoning_control: default_custom_provider_reasoning_control(),
             reasoning_efforts: default_custom_provider_reasoning_efforts(),
-            tool_calling: default_custom_provider_tool_calling(),
             context_window_policy: ContextWindowPolicyOverrides::default(),
             request_projection: None,
         }
@@ -141,7 +136,6 @@ impl CustomProviderModelDefaults {
             self.reasoning_control,
             self.reasoning_efforts.as_slice(),
         )?;
-        validate_custom_provider_tool_calling_setting(self.tool_calling)?;
         self.context_window_policy.validate()?;
         if let Some(request_projection) = self.request_projection.as_ref() {
             request_projection.validate_paths()?;
@@ -182,13 +176,10 @@ impl CustomProviderModelDefaults {
         if capabilities.reasoning_efforts.is_empty() {
             capabilities.reasoning_efforts = self.reasoning_efforts.clone();
         }
-        if capabilities.tool_calling == CapabilitySupport::Unknown {
-            capabilities.tool_calling = self.tool_calling;
-        }
     }
 
-    /// Applies the system-owned custom-provider reasoning and tool policy above catalog evidence.
-    /// 在目录证据之上应用系统持有的自定义供应商思考与工具策略。
+    /// Applies the system-owned custom-provider reasoning policy above catalog evidence.
+    /// 在目录证据之上应用系统持有的自定义供应商思考策略。
     ///
     /// # Parameters
     /// 参数
@@ -206,7 +197,6 @@ impl CustomProviderModelDefaults {
         if !self.reasoning_efforts.is_empty() {
             capabilities.reasoning_efforts = self.reasoning_efforts.clone();
         }
-        capabilities.tool_calling = self.tool_calling;
         capabilities.evidence_revision = format!(
             "{}+custom-provider-system-policy.v1",
             capabilities.evidence_revision
@@ -231,7 +221,6 @@ impl CustomProviderModelDefaults {
         capabilities.reasoning = self.reasoning;
         capabilities.reasoning_control = self.reasoning_control;
         capabilities.reasoning_efforts = self.reasoning_efforts.clone();
-        capabilities.tool_calling = self.tool_calling;
         capabilities.evidence_revision = format!(
             "{}+custom-provider-settings.v1",
             capabilities.evidence_revision
@@ -255,12 +244,6 @@ fn default_custom_provider_reasoning_control() -> ReasoningControlMode {
 /// 返回默认 OpenAI 兼容思考档位的独立副本。
 fn default_custom_provider_reasoning_efforts() -> Vec<ReasoningEffort> {
     CUSTOM_PROVIDER_OPENAI_REASONING_EFFORTS.to_vec()
-}
-
-/// Returns the default native tool-calling support for custom compatible providers.
-/// 返回自定义兼容供应商默认使用的原生工具调用支持状态。
-fn default_custom_provider_tool_calling() -> CapabilitySupport {
-    CapabilitySupport::Native
 }
 
 /// Validates the closed simple reasoning policies exposed by provider and model settings.
@@ -309,32 +292,6 @@ pub fn validate_custom_provider_reasoning_settings(
     }
     Err(String::from(
         "Custom provider reasoning settings must be natively enabled with at least one OpenAI-compatible enabled level, or explicitly disabled.",
-    ))
-}
-
-/// Validates the two-state tool-calling toggle exposed by direct custom-provider settings.
-/// 校验直接自定义供应商设置公开的双态工具调用开关。
-///
-/// # Parameters
-/// 参数
-/// `support` is the complete provider-level or model-level tool-calling choice.
-/// `support` 是完整的供应商级或模型级工具调用选择。
-///
-/// # Returns
-/// 返回值
-/// Success only for native support or explicit disablement.
-/// 仅在原生支持或显式关闭时返回成功。
-pub fn validate_custom_provider_tool_calling_setting(
-    support: CapabilitySupport,
-) -> Result<(), String> {
-    if matches!(
-        support,
-        CapabilitySupport::Native | CapabilitySupport::Unsupported
-    ) {
-        return Ok(());
-    }
-    Err(String::from(
-        "Custom provider tool calling must be natively enabled or explicitly disabled.",
     ))
 }
 
@@ -1005,38 +962,6 @@ mod tests {
 
         assert_eq!(capabilities.context_limit, Some(8_192));
         assert_eq!(capabilities.output_limit, Some(8_192));
-    }
-
-    /// Verifies provider settings require an explicit enabled or disabled tool-calling state.
-    /// 验证供应商设置要求工具调用必须处于明确开启或关闭状态。
-    #[test]
-    fn provider_settings_reject_unknown_tool_calling() {
-        let settings = CustomProviderModelDefaults {
-            tool_calling: CapabilitySupport::Unknown,
-            ..CustomProviderModelDefaults::default()
-        };
-
-        let error = settings
-            .validate()
-            .expect_err("unknown tool calling must be rejected");
-
-        assert!(error.contains("natively enabled or explicitly disabled"));
-    }
-
-    /// Verifies the boolean direct editor cannot persist an unrepresentable equivalent tool state.
-    /// 验证双态直接编辑器不能持久化无法表达的等价投影工具状态。
-    #[test]
-    fn provider_settings_reject_equivalent_tool_calling() {
-        let settings = CustomProviderModelDefaults {
-            tool_calling: CapabilitySupport::Equivalent,
-            ..CustomProviderModelDefaults::default()
-        };
-
-        let error = settings
-            .validate()
-            .expect_err("equivalent tool calling must be rejected");
-
-        assert!(error.contains("natively enabled or explicitly disabled"));
     }
 
     /// Verifies provider settings reject generic non-text output configuration.

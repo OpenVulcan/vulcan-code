@@ -33,8 +33,6 @@ function rowWithCapabilities(
         reasoning: "unknown",
         reasoning_control: "unknown",
         reasoning_efforts: [],
-        tool_calling: "unknown",
-        parallel_tool_calling: "unknown",
         prompt_cache: {
           provider_default_behavior: "Provider default",
           supports_managed_explicit: false,
@@ -48,7 +46,7 @@ function rowWithCapabilities(
 }
 
 describe("direct provider model settings", () => {
-  it("defaults reasoning and tool calling on without exposing output overrides", () => {
+  it("defaults reasoning on without exposing output overrides", () => {
     const draft = directCustomModelSettingsDraft(rowWithCapabilities())
 
     expect(draft).toEqual({
@@ -58,7 +56,6 @@ describe("direct provider model settings", () => {
       reasoning: "native",
       reasoning_control: "effort_selection",
       reasoning_efforts: ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
-      tool_calling: "native",
     })
     expect("output_resources" in draft).toBe(false)
   })
@@ -71,7 +68,6 @@ describe("direct provider model settings", () => {
       reasoning: "unsupported",
       reasoning_control: "fixed_off",
       reasoning_efforts: ["none"],
-      tool_calling: "unsupported",
     }))
 
     expect(draft).toEqual({
@@ -81,7 +77,6 @@ describe("direct provider model settings", () => {
       reasoning: "unsupported",
       reasoning_control: "fixed_off",
       reasoning_efforts: ["none"],
-      tool_calling: "unsupported",
     })
   })
 
@@ -151,7 +146,6 @@ describe("direct provider model settings", () => {
         reasoning: "native",
         reasoning_control: "effort_selection",
         reasoning_efforts: ["none", "medium", "high"],
-        tool_calling: "native",
       },
       {
         context_limit: 64_000,
@@ -160,7 +154,6 @@ describe("direct provider model settings", () => {
         reasoning: "native",
         reasoning_control: "effort_selection",
         reasoning_efforts: ["high", "none", "medium"],
-        tool_calling: "native",
       },
     )).toBe(true)
     expect(directProviderModelSettingsEqual(
@@ -176,8 +169,7 @@ describe("direct provider model settings", () => {
       input_resources: [],
       reasoning: "native" as const,
       reasoning_control: "effort_selection" as const,
-        reasoning_efforts: ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
-      tool_calling: "native" as const,
+      reasoning_efforts: ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
     }
     const first = resolveDirectCustomProviderDefaults(systemDefaults, undefined)
     first.input_resources?.push("image")
@@ -189,8 +181,7 @@ describe("direct provider model settings", () => {
       input_resources: [],
       reasoning: "native",
       reasoning_control: "effort_selection",
-        reasoning_efforts: ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
-      tool_calling: "native",
+      reasoning_efforts: ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
     })
   })
 })

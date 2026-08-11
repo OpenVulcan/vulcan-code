@@ -1210,8 +1210,6 @@ fn build_alibaba_static_conversation_catalog(
                 resolved_protocol_binding: None,
             };
             if responses_harness {
-                model.capabilities.tool_calling = CapabilitySupport::Unsupported;
-                model.capabilities.parallel_tool_calling = CapabilitySupport::Unsupported;
                 model.capabilities.reasoning = CapabilitySupport::Unsupported;
                 model.capabilities.reasoning_control = ReasoningControlMode::FixedOff;
             } else {
@@ -1607,12 +1605,6 @@ fn apply_resolved_capability_template(
     if declared("rerank") {
         target.rerank = template.rerank.clone();
     }
-    if declared("tool_calling") {
-        target.tool_calling = template.tool_calling;
-    }
-    if declared("parallel_tool_calling") {
-        target.parallel_tool_calling = template.parallel_tool_calling;
-    }
     if declared("reasoning") {
         target.reasoning = template.reasoning;
     }
@@ -1847,8 +1839,6 @@ fn enrich_kimi_model(service_entry_id: &str, protocol_id: &str, model: &mut Conn
     model.display_name = display_name.to_string();
     model.capabilities.context_limit = context_limit;
     model.capabilities.input_resources = input_resources;
-    model.capabilities.tool_calling = CapabilitySupport::Native;
-    model.capabilities.parallel_tool_calling = CapabilitySupport::Native;
     model.capabilities.reasoning = reasoning;
     model.capabilities.reasoning_control = reasoning_control;
     model.capabilities.reasoning_efforts = reasoning_efforts;
@@ -1878,8 +1868,6 @@ fn enrich_deepseek_model(protocol_id: &str, model: &mut ConnectionModel) {
     model.display_name = display_name.to_string();
     model.capabilities.context_limit = Some(1_000_000);
     model.capabilities.output_limit = Some(393_216);
-    model.capabilities.tool_calling = CapabilitySupport::Native;
-    model.capabilities.parallel_tool_calling = CapabilitySupport::Native;
     model.capabilities.reasoning = CapabilitySupport::Native;
     model.capabilities.reasoning_control = ReasoningControlMode::Toggle;
     model.capabilities.reasoning_efforts = vec![
@@ -2046,8 +2034,6 @@ fn enrich_alibaba_model(service_entry_id: &str, model: &mut ConnectionModel) {
         ),
         _ => return,
     };
-    model.capabilities.tool_calling = CapabilitySupport::Native;
-    model.capabilities.parallel_tool_calling = CapabilitySupport::Unknown;
     model.capabilities.reasoning = CapabilitySupport::Native;
     model.capabilities.reasoning_control = reasoning_control;
     model.capabilities.reasoning_efforts = reasoning_efforts;
@@ -2580,16 +2566,6 @@ fn openrouter_reported_capabilities(model: &OpenRouterModelEntry) -> ModelCapabi
         output_resources,
         embedding: None,
         rerank: None,
-        tool_calling: if supports("tools") {
-            CapabilitySupport::Native
-        } else {
-            CapabilitySupport::Unsupported
-        },
-        parallel_tool_calling: if supports("parallel_tool_calls") {
-            CapabilitySupport::Native
-        } else {
-            CapabilitySupport::Unsupported
-        },
         reasoning,
         reasoning_control,
         reasoning_efforts,
@@ -3528,7 +3504,6 @@ mod tests {
 
         let unknown = &catalog.models[2].capabilities;
         assert_eq!(unknown.context_limit, None);
-        assert_eq!(unknown.tool_calling, CapabilitySupport::Unknown);
         assert!(unknown.model_parameters.is_empty());
     }
 
@@ -3586,10 +3561,6 @@ mod tests {
         )
         .expect("documented response should parse");
         assert_eq!(catalog.models[0].display_name, "DeepSeek V4 Pro");
-        assert_eq!(
-            catalog.models[0].capabilities.tool_calling,
-            CapabilitySupport::Native
-        );
         assert_eq!(catalog.models[0].capabilities.context_limit, Some(8192));
         assert_eq!(catalog.models[0].capabilities.output_limit, Some(4096));
         assert_eq!(
@@ -3620,10 +3591,6 @@ mod tests {
             r#"{"data":[{"id":"deepseek/future-model","name":"Future","context_length":131072,"supported_parameters":["tools"],"architecture":{"input_modalities":["text","image"],"output_modalities":["text"]},"top_provider":{"max_completion_tokens":8192}}]}"#,
         )
         .expect("explicit discovery evidence must parse");
-        assert_eq!(
-            catalog.models[0].capabilities.tool_calling,
-            CapabilitySupport::Native
-        );
         let manifests = crate::provider_manifest::load_bundled_resolved_catalog();
         let manifest = manifests
             .manifest("deepseek")
@@ -3641,7 +3608,6 @@ mod tests {
         assert_eq!(capabilities.context_limit, Some(131_072));
         assert_eq!(capabilities.output_limit, Some(8_192));
         assert_eq!(capabilities.input_resources, vec![ResourceKind::Image]);
-        assert_eq!(capabilities.tool_calling, CapabilitySupport::Unknown);
         assert!(
             capabilities
                 .operations
@@ -3859,10 +3825,6 @@ mod tests {
         assert_eq!(
             catalog.models[0].capabilities.operations,
             vec![AiOperation::ConversationRespond]
-        );
-        assert_eq!(
-            catalog.models[0].capabilities.tool_calling,
-            CapabilitySupport::Unknown
         );
         assert_eq!(
             catalog.models[0].capabilities.evidence_revision,
@@ -4385,11 +4347,6 @@ mod manifest_migration_tests {
             a.output_resources, b.output_resources,
             "output resource drift `{model_id}`"
         );
-        assert_eq!(a.tool_calling, b.tool_calling, "tool drift `{model_id}`");
-        assert_eq!(
-            a.parallel_tool_calling, b.parallel_tool_calling,
-            "parallel tool drift `{model_id}`"
-        );
         assert_eq!(a.reasoning, b.reasoning, "reasoning drift `{model_id}`");
         assert_eq!(
             a.reasoning_control, b.reasoning_control,
@@ -4668,17 +4625,6 @@ mod manifest_migration_tests {
                 assert_eq!(
                     actual_capabilities.rerank, expected_capabilities.rerank,
                     "rerank drift `{service_entry_id}` / `{protocol_id}` / `{}`",
-                    actual.id
-                );
-                assert_eq!(
-                    actual_capabilities.tool_calling, expected_capabilities.tool_calling,
-                    "tool drift `{service_entry_id}` / `{protocol_id}` / `{}`",
-                    actual.id
-                );
-                assert_eq!(
-                    actual_capabilities.parallel_tool_calling,
-                    expected_capabilities.parallel_tool_calling,
-                    "parallel tool drift `{service_entry_id}` / `{protocol_id}` / `{}`",
                     actual.id
                 );
                 assert_eq!(

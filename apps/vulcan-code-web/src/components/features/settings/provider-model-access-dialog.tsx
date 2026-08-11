@@ -122,7 +122,6 @@ export function buildProviderModelAccessRows(
         reasoning: "unsupported",
         reasoning_control: "unsupported",
         reasoning_efforts: [],
-        tool_calling: "unsupported",
         prompt_cache: {
           provider_default_behavior: "Provider-tool template models do not use conversation prompt caching.",
           supports_managed_explicit: false,

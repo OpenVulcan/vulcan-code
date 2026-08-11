@@ -238,8 +238,6 @@
           "video"
         ],
         "output_resources": [],
-        "tool_calling": "native",
-        "parallel_tool_calling": "native",
         "reasoning": "native",
         "provider_native_tools": [],
         "reasoning_control": "fixed_on",
@@ -258,8 +256,6 @@
             "image"
           ],
           "output_resources": [],
-          "tool_calling": "native",
-          "parallel_tool_calling": "native",
           "reasoning": "native",
           "provider_native_tools": [],
           "reasoning_control": "fixed_on",
@@ -306,8 +302,6 @@
           "video"
         ],
         "output_resources": [],
-        "tool_calling": "native",
-        "parallel_tool_calling": "native",
         "reasoning": "native",
         "provider_native_tools": [],
         "reasoning_control": "fixed_on",
@@ -326,8 +320,6 @@
             "image"
           ],
           "output_resources": [],
-          "tool_calling": "native",
-          "parallel_tool_calling": "native",
           "reasoning": "native",
           "provider_native_tools": [],
           "reasoning_control": "fixed_on",
@@ -371,8 +363,6 @@
           "image"
         ],
         "output_resources": [],
-        "tool_calling": "native",
-        "parallel_tool_calling": "native",
         "reasoning": "native",
         "provider_native_tools": [],
         "reasoning_control": "effort_selection",
@@ -421,8 +411,6 @@
           "video"
         ],
         "output_resources": [],
-        "tool_calling": "native",
-        "parallel_tool_calling": "native",
         "reasoning": "native",
         "provider_native_tools": [],
         "reasoning_control": "effort_selection",
@@ -445,8 +433,6 @@
             "image"
           ],
           "output_resources": [],
-          "tool_calling": "native",
-          "parallel_tool_calling": "native",
           "reasoning": "native",
           "provider_native_tools": [],
           "reasoning_control": "effort_selection",
@@ -495,8 +481,6 @@
           "video"
         ],
         "output_resources": [],
-        "tool_calling": "native",
-        "parallel_tool_calling": "native",
         "reasoning": "native",
         "provider_native_tools": [],
         "reasoning_control": "effort_selection",
@@ -519,8 +503,6 @@
             "image"
           ],
           "output_resources": [],
-          "tool_calling": "native",
-          "parallel_tool_calling": "native",
           "reasoning": "native",
           "provider_native_tools": [],
           "reasoning_control": "effort_selection",
@@ -562,8 +544,6 @@
           "video"
         ],
         "output_resources": [],
-        "tool_calling": "native",
-        "parallel_tool_calling": "native",
         "reasoning": "native",
         "provider_native_tools": [],
         "reasoning_control": "fixed_on",
@@ -582,8 +562,6 @@
             "image"
           ],
           "output_resources": [],
-          "tool_calling": "native",
-          "parallel_tool_calling": "native",
           "reasoning": "native",
           "provider_native_tools": [],
           "reasoning_control": "fixed_on",
@@ -621,8 +599,6 @@
           "video"
         ],
         "output_resources": [],
-        "tool_calling": "native",
-        "parallel_tool_calling": "native",
         "reasoning": "native",
         "provider_native_tools": [],
         "reasoning_control": "fixed_on",
@@ -641,8 +617,6 @@
             "image"
           ],
           "output_resources": [],
-          "tool_calling": "native",
-          "parallel_tool_calling": "native",
           "reasoning": "native",
           "provider_native_tools": [],
           "reasoning_control": "fixed_on",
@@ -679,8 +653,6 @@
           "image"
         ],
         "output_resources": [],
-        "tool_calling": "native",
-        "parallel_tool_calling": "native",
         "reasoning": "unknown",
         "provider_native_tools": [],
         "reasoning_control": "unknown",
@@ -716,8 +688,6 @@
           "image"
         ],
         "output_resources": [],
-        "tool_calling": "native",
-        "parallel_tool_calling": "native",
         "reasoning": "unknown",
         "provider_native_tools": [],
         "reasoning_control": "unknown",
@@ -751,8 +721,6 @@
         "operations": ["conversation_respond"],
         "input_resources": [],
         "output_resources": [],
-        "tool_calling": "native",
-        "parallel_tool_calling": "native",
         "reasoning": "unsupported",
         "provider_native_tools": [],
         "reasoning_control": "unknown",
@@ -786,8 +754,6 @@
         "operations": ["conversation_respond"],
         "input_resources": [],
         "output_resources": [],
-        "tool_calling": "native",
-        "parallel_tool_calling": "native",
         "reasoning": "unsupported",
         "provider_native_tools": [],
         "reasoning_control": "unknown",
@@ -821,8 +787,6 @@
         "operations": ["conversation_respond"],
         "input_resources": [],
         "output_resources": [],
-        "tool_calling": "native",
-        "parallel_tool_calling": "native",
         "reasoning": "unsupported",
         "provider_native_tools": [],
         "reasoning_control": "unknown",
@@ -858,8 +822,6 @@
           "image"
         ],
         "output_resources": [],
-        "tool_calling": "native",
-        "parallel_tool_calling": "native",
         "reasoning": "unsupported",
         "provider_native_tools": [],
         "reasoning_control": "unknown",
@@ -895,8 +857,6 @@
           "image"
         ],
         "output_resources": [],
-        "tool_calling": "native",
-        "parallel_tool_calling": "native",
         "reasoning": "unsupported",
         "provider_native_tools": [],
         "reasoning_control": "unknown",
@@ -932,8 +892,6 @@
           "image"
         ],
         "output_resources": [],
-        "tool_calling": "native",
-        "parallel_tool_calling": "native",
         "reasoning": "unsupported",
         "provider_native_tools": [],
         "reasoning_control": "unknown",

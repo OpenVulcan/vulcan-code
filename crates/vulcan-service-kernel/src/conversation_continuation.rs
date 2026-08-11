@@ -51,6 +51,40 @@ impl SessionContinuationRuntimeBlockers {
     }
 }
 
+/// Returns the latest visible canonical user, assistant, or error tail that controls prompt-free continuation.
+/// 返回控制无提示词继续资格的最近一条可见规范用户、助手或错误尾部。
+///
+/// # Parameters
+/// 参数
+/// `runtime_state` owns the canonical conversation record stream inspected at the terminal boundary.
+/// `runtime_state` 持有在终态边界检查的规范会话记录流。
+/// # Returns
+/// 返回值
+/// Returns the stable tail-kind key, or `None` when no canonical dialogue record exists.
+/// 返回稳定的尾部类型键；不存在规范对话记录时返回 `None`。
+pub(crate) fn canonical_conversation_tail_kind(
+    runtime_state: &SessionRuntimeStateEntry,
+) -> Option<&'static str> {
+    runtime_state
+        .conversation_state
+        .records
+        .iter()
+        .rev()
+        .find(|record| {
+            record.visible
+                && matches!(
+                    record.record_kind,
+                    SessionMessageRecordKind::Transcript
+                        | SessionMessageRecordKind::AssistantOutput
+                )
+        })
+        .map(|record| match record.kind {
+            SessionMessageKind::Assistant => "assistant",
+            SessionMessageKind::User => "user",
+            SessionMessageKind::Error => "error",
+        })
+}
+
 /// Resolves one continuation opportunity from its persisted terminal boundary and live blockers.
 /// 根据持久化终止边界与实时阻断条件解析一次 Continue 机会。
 ///
@@ -109,17 +143,7 @@ pub(crate) fn resolve_session_continuation_eligibility(
     if ledger.in_flight_call_count() != 0 {
         return Err("ERR_CONVERSATION_CONTINUE_CALL_IN_FLIGHT");
     }
-    let tail_kind = runtime_state
-        .conversation_state
-        .records
-        .iter()
-        .rev()
-        .find(|record| record.visible && record.record_kind == SessionMessageRecordKind::Transcript)
-        .map(|record| match record.kind {
-            SessionMessageKind::Assistant => "assistant",
-            SessionMessageKind::User => "user",
-            SessionMessageKind::Error => "error",
-        })
+    let tail_kind = canonical_conversation_tail_kind(runtime_state)
         .ok_or("ERR_CONVERSATION_CONTINUE_TERMINAL_TAIL_MISSING")?;
     if tail_kind == "assistant" || continuation.canonical_tail_kind.as_deref() != Some(tail_kind) {
         return Err("ERR_CONVERSATION_CONTINUE_TERMINAL_TAIL_INVALID");
@@ -436,13 +460,16 @@ mod tests {
             Err("ERR_CONVERSATION_CONTINUE_STALE")
         );
 
+        // assistant_output models the actual final-output record kind emitted by successful Provider runs.
+        // assistant_output 模拟 Provider 成功运行实际生成的最终输出记录类型。
+        let mut assistant_output =
+            SessionMessageEntry::new(SessionMessageKind::Assistant, "Answer", "complete")
+                .with_runtime_metadata("assistant-1", "1001");
+        assistant_output.record_kind = SessionMessageRecordKind::AssistantOutput;
         runtime_state
             .conversation_state
             .records
-            .push(conversation_record(
-                SessionMessageEntry::new(SessionMessageKind::Assistant, "Answer", "complete")
-                    .with_runtime_metadata("assistant-1", "1001"),
-            ));
+            .push(conversation_record(assistant_output));
         assert_eq!(
             resolve_session_continuation_eligibility(
                 &runtime_state,

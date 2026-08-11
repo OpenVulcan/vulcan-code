@@ -35,6 +35,7 @@ import {
   canOpenCachedSubagentSurface,
   applySubagentPanelRouteResponse,
   injectCachedSubagentSurfaceMessages,
+  mergeConversationMessagesWithSubagentSurfaceMessageCache,
   reorderPendingPromptSummaries,
   type SubagentSurfaceMessageCache,
   type WorkbenchMergeOptions,
@@ -110,6 +111,9 @@ interface WorkbenchConversationActionsOptions {
   // Cached subagent transcript surfaces for instant route switching.
   // 用于即时路由切换的子代理转录界面缓存。
   subagentSurfaceMessageCacheRef: React.MutableRefObject<SubagentSurfaceMessageCache>;
+  // Invalidates hydration responses that began before a destructive prompt edit committed.
+  // 作废在破坏性提示词编辑提交前启动的水合响应。
+  invalidateConversationHydration: (conversationId: string) => void;
 }
 
 // useWorkbenchConversationActions owns conversation, subagent, pending-prompt, model, edit, and fork callbacks.
@@ -130,6 +134,7 @@ export function useWorkbenchConversationActions(options: WorkbenchConversationAc
     workbenchStateRef,
     requestStopConversationRunChoice,
     subagentSurfaceMessageCacheRef,
+    invalidateConversationHydration,
   } = options;
   // inflightSubagentOpenRequestsRef coalesces duplicate opens without serializing independent side-panel tabs.
   // inflightSubagentOpenRequestsRef 合并重复打开请求，但不串行化彼此独立的侧栏页签。
@@ -614,8 +619,8 @@ const handleGetUserPromptEditDraft = React.useCallback(async (
   }
 }, [translate]);
 
-// handleSubmitUserPromptEdit submits one edit and lets backend deltas update the replayed turn.
-// handleSubmitUserPromptEdit 提交单次编辑，并由后端增量更新重放后的回合。
+// handleSubmitUserPromptEdit submits one edit and closes the destructive transaction with an authoritative snapshot.
+// handleSubmitUserPromptEdit 提交单次编辑，并用权威快照闭合破坏性事务。
 const handleSubmitUserPromptEdit = React.useCallback(async (request: {
   conversationId: string;
   messageId: string;
@@ -627,12 +632,49 @@ const handleSubmitUserPromptEdit = React.useCallback(async (request: {
     if (ack && selectedConversationIdRef.current === request.conversationId) {
       setSelectedConversationId(ack.conversationId);
     }
+    if (ack) {
+      // The first-open hydration request may still carry the pre-edit transcript and must never cross this commit boundary.
+      // 首次打开时的水合请求可能仍携带编辑前转录，绝不能跨越本次提交边界。
+      invalidateConversationHydration(request.conversationId);
+      try {
+        // authoritativeSnapshot closes the destructive-edit transaction even if an intermediate
+        // rollback patch was delayed behind the replacement prompt's live stream.
+        // authoritativeSnapshot 在中间回滚补丁晚于替代提示词实时流时，仍会闭合破坏性编辑事务。
+        const authoritativeSnapshot = await loadWorkbenchSnapshot();
+        // authoritativeConversationMessages is the exact post-edit window and must not inherit the removed streaming tail.
+        // authoritativeConversationMessages 是编辑后的精确窗口，不得继承已删除的流式尾部。
+        const authoritativeConversationMessages = authoritativeSnapshot.messages.filter(
+          (message) => message.conversationId === request.conversationId,
+        );
+        setWorkbenchState((current) => {
+          const mergedWorkbench = mergeWorkbenchWithLocalCaches(current, authoritativeSnapshot);
+          return mergeConversationMessagesWithSubagentSurfaceMessageCache(
+            mergedWorkbench,
+            request.conversationId,
+            authoritativeConversationMessages,
+            subagentSurfaceMessageCacheRef.current,
+          );
+        });
+      } catch (refreshError) {
+        // The edit already committed; live deltas and gap recovery remain authoritative fallbacks.
+        // 编辑已经提交；实时增量与缺口恢复仍是权威回退路径。
+        console.warn("Failed to refresh the workbench after a committed prompt edit.", refreshError);
+      }
+    }
     return true;
   } catch (nextError) {
     toast.error(translate("conversation.action.editPromptFailed"));
     return false;
   }
-}, [selectedConversationIdRef, setSelectedConversationId, translate]);
+}, [
+  mergeWorkbenchWithLocalCaches,
+  invalidateConversationHydration,
+  selectedConversationIdRef,
+  setSelectedConversationId,
+  setWorkbenchState,
+  subagentSurfaceMessageCacheRef,
+  translate,
+]);
 
 // handleForkConversation creates a persisted copy of the current conversation and opens it.
 // handleForkConversation 创建当前会话的持久化副本并打开。

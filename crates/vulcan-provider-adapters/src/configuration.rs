@@ -5,7 +5,7 @@ use crate::{
     CustomModelDefinition, CustomModelRequestProjection, CustomModelTemplateDecision,
     CustomProviderModelDefaults, PersistedConnectionGraph, ProviderDescriptor,
     ProviderToolCapabilityKind, ProviderToolTargetSelection, SecondaryRouteSelection,
-    validate_custom_provider_reasoning_settings, validate_custom_provider_tool_calling_setting,
+    validate_custom_provider_reasoning_settings,
 };
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -58,10 +58,6 @@ pub struct ModelCapabilityOverrides {
     /// 可选的完整思考档位替换值。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_efforts: Option<Vec<ReasoningEffort>>,
-    /// Optional complete tool-calling support replacement.
-    /// 可选的完整工具调用支持状态替换值。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tool_calling: Option<CapabilitySupport>,
     /// Optional sparse Codex context-window policy carried with this provider/model layer.
     /// 随供应商或模型层保存的可选稀疏 Codex 上下文窗口策略。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -88,7 +84,6 @@ impl ModelCapabilityOverrides {
             && self.reasoning.is_none()
             && self.reasoning_control.is_none()
             && self.reasoning_efforts.is_none()
-            && self.tool_calling.is_none()
             && self.context_window_policy.is_none()
             && self.request_projection.is_none()
     }
@@ -140,9 +135,6 @@ impl ModelCapabilityOverrides {
         ) {
             validate_custom_provider_reasoning_settings(reasoning, control, efforts)?;
         }
-        if let Some(tool_calling) = self.tool_calling {
-            validate_custom_provider_tool_calling_setting(tool_calling)?;
-        }
         if let Some(context_window_policy) = self.context_window_policy {
             context_window_policy.validate()?;
         }
@@ -181,9 +173,6 @@ fn apply_capability_overrides(
     }
     if let Some(reasoning_efforts) = overrides.reasoning_efforts.as_ref() {
         capabilities.reasoning_efforts = reasoning_efforts.clone();
-    }
-    if let Some(tool_calling) = overrides.tool_calling {
-        capabilities.tool_calling = tool_calling;
     }
 }
 
@@ -2282,11 +2271,6 @@ impl PersistedAiConfiguration {
             && let Some(reasoning_efforts) = overrides.reasoning_efforts.as_ref()
         {
             capabilities.reasoning_efforts = reasoning_efforts.clone();
-        }
-        if capabilities.tool_calling == CapabilitySupport::Unknown
-            && let Some(tool_calling) = overrides.tool_calling
-        {
-            capabilities.tool_calling = tool_calling;
         }
     }
 

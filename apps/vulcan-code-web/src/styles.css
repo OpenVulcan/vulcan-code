@@ -2,6 +2,7 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/geist";
+@import "./ui/foundations/tokens.css";
 @import "./styles/shell.css";
 @import "./styles/sidebar-base.css";
 @import "./styles/sidebar-tree.css";
@@ -23,6 +24,7 @@
 @import "./styles/composer-selectors.css";
 @import "./styles/composer-textarea.css";
 @import "./styles/settings.css";
+@import "./styles/visual-lab.css";
 @import "./styles/markdown.css";
 @import "./styles/plan-artifact.css";
 @import "./styles/special-blocks.css";

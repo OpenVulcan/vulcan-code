@@ -53,6 +53,9 @@ interface ConversationHydrationState {
   // handleLoadConversationHistory requests one older turn page for the selected conversation.
   // handleLoadConversationHistory 为当前选中会话请求一页更早轮次。
   handleLoadConversationHistory: (conversationId: string) => Promise<boolean>;
+  // invalidateConversationHydration prevents pre-mutation hydration responses from restoring replaced history.
+  // invalidateConversationHydration 防止变更前发出的水合响应恢复已被替换的历史。
+  invalidateConversationHydration: (conversationId: string) => void;
 }
 
 // useConversationHydration owns backend body hydration and older-history pagination state.
@@ -77,6 +80,9 @@ export function useConversationHydration({
   // hydratingConversationIdsRef stores conversation ids with an active service hydration request.
   // hydratingConversationIdsRef 保存当前已有服务端正文水合请求在途的会话标识。
   const hydratingConversationIdsRef = React.useRef<Set<string>>(new Set());
+  // conversationHydrationGenerationByIdRef invalidates responses that started before a destructive conversation mutation.
+  // conversationHydrationGenerationByIdRef 作废在破坏性会话变更前启动的响应。
+  const conversationHydrationGenerationByIdRef = React.useRef<Map<string, number>>(new Map());
   // conversationLoadError stores the latest conversation hydration error.
   // conversationLoadError 保存最近一次会话正文水合错误。
   const [conversationLoadError, setConversationLoadError] = React.useState<string | null>(null);
@@ -113,6 +119,13 @@ export function useConversationHydration({
     }
   }, []);
 
+  // invalidateConversationHydration advances one conversation's ownership generation without cancelling unrelated loads.
+  // invalidateConversationHydration 推进单个会话的所有权代际，不取消其他会话的加载。
+  const invalidateConversationHydration = React.useCallback((conversationId: string) => {
+    const currentGeneration = conversationHydrationGenerationByIdRef.current.get(conversationId) ?? 0;
+    conversationHydrationGenerationByIdRef.current.set(conversationId, currentGeneration + 1);
+  }, []);
+
   React.useEffect(() => {
     if (!selectedConversationId) {
       setLoadingConversationId(null);
@@ -125,6 +138,9 @@ export function useConversationHydration({
       return;
     }
     const conversationId = selectedConversationId;
+    // requestGeneration binds this response to the transcript revision that existed when hydration started.
+    // requestGeneration 将响应绑定到水合启动时存在的转录版本。
+    const requestGeneration = conversationHydrationGenerationByIdRef.current.get(conversationId) ?? 0;
     if (selectedConversationHydrated) {
       setLoadingConversationId(null);
       return;
@@ -144,7 +160,10 @@ export function useConversationHydration({
     async function hydrateConversation() {
       try {
         const response = await loadConversationMessages(conversationId);
-        if (!mountedRef.current) {
+        if (
+          !mountedRef.current
+          || (conversationHydrationGenerationByIdRef.current.get(conversationId) ?? 0) !== requestGeneration
+        ) {
           return;
         }
         const hydratedWorkbench = {
@@ -186,10 +205,16 @@ export function useConversationHydration({
     if (!cursor?.hasMoreHistory || cursor.earliestOrdinal == null || cursor.loading) {
       return false;
     }
+    // requestGeneration prevents an older-history page from crossing a destructive edit boundary.
+    // requestGeneration 防止更早历史分页响应跨越破坏性编辑边界。
+    const requestGeneration = conversationHydrationGenerationByIdRef.current.get(conversationId) ?? 0;
     setConversationHistoryRequestLoading(conversationId, true);
     try {
       const response = await loadConversationHistoryPage(conversationId, cursor.earliestOrdinal);
-      if (!mountedRef.current) {
+      if (
+        !mountedRef.current
+        || (conversationHydrationGenerationByIdRef.current.get(conversationId) ?? 0) !== requestGeneration
+      ) {
         return false;
       }
       setWorkbenchState((current) => mergeConversationHydrationWithLocalCaches(
@@ -211,5 +236,6 @@ export function useConversationHydration({
     conversationLoadError,
     conversationHistoryLoadingIds,
     handleLoadConversationHistory,
+    invalidateConversationHydration,
   };
 }

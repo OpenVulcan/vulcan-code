@@ -270,7 +270,7 @@ export function ProjectIconDialog(props: {
                     <SelectTrigger className="badge-shape-trigger">
                       <span>{badgeShapeLabel(badgeConfig.shape, t)}</span>
                     </SelectTrigger>
-                    <SelectContent className="project-icon-select-content" position="popper">
+                    <SelectContent className="project-icon-select-content">
                       <SelectItem value="circle">{t("projectIcon.shapeCircle")}</SelectItem>
                       <SelectItem value="square">{t("projectIcon.shapeSquare")}</SelectItem>
                     </SelectContent>

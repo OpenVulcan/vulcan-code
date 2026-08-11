@@ -38,6 +38,7 @@ import {
   numberMetadata,
 } from "@/components/conversation/conversation-metadata";
 import { formatWorkProcessDuration } from "@/components/conversation/conversation-timeline";
+import { TurnStatsTooltipCard } from "@/components/conversation/conversation-turn-stats-card";
 
 // ConversationDisplayBlock contains the transcript fields needed by extracted display blocks.
 // ConversationDisplayBlock 包含已拆分展示块所需的转录字段。
@@ -484,32 +485,62 @@ function thinkingDurationValueToMs(value: unknown, key: string): number | null {
   return null;
 }
 
-// TurnStatsBlock renders the compact non-clickable per-turn statistics row.
-// TurnStatsBlock 渲染不可点击的紧凑按轮次统计横条。
+// TurnStatsBlock renders the compact per-turn statistics row and its structured hover card.
+// TurnStatsBlock 渲染紧凑轮次统计横条及其结构化悬浮卡片。
 export function TurnStatsBlock(props: {
   // block contains the compact turn statistics payload.
   // block 包含紧凑轮次统计载荷。
   block: ConversationDisplayBlock;
 }) {
-  const { t } = useI18n();
+  // locale and t keep both the compact row and its detailed card synchronized with the active language.
+  // locale 与 t 使紧凑横条和详情卡片同步跟随当前语言。
+  const { locale, t } = useI18n();
+  // turnKind identifies display-only child-agent feedback rows without inferring from their body text.
+  // turnKind 通过权威元数据识别仅供展示的子代理反馈行，不从正文猜测。
   const turnKind = metadataString(props.block.rawMetadata, [
     "turn_stats.turn_kind",
     "turnStats.turnKind",
   ]);
+  // subagentStats controls the badge icon and prevents duplicating a child section inside a child-only row.
+  // subagentStats 控制徽标图标，并避免在纯子代理统计行内重复展示子代理分区。
   const subagentStats = turnKind?.trim().toLowerCase() === "subagent_feedback";
+  // summary keeps the existing compact transcript wording while the tooltip uses structured metadata.
+  // summary 保留现有紧凑转录文案，而悬浮卡改用结构化元数据。
   const summary = subagentStats
     ? ((subagentTurnStatsSummary(props.block.rawMetadata, t) ?? props.block.summary) || props.block.title)
     : (props.block.summary || props.block.title);
+  // statisticsRow is shared by structured and legacy blocks so legacy transcripts never open an empty tooltip.
+  // statisticsRow 由结构化与旧版块共享，避免旧版转录打开空白悬浮卡。
+  const statisticsRow = (
+    <div
+      aria-label={summary}
+      className={cn("turn-stats-row", props.block.status ?? "completed", subagentStats && "subagent")}
+      tabIndex={0}
+    >
+      {subagentStats ? <Bot aria-hidden="true" size={13} /> : <span aria-hidden="true">{turnStatsIcon(props.block.status)}</span>}
+      <strong>{summary}</strong>
+    </div>
+  );
+  if (!turnStatsMetadataObject(props.block.rawMetadata)) {
+    return statisticsRow;
+  }
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <div className={cn("turn-stats-row", props.block.status ?? "completed", subagentStats && "subagent")}>
-          {subagentStats ? <Bot aria-hidden="true" size={13} /> : <span aria-hidden="true">{turnStatsIcon(props.block.status)}</span>}
-          <strong>{summary}</strong>
-        </div>
+        {statisticsRow}
       </TooltipTrigger>
-      <TooltipContent className="turn-stats-tooltip" side="right" sideOffset={8}>
-        <pre>{props.block.body}</pre>
+      <TooltipContent
+        align="start"
+        className="context-usage-tooltip turn-stats-tooltip"
+        showArrow={false}
+        side="top"
+        sideOffset={8}
+      >
+        <TurnStatsTooltipCard
+          locale={locale}
+          metadata={props.block.rawMetadata}
+          subagentStats={subagentStats}
+        />
       </TooltipContent>
     </Tooltip>
   );

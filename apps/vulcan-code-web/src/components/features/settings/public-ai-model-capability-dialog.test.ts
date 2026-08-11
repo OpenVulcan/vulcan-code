@@ -15,7 +15,6 @@ const currentSettingsFixture: PublicAiModelCapabilityOverrides = {
   reasoning: "native",
   reasoning_control: "effort_selection",
   reasoning_efforts: ["none", "low"],
-  tool_calling: "native",
   request_projection: {
     reasoning: {},
     model_parameter_paths: {},

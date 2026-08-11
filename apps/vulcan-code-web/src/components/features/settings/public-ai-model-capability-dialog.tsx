@@ -196,9 +196,6 @@ export function PublicAiModelCapabilityDialog(props: ModelCapabilityDialogProps)
   // reasoningEfforts is the complete OpenAI-compatible model level set.
   // reasoningEfforts 是完整的 OpenAI 兼容模型档位集合。
   const [reasoningEfforts, setReasoningEfforts] = React.useState<string[]>([])
-  // toolCallingEnabled is the direct user-defined model tool policy.
-  // toolCallingEnabled 是直接自定义模型工具策略。
-  const [toolCallingEnabled, setToolCallingEnabled] = React.useState(true)
   // contextWindowPolicy is the sparse Codex threshold layer edited for this scope.
   // contextWindowPolicy 是此作用域正在编辑的稀疏 Codex 阈值层。
   const [contextWindowPolicy, setContextWindowPolicy] = React.useState<PublicAiContextWindowPolicyOverrides | undefined>(undefined)
@@ -229,10 +226,9 @@ export function PublicAiModelCapabilityDialog(props: ModelCapabilityDialogProps)
     reasoning: reasoningEnabled ? "native" : "unsupported",
     reasoning_control: reasoningEnabled ? "effort_selection" : "fixed_off",
     reasoning_efforts: reasoningEnabled ? reasoningEfforts : ["none"],
-    tool_calling: toolCallingEnabled ? "native" : "unsupported",
     context_window_policy: contextWindowPolicy,
     request_projection: requestProjection,
-  }), [contextLimit, contextWindowPolicy, inputResources, outputLimit, reasoningEfforts, reasoningEnabled, requestProjection, toolCallingEnabled])
+  }), [contextLimit, contextWindowPolicy, inputResources, outputLimit, reasoningEfforts, reasoningEnabled, requestProjection])
   // dirty is true only when the visible model layer differs semantically from its authoritative baseline.
   // dirty 仅在可见模型层与权威基线存在语义差异时为真。
   const dirty = !directProviderModelSettingsEqual(currentSettings, baselineSettings)
@@ -262,7 +258,6 @@ export function PublicAiModelCapabilityDialog(props: ModelCapabilityDialogProps)
       && settings.reasoning_control !== "fixed_off"
     setReasoningEnabled(nextReasoningEnabled)
     setReasoningEfforts(projectOpenAiReasoningEfforts(settings.reasoning_efforts ?? []))
-    setToolCallingEnabled(settings.tool_calling !== "unsupported")
     setContextWindowPolicy(settings.context_window_policy ?? undefined)
     setRequestProjection(normalizeRequestProjection(settings.request_projection))
     setTouchedFields(new Set())
@@ -402,8 +397,7 @@ export function PublicAiModelCapabilityDialog(props: ModelCapabilityDialogProps)
             </p>
           </fieldset>
         ) : null}
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div className="grid gap-4 sm:grid-cols-2">
+        <div className="grid gap-4">
             <fieldset className="space-y-3 rounded-lg border p-4">
               <legend className="px-1 text-sm font-medium">{t("settings.customModels.reasoning")}</legend>
               <label className="flex items-center justify-between gap-3 text-sm">
@@ -443,17 +437,6 @@ export function PublicAiModelCapabilityDialog(props: ModelCapabilityDialogProps)
                 ))}
               </div>
             </fieldset>
-            <fieldset className="rounded-lg border p-4">
-              <legend className="px-1 text-sm font-medium">{t("settings.customModels.toolCalling")}</legend>
-              <label className="flex items-center justify-between gap-3 text-sm">
-                <span>{t(toolCallingEnabled ? "settings.customModels.enabled" : "settings.customModels.disabled")}</span>
-                <Switch checked={toolCallingEnabled} onCheckedChange={(enabled) => { markField("tool_calling"); setToolCallingEnabled(enabled) }} />
-              </label>
-              <p className="mt-2 text-xs text-muted-foreground">
-                {t("settings.customModels.toolCallingDefaultDescription")}
-              </p>
-            </fieldset>
-          </div>
         </div>
         <ReasoningProjectionEditor
           efforts={reasoningEfforts.length > 0 ? reasoningEfforts : ["none"]}
@@ -508,9 +491,6 @@ export function buildCapabilityOverridePatch(
   if (touchedFields.has("input_resources")) {
     patch.input_resources = [...(current.input_resources ?? [])]
   }
-  if (touchedFields.has("tool_calling")) {
-    patch.tool_calling = current.tool_calling
-  }
   if (touchedFields.has("context_window_policy")) {
     // Null must survive JSON serialization so clearing the editor removes the persisted layer.
     // 清空编辑器时必须保留 null，确保 JSON 序列化后真正移除已持久化的策略层。
@@ -551,9 +531,6 @@ function modelCapabilitySettingsDraft(
           overrides?.reasoning_efforts ?? capabilities.reasoning_efforts ?? [],
         )
       : ["none"],
-    tool_calling: (overrides?.tool_calling ?? capabilities.tool_calling) === "unsupported"
-      ? "unsupported"
-      : "native",
     context_window_policy: overrides?.context_window_policy ?? undefined,
     request_projection: normalizeRequestProjection(overrides?.request_projection),
   }

@@ -125,6 +125,13 @@ pub(super) async fn handle_finished_stream_event(
         .checked_div(1_000)
         .and_then(|value| i64::try_from(value).ok())
         .unwrap_or_default();
+    webui_trace(
+        "stream_goal_accounting_start",
+        format!(
+            "session={finished_session_id} has_goal={} elapsed_seconds={goal_elapsed_seconds}",
+            terminal_goal_id.is_some()
+        ),
+    );
     match account_session_goal_from_report(
         task_state,
         controller_runtime,
@@ -146,6 +153,10 @@ pub(super) async fn handle_finished_stream_event(
             eprintln!("[webui-service] session goal accounting failed: {error}");
         }
     }
+    webui_trace(
+        "stream_goal_accounting_finished",
+        format!("session={finished_session_id}"),
+    );
 
     // Boundary events are captured before report ownership moves into the in-memory projection.
     // 边界事件在报告所有权移入内存投影前完成捕获。
@@ -178,6 +189,10 @@ pub(super) async fn handle_finished_stream_event(
     // Measures terminal report projection, including turn stats and final session state.
     // 衡量终态报告投影耗时，包括统计行与最终会话状态。
     let final_report_apply_started_at = current_unix_millis_value();
+    webui_trace(
+        "stream_final_report_apply_start",
+        format!("session={finished_session_id}"),
+    );
     // The optional apply result gates lifecycle, hook, and persistence work after projection failure.
     // 可选应用结果在投影失败后阻止生命周期、Hook 与持久化工作。
     let final_report_apply =

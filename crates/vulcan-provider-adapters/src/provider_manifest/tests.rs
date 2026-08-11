@@ -922,8 +922,6 @@ fn capability_templates_merge_with_presence_semantics() {
             "capabilities": {
               "operations": ["conversation_respond"],
               "provider_native_tools": ["web_search"],
-              "tool_calling": "native",
-              "parallel_tool_calling": "native",
               "reasoning": "native",
               "prompt_cache": {"provider_default_behavior": "probe", "supports_managed_explicit": false, "supported_ttl_options": []},
               "evidence_revision": "defaults.v1",
@@ -960,13 +958,10 @@ fn capability_templates_merge_with_presence_semantics() {
     let compiled = super::compiler::compile_manifest(&manifest, super::ManifestOwnership::System)
         .expect("merge probe must compile");
 
-    // The partial overlay replaces its declared operations list, keeps its declared tools,
-    // and inherits every omitted support field from the provider default base with real
-    // presence semantics (plan §6.4): an omitted field is Inherit, an explicit empty list is
-    // Set-to-empty, and each written field carries provenance.
-    // 部分覆盖替换其声明的 operations 列表、保留其声明的工具，并以真实 presence 语义
-    // （方案 §6.4）继承供应商默认基座中所有省略的支持字段：省略字段是 Inherit，
-    // 显式空列表是 Set 为空，且每个被写入字段都携带来源。
+    // The partial overlay replaces its declared operations list and inherits omitted list fields
+    // from the provider default base with real presence semantics (plan §6.4).
+    // 部分覆盖替换其声明的 operations 列表，并以真实 presence 语义（方案 §6.4）
+    // 从供应商默认基座继承省略的列表字段。
     let partial = compiled
         .rule_for_model("official-api", Some("api-key"), "merge/model")
         .expect("partial overlay rule must match");
@@ -978,32 +973,16 @@ fn capability_templates_merge_with_presence_semantics() {
         "the rule overlay must replace the operations list"
     );
     assert_eq!(
-        capabilities.tool_calling,
-        vulcan_ai_contract::CapabilitySupport::Native,
-        "an undeclared support field must inherit the provider default base"
-    );
-    assert_eq!(
         capabilities.provider_native_tools,
         vec![vulcan_ai_contract::NativeToolKind::WebSearch],
         "an undeclared list field must inherit the provider default base"
     );
-    // The rule writes operations and evidence; the provider defaults own tool_calling.
-    // 规则写入 operations 与 evidence；供应商默认拥有 tool_calling。
     let provenance = &partial.capability_provenance;
     assert_eq!(
         provenance["operations"].rule_id.as_deref(),
         Some("partial-overlay"),
         "the rule must own its declared operations field"
     );
-    assert!(
-        provenance["tool_calling"].rule_id.is_none(),
-        "an inherited support field must be owned by the provider defaults"
-    );
-    assert_eq!(
-        provenance["tool_calling"].evidence_revision.as_deref(),
-        Some("defaults.v1")
-    );
-
     // The explicit empty tools list is the authoritative no-tools contract.
     // 显式空工具列表是权威的无工具契约。
     let cleared = compiled
@@ -1628,8 +1607,6 @@ fn capability_template_missing_list_field_inherits_default() {
             "capabilities": {
               "operations": ["conversation_respond"],
               "provider_native_tools": ["web_search"],
-              "tool_calling": "native",
-              "parallel_tool_calling": "native",
               "reasoning": "native",
               "prompt_cache": { "provider_default_behavior": "probe", "supports_managed_explicit": false, "supported_ttl_options": [] },
               "evidence_revision": "defaults.v1",
@@ -1643,8 +1620,6 @@ fn capability_template_missing_list_field_inherits_default() {
               "selected_protocol": "openai-chat-completions.v1",
               "capabilities": {
                 "operations": ["conversation_respond", "embedding_create"],
-                "tool_calling": "unknown",
-                "parallel_tool_calling": "unknown",
                 "reasoning": "unknown",
                 "prompt_cache": { "provider_default_behavior": "probe", "supports_managed_explicit": false, "supported_ttl_options": [] },
                 "evidence_revision": "rule.v1"
@@ -1716,7 +1691,6 @@ fn capability_patch_null_clears_nullable_limit() {
             "unknown_model_policy": "declared_rule_required",
             "capabilities": {
               "operations": ["conversation_respond"],
-              "tool_calling": "native",
               "context_limit": 4096,
               "evidence_revision": "defaults.v1"
             }
@@ -1745,11 +1719,6 @@ fn capability_patch_null_clears_nullable_limit() {
     assert_eq!(
         capabilities.context_limit, None,
         "a nullable limit `null` must clear the lower layer"
-    );
-    assert_eq!(
-        capabilities.tool_calling,
-        vulcan_ai_contract::CapabilitySupport::Native,
-        "omitted fields must still inherit the provider default base"
     );
     assert_eq!(
         capabilities.evidence_revision, "rule.v1",
@@ -1805,7 +1774,7 @@ fn capability_patch_null_on_non_nullable_field_rejected() {
           "matcher": { "kind": "exact", "value": "bad/null" },
           "selected_protocol": "openai-chat-completions.v1",
           "capabilities": {
-            "tool_calling": null,
+            "reasoning": null,
             "evidence_revision": "rule.v1"
           }
         }

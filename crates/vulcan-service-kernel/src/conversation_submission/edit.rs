@@ -35,6 +35,29 @@ struct UserPromptEditWorkspaceBackup {
     conversation_summary: Option<ConversationSummary>,
 }
 
+/// Preserves the live composer model selection across a historical prompt rollback.
+/// 在历史提示词回滚期间保留输入区当前生效的模型选择。
+///
+/// # Parameters
+/// 参数
+/// `live_runtime_state` is the session state after the user's latest provider, account, model, or protocol selection.
+/// `live_runtime_state` 是用户最近选择供应商、账号、模型或协议后的会话状态。
+/// `replay_runtime_state` is the historical state restored immediately before the edited prompt.
+/// `replay_runtime_state` 是在被编辑提示词之前恢复出的历史状态。
+fn preserve_live_model_selection_for_prompt_replay(
+    live_runtime_state: &SessionRuntimeStateEntry,
+    replay_runtime_state: &mut SessionRuntimeStateEntry,
+) {
+    replay_runtime_state.active_provider_id = live_runtime_state.active_provider_id.clone();
+    replay_runtime_state.active_connection_id = live_runtime_state.active_connection_id.clone();
+    replay_runtime_state.active_model_id = live_runtime_state.active_model_id.clone();
+    // providerRouteLease must preserve `None`: model/protocol selection explicitly clears the old
+    // lease so the edited replay resolves the newly declared route instead of reviving history.
+    // providerRouteLease 必须保留 `None`：模型或协议选择会显式清除旧租约，确保编辑重放解析
+    // 新声明的路由，而不是复活历史路由。
+    replay_runtime_state.provider_route_lease = live_runtime_state.provider_route_lease.clone();
+}
+
 impl UserPromptEditWorkspaceBackup {
     /// Captures the exact session-scoped state that destructive editing may replace.
     /// 捕获破坏性编辑可能替换的精确会话级状态。
@@ -257,7 +280,13 @@ pub(crate) async fn service_submit_user_prompt_edit(
     // edit_submission_authorization 仅允许当前事务的嵌套重放通过普通准入。
     let edit_submission_authorization =
         edit_admission_guard.existing_submission_authorization(session_id)?;
-    let (controller_runtime, vmm_controller_registry, source_session, project_id) = {
+    let (
+        controller_runtime,
+        vmm_controller_registry,
+        source_session,
+        project_id,
+        live_runtime_state,
+    ) = {
         let mut guard = state
             .lock()
             .map_err(|_| String::from("ERR_SERVICE_STATE_LOCK_FAILED"))?;
@@ -287,11 +316,19 @@ pub(crate) async fn service_submit_user_prompt_edit(
             .ok_or_else(|| String::from("ERR_USER_PROMPT_EDIT_SESSION_NOT_FOUND"))?;
         let project_id = owning_project_id_for_session(workspace, session_id)
             .ok_or_else(|| String::from("ERR_USER_PROMPT_EDIT_PROJECT_NOT_FOUND"))?;
+        // liveRuntimeState freezes the composer route before any destructive disk rollback starts.
+        // liveRuntimeState 在任何破坏性磁盘回滚开始前冻结输入区路由。
+        let live_runtime_state = workspace
+            .session_runtime_state
+            .get(&session_id)
+            .cloned()
+            .ok_or_else(|| String::from("ERR_USER_PROMPT_EDIT_RUNTIME_STATE_NOT_FOUND"))?;
         (
             controller_runtime,
             guard.vmm_controller_registry.clone(),
             source_session,
             project_id,
+            live_runtime_state,
         )
     };
     // rewrite_fence blocks stale and replacement controllers until disk and retained state agree.
@@ -325,9 +362,16 @@ pub(crate) async fn service_submit_user_prompt_edit(
         workspace
             .session_messages
             .insert(session_id, rollback.retained_messages.clone());
+        // replayRuntimeState rewinds dialogue-owned state while retaining the exact live composer route.
+        // replayRuntimeState 回退对话所有状态，同时保留输入区当前的精确路由。
+        let mut replay_runtime_state = rollback.runtime_state.clone();
+        preserve_live_model_selection_for_prompt_replay(
+            &live_runtime_state,
+            &mut replay_runtime_state,
+        );
         workspace
             .session_runtime_state
-            .insert(session_id, rollback.runtime_state.clone());
+            .insert(session_id, replay_runtime_state);
         sync_hydrated_session_dialogue_ready_marker(workspace, session_id);
         workspace
             .session_run_phases
@@ -450,5 +494,64 @@ pub(crate) async fn service_submit_user_prompt_edit(
                 )),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vulcan_workbench_model::SessionProviderRouteLeaseIdentity;
+
+    /// Verifies an edited replay keeps the newly selected model and does not revive its historical protocol lease.
+    /// 验证编辑重放保留新选择的模型，且不会复活历史协议租约。
+    #[test]
+    fn prompt_replay_preserves_live_model_selection_and_cleared_lease() {
+        // liveRuntimeState represents a composer selection whose new route has not been leased yet.
+        // liveRuntimeState 表示输入区已经选择新路由、但尚未建立新租约的状态。
+        let live_runtime_state = SessionRuntimeStateEntry {
+            active_provider_id: Some(String::from("custom:new-provider")),
+            active_connection_id: Some(String::from("connection-new")),
+            active_model_id: Some(String::from("model-new")),
+            provider_route_lease: None,
+            ..SessionRuntimeStateEntry::default()
+        };
+        // replayRuntimeState represents the historical route restored from before the edited prompt.
+        // replayRuntimeState 表示从被编辑提示词之前恢复出的历史路由。
+        let mut replay_runtime_state = SessionRuntimeStateEntry {
+            active_provider_id: Some(String::from("provider-old")),
+            active_connection_id: Some(String::from("connection-old")),
+            active_model_id: Some(String::from("model-old")),
+            provider_route_lease: Some(SessionProviderRouteLeaseIdentity {
+                schema_version: 1,
+                provider_id: String::from("provider-old"),
+                connection_id: String::from("connection-old"),
+                model_id: String::from("model-old"),
+                protocol_profile_id: String::from("openai-chat-completions.v1"),
+                manifest_revision: 1,
+                manifest_generation: 1,
+                catalog_revision: String::from("catalog-old"),
+                route_revision: String::from("route-old"),
+            }),
+            ..SessionRuntimeStateEntry::default()
+        };
+
+        preserve_live_model_selection_for_prompt_replay(
+            &live_runtime_state,
+            &mut replay_runtime_state,
+        );
+
+        assert_eq!(
+            replay_runtime_state.active_provider_id.as_deref(),
+            Some("custom:new-provider")
+        );
+        assert_eq!(
+            replay_runtime_state.active_connection_id.as_deref(),
+            Some("connection-new")
+        );
+        assert_eq!(
+            replay_runtime_state.active_model_id.as_deref(),
+            Some("model-new")
+        );
+        assert!(replay_runtime_state.provider_route_lease.is_none());
     }
 }

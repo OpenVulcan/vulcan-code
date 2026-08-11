@@ -6,6 +6,9 @@ use crate::agent_runtime::ExtensionGeneration;
 use crate::agent_runtime::execution_models::{ExecutionPreparationRequest, ExecutionRunReport};
 use crate::agent_runtime::question_runtime::QuestionRuntime;
 use crate::agent_runtime::runtime_stream_bootstrap::bootstrap_runtime_stream;
+use crate::agent_runtime::runtime_stream_bootstrap_core::{
+    after_precheck_trace, after_precheck_unix_millis,
+};
 use crate::agent_runtime::runtime_stream_launch_payload::{
     RuntimeStreamLaunch, build_runtime_stream_launch_payload,
 };
@@ -105,6 +108,13 @@ pub async fn prepare_runtime_stream_launch_with_plugins_and_public_ai(
     public_ai_runtime: Option<Arc<vulcan_provider_adapters::PublicAiRuntime>>,
     request: ExecutionPreparationRequest,
 ) -> Result<RuntimeStreamLaunch, ExecutionRunReport> {
+    // launchStartedAt measures the complete lazy launch preparation reached by the first stream poll.
+    // launchStartedAt 测量首次流轮询进入的完整惰性启动准备边界。
+    let launch_started_at = after_precheck_unix_millis();
+    after_precheck_trace(
+        "after_precheck_23a_runtime_launch_enter",
+        format!("session={}", request.session_id),
+    );
     let prepared_launch_input = prepare_runtime_launch_input(
         config,
         agent_profile_catalog,
@@ -117,6 +127,14 @@ pub async fn prepare_runtime_stream_launch_with_plugins_and_public_ai(
         public_ai_runtime,
         request,
     )?;
+    after_precheck_trace(
+        "after_precheck_26_prepared_launch_input_ready",
+        format!(
+            "session={} elapsed_ms={}",
+            prepared_launch_input.request.session_id,
+            after_precheck_unix_millis().saturating_sub(launch_started_at)
+        ),
+    );
     build_runtime_stream_launch_from_prepared_input(config.clone(), prepared_launch_input).await
 }
 

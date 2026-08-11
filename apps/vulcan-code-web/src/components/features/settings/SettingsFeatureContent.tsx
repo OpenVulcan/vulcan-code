@@ -1,4 +1,5 @@
 import { LogsArea } from "@/components/features/settings/settings-diagnostics-area";
+import { VisualLabSettingsArea } from "@/components/dev/visual-lab-settings-area";
 import { McpSettingsArea } from "@/components/features/settings/mcp-settings-area";
 import {
   AboutLicensesSettingsArea,
@@ -94,6 +95,9 @@ export function SettingsFeatureContent(props: SettingsFeatureContentProps) {
   }
   if (props.activeSettingsSubArea === "runtime-diagnostics") {
     return <LogsArea startup={props.startup} logs={props.workbench.logs} />;
+  }
+  if (props.activeSettingsSubArea === "visual-lab") {
+    return <VisualLabSettingsArea />;
   }
   if (props.activeSettingsSubArea === "notifications") {
     return <NotificationSettingsArea />;

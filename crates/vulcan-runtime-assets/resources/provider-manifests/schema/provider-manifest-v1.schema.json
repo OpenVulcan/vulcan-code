@@ -1961,12 +1961,6 @@
             {"$ref": "#/$defs/rerank_capabilities"}
           ]
         },
-        "tool_calling": {
-          "type": "string"
-        },
-        "parallel_tool_calling": {
-          "type": "string"
-        },
         "reasoning": {
           "type": "string"
         },

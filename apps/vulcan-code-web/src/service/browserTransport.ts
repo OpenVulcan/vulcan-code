@@ -104,6 +104,57 @@ export function closeWebSocketWhenReady(
   }
 }
 
+// waitForWebSocketOpen resolves only after one exact socket can deliver service events.
+// waitForWebSocketOpen 仅在精确套接字已经能够传递服务事件后解析。
+//
+// Parameters
+// 参数
+// `socket` is the connection whose opening handshake must complete before callers proceed.
+// `socket` 是调用方继续执行前必须完成建连握手的连接。
+//
+// Returns
+// 返回值
+// A promise that resolves on `open` and rejects when the connection fails or closes first.
+// 返回在 `open` 时解析、在连接先失败或关闭时拒绝的 Promise。
+export function waitForWebSocketOpen(socket: WebSocket): Promise<void> {
+  if (socket.readyState === socket.OPEN) {
+    return Promise.resolve();
+  }
+  if (socket.readyState !== socket.CONNECTING) {
+    return Promise.reject(new Error("Browser service event WebSocket is not connectable."));
+  }
+  return new Promise<void>((resolve, reject) => {
+    // cleanup removes every temporary handshake observer after one terminal outcome.
+    // cleanup 在任一终态结果后移除全部临时握手观察器。
+    const cleanup = () => {
+      socket.removeEventListener("open", handleOpen);
+      socket.removeEventListener("error", handleError);
+      socket.removeEventListener("close", handleClose);
+    };
+    // handleOpen completes the event-channel readiness barrier.
+    // handleOpen 完成事件通道就绪屏障。
+    const handleOpen = () => {
+      cleanup();
+      resolve();
+    };
+    // handleError rejects a handshake that cannot carry initial workbench deltas.
+    // handleError 拒绝无法承载初始工作台增量的握手。
+    const handleError = () => {
+      cleanup();
+      reject(new Error("Browser service event WebSocket connection failed."));
+    };
+    // handleClose rejects a connection that closed before becoming usable.
+    // handleClose 拒绝在可用前已经关闭的连接。
+    const handleClose = () => {
+      cleanup();
+      reject(new Error("Browser service event WebSocket closed before opening."));
+    };
+    socket.addEventListener("open", handleOpen, { once: true });
+    socket.addEventListener("error", handleError, { once: true });
+    socket.addEventListener("close", handleClose, { once: true });
+  });
+}
+
 // BrowserServiceTransport talks to the local service through HTTP RPC and WebSocket events.
 // BrowserServiceTransport 通过 HTTP RPC 与 WebSocket 事件连接本地服务。
 export class BrowserServiceTransport implements ServiceTransport {
@@ -182,16 +233,17 @@ export class BrowserServiceTransport implements ServiceTransport {
     });
   }
 
-  // subscribe registers a topic handler and lazily opens the event WebSocket.
-  // subscribe 注册主题处理函数，并按需打开事件 WebSocket。
+  // subscribe registers a topic handler and resolves only after the event WebSocket is open.
+  // subscribe 注册主题处理函数，并且仅在事件 WebSocket 已连接后解析。
   async subscribe<T>(topic: string, handler: ServiceEventHandler<T>): Promise<ServiceUnsubscribe> {
     const typedHandler = handler as ServiceEventHandler<unknown>;
     const topicHandlers = this.handlers.get(topic) ?? new Set<ServiceEventHandler<unknown>>();
     topicHandlers.add(typedHandler);
     this.handlers.set(topic, topicHandlers);
     this.disposed = false;
-    void this.ensureSocket();
-    return () => {
+    // unsubscribe owns this exact handler and closes an otherwise unused event channel.
+    // unsubscribe 持有当前精确处理器，并关闭不再被使用的事件通道。
+    const unsubscribe = () => {
       const currentHandlers = this.handlers.get(topic);
       currentHandlers?.delete(typedHandler);
       if (currentHandlers && currentHandlers.size === 0) {
@@ -202,6 +254,17 @@ export class BrowserServiceTransport implements ServiceTransport {
         this.closeSocketIfUnused();
       }
     };
+    try {
+      const socket = await this.ensureSocket();
+      if (!socket) {
+        throw new Error("Browser service event WebSocket was not created.");
+      }
+      await waitForWebSocketOpen(socket);
+      return unsubscribe;
+    } catch (error) {
+      unsubscribe();
+      throw error;
+    }
   }
 
   // dispose closes the WebSocket and clears all handlers.
@@ -213,22 +276,28 @@ export class BrowserServiceTransport implements ServiceTransport {
     this.closeSocketIfUnused();
   }
 
-  // ensureSocket opens the event WebSocket once.
-  // ensureSocket 只打开一次事件 WebSocket。
-  private async ensureSocket(): Promise<void> {
-    if (this.disposed || this.socket || this.handlerCount() === 0) {
-      return;
+  // ensureSocket creates or returns the single event WebSocket without claiming it is already open.
+  // ensureSocket 创建或返回唯一事件 WebSocket，但不会声称连接已经打开。
+  private async ensureSocket(): Promise<WebSocket | null> {
+    if (this.disposed || this.handlerCount() === 0) {
+      return null;
+    }
+    if (this.socket) {
+      return this.socket;
     }
     this.clearReconnectTimer();
     let baseUrl: string;
     try {
       baseUrl = await this.resolveBaseUrl();
-    } catch {
+    } catch (error) {
       this.scheduleReconnect();
-      return;
+      throw error;
     }
-    if (this.disposed || this.socket || this.handlerCount() === 0) {
-      return;
+    if (this.disposed || this.handlerCount() === 0) {
+      return null;
+    }
+    if (this.socket) {
+      return this.socket;
     }
     const socket = new WebSocket(webSocketUrlFromBaseUrl(baseUrl));
     socket.addEventListener("message", (event) => {
@@ -253,9 +322,16 @@ export class BrowserServiceTransport implements ServiceTransport {
       this.scheduleReconnect();
     });
     socket.addEventListener("error", () => {
+      // A failed handshake cannot remain the reusable socket for the next bootstrap attempt.
+      // 失败的握手不能继续充当下一次启动尝试复用的套接字。
+      if (this.socket === socket) {
+        this.socket = null;
+      }
       emitBrowserServiceConnectionStatus("disconnected", "Browser service connection failed.");
+      this.scheduleReconnect();
     });
     this.socket = socket;
+    return socket;
   }
 
   // closeSocketIfUnused closes the current socket only after its ownership state is revalidated.
@@ -287,7 +363,9 @@ export class BrowserServiceTransport implements ServiceTransport {
     emitBrowserServiceConnectionStatus("reconnecting");
     this.reconnectTimer = window.setTimeout(() => {
       this.reconnectTimer = null;
-      void this.ensureSocket();
+      // Background reconnect failures are already projected by discovery and the next timer.
+      // 后台重连失败已由发现流程与下一次定时器投影。
+      void this.ensureSocket().catch(() => undefined);
     }, delay);
   }
 

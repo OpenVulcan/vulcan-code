@@ -8,6 +8,7 @@ use crate::agent_runtime::config::{
     RuntimeToolPolicyDefinition,
 };
 use crate::agent_runtime::question_runtime::QuestionRuntime;
+use crate::agent_runtime::runtime_stream_bootstrap_core::after_precheck_trace;
 use crate::agent_runtime::task_runtime::TaskRuntime;
 use crate::luaskills_runtime::{
     LuaSkillsRuntimeHandle, list_luaskills_tool_entries, luaskills_entry_args_schema,
@@ -259,10 +260,26 @@ impl RuntimeFoundation {
         question_runtime: Arc<QuestionRuntime>,
         command_session_runtime: Arc<CommandSessionRuntime>,
     ) -> Self {
+        after_precheck_trace(
+            "after_precheck_24a2_foundation_components_enter",
+            format!("extension_revision={extension_revision}"),
+        );
         let runtime_config = AgentRuntimeConfig::from_sources(config, agent_profile_catalog);
+        after_precheck_trace(
+            "after_precheck_24a3_runtime_config_ready",
+            format!("extension_revision={extension_revision}"),
+        );
         let mut subagent_catalog = vulcan_task_session::load_subagent_catalog_from_roots(
             vulcan_runtime_assets::resolve_system_subagents_resource_directory(),
             crate::data_plane::application_data_root().join("agents"),
+        );
+        after_precheck_trace(
+            "after_precheck_24a4_subagent_catalog_ready",
+            format!(
+                "extension_revision={} errors={}",
+                extension_revision,
+                subagent_catalog.errors.len()
+            ),
         );
         let native_tools = build_native_tool_catalog(
             &runtime_config,
@@ -271,6 +288,10 @@ impl RuntimeFoundation {
             config.vmm.clone(),
             vulcan_plugin_runtime.clone(),
             luaskills_runtime.clone(),
+        );
+        after_precheck_trace(
+            "after_precheck_24a5_native_tool_catalog_ready",
+            format!("extension_revision={extension_revision}"),
         );
         let mut warnings = subagent_catalog
             .errors
@@ -290,6 +311,14 @@ impl RuntimeFoundation {
                 .as_ref()
                 .map(VulcanPluginRuntimeManager::snapshot)
         });
+        after_precheck_trace(
+            "after_precheck_24a6_plugin_catalog_ready",
+            format!(
+                "extension_revision={} installed={}",
+                extension_revision,
+                vulcan_plugin_catalog.is_some()
+            ),
+        );
         if let Some(catalog) = vulcan_plugin_catalog.as_ref()
             && let Err(error) =
                 subagent_catalog.merge_plugin_definitions(catalog.enabled_agents.values().cloned())
@@ -299,6 +328,10 @@ impl RuntimeFoundation {
         if let Err(error) = task_runtime.replace_subagent_catalog(subagent_catalog) {
             warnings.push(error);
         }
+        after_precheck_trace(
+            "after_precheck_24a7_subagent_catalog_installed",
+            format!("extension_revision={extension_revision}"),
+        );
         let (luaskills_tools, luaskills_dispatch_tools, implicit_luaskill_prompt_entries) =
             match luaskills_runtime.as_ref() {
                 Some(handle) => match list_luaskills_tool_entries(handle) {
@@ -320,6 +353,16 @@ impl RuntimeFoundation {
                 },
                 None => (Vec::new(), Vec::new(), Vec::new()),
             };
+        after_precheck_trace(
+            "after_precheck_24a8_luaskills_catalog_ready",
+            format!(
+                "extension_revision={} explicit_tools={} dispatch_tools={} prompt_entries={}",
+                extension_revision,
+                luaskills_tools.len(),
+                luaskills_dispatch_tools.len(),
+                implicit_luaskill_prompt_entries.len()
+            ),
+        );
         Self {
             extension_revision,
             config: runtime_config,

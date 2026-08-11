@@ -278,10 +278,8 @@ pub(crate) async fn maybe_prepare_next_webui_pending_prompt(
         reasoning_effort,
     };
     let precheck_start = if let Some(expected_goal_dispatch_version) = goal_dispatch_version {
-        let mut hook_runtime = entry_agent_runtime
-            .conversation_hook_runtime
-            .lock()
-            .map_err(|error| format!("会话 hook runtime 加锁失败：{error}"))?;
+        // Service state always precedes the shared Hook runtime in the cross-runtime lock order.
+        // 跨运行时锁顺序中，服务状态始终先于共享 Hook 运行时。
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -290,6 +288,10 @@ pub(crate) async fn maybe_prepare_next_webui_pending_prompt(
             session_id,
             expected_goal_dispatch_version,
         )?;
+        let mut hook_runtime = entry_agent_runtime
+            .conversation_hook_runtime
+            .lock()
+            .map_err(|error| format!("会话 hook runtime 加锁失败：{error}"))?;
         let precheck_start = begin_shared_prompt_turn(
             &mut workspace_snapshot,
             &mut hook_runtime,
@@ -304,6 +306,11 @@ pub(crate) async fn maybe_prepare_next_webui_pending_prompt(
         )?;
         precheck_start
     } else {
+        // Service state always precedes the shared Hook runtime in the cross-runtime lock order.
+        // 跨运行时锁顺序中，服务状态始终先于共享 Hook 运行时。
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
         let mut hook_runtime = entry_agent_runtime
             .conversation_hook_runtime
             .lock()
@@ -313,9 +320,6 @@ pub(crate) async fn maybe_prepare_next_webui_pending_prompt(
             &mut hook_runtime,
             prompt_turn_begin_input,
         )?;
-        let mut guard = state
-            .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?;
         start_webui_session_kernel_turn(
             &mut guard,
             session_id,
