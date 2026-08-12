@@ -1,6 +1,6 @@
 ---
 name: terminal-session
-description: Required operating guide for the terminal_session tool. Use before any terminal_session call to understand named persistent terminals, cross-platform PTY input, incremental output, command transactions with exit codes, TUI screen output, and safe control of long-running processes.
+description: Required operating guide for the terminal_session tool. Use before any terminal_session call to understand named persistent terminals, cross-platform PTY input and child-side platform semantics, incremental output, command transactions with exit codes, TUI screen output, and safe control of long-running processes.
 ---
 
 # Terminal Session
@@ -15,7 +15,7 @@ Before using `terminal_session`, read this skill and follow it. Do not use `term
 - Use `terminal_session` when shell state matters: activated environments, changed directories, REPLs, long-running processes, interactive prompts, or TUI screens.
 - Always give `start` a non-empty, task-oriented `name`.
 - Use standardized `text`, `paste`, `key`, and `chord` inputs. Do not hand-write ANSI escapes, platform-specific getch bytes, or control characters.
-- Check `backend` and `input_capabilities` on tool responses. Interactive terminal sessions use the same isolated PTY and ANSI/VT input contract on Windows, Linux, and macOS.
+- Check `backend` and `input_capabilities` on tool responses. Interactive terminal sessions use the same isolated PTY and ANSI/VT host-input contract on Windows, Linux, and macOS. On Windows, ConPTY may translate that host input into Console key events before a console-mode child reads it.
 - Prefer `read` after append-style output. For TUI or screen-like output, use `send` with `screen_stable` or `snapshot` to inspect `screen_text`.
 - Before finalizing a task, clean up temporary terminals you started for tests or diagnostics. Do not announce final completion until this cleanup is done.
 
@@ -29,7 +29,7 @@ Every terminal response may include backend and capability metadata:
 
 Backend rules:
 
-- `pty`: the cross-platform `terminal_session` backend on Windows, Linux, and macOS. It runs in the isolated terminal host and converts standardized keys/chords into ANSI/VT input.
+- `pty`: the cross-platform `terminal_session` backend on Windows, Linux, and macOS. It runs in the isolated terminal host and converts standardized keys/chords into ANSI/VT input. Windows ConPTY can then expose supported special keys as Console key events to console-mode child programs; this child-facing representation does not change the tool contract.
 - `pipe`: command-style process I/O. It is not a full TUI backend.
 
 Do not infer key support from the operating system alone. Use the response's `backend` and `input_capabilities` fields.
@@ -198,7 +198,9 @@ F1 ... F12
 
 Enter is encoded for the current backend and interactive shell, but child programs may observe `\n` or `\r` depending on how they read input. Programs that read raw characters should treat both as submit keys.
 
-On Windows native console sessions, `Enter`, arrows, Delete, function keys, and supported chords are real console key events. On Windows PTY sessions, generated Enter/key-submit input uses a single carriage return for PowerShell and cmd-style shells. Avoid sending manual `\r\n` as a key substitute; the extra line-feed can leave PowerShell in continuation mode.
+On Windows PTY sessions, the terminal host writes ANSI/VT input to ConPTY. ConPTY may present supported special keys to console-mode child programs as Windows Console key events. For example, Python `msvcrt.getch()` normally reports an arrow as an extended prefix (`b"\xe0"` or `b"\x00"`) followed by `b"H"`, `b"P"`, `b"K"`, or `b"M"` for Up, Down, Left, or Right. A Python Windows-console TUI must use `msvcrt.getch()` or an equivalent Console-input API for these keys; `sys.stdin.read()` does not expose the arrow-key Console events as VT bytes. The AI must still send standardized `key` inputs such as `ArrowDown` and must never send those scan-code bytes manually.
+
+Generated Enter/key-submit input uses a single carriage return for PowerShell and cmd-style shells on Windows PTY sessions. Avoid sending manual `\r\n` as a key substitute; the extra line-feed can leave PowerShell in continuation mode.
 
 ```json
 { "kind": "chord", "key": "c", "ctrl": true }
@@ -214,7 +216,7 @@ Do not assume arbitrary application shortcuts are supported. If a chord is rejec
 
 ## Input Encoding
 
-The terminal host always converts standardized keys and chords to the cross-platform ANSI/VT input contract. There is no per-platform `key_encoding` selector.
+The terminal host always converts standardized keys and chords to the cross-platform ANSI/VT host-input contract. There is no per-platform `key_encoding` selector. The reported `encoding: "ansi_vt"` describes bytes written by the host to the PTY; it does not guarantee that every child-side input API returns those same bytes after the platform terminal driver processes them.
 
 ```json
 {
@@ -225,7 +227,27 @@ The terminal host always converts standardized keys and chords to the cross-plat
 }
 ```
 
-Legacy programs that require raw Windows Console `KEY_EVENT` records instead of terminal input are outside this PTY contract. Prefer their ANSI/VT mode, command-line alternatives, or documented text shortcuts.
+Windows ConPTY translates supported terminal keys into Console `KEY_EVENT` records for console-mode child programs, which supports normal `msvcrt.getch()` menus. Arbitrary scan-code injection and application-specific raw `KEY_EVENT` construction remain outside this PTY contract. Prefer standardized `key` and `chord` inputs, ANSI/VT-aware application modes, or documented text shortcuts.
+
+### Child Input Semantics By Platform
+
+The tool-facing API is identical on every platform, but a child program observes input through its operating system's terminal API:
+
+| Platform | PTY path | What a Python TUI should use | Arrow-key behavior |
+| --- | --- | --- | --- |
+| Windows | Terminal host writes ANSI/VT to ConPTY; ConPTY can translate it to Console input events | `msvcrt.getch()` for a Windows console menu, or a cross-platform TUI library that supports ConPTY | `msvcrt.getch()` commonly returns `b"\xe0"` or `b"\x00"`, then `b"H"`/`b"P"`/`b"K"`/`b"M"` |
+| Linux | Terminal host writes ANSI/VT to a POSIX PTY; the terminal line discipline applies | `curses`, `termios` plus `tty`, or another PTY-aware TUI library | In raw/cbreak mode, simple arrows are ANSI escape sequences such as `ESC [ A` through `ESC [ D`; canonical mode may buffer until newline |
+| macOS | Terminal host writes ANSI/VT to a POSIX PTY; the terminal line discipline applies | `curses`, `termios` plus `tty`, or another PTY-aware TUI library | The same POSIX raw/cbreak rules apply; escape-sequence bytes may arrive across multiple reads |
+
+Do not use plain canonical `sys.stdin.read()` as a universal cross-platform raw-key reader. On Windows it does not expose `msvcrt` extended-key events as VT bytes; on Linux and macOS canonical mode can wait for a newline. Use a platform terminal API or a maintained cross-platform TUI library, and let that library decode key sequences.
+
+This distinction is only for code running inside the child terminal. AI callers always use the same structured inputs:
+
+```json
+{ "kind": "key", "key": "ArrowDown" }
+```
+
+Never branch AI tool calls by operating system and never send `\x1b[B`, `\xe0P`, or other platform bytes manually.
 
 ## Output
 
@@ -254,7 +276,9 @@ Control strategy:
 
 Do not send ANSI escapes directly. Use standardized keys; the terminal host owns their ANSI/VT encoding on every platform.
 
-If a key does not work, inspect `backend` and `input_capabilities`, verify that the target application accepts terminal/VT input, and prefer documented text shortcuts where available.
+If a key does not work, inspect `backend` and `input_capabilities`, verify how the target application reads terminal input, and prefer documented text shortcuts where available. In particular, a Windows Python console TUI should use `msvcrt.getch()` rather than `sys.stdin.read()` for arrows and other extended keys.
+
+For Linux and macOS Python TUIs, use `curses` or place stdin in raw/cbreak mode with `termios` and `tty`; do not expect canonical `sys.stdin.read()` to return an arrow immediately or in one read. Cross-platform applications should prefer a library that owns both the Windows Console and POSIX terminal input modes.
 
 ## Interrupts
 
@@ -343,7 +367,23 @@ Avoid saying the work is final, finished, stopped, or ended while you still need
 }
 ```
 
-### Drive A Windows Getch Menu On Native Console
+### Drive A Windows Python Getch Menu Through ConPTY
+
+Inside the Python program, read extended keys with `msvcrt.getch()`:
+
+```python
+first = msvcrt.getch()
+if first in (b"\xe0", b"\x00"):
+    scan = msvcrt.getch()
+    key = {
+        b"H": "up",
+        b"P": "down",
+        b"K": "left",
+        b"M": "right",
+    }.get(scan)
+```
+
+Continue to drive that program with standardized terminal inputs. `ArrowDown` reaches the Python program as the corresponding ConPTY Console key event; do not send `b"\xe0P"` yourself.
 
 ```json
 {
