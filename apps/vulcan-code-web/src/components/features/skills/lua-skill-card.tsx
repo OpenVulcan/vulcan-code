@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { IconButton } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import {
   Dialog,
   DialogContent,
@@ -122,18 +123,13 @@ export function LuaSkillCard(props: {
         <span className="agent-definition-row-path">{props.skill.skillDir}</span>
       </div>
       <div className="agent-definition-row-actions">
-        <button
-          aria-checked={props.skill.enabled}
+        <Switch
+          checked={props.skill.enabled}
           aria-label={props.skill.enabled ? t("skills.action.disable") : t("skills.action.enable")}
-          className={`agent-definition-switch ${props.skill.enabled ? "on" : ""}`}
           disabled={props.busy}
-          onClick={() => void props.onRunAction("toggle", () => props.actions.onSetLuaSkillEnabled(props.skill.skillId, !props.skill.enabled))}
-          role="switch"
+          onCheckedChange={() => void props.onRunAction("toggle", () => props.actions.onSetLuaSkillEnabled(props.skill.skillId, !props.skill.enabled))}
           title={props.skill.enabled ? t("skills.action.disable") : t("skills.action.enable")}
-          type="button"
-        >
-          <span />
-        </button>
+        />
         <IconButton
           aria-label={`${t("skills.action.tools")} (${props.skill.tools.length})`}
           onClick={() => props.onOpenTools(props.skill)}

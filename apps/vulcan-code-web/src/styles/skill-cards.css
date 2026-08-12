@@ -182,8 +182,7 @@
   grid-template-columns: minmax(0, 1fr) 144px;
 }
 
-.agent-catalog-search-input,
-.agent-catalog-status-select {
+.agent-catalog-search-input {
   min-width: 0;
   height: 36px;
   border: 1px solid var(--border);
@@ -199,7 +198,9 @@
 }
 
 .agent-catalog-status-select {
-  padding-right: 28px;
+  width: 100%;
+  min-width: 0;
+  height: 36px;
 }
 
 .agent-catalog-notice {
@@ -321,20 +322,6 @@
 .agent-editor-checkbox span {
   color: var(--muted-foreground);
   font-size: 12px;
-}
-
-.agent-editor-grid select {
-  min-width: 0;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  background: var(--background);
-  color: var(--foreground);
-  padding: 8px 9px;
-  font-size: 12px;
-}
-
-.agent-editor-grid select {
-  height: 32px;
 }
 
 .agent-editor-color-picker {
@@ -493,12 +480,6 @@
   white-space: nowrap;
 }
 
-.agent-tool-policy-checkbox input {
-  width: 16px;
-  height: 16px;
-  accent-color: var(--primary);
-}
-
 @media (max-width: 760px) {
   .agent-editor-grid,
   .agent-tool-policy-toolbar,
@@ -562,14 +543,7 @@
   gap: 8px;
 }
 
-.agent-editor-checkbox input {
-  width: 15px;
-  height: 15px;
-  padding: 0;
-}
-
-.skill-toolbar input,
-.skill-toolbar select {
+.skill-toolbar input {
   min-width: 0;
   height: 32px;
   border: 1px solid var(--border);
@@ -582,11 +556,6 @@
 
 .skill-toolbar input {
   flex: 1 1 210px;
-}
-
-.lua-skill-install-dialog {
-  width: min(520px, calc(100vw - 32px));
-  max-width: min(520px, calc(100vw - 32px)) !important;
 }
 
 .lua-skill-install-form,
@@ -605,8 +574,7 @@
   font-size: 12px;
 }
 
-.lua-skill-install-field input,
-.lua-skill-install-field select {
+.lua-skill-install-field input {
   min-width: 0;
   height: 34px;
   border: 1px solid var(--border);
@@ -765,23 +733,6 @@
   font-weight: 600;
 }
 
-.lua-settings-field select {
-  width: 100%;
-  min-width: 0;
-  box-sizing: border-box;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--background);
-  color: var(--foreground);
-  font: inherit;
-  font-size: 13px;
-}
-
-.lua-settings-field select {
-  height: 36px;
-  padding: 0 10px;
-}
-
 .lua-settings-field small {
   color: var(--muted-foreground);
   font-size: 11px;
@@ -796,13 +747,6 @@
   color: var(--foreground);
   font-size: 13px;
   cursor: pointer;
-}
-
-.lua-settings-toggle input {
-  width: 16px;
-  height: 16px;
-  margin: 0;
-  accent-color: var(--primary);
 }
 
 .lua-settings-toggle > label {
@@ -1307,27 +1251,6 @@
   gap: 10px;
 }
 
-.agent-definition-switch {
-  width: 32px;
-  height: 18px;
-  display: inline-flex;
-  align-items: center;
-  border: 0;
-  border-radius: 999px;
-  background: var(--muted-foreground);
-  padding: 2px;
-  transition: background-color 120ms ease;
-}
-
-.agent-definition-switch span {
-  width: 14px;
-  height: 14px;
-  border-radius: 999px;
-  background: var(--background);
-  transform: translateX(0);
-  transition: transform 120ms ease;
-}
-
 .agent-skills-management-surface .agent-catalog-toolbar-main {
   justify-content: space-between;
 }
@@ -1361,16 +1284,6 @@
   outline: 0;
   background: transparent;
   color: inherit;
-}
-
-.agent-skills-management-surface .agent-catalog-filter-row > select {
-  height: 36px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--background);
-  color: var(--foreground);
-  padding: 0 28px 0 10px;
-  font-size: 12px;
 }
 
 .agent-skill-category-floating-row {
@@ -1507,17 +1420,6 @@
   font-size: 12px;
 }
 
-.agent-skill-form-field select {
-  min-width: 0;
-  width: 100%;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  background: var(--background);
-  color: var(--foreground);
-  padding: 8px 9px;
-  font: inherit;
-}
-
 .agent-skill-source-editor textarea {
   min-height: 360px;
   resize: vertical;
@@ -1641,19 +1543,6 @@
     grid-column: auto;
   }
 
-}
-
-.agent-definition-switch.on {
-  background: var(--foreground);
-}
-
-.agent-definition-switch.on span {
-  transform: translateX(14px);
-}
-
-.agent-definition-switch:disabled {
-  cursor: default;
-  opacity: 0.55;
 }
 
 .skill-card-header {
@@ -2083,23 +1972,6 @@
 
 .lua-skill-config-field > p {
   color: var(--muted-foreground);
-}
-
-.lua-skill-config-field select {
-  width: 100%;
-  min-height: 34px;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  outline: none;
-  background: var(--background);
-  color: var(--foreground);
-  padding: 7px 9px;
-  font: inherit;
-}
-
-.lua-skill-config-field select:focus {
-  border-color: color-mix(in srgb, var(--primary) 62%, var(--border));
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 15%, transparent);
 }
 
 .lua-skill-config-field-footer {

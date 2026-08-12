@@ -46,7 +46,7 @@ export interface UserPromptEditDialogProps {
 export function UserPromptEditDialog(props: UserPromptEditDialogProps) {
   return (
     <Dialog open={Boolean(props.draft)} onOpenChange={(open) => !open && props.onClose()}>
-      <DialogContent className="user-prompt-edit-dialog">
+      <DialogContent size="lg">
         <DialogHeader>
           <DialogTitle>{props.title}</DialogTitle>
         </DialogHeader>

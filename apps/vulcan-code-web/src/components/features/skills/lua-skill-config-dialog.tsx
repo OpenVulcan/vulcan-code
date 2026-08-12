@@ -3,6 +3,8 @@ import { RefreshCw, Settings2, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button, IconButton } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Dialog,
@@ -544,42 +546,45 @@ export function LuaSkillConfigDialog(props: {
           <span className="lua-skill-config-secret-status">{t("skills.luaConfig.secretConfigured")}</span>
         ) : null}
         {item.type === "boolean" && item.sensitive ? (
-          <select
+          <Select
             disabled={busy}
-            id={fieldId}
-            onChange={(event) => updateDraft(item.key, event.target.value, true)}
-            value={String(currentValue)}
+            onValueChange={(value) => updateDraft(item.key, value === "preserve-secret" ? "" : value, true)}
+            value={String(currentValue) || "preserve-secret"}
           >
-            <option value="">{t("skills.luaConfig.preserveSecret")}</option>
-            <option value="true">true</option>
-            <option value="false">false</option>
-          </select>
+            <SelectTrigger className="w-full" id={fieldId}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="preserve-secret">{t("skills.luaConfig.preserveSecret")}</SelectItem>
+              <SelectItem value="true">true</SelectItem>
+              <SelectItem value="false">false</SelectItem>
+            </SelectContent>
+          </Select>
         ) : item.type === "boolean" ? (
-          <button
-            aria-checked={Boolean(currentValue)}
-            className={`agent-definition-switch ${currentValue ? "on" : ""}`}
+          <Switch
+            checked={Boolean(currentValue)}
             disabled={busy}
             id={fieldId}
-            onClick={() => updateDraft(item.key, !currentValue)}
-            role="switch"
-            type="button"
-          >
-            <span />
-          </button>
+            onCheckedChange={(checked) => updateDraft(item.key, checked)}
+          />
         ) : item.type === "enum" ? (
-          <select
+          <Select
             disabled={busy}
-            id={fieldId}
-            onChange={(event) => updateDraft(item.key, event.target.value, item.sensitive)}
-            value={String(currentValue)}
+            onValueChange={(value) => updateDraft(item.key, value === "unset-enum" ? "" : value, item.sensitive)}
+            value={String(currentValue) || "unset-enum"}
           >
-            <option value="">{item.placeholder ?? t("skills.luaConfig.selectValue")}</option>
-            {item.options.map((option) => (
-              <option key={option.value} title={option.description} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
+            <SelectTrigger className="w-full" id={fieldId}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="unset-enum">{item.placeholder ?? t("skills.luaConfig.selectValue")}</SelectItem>
+              {item.options.map((option) => (
+                <SelectItem key={option.value} title={option.description} value={option.value}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         ) : item.format === "multiline" ? (
           <Textarea
             density="large"

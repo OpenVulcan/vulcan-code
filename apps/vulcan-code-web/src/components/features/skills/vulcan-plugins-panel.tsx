@@ -1,6 +1,9 @@
 import * as React from "react";
 import { ChartNoAxesCombined, KeyRound, Puzzle, Route, Search, ShieldCheck, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { StatusPill } from "@/components/shared/status";
 import { useI18n } from "@/i18n";
 import type { PluginSummary, VulcanPluginPermissionPreview } from "@/types";
@@ -450,10 +453,9 @@ export function VulcanPluginsPanel(props: {
               </div>
             </dl>
             <label className="vulcan-plugin-permission-consent">
-              <input
+              <Checkbox
                 checked={authorizationConfirmed}
-                onChange={(event) => setAuthorizationConfirmed(event.target.checked)}
-                type="checkbox"
+                onCheckedChange={(checked) => setAuthorizationConfirmed(checked === true)}
               />
               <span>{locale.startsWith("zh")
                 ? "我已核对并授权以上全部能力、Hook、挂载点和进程入口。"
@@ -461,10 +463,9 @@ export function VulcanPluginsPanel(props: {
             </label>
             {permissionPreview.permissions.includes("dependency_registry_network") ? (
               <label className="vulcan-plugin-permission-consent warning">
-                <input
+                <Checkbox
                   checked={registryDependenciesConfirmed}
-                  onChange={(event) => setRegistryDependenciesConfirmed(event.target.checked)}
-                  type="checkbox"
+                  onCheckedChange={(checked) => setRegistryDependenciesConfirmed(checked === true)}
                 />
                 <span>{locale.startsWith("zh")
                   ? "允许 Vulcan 在安装时联网从注册表获取该插件声明的锁定依赖。"
@@ -536,17 +537,17 @@ export function VulcanPluginsPanel(props: {
             value={searchQuery}
           />
         </label>
-        <select
-          aria-label={t("skills.filter.statusLabel")}
-          className="agent-catalog-status-select"
-          onChange={(event) => setStatusFilter(event.target.value as VulcanPluginStatusFilter)}
-          value={statusFilter}
-        >
-          <option value="all">{t("skills.filter.allStatuses")}</option>
-          <option value="enabled">{t("skills.status.enabled")}</option>
-          <option value="disabled">{t("skills.status.stopped")}</option>
-          <option value="issues">{t("skills.filter.issues")}</option>
-        </select>
+        <Select onValueChange={(value) => setStatusFilter(value as VulcanPluginStatusFilter)} value={statusFilter}>
+          <SelectTrigger aria-label={t("skills.filter.statusLabel")} className="agent-catalog-status-select">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">{t("skills.filter.allStatuses")}</SelectItem>
+            <SelectItem value="enabled">{t("skills.status.enabled")}</SelectItem>
+            <SelectItem value="disabled">{t("skills.status.stopped")}</SelectItem>
+            <SelectItem value="issues">{t("skills.filter.issues")}</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
       {secretError ? <div className="vulcan-plugin-install-error">{secretError}</div> : null}
       <div className="skill-card-list agent-skill-card-list">
@@ -713,19 +714,14 @@ export function VulcanPluginsPanel(props: {
                   <Trash2 size={15} />
                 </button>
               ) : null}
-              <button
+              <Switch
                 aria-busy={busyPluginId === plugin.id}
-                aria-checked={plugin.desiredEnabled}
+                checked={plugin.desiredEnabled}
                 aria-label={toggleLabel}
-                className={`agent-definition-switch ${plugin.desiredEnabled ? "on" : ""}`}
                 disabled={!plugin.available || busyPluginId !== null || plugin.runtimeState === "enabling" || plugin.runtimeState === "draining"}
-                onClick={() => void togglePlugin(plugin)}
-                role="switch"
+                onCheckedChange={() => void togglePlugin(plugin)}
                 title={toggleLabel}
-                type="button"
-              >
-                <span />
-              </button>
+              />
               </div>
             </article>
           );

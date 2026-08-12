@@ -1,7 +1,17 @@
 import { Palette, Sparkles } from "lucide-react"
-import type { CSSProperties, ReactNode } from "react"
+import { useState, type CSSProperties, type ReactNode } from "react"
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button, IconButton } from "@/components/ui/button"
 import {
@@ -12,6 +22,14 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import {
   Empty,
   EmptyDescription,
@@ -30,6 +48,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet"
 import { Spinner } from "@/components/ui/spinner"
 import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
@@ -134,6 +160,9 @@ export function VisualLabSettingsArea() {
   // text binds the current locale to the compact copy selector.
   // text 将当前语言绑定到紧凑文案选择器。
   const text = (zh: string, en: string) => visualLabText(locale, zh, en)
+  // dialogPreview identifies the modal surface currently opened from the fixed acceptance section.
+  // dialogPreview 标识当前从固定验收区域打开的模态表面。
+  const [dialogPreview, setDialogPreview] = useState<"dialog" | "alert" | "sheet" | null>(null)
 
   return (
     <div className="visual-lab">
@@ -292,6 +321,57 @@ export function VisualLabSettingsArea() {
             <AlertTitle>{text("危险提示", "Destructive alert")}</AlertTitle>
             <AlertDescription>{text("危险语义必须保持清晰但不过度抢眼。", "Danger must remain clear without overwhelming the interface.")}</AlertDescription>
           </Alert>
+        </VisualLabSection>
+
+        <VisualLabSection
+          description={text("普通弹窗、确认弹窗和侧边抽屉使用统一表面、尺寸与操作区。", "Dialogs, confirmations, and sheets share surface, sizing, and action-area contracts.")}
+          title={text("模态表面", "Modal surfaces")}
+        >
+          <div className="visual-lab-row">
+            <Button onClick={() => setDialogPreview("dialog")} variant="outline">{text("普通弹窗", "Dialog")}</Button>
+            <Button onClick={() => setDialogPreview("alert")} variant="outline">{text("确认弹窗", "Confirmation")}</Button>
+            <Button onClick={() => setDialogPreview("sheet")} variant="outline">{text("侧边抽屉", "Sheet")}</Button>
+          </div>
+          <Dialog open={dialogPreview === "dialog"} onOpenChange={(open) => setDialogPreview(open ? "dialog" : null)}>
+            <DialogContent size="md">
+              <DialogHeader>
+                <DialogTitle>{text("标准表单弹窗", "Standard form dialog")}</DialogTitle>
+                <DialogDescription>{text("检查标题、说明、内容间距、关闭按钮和底部操作区。", "Review title, description, spacing, close action, and footer.")}</DialogDescription>
+              </DialogHeader>
+              <Field>
+                <FieldLabel htmlFor="visual-lab-dialog-input">{text("示例字段", "Example field")}</FieldLabel>
+                <Input defaultValue={text("示例内容", "Example value")} id="visual-lab-dialog-input" />
+              </Field>
+              <DialogFooter>
+                <Button onClick={() => setDialogPreview(null)} variant="outline">{text("取消", "Cancel")}</Button>
+                <Button onClick={() => setDialogPreview(null)}>{text("保存", "Save")}</Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+          <AlertDialog open={dialogPreview === "alert"} onOpenChange={(open) => setDialogPreview(open ? "alert" : null)}>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>{text("确认当前操作？", "Confirm this action?")}</AlertDialogTitle>
+                <AlertDialogDescription>{text("确认弹窗只承载需要明确决定的操作。", "Confirmations are reserved for explicit decisions.")}</AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>{text("取消", "Cancel")}</AlertDialogCancel>
+                <AlertDialogAction>{text("确认", "Confirm")}</AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+          <Sheet open={dialogPreview === "sheet"} onOpenChange={(open) => setDialogPreview(open ? "sheet" : null)}>
+            <SheetContent size="md">
+              <SheetHeader>
+                <SheetTitle>{text("标准侧边抽屉", "Standard side sheet")}</SheetTitle>
+                <SheetDescription>{text("用于需要保留主界面上下文的辅助编辑。", "Used for auxiliary editing that preserves page context.")}</SheetDescription>
+              </SheetHeader>
+              <div className="px-4 text-sm text-muted-foreground">{text("抽屉内容区域", "Sheet content area")}</div>
+              <SheetFooter>
+                <Button onClick={() => setDialogPreview(null)}>{text("完成", "Done")}</Button>
+              </SheetFooter>
+            </SheetContent>
+          </Sheet>
         </VisualLabSection>
 
         <VisualLabSection

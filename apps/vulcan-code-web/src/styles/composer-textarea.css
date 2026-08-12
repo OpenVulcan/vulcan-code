@@ -65,7 +65,6 @@
   color: var(--muted-foreground);
 }
 
-.rename-dialog,
 .archive-dialog {
   width: min(460px, calc(100vw - 32px));
 }

@@ -18,6 +18,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { useI18n } from "@/i18n"
 import {
@@ -109,15 +110,19 @@ export function ContextWindowPolicyEditor(props: {
         </label>
         <label className="grid gap-1 text-sm">
           <span>{t("settings.contextWindowPolicy.scope")}</span>
-          <select
-            className="h-9 rounded-md border bg-background px-3 text-sm"
-            onChange={(event) => updateScope(event.target.value)}
-            value={props.value?.auto_compact_scope ?? ""}
+          <Select
+            onValueChange={(value) => updateScope(value === "inherit" ? "" : value)}
+            value={props.value?.auto_compact_scope ?? "inherit"}
           >
-            <option value="">{t("settings.contextWindowPolicy.scopeInherit")}</option>
-            <option value="total">{t("settings.contextWindowPolicy.scopeTotal")}</option>
-            <option value="body_after_prefix">{t("settings.contextWindowPolicy.scopeBodyAfterPrefix")}</option>
-          </select>
+            <SelectTrigger className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="inherit">{t("settings.contextWindowPolicy.scopeInherit")}</SelectItem>
+              <SelectItem value="total">{t("settings.contextWindowPolicy.scopeTotal")}</SelectItem>
+              <SelectItem value="body_after_prefix">{t("settings.contextWindowPolicy.scopeBodyAfterPrefix")}</SelectItem>
+            </SelectContent>
+          </Select>
         </label>
         <label className="grid gap-1 text-sm">
           <span>{t("settings.contextWindowPolicy.fallbackBuffer")}</span>

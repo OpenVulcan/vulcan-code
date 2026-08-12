@@ -376,10 +376,6 @@
   white-space: nowrap;
 }
 
-.workspace-subagent-stop-dialog {
-  max-width: min(420px, calc(100vw - 32px));
-}
-
 .workspace-subagent-empty {
   min-width: 0;
   min-height: 220px;

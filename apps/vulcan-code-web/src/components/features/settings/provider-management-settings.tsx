@@ -30,6 +30,7 @@ import {
 } from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import {
@@ -39,6 +40,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { Switch } from "@/components/ui/switch"
 import {
   Dialog,
   DialogContent,
@@ -1167,11 +1169,10 @@ function CustomProviderDialog(props: {
                         className={`inline-flex cursor-pointer items-center gap-2 rounded-full border px-3 py-1.5 text-sm ${enabled ? "border-foreground bg-muted font-medium" : "text-muted-foreground"}`}
                         key={option.id}
                       >
-                        <input
+                        <Checkbox
                           checked={enabled}
-                          className="size-4"
                           disabled={saving}
-                          onChange={() => {
+                          onCheckedChange={() => {
                             setProtocols((current) => {
                               const next = enabled
                                 ? current.filter((protocol) => protocol !== option.id)
@@ -1191,7 +1192,6 @@ function CustomProviderDialog(props: {
                               return sortProtocolsByAutoPriority(next)
                             })
                           }}
-                          type="checkbox"
                         />
                         {option.label}
                       </label>
@@ -1249,11 +1249,10 @@ function CustomProviderDialog(props: {
               <div className="grid gap-3 rounded-xl border bg-muted/30 p-3 text-sm">
                 <p className="font-medium text-foreground">{t("settings.customProviders.codexCapabilities")}</p>
                 <label className="flex items-start gap-2">
-                  <input
+                  <Switch
                     checked={remoteCompactionPolicy === "enabled_with_local_fallback"}
                     className="mt-1"
-                    onChange={(event) => setRemoteCompactionPolicy(event.target.checked ? "enabled_with_local_fallback" : "disabled")}
-                    type="checkbox"
+                    onCheckedChange={(checked) => setRemoteCompactionPolicy(checked ? "enabled_with_local_fallback" : "disabled")}
                   />
                   <span>
                     <span className="block font-medium">{t("settings.customProviders.codexRemoteCompaction")}</span>
@@ -1261,11 +1260,10 @@ function CustomProviderDialog(props: {
                   </span>
                 </label>
                 <label className="flex items-start gap-2">
-                  <input
+                  <Switch
                     checked={websocketPolicy !== "disabled"}
                     className="mt-1"
-                    onChange={(event) => setWebsocketPolicy(event.target.checked ? "unverified_override" : "disabled")}
-                    type="checkbox"
+                    onCheckedChange={(checked) => setWebsocketPolicy(checked ? "unverified_override" : "disabled")}
                   />
                   <span>
                     <span className="block font-medium">{t("settings.customProviders.codexWebsocket")}</span>

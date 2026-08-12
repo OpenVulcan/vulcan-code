@@ -6,6 +6,7 @@ import { MarkdownMessage } from "@/components/conversation/conversation-markdown
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { listManagedKnowledgeDocumentFolders, listManagedKnowledgeDocuments, readManagedKnowledgeDocument, searchManagedKnowledgeLibrary } from "@/service/knowledge-base-service";
 import type { KnowledgeDocumentContent, KnowledgeDocumentSummary, KnowledgeLibrarySummary, KnowledgeSearchResult } from "@/types";
@@ -325,11 +326,16 @@ export function KnowledgeLibraryViewerDialog(props: {
         </header>
         <div className="knowledge-viewer-search">
           <Search size={16} />
-          <select aria-label="检索层" className="knowledge-viewer-search-mode" disabled={searching} onChange={(event) => setSearchRetrievalMode(event.target.value as "raw_bm25" | "display_bm25" | "display_hybrid")} value={searchRetrievalMode}>
-            <option value="raw_bm25">原始库 BM25</option>
-            <option value="display_bm25">显示库 BM25</option>
-            <option value="display_hybrid">显示库混合检索</option>
-          </select>
+          <Select disabled={searching} onValueChange={(value) => setSearchRetrievalMode(value as "raw_bm25" | "display_bm25" | "display_hybrid")} value={searchRetrievalMode}>
+            <SelectTrigger aria-label="检索层" className="knowledge-viewer-search-mode">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="raw_bm25">原始库 BM25</SelectItem>
+              <SelectItem value="display_bm25">显示库 BM25</SelectItem>
+              <SelectItem value="display_hybrid">显示库混合检索</SelectItem>
+            </SelectContent>
+          </Select>
           <Input aria-label={t("knowledge.search.placeholder")} disabled={searching} onChange={(event) => {
             setSearchText(event.target.value);
             if (!event.target.value.trim()) clearSearch();

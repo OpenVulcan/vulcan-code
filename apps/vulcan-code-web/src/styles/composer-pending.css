@@ -221,10 +221,6 @@
   color: var(--foreground);
 }
 
-.composer-goal-dialog {
-  max-width: 420px;
-}
-
 .composer-goal-dialog-body {
   display: grid;
   gap: 10px;

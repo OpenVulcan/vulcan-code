@@ -3,6 +3,8 @@ import { CircleHelp } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { useI18n } from "@/i18n"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
@@ -642,19 +644,24 @@ export function LuaSkillsSettingsPanel(props: {
           <h4>{t("skills.luaSettings.capabilities")}</h4>
           <label className="lua-settings-field">
             <span>{t("skills.luaSettings.defaultEncoding")}</span>
-            <select
-              value={draft.capabilities.defaultTextEncoding ?? ""}
-              onChange={(event) => updateDefaultEncoding(event.currentTarget.value)}
+            <Select
+              onValueChange={(value) => updateDefaultEncoding(value === "auto" ? "" : value)}
+              value={draft.capabilities.defaultTextEncoding ?? "auto"}
             >
-              <option value="">{t("skills.luaSettings.autoEncoding")}</option>
-              <option value="utf-8">UTF-8</option>
-              <option value="system">System</option>
-              <option value="oem">OEM</option>
-              <option value="gbk">GBK</option>
-              <option value="gb18030">GB18030</option>
-              <option value="latin1">Latin-1</option>
-              <option value="base64">Base64</option>
-            </select>
+              <SelectTrigger className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="auto">{t("skills.luaSettings.autoEncoding")}</SelectItem>
+                <SelectItem value="utf-8">UTF-8</SelectItem>
+                <SelectItem value="system">System</SelectItem>
+                <SelectItem value="oem">OEM</SelectItem>
+                <SelectItem value="gbk">GBK</SelectItem>
+                <SelectItem value="gb18030">GB18030</SelectItem>
+                <SelectItem value="latin1">Latin-1</SelectItem>
+                <SelectItem value="base64">Base64</SelectItem>
+              </SelectContent>
+            </Select>
           </label>
           <ToggleSettingField
             label={t("skills.luaSettings.skillManagementBridge")}
@@ -834,10 +841,9 @@ function ToggleSettingField(props: {
   if (!props.tooltip) {
     return (
       <label className="lua-settings-toggle">
-        <input
-          type="checkbox"
+        <Switch
           checked={props.checked}
-          onChange={(event) => props.onChange(event.currentTarget.checked)}
+          onCheckedChange={props.onChange}
         />
         <span>{props.label}</span>
       </label>
@@ -845,11 +851,10 @@ function ToggleSettingField(props: {
   }
   return (
     <div className="lua-settings-toggle">
-      <input
+      <Switch
         id={inputId}
-        type="checkbox"
         checked={props.checked}
-        onChange={(event) => props.onChange(event.currentTarget.checked)}
+        onCheckedChange={props.onChange}
       />
       <label htmlFor={inputId}>{props.label}</label>
       <TooltipProvider delayDuration={500}>

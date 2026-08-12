@@ -283,10 +283,6 @@
   font-weight: 400;
 }
 
-.user-prompt-edit-dialog {
-  width: min(680px, calc(100vw - 32px));
-}
-
 .user-prompt-edit-textarea {
   min-height: 180px;
   max-height: min(50vh, 420px);

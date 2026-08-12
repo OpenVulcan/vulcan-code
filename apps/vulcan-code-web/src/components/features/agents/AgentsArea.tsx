@@ -8,7 +8,10 @@ import type { FeatureHeaderSummary } from "@/components/features/feature-area-ty
 import { SourceOriginLink } from "@/components/features/source-origin-link"
 import { Badge } from "@/components/ui/badge"
 import { Button, IconButton } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import {
   Dialog,
@@ -359,16 +362,16 @@ export function AgentsArea(props: {
               type="search"
               value={searchQuery}
             />
-            <select
-              aria-label={text("启停状态筛选", "Enabled-state filter")}
-              className="agent-catalog-status-select"
-              onChange={(event) => setStatusFilter(event.target.value as AgentStatusFilter)}
-              value={statusFilter}
-            >
-              <option value="all">{text("全部", "All")}</option>
-              <option value="enabled">{text("已启用", "Enabled")}</option>
-              <option value="disabled">{text("已停用", "Disabled")}</option>
-            </select>
+            <Select onValueChange={(value) => setStatusFilter(value as AgentStatusFilter)} value={statusFilter}>
+              <SelectTrigger aria-label={text("启停状态筛选", "Enabled-state filter")} className="agent-catalog-status-select">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">{text("全部", "All")}</SelectItem>
+                <SelectItem value="enabled">{text("已启用", "Enabled")}</SelectItem>
+                <SelectItem value="disabled">{text("已停用", "Disabled")}</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
         </section>
         <AgentCatalogIssues catalog={props.workbench.subagentCatalog} />
@@ -635,18 +638,23 @@ function AgentEditorForm(props: {
               </label>
               <label>
                 <span>{text("元数据语言", "Metadata language")}</span>
-                <select disabled={props.busy || readOnlySystemMetadata} value={selectedMetadataLocale} onChange={(event) => updateDraftField("metadataLocale", event.target.value as AgentMetadataLocale)}>
-                  {AGENT_METADATA_LOCALES.map((option) => (
-                    <option key={option.locale} value={option.locale}>{text(option.zh, option.en)}</option>
-                  ))}
-                </select>
+                <Select disabled={props.busy || readOnlySystemMetadata} value={selectedMetadataLocale} onValueChange={(value) => updateDraftField("metadataLocale", value as AgentMetadataLocale)}>
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {AGENT_METADATA_LOCALES.map((option) => (
+                      <SelectItem key={option.locale} value={option.locale}>{text(option.zh, option.en)}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </label>
               <label>
                 <span>{text("名称", "Name")}</span>
                 <Input disabled={props.busy || readOnlySystemMetadata} value={selectedMetadataName} onChange={(event) => updateDraftMetadataField("name", event.target.value)} />
               </label>
               <label className="agent-editor-checkbox">
-                <input checked={draft.enabled} disabled={props.busy || readOnlySystemMetadata} type="checkbox" onChange={(event) => updateDraftField("enabled", event.target.checked)} />
+                <Switch checked={draft.enabled} disabled={props.busy || readOnlySystemMetadata} onCheckedChange={(checked) => updateDraftField("enabled", checked)} />
                 <span>{text("暴露给模型", "Expose to model")}</span>
               </label>
               <label className="wide">
@@ -970,12 +978,11 @@ function AgentCapabilityPolicyTable(props: {
                 {option.detail ? <span>{option.detail}</span> : null}
               </div>
               <label className="agent-tool-policy-checkbox">
-                <input
+                <Checkbox
                   checked={checked}
                   disabled={props.disabled || props.mode === "all"}
-                  type="checkbox"
-                  onChange={(event) => {
-                    props.onSelectedItemsChange(setPolicyItemSelection(selectedPolicyItems, option.id, event.target.checked))
+                  onCheckedChange={(nextChecked) => {
+                    props.onSelectedItemsChange(setPolicyItemSelection(selectedPolicyItems, option.id, nextChecked === true))
                   }}
                 />
                 <span>{policySelectionLabel(props.mode, locale)}</span>
@@ -1100,18 +1107,13 @@ function AgentDefinitionCard(props: {
         <span className="agent-definition-row-path">{definition.definitionFile}</span>
       </div>
       <div className="agent-definition-row-actions">
-        {definition.canToggle ? <button
-          aria-checked={definition.enabled}
+        {definition.canToggle ? <Switch
+          checked={definition.enabled}
           aria-label={definition.enabled ? t("skills.action.disable") : t("skills.action.enable")}
-          className={`agent-definition-switch ${definition.enabled ? "on" : ""}`}
           disabled={props.busy || props.toggleBusy}
-          onClick={() => void props.onRunToggleAction(definition.agentId, () => props.actions.onSetAgentDefinitionEnabled(definition.agentId, !definition.enabled))}
-          role="switch"
+          onCheckedChange={() => void props.onRunToggleAction(definition.agentId, () => props.actions.onSetAgentDefinitionEnabled(definition.agentId, !definition.enabled))}
           title={definition.enabled ? t("skills.action.disable") : t("skills.action.enable")}
-          type="button"
-        >
-          <span />
-        </button> : null}
+        /> : null}
         {definition.canEdit ? (
           <IconButton aria-label={text("编辑", "Edit")} disabled={props.busy} onClick={props.onEdit} title={text("编辑", "Edit")} type="button">
             <Pencil size={15} />

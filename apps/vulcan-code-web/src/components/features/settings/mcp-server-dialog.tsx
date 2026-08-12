@@ -9,6 +9,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { useI18n } from "@/i18n"
 import type { McpServerSummary } from "@/types"
@@ -157,7 +159,7 @@ export function McpServerDialog(props: {
   }, [argsText, bearerToken, command, cwd, enabled, envPassthroughText, envText, headersFromEnvText, headersText, name, oauthClientId, oauthClientSecret, oauthRedirectUri, oauthScopesText, props, transport, url])
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
-      <DialogContent className="settings-dialog wide">
+      <DialogContent scrollMode="body-scroll" size="xl">
         <DialogHeader>
           <DialogTitle>{props.server ? text("编辑 MCP 服务器", "Edit MCP server") : text("添加 MCP 服务器", "Add MCP server")}</DialogTitle>
           <DialogDescription>{text("多值字段每行一个；键值字段使用 KEY=VALUE。", "Use one line per value; key/value fields use KEY=VALUE.")}</DialogDescription>
@@ -167,16 +169,19 @@ export function McpServerDialog(props: {
             <span>{text("名称", "Name")}</span>
             <Input onChange={(event) => setName(event.target.value)} value={name} />
           </label>
-          <label className="settings-form-field">
+          <div className="settings-form-field">
             <span>{text("传输", "Transport")}</span>
-            <select className="settings-input" onChange={(event) => setTransport(event.target.value)} value={transport}>
-              <option value="stdio">stdio</option>
-              <option value="http">http</option>
-              <option value="sse">sse</option>
-            </select>
-          </label>
+            <Select onValueChange={setTransport} value={transport}>
+              <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="stdio">stdio</SelectItem>
+                <SelectItem value="http">http</SelectItem>
+                <SelectItem value="sse">sse</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
           <label className="settings-check-row inline">
-            <input checked={enabled} onChange={(event) => setEnabled(event.target.checked)} type="checkbox" />
+            <Switch checked={enabled} onCheckedChange={setEnabled} />
             <span>{text("启用服务器", "Enable server")}</span>
           </label>
           {transport === "stdio" ? (

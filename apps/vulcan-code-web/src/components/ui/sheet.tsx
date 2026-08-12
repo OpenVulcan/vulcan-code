@@ -43,24 +43,43 @@ function SheetOverlay({
   )
 }
 
+// SheetContentSize defines the supported widths for side-mounted sheets.
+// SheetContentSize 定义侧边抽屉支持的宽度。
+type SheetContentSize = "sm" | "md" | "lg"
+
+// SheetContentProps exposes controlled direction, width, and close-button behavior.
+// SheetContentProps 暴露受控的方向、宽度与关闭按钮行为。
+interface SheetContentProps extends React.ComponentProps<typeof SheetPrimitive.Content> {
+  // Edge from which the sheet enters.
+  // 抽屉进入的边缘方向。
+  side?: "top" | "right" | "bottom" | "left"
+  // Whether the standard close action is rendered.
+  // 是否渲染标准关闭操作。
+  showCloseButton?: boolean
+  // Semantic width used by left and right sheets.
+  // 左右侧抽屉使用的语义宽度。
+  size?: SheetContentSize
+}
+
+// SheetContent renders a shared edge-mounted surface with semantic sizing.
+// SheetContent 使用语义尺寸渲染共享的边缘抽屉表面。
 function SheetContent({
   className,
   children,
   side = "right",
   showCloseButton = true,
+  size = "sm",
   ...props
-}: React.ComponentProps<typeof SheetPrimitive.Content> & {
-  side?: "top" | "right" | "bottom" | "left"
-  showCloseButton?: boolean
-}) {
+}: SheetContentProps) {
   return (
     <SheetPortal>
       <SheetOverlay />
       <SheetPrimitive.Content
         data-slot="sheet-content"
         data-side={side}
+        data-size={size}
         className={cn(
-          "fixed z-50 flex flex-col gap-4 bg-popover bg-clip-padding text-sm text-popover-foreground shadow-lg transition duration-200 ease-in-out data-[side=bottom]:inset-x-0 data-[side=bottom]:bottom-0 data-[side=bottom]:h-auto data-[side=bottom]:border-t data-[side=left]:inset-y-0 data-[side=left]:left-0 data-[side=left]:h-full data-[side=left]:w-3/4 data-[side=left]:border-r data-[side=right]:inset-y-0 data-[side=right]:right-0 data-[side=right]:h-full data-[side=right]:w-3/4 data-[side=right]:border-l data-[side=top]:inset-x-0 data-[side=top]:top-0 data-[side=top]:h-auto data-[side=top]:border-b data-[side=left]:sm:max-w-sm data-[side=right]:sm:max-w-sm data-open:animate-in data-open:fade-in-0 data-[side=bottom]:data-open:slide-in-from-bottom-10 data-[side=left]:data-open:slide-in-from-left-10 data-[side=right]:data-open:slide-in-from-right-10 data-[side=top]:data-open:slide-in-from-top-10 data-closed:animate-out data-closed:fade-out-0 data-[side=bottom]:data-closed:slide-out-to-bottom-10 data-[side=left]:data-closed:slide-out-to-left-10 data-[side=right]:data-closed:slide-out-to-right-10 data-[side=top]:data-closed:slide-out-to-top-10",
+          "fixed z-50 flex flex-col gap-4 bg-popover bg-clip-padding text-sm text-popover-foreground shadow-lg transition duration-200 ease-in-out data-[side=bottom]:inset-x-0 data-[side=bottom]:bottom-0 data-[side=bottom]:h-auto data-[side=bottom]:border-t data-[side=left]:inset-y-0 data-[side=left]:left-0 data-[side=left]:h-full data-[side=left]:w-3/4 data-[side=left]:border-r data-[side=right]:inset-y-0 data-[side=right]:right-0 data-[side=right]:h-full data-[side=right]:w-3/4 data-[side=right]:border-l data-[side=top]:inset-x-0 data-[side=top]:top-0 data-[side=top]:h-auto data-[side=top]:border-b data-[side=left]:data-[size=sm]:sm:max-w-sm data-[side=right]:data-[size=sm]:sm:max-w-sm data-[side=left]:data-[size=md]:sm:max-w-xl data-[side=right]:data-[size=md]:sm:max-w-xl data-[side=left]:data-[size=lg]:sm:max-w-2xl data-[side=right]:data-[size=lg]:sm:max-w-2xl data-open:animate-in data-open:fade-in-0 data-[side=bottom]:data-open:slide-in-from-bottom-10 data-[side=left]:data-open:slide-in-from-left-10 data-[side=right]:data-open:slide-in-from-right-10 data-[side=top]:data-open:slide-in-from-top-10 data-closed:animate-out data-closed:fade-out-0 data-[side=bottom]:data-closed:slide-out-to-bottom-10 data-[side=left]:data-closed:slide-out-to-left-10 data-[side=right]:data-closed:slide-out-to-right-10 data-[side=top]:data-closed:slide-out-to-top-10",
           className
         )}
         {...props}

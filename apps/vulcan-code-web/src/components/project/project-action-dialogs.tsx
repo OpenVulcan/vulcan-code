@@ -56,7 +56,7 @@ export function RenameDialog(props: {
 
   return (
     <Dialog open={Boolean(props.target)} onOpenChange={(open) => !open && props.onCancel()}>
-      <DialogContent className="rename-dialog">
+      <DialogContent size="sm">
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>{description}</DialogDescription>

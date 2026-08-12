@@ -1096,7 +1096,7 @@ function WorkspaceSubagentPanel(args: {
         </div>
       ) : null}
       <Dialog open={stopConfirmOpen} onOpenChange={(open) => !stopSubmitting && setStopConfirmOpen(open)}>
-        <DialogContent className="workspace-subagent-stop-dialog" showCloseButton={!stopSubmitting}>
+        <DialogContent showCloseButton={!stopSubmitting} size="sm">
           <DialogHeader>
             <DialogTitle>{t("conversation.subagent.stopConfirmTitle")}</DialogTitle>
             <DialogDescription>
@@ -1115,7 +1115,7 @@ function WorkspaceSubagentPanel(args: {
         </DialogContent>
       </Dialog>
       <Dialog open={closeConfirmOpen} onOpenChange={(open) => !closeSubmitting && setCloseConfirmOpen(open)}>
-        <DialogContent className="workspace-subagent-stop-dialog" showCloseButton={!closeSubmitting}>
+        <DialogContent showCloseButton={!closeSubmitting} size="sm">
           <DialogHeader>
             <DialogTitle>{t("conversation.subagent.closeConfirmTitle")}</DialogTitle>
             <DialogDescription>

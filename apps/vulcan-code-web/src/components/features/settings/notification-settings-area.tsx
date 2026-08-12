@@ -2,6 +2,7 @@ import * as React from "react";
 import { Bell } from "lucide-react";
 import { PanelTitle, StatusPill } from "@/components/shared/status";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import { useI18n } from "@/i18n";
 import {
   loadNotificationPreferences,
@@ -150,11 +151,10 @@ export function NotificationSettingsArea() {
           <p>{t("settings.notifications.localChannel.description")}</p>
           <label className="settings-form-field">
             <span>{t("settings.notifications.permission")}: {permissionLabel}</span>
-            <input
+            <Switch
               checked={preferences.channels.local.enabled}
               disabled={!capability.supported || permission === "denied" || requestingPermission}
-              onChange={(event) => void handleLocalChannelChange(event.currentTarget.checked)}
-              type="checkbox"
+              onCheckedChange={(checked) => void handleLocalChannelChange(checked)}
             />
           </label>
           {capability.supported && permission === "default" ? (
@@ -174,18 +174,16 @@ export function NotificationSettingsArea() {
           <strong>{t("settings.notifications.categories")}</strong>
           <label className="settings-form-field">
             <span>{t("settings.notifications.completed")}</span>
-            <input
+            <Switch
               checked={preferences.categories.conversationCompleted}
-              onChange={(event) => updateCategories("conversationCompleted", event.currentTarget.checked)}
-              type="checkbox"
+              onCheckedChange={(checked) => updateCategories("conversationCompleted", checked)}
             />
           </label>
           <label className="settings-form-field">
             <span>{t("settings.notifications.failed")}</span>
-            <input
+            <Switch
               checked={preferences.categories.conversationFailed}
-              onChange={(event) => updateCategories("conversationFailed", event.currentTarget.checked)}
-              type="checkbox"
+              onCheckedChange={(checked) => updateCategories("conversationFailed", checked)}
             />
           </label>
         </article>
@@ -194,10 +192,9 @@ export function NotificationSettingsArea() {
           <p>{t("settings.notifications.privacy.description")}</p>
           <label className="settings-form-field">
             <span>{t("settings.notifications.showTitle")}</span>
-            <input
+            <Switch
               checked={preferences.privacy.showConversationTitle}
-              onChange={(event) => updateTitlePrivacy(event.currentTarget.checked)}
-              type="checkbox"
+              onCheckedChange={updateTitlePrivacy}
             />
           </label>
         </article>

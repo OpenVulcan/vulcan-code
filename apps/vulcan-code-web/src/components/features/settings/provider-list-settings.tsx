@@ -12,6 +12,8 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Switch } from "@/components/ui/switch"
 import {
   Card,
   CardContent,
@@ -290,17 +292,16 @@ export function CredentialManagementArea(props: {
         {snapshot ? (
           <div className="settings-inline-control">
             <span>账号用量后台刷新</span>
-            <select
-              className="settings-input"
-              onChange={(event) => void saveUsageRefreshInterval(Number(event.target.value))}
-              value={snapshot.usageRefreshIntervalSeconds}
-            >
-              <option value={60}>每 1 分钟</option>
-              <option value={300}>每 5 分钟</option>
-              <option value={900}>每 15 分钟</option>
-              <option value={1800}>每 30 分钟</option>
-              <option value={3600}>每 1 小时</option>
-            </select>
+            <Select onValueChange={(value) => void saveUsageRefreshInterval(Number(value))} value={String(snapshot.usageRefreshIntervalSeconds)}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="60">每 1 分钟</SelectItem>
+                <SelectItem value="300">每 5 分钟</SelectItem>
+                <SelectItem value="900">每 15 分钟</SelectItem>
+                <SelectItem value="1800">每 30 分钟</SelectItem>
+                <SelectItem value="3600">每 1 小时</SelectItem>
+              </SelectContent>
+            </Select>
             <small>仅刷新声明支持用量查询且已具备必要凭据的账号，缓存只保存在内存中。</small>
           </div>
         ) : null}
@@ -812,14 +813,17 @@ function PublicAiDeleteConnectionDialog(props: {
           </DialogDescription>
         </DialogHeader>
         {props.isProviderDefault && replacements.length > 0 ? (
-          <label className="settings-field">
+          <div className="settings-field">
             <span>替代默认账号</span>
-            <select onChange={(event) => setReplacementId(event.target.value)} value={replacementId}>
+            <Select onValueChange={setReplacementId} value={replacementId}>
+              <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+              <SelectContent>
               {replacements.map((connection) => (
-                <option key={connection.id} value={connection.id}>{connection.display_name}</option>
+                <SelectItem key={connection.id} value={connection.id}>{connection.display_name}</SelectItem>
               ))}
-            </select>
-          </label>
+              </SelectContent>
+            </Select>
+          </div>
         ) : null}
         {error ? <p className="settings-error-text">{error}</p> : null}
         <DialogFooter>
@@ -1170,7 +1174,7 @@ function PublicAiConnectionDialog(props: {
         props.onOpenChange(open)
       }}
     >
-      <DialogContent className="settings-dialog">
+      <DialogContent scrollMode="body-scroll" size="lg">
         <DialogHeader>
           <DialogTitle>
             {props.connection
@@ -1188,17 +1192,19 @@ function PublicAiConnectionDialog(props: {
             <span>供应商</span>
             <span className="provider-credential-select">
               <ProviderIcon category={provider?.category} providerId={provider?.id} />
-              <select
-                className="settings-input"
+              <Select
                 disabled={props.connection !== null}
-                onChange={(event) => {
-                  setProviderId(event.target.value)
+                onValueChange={(value) => {
+                  setProviderId(value)
                   setServiceOriginOverride("")
                 }}
                 value={provider?.id ?? ""}
               >
-                {props.providers.map((item) => <option key={item.id} value={item.id}>{item.display_name}</option>)}
-              </select>
+                <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {props.providers.map((item) => <SelectItem key={item.id} value={item.id}>{item.display_name}</SelectItem>)}
+                </SelectContent>
+              </Select>
             </span>
           </label>
           <label className="settings-form-field">
@@ -1207,35 +1213,39 @@ function PublicAiConnectionDialog(props: {
               && credentialMode === "token" ? (
               <strong>保存时自动识别区域</strong>
             ) : (
-              <select
-                className="settings-input"
-                onChange={(event) => {
-                  setEntryId(event.target.value)
-                  if (event.target.value !== entry?.id) {
+              <Select
+                onValueChange={(value) => {
+                  setEntryId(value)
+                  if (value !== entry?.id) {
                     setServiceOriginOverride("")
                   }
                 }}
                 value={entry?.id ?? ""}
               >
-                {(provider?.service_entries ?? []).map((item) => <option key={item.id} value={item.id}>{item.display_name}</option>)}
-              </select>
+                <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {(provider?.service_entries ?? []).map((item) => <SelectItem key={item.id} value={item.id}>{item.display_name}</SelectItem>)}
+                </SelectContent>
+              </Select>
             )}
           </label>
           <label className="settings-form-field">
             <span>凭据类型</span>
-            <select
-              className="settings-input"
-              onChange={(event) => {
-                const nextProfile = entry?.credential_profiles.find((item) => item.id === event.target.value)
-                setCredentialProfileId(event.target.value)
+            <Select
+              onValueChange={(value) => {
+                const nextProfile = entry?.credential_profiles.find((item) => item.id === value)
+                setCredentialProfileId(value)
                 setCredentialMode(nextProfile?.credential_mode ?? "token")
               }}
               value={credentialProfile?.id ?? ""}
             >
+              <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+              <SelectContent>
               {(entry?.credential_profiles ?? []).map((profile) => (
-                <option key={profile.id} value={profile.id}>{profile.display_name}</option>
+                <SelectItem key={profile.id} value={profile.id}>{profile.display_name}</SelectItem>
               ))}
-            </select>
+              </SelectContent>
+            </Select>
           </label>
           <label className="settings-form-field">
             <span>账号显示名</span>
@@ -1278,10 +1288,9 @@ function PublicAiConnectionDialog(props: {
               <small>仅用于该账号的用量查询，不用于模型调用。</small>
               {props.connection?.has_management_key ? (
                 <label className="settings-inline-checkbox">
-                  <input
+                  <Switch
                     checked={removeManagementKey}
-                    onChange={(event) => setRemoveManagementKey(event.target.checked)}
-                    type="checkbox"
+                    onCheckedChange={setRemoveManagementKey}
                   />
                   <span>移除现有管理密钥</span>
                 </label>

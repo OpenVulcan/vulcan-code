@@ -278,7 +278,7 @@ function VmmContentPage({
           }
         }}
       >
-        <SheetContent className="overflow-y-auto sm:max-w-xl">
+        <SheetContent className="overflow-y-auto" size="md">
           <SheetHeader>
             <SheetTitle>{selectedHit?.summary}</SheetTitle>
             <SheetDescription>{selectedHit?.createdAt}</SheetDescription>

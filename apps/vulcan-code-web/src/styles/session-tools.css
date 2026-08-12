@@ -589,10 +589,6 @@
   white-space: pre;
 }
 
-.terminal-stop-confirm-dialog {
-  max-width: min(420px, calc(100vw - 32px));
-}
-
 .terminal-stop-confirm-body {
   display: grid;
   gap: 8px;

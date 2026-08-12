@@ -52,13 +52,25 @@ function AlertDialogOverlay({
 
 // AlertDialogContent renders the focused confirmation surface and accessible content.
 // AlertDialogContent 渲染聚焦的确认界面及无障碍内容。
+// AlertDialogContentSize defines the supported widths for confirmation surfaces.
+// AlertDialogContentSize 定义确认弹窗表面支持的宽度。
+type AlertDialogContentSize = "compact" | "sm" | "md"
+
+// AlertDialogContentProps exposes semantic confirmation sizing.
+// AlertDialogContentProps 暴露语义化确认弹窗尺寸。
+interface AlertDialogContentProps extends React.ComponentProps<typeof AlertDialogPrimitive.Content> {
+  // Semantic width of the confirmation surface.
+  // 确认弹窗表面的语义宽度。
+  size?: AlertDialogContentSize
+}
+
+// AlertDialogContent renders the shared confirmation surface at a semantic width.
+// AlertDialogContent 使用语义宽度渲染共享确认弹窗表面。
 function AlertDialogContent({
   className,
-  size = "default",
+  size = "compact",
   ...props
-}: React.ComponentProps<typeof AlertDialogPrimitive.Content> & {
-  size?: "default" | "sm"
-}) {
+}: AlertDialogContentProps) {
   return (
     <AlertDialogPortal>
       <AlertDialogOverlay />
@@ -66,7 +78,7 @@ function AlertDialogContent({
         data-slot="alert-dialog-content"
         data-size={size}
         className={cn(
-          "group/alert-dialog-content fixed top-1/2 left-1/2 z-50 grid w-full -translate-x-1/2 -translate-y-1/2 gap-4 rounded-xl bg-popover p-4 text-popover-foreground ring-1 ring-foreground/10 duration-100 outline-none data-[size=default]:max-w-xs data-[size=sm]:max-w-xs data-[size=default]:sm:max-w-sm data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          "group/alert-dialog-content fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 rounded-xl bg-popover p-4 text-popover-foreground ring-1 ring-foreground/10 duration-100 outline-none data-[size=compact]:sm:max-w-sm data-[size=sm]:sm:max-w-md data-[size=md]:sm:max-w-lg data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
           className
         )}
         {...props}

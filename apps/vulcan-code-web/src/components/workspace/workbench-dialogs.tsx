@@ -235,7 +235,7 @@ function StopConversationRunDialog(props: {
         props.onCancel();
       }
     }}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent size="sm">
         <DialogHeader>
           <DialogTitle>{t("conversation.stopWithAgents.title")}</DialogTitle>
           <DialogDescription>

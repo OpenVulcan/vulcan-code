@@ -3,6 +3,8 @@ import { Pencil, Plus, Trash2 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import {
   Dialog,
@@ -167,12 +169,17 @@ export function AgentSkillEditorDialog(props: {
               </label>
               <label className="agent-skill-form-field">
                 <span>{chinese ? "技能分类" : "Skill category"}</span>
-                <select onChange={(event) => updateStructuredField("categoryId", event.target.value)} value={draft.categoryId}>
-                  {props.categories.map((category) => <option key={category.categoryId} value={category.categoryId}>{category.emoji} {localizedCategoryName(category, props.locale)}</option>)}
-                </select>
+                <Select onValueChange={(value) => updateStructuredField("categoryId", value)} value={draft.categoryId}>
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {props.categories.map((category) => <SelectItem key={category.categoryId} value={category.categoryId}>{category.emoji} {localizedCategoryName(category, props.locale)}</SelectItem>)}
+                  </SelectContent>
+                </Select>
               </label>
               <label className="agent-skill-form-check">
-                <input checked={draft.enabled} onChange={(event) => updateStructuredField("enabled", event.target.checked)} type="checkbox" />
+                <Switch checked={draft.enabled} onCheckedChange={(checked) => updateStructuredField("enabled", checked)} />
                 <span>{chinese ? "启用此技能" : "Enable this skill"}</span>
               </label>
               <AgentSkillTextField label="English name" onChange={(value) => updateLocaleField("en-US", "displayName", value)} value={draft.locales["en-US"]?.displayName ?? ""} />

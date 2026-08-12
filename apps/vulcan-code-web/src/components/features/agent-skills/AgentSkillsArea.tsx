@@ -15,6 +15,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Switch } from "@/components/ui/switch"
 import { useI18n } from "@/i18n"
 import type {
   AgentSkillCategorySummary,
@@ -272,19 +274,29 @@ export function AgentSkillsArea(props: {
                 value={searchQuery}
               />
             </label>
-            <select aria-label={locale.startsWith("zh") ? "按状态筛选技能" : "Filter skills by state"} onChange={(event) => setStatusFilter(event.target.value as AgentSkillStatusFilter)} value={statusFilter}>
-              <option value="all">{locale.startsWith("zh") ? "全部状态" : "All states"}</option>
-              <option value="enabled">{locale.startsWith("zh") ? "已启用" : "Enabled"}</option>
-              <option value="disabled">{locale.startsWith("zh") ? "已停用" : "Disabled"}</option>
-              <option value="issues">{locale.startsWith("zh") ? "存在问题" : "Has issues"}</option>
-            </select>
-            <select aria-label={locale.startsWith("zh") ? "按来源筛选技能" : "Filter skills by source"} onChange={(event) => setSourceFilter(event.target.value as AgentSkillSourceFilter)} value={sourceFilter}>
-              <option value="all">{locale.startsWith("zh") ? "全部来源" : "All sources"}</option>
-              <option value="system">{locale.startsWith("zh") ? "系统技能" : "System"}</option>
-              <option value="user">{locale.startsWith("zh") ? "用户技能" : "User"}</option>
-              <option value="plugin">{locale.startsWith("zh") ? "插件技能" : "Plugins"}</option>
-              <option value="overrides">{locale.startsWith("zh") ? "用户覆盖" : "Overrides"}</option>
-            </select>
+            <Select onValueChange={(value) => setStatusFilter(value as AgentSkillStatusFilter)} value={statusFilter}>
+              <SelectTrigger aria-label={locale.startsWith("zh") ? "按状态筛选技能" : "Filter skills by state"} className="agent-catalog-status-select">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">{locale.startsWith("zh") ? "全部状态" : "All states"}</SelectItem>
+                <SelectItem value="enabled">{locale.startsWith("zh") ? "已启用" : "Enabled"}</SelectItem>
+                <SelectItem value="disabled">{locale.startsWith("zh") ? "已停用" : "Disabled"}</SelectItem>
+                <SelectItem value="issues">{locale.startsWith("zh") ? "存在问题" : "Has issues"}</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select onValueChange={(value) => setSourceFilter(value as AgentSkillSourceFilter)} value={sourceFilter}>
+              <SelectTrigger aria-label={locale.startsWith("zh") ? "按来源筛选技能" : "Filter skills by source"} className="agent-catalog-status-select">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">{locale.startsWith("zh") ? "全部来源" : "All sources"}</SelectItem>
+                <SelectItem value="system">{locale.startsWith("zh") ? "系统技能" : "System"}</SelectItem>
+                <SelectItem value="user">{locale.startsWith("zh") ? "用户技能" : "User"}</SelectItem>
+                <SelectItem value="plugin">{locale.startsWith("zh") ? "插件技能" : "Plugins"}</SelectItem>
+                <SelectItem value="overrides">{locale.startsWith("zh") ? "用户覆盖" : "Overrides"}</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
         </div>
 
@@ -333,18 +345,13 @@ export function AgentSkillsArea(props: {
                 <span className="agent-definition-row-path">{record.skillFile}</span>
               </div>
               <div className="agent-definition-row-actions">
-                {record.canToggle ? <button
-                  aria-checked={record.enabled}
+                {record.canToggle ? <Switch
+                  checked={record.enabled}
                   aria-label={record.enabled ? (locale.startsWith("zh") ? "停用" : "Disable") : (locale.startsWith("zh") ? "启用" : "Enable")}
-                  className={`agent-definition-switch ${record.enabled ? "on" : ""}`}
                   disabled={!record.effective || busyRows.has(record.name) || busyAction !== null}
-                  onClick={() => void runRowAction(record)}
-                  role="switch"
+                  onCheckedChange={() => void runRowAction(record)}
                   title={record.enabled ? (locale.startsWith("zh") ? "停用" : "Disable") : (locale.startsWith("zh") ? "启用" : "Enable")}
-                  type="button"
-                >
-                  <span />
-                </button> : null}
+                /> : null}
                 {record.effective && record.canEdit ? (
                   <IconButton aria-label={record.scopeKey === "system" ? (locale.startsWith("zh") ? "创建用户覆盖" : "Create override") : (locale.startsWith("zh") ? "编辑" : "Edit")} disabled={busyAction !== null} onClick={() => openEditor(record)} title={record.scopeKey === "system" ? (locale.startsWith("zh") ? "创建用户覆盖" : "Create override") : (locale.startsWith("zh") ? "编辑" : "Edit")} type="button">
                     <Pencil size={14} />

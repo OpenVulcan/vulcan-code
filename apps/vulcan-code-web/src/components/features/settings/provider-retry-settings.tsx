@@ -5,6 +5,7 @@ import type { ProviderRetrySettingsSaveRequest, SettingsActionProps } from "@/co
 import { PanelTitle, StatusPill } from "@/components/shared/status"
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import { Switch } from "@/components/ui/switch"
 import { useI18n } from "@/i18n"
 import type { ProviderRetrySettingsSummary } from "@/types"
 
@@ -176,11 +177,11 @@ export function ProviderRetrySettingsArea(props: {
         <article className="settings-card">
           <StatusPill status={draft.enabled ? "ready" : "warning"} label={draft.enabled ? text("自动重试已启用", "Automatic retry enabled") : text("自动重试已停用", "Automatic retry disabled")} />
           <label className="settings-check-row inline">
-            <input checked={draft.enabled} onChange={(event) => setDraft((current) => ({ ...current, enabled: event.currentTarget.checked }))} type="checkbox" />
+            <Switch checked={draft.enabled} onCheckedChange={(checked) => setDraft((current) => ({ ...current, enabled: checked }))} />
             {text("启用可重试 Provider 错误的自动重试", "Automatically retry eligible Provider failures")}
           </label>
           <label className="settings-check-row inline">
-            <input checked={draft.respectRetryAfter} onChange={(event) => setDraft((current) => ({ ...current, respectRetryAfter: event.currentTarget.checked }))} type="checkbox" />
+            <Switch checked={draft.respectRetryAfter} onCheckedChange={(checked) => setDraft((current) => ({ ...current, respectRetryAfter: checked }))} />
             {text("遵守 Provider 返回的 Retry-After 等待提示", "Honor Provider Retry-After wait hints")}
           </label>
         </article>
@@ -200,7 +201,7 @@ export function ProviderRetrySettingsArea(props: {
         <article className="settings-card">
           <strong>{text("429 与限流错误", "429 and rate-limit failures")}</strong>
           <label className="settings-check-row inline">
-            <input checked={draft.retry429} onChange={(event) => setDraft((current) => ({ ...current, retry429: event.currentTarget.checked }))} type="checkbox" />
+            <Switch checked={draft.retry429} onCheckedChange={(checked) => setDraft((current) => ({ ...current, retry429: checked }))} />
             {text("自动重试 HTTP 429 与 Anthropic rate_limit_error", "Retry HTTP 429 and Anthropic rate_limit_error")}
           </label>
           <p>{text("每次限流都会先显示等待记录，且所有自动重试都受宿主硬上限约束。", "Every rate limit first creates a visible wait record, and all automatic retries remain under the host hard ceiling.")}</p>

@@ -37,7 +37,7 @@ export function TerminalStopConfirmDialog(props: {
   const { t } = useI18n();
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
-      <DialogContent className="terminal-stop-confirm-dialog" showCloseButton={!props.stopping}>
+      <DialogContent showCloseButton={!props.stopping} size="sm">
         <DialogHeader>
           <DialogTitle>{t("terminalStop.title")}</DialogTitle>
           <DialogDescription>

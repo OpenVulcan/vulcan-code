@@ -47,21 +47,56 @@ function DialogOverlay({
   )
 }
 
+// DialogContentSize defines the supported surface widths for standard and specialized dialogs.
+// DialogContentSize 定义标准弹窗与特殊弹窗支持的表面宽度。
+type DialogContentSize = "compact" | "sm" | "md" | "lg" | "xl" | "viewer" | "fullscreen"
+
+// DialogContentLayout defines padding and spacing owned by the shared dialog surface.
+// DialogContentLayout 定义由共享弹窗表面负责的内边距与间距。
+type DialogContentLayout = "form" | "document" | "viewer"
+
+// DialogContentScrollMode defines which dialog layer owns vertical overflow.
+// DialogContentScrollMode 定义由哪一层弹窗结构负责垂直溢出。
+type DialogContentScrollMode = "body-scroll" | "content-scroll" | "fixed-footer"
+
+// DialogContentProps exposes semantic surface options without requiring page-level visual overrides.
+// DialogContentProps 暴露语义化表面选项，避免页面级视觉覆盖。
+interface DialogContentProps extends React.ComponentProps<typeof DialogPrimitive.Content> {
+  // Whether the standard top-right close action is rendered.
+  // 是否渲染标准的右上角关闭操作。
+  showCloseButton?: boolean
+  // Semantic width of the dialog surface.
+  // 弹窗表面的语义宽度。
+  size?: DialogContentSize
+  // Semantic content spacing of the dialog surface.
+  // 弹窗表面的语义内容间距。
+  layout?: DialogContentLayout
+  // Optional overflow ownership used by bounded-height dialogs.
+  // 有界高度弹窗使用的可选溢出归属。
+  scrollMode?: DialogContentScrollMode
+}
+
+// DialogContent renders the shared modal surface with semantic size, layout, and overflow contracts.
+// DialogContent 使用语义尺寸、布局与溢出契约渲染共享模态表面。
 function DialogContent({
   className,
   children,
   showCloseButton = true,
+  size = "compact",
+  layout = "form",
+  scrollMode,
   ...props
-}: React.ComponentProps<typeof DialogPrimitive.Content> & {
-  showCloseButton?: boolean
-}) {
+}: DialogContentProps) {
   return (
     <DialogPortal>
       <DialogOverlay />
       <DialogPrimitive.Content
         data-slot="dialog-content"
+        data-layout={layout}
+        data-scroll-mode={scrollMode}
+        data-size={size}
         className={cn(
-          "fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 rounded-xl bg-popover p-4 text-sm text-popover-foreground ring-1 ring-foreground/10 duration-100 outline-none sm:max-w-sm data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          "fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 rounded-xl bg-popover text-sm text-popover-foreground ring-1 ring-foreground/10 duration-100 outline-none data-[layout=document]:gap-0 data-[layout=document]:p-0 data-[layout=form]:gap-4 data-[layout=form]:p-4 data-[layout=viewer]:gap-0 data-[layout=viewer]:p-0 data-[scroll-mode=body-scroll]:max-h-[calc(100vh-2rem)] data-[scroll-mode=body-scroll]:overflow-y-auto data-[scroll-mode=content-scroll]:max-h-[calc(100vh-2rem)] data-[scroll-mode=content-scroll]:overflow-hidden data-[scroll-mode=fixed-footer]:max-h-[calc(100vh-2rem)] data-[scroll-mode=fixed-footer]:overflow-hidden data-[size=compact]:sm:max-w-sm data-[size=sm]:sm:max-w-md data-[size=md]:sm:max-w-xl data-[size=lg]:sm:max-w-2xl data-[size=xl]:sm:max-w-4xl data-[size=viewer]:h-[min(860px,calc(100vh-2rem))] data-[size=viewer]:sm:max-w-[min(1180px,calc(100vw-2rem))] data-[size=fullscreen]:inset-4 data-[size=fullscreen]:h-auto data-[size=fullscreen]:max-w-none data-[size=fullscreen]:translate-x-0 data-[size=fullscreen]:translate-y-0 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
           className
         )}
         {...props}

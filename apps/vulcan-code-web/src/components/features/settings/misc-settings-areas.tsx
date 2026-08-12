@@ -17,6 +17,7 @@ import { ModelPickerControl, modelPickerChoiceKey } from "@/components/composer/
 import { PanelTitle, StatusPill } from "@/components/shared/status"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 import { useI18n } from "@/i18n"
 import type { SettingsActionProps } from "@/components/features/settings/settings-action-types"
@@ -242,16 +243,19 @@ export function PromptComposerSettingsArea(props: {
       <section className="panel settings-detail-panel">
         <PanelTitle icon={<SlidersHorizontal size={17} />} title={text("输出风格", "Output style")} />
         <div className="settings-form-grid">
-          <label className="settings-field">
+          <div className="settings-field">
             <span>{text("新会话默认风格", "Default for new sessions")}</span>
-            <select className="settings-input" onChange={(event) => setOutputStyleId(event.target.value)} value={outputStyleId}>
+            <Select onValueChange={setOutputStyleId} value={outputStyleId}>
+              <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+              <SelectContent>
               {props.outputStyleCatalog.entries.map((entry) => (
-                <option key={entry.id} value={entry.id}>
+                <SelectItem key={entry.id} value={entry.id}>
                   {`${locale === "zh-CN" ? entry.labelZh : entry.labelEn} · ${entry.promptCharCount} chars`}
-                </option>
+                </SelectItem>
               ))}
-            </select>
-          </label>
+              </SelectContent>
+            </Select>
+          </div>
           <p className="settings-muted-line">
             {text("全局设置仅在新会话或上下文压缩后的会话应用，避免替换当前系统提示词。", "The global setting applies only at a new session or compaction boundary, so the active system prompt is never replaced mid-context.")}
           </p>

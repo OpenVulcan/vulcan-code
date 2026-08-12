@@ -49,7 +49,7 @@ export function ComposerGoalDialog(props: ComposerGoalDialogProps) {
   const { t } = useI18n();
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
-      <DialogContent className="composer-goal-dialog">
+      <DialogContent size="sm">
         <DialogHeader>
           <DialogTitle>{props.mode === "resume" ? t("composer.goalDialog.resumeTitle") : t("composer.goalDialog.editTitle")}</DialogTitle>
         </DialogHeader>

@@ -1,6 +1,7 @@
 import * as React from "react";
 import { PackagePlus, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   Dialog,
   DialogContent,
@@ -155,26 +156,26 @@ export function LuaSkillsPanel(props: {
             value={searchQuery}
           />
         </label>
-        <select
-          aria-label={t("skills.filter.statusLabel")}
-          className="agent-catalog-status-select"
-          onChange={(event) => setStatusFilter(event.target.value as LuaSkillStatusFilter)}
-          value={statusFilter}
-        >
-          <option value="all">{t("skills.filter.allStatuses")}</option>
-          <option value="enabled">{t("skills.status.enabled")}</option>
-          <option value="disabled">{t("skills.status.stopped")}</option>
-        </select>
-        <select
-          aria-label={t("skills.filter.sourceLabel")}
-          className="agent-catalog-status-select"
-          onChange={(event) => setSourceFilter(event.target.value as LuaSkillSourceFilter)}
-          value={sourceFilter}
-        >
-          <option value="all">{t("skills.filter.allSources")}</option>
-          <option value="system">{t("skills.label.system")}</option>
-          <option value="user">{t("skills.label.user")}</option>
-        </select>
+        <Select onValueChange={(value) => setStatusFilter(value as LuaSkillStatusFilter)} value={statusFilter}>
+          <SelectTrigger aria-label={t("skills.filter.statusLabel")} className="agent-catalog-status-select">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">{t("skills.filter.allStatuses")}</SelectItem>
+            <SelectItem value="enabled">{t("skills.status.enabled")}</SelectItem>
+            <SelectItem value="disabled">{t("skills.status.stopped")}</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select onValueChange={(value) => setSourceFilter(value as LuaSkillSourceFilter)} value={sourceFilter}>
+          <SelectTrigger aria-label={t("skills.filter.sourceLabel")} className="agent-catalog-status-select">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">{t("skills.filter.allSources")}</SelectItem>
+            <SelectItem value="system">{t("skills.label.system")}</SelectItem>
+            <SelectItem value="user">{t("skills.label.user")}</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
       <div className="skill-card-list agent-skill-card-list">
         {visibleSkills.length === 0 ? (
@@ -284,7 +285,7 @@ export function LuaSkillInstallDialog(props: {
 
   return (
     <Dialog open={props.open} onOpenChange={(open) => !installingRef.current && props.onOpenChange(open)}>
-      <DialogContent className="lua-skill-install-dialog">
+      <DialogContent size="md">
         <DialogHeader>
           <DialogTitle>{t("skills.lua.installTitle")}</DialogTitle>
           <DialogDescription>{t("skills.lua.installDescription")}</DialogDescription>
@@ -292,10 +293,15 @@ export function LuaSkillInstallDialog(props: {
         <form className="lua-skill-install-form" onSubmit={submitInstall}>
           <label className="lua-skill-install-field">
             <span>{t("skills.lua.sourceType")}</span>
-            <select disabled={installing} value={sourceType} onChange={(event) => setSourceType(event.target.value as "github" | "url")}>
-              <option value="github">GitHub</option>
-              <option value="url">URL</option>
-            </select>
+            <Select disabled={installing} value={sourceType} onValueChange={(value) => setSourceType(value as "github" | "url")}>
+              <SelectTrigger className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="github">GitHub</SelectItem>
+                <SelectItem value="url">URL</SelectItem>
+              </SelectContent>
+            </Select>
           </label>
           <label className="lua-skill-install-field">
             <span>{t("skills.lua.installSource")}</span>

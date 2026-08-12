@@ -192,21 +192,6 @@
   grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
 }
 
-.settings-dialog {
-  width: min(720px, calc(100vw - 36px));
-  max-width: min(720px, calc(100vw - 36px));
-}
-
-.settings-dialog.wide {
-  width: min(920px, calc(100vw - 36px));
-  max-width: min(920px, calc(100vw - 36px));
-}
-
-.settings-dialog.model-list-dialog {
-  width: min(1050px, calc(100vw - 36px));
-  max-width: min(1050px, calc(100vw - 36px));
-}
-
 .settings-form-grid {
   min-height: 0;
   display: grid;
@@ -229,17 +214,6 @@
   color: var(--muted-foreground);
   font-size: 12px;
   font-weight: 650;
-}
-
-.settings-input {
-  width: 100%;
-  min-width: 0;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  background: var(--background);
-  color: var(--foreground);
-  padding: 8px 10px;
-  font-size: 13px;
 }
 
 .settings-checkbox-line {
