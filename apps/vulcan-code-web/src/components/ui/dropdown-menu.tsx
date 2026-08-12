@@ -31,18 +31,55 @@ function DropdownMenuTrigger({
   )
 }
 
+// DropdownMenuContent renders shared menu content and avoids restoring focus to a trigger after pointer dismissal.
+// DropdownMenuContent 渲染共享菜单内容，并避免指针点击外部关闭后把焦点强制还给触发按钮。
+//
+// Parameters:
+// 参数：接收 Radix 下拉菜单内容属性、定位参数及可选外部交互回调。
+// Returns the portal-mounted menu content while preserving keyboard focus restoration.
+// 返回挂载到 Portal 的菜单内容，同时保留键盘关闭时的焦点恢复。
 function DropdownMenuContent({
   className,
   align = "start",
   sideOffset = 4,
+  onCloseAutoFocus,
+  onInteractOutside,
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Content>) {
+  // interactedOutsideRef distinguishes pointer dismissal from keyboard-driven menu closure.
+  // interactedOutsideRef 区分指针点击外部关闭与键盘驱动的菜单关闭。
+  const interactedOutsideRef = React.useRef(false)
+  // handleInteractOutside records only unhandled outside interactions that will dismiss the menu.
+  // handleInteractOutside 仅记录未被调用方阻止、将实际关闭菜单的外部交互。
+  const handleInteractOutside = React.useCallback<
+    NonNullable<React.ComponentProps<typeof DropdownMenuPrimitive.Content>["onInteractOutside"]>
+  >((event) => {
+    onInteractOutside?.(event)
+    interactedOutsideRef.current = !event.defaultPrevented
+  }, [onInteractOutside])
+  // handleCloseAutoFocus suppresses pointer-dismiss focus return while retaining Radix keyboard behavior.
+  // handleCloseAutoFocus 阻止指针关闭后的焦点回送，同时保留 Radix 的键盘行为。
+  const handleCloseAutoFocus = React.useCallback<
+    NonNullable<React.ComponentProps<typeof DropdownMenuPrimitive.Content>["onCloseAutoFocus"]>
+  >((event) => {
+    // interactedOutside is consumed once so later keyboard closures cannot inherit stale pointer state.
+    // interactedOutside 只消费一次，避免后续键盘关闭继承陈旧的指针状态。
+    const interactedOutside = interactedOutsideRef.current
+    interactedOutsideRef.current = false
+    onCloseAutoFocus?.(event)
+    if (interactedOutside && !event.defaultPrevented) {
+      event.preventDefault()
+    }
+  }, [onCloseAutoFocus])
+
   return (
     <DropdownMenuPrimitive.Portal>
       <DropdownMenuPrimitive.Content
         data-slot="dropdown-menu-content"
         sideOffset={sideOffset}
         align={align}
+        onCloseAutoFocus={handleCloseAutoFocus}
+        onInteractOutside={handleInteractOutside}
         className={cn("z-50 max-h-(--radix-dropdown-menu-content-available-height) w-(--radix-dropdown-menu-trigger-width) min-w-32 origin-(--radix-dropdown-menu-content-transform-origin) overflow-x-hidden overflow-y-auto rounded-lg bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10 duration-100 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=closed]:overflow-hidden data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95", className )}
         {...props}
       />

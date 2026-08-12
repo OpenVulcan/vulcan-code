@@ -5,21 +5,13 @@ use super::*;
 pub fn resolve_tool_schema_projection_profile(
     context: &VulcanToolSchemaProjectionContext<'_>,
 ) -> VulcanToolSchemaProjectionProfile {
+    // targetDialect takes precedence over the outer OpenAI-compatible envelope because Gemini validates the final function declaration.
+    // targetDialect 优先于外层 OpenAI 兼容封装，因为 Gemini 校验的是最终函数声明。
     if context
         .api_family_key
-        .eq_ignore_ascii_case("google-gemini-generate-content")
+        .eq_ignore_ascii_case("google-gemini-function-declarations")
+        || openai_compatible_request_targets_gemini(context)
     {
-        return VulcanToolSchemaProjectionProfile::GeminiSlim;
-    }
-
-    if context
-        .api_family_key
-        .eq_ignore_ascii_case("openai-responses-compatible")
-    {
-        return VulcanToolSchemaProjectionProfile::OpenAiResponsesStrict;
-    }
-
-    if openai_compatible_request_targets_gemini(context) {
         return VulcanToolSchemaProjectionProfile::GeminiSlim;
     }
 
@@ -34,108 +26,22 @@ pub fn project_tool_parameters_schema(
 ) -> Value {
     match profile {
         VulcanToolSchemaProjectionProfile::PassThrough => schema.clone(),
-        VulcanToolSchemaProjectionProfile::StrictContainer => {
-            let mut projected = schema.clone();
-            normalize_provider_tool_parameters_schema(&mut projected);
-            projected
-        }
         VulcanToolSchemaProjectionProfile::GeminiSlim => project_gemini_slim_schema(schema),
-        VulcanToolSchemaProjectionProfile::OpenAiResponsesStrict => {
-            let mut projected = schema.clone();
-            normalize_provider_tool_parameters_schema(&mut projected);
-            sanitize_openai_responses_schema(&mut projected);
-            projected
-        }
     }
 }
 
-/// Recursively normalizes one provider tool-parameters schema by inferring explicit container types for object- and array-shaped branches.
-/// 递归规范化单条 Provider 工具参数 Schema，并为对象形与数组形分支补齐显式容器类型。
-pub fn normalize_provider_tool_parameters_schema(schema: &mut Value) {
-    match schema {
-        Value::Object(object) => {
-            if object.contains_key("$ref") {
-                return;
-            }
-
-            normalize_schema_multi_type_union(object);
-
-            if !object.contains_key("type") {
-                if schema_branch_looks_like_object(object) {
-                    object.insert(String::from("type"), Value::String(String::from("object")));
-                } else if schema_branch_looks_like_array(object) {
-                    object.insert(String::from("type"), Value::String(String::from("array")));
-                }
-            }
-
-            for key in [
-                "$defs",
-                "definitions",
-                "properties",
-                "patternProperties",
-                "dependentSchemas",
-            ] {
-                if let Some(Value::Object(entries)) = object.get_mut(key) {
-                    for value in entries.values_mut() {
-                        normalize_provider_tool_parameters_schema(value);
-                    }
-                }
-            }
-
-            for key in [
-                "items",
-                "contains",
-                "propertyNames",
-                "additionalProperties",
-                "unevaluatedProperties",
-                "unevaluatedItems",
-            ] {
-                if let Some(value) = object.get_mut(key) {
-                    normalize_provider_tool_parameters_schema(value);
-                }
-            }
-
-            let parent_properties = object.get("properties").cloned();
-            let parent_additional_properties = object.get("additionalProperties").cloned();
-
-            for key in ["prefixItems"] {
-                if let Some(Value::Array(items)) = object.get_mut(key) {
-                    for item in items {
-                        normalize_provider_tool_parameters_schema(item);
-                    }
-                }
-            }
-
-            for key in ["anyOf", "oneOf", "allOf"] {
-                if let Some(Value::Array(items)) = object.get_mut(key) {
-                    for item in items {
-                        normalize_provider_tool_parameters_schema(item);
-                        inherit_parent_object_shape_into_combinator_branch(
-                            parent_properties.as_ref(),
-                            parent_additional_properties.as_ref(),
-                            item,
-                        );
-                    }
-                }
-            }
-
-            if let Some(branch) = object.get_mut("not") {
-                normalize_provider_tool_parameters_schema(branch);
-                inherit_parent_object_shape_into_combinator_branch(
-                    parent_properties.as_ref(),
-                    parent_additional_properties.as_ref(),
-                    branch,
-                );
-            }
-        }
-        Value::Array(items) => {
-            for item in items {
-                normalize_provider_tool_parameters_schema(item);
-            }
-        }
-        _ => {}
-    }
-}
+/// Returns whether one OpenAI-compatible request ends at a Gemini-family schema validator.
+/// 返回单个 OpenAI 兼容请求是否最终进入 Gemini 模型族的 Schema 校验器。
+///
+/// # Parameters
+/// 参数
+/// `context` contains the final API-family key and concrete model identifier for one request.
+/// `context` 包含单次请求最终使用的接口族键与具体模型标识。
+///
+/// # Returns
+/// 返回值
+/// Returns `true` only when both the OpenAI-compatible envelope and a Gemini-family model are explicit.
+/// 仅当 OpenAI 兼容外层协议与 Gemini 模型族均明确时返回 `true`。
 fn openai_compatible_request_targets_gemini(
     context: &VulcanToolSchemaProjectionContext<'_>,
 ) -> bool {
@@ -147,12 +53,7 @@ fn openai_compatible_request_targets_gemini(
         return false;
     }
 
-    if model_id_looks_like_gemini(context.model_id) {
-        return true;
-    }
-
-    context.provider_id.eq_ignore_ascii_case("openrouter")
-        && openrouter_additional_params_target_gemini(context.additional_params)
+    model_id_looks_like_gemini(context.model_id)
 }
 
 /// Returns whether one model identifier clearly belongs to the Gemini/Gemma family.
@@ -163,157 +64,6 @@ fn model_id_looks_like_gemini(model_id: &str) -> bool {
         || normalized.contains("gemma")
         || normalized.starts_with("google/")
         || normalized.starts_with("google-")
-}
-
-/// Returns whether OpenRouter additional parameters pin routing to a Gemini-like endpoint.
-/// 返回 OpenRouter 附加参数是否将路由固定到类似 Gemini 的端点。
-fn openrouter_additional_params_target_gemini(additional_params: Option<&Value>) -> bool {
-    let Some(Value::Object(root)) = additional_params else {
-        return false;
-    };
-    let Some(Value::Object(provider)) = root.get("provider") else {
-        return false;
-    };
-    provider.values().any(value_contains_gemini_hint)
-}
-
-/// Returns whether one arbitrary JSON value contains a Gemini-like routing hint.
-/// 返回单个任意 JSON 值是否包含类似 Gemini 的路由提示。
-fn value_contains_gemini_hint(value: &Value) -> bool {
-    match value {
-        Value::String(text) => model_id_looks_like_gemini(text),
-        Value::Array(items) => items.iter().any(value_contains_gemini_hint),
-        Value::Object(object) => object.values().any(value_contains_gemini_hint),
-        _ => false,
-    }
-}
-
-/// Rewrites JSON-Schema multi-type arrays into strict-validator-compatible scalar, nullable, or `anyOf` forms.
-/// 将 JSON Schema 的多类型数组重写为严格校验器兼容的标量、可空或 `anyOf` 形式。
-fn normalize_schema_multi_type_union(object: &mut Map<String, Value>) {
-    let Some(Value::Array(type_values)) = object.get("type").cloned() else {
-        return;
-    };
-
-    let mut nullable = object
-        .get("nullable")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let mut normalized_types = Vec::<String>::new();
-
-    for type_value in type_values {
-        let Some(type_name) = type_value.as_str() else {
-            return;
-        };
-        if type_name.eq_ignore_ascii_case("null") {
-            nullable = true;
-            continue;
-        }
-        if !normalized_types
-            .iter()
-            .any(|existing| existing == type_name)
-        {
-            normalized_types.push(type_name.to_string());
-        }
-    }
-
-    match normalized_types.len() {
-        0 => {
-            object.insert(String::from("type"), Value::String(String::from("null")));
-        }
-        1 => {
-            object.insert(
-                String::from("type"),
-                Value::String(normalized_types[0].clone()),
-            );
-        }
-        _ => {
-            object.remove("type");
-            let mut any_of = normalized_types
-                .into_iter()
-                .map(|type_name| {
-                    Value::Object(Map::from_iter([(
-                        String::from("type"),
-                        Value::String(type_name),
-                    )]))
-                })
-                .collect::<Vec<_>>();
-            if let Some(Value::Array(mut existing_any_of)) = object.remove("anyOf") {
-                any_of.append(&mut existing_any_of);
-            }
-            object.insert(String::from("anyOf"), Value::Array(any_of));
-        }
-    }
-
-    if nullable {
-        object.insert(String::from("nullable"), Value::Bool(true));
-    }
-}
-
-/// Returns whether one schema branch semantically behaves like an object schema.
-/// 返回单个 Schema 分支是否在语义上表现为对象 Schema。
-fn schema_branch_looks_like_object(object: &Map<String, Value>) -> bool {
-    [
-        "properties",
-        "required",
-        "additionalProperties",
-        "patternProperties",
-        "propertyNames",
-        "minProperties",
-        "maxProperties",
-        "dependentRequired",
-        "dependentSchemas",
-        "unevaluatedProperties",
-    ]
-    .iter()
-    .any(|key| object.contains_key(*key))
-}
-
-/// Returns whether one schema branch semantically behaves like an array schema.
-/// 返回单个 Schema 分支是否在语义上表现为数组 Schema。
-fn schema_branch_looks_like_array(object: &Map<String, Value>) -> bool {
-    [
-        "items",
-        "prefixItems",
-        "contains",
-        "minItems",
-        "maxItems",
-        "uniqueItems",
-        "unevaluatedItems",
-    ]
-    .iter()
-    .any(|key| object.contains_key(*key))
-}
-
-/// Copies the parent object-shape view into one combinator branch for stricter validators.
-/// 为更严格的校验器将父级对象形状视图复制到单个组合分支。
-fn inherit_parent_object_shape_into_combinator_branch(
-    parent_properties: Option<&Value>,
-    parent_additional_properties: Option<&Value>,
-    branch: &mut Value,
-) {
-    let Some(branch_object) = branch.as_object_mut() else {
-        return;
-    };
-    if branch_object.get("type").and_then(Value::as_str) != Some("object") {
-        return;
-    }
-
-    if branch_object.contains_key("properties") {
-        return;
-    }
-
-    if let Some(parent_properties) = parent_properties {
-        branch_object.insert(String::from("properties"), parent_properties.clone());
-    }
-    if !branch_object.contains_key("additionalProperties")
-        && let Some(additional_properties) = parent_additional_properties
-    {
-        branch_object.insert(
-            String::from("additionalProperties"),
-            additional_properties.clone(),
-        );
-    }
 }
 
 /// Projects one schema into the compact Gemini tool-declaration dialect.
@@ -510,9 +260,12 @@ fn project_gemini_node(schema: &Value) -> Option<Value> {
     insert_optional_clone(&mut projected, object, "minLength");
     hydrate_gemini_required_combinator_branch_properties(&mut projected);
 
+    // Combinator-only root objects remain meaningful even without root-level properties or required fields.
+    // 仅含组合器的根对象即使没有根级 properties 或 required 字段仍具有完整语义。
     if projected.get("type").and_then(Value::as_str) == Some("object")
         && !projected.contains_key("properties")
         && !projected.contains_key("required")
+        && !schema_has_combinator(&projected)
     {
         return None;
     }
@@ -705,66 +458,4 @@ fn hydrate_gemini_required_branch_properties(
         String::from("properties"),
         Value::Object(required_properties),
     );
-}
-
-/// Recursively normalizes one OpenAI Responses JSON schema for strict tool mode.
-/// 为严格工具模式递归规范化单个 OpenAI Responses JSON Schema。
-fn sanitize_openai_responses_schema(schema: &mut Value) {
-    if let Value::Object(object) = schema {
-        if object.contains_key("$ref") {
-            object.retain(|key, _| key == "$ref");
-            return;
-        }
-
-        let is_object_schema = object.get("type") == Some(&Value::String(String::from("object")))
-            || object.contains_key("properties");
-
-        if is_object_schema && !object.contains_key("additionalProperties") {
-            object.insert(String::from("additionalProperties"), Value::Bool(false));
-        }
-
-        if let Some(Value::Object(properties)) = object.get("properties") {
-            object.insert(
-                String::from("required"),
-                Value::Array(properties.keys().cloned().map(Value::String).collect()),
-            );
-        }
-
-        if let Some(Value::Object(definitions)) = object.get_mut("$defs") {
-            for value in definitions.values_mut() {
-                sanitize_openai_responses_schema(value);
-            }
-        }
-
-        if let Some(Value::Object(properties)) = object.get_mut("properties") {
-            for value in properties.values_mut() {
-                sanitize_openai_responses_schema(value);
-            }
-        }
-
-        if let Some(items) = object.get_mut("items") {
-            sanitize_openai_responses_schema(items);
-        }
-
-        if let Some(one_of) = object.remove("oneOf") {
-            match object.get_mut("anyOf") {
-                Some(Value::Array(existing)) => {
-                    if let Value::Array(mut incoming) = one_of {
-                        existing.append(&mut incoming);
-                    }
-                }
-                _ => {
-                    object.insert(String::from("anyOf"), one_of);
-                }
-            }
-        }
-
-        for key in ["anyOf", "oneOf", "allOf"] {
-            if let Some(Value::Array(variants)) = object.get_mut(key) {
-                for variant in variants {
-                    sanitize_openai_responses_schema(variant);
-                }
-            }
-        }
-    }
 }

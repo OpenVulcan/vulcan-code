@@ -249,30 +249,18 @@ pub enum VulcanToolSchemaProjectionProfile {
     /// Preserve the host schema exactly as it was resolved by the tool manager.
     /// 原样保留工具管理器解析出的宿主 Schema。
     PassThrough,
-    /// Add explicit container types and compatibility details for stricter JSON Schema validators.
-    /// 为更严格的 JSON Schema 校验器补齐显式容器类型与兼容细节。
-    StrictContainer,
     /// Project JSON Schema into the smaller Gemini function-declaration dialect.
     /// 将 JSON Schema 投影为更精简的 Gemini 函数声明方言。
     GeminiSlim,
-    /// Apply OpenAI Responses strict-tool requirements after container normalization.
-    /// 在容器规范化之后应用 OpenAI Responses 严格工具要求。
-    OpenAiResponsesStrict,
 }
 
 /// Request-scoped context used to choose the provider-facing tool-schema projection profile.
 /// 用于选择 Provider 可见工具 Schema 投影策略的请求级上下文。
 pub struct VulcanToolSchemaProjectionContext<'a> {
-    /// Stable provider identifier such as `openrouter` or `google`.
-    /// 稳定供应商标识，例如 `openrouter` 或 `google`。
-    pub provider_id: &'a str,
     /// Stable API-family key such as `openai-chat-compatible`.
     /// 稳定接口族键，例如 `openai-chat-compatible`。
     pub api_family_key: &'a str,
     /// Stable model identifier used by the concrete provider request.
     /// 具体 Provider 请求使用的稳定模型标识。
     pub model_id: &'a str,
-    /// Optional additional request parameters that may carry OpenRouter routing hints.
-    /// 可能携带 OpenRouter 路由提示的可选附加请求参数。
-    pub additional_params: Option<&'a Value>,
 }

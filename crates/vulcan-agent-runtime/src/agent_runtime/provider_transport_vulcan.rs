@@ -348,14 +348,16 @@ impl VulcanPublicContractAdapter {
 fn tool_schema_api_family_key(protocol_profile_id: &str) -> &'static str {
     match protocol_profile_id {
         vulcan_ai_protocols::GEMINI_GENERATE_CONTENT_PROFILE_ID
-        | vulcan_ai_protocols::GOOGLE_CODE_ASSIST_PROFILE_ID => "google-gemini-generate-content",
+        | vulcan_ai_protocols::GOOGLE_CODE_ASSIST_PROFILE_ID
+        | vulcan_ai_protocols::GEMINI_INTERACTIONS_PROFILE_ID => {
+            "google-gemini-function-declarations"
+        }
         vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID
         | vulcan_ai_protocols::OPENAI_CODEX_RESPONSES_PROFILE_ID => "openai-responses-compatible",
         vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID => "openai-chat-compatible",
         vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID
         | vulcan_ai_protocols::ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID
         | vulcan_ai_protocols::CLAUDE_CODE_MESSAGES_PROFILE_ID => "anthropic-messages",
-        vulcan_ai_protocols::GEMINI_INTERACTIONS_PROFILE_ID => "gemini-interactions",
         vulcan_ai_protocols::COHERE_CHAT_PROFILE_ID => "cohere-chat",
         _ => "unknown",
     }
@@ -379,15 +381,13 @@ pub(crate) fn project_public_tool_definitions(
     model_id: &str,
     tools: Vec<ProviderToolDefinition>,
 ) -> Vec<ToolDefinition> {
-    // schemaProjectionContext freezes the exact provider, protocol family, and model before projection.
-    // schemaProjectionContext 在投影前冻结精确供应商、协议族与模型。
+    // schemaProjectionContext freezes the exact protocol family and model before projection.
+    // schemaProjectionContext 在投影前冻结精确协议族与模型。
     let schema_projection_context = VulcanToolSchemaProjectionContext {
-        provider_id: route.provider.id.as_str(),
         api_family_key: tool_schema_api_family_key(
             route.protocol_route.protocol_profile_id.as_str(),
         ),
         model_id,
-        additional_params: None,
     };
     // schemaProjectionProfile reuses the host-owned compatibility policy for every request path.
     // schemaProjectionProfile 为每条请求路径复用宿主自有兼容策略。
@@ -2474,6 +2474,22 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::path::PathBuf;
+
+    /// Verifies every native Gemini protocol profile resolves to the shared function-declaration schema family.
+    /// 验证每个原生 Gemini 协议配置都会解析到共享函数声明 Schema 族。
+    #[test]
+    fn native_gemini_profiles_share_the_function_declaration_schema_family() {
+        for protocol_profile_id in [
+            vulcan_ai_protocols::GEMINI_GENERATE_CONTENT_PROFILE_ID,
+            vulcan_ai_protocols::GOOGLE_CODE_ASSIST_PROFILE_ID,
+            vulcan_ai_protocols::GEMINI_INTERACTIONS_PROFILE_ID,
+        ] {
+            assert_eq!(
+                tool_schema_api_family_key(protocol_profile_id),
+                "google-gemini-function-declarations"
+            );
+        }
+    }
 
     /// RecordingProviderDeltaSink retains canonical Core deltas for adapter projection tests.
     /// RecordingProviderDeltaSink 为适配器投影测试保留规范 Core 增量。

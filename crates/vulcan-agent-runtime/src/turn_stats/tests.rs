@@ -322,6 +322,7 @@ fn ledger_turn_stats_rebuilds_the_exact_closing_boundary() {
         "summary-1",
         ProviderUsageSnapshot {
             input_tokens: Some(10),
+            uncached_input_tokens: Some(10),
             output_tokens: Some(1),
             total_tokens: Some(11),
             ..ProviderUsageSnapshot::default()
@@ -335,6 +336,7 @@ fn ledger_turn_stats_rebuilds_the_exact_closing_boundary() {
         "summary-2",
         ProviderUsageSnapshot {
             input_tokens: Some(20),
+            uncached_input_tokens: Some(20),
             output_tokens: Some(2),
             total_tokens: Some(22),
             ..ProviderUsageSnapshot::default()
@@ -353,6 +355,7 @@ fn ledger_turn_stats_rebuilds_the_exact_closing_boundary() {
 
     assert_eq!(stats.provider_call_count, 1);
     assert_eq!(stats.input_tokens, 10);
+    assert_eq!(stats.uncached_input_tokens, Some(10));
     assert_eq!(stats.output_tokens, 1);
     assert_eq!(stats.total_tokens, 11);
 }
@@ -405,6 +408,7 @@ fn usage_segment_merger_accumulates_all_statistics_fields() {
         provider_call_count: 1,
         tool_call_count: 2,
         input_tokens: 3,
+        uncached_input_tokens: Some(2),
         output_tokens: 4,
         reasoning_tokens: 5,
         total_tokens: 12,
@@ -423,6 +427,7 @@ fn usage_segment_merger_accumulates_all_statistics_fields() {
         provider_call_count: 10,
         tool_call_count: 20,
         input_tokens: 30,
+        uncached_input_tokens: Some(20),
         output_tokens: 40,
         reasoning_tokens: 50,
         total_tokens: 120,
@@ -435,6 +440,7 @@ fn usage_segment_merger_accumulates_all_statistics_fields() {
     assert_eq!(stats.provider_call_count, 11);
     assert_eq!(stats.tool_call_count, 22);
     assert_eq!(stats.input_tokens, 33);
+    assert_eq!(stats.uncached_input_tokens, Some(22));
     assert_eq!(stats.output_tokens, 44);
     assert_eq!(stats.reasoning_tokens, 55);
     assert_eq!(stats.total_tokens, 132);
@@ -457,6 +463,7 @@ fn explicit_subagent_segments_group_without_polluting_parent_turn_totals() {
         turn_kind: SessionTurnStatsKind::UserTurn,
         provider_call_count: 1,
         input_tokens: 10,
+        uncached_input_tokens: Some(10),
         output_tokens: 3,
         total_tokens: 13,
         ..SessionTurnStats::default()
@@ -472,6 +479,7 @@ fn explicit_subagent_segments_group_without_polluting_parent_turn_totals() {
         provider_call_count: 1,
         tool_call_count: 0,
         input_tokens: 100,
+        uncached_input_tokens: Some(60),
         output_tokens: 25,
         reasoning_tokens: 5,
         total_tokens: 130,
@@ -483,6 +491,7 @@ fn explicit_subagent_segments_group_without_polluting_parent_turn_totals() {
 
     assert_eq!(stats.provider_call_count, 1);
     assert_eq!(stats.input_tokens, 10);
+    assert_eq!(stats.uncached_input_tokens, Some(10));
     assert_eq!(stats.output_tokens, 3);
     assert_eq!(stats.reasoning_tokens, 0);
     assert_eq!(stats.total_tokens, 13);
@@ -494,6 +503,7 @@ fn explicit_subagent_segments_group_without_polluting_parent_turn_totals() {
     );
     assert_eq!(stats.usage_groups[0].provider_call_count, 1);
     assert_eq!(stats.usage_groups[0].input_tokens, 100);
+    assert_eq!(stats.usage_groups[0].uncached_input_tokens, Some(60));
     assert_eq!(stats.usage_groups[0].total_tokens, 130);
 }
 

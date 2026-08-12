@@ -190,15 +190,36 @@ fn manager_allows_command_line_tools_in_plan_mode() {
     );
 }
 
-/// Verifies OpenRouter Gemini-family models select the compact Gemini projection even on an OpenAI-compatible wire API.
-/// 验证 OpenRouter 的 Gemini 模型即使走 OpenAI 兼容线协议也会选择紧凑 Gemini 投影。
+/// Verifies standard non-Gemini protocol families preserve the canonical tool schema.
+/// 验证标准非 Gemini 协议族会保留规范工具 Schema。
 #[test]
-fn projection_profile_detects_openrouter_gemini_models() {
+fn standard_protocol_families_select_pass_through_projection() {
+    for api_family_key in [
+        "openai-chat-compatible",
+        "openai-responses-compatible",
+        "anthropic-messages",
+        "cohere-chat",
+    ] {
+        let context = VulcanToolSchemaProjectionContext {
+            api_family_key,
+            model_id: "fixture-model",
+        };
+
+        assert_eq!(
+            resolve_tool_schema_projection_profile(&context),
+            VulcanToolSchemaProjectionProfile::PassThrough,
+            "unexpected projection for {api_family_key}"
+        );
+    }
+}
+
+/// Verifies native Gemini function-declaration protocols select the compact Gemini projection.
+/// 验证原生 Gemini 函数声明协议会选择紧凑 Gemini 投影。
+#[test]
+fn native_gemini_protocols_select_gemini_projection() {
     let context = VulcanToolSchemaProjectionContext {
-        provider_id: "openrouter",
-        api_family_key: "openai-chat-compatible",
-        model_id: "google/gemini-2.5-pro",
-        additional_params: None,
+        api_family_key: "google-gemini-function-declarations",
+        model_id: "deepseek-v4-flash",
     };
 
     assert_eq!(
@@ -207,21 +228,28 @@ fn projection_profile_detects_openrouter_gemini_models() {
     );
 }
 
-/// Verifies OpenRouter pinned endpoint hints can select the Gemini projection for aliased models.
-/// 验证 OpenRouter 固定端点提示可为别名模型选择 Gemini 投影。
+/// Verifies Gemini-family models select the compact Gemini projection on an OpenAI-compatible wire API.
+/// 验证 Gemini 模型通过 OpenAI 兼容线协议调用时会选择紧凑 Gemini 投影。
 #[test]
-fn projection_profile_detects_openrouter_gemini_endpoint_hints() {
-    let params = json!({
-        "provider": {
-            "order": ["google-ai-studio"],
-            "allow_fallbacks": false
-        }
-    });
+fn projection_profile_detects_openai_compatible_gemini_models() {
     let context = VulcanToolSchemaProjectionContext {
-        provider_id: "openrouter",
         api_family_key: "openai-chat-compatible",
-        model_id: "alias/model",
-        additional_params: Some(&params),
+        model_id: "google/gemini-2.5-pro",
+    };
+
+    assert_eq!(
+        resolve_tool_schema_projection_profile(&context),
+        VulcanToolSchemaProjectionProfile::GeminiSlim
+    );
+}
+
+/// Verifies an OpenAI-compatible Responses envelope cannot bypass Gemini target projection.
+/// 验证 OpenAI 兼容 Responses 外层协议不能绕过 Gemini 目标投影。
+#[test]
+fn projection_profile_prioritizes_gemini_target_over_responses_envelope() {
+    let context = VulcanToolSchemaProjectionContext {
+        api_family_key: "openai-responses-compatible",
+        model_id: "google/gemini-2.5-pro",
     };
 
     assert_eq!(
@@ -387,35 +415,66 @@ fn gemini_slim_projection_collapses_nullable_type_arrays() {
     assert!(projected["properties"]["value"]["anyOf"].is_null());
 }
 
-/// Verifies OpenAI Responses strict projection still adds strict object constraints recursively.
-/// 验证 OpenAI Responses 严格投影仍会递归补齐严格对象约束。
+/// Verifies Gemini projection preserves a meaningful root object defined only by combinator branches.
+/// 验证 Gemini 投影会保留仅由组合分支定义的有效根对象。
 #[test]
-fn openai_responses_strict_projection_adds_required_object_constraints() {
+fn gemini_slim_projection_preserves_combinator_only_root_objects() {
     let schema = json!({
         "type": "object",
+        "oneOf": [
+            {
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "const": "describe" }
+                },
+                "required": ["action"]
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "const": "validate" },
+                    "skill_id": { "type": "string" }
+                },
+                "required": ["action", "skill_id"]
+            }
+        ]
+    });
+
+    let projected =
+        project_tool_parameters_schema(&schema, VulcanToolSchemaProjectionProfile::GeminiSlim);
+
+    assert_eq!(projected["type"], json!("object"));
+    assert_eq!(projected["oneOf"][0]["type"], json!("object"));
+    assert_eq!(
+        projected["oneOf"][1]["required"],
+        json!(["action", "skill_id"])
+    );
+}
+
+/// Verifies pass-through projection preserves optional fields and unsupported-extension keywords exactly.
+/// 验证透传投影会精确保留可选字段和扩展关键字。
+#[test]
+fn pass_through_projection_preserves_canonical_schema_exactly() {
+    let schema = json!({
+        "type": "object",
+        "additionalProperties": true,
         "properties": {
             "location": {
                 "type": "object",
+                "description": "Optional location.",
                 "properties": {
                     "city": { "type": "string" }
-                }
+                },
+                "x-vulcan-extension": { "preserve": true }
             }
+        },
+        "$defs": {
+            "unused": { "type": ["string", "null"] }
         }
     });
 
-    let projected = project_tool_parameters_schema(
-        &schema,
-        VulcanToolSchemaProjectionProfile::OpenAiResponsesStrict,
-    );
+    let projected =
+        project_tool_parameters_schema(&schema, VulcanToolSchemaProjectionProfile::PassThrough);
 
-    assert_eq!(projected["additionalProperties"], json!(false));
-    assert_eq!(projected["required"], json!(["location"]));
-    assert_eq!(
-        projected["properties"]["location"]["additionalProperties"],
-        json!(false)
-    );
-    assert_eq!(
-        projected["properties"]["location"]["required"],
-        json!(["city"])
-    );
+    assert_eq!(projected, schema);
 }

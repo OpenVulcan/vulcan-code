@@ -28,8 +28,7 @@ pub use request_streaming::{
     ToolRequestStagingPolicy, ToolRequestStagingStatus, ToolRequestStreamingCapability,
 };
 pub use schema_projection::{
-    normalize_provider_tool_parameters_schema, project_tool_parameters_schema,
-    resolve_tool_schema_projection_profile,
+    project_tool_parameters_schema, resolve_tool_schema_projection_profile,
 };
 pub use types::{
     ResolvedToolDefinition, ResolvedToolSet, VULCAN_TOOL_ERROR_DETAIL_KIND, VulcanPlanToolPolicy,

@@ -233,15 +233,21 @@ mod tests {
         assert!(validate.is_err());
     }
 
-    /// Verifies provider normalization preserves both strict runtime-config schema branches.
-    /// 验证 provider 正规化会保留两个严格 runtime-config schema 分支。
+    /// Verifies the Gemini-specific projection preserves both strict runtime-config schema branches.
+    /// 验证 Gemini 专用投影会保留两个严格 runtime-config Schema 分支。
     #[test]
-    fn runtime_config_schema_survives_provider_normalization() {
-        let mut schema = runtime_config_args_schema();
-        vulcan_tools_manager::normalize_provider_tool_parameters_schema(&mut schema);
+    fn runtime_config_schema_survives_gemini_projection() {
+        let schema = vulcan_tools_manager::project_tool_parameters_schema(
+            &runtime_config_args_schema(),
+            vulcan_tools_manager::VulcanToolSchemaProjectionProfile::GeminiSlim,
+        );
 
         assert_eq!(schema["type"], json!("object"));
-        assert_eq!(schema["oneOf"][0]["type"], json!("object"));
+        assert_eq!(
+            schema["oneOf"][0]["type"],
+            json!("object"),
+            "projected schema: {schema}"
+        );
         assert_eq!(schema["oneOf"][1]["type"], json!("object"));
         assert_eq!(
             schema["oneOf"][1]["required"],

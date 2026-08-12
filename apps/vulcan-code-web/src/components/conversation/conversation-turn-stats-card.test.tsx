@@ -12,6 +12,7 @@ const TURN_STATS_METADATA = {
     provider_call_count: 4,
     tool_call_count: 7,
     input_tokens: 286_261,
+    uncached_input_tokens: 3_637,
     output_tokens: 305,
     total_tokens: 286_566,
     cached_input_tokens: 282_624,
@@ -22,6 +23,7 @@ const TURN_STATS_METADATA = {
         provider_call_count: 2,
         tool_call_count: 3,
         input_tokens: 20_000,
+        uncached_input_tokens: 2_000,
         output_tokens: 105,
         total_tokens: 20_105,
         cached_input_tokens: 18_000,
@@ -31,6 +33,7 @@ const TURN_STATS_METADATA = {
         provider_call_count: 2,
         tool_call_count: 4,
         input_tokens: 266_261,
+        uncached_input_tokens: 1_637,
         output_tokens: 200,
         total_tokens: 266_461,
         cached_input_tokens: 264_624,
@@ -56,7 +59,9 @@ describe("turn statistics hover card", () => {
     expect(markup).toContain("总请求次数");
     expect(markup).toContain("工具调用次数");
     expect(markup).toContain("缓存 Tokens");
-    expect(markup).toContain("输入 Tokens");
+    expect(markup).toContain("无缓存输入");
+    expect(markup).toContain("3,637");
+    expect(markup).not.toContain("286,261");
     expect(markup).toContain("输出 Tokens");
     expect(markup).toContain("合计 Tokens");
     expect(markup).toContain("98.7%");
@@ -76,10 +81,48 @@ describe("turn statistics hover card", () => {
 
     expect(markup).toContain("turn-stats-subagent-section");
     expect(markup).toContain("子代理 Tokens");
-    expect(markup).toContain("266,261");
+    expect(markup).toContain("1,637");
     expect(markup).toContain("266,461");
+    expect(markup).not.toContain("266,261");
     expect(markup).not.toContain("用量分组");
     expect(markup).not.toContain("常规");
+  });
+
+  // Verifies legacy Anthropic segments use cache-write semantics instead of subtracting cache reads from raw input.
+  // 验证旧版 Anthropic 分段使用缓存写入语义，而不是从原始输入中扣减缓存读取。
+  it("reconstructs legacy Anthropic uncached input from protocol-tagged segments", () => {
+    const markup = renderToStaticMarkup(
+      <TurnStatsTooltipCard
+        locale="zh-CN"
+        metadata={{
+          turn_stats: {
+            turn_kind: "user_turn",
+            provider_call_count: 1,
+            tool_call_count: 0,
+            input_tokens: 12,
+            output_tokens: 5,
+            total_tokens: 105,
+            cached_input_tokens: 80,
+            cache_creation_input_tokens: 8,
+            usage_segments: [{
+              kind: "assistant_response",
+              execution_profile: "anthropic-messages.v1",
+              provider_call_count: 1,
+              input_tokens: 12,
+              output_tokens: 5,
+              total_tokens: 105,
+              cached_input_tokens: 80,
+              cache_creation_input_tokens: 8,
+            }],
+          },
+        }}
+        subagentStats={false}
+      />,
+    );
+
+    expect(markup).toContain("无缓存输入");
+    expect(markup).toContain(">20<");
+    expect(markup).toContain("80.0%");
   });
 
   // Verifies an independent subagent-feedback row does not duplicate a nested subagent section.

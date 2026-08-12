@@ -611,6 +611,7 @@ fn terminal_report_includes_embedded_subagent_usage_once_in_parent_totals() {
             provider_call_count: 1,
             tool_call_count: 0,
             input_tokens: 100,
+            uncached_input_tokens: Some(60),
             output_tokens: 25,
             reasoning_tokens: 5,
             total_tokens: 130,
@@ -640,6 +641,7 @@ fn terminal_report_includes_embedded_subagent_usage_once_in_parent_totals() {
     assert_eq!(subagent_group.reasoning_tokens, 5);
     assert_eq!(subagent_group.total_tokens, 130);
     assert_eq!(subagent_group.cached_input_tokens, Some(40));
+    assert_eq!(subagent_group.uncached_input_tokens, Some(60));
 }
 
 /// Verifies terminal reports leave existing assistant usage empty while materializing Turn Stats.

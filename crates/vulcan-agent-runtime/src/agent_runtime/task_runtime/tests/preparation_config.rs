@@ -1225,6 +1225,7 @@ fn task_runtime_preparation_request_clears_parent_transient_runtime_state() {
             provider_call_count: 1,
             tool_call_count: 0,
             input_tokens: 10,
+            uncached_input_tokens: None,
             output_tokens: 2,
             reasoning_tokens: 0,
             total_tokens: 12,

@@ -124,6 +124,10 @@ pub struct SessionTurnUsageSegment {
     /// Provider 报告的输入 Token 数。
     #[serde(default)]
     pub input_tokens: usize,
+    /// Protocol-normalized non-cached input token count.
+    /// 经过协议归一化的无缓存输入 Token 数。
+    #[serde(default)]
+    pub uncached_input_tokens: Option<usize>,
     /// Provider-reported output token count.
     /// Provider 报告的输出 Token 数。
     #[serde(default)]
@@ -175,6 +179,7 @@ impl SessionTurnUsageSegment {
             provider_call_count,
             tool_call_count: 0,
             input_tokens,
+            uncached_input_tokens: usage.and_then(|usage| usage.uncached_input_tokens),
             output_tokens,
             reasoning_tokens,
             total_tokens,
@@ -203,6 +208,10 @@ pub struct SessionTurnUsageGroup {
     /// 该分组内 Provider 报告的输入 Token 数。
     #[serde(default)]
     pub input_tokens: usize,
+    /// Protocol-normalized non-cached input token count for this group.
+    /// 该分组内经过协议归一化的无缓存输入 Token 数。
+    #[serde(default)]
+    pub uncached_input_tokens: Option<usize>,
     /// Provider-reported output token count for this group.
     /// 该分组内 Provider 报告的输出 Token 数。
     #[serde(default)]
@@ -234,6 +243,7 @@ impl SessionTurnUsageGroup {
             provider_call_count: 0,
             tool_call_count: 0,
             input_tokens: 0,
+            uncached_input_tokens: None,
             output_tokens: 0,
             reasoning_tokens: 0,
             total_tokens: 0,
@@ -250,6 +260,10 @@ impl SessionTurnUsageGroup {
             .saturating_add(segment.provider_call_count);
         self.tool_call_count = self.tool_call_count.saturating_add(segment.tool_call_count);
         self.input_tokens = self.input_tokens.saturating_add(segment.input_tokens);
+        if let Some(uncached_input_tokens) = segment.uncached_input_tokens {
+            let accumulated = self.uncached_input_tokens.unwrap_or(0);
+            self.uncached_input_tokens = Some(accumulated.saturating_add(uncached_input_tokens));
+        }
         self.output_tokens = self.output_tokens.saturating_add(segment.output_tokens);
         self.reasoning_tokens = self
             .reasoning_tokens
@@ -272,6 +286,7 @@ impl SessionTurnUsageGroup {
         self.provider_call_count > 0
             || self.tool_call_count > 0
             || self.input_tokens > 0
+            || self.uncached_input_tokens.is_some()
             || self.output_tokens > 0
             || self.reasoning_tokens > 0
             || self.total_tokens > 0
@@ -373,6 +388,10 @@ pub struct SessionTurnStats {
     /// 跨整个轮次聚合得到的 Provider 报告输入 Token 总数。
     #[serde(default)]
     pub input_tokens: usize,
+    /// Protocol-normalized non-cached input tokens aggregated across the turn.
+    /// 跨整个轮次聚合得到的协议归一化无缓存输入 Token 数。
+    #[serde(default)]
+    pub uncached_input_tokens: Option<usize>,
     /// Provider-reported total output tokens aggregated across the turn.
     /// 跨整个轮次聚合得到的 Provider 报告输出 Token 总数。
     #[serde(default)]
@@ -417,6 +436,10 @@ impl SessionTurnStats {
             .saturating_add(segment.provider_call_count);
         self.tool_call_count = self.tool_call_count.saturating_add(segment.tool_call_count);
         self.input_tokens = self.input_tokens.saturating_add(segment.input_tokens);
+        if let Some(uncached_input_tokens) = segment.uncached_input_tokens {
+            let accumulated = self.uncached_input_tokens.unwrap_or(0);
+            self.uncached_input_tokens = Some(accumulated.saturating_add(uncached_input_tokens));
+        }
         self.output_tokens = self.output_tokens.saturating_add(segment.output_tokens);
         self.reasoning_tokens = self
             .reasoning_tokens
@@ -501,6 +524,9 @@ impl SessionTurnStats {
         if let Some(duration_ms) = self.duration_ms {
             lines.push(format!("耗时：{duration_ms} ms"));
         }
+        if let Some(uncached_input_tokens) = self.uncached_input_tokens {
+            lines.push(format!("无缓存输入 Tokens：{uncached_input_tokens}"));
+        }
         if let Some(speed) = self.output_tokens_per_second
             && speed.is_finite()
         {
@@ -530,6 +556,13 @@ impl SessionTurnStats {
                         "{}缓存命中 Tokens：{}",
                         group.kind.display_label(),
                         cached_input_tokens
+                    ));
+                }
+                if let Some(uncached_input_tokens) = group.uncached_input_tokens {
+                    lines.push(format!(
+                        "{}无缓存输入 Tokens：{}",
+                        group.kind.display_label(),
+                        uncached_input_tokens
                     ));
                 }
                 if let Some(cache_creation_input_tokens) = group.cache_creation_input_tokens {
@@ -572,6 +605,7 @@ mod tests {
         assert!(stats.usage_groups.is_empty());
         assert_eq!(stats.provider_call_count, 1);
         assert_eq!(stats.total_tokens, 14);
+        assert_eq!(stats.uncached_input_tokens, None);
     }
 
     /// Verifies usage segments are grouped as regular and child-agent accounting.
@@ -590,6 +624,7 @@ mod tests {
             provider_call_count: 1,
             tool_call_count: 0,
             input_tokens: 10,
+            uncached_input_tokens: Some(6),
             output_tokens: 3,
             reasoning_tokens: 0,
             total_tokens: 13,
@@ -607,6 +642,7 @@ mod tests {
             provider_call_count: 2,
             tool_call_count: 1,
             input_tokens: 20,
+            uncached_input_tokens: Some(14),
             output_tokens: 5,
             reasoning_tokens: 1,
             total_tokens: 26,
@@ -625,6 +661,7 @@ mod tests {
             SessionTurnUsageGroupKind::Subagent
         );
         assert_eq!(stats.usage_groups[1].provider_call_count, 2);
+        assert_eq!(stats.usage_groups[1].uncached_input_tokens, Some(14));
         assert_eq!(stats.usage_groups[1].total_tokens, 26);
         assert_eq!(stats.usage_groups[1].cached_input_tokens, Some(6));
     }

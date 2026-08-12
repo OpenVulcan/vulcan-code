@@ -100,6 +100,7 @@ pub fn build_session_turn_stats_from_state_with_segments(
         contains_estimated_budget: false,
         tool_call_count: 0,
         input_tokens: 0,
+        uncached_input_tokens: None,
         output_tokens: 0,
         reasoning_tokens: 0,
         total_tokens: 0,
@@ -124,6 +125,7 @@ pub fn build_session_turn_stats_from_state_with_segments(
         provider_call_count: 0,
         tool_call_count: 0,
         input_tokens: 0,
+        uncached_input_tokens: None,
         output_tokens: 0,
         reasoning_tokens: 0,
         total_tokens: 0,
@@ -153,6 +155,14 @@ pub fn build_session_turn_stats_from_state_with_segments(
                 assistant_segment.input_tokens = assistant_segment
                     .input_tokens
                     .saturating_add(usage.input_tokens.unwrap_or(0));
+                if let Some(uncached_input_tokens) = usage.uncached_input_tokens {
+                    let accumulated = stats.uncached_input_tokens.unwrap_or(0);
+                    stats.uncached_input_tokens =
+                        Some(accumulated.saturating_add(uncached_input_tokens));
+                    let segment_accumulated = assistant_segment.uncached_input_tokens.unwrap_or(0);
+                    assistant_segment.uncached_input_tokens =
+                        Some(segment_accumulated.saturating_add(uncached_input_tokens));
+                }
                 stats.output_tokens = stats
                     .output_tokens
                     .saturating_add(usage.output_tokens.unwrap_or(0));
@@ -210,6 +220,7 @@ pub fn build_session_turn_stats_from_state_with_segments(
 
     if assistant_segment.provider_call_count > 0
         || assistant_segment.input_tokens > 0
+        || assistant_segment.uncached_input_tokens.is_some()
         || assistant_segment.output_tokens > 0
         || assistant_segment.reasoning_tokens > 0
         || assistant_segment.total_tokens > 0
@@ -370,6 +381,7 @@ pub(crate) fn build_session_turn_stats_from_state_with_ledger_owner_and_segments
     stats.child_contribution_revision = 0;
     stats.contains_estimated_budget = false;
     stats.input_tokens = 0;
+    stats.uncached_input_tokens = None;
     stats.output_tokens = 0;
     stats.reasoning_tokens = 0;
     stats.total_tokens = 0;

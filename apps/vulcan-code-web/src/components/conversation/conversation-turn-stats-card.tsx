@@ -15,9 +15,9 @@ interface TurnStatsUsageSnapshot {
   // Number of tool calls represented by this scope.
   // 当前范围包含的工具调用次数。
   toolCallCount: number;
-  // Provider-reported input token count.
-  // Provider 报告的输入 Token 数。
-  inputTokens: number;
+  // Protocol-normalized non-cached input token count.
+  // 经过协议归一化的无缓存输入 Token 数。
+  uncachedInputTokens: number | null;
   // Provider-reported output token count.
   // Provider 报告的输出 Token 数。
   outputTokens: number;
@@ -111,7 +111,7 @@ export function TurnStatsTooltipCard(props: {
 // TurnStatsUsageRows 为一个总计或子代理范围严格渲染三行对齐数据。
 //
 // Parameters:
-// 参数：usage 包含六项用量，locale 选择标签与数字格式。
+// 参数：usage 包含当前范围的用量核算字段，locale 选择标签与数字格式。
 // Returns a three-row statistics grid.
 // 返回三行统计网格。
 function TurnStatsUsageRows(props: {
@@ -130,6 +130,11 @@ function TurnStatsUsageRows(props: {
   const cachedValue = props.usage.cachedInputTokens == null
     ? "—"
     : formatTurnStatsNumber(props.usage.cachedInputTokens, props.locale);
+  // uncachedInputValue never presents the Provider total input as non-cached input.
+  // uncachedInputValue 绝不把 Provider 输入总量冒充无缓存输入。
+  const uncachedInputValue = props.usage.uncachedInputTokens == null
+    ? "—"
+    : formatTurnStatsNumber(props.usage.uncachedInputTokens, props.locale);
   return (
     <div className="turn-stats-metric-grid">
       <TurnStatsMetricRow
@@ -141,8 +146,8 @@ function TurnStatsUsageRows(props: {
       <TurnStatsMetricRow
         leftLabel={zh ? "缓存 Tokens" : "Cached tokens"}
         leftValue={cachedValue}
-        rightLabel={zh ? "输入 Tokens" : "Input tokens"}
-        rightValue={formatTurnStatsNumber(props.usage.inputTokens, props.locale)}
+        rightLabel={zh ? "无缓存输入" : "Uncached input"}
+        rightValue={uncachedInputValue}
       />
       <TurnStatsMetricRow
         leftLabel={zh ? "输出 Tokens" : "Output tokens"}
@@ -200,14 +205,81 @@ function turnStatsUsageSnapshot(stats: Record<string, unknown>): TurnStatsUsageS
   // cachedInputTokens keeps null when the optional Provider field was not reported.
   // cachedInputTokens 在 Provider 未报告可选字段时保留 null。
   const cachedInputTokens = optionalTurnStatsCount(stats.cached_input_tokens ?? stats.cachedInputTokens);
+  // reportedUncachedInputTokens is the authoritative protocol-normalized field persisted by new turn stats.
+  // reportedUncachedInputTokens 是新轮次统计持久化的权威协议归一化字段。
+  const reportedUncachedInputTokens = optionalTurnStatsCount(
+    stats.uncached_input_tokens ?? stats.uncachedInputTokens,
+  );
+  // uncachedInputTokens repairs legacy segmented rows only when their protocol profile proves the input semantics.
+  // uncachedInputTokens 仅在协议档案能够证明输入语义时修复旧版分段行。
+  const uncachedInputTokens = reportedUncachedInputTokens
+    ?? legacyTurnStatsUncachedInputTokens(stats);
   return {
     providerCallCount: numberMetadata(stats.provider_call_count ?? stats.providerCallCount),
     toolCallCount: numberMetadata(stats.tool_call_count ?? stats.toolCallCount),
-    inputTokens: numberMetadata(stats.input_tokens ?? stats.inputTokens),
+    uncachedInputTokens,
     outputTokens: numberMetadata(stats.output_tokens ?? stats.outputTokens),
     totalTokens: numberMetadata(stats.total_tokens ?? stats.totalTokens),
     cachedInputTokens,
   };
+}
+
+// legacyTurnStatsUncachedInputTokens reconstructs non-cached input from protocol-tagged legacy usage segments.
+// legacyTurnStatsUncachedInputTokens 根据带协议标记的旧版用量分段重建无缓存输入。
+//
+// Parameters:
+// 参数：stats 是尚未持久化 uncached_input_tokens 的旧版轮次统计对象。
+// Returns a protocol-proven aggregate, or null when any contributing segment is ambiguous.
+// 返回协议可证明的聚合值；任一参与分段存在歧义时返回 null。
+function legacyTurnStatsUncachedInputTokens(stats: Record<string, unknown>): number | null {
+  // segmentsValue reads the stable persisted list without inventing a flat-row fallback.
+  // segmentsValue 读取稳定持久化分段列表，不为扁平旧行编造回退值。
+  const segmentsValue = stats.usage_segments ?? stats.usageSegments;
+  if (!Array.isArray(segmentsValue)) {
+    return null;
+  }
+  // uncachedInputTokens accumulates only segments that belong to the parent aggregate.
+  // uncachedInputTokens 仅聚合属于父级总计的分段。
+  let uncachedInputTokens = 0;
+  // observed records whether at least one accounting segment was reconstructed.
+  // observed 记录是否至少重建了一个核算分段。
+  let observed = false;
+  for (const segmentValue of segmentsValue) {
+    // segment narrows one persisted JSON entry before reading its stable fields.
+    // segment 在读取稳定字段前收窄单个持久化 JSON 条目。
+    const segment = objectValue(segmentValue);
+    if (!segment || metadataString(segment, ["kind"])?.toLowerCase() === "subagent_task") {
+      continue;
+    }
+    // inputTokens preserves field absence so unknown usage cannot silently become zero.
+    // inputTokens 保留字段缺失状态，避免把未知用量静默转换为零。
+    const inputTokens = optionalTurnStatsCount(segment.input_tokens ?? segment.inputTokens);
+    if (inputTokens == null) {
+      return null;
+    }
+    // protocolProfile identifies the exact wire usage semantics recorded on the segment.
+    // protocolProfile 标识分段记录的精确线协议用量语义。
+    const protocolProfile = metadataString(segment, ["execution_profile", "executionProfile"]);
+    if (!protocolProfile) {
+      return null;
+    }
+    // cachedInputTokens defaults to zero only after the protocol profile is known.
+    // cachedInputTokens 仅在协议档案已知后才将缺失缓存读取视为零。
+    const cachedInputTokens = optionalTurnStatsCount(
+      segment.cached_input_tokens ?? segment.cachedInputTokens,
+    ) ?? 0;
+    // cacheCreationInputTokens is separate uncached work in the Anthropic Messages contract.
+    // cacheCreationInputTokens 在 Anthropic Messages 契约中属于独立的无缓存处理量。
+    const cacheCreationInputTokens = optionalTurnStatsCount(
+      segment.cache_creation_input_tokens ?? segment.cacheCreationInputTokens,
+    ) ?? 0;
+    const segmentUncachedInputTokens = protocolProfile === "anthropic-messages.v1"
+      ? inputTokens + cacheCreationInputTokens
+      : Math.max(0, inputTokens - cachedInputTokens);
+    uncachedInputTokens += segmentUncachedInputTokens;
+    observed = true;
+  }
+  return observed ? uncachedInputTokens : null;
 }
 
 // turnStatsSubagentUsageSnapshot selects the authoritative subagent usage group from a parent turn.
@@ -251,18 +323,24 @@ function optionalTurnStatsCount(value: unknown): number | null {
     : Math.max(0, Math.trunc(numericValue));
 }
 
-// turnStatsCacheHitPercent calculates the displayed cache-hit percentage from official input accounting.
-// turnStatsCacheHitPercent 根据官方输入核算计算展示用缓存命中率。
+// turnStatsCacheHitPercent calculates the displayed cache-hit percentage from normalized cached and uncached input.
+// turnStatsCacheHitPercent 根据归一化后的缓存与无缓存输入计算展示用缓存命中率。
 //
 // Parameters:
 // 参数：usage 是当前卡片分区的标准化用量。
 // Returns a percentage clamped to the progress-bar domain, or null when the ratio is unavailable.
 // 返回限制在进度条范围内的百分比；比率不可用时返回 null。
 function turnStatsCacheHitPercent(usage: TurnStatsUsageSnapshot): number | null {
-  if (usage.cachedInputTokens == null || usage.inputTokens <= 0) {
+  if (usage.cachedInputTokens == null || usage.uncachedInputTokens == null) {
     return null;
   }
-  return Math.min(100, Math.max(0, (usage.cachedInputTokens / usage.inputTokens) * 100));
+  // totalInputTokens reconstructs one protocol-neutral input denominator from normalized components.
+  // totalInputTokens 根据归一化分项重建协议无关的输入分母。
+  const totalInputTokens = usage.cachedInputTokens + usage.uncachedInputTokens;
+  if (totalInputTokens <= 0) {
+    return null;
+  }
+  return Math.min(100, Math.max(0, (usage.cachedInputTokens / totalInputTokens) * 100));
 }
 
 // formatTurnStatsNumber formats one exact integer using the active interface locale.
