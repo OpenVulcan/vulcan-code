@@ -101,7 +101,7 @@ pub(super) struct CommandSessionSupervisorInput {
     pub stderr: ChildStderr,
     /// Control channel used by runtime API calls to write or stop the session.
     /// 运行时 API 写入或停止会话时使用的控制通道。
-    pub control_receiver: UnboundedReceiver<CommandSessionControlMessage>,
+    pub control_receiver: Receiver<CommandSessionControlMessage>,
     /// Optional initial stdin payload submitted immediately after start.
     /// 启动后立即提交的可选初始标准输入内容。
     pub initial_stdin: Option<String>,
@@ -135,6 +135,9 @@ pub(super) async fn run_command_session_supervisor(input: CommandSessionSupervis
     ));
 
     let mut stop_requested = false;
+    // stdin_writable separates an uncertain or cancelled pipe write from process lifecycle ownership.
+    // stdin_writable 将不确定或已取消的管道写入与进程生命周期所有权分离。
+    let mut stdin_writable = stdin.is_some();
     if let Some(initial_stdin) = initial_stdin {
         let initial_stdin = if initial_stdin_append_newline {
             format!("{initial_stdin}{}", record.interactive_newline.as_str())
@@ -206,8 +209,8 @@ pub(super) async fn run_command_session_supervisor(input: CommandSessionSupervis
             maybe_message = control_receiver.recv() => {
                 match maybe_message {
                     Some(CommandSessionControlMessage::Write { bytes, responder }) => {
-                        let write_result = match stdin.as_mut() {
-                            Some(child_stdin) => {
+                        let write_result = match (stdin_writable, stdin.as_mut()) {
+                            (true, Some(child_stdin)) => {
                                 match write_command_session_stdin(child_stdin, &bytes).await {
                                     Ok(bytes_written) => {
                                         record
@@ -217,24 +220,22 @@ pub(super) async fn run_command_session_supervisor(input: CommandSessionSupervis
                                         Ok(bytes_written)
                                     }
                                     Err(error) => {
-                                        stop_requested = true;
-                                        stdin = None;
-                                        let _ = request_command_session_child_stop(&mut child);
-                                        record.shared_state.mark_stop_requested().await;
+                                        // Cancellation can leave a partial pipe write, so reject later writes without
+                                        // closing the handle or terminating a process that is still alive.
+                                        // 取消操作可能留下部分管道写入，因此拒绝后续写入，但不关闭句柄或终止仍存活的进程。
+                                        stdin_writable = false;
+                                        record.shared_state.remember_failure_reason(format!(
+                                            "Command-session stdin was disabled after a failed write: {error}"
+                                        )).await;
                                         Err(error)
                                     }
                                 }
                             }
-                            None => Err(String::from(
+                            _ => Err(String::from(
                                 "The command session does not currently have a writable stdin channel.",
                             )),
                         };
                         let _ = responder.send(write_result);
-                    }
-                    Some(CommandSessionControlMessage::InputEvents { responder, .. }) => {
-                        let _ = responder.send(Err(String::from(
-                            "Structured terminal input events are only supported by the Windows native console backend.",
-                        )));
                     }
                     Some(CommandSessionControlMessage::Resize { responder, .. }) => {
                         let _ = responder.send(Err(String::from(
@@ -243,6 +244,7 @@ pub(super) async fn run_command_session_supervisor(input: CommandSessionSupervis
                     }
                     Some(CommandSessionControlMessage::Stop { responder }) => {
                         stop_requested = true;
+                        stdin_writable = false;
                         stdin = None;
                         let stop_result = request_command_session_child_stop(&mut child);
                         if stop_result.is_ok() {

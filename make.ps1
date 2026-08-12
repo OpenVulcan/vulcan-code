@@ -1,9 +1,9 @@
 ﻿# make.ps1 provides the PowerShell-native task entry for local build and run workflows.
 # make.ps1 用于提供本地构建与运行工作流的 PowerShell 原生入口。
-# CommandMode selects the top-level command such as build, run, release, or deps.
-# CommandMode 用于选择顶层命令，例如 build、run、release 或 deps。
-# CommandVariant carries the optional secondary mode such as release after run or host/lua/cbm/vmm after deps.
-# CommandVariant 用于承接可选的二级模式，例如 run 后面的 release，或 deps 后面的 host/lua/cbm/vmm。
+# CommandMode selects the top-level command such as sync, vite, build, run, release, or deps.
+# CommandMode 用于选择顶层命令，例如 sync、vite、build、run、release 或 deps。
+# CommandVariant carries a secondary mode such as a Vite action, release after run, or a dependency kind.
+# CommandVariant 用于承接二级模式，例如 Vite 操作、run 后面的 release 或依赖类型。
 param(
     [Parameter(Position = 0)]
     [string]$CommandMode = "",
@@ -46,6 +46,14 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 # TauriBuildScriptPath points at the new Tauri/WebUI build script.
 # TauriBuildScriptPath 用于指向新版 Tauri/WebUI 构建脚本。
 $TauriBuildScriptPath = Join-Path $ScriptDir "scripts\build_tauri.ps1"
+
+# TauriSyncScriptPath points at the dedicated runtime-resource synchronization script.
+# TauriSyncScriptPath 用于指向专用的运行时资源同步脚本。
+$TauriSyncScriptPath = Join-Path $ScriptDir "scripts\sync_tauri_runtime.ps1"
+
+# ViteDevServerScriptPath points at the standalone WebUI development-server lifecycle script.
+# ViteDevServerScriptPath 用于指向独立 WebUI 开发服务器生命周期脚本。
+$ViteDevServerScriptPath = Join-Path $ScriptDir "scripts\vite_dev_server.ps1"
 
 # TauriRunScriptPath points at the new Tauri/WebUI run script.
 # TauriRunScriptPath 用于指向新版 Tauri/WebUI 运行脚本。
@@ -108,6 +116,41 @@ function Invoke-TauriBuild {
         & $TauriBuildScriptPath
     }
 
+    if ($LASTEXITCODE -ne 0) {
+        exit $LASTEXITCODE
+    }
+}
+
+# Invoke-TauriSync synchronizes runtime resources without compiling the application.
+# Invoke-TauriSync 用于在不编译应用的情况下同步运行时资源。
+# This function returns no value and exits with the child script status on failure.
+# 此函数不返回值，并在子脚本失败时以其状态码退出。
+function Invoke-TauriSync {
+    if (-not (Test-Path -LiteralPath $TauriSyncScriptPath)) {
+        throw "Missing Tauri runtime synchronization script: $TauriSyncScriptPath"
+    }
+
+    & $TauriSyncScriptPath
+    if ($LASTEXITCODE -ne 0) {
+        exit $LASTEXITCODE
+    }
+}
+
+# Invoke-ViteDevServer delegates one explicit standalone Vite lifecycle action.
+# Invoke-ViteDevServer 用于委托一个显式的独立 Vite 生命周期操作。
+# Action selects start, stop, or status and the function exits with the child script status.
+# Action 用于选择 start、stop 或 status，此函数以子脚本状态码退出。
+function Invoke-ViteDevServer {
+    param(
+        [ValidateSet("start", "stop", "status")]
+        [string]$Action
+    )
+
+    if (-not (Test-Path -LiteralPath $ViteDevServerScriptPath)) {
+        throw "Missing Vite development-server script: $ViteDevServerScriptPath"
+    }
+
+    & $ViteDevServerScriptPath $Action
     if ($LASTEXITCODE -ne 0) {
         exit $LASTEXITCODE
     }
@@ -207,13 +250,17 @@ function Invoke-RustThirdPartyNoticeGeneration {
 # Show-Usage 用于输出支持的命令形式，方便贡献者在输入无效参数后快速恢复。
 function Show-Usage {
     Write-Host "Usage:"
+    Write-Host "  ./make sync        # synchronize runtime resources into output"
+    Write-Host "  ./make vite start  # start the standalone WebUI Vite dev server"
+    Write-Host "  ./make vite stop   # stop the standalone WebUI Vite dev server"
+    Write-Host "  ./make vite status # show the standalone WebUI Vite dev server status"
     Write-Host "  ./make             # Tauri/WebUI debug build"
     Write-Host "  ./make build       # Tauri/WebUI debug build"
-    Write-Host "  ./make br          # build and run Tauri/WebUI debug"
+    Write-Host "  ./make br          # build and run Tauri/WebUI debug; Vite is managed separately"
     Write-Host "  ./make br release  # build and run Tauri/WebUI release"
     Write-Host "  ./make release     # Tauri/WebUI release build"
     Write-Host "  ./make licenses    # generate Rust third-party notices for the About page"
-    Write-Host "  ./make run         # run Tauri/WebUI debug build"
+    Write-Host "  ./make run         # run Tauri/WebUI debug build; Vite is managed separately"
     Write-Host "  ./make run release # run Tauri/WebUI release build"
     Write-Host "  ./make deps        # install host + LuaSkills + Codebase Memory + VMM runtime dependencies"
     Write-Host "  ./make deps host   # install host native dependencies only"
@@ -248,6 +295,24 @@ switch ($NormalizedMode) {
         }
         else {
             Write-Error "Unsupported build command: '$CommandVariant'"
+            Show-Usage
+            exit 1
+        }
+    }
+    "sync" {
+        if (-not [string]::IsNullOrWhiteSpace($NormalizedVariant)) {
+            Write-Error "Unsupported sync command: '$CommandVariant'"
+            Show-Usage
+            exit 1
+        }
+        Invoke-TauriSync
+    }
+    "vite" {
+        if ($NormalizedVariant -eq "start" -or $NormalizedVariant -eq "stop" -or $NormalizedVariant -eq "status") {
+            Invoke-ViteDevServer -Action $NormalizedVariant
+        }
+        else {
+            Write-Error "Unsupported vite command: '$CommandVariant'"
             Show-Usage
             exit 1
         }

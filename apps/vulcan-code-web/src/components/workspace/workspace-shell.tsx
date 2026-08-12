@@ -10,20 +10,13 @@ import {
 } from "@/components/conversation/conversation-transcript";
 import { dispatchConversationLayoutWillChange } from "@/components/conversation/conversation-layout-events";
 import { terminalSessionViewModel } from "@/components/conversation/conversation-terminal-model";
-import {
-  activeSkillHeaderSummary,
-  type SkillHeaderBusyActionId,
-} from "@/components/features/skills/SkillsArea";
-import {
-  AgentsArea,
-  activeAgentsHeaderSummary,
-  FloatingAgentCategoryMenu,
-} from "@/components/features/agents/AgentsArea";
-import { AgentSkillsArea, FloatingAgentSkillCategoryMenu } from "@/components/features/agent-skills/AgentSkillsArea";
-import { KnowledgeBaseArea } from "@/components/features/knowledge/KnowledgeBaseArea";
+import { activeSkillHeaderSummary } from "@/components/features/skills/skill-area-header";
+import type { SkillHeaderBusyActionId } from "@/components/features/skills/skill-area-types";
+import { activeAgentsHeaderSummary } from "@/components/features/agents/agent-area-header";
 import {
   ProjectSidebar,
 } from "@/components/project/ProjectSidebar";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   FloatingSkillMenu,
@@ -62,6 +55,7 @@ import {
   PanelRightOpen,
   PackagePlus,
   RefreshCw,
+  TerminalSquare,
 } from "lucide-react";
 
 import {
@@ -85,6 +79,22 @@ import {
 } from "@/components/workspace/workspace-shell/git-summary";
 import type { WorkspaceShellProps } from "@/components/workspace/workspace-shell/types";
 export type { WorkspaceMainView } from "@/components/workspace/workspace-shell/types";
+
+// LazyAgentsArea keeps the independent agent editor outside the console-first chunk.
+// LazyAgentsArea 将独立智能体编辑器保留在控制台优先分块之外。
+const LazyAgentsArea = React.lazy(() => import("@/components/features/agents/AgentsArea").then((module) => ({ default: module.AgentsArea })));
+// LazyFloatingAgentCategoryMenu defers agent-only floating controls with their owning feature.
+// LazyFloatingAgentCategoryMenu 将智能体专属浮动控件与其所属功能一同延迟。
+const LazyFloatingAgentCategoryMenu = React.lazy(() => import("@/components/features/agents/AgentsArea").then((module) => ({ default: module.FloatingAgentCategoryMenu })));
+// LazyAgentSkillsArea keeps the prompt-skill editor outside the console-first chunk.
+// LazyAgentSkillsArea 将提示词技能编辑器保留在控制台优先分块之外。
+const LazyAgentSkillsArea = React.lazy(() => import("@/components/features/agent-skills/AgentSkillsArea").then((module) => ({ default: module.AgentSkillsArea })));
+// LazyFloatingAgentSkillCategoryMenu defers prompt-skill-only floating controls.
+// LazyFloatingAgentSkillCategoryMenu 延迟提示词技能专属浮动控件。
+const LazyFloatingAgentSkillCategoryMenu = React.lazy(() => import("@/components/features/agent-skills/AgentSkillsArea").then((module) => ({ default: module.FloatingAgentSkillCategoryMenu })));
+// LazyKnowledgeBaseArea keeps knowledge management outside the console-first chunk.
+// LazyKnowledgeBaseArea 将知识库管理保留在控制台优先分块之外。
+const LazyKnowledgeBaseArea = React.lazy(() => import("@/components/features/knowledge/KnowledgeBaseArea").then((module) => ({ default: module.KnowledgeBaseArea })));
 // WorkspaceShell renders the shadcn dashboard-like fused sidebar and inset console area.
 // WorkspaceShell 渲染类似 shadcn dashboard 的融合侧栏与 inset 控制台区域。
 export function WorkspaceShell(props: WorkspaceShellProps) {
@@ -1035,6 +1045,44 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     selectedWorkspaceGitState,
   ]);
 
+  // activeTerminalProject is the project-level terminal owner selected by the workbench.
+  // activeTerminalProject 是工作台选中的项目级终端归属项目。
+  const activeTerminalProject = props.workbench.projects.find(
+    (project) => project.id === props.activeProjectId,
+  ) ?? null;
+  // projectTerminalLabel describes the active project's top-bar terminal action.
+  // projectTerminalLabel 描述当前活动项目的顶部栏终端操作。
+  const projectTerminalLabel = activeTerminalProject
+    ? props.projectTerminalRunningCount > 0
+      ? `打开 ${activeTerminalProject.name} 项目终端，${props.projectTerminalRunningCount} 个后台终端正在运行`
+      : `打开 ${activeTerminalProject.name} 项目终端`
+    : "打开项目终端";
+  // projectTerminalAction anchors the floating terminal immediately left of the context-panel toggle.
+  // projectTerminalAction 将浮动终端入口锚定在上下文面板切换按钮左侧。
+  const projectTerminalAction = activeTerminalProject ? (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          ref={props.projectTerminalButtonRef}
+          aria-haspopup="dialog"
+          aria-label={projectTerminalLabel}
+          className="icon-button project-terminal-launch-button"
+          onClick={props.onOpenProjectTerminal}
+          size={props.projectTerminalRunningCount > 0 ? "sm" : "icon-sm"}
+          type="button"
+          variant="ghost"
+        >
+          <TerminalSquare size={16} />
+          {props.projectTerminalRunningCount > 0 ? (
+            <Badge aria-hidden="true" variant="secondary">
+              {props.projectTerminalRunningCount}
+            </Badge>
+          ) : null}
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="bottom">{projectTerminalLabel}</TooltipContent>
+    </Tooltip>
+  ) : null;
   // rightPanelLabel describes the page-registered context panel toggle action.
   // rightPanelLabel 描述页面注册的上下文面板切换动作。
   const rightPanelLabel = effectiveRightPanelOpen ? t("contextPanel.close") : t("contextPanel.open");
@@ -1073,13 +1121,14 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           <Button
             disabled={skillHeaderBusyAction !== null}
             onClick={() => void runSkillHeaderAction("lua-refresh", props.luaSkillActions.onRefreshLuaSkills)}
+            size="sm"
             type="button"
             variant="secondary"
           >
             <RefreshCw className={skillHeaderBusyAction === "lua-refresh" ? "spin" : undefined} size={15} />
             <span>{skillHeaderBusyAction === "lua-refresh" ? t("skills.action.refreshing") : t("skills.action.refresh")}</span>
           </Button>
-          <Button onClick={() => setLuaInstallDialogOpen(true)} type="button">
+          <Button onClick={() => setLuaInstallDialogOpen(true)} size="sm" type="button">
             <PackagePlus size={15} />
             <span>{t("skills.action.installLua")}</span>
           </Button>
@@ -1180,12 +1229,14 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     }],
   } : props.mainView === "agent-skills" ? {
     content: (
-      <AgentSkillsArea
-        actions={props.agentSkillActions}
-        selectedCategoryId={selectedAgentSkillCategoryId}
-        onSelectCategory={setSelectedAgentSkillCategoryId}
-        workbench={props.workbench}
-      />
+      <React.Suspense fallback={null}>
+        <LazyAgentSkillsArea
+          actions={props.agentSkillActions}
+          selectedCategoryId={selectedAgentSkillCategoryId}
+          onSelectCategory={setSelectedAgentSkillCategoryId}
+          workbench={props.workbench}
+        />
+      </React.Suspense>
     ),
     detail: props.workbench.agentSkills.notice,
     headerActions: null,
@@ -1197,24 +1248,28 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
       expanded: agentSkillsMenuExpanded,
       onLayoutModeWillChange: notifyConversationLayoutWillChange,
       panel: (
-        <FloatingAgentSkillCategoryMenu
-          expanded={agentSkillsMenuExpanded}
-          selectedCategoryId={selectedAgentSkillCategoryId}
-          onExpandedChange={setAgentSkillsMenuExpanded}
-          onSelectCategory={setSelectedAgentSkillCategoryId}
-          workbench={props.workbench}
-        />
+        <React.Suspense fallback={null}>
+          <LazyFloatingAgentSkillCategoryMenu
+            expanded={agentSkillsMenuExpanded}
+            selectedCategoryId={selectedAgentSkillCategoryId}
+            onExpandedChange={setAgentSkillsMenuExpanded}
+            onSelectCategory={setSelectedAgentSkillCategoryId}
+            workbench={props.workbench}
+          />
+        </React.Suspense>
       ),
       side: "left",
     }],
   } : props.mainView === "agents" ? {
     content: (
-      <AgentsArea
-        actions={props.agentActions}
-        selectedCategoryId={selectedAgentCategoryId}
-        onSelectCategory={setSelectedAgentCategoryId}
-        workbench={props.workbench}
-      />
+      <React.Suspense fallback={null}>
+        <LazyAgentsArea
+          actions={props.agentActions}
+          selectedCategoryId={selectedAgentCategoryId}
+          onSelectCategory={setSelectedAgentCategoryId}
+          workbench={props.workbench}
+        />
+      </React.Suspense>
     ),
     detail: agentsHeaderSummary.detail,
     headerActions: agentsHeaderActions,
@@ -1226,13 +1281,15 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
       expanded: agentsMenuExpanded,
       onLayoutModeWillChange: notifyConversationLayoutWillChange,
       panel: (
-        <FloatingAgentCategoryMenu
-          expanded={agentsMenuExpanded}
-          selectedCategoryId={selectedAgentCategoryId}
-          onExpandedChange={setAgentsMenuExpanded}
-          onSelectCategory={setSelectedAgentCategoryId}
-          workbench={props.workbench}
-        />
+        <React.Suspense fallback={null}>
+          <LazyFloatingAgentCategoryMenu
+            expanded={agentsMenuExpanded}
+            selectedCategoryId={selectedAgentCategoryId}
+            onExpandedChange={setAgentsMenuExpanded}
+            onSelectCategory={setSelectedAgentCategoryId}
+            workbench={props.workbench}
+          />
+        </React.Suspense>
       ),
       side: "left",
     }],
@@ -1267,7 +1324,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
       side: "left",
     }],
   } : props.mainView === "knowledge" ? {
-    content: <KnowledgeBaseArea />,
+    content: <React.Suspense fallback={null}><LazyKnowledgeBaseArea /></React.Suspense>,
     detail: t("area.knowledge.description"),
     headerActions: null,
     title: t("area.knowledge"),
@@ -1334,7 +1391,12 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         onTrace={props.onTrace}
       />
     ),
-    headerRightActions: hasSelectedChatConversation ? contextPanelToggleAction : undefined,
+    headerRightActions: projectTerminalAction || hasSelectedChatConversation ? (
+      <>
+        {projectTerminalAction}
+        {hasSelectedChatConversation ? contextPanelToggleAction : null}
+      </>
+    ) : undefined,
     toolPanels: [{
       className: "conversation-session-tool-adaptive-panel",
       contentClassName: "conversation-session-tool-content",
@@ -1398,6 +1460,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   return (
     <div className="workspace-panel-shell" ref={shellRef}>
       <ProjectSidebar
+        activeProjectId={props.activeProjectId}
         projects={props.workbench.projects}
         conversations={props.workbench.conversations}
         expandedProjectIds={props.workbench.expandedProjectIds}
@@ -1422,6 +1485,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         onExpandedProjectIdsChange={props.onExpandedProjectIdsChange}
         onProjectMenuAction={props.onProjectMenuAction}
         onReorderProjects={props.onReorderProjects}
+        onSelectProject={props.onSelectProject}
         onSelectConversation={props.onSelectConversation}
       />
       <SidebarInset className="workspace-inset">

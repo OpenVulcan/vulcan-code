@@ -1,6 +1,7 @@
 import { Palette, Sparkles } from "lucide-react"
 import { useState, type CSSProperties, type ReactNode } from "react"
 
+import { UsagePanel, type UsagePanelViewModel } from "@/components/product/usage"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
   AlertDialog,
@@ -204,6 +205,42 @@ export function VisualLabSettingsArea() {
   // labFilter stores the interactive filter-chip example without affecting product data.
   // labFilter 保存交互式筛选标签示例，不影响产品数据。
   const [labFilter, setLabFilter] = useState<"all" | "active" | "issues">("all")
+  // usagePanelSamples defines fixed state fixtures without connecting the lab to product services.
+  // usagePanelSamples 定义固定状态样本，且不把视觉实验室连接到产品服务。
+  const usagePanelSamples: UsagePanelViewModel[] = [
+    {
+      title: text("本月用量", "Monthly usage"),
+      description: text("供应商上报事实与已知费用。", "Provider-reported facts and known costs."),
+      state: "ready",
+      metrics: [
+        { id: "calls", label: text("真实调用", "Physical attempts"), value: "12,480", description: text("包含重试", "Includes retries") },
+        { id: "coverage", label: text("覆盖率", "Coverage"), value: "98.6%" },
+        { id: "tokens", label: "Token", value: "8,942,110" },
+      ],
+      tokenBreakdown: {
+        title: text("Token 分解", "Token breakdown"),
+        items: [
+          { id: "input", label: text("输入", "Input"), value: "5,106,302" },
+          { id: "output", label: text("输出", "Output"), value: "3,835,808" },
+        ],
+      },
+      cost: {
+        label: text("已知费用", "Known cost"),
+        amount: "USD 42.7819",
+        source: text("供应商上报", "Provider reported"),
+      },
+      modelsTitle: text("模型用量", "Model usage"),
+      models: [
+        { id: "model-a", label: "GPT-5.6 Terra", provider: "OpenAI", tokens: "6,340,110 Token", requests: text("8,920 次调用", "8,920 requests") },
+        { id: "model-b", label: "Claude Sonnet 4.6", provider: "Anthropic", tokens: "2,602,000 Token", requests: text("3,560 次调用", "3,560 requests") },
+      ],
+    },
+    { title: text("空状态", "Empty state"), description: text("无事实时不显示虚构的零。", "No invented zero when facts are absent."), state: "empty", stateMessage: text("暂无用量记录", "No usage records") },
+    { title: text("加载状态", "Loading state"), state: "loading", stateMessage: text("正在读取原生用量…", "Loading native usage…") },
+    { title: text("部分可用", "Partial state"), state: "partial", stateLabel: text("部分", "Partial"), stateMessage: text("费用暂缺，Token 事实仍可查看。", "Cost is unavailable; token facts remain visible."), metrics: [{ id: "partial-token", label: "Token", value: "438,210" }] },
+    { title: text("错误状态", "Error state"), state: "error", stateMessage: text("无法读取用量，请检查服务状态。", "Usage could not be loaded. Check service status.") },
+    { title: text("长数字与窄宽度", "Long values at narrow width"), state: "ready", metrics: [{ id: "long-token", label: text("精确 Token 合计", "Exact token total"), value: "9,223,372,036,854,775,807" }], cost: { label: text("精确费用", "Exact cost"), amount: "CNY 12345678901234567890.123456789", source: text("本地估算", "Locally estimated") } },
+  ]
 
   return (
     <div className="visual-lab">
@@ -448,6 +485,19 @@ export function VisualLabSettingsArea() {
               </SheetFooter>
             </SheetContent>
           </Sheet>
+        </VisualLabSection>
+
+        <VisualLabSection
+          description={text("产品组件只接收确定的视图模型；统一验证正常、空、加载、部分、错误、长数字与窄宽度。", "Product components consume determined view models only; ready, empty, loading, partial, error, long-value, and narrow states are reviewed together.")}
+          title={text("自定义产品组件 · 用量", "Product components · Usage")}
+        >
+          <div className="grid items-start gap-3 xl:grid-cols-2">
+            {usagePanelSamples.map((sample, index) => (
+              <div className={index === usagePanelSamples.length - 1 ? "max-w-[280px]" : undefined} key={`${sample.state}-${sample.title}`}>
+                <UsagePanel model={sample} />
+              </div>
+            ))}
+          </div>
         </VisualLabSection>
 
         <VisualLabSection

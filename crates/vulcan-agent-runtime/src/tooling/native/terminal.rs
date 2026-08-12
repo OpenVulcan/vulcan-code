@@ -160,30 +160,6 @@ pub(crate) enum TerminalSessionWaitMode {
     ScreenStable,
 }
 
-/// Key encoding family used when terminal_session converts standardized key names into terminal input bytes.
-/// terminal_session 将标准化按键名转换为终端输入字节时使用的按键编码族。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum TerminalSessionKeyEncoding {
-    /// ANSI/VT escape sequences used by ordinary PTY and terminal applications.
-    /// 普通 PTY 与终端应用使用的 ANSI/VT 转义序列。
-    AnsiVt,
-    /// Windows console `msvcrt.getch()` extended-key byte pairs.
-    /// Windows 控制台 `msvcrt.getch()` 扩展键字节对。
-    WindowsConsoleGetch,
-}
-
-impl TerminalSessionKeyEncoding {
-    /// Renders one stable lowercase key-encoding label.
-    /// 渲染稳定的小写按键编码标签。
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::AnsiVt => "ansi_vt",
-            Self::WindowsConsoleGetch => "windows_console_getch",
-        }
-    }
-}
-
 impl TerminalSessionWaitMode {
     /// Renders one stable lowercase wait-mode label.
     /// 渲染稳定的小写等待模式标签。
@@ -245,9 +221,6 @@ pub(crate) struct TerminalSessionToolArgs {
     /// Optional wait policy used by send/read actions.
     /// 供 send/read 动作使用的可选等待策略。
     wait_policy: Option<TerminalSessionWaitPolicy>,
-    /// Optional key encoding used when converting key/chord inputs during send.
-    /// send 时转换 key/chord 输入所使用的可选按键编码。
-    key_encoding: Option<TerminalSessionKeyEncoding>,
     /// Optional output cursor override.
     /// 可选输出游标覆盖值。
     after_seq: Option<u64>,
@@ -366,7 +339,7 @@ pub(crate) struct ResolvedSessionShellBehavior {
 
 fn terminal_session_tool_description() -> String {
     String::from(
-        "Operate named persistent host terminal sessions. Before using terminal_session, you must call skill(\"terminal-session\") and follow its instructions. Do not use this tool from memory. The start action requires a non-empty name. Use shell_command for isolated one-shot commands. terminal_session supports list/start/send/read/snapshot/stop, ordered text/paste/key/chord input, incremental output, native Windows console key events when available, TUI-aware output mode hints, and command transactions with per-send exit codes via wait_policy.mode=until_exit_code.",
+        "Operate named persistent host terminal sessions. Before using terminal_session, you must call skill(\"terminal-session\") and follow its instructions. Do not use this tool from memory. The start action requires a non-empty name. Use shell_command for isolated one-shot commands. terminal_session supports list/start/send/read/snapshot/stop, ordered cross-platform ANSI/VT text/paste/key/chord input, incremental output, TUI-aware output mode hints, and command transactions with per-send exit codes via wait_policy.mode=until_exit_code.",
     )
 }
 
@@ -438,7 +411,7 @@ pub(crate) fn terminal_session_args_schema(shell_support: &HostCommandShellSuppo
                             "type": "object",
                             "properties": {
                                 "kind": { "type": "string", "enum": ["key"] },
-                                "key": { "type": "string", "description": "Standard key name such as Enter, Tab, Esc, ArrowDown, Home, End, PageUp, PageDown, Insert, Delete, or F1-F12. The key_encoding field controls whether navigation/function keys use ANSI VT bytes or Windows msvcrt.getch byte pairs." }
+                                "key": { "type": "string", "description": "Standard key name such as Enter, Tab, Esc, ArrowDown, Home, End, PageUp, PageDown, Insert, Delete, or F1-F12. The cross-platform terminal host encodes navigation and function keys as ANSI/VT input." }
                             },
                             "required": ["kind", "key"],
                             "additionalProperties": false
@@ -473,11 +446,6 @@ pub(crate) fn terminal_session_args_schema(shell_support: &HostCommandShellSuppo
                 },
                 "required": ["mode"],
                 "additionalProperties": false
-            },
-            "key_encoding": {
-                "type": "string",
-                "enum": ["ansi_vt", "windows_console_getch"],
-                "description": "Optional key encoding for send key/chord inputs. Omit this field on Windows native console sessions to deliver real Console KEY_EVENT input for msvcrt.getch() and Console.ReadKey(). Set ansi_vt explicitly when a Windows native console session must feed stdin/VT readers such as sys.stdin.read(1). Use windows_console_getch only for explicit byte-oriented compatibility cases."
             },
             "after_seq": {
                 "type": "integer",

@@ -20,6 +20,7 @@ describe("ProjectSidebar", () => {
       <I18nProvider initialLocale="zh-CN">
         <SidebarProvider defaultOpen>
           <ProjectSidebar
+            activeProjectId={null}
             agentSkillsActive={false}
             agentsActive={false}
             conversations={[]}
@@ -38,6 +39,7 @@ describe("ProjectSidebar", () => {
             onReorderProjects={noop}
             onSelectArea={noop}
             onSelectConversation={noop}
+            onSelectProject={noop}
             pinnedConversationIds={new Set()}
             projects={[]}
             selectedConversationId={null}

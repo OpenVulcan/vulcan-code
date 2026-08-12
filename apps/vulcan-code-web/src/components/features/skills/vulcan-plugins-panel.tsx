@@ -1,6 +1,7 @@
 import * as React from "react";
 import { ChartNoAxesCombined, KeyRound, Puzzle, Route, Search, ShieldCheck, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { Button, IconButton } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
@@ -414,14 +415,15 @@ export function VulcanPluginsPanel(props: {
             placeholder={locale.startsWith("zh") ? "输入包含 plugin.yaml 的本地目录" : "Directory containing plugin.yaml"}
             value={installSourcePath}
           />
-          <button
-            className="secondary-button"
+          <Button
             disabled={installBusy || installSourcePath.trim().length === 0}
             onClick={() => void inspectPluginPackage()}
+            size="sm"
             type="button"
+            variant="secondary"
           >
             {locale.startsWith("zh") ? "检查" : "Inspect"}
-          </button>
+          </Button>
         </div>
         {installError ? <div className="skill-empty-state warning">{installError}</div> : null}
         {permissionPreview ? (
@@ -509,8 +511,7 @@ export function VulcanPluginsPanel(props: {
                     : (locale.startsWith("zh") ? "更新前必须先停用并完全排空现有插件。" : "Disable and fully drain the existing plugin before updating it.")}
               </div>
             ) : null}
-            <button
-              className="primary-button"
+            <Button
               disabled={installBusy
                  || !authorizationConfirmed
                  || (inspectedInstalledPlugin !== undefined
@@ -518,12 +519,13 @@ export function VulcanPluginsPanel(props: {
                  || permissionPreview.installSecretRequirements.some((requirement) => !(installSecretDrafts[`${requirement.serverId}:${requirement.secretKey}`] ?? ""))
                  || (permissionPreview.permissions.includes("dependency_registry_network") && !registryDependenciesConfirmed)}
               onClick={() => void installInspectedPlugin()}
+              size="sm"
               type="button"
             >
               {inspectedInstalledPlugin?.extension?.origin === "userInstalled"
                 ? (locale.startsWith("zh") ? "授权并更新" : "Authorize and update")
                 : (locale.startsWith("zh") ? "授权并安装" : "Authorize and install")}
-            </button>
+            </Button>
           </div>
         ) : null}
       </section>
@@ -674,23 +676,26 @@ export function VulcanPluginsPanel(props: {
                                 type="password"
                                 value={secretDrafts[draftKey] ?? ""}
                               />
-                              <button
-                                className="secondary-button"
+                              <Button
                                 disabled={secretBusyKey !== null || !(secretDrafts[draftKey] ?? "")}
                                 onClick={() => void storePluginMcpSecret(plugin.id, server.id, secretKey)}
+                                size="sm"
                                 type="button"
+                                variant="secondary"
                               >
                                 {locale.startsWith("zh") ? "安全保存" : "Store securely"}
-                              </button>
-                              <button
-                                className="icon-button danger"
+                              </Button>
+                              <IconButton
+                                aria-label={locale.startsWith("zh") ? "删除 Secret" : "Delete secret"}
                                 disabled={secretBusyKey !== null}
                                 onClick={() => void deletePluginMcpSecret(plugin.id, server.id, secretKey)}
+                                size="sm"
                                 title={locale.startsWith("zh") ? "删除 Secret" : "Delete secret"}
                                 type="button"
+                                variant="destructive"
                               >
                                 <Trash2 size={14} />
-                              </button>
+                              </IconButton>
                             </div>
                           );
                         })}
@@ -701,18 +706,19 @@ export function VulcanPluginsPanel(props: {
               </div>
               <div className="agent-definition-row-actions">
               {plugin.extension?.origin === "userInstalled" ? (
-                <button
+                <IconButton
                   aria-label={locale.startsWith("zh") ? "卸载用户插件" : "Uninstall user plugin"}
-                  className="icon-button danger"
                   disabled={installBusy || plugin.runtimeState !== "disabled"}
                   onClick={() => void uninstallPlugin(plugin)}
+                  size="sm"
                   title={plugin.runtimeState === "disabled"
                     ? (locale.startsWith("zh") ? "卸载" : "Uninstall")
                     : (locale.startsWith("zh") ? "请先停用插件" : "Disable the plugin first")}
                   type="button"
+                  variant="destructive"
                 >
                   <Trash2 size={15} />
-                </button>
+                </IconButton>
               ) : null}
               <Switch
                 aria-busy={busyPluginId === plugin.id}

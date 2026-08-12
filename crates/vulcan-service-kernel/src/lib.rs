@@ -96,13 +96,14 @@ use vulcan_service_api::SessionGoalStatus;
 use vulcan_service_api::{
     AgentSkillCategorySaveRequest, AgentSkillLoadIssueSummary, AgentSkillSaveRequest,
     AgentSkillsCatalogChangedDelta, AgentSkillsCatalogSummary, AgentSkillsCatalogUpdate,
-    AppendMessageBodyDelta, CommandSessionSummary, CommandSessionsChangedDelta,
-    ComposerAttachmentSummary, ContextInjectionCardSummary, ContextInjectionChangedDelta,
-    ContextInjectionItemSummary, ContextInjectionSnapshot, ContextUsageBreakdownItem,
-    ContextUsageChangedDelta, ContextUsageSnapshot, ConversationArchivedDelta,
-    ConversationForkSourceSummary, ConversationMessage, ConversationMessageStreamState,
-    ConversationRunSettledEvent, ConversationSummary, ConversationsArchivedDelta,
-    FeatureAreaSummary, HydratedConversationWindowSummary, KeyValueSummary, LogEntrySummary,
+    AppendMessageBodyDelta, CommandSessionDisplayAttachment, CommandSessionDisplayChangedEvent,
+    CommandSessionSummary, CommandSessionsChangedDelta, ComposerAttachmentSummary,
+    ContextInjectionCardSummary, ContextInjectionChangedDelta, ContextInjectionItemSummary,
+    ContextInjectionSnapshot, ContextUsageBreakdownItem, ContextUsageChangedDelta,
+    ContextUsageSnapshot, ConversationArchivedDelta, ConversationForkSourceSummary,
+    ConversationMessage, ConversationMessageStreamState, ConversationRunSettledEvent,
+    ConversationSummary, ConversationsArchivedDelta, FeatureAreaSummary,
+    HydratedConversationWindowSummary, KeyValueSummary, LogEntrySummary,
     LuaSkillConfigDeleteRequest, LuaSkillConfigDeleteResult, LuaSkillConfigDescriptor,
     LuaSkillConfigEnumOption, LuaSkillConfigEvent, LuaSkillConfigEventBatch, LuaSkillConfigIssue,
     LuaSkillConfigItem, LuaSkillConfigRefreshRequest, LuaSkillConfigSetRequest,
@@ -112,18 +113,21 @@ use vulcan_service_api::{
     LuaSkillsManagedRuntimeComponentSummary, McpServerSummary, McpToolSummary, MemorySummary,
     MessageRole, OptionalTextPatch, PendingQuestionChangedDelta, PendingQuestionOptionSummary,
     PendingQuestionPromptSummary, PendingQuestionSnapshot, PluginSummary, ProjectRemovedDelta,
-    ProjectSummary, ProviderModelSummary, ProviderSummary, ReasoningSelectionOptionSummary,
-    ReasoningSelectionSummary, RuntimeModuleSnapshot, ServiceEvent, ServiceEventEmitter,
-    SessionAddonChangedEvent, SessionAddonsChangedDelta, SessionAddonsChangedResponse,
-    SessionGoalSummary, SessionOutputStyleSummary, SessionOutputStyleUpdateRequest,
-    SessionPlanArtifactSummary, SessionPlanModeSummary, SessionTodolistItemSummary,
-    SessionTodolistSummary, SessionVmmPolicyByConversation, SessionVmmPolicySummary,
-    SettingSectionSummary, StartupSnapshot, StartupStepStatus, SubagentCatalogIssueSummary,
-    SubagentCatalogSummary, SubagentCatalogUpdate, SubagentCategorySummary,
-    SubagentDefinitionLocaleSummary, SubagentDefinitionSaveRequest, SubagentDefinitionSummary,
-    SubagentNavigationChangedDelta, SubagentNavigationSnapshot, SubagentPanelRouteResponse,
-    ToolCallSummary, UpdateConversationRunPhaseDelta, UserPromptEditDraftSummary,
-    VmmMemorySnapshot, WEBUI_SERVICE_DISCOVERY_STATUS_FAILED, WEBUI_SERVICE_DISCOVERY_STATUS_READY,
+    ProjectSummary, ProjectTerminalCatalog, ProjectTerminalDisplayAttachment,
+    ProjectTerminalDisplayChangedEvent, ProjectTerminalRunningCountChangedEvent,
+    ProjectTerminalShellOption, ProjectTerminalSummary, ProviderModelSummary, ProviderSummary,
+    ReasoningSelectionOptionSummary, ReasoningSelectionSummary, RuntimeModuleSnapshot,
+    ServiceEvent, ServiceEventEmitter, SessionAddonChangedEvent, SessionAddonsChangedDelta,
+    SessionAddonsChangedResponse, SessionGoalSummary, SessionOutputStyleSummary,
+    SessionOutputStyleUpdateRequest, SessionPlanArtifactSummary, SessionPlanModeSummary,
+    SessionTodolistItemSummary, SessionTodolistSummary, SessionVmmPolicyByConversation,
+    SessionVmmPolicySummary, SettingSectionSummary, StartupSnapshot, StartupStepStatus,
+    SubagentCatalogIssueSummary, SubagentCatalogSummary, SubagentCatalogUpdate,
+    SubagentCategorySummary, SubagentDefinitionLocaleSummary, SubagentDefinitionSaveRequest,
+    SubagentDefinitionSummary, SubagentNavigationChangedDelta, SubagentNavigationSnapshot,
+    SubagentPanelRouteResponse, TerminalDisplayChunk, ToolCallSummary,
+    UpdateConversationRunPhaseDelta, UserPromptEditDraftSummary, VmmMemorySnapshot,
+    WEBUI_SERVICE_DISCOVERY_STATUS_FAILED, WEBUI_SERVICE_DISCOVERY_STATUS_READY,
     WEBUI_SERVICE_DISCOVERY_STATUS_STARTING, WEBUI_SERVICE_PORT_ENV, WEBUI_STATIC_DIR_ENV,
     WorkbenchDelta, WorkbenchDeltaEnvelope, WorkbenchSnapshot, WorkspaceGitChangedEvent,
     webui_service_discovery_snapshot_with_status, webui_service_starting_discovery_snapshot,
@@ -222,6 +226,7 @@ mod plugin_storage;
 mod plugin_ui_events;
 mod project_conversation_services;
 mod project_directories;
+mod project_terminals;
 mod provider_manifest_sync;
 mod provider_settings;
 mod provider_usage_migration;
@@ -343,6 +348,7 @@ pub use project_conversation_services::service_add_project_initial_directory;
 use project_conversation_services::*;
 pub use project_directories::service_add_project_from_path;
 use project_directories::service_browse_project_directories;
+use project_terminals::*;
 use provider_settings::{provider_retry_settings, service_save_provider_retry_settings};
 use provider_usage_runtime::*;
 use public_ai_settings::*;
@@ -502,8 +508,8 @@ pub fn create_service_bridge_state(
     }))
 }
 
-/// Stops the live MCP runtime and active child-agent work before the host application exits.
-/// 在宿主应用退出前停止实时 MCP 运行时与活动子代理工作。
+/// Stops project terminals, live MCP runtime, and active child-agent work before the host exits.
+/// 在宿主应用退出前停止项目终端、实时 MCP 运行时与活动子代理工作。
 ///
 /// # Parameters
 /// 参数
@@ -544,7 +550,9 @@ pub fn service_prepare_for_app_shutdown(
     if let Some(provider_manifest_sync) = provider_manifest_sync {
         provider_manifest_sync.stop_periodic_task()?;
     }
-    ordered_runtime_shutdown(
+    let project_terminal_shutdown = cancel_all_project_terminal_displays()
+        .and_then(|_| project_terminal_runtime().request_all_terminal_stops_for_shutdown());
+    let runtime_shutdown = ordered_runtime_shutdown(
         || match task_runtime.as_ref() {
             Some(task_runtime) => task_runtime.stop_active_tasks_for_app_shutdown(),
             None => Ok(Vec::new()),
@@ -567,7 +575,15 @@ pub fn service_prepare_for_app_shutdown(
             }
             Ok(())
         },
-    )
+    );
+    match (runtime_shutdown, project_terminal_shutdown) {
+        (Ok(stopped_task_ids), Ok(_)) => Ok(stopped_task_ids),
+        (Err(runtime_error), Ok(_)) => Err(runtime_error),
+        (Ok(_), Err(terminal_error)) => Err(terminal_error),
+        (Err(runtime_error), Err(terminal_error)) => Err(format!(
+            "{runtime_error} Project terminal shutdown also failed: {terminal_error}"
+        )),
+    }
 }
 
 /// Runs the strict task, managed-memory, and MCP shutdown sequence.

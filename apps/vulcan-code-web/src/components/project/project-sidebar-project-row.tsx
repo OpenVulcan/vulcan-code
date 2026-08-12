@@ -41,6 +41,9 @@ export function SortableProjectRow(props: {
   // Whether the selected conversation belongs to this project.
   // 当前选中会话是否归属于该项目。
   hasSelectedConversation: boolean;
+  // Whether this project owns the project-level floating tools.
+  // 当前项目是否持有项目级浮动工具。
+  isActiveProject: boolean;
   // Current sidebar collapsed or expanded state.
   // 当前侧栏的折叠或展开状态。
   sidebarState: "collapsed" | "expanded";
@@ -53,6 +56,9 @@ export function SortableProjectRow(props: {
   // Toggles the project folder expansion.
   // 切换项目文件夹展开状态。
   onToggleOpen: (projectId: string) => void;
+  // Selects this project without changing the current conversation.
+  // 选择当前项目且不改变当前会话。
+  onSelectProject: (projectId: string) => void;
   // Toggles the conversation list overflow rows for this project.
   // 切换当前项目会话列表的溢出行。
   onToggleConversationList: (projectId: string) => void;
@@ -92,9 +98,10 @@ export function SortableProjectRow(props: {
       className={cn(
         "project-folder-button",
         isSidebarCollapsed && "collapsed-project-button",
-        isSidebarCollapsed && props.hasSelectedConversation && "project-folder-active",
+        props.isActiveProject && "project-folder-active",
       )}
       onClick={(event) => {
+        props.onSelectProject(props.project.id);
         if (isSidebarCollapsed) {
           event.preventDefault();
           return;

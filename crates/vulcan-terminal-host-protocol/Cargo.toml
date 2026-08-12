@@ -1,0 +1,15 @@
+[package]
+name = "vulcan-terminal-host-protocol"
+description = "Lightweight versioned framing contract shared by terminal host processes and parent runtimes."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+tokio = { version = "1.52.2", features = ["io-util"] }

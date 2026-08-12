@@ -9,12 +9,7 @@ import {
   Settings,
 } from "lucide-react";
 import { IconButton } from "@/components/ui/button";
-import {
-  LuaSkillInstallDialog,
-  SkillsArea,
-  type SkillActionProps,
-  type SkillSubAreaId,
-} from "@/components/features/skills/SkillsArea";
+import type { SkillActionProps, SkillSubAreaId } from "@/components/features/skills/skill-area-types";
 import {
   enabledPluginDetailMounts,
   findEnabledPluginDetailMount,
@@ -22,6 +17,13 @@ import {
 } from "@/components/features/skills/skill-area-types";
 import { useI18n } from "@/i18n";
 import type { WorkbenchSnapshot } from "@/types";
+
+// LazySkillsArea keeps the full LuaSkills catalog outside the console-first workbench chunk.
+// LazySkillsArea 将完整 LuaSkills 目录保留在控制台优先的工作台分块之外。
+const LazySkillsArea = React.lazy(() => import("@/components/features/skills/SkillsArea").then((module) => ({ default: module.SkillsArea })));
+// LazyLuaSkillInstallDialog keeps installation UI outside the initial workbench chunk.
+// LazyLuaSkillInstallDialog 将安装界面保留在初始工作台分块之外。
+const LazyLuaSkillInstallDialog = React.lazy(() => import("@/components/features/skills/lua-skills-panel").then((module) => ({ default: module.LuaSkillInstallDialog })));
 
 // WorkspaceSkillsSettings renders the embedded skills settings page.
 // WorkspaceSkillsSettings 渲染内嵌技能设置页面。
@@ -52,16 +54,14 @@ export function WorkspaceSkillsSettings(props: {
 
   return (
     <>
-      <SkillsArea
-        activeTab={activeSubArea}
-        skillActions={skillActions}
-        workbench={workbench}
-      />
-      <LuaSkillInstallDialog
-        actions={skillActions}
-        open={luaInstallDialogOpen}
-        onOpenChange={onLuaInstallDialogOpenChange}
-      />
+      <React.Suspense fallback={null}>
+        <LazySkillsArea activeTab={activeSubArea} skillActions={skillActions} workbench={workbench} />
+      </React.Suspense>
+      {luaInstallDialogOpen ? (
+        <React.Suspense fallback={null}>
+          <LazyLuaSkillInstallDialog actions={skillActions} open={luaInstallDialogOpen} onOpenChange={onLuaInstallDialogOpenChange} />
+        </React.Suspense>
+      ) : null}
     </>
   );
 }

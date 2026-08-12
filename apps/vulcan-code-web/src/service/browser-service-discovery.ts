@@ -54,6 +54,10 @@ const BROWSER_SERVICE_DISCOVERY_PATH = "/vulcan-service-discovery.json";
 // BROWSER_SERVICE_CONNECTION_EVENT 会在本地服务连接状态变化时发出。
 export const BROWSER_SERVICE_CONNECTION_EVENT = "vulcan:browser-service-connection";
 
+// browserServiceClientId identifies this exact browser/WebView lifetime to the event socket.
+// browserServiceClientId 向事件套接字标识当前精确浏览器或 WebView 生命周期。
+let browserServiceClientId: string | null = null;
+
 // BrowserServiceConnectionStatus is the frontend-visible local service connection state.
 // BrowserServiceConnectionStatus 是前端可见的本地服务连接状态。
 export type BrowserServiceConnectionStatus = "connected" | "disconnected" | "reconnecting";
@@ -80,6 +84,12 @@ let resolvedBrowserServiceAccessToken: string | null = null;
 // lastBrowserServiceConnectionStatus stores the most recently emitted connection state.
 // lastBrowserServiceConnectionStatus 保存最近一次发出的连接状态。
 let lastBrowserServiceConnectionStatus: BrowserServiceConnectionStatus | null = null;
+
+// currentBrowserServiceConnectionStatus returns the latest emitted local-service connection state.
+// currentBrowserServiceConnectionStatus 返回最近一次已发出的本地服务连接状态。
+export function currentBrowserServiceConnectionStatus(): BrowserServiceConnectionStatus | null {
+  return lastBrowserServiceConnectionStatus;
+}
 
 // emitBrowserServiceConnectionStatus notifies the UI about meaningful connection changes.
 // emitBrowserServiceConnectionStatus 将有意义的连接变化通知 UI。
@@ -123,6 +133,13 @@ export function resolveBrowserServiceAccessToken(): string | null {
   return token;
 }
 
+// resolveBrowserServiceClientId returns the identity shared by terminal attach RPCs and the event socket.
+// resolveBrowserServiceClientId 返回由终端挂接 RPC 与事件套接字共享的标识。
+export function resolveBrowserServiceClientId(): string {
+  browserServiceClientId ??= globalThis.crypto.randomUUID();
+  return browserServiceClientId;
+}
+
 // resolveReachableBrowserServiceBaseUrl finds the active local service endpoint.
 // resolveReachableBrowserServiceBaseUrl 查找当前可用的本地服务端点。
 export async function resolveReachableBrowserServiceBaseUrl(): Promise<string> {
@@ -162,6 +179,7 @@ export function webSocketUrlFromBaseUrl(baseUrl: string): string {
   if (token) {
     url.searchParams.set("token", token);
   }
+  url.searchParams.set("clientId", resolveBrowserServiceClientId());
   return url.toString();
 }
 

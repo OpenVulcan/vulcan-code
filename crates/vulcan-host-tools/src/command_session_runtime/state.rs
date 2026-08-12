@@ -22,6 +22,9 @@ pub(super) struct CommandSessionMutableState {
     /// Highest assigned output sequence number.
     /// 当前已分配的最高输出序号。
     pub(super) last_seq: u64,
+    /// Highest output sequence evicted from bounded retained history.
+    /// 已从有界保留历史中淘汰的最高输出序号。
+    pub(super) dropped_before_seq: u64,
     /// Highest output sequence number already exposed to at least one read caller.
     /// 已经暴露给至少一个读取调用方的最高输出序号。
     pub(super) highest_delivered_seq: u64,
@@ -45,7 +48,10 @@ pub(super) struct CommandSessionMutableState {
     pub(super) screen_text: Option<String>,
     /// Buffered output chunks retained for future read calls.
     /// 为后续读取调用保留的缓冲输出分片。
-    pub(super) chunks: Vec<CommandSessionOutputChunk>,
+    pub(super) chunks: VecDeque<CommandSessionOutputChunk>,
+    /// Total UTF-8 bytes currently retained by output chunks.
+    /// 输出分片当前保留的 UTF-8 总字节数。
+    pub(super) retained_output_bytes: usize,
 }
 
 impl Default for CommandSessionMutableState {
@@ -59,6 +65,7 @@ impl Default for CommandSessionMutableState {
             stdout_bytes: 0,
             stderr_bytes: 0,
             last_seq: 0,
+            dropped_before_seq: 0,
             highest_delivered_seq: 0,
             ai_delivered_seq: 0,
             pending_stdin_line: false,
@@ -66,7 +73,8 @@ impl Default for CommandSessionMutableState {
             screen_rows: None,
             screen_cols: None,
             screen_text: None,
-            chunks: Vec::new(),
+            chunks: VecDeque::new(),
+            retained_output_bytes: 0,
         }
     }
 }
@@ -100,18 +108,35 @@ impl CommandSessionSharedState {
         self.change_notify.notify_waiters();
     }
 
-    /// Appends one decoded output chunk from a blocking PTY reader thread and wakes pending readers.
-    /// 从阻塞 PTY 读取线程追加一条解码后的输出分片并唤醒等待中的读取方。
-    pub(super) fn append_output_chunk_blocking(
+    /// Atomically appends one decoded output chunk and its optional terminal screen checkpoint.
+    /// 以原子方式追加一条解码输出分片及其可选终端屏幕检查点。
+    ///
+    /// # Parameters / 参数
+    /// - `stream`: Logical output stream assigned to the decoded PTY bytes.
+    /// - `text`: Decoded output text retained for incremental readers.
+    /// - `screen_frame`: Optional sequence, rows, columns, and formatted VT checkpoint.
+    /// - `stream`：分配给已解码 PTY 字节的逻辑输出流。
+    /// - `text`：为增量读取方保留的解码输出文本。
+    /// - `screen_frame`：可选的序号、行数、列数与格式化 VT 检查点。
+    pub(super) async fn append_output_chunk_with_screen_frame(
         &self,
         stream: CommandSessionOutputStream,
         text: String,
+        screen_frame: Option<(u64, u16, u16, String)>,
     ) {
-        if text.is_empty() {
+        if text.is_empty() && screen_frame.is_none() {
             return;
         }
-        let mut state = self.mutable_state.blocking_lock();
-        append_output_chunk_to_state(&mut state, stream, text);
+        let mut state = self.mutable_state.lock().await;
+        if !text.is_empty() {
+            append_output_chunk_to_state(&mut state, stream, text);
+        }
+        if let Some((sequence, rows, cols, frame_text)) = screen_frame {
+            state.screen_frame_seq = Some(sequence);
+            state.screen_rows = Some(rows);
+            state.screen_cols = Some(cols);
+            state.screen_text = Some(frame_text);
+        }
         drop(state);
         self.change_notify.notify_waiters();
     }
@@ -138,26 +163,9 @@ impl CommandSessionSharedState {
 
     /// Stores the latest terminal screen frame and wakes pending readers.
     /// 保存最新终端屏幕帧并唤醒等待中的读取方。
+    #[cfg(test)]
     pub(super) async fn update_screen_frame(&self, seq: u64, rows: u16, cols: u16, text: String) {
         let mut state = self.mutable_state.lock().await;
-        state.screen_frame_seq = Some(seq);
-        state.screen_rows = Some(rows);
-        state.screen_cols = Some(cols);
-        state.screen_text = Some(text);
-        drop(state);
-        self.change_notify.notify_waiters();
-    }
-
-    /// Stores the latest terminal screen frame from a blocking PTY reader thread.
-    /// 从阻塞 PTY 读取线程保存最新终端屏幕帧。
-    pub(super) fn update_screen_frame_blocking(
-        &self,
-        seq: u64,
-        rows: u16,
-        cols: u16,
-        text: String,
-    ) {
-        let mut state = self.mutable_state.blocking_lock();
         state.screen_frame_seq = Some(seq);
         state.screen_rows = Some(rows);
         state.screen_cols = Some(cols);
@@ -214,12 +222,12 @@ pub(super) fn append_output_chunk_to_state(
         }
     }
     if can_coalesce_output_chunk(
-        state.chunks.last(),
+        state.chunks.back(),
         state.highest_delivered_seq,
         stream,
         bytes,
     ) {
-        if let Some(last_chunk) = state.chunks.last_mut() {
+        if let Some(last_chunk) = state.chunks.back_mut() {
             last_chunk.text.push_str(&text);
         }
     } else {
@@ -227,7 +235,19 @@ pub(super) fn append_output_chunk_to_state(
         let seq = state.last_seq;
         state
             .chunks
-            .push(CommandSessionOutputChunk { seq, stream, text });
+            .push_back(CommandSessionOutputChunk { seq, stream, text });
+    }
+    state.retained_output_bytes = state.retained_output_bytes.saturating_add(bytes);
+    while state.chunks.len() > COMMAND_SESSION_RETAINED_CHUNK_LIMIT
+        || state.retained_output_bytes > COMMAND_SESSION_RETAINED_BYTE_LIMIT
+    {
+        let Some(dropped) = state.chunks.pop_front() else {
+            break;
+        };
+        state.retained_output_bytes = state
+            .retained_output_bytes
+            .saturating_sub(dropped.text.len());
+        state.dropped_before_seq = dropped.seq;
     }
 }
 

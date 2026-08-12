@@ -14,8 +14,21 @@
 ## 运行方式
 
 ```bash
+./make vite start
+./make vite status
 ./make run
+./make vite stop
 ```
+
+debug 模式下的 `run` 与 `br` 不再自动启动或停止 Vite；开发服务器由 `make vite start|status|stop` 独立管理。release 模式继续直接使用已经构建的 WebUI 资源，不依赖 Vite。
+
+## 资源同步
+
+```bash
+./make sync
+```
+
+`./make sync` 只负责把配置、运行时资源、系统技能和插件同步到 `output`；资源未变化时，后续 `build`、`release` 与 `br` 无需重复同步。
 
 ## 构建方式
 

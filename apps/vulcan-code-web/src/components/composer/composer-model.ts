@@ -196,6 +196,9 @@ export function isComposerTextEntryElement(element: Element | null): boolean {
   if (!element) {
     return false;
   }
+  if (element.closest('[data-terminal-input-scope="true"]')) {
+    return true;
+  }
   if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement || element instanceof HTMLSelectElement) {
     return true;
   }

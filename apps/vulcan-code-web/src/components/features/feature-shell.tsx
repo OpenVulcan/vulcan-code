@@ -7,30 +7,22 @@ import {
 import { FeatureContent as FeatureShellContent } from "@/components/features/feature-shell-content"
 import { Button } from "@/components/ui/button"
 import { FeatureSidebar, areaIconMap, primaryFeatureAreas } from "@/components/features/feature-shell-sidebar"
-import { activeAgentsHeaderSummary, type AgentActionProps } from "@/components/features/agents/AgentsArea"
+import { activeAgentsHeaderSummary } from "@/components/features/agents/agent-area-header"
+import type { AgentActionProps } from "@/components/features/agents/agent-area-types"
 import { WorkspaceTitleMenu } from "@/components/workspace/workspace-title-menu"
 import {
   activeSettingsHeaderSummary,
-  localizedLiteral,
   settingsSubAreas,
-  type SettingsActionProps,
-} from "@/components/features/settings/SettingsFeatureContent"
-import {
-  LuaSkillInstallDialog,
-  activeSkillHeaderSummary,
-  type SkillActionProps,
-  type SkillHeaderBusyActionId,
-  type SkillSubAreaId,
-} from "@/components/features/skills/SkillsArea"
+} from "@/components/features/settings/settings-navigation"
+import type { SettingsActionProps } from "@/components/features/settings/settings-action-types"
+import { activeSkillHeaderSummary } from "@/components/features/skills/skill-area-header"
+import type { SkillActionProps, SkillHeaderBusyActionId, SkillSubAreaId } from "@/components/features/skills/skill-area-types"
 import {
   findEnabledPluginDetailMount,
   isPluginDetailSubArea,
 } from "@/components/features/skills/skill-area-types"
 import type { AgentSkillActionProps } from "@/components/features/agent-skills/agent-skills-types"
-import {
-  type MemoryActionProps,
-  type MemorySubAreaId,
-} from "@/components/features/memory/MemoryArea"
+import type { MemoryActionProps } from "@/components/features/memory/use-memory-area-controller"
 import {
   SidebarInset,
   SidebarProvider,
@@ -46,8 +38,19 @@ import type {
 } from "@/types"
 import type { WorkspacePageDescriptor } from "@/components/workspace/workspace-page-descriptor"
 
+// MemorySubAreaId identifies one service-projected VMM section.
+// MemorySubAreaId 标识一个由服务投影的 VMM 分区。
+type MemorySubAreaId = string
+
+// LazyLuaSkillInstallDialog keeps the installation workflow outside the initial workbench chunk.
+// LazyLuaSkillInstallDialog 将安装流程保留在初始工作台分块之外。
+const LazyLuaSkillInstallDialog = React.lazy(() => import("@/components/features/skills/lua-skills-panel").then((module) => ({ default: module.LuaSkillInstallDialog })))
+
 // localizedLiteral chooses a short local component label by the active WebUI locale.
 // localizedLiteral 根据当前 WebUI 语言选择组件内短文案。
+function localizedLiteral(locale: string, zh: string, en: string): string {
+  return locale === "zh-CN" ? zh : en
+}
 // FeatureShell renders non-console pages with the same sidebar and inset structure as the console.
 // FeatureShell 使用与控制台一致的侧栏和内容框结构渲染非控制台页面。
 function FeatureShell(props: {
@@ -169,13 +172,14 @@ function FeatureShell(props: {
       <Button
         disabled={skillHeaderBusyAction !== null}
         onClick={() => void runSkillHeaderAction("lua-refresh", props.luaSkillActions.onRefreshLuaSkills)}
+        size="sm"
         type="button"
         variant="secondary"
       >
         <RefreshCw className={skillHeaderBusyAction === "lua-refresh" ? "spin" : undefined} size={15} />
         <span>{skillHeaderBusyAction === "lua-refresh" ? t("skills.action.refreshing") : t("skills.action.refresh")}</span>
       </Button>
-      <Button onClick={() => setLuaInstallDialogOpen(true)} type="button">
+      <Button onClick={() => setLuaInstallDialogOpen(true)} size="sm" type="button">
         <PackagePlus size={15} />
         <span>{t("skills.action.installLua")}</span>
       </Button>
@@ -288,11 +292,15 @@ function FeatureShell(props: {
           />
           {pageDescriptor.content}
         </div>
-        <LuaSkillInstallDialog
-      actions={props.luaSkillActions}
-          open={luaInstallDialogOpen}
-          onOpenChange={setLuaInstallDialogOpen}
-        />
+        {luaInstallDialogOpen ? (
+          <React.Suspense fallback={null}>
+            <LazyLuaSkillInstallDialog
+              actions={props.luaSkillActions}
+              open={luaInstallDialogOpen}
+              onOpenChange={setLuaInstallDialogOpen}
+            />
+          </React.Suspense>
+        ) : null}
       </SidebarInset>
     </SidebarProvider>
   )

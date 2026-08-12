@@ -319,6 +319,7 @@
 }
 
 .workspace {
+  --workspace-header-height: 46px;
   position: relative;
   grid-column: 1;
   grid-row: 1;

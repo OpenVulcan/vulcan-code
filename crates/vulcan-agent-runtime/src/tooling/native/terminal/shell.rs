@@ -49,11 +49,7 @@ pub(crate) fn terminal_session_pty_newline(shell_label: &str) -> &'static str {
 /// Returns the default backend used by terminal_session on the current host.
 /// 返回当前宿主上 terminal_session 使用的默认后端。
 pub(crate) fn default_terminal_session_backend() -> CommandSessionBackend {
-    if cfg!(windows) {
-        CommandSessionBackend::WindowsConsole
-    } else {
-        CommandSessionBackend::Pty
-    }
+    CommandSessionBackend::Pty
 }
 
 #[cfg(test)]

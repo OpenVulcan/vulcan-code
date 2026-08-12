@@ -3,6 +3,43 @@
 
 use super::*;
 
+/// Maximum retained output fragments returned by one visible display attachment.
+/// 单个可见显示层挂接时返回的最大保留输出分片数。
+const COMMAND_SESSION_DISPLAY_BOOTSTRAP_MAX_CHUNKS: usize = 4096;
+
+/// Maximum changed output fragments carried by one pushed display event.
+/// 单个主动推送显示事件承载的最大变化输出分片数。
+const COMMAND_SESSION_DISPLAY_EVENT_MAX_CHUNKS: usize = 512;
+
+/// Stores ownership and cancellation for one visible command-session display.
+/// 保存一个可见命令会话显示层的所有权与取消句柄。
+struct CommandSessionDisplaySubscription {
+    /// Browser or WebView lifetime that owns this display.
+    /// 持有该显示层的浏览器或 WebView 生命周期。
+    client_id: Uuid,
+    /// Cancels runtime-to-WebUI content delivery.
+    /// 取消运行时到 WebUI 的内容交付。
+    cancel: tokio::sync::oneshot::Sender<()>,
+}
+
+/// Stores subscriptions only for currently visible command-session displays.
+/// 仅保存当前可见命令会话显示层的订阅。
+static COMMAND_SESSION_DISPLAY_SUBSCRIPTIONS: std::sync::OnceLock<
+    std::sync::Mutex<std::collections::HashMap<String, CommandSessionDisplaySubscription>>,
+> = std::sync::OnceLock::new();
+
+/// Returns the process-local visible command-session display subscription registry.
+/// 返回进程内可见命令会话显示订阅注册表。
+///
+/// # Returns / 返回值
+/// Returns the lazily initialized subscription registry.
+/// 返回延迟初始化的订阅注册表。
+fn command_session_display_subscriptions()
+-> &'static std::sync::Mutex<std::collections::HashMap<String, CommandSessionDisplaySubscription>> {
+    COMMAND_SESSION_DISPLAY_SUBSCRIPTIONS
+        .get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
 /// Runtime and identity context shared by command-session mutating actions.
 /// 命令会话变更类动作共享的运行时与身份上下文。
 struct CommandSessionActionContext {
@@ -132,6 +169,250 @@ pub(super) fn resolve_service_command_session_ids(
             })?,
     };
     Ok((command_session_id, owner_session_id))
+}
+
+/// Attaches one visible read-only command-session terminal display.
+/// 挂接一个可见的只读命令会话终端显示层。
+///
+/// The first response contains a bounded retained tail. Subsequent changes are pushed by runtime
+/// notification and stop immediately after explicit detach or terminal completion.
+/// 首次响应包含有界的保留输出尾部；后续变化由运行时通知主动推送，并在显式解除挂接或终端完成后立即停止。
+///
+/// # Parameters / 参数
+/// - `app`: Service event emitter used for changed terminal output.
+/// - `state`: Shared service runtime state.
+/// - `command_session_id`: Raw command-session identity.
+/// - `owner_session_id`: Optional owner identity used for strict validation.
+/// - `display_client_id`: Browser/WebView lifetime shared with the event socket.
+/// - `app`：用于发送终端变化输出的服务事件发送器。
+/// - `state`：共享服务运行时状态。
+/// - `command_session_id`：原始命令会话标识。
+/// - `owner_session_id`：用于严格校验的可选归属标识。
+/// - `display_client_id`：与事件套接字共享的浏览器或 WebView 生命周期。
+///
+/// # Returns / 返回值
+/// Returns the opaque subscription id, current summary, and one-time retained output tail.
+/// 返回不透明订阅标识、当前摘要以及一次性的保留输出尾部。
+pub(super) async fn service_attach_command_session_display(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    command_session_id: String,
+    owner_session_id: Option<String>,
+    display_client_id: String,
+) -> Result<CommandSessionDisplayAttachment, String> {
+    let display_client_id = display_client_id.parse::<Uuid>().map_err(|error| {
+        format!("Invalid command-session display client id `{display_client_id}`: {error}")
+    })?;
+    let (_, agent_runtime, _, _, _) = runtime_parts_from_state(&state)?;
+    let (command_session_id, owner_session_id) =
+        resolve_service_command_session_ids(&agent_runtime, command_session_id, owner_session_id)?;
+    let subscription_id = Uuid::new_v4().to_string();
+    let (cancel_sender, mut cancel_receiver) = tokio::sync::oneshot::channel();
+    command_session_display_subscriptions()
+        .lock()
+        .map_err(|_| String::from("Command-session display subscription registry is poisoned."))?
+        .insert(
+            subscription_id.clone(),
+            CommandSessionDisplaySubscription {
+                client_id: display_client_id,
+                cancel: cancel_sender,
+            },
+        );
+
+    let initial = match agent_runtime
+        .command_session_runtime
+        .read_recent_session_for_display(
+            owner_session_id,
+            command_session_id,
+            COMMAND_SESSION_DISPLAY_BOOTSTRAP_MAX_CHUNKS,
+        )
+        .await
+    {
+        Ok(initial) => initial,
+        Err(error) => {
+            let _ = service_detach_command_session_display(subscription_id.clone());
+            return Err(error);
+        }
+    };
+
+    let initial_terminal = command_session_summary_from_snapshot(initial.snapshot.clone());
+    let initial_chunks = terminal_display_chunks(initial.returned_chunks);
+    let runtime = Arc::clone(&agent_runtime.command_session_runtime);
+    let task_subscription_id = subscription_id.clone();
+    let task_display_client_id = display_client_id.to_string();
+    tokio::spawn(async move {
+        let mut display_cursor =
+            vulcan_host_tools::command_session_runtime::CommandSessionDisplayCursor {
+                after_seq: initial.snapshot.last_seq,
+                running_was_observed: initial.snapshot.status
+                    == vulcan_host_tools::command_session_runtime::CommandSessionStatus::Running,
+                screen_frame_seq: initial.snapshot.screen_frame_seq,
+                failure_reason: initial.snapshot.failure_reason.clone(),
+            };
+        loop {
+            let change = tokio::select! {
+                _ = &mut cancel_receiver => break,
+                change = runtime.wait_for_session_display_change(
+                    owner_session_id,
+                    command_session_id,
+                    &display_cursor,
+                    COMMAND_SESSION_DISPLAY_EVENT_MAX_CHUNKS,
+                ) => change,
+            };
+            let outcome = match change {
+                Ok(outcome) => outcome,
+                Err(_) => break,
+            };
+            let last_delivered_seq = outcome
+                .returned_chunks
+                .last()
+                .map(|chunk| chunk.seq)
+                .unwrap_or(display_cursor.after_seq);
+            display_cursor =
+                vulcan_host_tools::command_session_runtime::CommandSessionDisplayCursor {
+                    after_seq: last_delivered_seq,
+                    running_was_observed: outcome.snapshot.status
+                        == vulcan_host_tools::command_session_runtime::CommandSessionStatus::Running,
+                    screen_frame_seq: outcome.snapshot.screen_frame_seq,
+                    failure_reason: outcome.snapshot.failure_reason.clone(),
+                };
+            let emitted = emit_command_session_display_change_if_attached(
+                &app,
+                &task_subscription_id,
+                display_client_id,
+                CommandSessionDisplayChangedEvent {
+                    display_client_id: task_display_client_id.clone(),
+                    subscription_id: task_subscription_id.clone(),
+                    terminal: command_session_summary_from_snapshot(outcome.snapshot),
+                    chunks: terminal_display_chunks(outcome.returned_chunks),
+                },
+            )
+            .unwrap_or(false);
+            if !emitted {
+                break;
+            }
+            if !display_cursor.running_was_observed && !outcome.has_more {
+                break;
+            }
+        }
+        if let Ok(mut subscriptions) = command_session_display_subscriptions().lock() {
+            subscriptions.remove(&task_subscription_id);
+        }
+    });
+
+    Ok(CommandSessionDisplayAttachment {
+        subscription_id,
+        terminal: initial_terminal,
+        chunks: initial_chunks,
+    })
+}
+
+/// Detaches one hidden command-session display and stops all future content delivery.
+/// 解除一个已隐藏命令会话显示层的挂接，并停止后续全部内容交付。
+///
+/// # Parameters / 参数
+/// - `subscription_id`: Opaque id returned by the attach call.
+/// - `subscription_id`：挂接调用返回的不透明标识。
+///
+/// # Returns / 返回值
+/// Returns `true` only when an active visible subscription was cancelled.
+/// 仅在成功取消一个活动可见订阅时返回 `true`。
+pub(super) fn service_detach_command_session_display(
+    subscription_id: String,
+) -> Result<bool, String> {
+    let subscription = command_session_display_subscriptions()
+        .lock()
+        .map_err(|_| String::from("Command-session display subscription registry is poisoned."))?
+        .remove(&subscription_id);
+    let Some(subscription) = subscription else {
+        return Ok(false);
+    };
+    let _ = subscription.cancel.send(());
+    Ok(true)
+}
+
+/// Emits one command-session display change only while its exact subscription is registered.
+/// 仅在精确命令会话显示订阅仍登记时发出一次变化。
+///
+/// The registry lock serializes event emission with detach, which makes detach a strict boundary
+/// after which the service cannot emit more terminal content for that subscription.
+/// 注册表锁将事件发出与解除挂接串行化，使解除挂接成为严格边界；此后服务不能再为该订阅发出终端内容。
+///
+/// # Parameters / 参数
+/// - `app`: Service event emitter for the attached browser.
+/// - `subscription_id`: Exact opaque display subscription identity.
+/// - `display_client_id`: Exact browser/WebView lifetime identity.
+/// - `event`: Fully materialized read-only command-session display change.
+/// - `app`：已挂接浏览器的服务事件发送器。
+/// - `subscription_id`：精确的不透明显示订阅标识。
+/// - `display_client_id`：精确浏览器或 WebView 生命周期标识。
+/// - `event`：已完整构建的只读命令会话显示变化。
+///
+/// # Returns / 返回值
+/// Returns true only when the matching active subscription received the event.
+/// 仅当匹配的活动订阅收到事件时返回 true。
+fn emit_command_session_display_change_if_attached(
+    app: &ServiceEventEmitter,
+    subscription_id: &str,
+    display_client_id: Uuid,
+    event: CommandSessionDisplayChangedEvent,
+) -> Result<bool, String> {
+    let subscriptions = command_session_display_subscriptions()
+        .lock()
+        .map_err(|_| String::from("Command-session display subscription registry is poisoned."))?;
+    let attached = subscriptions
+        .get(subscription_id)
+        .is_some_and(|subscription| subscription.client_id == display_client_id);
+    if !attached {
+        return Ok(false);
+    }
+    app.emit(ServiceEvent::CommandSessionDisplayChanged(Box::new(event)));
+    Ok(true)
+}
+
+/// Cancels every visible AI terminal display owned by one disconnected browser client.
+/// 取消由一个已断开浏览器客户端持有的全部可见 AI 终端显示层。
+///
+/// # Parameters / 参数
+/// - `client_id`: Exact browser/WebView lifetime reported by the event socket.
+/// - `client_id`：事件套接字报告的精确浏览器或 WebView 生命周期。
+pub(crate) fn cancel_command_session_displays_for_client(client_id: Uuid) {
+    let Ok(mut subscriptions) = command_session_display_subscriptions().lock() else {
+        return;
+    };
+    let matching_ids = subscriptions
+        .iter()
+        .filter(|(_, subscription)| subscription.client_id == client_id)
+        .map(|(subscription_id, _)| subscription_id.clone())
+        .collect::<Vec<_>>();
+    for subscription_id in matching_ids {
+        if let Some(subscription) = subscriptions.remove(&subscription_id) {
+            let _ = subscription.cancel.send(());
+        }
+    }
+}
+
+/// Converts runtime output chunks into the stable browser-facing display contract.
+/// 将运行时输出分片转换为稳定的浏览器显示契约。
+///
+/// # Parameters / 参数
+/// - `chunks`: Ordered runtime output fragments.
+/// - `chunks`：有序的运行时输出片段。
+///
+/// # Returns / 返回值
+/// Returns ordered service API display chunks with stable stream labels.
+/// 返回带稳定输出流标签的有序服务 API 显示分片。
+fn terminal_display_chunks(
+    chunks: Vec<vulcan_host_tools::command_session_runtime::CommandSessionOutputChunk>,
+) -> Vec<TerminalDisplayChunk> {
+    chunks
+        .into_iter()
+        .map(|chunk| TerminalDisplayChunk {
+            seq: chunk.seq,
+            stream: chunk.stream.as_str().to_owned(),
+            text: chunk.text,
+        })
+        .collect()
 }
 
 /// Loads runtime handles and resolved ids for one command-session mutating action.

@@ -13,7 +13,9 @@ members = [
     "crates/vulcan-service-runtime",
     "crates/vulcan-change-set",
     "crates/vulcan-host-tools",
-    "crates/vulcan-windows-console-helper",
+    "crates/vulcan-process-lifecycle",
+    "crates/vulcan-terminal-host-protocol",
+    "crates/vulcan-terminal-host",
     "crates/vulcan-provider-config",
     "crates/vulcan-runtime-assets",
     "crates/vulcan-workbench-model",
@@ -50,6 +52,7 @@ license = "MIT"
 version = "0.1.0"
 
 [workspace.dependencies]
+vt100 = "0.16.2"
 vulcan-agent-runtime = { path = "crates/vulcan-agent-runtime" }
 vulcan-subagent-core = { path = "crates/vulcan-subagent-core" }
 vulcan-session-core = { path = "crates/vulcan-session-core" }
@@ -62,6 +65,7 @@ vulcan-tools-manager = { path = "crates/vulcan-tools-manager" }
 vulcan-core = { path = "crates/vulcan-core" }
 vulcan-change-set = { path = "crates/vulcan-change-set" }
 vulcan-host-tools = { path = "crates/vulcan-host-tools" }
+vulcan-terminal-host-protocol = { path = "crates/vulcan-terminal-host-protocol" }
 vulcan-workbench-model = { path = "crates/vulcan-workbench-model" }
 vulcan-workspace-store = { path = "crates/vulcan-workspace-store" }
 vulcan-runtime-assets = { path = "crates/vulcan-runtime-assets" }

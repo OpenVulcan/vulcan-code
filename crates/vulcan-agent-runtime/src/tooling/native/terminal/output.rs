@@ -173,28 +173,19 @@ pub(crate) fn terminal_controls_hint_line(output_mode: &str) -> Option<&'static 
 /// 构建后端特定的终端输入能力元数据。
 pub(crate) fn terminal_input_capabilities(snapshot: &CommandSessionSnapshot) -> Value {
     match snapshot.backend {
-        CommandSessionBackend::WindowsConsole => json!({
-            "text": true,
-            "paste": true,
-            "key": true,
-            "chord": true,
-            "native_console_events": true,
-            "common_keys": ["Enter", "Tab", "Esc", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Delete", "F1"],
-        }),
         CommandSessionBackend::Pty => json!({
             "text": true,
             "paste": true,
             "key": true,
             "chord": true,
-            "native_console_events": false,
-            "common_keys": ["Enter", "Tab", "Esc", "ArrowUp", "ArrowDown"],
+            "encoding": "ansi_vt",
+            "common_keys": ["Enter", "Tab", "Esc", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Delete", "F1"],
         }),
         CommandSessionBackend::Pipe => json!({
             "text": true,
             "paste": true,
             "key": false,
             "chord": false,
-            "native_console_events": false,
         }),
     }
 }

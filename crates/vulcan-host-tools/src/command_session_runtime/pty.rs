@@ -1,65 +1,22 @@
 use super::*;
+use crate::terminal_host_client::{TerminalHostConnection, wait_for_terminal_host_stop_deadline};
+use crate::terminal_host_protocol::{
+    TerminalHostErrorEvent, TerminalHostExitedEvent, TerminalHostFrameKind,
+    decode_terminal_host_json, validate_terminal_host_sequence,
+};
 
-pub(super) async fn write_pty_command_session_stdin(
-    writer: Arc<StdMutex<Box<dyn Write + Send>>>,
-    bytes: Vec<u8>,
-) -> Result<usize, String> {
-    let byte_count = bytes.len();
-    let write_task = tokio::task::spawn_blocking(move || {
-        let mut writer = writer
-            .lock()
-            .map_err(|_| String::from("The PTY stdin writer lock is poisoned."))?;
-        writer
-            .write_all(&bytes)
-            .map_err(|error| format!("Failed to write PTY stdin: {error}"))?;
-        writer
-            .flush()
-            .map_err(|error| format!("Failed to flush PTY stdin: {error}"))?;
-        Ok::<usize, String>(byte_count)
-    });
-    timeout(
-        Duration::from_millis(COMMAND_SESSION_STDIN_WRITE_TIMEOUT_MS),
-        write_task,
-    )
-    .await
-    .map_err(|_| {
-        format!("Timed out writing PTY stdin after {COMMAND_SESSION_STDIN_WRITE_TIMEOUT_MS}ms.")
-    })?
-    .map_err(|error| format!("The PTY stdin writer task failed: {error}"))?
-}
-
-/// Requests PTY child termination through a cloned child killer.
-/// 通过克隆出的子进程终止器请求 PTY 子进程停止。
-pub(super) async fn request_pty_command_session_child_stop(
-    killer: Arc<StdMutex<Box<dyn portable_pty::ChildKiller + Send + Sync>>>,
-) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || {
-        let mut killer = killer
-            .lock()
-            .map_err(|_| String::from("The PTY child killer lock is poisoned."))?;
-        killer
-            .kill()
-            .map_err(|error| format!("Failed to stop the PTY command-session process: {error}"))
-    })
-    .await
-    .map_err(|error| format!("The PTY child killer task failed: {error}"))?
-}
-
-/// Rolling renderable screen frame synthesized from PTY output bytes.
-/// 从 PTY 输出字节综合出的滚动可渲染屏幕帧。
+/// Headless VT screen checkpoint synthesized from decoded PTY output.
+/// 从解码后的 PTY 输出综合生成的无界面 VT 屏幕检查点。
 pub(super) struct PtyScreenFrameState {
-    /// Screen rows retained for WebUI frame display.
-    /// WebUI 帧显示保留的屏幕行数。
+    /// Complete terminal parser used to preserve cursor, style, and alternate-screen state.
+    /// 用于保留光标、样式与备用屏幕状态的完整终端解析器。
+    parser: vt100::Parser,
+    /// Current screen rows exposed through the snapshot contract.
+    /// 通过快照合同暴露的当前屏幕行数。
     rows: u16,
-    /// Screen columns reported for WebUI frame display.
-    /// WebUI 帧显示报告的屏幕列数。
+    /// Current screen columns exposed through the snapshot contract.
+    /// 通过快照合同暴露的当前屏幕列数。
     cols: u16,
-    /// Completed visible lines retained in the rolling frame.
-    /// 滚动帧中保留的已完成可见行。
-    lines: Vec<String>,
-    /// Current mutable line that has not ended with a newline.
-    /// 尚未以换行结束的当前可变行。
-    current_line: String,
     /// Monotonic frame sequence emitted when visible text changes.
     /// 可见文本变化时递增的帧序号。
     frame_seq: u64,
@@ -69,57 +26,49 @@ pub(super) struct PtyScreenFrameState {
 }
 
 impl PtyScreenFrameState {
-    /// Creates one default rolling PTY screen frame state.
-    /// 创建一份默认滚动 PTY 屏幕帧状态。
+    /// Creates one rolling legacy screen-frame state.
+    /// 创建一份滚动的旧版屏幕帧状态。
+    ///
+    /// # Parameters / 参数
+    /// - `rows`: Maximum retained screen rows.
+    /// - `cols`: Reported screen columns.
+    /// - `rows`：最大保留屏幕行数。
+    /// - `cols`：报告的屏幕列数。
+    ///
+    /// # Returns / 返回值
+    /// Returns an empty frame state with sequence zero.
+    /// 返回序号为零的空帧状态。
     pub(super) fn new(rows: u16, cols: u16) -> Self {
         Self {
+            parser: vt100::Parser::new(rows, cols, 0),
             rows,
             cols,
-            lines: Vec::new(),
-            current_line: String::new(),
             frame_seq: 0,
             last_frame_text: String::new(),
         }
     }
 
-    /// Pushes one decoded PTY output fragment and returns a new frame when visible text changed.
-    /// 推入一段已解码 PTY 输出，并在可见文本变化时返回新帧。
+    /// Pushes one decoded output fragment and returns a changed legacy screen frame.
+    /// 推入一个已解码输出片段，并在变化时返回旧版屏幕帧。
+    ///
+    /// # Parameters / 参数
+    /// - `text`: Decoded terminal output fragment.
+    /// - `text`：已解码的终端输出片段。
+    ///
+    /// # Returns / 返回值
+    /// Returns frame sequence, dimensions, and text only when visible content changed.
+    /// 仅在可见内容变化时返回帧序号、尺寸和文本。
     pub(super) fn push_output(&mut self, text: &str) -> Option<(u64, u16, u16, String)> {
         if text.is_empty() {
             return None;
         }
-        let mut chars = text.chars().peekable();
-        while let Some(ch) = chars.next() {
-            match ch {
-                '\x1b' => {
-                    self.current_line.push(ch);
-                    if chars.peek() == Some(&'[') {
-                        self.current_line.push(chars.next().unwrap_or('['));
-                        for next in chars.by_ref() {
-                            self.current_line.push(next);
-                            if next.is_ascii_alphabetic() || matches!(next, '~' | '@') {
-                                break;
-                            }
-                        }
-                    }
-                }
-                '\r' => {
-                    self.current_line.clear();
-                }
-                '\n' => {
-                    self.finish_current_line();
-                }
-                '\t' => {
-                    self.current_line.push_str("    ");
-                }
-                ch if ch.is_control() => {}
-                ch => {
-                    self.current_line.push(ch);
-                }
-            }
+        self.parser.process(text.as_bytes());
+        if self.parser.screen().contents().trim().is_empty() {
+            return None;
         }
-        let frame_text = self.frame_text();
-        if frame_text.trim().is_empty() || frame_text == self.last_frame_text {
+        let frame_text =
+            String::from_utf8_lossy(&self.parser.screen().state_formatted()).into_owned();
+        if frame_text == self.last_frame_text {
             return None;
         }
         self.frame_seq = self.frame_seq.saturating_add(1);
@@ -127,31 +76,36 @@ impl PtyScreenFrameState {
         Some((self.frame_seq, self.rows, self.cols, frame_text))
     }
 
-    /// Moves the current line into the retained line buffer.
-    /// 将当前行移动到保留行缓冲区。
-    pub(super) fn finish_current_line(&mut self) {
-        self.lines.push(std::mem::take(&mut self.current_line));
-        let max_lines = self.rows.saturating_sub(1).max(1) as usize;
-        if self.lines.len() > max_lines {
-            let remove_count = self.lines.len() - max_lines;
-            self.lines.drain(0..remove_count);
-        }
-    }
-
-    /// Builds the current renderable frame text.
-    /// 构建当前可渲染帧文本。
-    pub(super) fn frame_text(&self) -> String {
-        let mut lines = self.lines.clone();
-        if !self.current_line.is_empty() {
-            lines.push(self.current_line.clone());
-        }
-        lines.join("\n")
+    /// Resizes the headless VT checkpoint after the isolated PTY accepts a new grid.
+    /// 隔离 PTY 接受新字符网格后调整无界面 VT 检查点尺寸。
+    ///
+    /// # Parameters / 参数
+    /// - `rows`: Accepted positive terminal row count.
+    /// - `cols`: Accepted positive terminal column count.
+    /// - `rows`：已接受的大于零终端行数。
+    /// - `cols`：已接受的大于零终端列数。
+    fn resize(&mut self, rows: u16, cols: u16) {
+        self.parser.screen_mut().set_size(rows, cols);
+        self.rows = rows;
+        self.cols = cols;
     }
 }
 
-/// Appends PTY output to the chunk buffer and mirrors it into the live WebUI screen frame.
-/// 将 PTY 输出追加到分片缓冲区，并镜像到 WebUI 实时屏幕帧。
-pub(super) fn append_pty_output_and_update_screen(
+/// Appends decoded PTY output and mirrors it into the legacy screen snapshot.
+/// 追加解码后的 PTY 输出，并将其镜像到旧版屏幕快照。
+///
+/// The raw decoded chunk remains the authoritative AI output stream. The formatted VT checkpoint
+/// initializes visible read-only xterm views without changing the AI cursor contract.
+/// 原始解码分片仍是 AI 输出流的权威来源；格式化 VT 检查点用于初始化可见只读 xterm，且不改变 AI 游标合同。
+///
+/// # Parameters / 参数
+/// - `shared_state`: Session state receiving output and frame updates.
+/// - `screen_state`: Rolling legacy screen-frame accumulator.
+/// - `text`: Decoded output fragment.
+/// - `shared_state`：接收输出与帧更新的会话状态。
+/// - `screen_state`：滚动的旧版屏幕帧累加器。
+/// - `text`：已解码输出片段。
+async fn append_pty_output_and_update_screen(
     shared_state: &Arc<CommandSessionSharedState>,
     screen_state: &mut PtyScreenFrameState,
     text: String,
@@ -159,140 +113,107 @@ pub(super) fn append_pty_output_and_update_screen(
     if text.is_empty() {
         return;
     }
-    shared_state.append_output_chunk_blocking(CommandSessionOutputStream::Stdout, text.clone());
-    if let Some((seq, rows, cols, frame_text)) = screen_state.push_output(&text) {
-        shared_state.update_screen_frame_blocking(seq, rows, cols, frame_text);
-    }
+    let screen_frame = screen_state.push_output(&text);
+    shared_state
+        .append_output_chunk_with_screen_frame(
+            CommandSessionOutputStream::Stdout,
+            text,
+            screen_frame,
+        )
+        .await;
 }
 
-/// Pumps one PTY reader stream into the shared command-session output buffer.
-/// 将一条 PTY 读取流持续泵入共享命令会话输出缓冲区。
-pub(super) fn pump_pty_command_session_output(
-    mut reader: Box<dyn Read + Send>,
-    writer: Arc<StdMutex<Box<dyn Write + Send>>>,
-    shared_state: Arc<CommandSessionSharedState>,
-) {
-    let mut output_decoder = ShellOutputStreamDecoder::new();
-    let mut screen_state =
-        PtyScreenFrameState::new(DEFAULT_PTY_SCREEN_ROWS, DEFAULT_PTY_SCREEN_COLS);
-    let mut buffer = vec![0_u8; 4096];
-    loop {
-        match reader.read(&mut buffer) {
-            Ok(0) => {
-                let flushed_text = output_decoder.finish();
-                let flushed_text = answer_pty_terminal_status_queries(flushed_text, &writer);
-                append_pty_output_and_update_screen(&shared_state, &mut screen_state, flushed_text);
-                break;
-            }
-            Ok(read_bytes) => {
-                let text = output_decoder.push_bytes(&buffer[..read_bytes]);
-                let text = answer_pty_terminal_status_queries(text, &writer);
-                append_pty_output_and_update_screen(&shared_state, &mut screen_state, text);
-            }
-            Err(error) => {
-                let flushed_text = output_decoder.finish();
-                let flushed_text = answer_pty_terminal_status_queries(flushed_text, &writer);
-                append_pty_output_and_update_screen(&shared_state, &mut screen_state, flushed_text);
-                shared_state.append_output_chunk_blocking(
-                    CommandSessionOutputStream::Stderr,
-                    format!("[host] Failed to read PTY command session: {error}\n"),
-                );
-                break;
-            }
-        }
-    }
-}
-
-/// Answers minimal ANSI terminal status queries required by ConPTY-hosted console programs.
-/// 应答 ConPTY 承载的控制台程序所需的最小 ANSI 终端状态查询。
-pub(super) fn answer_pty_terminal_status_queries(
-    text: String,
-    writer: &Arc<StdMutex<Box<dyn Write + Send>>>,
-) -> String {
-    if !text.contains("\x1b[6n") {
-        return text;
-    }
-    if let Ok(mut writer) = writer.lock() {
-        let _ = writer.write_all(b"\x1b[1;1R");
-        let _ = writer.flush();
-    }
-    text.replace("\x1b[6n", "")
-}
-
+/// Contains all ownership transferred to one command-session terminal-host supervisor.
+/// 包含移交给一个命令会话终端宿主监控器的全部所有权。
 pub(super) struct PtyCommandSessionSupervisorInput {
     /// Runtime record that owns status, output buffers, and control metadata.
     /// 持有状态、输出缓冲与控制元数据的运行时记录。
     pub record: Arc<CommandSessionRecord>,
-    /// Master PTY handle kept alive for the lifetime of the session.
-    /// 在会话生命周期内保持存活的主 PTY 句柄。
-    pub master: Box<dyn portable_pty::MasterPty + Send>,
-    /// Spawned PTY child process owned by the supervisor.
-    /// 由监管器持有的已启动 PTY 子进程。
-    pub child: Box<dyn portable_pty::Child + Send + Sync>,
-    /// Blocking PTY reader consumed by the output pump thread.
-    /// 由输出泵线程消费的阻塞式 PTY 读取器。
-    pub reader: Box<dyn Read + Send>,
-    /// Blocking PTY writer shared with stdin control calls.
-    /// 与标准输入控制调用共享的阻塞式 PTY 写入器。
-    pub writer: Box<dyn Write + Send>,
-    /// Control channel used by runtime API calls to write or stop the session.
-    /// 运行时 API 写入或停止会话时使用的控制通道。
-    pub control_receiver: UnboundedReceiver<CommandSessionControlMessage>,
+    /// Isolated terminal-host process and its framed protocol pipes.
+    /// 隔离的终端宿主进程及其分帧协议管道。
+    pub connection: TerminalHostConnection,
+    /// Receives runtime write, resize, and stop operations.
+    /// 接收运行时写入、调整尺寸与停止操作。
+    pub control_receiver: Receiver<CommandSessionControlMessage>,
     /// Optional initial stdin payload submitted immediately after start.
     /// 启动后立即提交的可选初始标准输入内容。
     pub initial_stdin: Option<String>,
-    /// Whether the supervisor appends the interactive newline to initial stdin.
-    /// 监管器是否为初始标准输入追加交互式换行。
+    /// Indicates whether the interactive newline is appended to initial stdin.
+    /// 指示是否为初始标准输入追加交互换行。
     pub initial_stdin_append_newline: bool,
 }
 
-/// Runs the background PTY supervisor that owns the child process lifecycle and stdin control channel.
-/// 运行后台 PTY 监管器，持有子进程生命周期与标准输入控制通道。
+/// Runs the supervisor that bridges one session record to one isolated terminal host.
+/// 运行将一个会话记录连接到一个隔离终端宿主的监控器。
+///
+/// # Parameters / 参数
+/// - `input`: Complete terminal-host and session ownership bundle.
+/// - `input`：完整的终端宿主与会话所有权集合。
 pub(super) async fn run_pty_command_session_supervisor(input: PtyCommandSessionSupervisorInput) {
     let PtyCommandSessionSupervisorInput {
         record,
-        master: _master,
-        mut child,
-        reader,
-        writer,
+        connection,
         mut control_receiver,
         initial_stdin,
         initial_stdin_append_newline,
     } = input;
-    let writer = Arc::new(StdMutex::new(writer));
-    let killer = Arc::new(StdMutex::new(child.clone_killer()));
-    let reader_state = Arc::clone(&record.shared_state);
-    let reader_writer = Arc::clone(&writer);
-    std::thread::spawn(move || {
-        pump_pty_command_session_output(reader, reader_writer, reader_state)
-    });
+    let TerminalHostConnection {
+        mut child,
+        mut request_writer,
+        mut event_receiver,
+        mut stderr,
+        terminal_process_id: _,
+    } = connection;
 
-    let mut wait_task = tokio::task::spawn_blocking(move || {
-        let wait_result = child.wait();
-        match wait_result {
-            Ok(status) => (Some(status.exit_code() as i32), None, status.success()),
-            Err(error) => (
-                None,
-                Some(format!(
-                    "Failed to wait for the PTY command session to exit: {error}"
-                )),
-                false,
-            ),
+    let stderr_state = Arc::clone(&record.shared_state);
+    let stderr_task = tokio::spawn(async move {
+        let mut buffer = vec![0_u8; 4096];
+        loop {
+            match stderr.read(&mut buffer).await {
+                Ok(0) => break,
+                Ok(bytes_read) => {
+                    let diagnostic = String::from_utf8_lossy(&buffer[..bytes_read]);
+                    stderr_state
+                        .append_output_chunk(
+                            CommandSessionOutputStream::Stderr,
+                            format!("[terminal-host] {diagnostic}"),
+                        )
+                        .await;
+                }
+                Err(error) => {
+                    stderr_state
+                        .append_output_chunk(
+                            CommandSessionOutputStream::Stderr,
+                            format!("[terminal-host] Failed to read diagnostics: {error}\n"),
+                        )
+                        .await;
+                    break;
+                }
+            }
         }
     });
-
+    let mut wait_task = tokio::spawn(async move { child.wait().await });
+    let mut output_decoder = ShellOutputStreamDecoder::new();
+    let mut screen_state =
+        PtyScreenFrameState::new(DEFAULT_PTY_SCREEN_ROWS, DEFAULT_PTY_SCREEN_COLS);
+    let mut stdout_open = true;
+    let mut terminal_exit: Option<TerminalHostExitedEvent> = None;
+    let mut last_host_event_sequence = 1_u64;
     let mut stop_requested = false;
+    let mut stop_requested_at: Option<Instant> = None;
+    // host_wait_result retains host completion until every framed stdout event has been drained.
+    // host_wait_result 保留宿主完成结果，直到所有 stdout 分帧事件均已排空。
+    let mut host_wait_result: Option<std::io::Result<std::process::ExitStatus>> = None;
+
     if let Some(initial_stdin) = initial_stdin {
         let initial_stdin = if initial_stdin_append_newline {
             format!("{initial_stdin}{}", record.interactive_newline.as_str())
         } else {
             initial_stdin
         };
-        match write_pty_command_session_stdin(
-            Arc::clone(&writer),
-            initial_stdin.clone().into_bytes(),
-        )
-        .await
+        match request_writer
+            .write_input(initial_stdin.clone().into_bytes())
+            .await
         {
             Ok(_) => {
                 record
@@ -302,7 +223,8 @@ pub(super) async fn run_pty_command_session_supervisor(input: PtyCommandSessionS
             }
             Err(error) => {
                 record.shared_state.remember_failure_reason(error).await;
-                let _ = request_pty_command_session_child_stop(Arc::clone(&killer)).await;
+                stop_requested_at.get_or_insert_with(Instant::now);
+                let _ = request_writer.stop().await;
                 record.shared_state.mark_stop_requested().await;
                 stop_requested = true;
             }
@@ -310,47 +232,151 @@ pub(super) async fn run_pty_command_session_supervisor(input: PtyCommandSessionS
     }
 
     let (exit_code, wait_error, process_succeeded) = loop {
-        tokio::select! {
-            wait_result = &mut wait_task => {
-                match wait_result {
-                    Ok(result) => break result,
-                    Err(error) => {
+        if !stdout_open && let Some(wait_result) = host_wait_result.take() {
+            let flushed_text = output_decoder.finish();
+            append_pty_output_and_update_screen(
+                &record.shared_state,
+                &mut screen_state,
+                flushed_text,
+            )
+            .await;
+            match wait_result {
+                Ok(status) => {
+                    if let Some(exit) = terminal_exit {
                         break (
+                            exit.exit_code.map(|code| code as i32),
                             None,
-                            Some(format!("The PTY command-session wait task failed: {error}")),
-                            false,
+                            exit.exit_code == Some(0),
                         );
                     }
+                    break (
+                        status.code(),
+                        Some(String::from(
+                            "The terminal host exited without reporting the terminal child exit state.",
+                        )),
+                        false,
+                    );
                 }
+                Err(error) => {
+                    break (
+                        None,
+                        Some(format!(
+                            "Failed to wait for the terminal host process: {error}"
+                        )),
+                        false,
+                    );
+                }
+            }
+        }
+        tokio::select! {
+            frame_result = event_receiver.recv(), if stdout_open => {
+                match frame_result {
+                    Some(Ok(frame)) => if let Err(error) = validate_terminal_host_sequence(
+                        &mut last_host_event_sequence,
+                        frame.sequence,
+                    ) {
+                        stdout_open = false;
+                        record.shared_state.remember_failure_reason(format!(
+                            "Terminal-host event sequence validation failed: {error}"
+                        )).await;
+                        wait_task.abort();
+                        let _ = (&mut wait_task).await;
+                        host_wait_result = Some(Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            format!("Terminal-host event sequence validation failed: {error}"),
+                        )));
+                        stop_requested = true;
+                    } else {
+                        match frame.kind {
+                        TerminalHostFrameKind::OutputBytes => {
+                            let text = output_decoder.push_bytes(&frame.payload);
+                            append_pty_output_and_update_screen(
+                                &record.shared_state,
+                                &mut screen_state,
+                                text,
+                            )
+                            .await;
+                        }
+                        TerminalHostFrameKind::Exited => {
+                            match decode_terminal_host_json::<TerminalHostExitedEvent>(&frame.payload) {
+                                Ok(exit) => {
+                                    stop_requested = stop_requested || exit.stopped_by_request;
+                                    terminal_exit = Some(exit);
+                                }
+                                Err(error) => {
+                                    record.shared_state.remember_failure_reason(format!(
+                                        "Failed to decode terminal-host exit event: {error}"
+                                    )).await;
+                                }
+                            }
+                        }
+                        TerminalHostFrameKind::Error => {
+                            match decode_terminal_host_json::<TerminalHostErrorEvent>(&frame.payload) {
+                                Ok(error) => {
+                                    record.shared_state.remember_failure_reason(format!(
+                                        "Terminal host failed [{}]: {}",
+                                        error.code, error.message
+                                    )).await;
+                                }
+                                Err(error) => {
+                                    record.shared_state.remember_failure_reason(format!(
+                                        "Failed to decode terminal-host error event: {error}"
+                                    )).await;
+                                }
+                            }
+                        }
+                        TerminalHostFrameKind::StateChanged => {}
+                        unexpected => {
+                            record.shared_state.remember_failure_reason(format!(
+                                "Terminal host emitted an unexpected event: {unexpected:?}."
+                            )).await;
+                        }
+                        }
+                    },
+                    None => stdout_open = false,
+                    Some(Err(error)) => {
+                        stdout_open = false;
+                        record.shared_state.remember_failure_reason(format!(
+                            "Failed to read terminal-host event: {error}"
+                        )).await;
+                    }
+                }
+            }
+            wait_result = &mut wait_task, if host_wait_result.is_none() => {
+                // The host writes Exited before process termination; defer finalization until pipe EOF drains it.
+                // 宿主会在进程终止前写入 Exited；因此延迟结束，直到管道 EOF 将其排空。
+                host_wait_result = Some(match wait_result {
+                    Ok(result) => result,
+                    Err(error) => Err(std::io::Error::other(format!(
+                        "Terminal-host wait task failed: {error}"
+                    ))),
+                });
             }
             maybe_message = control_receiver.recv() => {
                 match maybe_message {
                     Some(CommandSessionControlMessage::Write { bytes, responder }) => {
-                        let write_result = match write_pty_command_session_stdin(Arc::clone(&writer), bytes.clone()).await {
+                        let write_result = match request_writer.write_input(bytes.clone()).await {
                             Ok(bytes_written) => {
-                                record
-                                    .shared_state
-                                    .set_pending_stdin_line(stdin_payload_bytes_leave_pending_line(&bytes))
-                                    .await;
+                                record.shared_state.set_pending_stdin_line(
+                                    stdin_payload_bytes_leave_pending_line(&bytes)
+                                ).await;
                                 Ok(bytes_written)
                             }
                             Err(error) => Err(error),
                         };
                         let _ = responder.send(write_result);
                     }
-                    Some(CommandSessionControlMessage::InputEvents { responder, .. }) => {
-                        let _ = responder.send(Err(String::from(
-                            "Structured terminal input events are only supported by the Windows native console backend.",
-                        )));
-                    }
-                    Some(CommandSessionControlMessage::Resize { responder, .. }) => {
-                        let _ = responder.send(Err(String::from(
-                            "Terminal resize is not yet supported by the current PTY runtime.",
-                        )));
+                    Some(CommandSessionControlMessage::Resize { rows, cols, responder }) => {
+                        let result = request_writer.resize(cols, rows).await;
+                        if result.is_ok() {
+                            screen_state.resize(rows, cols);
+                        }
+                        let _ = responder.send(result);
                     }
                     Some(CommandSessionControlMessage::Stop { responder }) => {
                         stop_requested = true;
-                        let stop_result = request_pty_command_session_child_stop(Arc::clone(&killer)).await;
+                        stop_requested_at.get_or_insert_with(Instant::now);
+                        let stop_result = request_writer.stop().await;
                         if stop_result.is_ok() {
                             record.shared_state.mark_stop_requested().await;
                         }
@@ -358,10 +384,28 @@ pub(super) async fn run_pty_command_session_supervisor(input: PtyCommandSessionS
                     }
                     None => {
                         stop_requested = true;
-                        let _ = request_pty_command_session_child_stop(Arc::clone(&killer)).await;
+                        stop_requested_at.get_or_insert_with(Instant::now);
+                        let _ = request_writer.stop().await;
                         record.shared_state.mark_stop_requested().await;
                     }
                 }
+            },
+            _ = wait_for_terminal_host_stop_deadline(
+                stop_requested_at,
+                TERMINAL_HOST_STOP_GRACE,
+            ), if host_wait_result.is_none() => {
+                let message = String::from(
+                    "Terminal host did not exit within the 2-second stop grace period.",
+                );
+                record.shared_state.remember_failure_reason(message.clone()).await;
+                stdout_open = false;
+                wait_task.abort();
+                let _ = (&mut wait_task).await;
+                host_wait_result = Some(Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    message,
+                )));
+                stop_requested = true;
             }
         }
     };
@@ -370,4 +414,5 @@ pub(super) async fn run_pty_command_session_supervisor(input: PtyCommandSessionS
         .shared_state
         .finalize_process_exit(stop_requested, exit_code, wait_error, process_succeeded)
         .await;
+    let _ = stderr_task.await;
 }

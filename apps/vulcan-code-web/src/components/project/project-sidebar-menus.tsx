@@ -15,6 +15,7 @@ import {
   Pin,
   PinOff,
   SquarePen,
+  TerminalSquare,
   Trash2,
 } from "lucide-react";
 
@@ -326,6 +327,10 @@ export function ProjectContextMenu(props: {
         <ContextMenuItem onSelect={() => props.onAction("open-directory", props.project)}>
           <FolderOpen size={15} />
           <span>{t("projectMenu.openDirectory")}</span>
+        </ContextMenuItem>
+        <ContextMenuItem onSelect={() => props.onAction("open-terminal", props.project)}>
+          <TerminalSquare size={15} />
+          <span>在终端控制台中打开</span>
         </ContextMenuItem>
         <ContextMenuItem disabled>
           <PanelTopOpen size={15} />

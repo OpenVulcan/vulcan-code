@@ -1,4 +1,3 @@
-import { formatSkillText } from "@/components/features/featureText"
 import { useI18n } from "@/i18n"
 import type { WorkbenchSnapshot } from "@/types"
 import { DynamicPluginMountPanel } from "@/components/plugins/dynamic-plugin-mount-panel"
@@ -8,64 +7,13 @@ import { LuaSkillsSettingsPanel } from "./lua-skills-settings-panel"
 import { VulcanPluginsPanel } from "./vulcan-plugins-panel"
 import {
   findEnabledPluginDetailMount,
-  localizedPluginCapability,
-  localizedPluginMountLabel,
   type SkillActionProps,
-  type SkillHeaderSummary,
   type SkillSubAreaId,
 } from "./skill-area-types"
 
 export { LuaSkillInstallDialog }
 export type { SkillActionProps, SkillHeaderBusyActionId, SkillHeaderSummary, SkillSubAreaId } from "./skill-area-types"
-
-// activeSkillHeaderSummary returns the title and metrics for the current skill sub page.
-// activeSkillHeaderSummary 返回当前技能子页面的标题与统计。
-export function activeSkillHeaderSummary(
-  activeTab: SkillSubAreaId,
-  workbench: WorkbenchSnapshot,
-  locale: string,
-  t: ReturnType<typeof useI18n>["t"],
-): SkillHeaderSummary {
-  if (activeTab === "settings") {
-    return {
-      title: t("skills.navigation.luaSettings"),
-      detail: workbench.luaSkills.notice,
-    }
-  }
-  if (activeTab === "plugins") {
-    // vulcanPlugins excludes ordinary Lua Skill projection rows from the plugin menu page.
-    // vulcanPlugins 从插件菜单页面排除普通 Lua Skill 投影行。
-    const vulcanPlugins = workbench.plugins.filter((plugin) => plugin.managementKind === "vulcanPlugin")
-    return {
-      title: t("skills.navigation.plugins"),
-      detail: formatSkillText(t("skills.header.pluginDetail"), {
-        total: vulcanPlugins.length,
-        enabled: vulcanPlugins.filter((plugin) => plugin.enabled && plugin.available).length,
-      }),
-    }
-  }
-  // pluginSelection resolves a dynamic manifest-owned detail page without plugin-specific branches.
-  // pluginSelection 解析动态清单自有详情页，不包含插件专用分支。
-  const pluginSelection = findEnabledPluginDetailMount(workbench.plugins, activeTab)
-  if (pluginSelection) {
-    return {
-      title: localizedPluginMountLabel(pluginSelection, locale),
-      detail: localizedPluginCapability(pluginSelection.plugin, locale),
-    }
-  }
-  const visibleToolCount = workbench.luaSkills.skills.reduce((count, skill) => count + skill.entryCount, 0)
-  const implicitToolCount = workbench.luaSkills.skills.reduce((count, skill) => (
-    count + skill.tools.filter((tool) => tool.registrationState === "implicit").length
-  ), 0)
-  return {
-    title: t("skills.navigation.list"),
-    detail: formatSkillText(t("skills.header.luaDetail"), {
-      total: workbench.luaSkills.skills.length,
-      visible: visibleToolCount,
-      implicit: implicitToolCount,
-    }),
-  }
-}
+export { activeSkillHeaderSummary } from "./skill-area-header"
 
 // SkillsArea renders the selected skill management page.
 // SkillsArea 渲染当前选中的技能管理页面。

@@ -14,8 +14,8 @@ import {
 } from "lucide-react"
 
 import { formatSkillText } from "@/components/features/featureText"
-import { vmmSectionIcon, type MemorySubAreaId } from "@/components/features/memory/MemoryArea"
-import { type SkillSubAreaId } from "@/components/features/skills/SkillsArea"
+import { vmmSectionIcon } from "@/components/features/memory/vmm-memory-sections"
+import type { SkillSubAreaId } from "@/components/features/skills/skill-area-types"
 import {
   enabledPluginDetailMounts,
   localizedPluginCapability,
@@ -24,7 +24,7 @@ import {
 import {
   settingsSubAreaGroups,
   type SettingsSubAreaGroup,
-} from "@/components/features/settings/SettingsFeatureContent"
+} from "@/components/features/settings/settings-navigation"
 import {
   Sidebar,
   SidebarContent,
@@ -48,6 +48,10 @@ import type {
   SettingsSubAreaId,
   WorkbenchSnapshot,
 } from "@/types"
+
+// MemorySubAreaId identifies one service-projected VMM section.
+// MemorySubAreaId 标识一个由服务投影的 VMM 分区。
+type MemorySubAreaId = string
 
 // FeatureSidebar renders the left navigation for one non-console feature area.
 // FeatureSidebar 渲染单个非控制台功能区的左侧导航。

@@ -318,7 +318,7 @@ where
     let runtime_root =
         vulcan_runtime_assets::resolve_luaskills_runtime_root().ok_or_else(|| {
             String::from(
-                "未找到 LuaSkills 运行时根目录，请先执行 make build 生成 output/lua_runtime。",
+                "未找到 LuaSkills 运行时根目录，请先执行 make sync 生成 output/lua_runtime。",
             )
         })?;
     // runtime_root pins every derived host path to one absolute native directory identity while removing Windows verbatim prefixes before the path reaches LuaSkills.

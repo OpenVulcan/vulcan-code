@@ -352,6 +352,73 @@ async fn shell_command_tool_executes_simple_command() {
     assert_eq!(host_result.payload["status"], "completed");
 }
 
+/// Reads shell-session output through its polling cursor until the expected text arrives.
+/// 通过 shell-session 的轮询游标持续读取输出，直到收到预期文本。
+async fn read_shell_session_until_text(
+    tool: &Arc<NativeToolDefinition>,
+    owner_session_id: Uuid,
+    command_session_id: &str,
+    initial_after_seq: Option<u64>,
+    expected_text: &str,
+) -> (String, u64) {
+    let mut accumulated_output = String::new();
+    let mut after_seq = initial_after_seq;
+    let mut last_payload = serde_json::Value::Null;
+
+    // A read may return a PTY control-only chunk before the command output, so advance the
+    // cursor over every delivered chunk instead of treating the first notification as complete.
+    // 一次读取可能在命令输出前先返回仅含 PTY 控制序列的分片，因此必须逐分片推进游标，不能把首次通知当作输出已完成。
+    for _ in 0..20 {
+        let mut arguments = json!({
+            "action": "read",
+            "command_session_id": command_session_id,
+            "wait_for_output_ms": 250
+        });
+        if let Some(cursor) = after_seq {
+            arguments["after_seq"] = json!(cursor);
+        }
+        let result = tool
+            .invoke(NativeToolExecutionRequest {
+                arguments,
+                session_id: Some(owner_session_id),
+                workspace_root: None,
+                controller_runtime: None,
+                knowledge_access: None,
+                spill_root: None,
+                enabled_prompt_skill_names: Vec::new(),
+                prepared_prompt_skills: Vec::new(),
+                prompt_skill_user_root: None,
+                project_vmm: VmmConfigLayer::default(),
+                session_vmm: VmmConfigLayer::default(),
+            })
+            .await
+            .expect("shell session read should execute");
+        accumulated_output.push_str(
+            result
+                .model_output
+                .as_str()
+                .expect("shell session read should render text"),
+        );
+        let host_result = result
+            .host_result
+            .expect("shell session read should expose host metadata");
+        last_payload = host_result.payload;
+        if let Some(last_seq) = last_payload["last_seq"].as_u64() {
+            after_seq = Some(last_seq);
+        }
+        if accumulated_output.contains(expected_text) {
+            return (
+                accumulated_output,
+                after_seq.expect("matching shell output should expose its last sequence"),
+            );
+        }
+    }
+
+    panic!(
+        "shell session output never contained {expected_text:?}; output was: {accumulated_output}; last payload was: {last_payload}"
+    );
+}
+
 /// The shell-session tool should support a full start-read-write-read-stop round trip and keep the command-session identifier stable across actions.
 /// shell-session 工具应支持完整的 start-read-write-read-stop 往返，并在各动作间保持稳定的命令会话标识。
 #[tokio::test]
@@ -366,7 +433,7 @@ async fn shell_session_tool_round_trips_stdio_and_output_reads() {
             arguments: json!({
                 "action": "start",
                 "command": interactive_shell_session_test_command(),
-                "shell": if cfg!(windows) { "cmd" } else { "auto" }
+                "shell": if cfg!(windows) { "cmd" } else { "sh" }
             }),
             session_id: Some(owner_session_id),
             workspace_root: None,
@@ -386,57 +453,28 @@ async fn shell_session_tool_round_trips_stdio_and_output_reads() {
         .expect("shell session start should expose host metadata");
     assert_eq!(start_host_result.kind, "command_session");
     assert_eq!(start_host_result.payload["action"], "start");
+    assert_eq!(start_host_result.payload["backend"], "pty");
     let command_session_id = start_host_result.payload["command_session_id"]
         .as_str()
         .expect("command session id should exist")
         .to_string();
 
-    let first_read_result = tool
-        .invoke(NativeToolExecutionRequest {
-            arguments: json!({
-                "action": "read",
-                "command_session_id": command_session_id.clone(),
-                "wait_for_output_ms": 300
-            }),
-            session_id: Some(owner_session_id),
-            workspace_root: None,
-            controller_runtime: None,
-            knowledge_access: None,
-            spill_root: None,
-            enabled_prompt_skill_names: Vec::new(),
-            prepared_prompt_skills: Vec::new(),
-            prompt_skill_user_root: None,
-            project_vmm: VmmConfigLayer::default(),
-            session_vmm: VmmConfigLayer::default(),
-        })
-        .await
-        .expect("shell session read should execute");
-    let first_read_output = first_read_result
-        .model_output
-        .as_str()
-        .expect("shell session read should render text");
+    let (first_read_output, first_last_seq) = read_shell_session_until_text(
+        &tool,
+        owner_session_id,
+        &command_session_id,
+        None,
+        "phase-1",
+    )
+    .await;
     assert!(first_read_output.contains("phase-1"));
-    let first_read_host_result = first_read_result
-        .host_result
-        .expect("shell session read should expose host metadata");
-    assert!(
-        first_read_host_result.payload["returned_chunk_count"]
-            .as_u64()
-            .unwrap_or_default()
-            >= 1,
-        "first read payload was: {}",
-        first_read_host_result.payload
-    );
-    let first_last_seq = first_read_host_result.payload["last_seq"]
-        .as_u64()
-        .expect("first read should expose last sequence");
 
     let write_result = tool
         .invoke(NativeToolExecutionRequest {
             arguments: json!({
                 "action": "write",
                 "command_session_id": command_session_id.clone(),
-                "stdin": "hello",
+                "stdin": "echo phase-2",
                 "append_newline": true
             }),
             session_id: Some(owner_session_id),
@@ -457,45 +495,19 @@ async fn shell_session_tool_round_trips_stdio_and_output_reads() {
         .expect("shell session write should expose host metadata");
     assert_eq!(
         write_host_result.payload["bytes_written"],
-        json!(if cfg!(windows) { 7 } else { 6 })
+        json!(if cfg!(windows) { 14 } else { 13 })
     );
 
-    let second_read_result = tool
-        .invoke(NativeToolExecutionRequest {
-            arguments: json!({
-                "action": "read",
-                "command_session_id": command_session_id.clone(),
-                "after_seq": first_last_seq,
-                "wait_for_output_ms": 1_500
-            }),
-            session_id: Some(owner_session_id),
-            workspace_root: None,
-            controller_runtime: None,
-            knowledge_access: None,
-            spill_root: None,
-            enabled_prompt_skill_names: Vec::new(),
-            prepared_prompt_skills: Vec::new(),
-            prompt_skill_user_root: None,
-            project_vmm: VmmConfigLayer::default(),
-            session_vmm: VmmConfigLayer::default(),
-        })
-        .await
-        .expect("shell session second read should execute");
-    let second_read_host_result = second_read_result
-        .host_result
-        .expect("shell session second read should expose host metadata");
-    assert!(
-        second_read_host_result.payload["returned_chunk_count"]
-            .as_u64()
-            .unwrap_or_default()
-            >= 1
-    );
-    assert!(
-        second_read_host_result.payload["last_seq"]
-            .as_u64()
-            .unwrap_or_default()
-            > first_last_seq
-    );
+    let (second_read_output, second_last_seq) = read_shell_session_until_text(
+        &tool,
+        owner_session_id,
+        &command_session_id,
+        Some(first_last_seq),
+        "phase-2",
+    )
+    .await;
+    assert!(second_read_output.contains("phase-2"));
+    assert!(second_last_seq > first_last_seq);
 
     let stop_result = tool
         .invoke(NativeToolExecutionRequest {

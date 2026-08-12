@@ -2,46 +2,31 @@ import React from "react";
 import { Maximize2, Square, TerminalSquare } from "lucide-react";
 import {
   terminalStateClass,
-  type TerminalVisualState,
   type TerminalSessionViewModel,
+  type TerminalVisualState,
 } from "@/components/conversation/conversation-terminal-model";
-import { TerminalOutputView } from "@/components/conversation/conversation-terminal-output";
 import { TerminalStopConfirmDialog } from "@/components/conversation/terminal-stop-confirm-dialog";
-import {
-  getCommandSessionSnapshot,
-  sendCommandSessionInput,
-  type TerminalInputEvent,
-} from "@/service/conversation-actions-service";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+import { ConversationReadOnlyTerminalSurface } from "@/components/conversation/terminal/conversation-read-only-terminal-surface";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { cn } from "@/lib/utils";
 import type { CommandSessionSummary } from "@/types";
 
-// ConversationSessionTerminalSection renders active terminal sessions in the shared floating session tool panel.
-// ConversationSessionTerminalSection 在共享会话浮动工具面板中渲染活跃终端会话。
+// ConversationSessionTerminalSection renders AI-owned terminal sessions in the session tool panel.
+// ConversationSessionTerminalSection 在会话工具面板中渲染 AI 持有的终端会话。
 export function ConversationSessionTerminalSection(props: {
   // Normalized terminal session rows.
-  // 归一化后的终端会话行。
+  // 归一化终端会话行。
   terminalSessions: TerminalSessionViewModel[];
-  // Original summaries keyed by session id for owner metadata.
-  // 按会话标识索引的原始摘要，用于归属元数据。
+  // Original summaries keyed by terminal id.
+  // 按终端标识索引的原始摘要。
   summariesById: Map<string, CommandSessionSummary>;
   // Force-stops one live terminal session.
-  // 强制停止单条实时终端会话。
+  // 强制停止一个实时终端会话。
   onStopCommandSession: (commandSessionId: string, ownerSessionId?: string | null) => Promise<void>;
 }) {
-  // t resolves stable WebUI copy keys for the active language.
-  // t 根据当前语言解析稳定的 WebUI 文案键。
+  // t resolves active-locale interface copy.
+  // t 解析当前语言的界面文案。
   const { t } = useI18n();
   return (
     <section className="conversation-session-tool-section conversation-session-terminal-section">
@@ -65,35 +50,36 @@ export function ConversationSessionTerminalSection(props: {
   );
 }
 
-// ConversationSessionTerminalRow renders one terminal session row with status and force-stop action.
-// ConversationSessionTerminalRow 渲染单条带状态与强制停止动作的终端会话。
+// ConversationSessionTerminalRow renders one AI terminal row and its read-only screen action.
+// ConversationSessionTerminalRow 渲染一个 AI 终端行及其只读屏幕操作。
 function ConversationSessionTerminalRow(props: {
   // Normalized terminal session row.
-  // 归一化后的终端会话行。
+  // 归一化终端会话行。
   session: TerminalSessionViewModel;
-  // Original summary used for owner metadata.
-  // 用于归属元数据的原始摘要。
+  // Original summary carrying owner metadata.
+  // 携带归属元数据的原始摘要。
   summary: CommandSessionSummary | null;
   // Force-stops one live terminal session.
-  // 强制停止单条实时终端会话。
+  // 强制停止一个实时终端会话。
   onStopCommandSession: (commandSessionId: string, ownerSessionId?: string | null) => Promise<void>;
 }) {
-  // t resolves stable WebUI copy keys for the active language.
-  // t 根据当前语言解析稳定的 WebUI 文案键。
+  // t resolves active-locale interface copy.
+  // t 解析当前语言的界面文案。
   const { t } = useI18n();
+  // stopping guards duplicate force-stop requests.
+  // stopping 防止重复强制停止请求。
   const [stopping, setStopping] = React.useState(false);
+  // confirmOpen controls the destructive stop confirmation.
+  // confirmOpen 控制破坏性停止确认。
   const [confirmOpen, setConfirmOpen] = React.useState(false);
+  // screenOpen is the sole display-attachment visibility source.
+  // screenOpen 是显示订阅可见性的唯一来源。
   const [screenOpen, setScreenOpen] = React.useState(false);
   const handleStopRequest = React.useCallback(() => {
-    if (!props.session.canStop || stopping) {
-      return;
-    }
-    setConfirmOpen(true);
+    if (props.session.canStop && !stopping) setConfirmOpen(true);
   }, [props.session.canStop, stopping]);
   const handleConfirmStop = React.useCallback(async () => {
-    if (!props.session.canStop || stopping) {
-      return;
-    }
+    if (!props.session.canStop || stopping) return;
     setStopping(true);
     try {
       await props.onStopCommandSession(props.session.id, props.summary?.ownerSessionId ?? null);
@@ -102,12 +88,6 @@ function ConversationSessionTerminalRow(props: {
       setStopping(false);
     }
   }, [props, stopping]);
-  const handleConfirmOpenChange = React.useCallback((open: boolean) => {
-    if (stopping) {
-      return;
-    }
-    setConfirmOpen(open);
-  }, [stopping]);
   const tooltipText = terminalSessionTooltipText(props.session, props.summary, t);
   const stateLabel = localizedTerminalStateLabel(props.session.state, t);
   return (
@@ -149,9 +129,11 @@ function ConversationSessionTerminalRow(props: {
         sessionName={props.session.name}
         stopping={stopping}
         onConfirm={handleConfirmStop}
-        onOpenChange={handleConfirmOpenChange}
+        onOpenChange={(open) => {
+          if (!stopping) setConfirmOpen(open);
+        }}
       />
-      <TerminalScreenDialog
+      <ConversationReadOnlyTerminalSurface
         open={screenOpen}
         session={props.session}
         summary={props.summary}
@@ -161,207 +143,32 @@ function ConversationSessionTerminalRow(props: {
   );
 }
 
-// TerminalScreenDialog renders the optional floating terminal screen view.
-// TerminalScreenDialog 渲染可选的浮动终端屏幕视图。
-function TerminalScreenDialog(props: {
-  // Whether the floating terminal screen is open.
-  // 浮动终端屏幕是否打开。
-  open: boolean;
-  // Normalized terminal session row.
-  // 归一化后的终端会话行。
-  session: TerminalSessionViewModel;
-  // Original backend summary with raw screen fields.
-  // 带原始屏幕字段的后端摘要。
-  summary: CommandSessionSummary | null;
-  // Updates the floating terminal screen open state.
-  // 更新浮动终端屏幕打开状态。
-  onOpenChange: (open: boolean) => void;
-}) {
-  // t resolves stable WebUI copy keys for the active language.
-  // t 根据当前语言解析稳定的 WebUI 文案键。
-  const { t } = useI18n();
-  const [sending, setSending] = React.useState(false);
-  const [liveSummary, setLiveSummary] = React.useState<CommandSessionSummary | null>(props.summary);
-  React.useEffect(() => {
-    setLiveSummary(props.summary);
-  }, [props.summary]);
-  const refreshLiveSummary = React.useCallback(async () => {
-    const nextSummary = await getCommandSessionSnapshot(props.session.id, liveSummary?.ownerSessionId ?? props.summary?.ownerSessionId ?? null);
-    if (nextSummary) {
-      setLiveSummary(nextSummary);
-    }
-  }, [liveSummary?.ownerSessionId, props.session.id, props.summary?.ownerSessionId]);
-  React.useEffect(() => {
-    if (!props.open) {
-      return;
-    }
-    let cancelled = false;
-    const poll = async () => {
-      try {
-        const nextSummary = await getCommandSessionSnapshot(props.session.id, liveSummary?.ownerSessionId ?? props.summary?.ownerSessionId ?? null);
-        if (!cancelled && nextSummary) {
-          setLiveSummary(nextSummary);
-        }
-      } catch (error) {
-        console.warn("Failed to refresh command session screen snapshot.", error);
-      }
-    };
-    void poll();
-    const intervalId = window.setInterval(() => {
-      void poll();
-    }, 250);
-    return () => {
-      cancelled = true;
-      window.clearInterval(intervalId);
-    };
-  }, [liveSummary?.ownerSessionId, props.open, props.session.id, props.summary?.ownerSessionId]);
-  const screenText = liveSummary?.screenText ?? "";
-  const backend = liveSummary?.backend ?? props.summary?.backend ?? "unknown";
-  const sizeLabel = liveSummary?.screenRows && liveSummary?.screenCols
-    ? `${liveSummary.screenRows}x${liveSummary.screenCols}`
-    : "unknown";
-  const handleKeyDown = React.useCallback(async (event: React.KeyboardEvent<HTMLPreElement>) => {
-    const input = terminalInputEventFromKeyboardEvent(event);
-    if (!input || sending) {
-      return;
-    }
-    event.preventDefault();
-    setSending(true);
-    try {
-      await sendCommandSessionInput(props.session.id, liveSummary?.ownerSessionId ?? props.summary?.ownerSessionId ?? null, [input]);
-      await refreshLiveSummary();
-    } finally {
-      setSending(false);
-    }
-  }, [liveSummary?.ownerSessionId, props.session.id, props.summary?.ownerSessionId, refreshLiveSummary, sending]);
-  return (
-    <Dialog open={props.open} onOpenChange={props.onOpenChange}>
-      <DialogContent className="conversation-session-terminal-screen-dialog">
-        <DialogTitle>{props.session.name}</DialogTitle>
-        <DialogDescription>
-          {backend} · {sizeLabel} · frame {liveSummary?.screenFrameSeq ?? props.summary?.screenFrameSeq ?? 0}
-        </DialogDescription>
-        <TerminalOutputView
-          className="conversation-session-terminal-screen-frame"
-          emptyText={t("terminalSession.emptyScreen")}
-          onKeyDown={handleKeyDown}
-          suppressBlackBackground
-          tabIndex={0}
-          text={screenText}
-        />
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-// terminalInputEventFromKeyboardEvent converts browser keyboard events into terminal input events.
-// terminalInputEventFromKeyboardEvent 将浏览器键盘事件转换为终端输入事件。
-function terminalInputEventFromKeyboardEvent(event: React.KeyboardEvent): TerminalInputEvent | null {
-  const keyName = terminalKeyNameFromBrowserKey(event.key);
-  if (event.ctrlKey || event.altKey || event.metaKey || (event.shiftKey && keyName && event.key !== "Tab")) {
-    if (!keyName && event.key.length !== 1) {
-      return null;
-    }
-    return {
-      kind: "chord",
-      key: keyName ?? event.key,
-      ctrl: event.ctrlKey,
-      alt: event.altKey,
-      shift: event.shiftKey,
-      meta: event.metaKey,
-    };
-  }
-  if (keyName) {
-    return { kind: "key", key: keyName };
-  }
-  if (event.key.length === 1) {
-    return { kind: "text", text: event.key };
-  }
-  return null;
-}
-
-// terminalKeyNameFromBrowserKey maps browser key names to backend key names.
-// terminalKeyNameFromBrowserKey 将浏览器按键名映射为后端按键名。
-function terminalKeyNameFromBrowserKey(key: string): string | null {
-  if (/^F([1-9]|1[0-2])$/.test(key)) {
-    return key;
-  }
-  switch (key) {
-    case "Enter":
-    case "Tab":
-    case "Backspace":
-    case "Delete":
-    case "Home":
-    case "End":
-      return key;
-    case "Escape":
-      return "Esc";
-    case "ArrowUp":
-    case "ArrowDown":
-    case "ArrowLeft":
-    case "ArrowRight":
-      return key;
-    case "PageUp":
-    case "PageDown":
-    case "Insert":
-      return key;
-    default:
-      return null;
-  }
-}
-
-// terminalSessionTooltipText builds a complete hover description for one compact terminal row.
-// terminalSessionTooltipText 为单条紧凑终端行构建完整悬浮说明。
+// terminalSessionTooltipText builds complete hover diagnostics for one compact terminal row.
+// terminalSessionTooltipText 为一个紧凑终端行构建完整悬浮诊断。
 function terminalSessionTooltipText(
-  // Normalized terminal row shown in the panel.
-  // 面板中展示的归一化终端行。
   session: TerminalSessionViewModel,
-  // Original backend summary with raw runtime fields.
-  // 带原始运行时字段的后端摘要。
   summary: CommandSessionSummary | null,
-  // Translates stable UI copy keys.
-  // 翻译稳定 UI 文案键。
   t: (key: TranslationKey) => string,
 ): string {
-  const labelSeparator = t("global.labelSeparator");
-  const stateLabel = localizedTerminalStateLabel(session.state, t);
+  const separator = t("global.labelSeparator");
   const lines = [
-    `${t("terminalSession.tooltip.status")}${labelSeparator}${stateLabel}`,
-    `${t("terminalSession.tooltip.command")}${labelSeparator}${session.command}`,
+    `${t("terminalSession.tooltip.status")}${separator}${localizedTerminalStateLabel(session.state, t)}`,
+    `${t("terminalSession.tooltip.command")}${separator}${session.command}`,
   ];
-  if (summary?.cwd) {
-    lines.push(`${t("terminalSession.tooltip.cwd")}${labelSeparator}${summary.cwd}`);
-  }
-  if (summary?.shellLabel) {
-    lines.push(`${t("terminalSession.tooltip.shell")}${labelSeparator}${summary.shellLabel}`);
-  }
-  if (summary?.backend) {
-    lines.push(`${t("terminalSession.tooltip.backend")}${labelSeparator}${summary.backend}`);
-  }
-  if (summary?.screenFrameSeq) {
-    lines.push(`${t("terminalSession.tooltip.screenFrame")}${labelSeparator}${summary.screenFrameSeq}`);
-  }
-  if (typeof session.exitCode === "number") {
-    lines.push(`${t("terminalSession.tooltip.exitCode")}${labelSeparator}${session.exitCode}`);
-  }
-  if (summary?.failureReason) {
-    lines.push(`${t("terminalSession.tooltip.error")}${labelSeparator}${summary.failureReason}`);
-  }
-  if (session.preview) {
-    lines.push(`${t("terminalSession.tooltip.output")}${labelSeparator}${session.preview}`);
-  }
-  lines.push(`${t("terminalSession.tooltip.session")}${labelSeparator}${session.id}`);
+  if (summary?.cwd) lines.push(`${t("terminalSession.tooltip.cwd")}${separator}${summary.cwd}`);
+  if (summary?.shellLabel) lines.push(`${t("terminalSession.tooltip.shell")}${separator}${summary.shellLabel}`);
+  if (summary?.backend) lines.push(`${t("terminalSession.tooltip.backend")}${separator}${summary.backend}`);
+  if (typeof session.exitCode === "number") lines.push(`${t("terminalSession.tooltip.exitCode")}${separator}${session.exitCode}`);
+  if (summary?.failureReason) lines.push(`${t("terminalSession.tooltip.error")}${separator}${summary.failureReason}`);
+  if (session.preview) lines.push(`${t("terminalSession.tooltip.output")}${separator}${session.preview}`);
+  lines.push(`${t("terminalSession.tooltip.session")}${separator}${session.id}`);
   return lines.join("\n");
 }
 
-// localizedTerminalStateLabel returns the active-language terminal lifecycle label.
-// localizedTerminalStateLabel 返回当前语言下的终端生命周期文案。
+// localizedTerminalStateLabel returns the active-locale lifecycle label.
+// localizedTerminalStateLabel 返回当前语言的生命周期标签。
 function localizedTerminalStateLabel(
-  // Normalized terminal lifecycle state.
-  // 归一化后的终端生命周期状态。
   state: TerminalVisualState,
-  // Translates stable UI copy keys.
-  // 翻译稳定 UI 文案键。
   t: (key: TranslationKey) => string,
 ): string {
   if (state === "running") return t("terminalState.running");

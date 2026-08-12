@@ -3,8 +3,6 @@ import { Bot, FolderOpen, Pencil, Plus, RefreshCw, RotateCcw, Save, Trash2, X } 
 import { toast } from "sonner"
 
 import { ModelPickerControl, modelPickerChoiceKey } from "@/components/composer/model-picker-control"
-import { formatSkillText } from "@/components/features/featureText"
-import type { FeatureHeaderSummary } from "@/components/features/feature-area-types"
 import { SourceOriginLink } from "@/components/features/source-origin-link"
 import { Badge } from "@/components/ui/badge"
 import { Button, IconButton } from "@/components/ui/button"
@@ -29,6 +27,7 @@ import type { CapabilityPolicyMode, SubagentCatalogSummary, SubagentCategorySumm
 import type { AgentActionProps } from "./agent-area-types"
 
 export type { AgentActionProps } from "./agent-area-types"
+export { activeAgentsHeaderSummary } from "./agent-area-header"
 
 // AgentEditorDraft stores the editable form state before it becomes a save request.
 // AgentEditorDraft 保存可编辑表单在转换为保存请求前的状态。
@@ -149,20 +148,6 @@ interface AgentCapabilityPolicyOption {
   // Additional source detail.
   // 额外来源详情。
   detail: string
-}
-
-// activeAgentsHeaderSummary returns the title and metrics for the independent agents page.
-// activeAgentsHeaderSummary 返回独立智能体页面的标题与统计。
-export function activeAgentsHeaderSummary(workbench: WorkbenchSnapshot, t: ReturnType<typeof useI18n>["t"]): FeatureHeaderSummary {
-  const enabledCount = workbench.subagentCatalog.definitions.filter((definition) => definition.enabled).length
-  return {
-    title: t("area.agents"),
-    detail: formatSkillText(t("agents.header.detail"), {
-      total: workbench.subagentCatalog.definitions.length,
-      enabled: enabledCount,
-      warnings: workbench.subagentCatalog.errors.length,
-    }),
-  }
 }
 
 // AgentsArea renders the independent agent and expert management page.

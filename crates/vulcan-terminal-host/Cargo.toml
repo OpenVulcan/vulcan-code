@@ -1,0 +1,32 @@
+[package]
+name = "vulcan-terminal-host"
+description = "Isolated cross-platform host process for one persistent terminal."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lints.rust]
+missing_docs = "warn"
+unsafe_code = "allow"
+
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+unwrap_used = "warn"
+
+[dependencies]
+portable-pty = "0.9.0"
+serde.workspace = true
+vt100.workspace = true
+vulcan-terminal-host-protocol.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = [
+  "Win32_Foundation",
+  "Win32_System_JobObjects",
+  "Win32_System_Threading",
+] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

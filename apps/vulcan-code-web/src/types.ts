@@ -10,3 +10,4 @@ export * from "./types/workbench";
 export * from "./types/knowledge-base";
 export * from "./types/public-ai";
 export * from "./types/service-events";
+export * from "./types/terminal";

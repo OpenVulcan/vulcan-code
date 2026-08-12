@@ -5,6 +5,7 @@ use super::conversation_services::{
     conversation_archived_delta, conversations_archived_delta_envelope,
 };
 use super::*;
+use crate::project_terminals::{cancel_project_terminal_displays, project_terminal_runtime};
 
 /// Minimal retained project state needed to validate and persist one layout mutation.
 /// 校验并持久化单次布局变更所需的最小保留项目状态。
@@ -541,6 +542,23 @@ pub(crate) async fn service_remove_project(
         archived_session_ids.iter().copied(),
         "移除",
     )?;
+
+    // project_terminal_ids is the exact project-owned runtime set confirmed by the removal dialog.
+    // project_terminal_ids 是已由移除确认框确认的精确项目级运行时集合。
+    let project_terminal_ids = project_terminal_runtime()
+        .list_project_terminals(&project_id)
+        .await?
+        .into_iter()
+        .map(|terminal| terminal.terminal_id)
+        .collect::<Vec<_>>();
+    for terminal_id in project_terminal_ids {
+        // Close first so a failed terminal stop cannot silently detach a still-existing display.
+        // 先关闭终端，避免终端停止失败时无提示地解除仍存在显示层的挂接。
+        project_terminal_runtime()
+            .close_terminal(&project_id, terminal_id)
+            .await?;
+        cancel_project_terminal_displays(&project_id, terminal_id)?;
+    }
 
     invalidate_project_session_lifecycle_persist_versions(&state, &project)?;
     // persist_lock serializes child archival and project removal with background session writers.

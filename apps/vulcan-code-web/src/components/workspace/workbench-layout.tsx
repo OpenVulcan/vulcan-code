@@ -30,12 +30,15 @@ import {
   type ConversationMenuAction,
   type ProjectMenuAction,
 } from "@/components/project/ProjectSidebar";
+import { ProjectFloatingTerminalLayer } from "@/components/project/terminal/project-floating-terminal-layer";
+import { clearProjectTerminalInputBuffers } from "@/components/project/terminal/project-terminal-input-buffer";
 import {
   type DraftConversationSelection,
 } from "@/components/workspace/workspace-resizable-body";
 import { retireMaterializedDraftSubmission } from "@/components/workspace/draft-submission-state";
 import { MediaUploadProgressPanel } from "@/components/workspace/media-upload-progress-panel";
 import { WorkbenchDialogs } from "@/components/workspace/workbench-dialogs";
+import { routeWorkspaceInputOwnerFromPointer } from "@/components/workspace/workspace-input-owner";
 import { useWorkbenchShellChrome } from "@/components/workspace/workbench-layout/shell-chrome";
 import {
   copyText,
@@ -84,6 +87,7 @@ import type {
   PendingQuestionSnapshot,
   PendingPromptSummary,
   ProjectSummary,
+  ProjectTerminalRunningCountChangedEvent,
   SettingsSubAreaId,
   StartupSnapshot,
   SubagentCatalogUpdate,
@@ -92,6 +96,8 @@ import type {
   WorkbenchSnapshot,
   MediaUploadProgressChangedDelta,
 } from "@/types";
+import { listProjectTerminals } from "@/service/terminal-service";
+import { hasServiceRuntime, serviceClient } from "@/service/webui-service-runtime";
 import {
   rejectPendingQuestion,
   replyPendingQuestion,
@@ -232,6 +238,15 @@ export function WorkbenchLayout(props: {
   // 后端返回的最近局部工作台更新信号。
   workbenchDelta: WorkbenchDeltaSignal | null;
 }) {
+  React.useEffect(() => {
+    // handleWorkspacePointerOwner routes input ownership from explicit pointer targets before bubble handlers run.
+    // handleWorkspacePointerOwner 在冒泡处理器运行前，根据明确指针目标路由输入所有权。
+    const handleWorkspacePointerOwner = (event: PointerEvent) => {
+      routeWorkspaceInputOwnerFromPointer(event.target);
+    };
+    document.addEventListener("pointerdown", handleWorkspacePointerOwner, true);
+    return () => document.removeEventListener("pointerdown", handleWorkspacePointerOwner, true);
+  }, []);
   // todolistStatusHost stores the footer node immediately following the version label.
   // todolistStatusHost 保存紧跟版本号的底栏 Todo 节点。
   const [todolistStatusHost, setTodolistStatusHost] = React.useState<HTMLDivElement | null>(null);
@@ -344,9 +359,101 @@ export function WorkbenchLayout(props: {
   const [workbenchState, setWorkbenchState] = React.useState<WorkbenchSnapshot>(
     () => workbenchWithSubagentSurfaceMessageCache(props.workbench, subagentSurfaceMessageCacheRef.current),
   );
+  // activeProjectId owns project-level tools independently from conversation lifetime.
+  // activeProjectId 独立于会话生命周期持有项目级工具。
+  const [activeProjectId, setActiveProjectId] = React.useState<string | null>(() => {
+    const selectedProjectId = props.workbench.conversations.find(
+      (conversation) => conversation.id === selectedConversationId,
+    )?.projectId ?? initialDraftConversation?.projectId ?? null;
+    return props.workbench.projects.some((project) => project.id === selectedProjectId)
+      ? selectedProjectId
+      : props.workbench.projects[0]?.id ?? null;
+  });
+  // projectTerminalOpenRequest expands the project floating terminal only after an explicit user action.
+  // projectTerminalOpenRequest 仅在用户明确操作后展开项目浮动终端。
+  const [projectTerminalOpenRequest, setProjectTerminalOpenRequest] = React.useState<{
+    projectId: string;
+    nonce: number;
+  } | null>(null);
+  // projectTerminalButtonRef exposes the exact top-bar target for the macOS-style Genie animation.
+  // projectTerminalButtonRef 暴露 macOS 风格精灵动画使用的精确顶部栏目标。
+  const projectTerminalButtonRef = React.useRef<HTMLButtonElement | null>(null);
+  // projectTerminalRunningCounts stores count-only lifecycle state independently from terminal content.
+  // projectTerminalRunningCounts 独立于终端内容保存仅包含数量的生命周期状态。
+  const [projectTerminalRunningCounts, setProjectTerminalRunningCounts] = React.useState<Record<
+    string,
+    { runningCount: number; revision: number }
+  >>({});
+  // projectTerminalCountListenerReady closes the bootstrap race between event registration and the first query.
+  // projectTerminalCountListenerReady 消除事件注册与首次查询之间的初始竞态。
+  const [projectTerminalCountListenerReady, setProjectTerminalCountListenerReady] = React.useState(false);
   // mediaUploadProgresses keeps every active pre-dispatch upload keyed by its exact submission identity.
   // mediaUploadProgresses 按精确提交标识保存所有活跃的分派前上传，避免并发上传互相覆盖。
   const [mediaUploadProgresses, setMediaUploadProgresses] = React.useState<Record<string, MediaUploadProgressChangedDelta>>({});
+  React.useEffect(() => {
+    setProjectTerminalCountListenerReady(false);
+    setProjectTerminalRunningCounts({});
+    if (!hasServiceRuntime()) return undefined;
+    let cancelled = false;
+    let unsubscribe: (() => void) | null = null;
+    // subscription receives project metadata only; terminal output remains bound to visible display attachments.
+    // subscription 仅接收项目元数据；终端输出仍严格绑定可见显示挂接。
+    const subscription = serviceClient.subscribe<ProjectTerminalRunningCountChangedEvent>(
+      "project.terminal.running-count.changed",
+      (event) => {
+        if (cancelled) return;
+        setProjectTerminalRunningCounts((current) => {
+          const previous = current[event.projectId];
+          if (previous && previous.revision > event.revision) return current;
+          return {
+            ...current,
+            [event.projectId]: {
+              runningCount: event.runningCount,
+              revision: event.revision,
+            },
+          };
+        });
+      },
+    );
+    void subscription.then((nextUnsubscribe) => {
+      if (cancelled) nextUnsubscribe();
+      else {
+        unsubscribe = nextUnsubscribe;
+        setProjectTerminalCountListenerReady(true);
+      }
+    }).catch(() => undefined);
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+      unsubscribe = null;
+    };
+  }, [props.serviceInstanceEpoch]);
+  React.useEffect(() => {
+    if (!activeProjectId || !projectTerminalCountListenerReady || !hasServiceRuntime()) return undefined;
+    let cancelled = false;
+    // loadRunningCount performs one metadata bootstrap for the active project without attaching screen content.
+    // loadRunningCount 为当前活动项目执行一次元数据初始加载，不挂接屏幕内容。
+    const loadRunningCount = async (): Promise<void> => {
+      const catalog = await listProjectTerminals(activeProjectId);
+      if (cancelled || !catalog || catalog.projectId !== activeProjectId) return;
+      const runningCount = catalog.terminals.filter((terminal) => terminal.status === "running").length;
+      setProjectTerminalRunningCounts((current) => {
+        const previous = current[activeProjectId];
+        if (previous && previous.revision > catalog.runningCountRevision) return current;
+        return {
+          ...current,
+          [activeProjectId]: {
+            runningCount,
+            revision: catalog.runningCountRevision,
+          },
+        };
+      });
+    };
+    void loadRunningCount().catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [activeProjectId, projectTerminalCountListenerReady, props.serviceInstanceEpoch]);
   React.useEffect(() => {
     if (
       isPluginDetailSubArea(activeWorkbenchSkillSubArea)
@@ -932,6 +1039,21 @@ export function WorkbenchLayout(props: {
   // selectedDraftConversation stores the draft used by the console header and empty state.
   // selectedDraftConversation 保存控制台标题栏与空状态使用的草稿会话。
   const selectedDraftConversation = selectedConversationId === draftConversation?.id ? draftConversation : null;
+  // selectedRouteProjectId changes only when the user selects a conversation or draft in another project.
+  // selectedRouteProjectId 仅在用户选择另一个项目的会话或草稿时变化。
+  const selectedRouteProjectId = selectedDraftConversation?.projectId ?? selectedConversation?.projectId ?? null;
+  // activeProject resolves the explicit owner used by project-level floating tools.
+  // activeProject 解析项目级浮动工具使用的明确归属项目。
+  const activeProject = workbenchState.projects.find((project) => project.id === activeProjectId) ?? null;
+  // handleOpenActiveProjectTerminal issues one explicit open request for the current project.
+  // handleOpenActiveProjectTerminal 为当前项目发出一次明确的打开请求。
+  const handleOpenActiveProjectTerminal = React.useCallback(() => {
+    if (!activeProject) return;
+    setProjectTerminalOpenRequest((request) => ({
+      projectId: activeProject.id,
+      nonce: (request?.nonce ?? 0) + 1,
+    }));
+  }, [activeProject]);
   // consoleWorkbenchState reprojects selected-session fields from the UI-local selection.
   // consoleWorkbenchState 根据 UI 本地选择重新投影当前会话字段。
   const consoleWorkbenchState = React.useMemo<WorkbenchSnapshot>(() => {
@@ -947,6 +1069,21 @@ export function WorkbenchLayout(props: {
   React.useEffect(() => {
     selectedConversationIdRef.current = selectedConversationId;
   }, [selectedConversationId]);
+  // Follow explicit conversation navigation across projects while preserving project selection across same-project sessions.
+  // 跟随跨项目的明确会话导航，同时在同项目会话切换时保留项目选择。
+  React.useEffect(() => {
+    if (selectedRouteProjectId) setActiveProjectId(selectedRouteProjectId);
+  }, [selectedConversationId, selectedRouteProjectId]);
+  // Reconcile a removed active project against the current route or the first remaining project.
+  // 在活动项目被移除后，根据当前路由或首个剩余项目进行协调。
+  React.useEffect(() => {
+    if (activeProjectId && workbenchState.projects.some((project) => project.id === activeProjectId)) return;
+    const routeProjectId = selectedRouteProjectId
+      && workbenchState.projects.some((project) => project.id === selectedRouteProjectId)
+      ? selectedRouteProjectId
+      : null;
+    setActiveProjectId(routeProjectId ?? workbenchState.projects[0]?.id ?? null);
+  }, [activeProjectId, selectedRouteProjectId, workbenchState.projects]);
   // Keep the normalized workbench projection aligned with the locally selected chat.
   // 保持归一化工作台投影与本地选中的聊天会话一致。
   React.useEffect(() => {
@@ -995,6 +1132,28 @@ export function WorkbenchLayout(props: {
     applySubagentCatalogUpdate,
     handleOpenWorkspaceChat,
   });
+  // handleWorkbenchProjectMenuAction owns the UI-only terminal entry before delegating persisted actions.
+  // handleWorkbenchProjectMenuAction 在委托持久化动作前处理仅属于界面的终端入口。
+  const handleWorkbenchProjectMenuAction = React.useCallback((
+    action: Parameters<typeof handleProjectMenuAction>[0],
+    project: Parameters<typeof handleProjectMenuAction>[1],
+  ) => {
+    if (action === "open-terminal") {
+      setActiveProjectId(project.id);
+      setProjectTerminalOpenRequest((request) => ({
+        projectId: project.id,
+        nonce: (request?.nonce ?? 0) + 1,
+      }));
+      return;
+    }
+    handleProjectMenuAction(action, project);
+  }, [handleProjectMenuAction]);
+  // handleCreateConversationForProject keeps project-level tools bound to the newly selected draft owner.
+  // handleCreateConversationForProject 使项目级工具绑定到新选择草稿的归属项目。
+  const handleCreateConversationForProject = React.useCallback((project: ProjectSummary) => {
+    setActiveProjectId(project.id);
+    handleCreateConversation(project);
+  }, [handleCreateConversation]);
 
   const {
     handleSaveSessionGoal,
@@ -1287,6 +1446,7 @@ export function WorkbenchLayout(props: {
       } else {
         applyProjectActionSnapshot(applyPreviewProjectAction(workbenchState, removeProjectTarget.id, "remove-project").snapshot, "local");
       }
+      clearProjectTerminalInputBuffers(removeProjectTarget.id);
       toast.success(formatWorkbenchTranslation(i18n.t, "workbenchConversation.archivedAndRemovedProject", { project: removeProjectTarget.name }));
       setRemoveProjectTarget(null);
     } catch (nextError) {
@@ -1760,6 +1920,12 @@ export function WorkbenchLayout(props: {
       <main className="workspace">
         {showConsoleSidebar ? (
           <WorkspaceShell
+            activeProjectId={activeProjectId}
+            projectTerminalButtonRef={projectTerminalButtonRef}
+            projectTerminalRunningCount={activeProjectId
+              ? projectTerminalRunningCounts[activeProjectId]?.runningCount ?? 0
+              : 0}
+            onOpenProjectTerminal={handleOpenActiveProjectTerminal}
             startup={props.startup}
             workbench={consoleWorkbenchState}
             activeSkillSubArea={activeWorkbenchSkillSubArea}
@@ -1782,7 +1948,7 @@ export function WorkbenchLayout(props: {
             conversationForkInProgress={conversationForkInProgress}
             pinnedConversationIds={pinnedConversationIds}
             onConversationMenuAction={handleConversationMenuAction}
-            onCreateConversation={handleCreateConversation}
+            onCreateConversation={handleCreateConversationForProject}
             onCreateProject={handleCreateProject}
             onOpenSkills={handleOpenWorkspaceSkills}
             onOpenAgentSkills={handleOpenWorkspaceAgentSkills}
@@ -1797,8 +1963,9 @@ export function WorkbenchLayout(props: {
             onSelectSkillSubArea={setActiveWorkbenchSkillSubArea}
             onSelectMemorySubArea={setActiveWorkbenchMemorySubArea}
             onExpandedProjectIdsChange={handleExpandedProjectIdsChange}
-            onProjectMenuAction={handleProjectMenuAction}
+            onProjectMenuAction={handleWorkbenchProjectMenuAction}
             onReorderProjects={handleReorderProjects}
+            onSelectProject={setActiveProjectId}
             onSelectConversation={handleSelectConversation}
             onLoadConversationHistory={handleLoadConversationHistory}
             onSelectWorkbenchModel={handleSelectWorkbenchModel}
@@ -1899,6 +2066,12 @@ export function WorkbenchLayout(props: {
             onTitlebarDoubleClick={handleTitlebarDoubleClick}
           />
         )}
+        <ProjectFloatingTerminalLayer
+          minimizeAnchorRef={projectTerminalButtonRef}
+          openRequest={projectTerminalOpenRequest}
+          project={activeProject}
+          projects={workbenchState.projects}
+        />
         {showStartupOverlay ? <StartupOverlay startup={props.startup} /> : null}
       </main>
       <WorkbenchDialogs

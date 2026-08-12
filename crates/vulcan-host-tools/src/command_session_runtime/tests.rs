@@ -1,15 +1,40 @@
 use super::{
-    COMMAND_SESSION_OUTPUT_CHUNK_COALESCE_SOFT_LIMIT_BYTES, CommandSessionBackend,
-    CommandSessionOutputChunk, CommandSessionOutputStream, CommandSessionRecord,
-    CommandSessionRuntime, CommandSessionSharedState, CommandSessionStatus, PtyScreenFrameState,
-    can_coalesce_output_chunk, output_chunk_ends_with_line_boundary,
+    COMMAND_SESSION_CONTROL_QUEUE_LIMIT, COMMAND_SESSION_OUTPUT_CHUNK_COALESCE_SOFT_LIMIT_BYTES,
+    COMMAND_SESSION_RETAINED_BYTE_LIMIT, COMMAND_SESSION_RETAINED_CHUNK_LIMIT,
+    CommandSessionBackend, CommandSessionDisplayCursor, CommandSessionInputEvent,
+    CommandSessionMutableState, CommandSessionOutputChunk, CommandSessionOutputStream,
+    CommandSessionRecord, CommandSessionRuntime, CommandSessionSharedState, CommandSessionStatus,
+    PtyScreenFrameState, append_output_chunk_to_state, can_coalesce_output_chunk,
+    encode_command_session_input_events, output_chunk_ends_with_line_boundary,
 };
-#[cfg(windows)]
-use super::{CommandSessionInputEvent, CommandSessionStartRequest};
 use crate::model::SessionId;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::mpsc::unbounded_channel;
+use tokio::sync::mpsc::channel;
+use tokio::time::{Duration, timeout};
+
+/// Verifies a later shell-session stdin timeout cannot be escalated into automatic process termination.
+/// 验证后续 shell-session 标准输入超时不会升级为自动终止进程。
+#[test]
+fn pipe_write_failure_does_not_terminate_a_live_session() {
+    // pipe_runtime_source captures the exact supervisor implementation used by shell_session.
+    // pipe_runtime_source 捕获 shell_session 实际使用的监督器实现。
+    let pipe_runtime_source = include_str!("pipe.rs");
+    // write_branch isolates the ordinary post-start Write control branch from initial-input policy.
+    // write_branch 将启动后的普通 Write 控制分支与初始输入策略隔离。
+    let write_branch = pipe_runtime_source
+        .split("Some(CommandSessionControlMessage::Write")
+        .nth(1)
+        .and_then(|source| {
+            source
+                .split("Some(CommandSessionControlMessage::Resize")
+                .next()
+        })
+        .expect("pipe supervisor must retain its Write control branch");
+
+    assert!(!write_branch.contains("request_command_session_child_stop"));
+    assert!(!write_branch.contains("mark_stop_requested"));
+}
 
 /// Output coalescing should keep appending to one undelivered line fragment until the line is completed.
 /// 输出合并应持续追加到同一条未投递行碎片，直到该行被完整结束。
@@ -70,10 +95,129 @@ fn output_chunk_coalescing_respects_line_boundaries_and_soft_limit() {
     ));
 }
 
-/// PTY frame synthesis should keep a rolling live screen for WebUI display.
-/// PTY 帧综合应为 WebUI 展示保留滚动实时屏幕。
+/// Retained command-session output should obey both fragment and byte limits and expose one cursor gap.
+/// 命令会话保留输出应同时遵守分片与字节上限，并暴露一个游标缺口。
+#[tokio::test]
+async fn retained_command_session_output_is_bounded_and_reports_a_gap() {
+    let mut state = CommandSessionMutableState::default();
+    for _ in 0..(COMMAND_SESSION_RETAINED_CHUNK_LIMIT + 2) {
+        append_output_chunk_to_state(
+            &mut state,
+            CommandSessionOutputStream::Stdout,
+            String::from("x\n"),
+        );
+    }
+    assert_eq!(state.chunks.len(), COMMAND_SESSION_RETAINED_CHUNK_LIMIT);
+    assert_eq!(
+        state.retained_output_bytes,
+        COMMAND_SESSION_RETAINED_CHUNK_LIMIT * 2
+    );
+    assert_eq!(state.dropped_before_seq, 2);
+
+    let mut byte_bounded_state = CommandSessionMutableState::default();
+    append_output_chunk_to_state(
+        &mut byte_bounded_state,
+        CommandSessionOutputStream::Stdout,
+        "x".repeat(COMMAND_SESSION_RETAINED_BYTE_LIMIT),
+    );
+    append_output_chunk_to_state(
+        &mut byte_bounded_state,
+        CommandSessionOutputStream::Stdout,
+        String::from("\n"),
+    );
+    assert_eq!(byte_bounded_state.chunks.len(), 1);
+    assert_eq!(byte_bounded_state.retained_output_bytes, 1);
+    assert_eq!(byte_bounded_state.dropped_before_seq, 1);
+
+    let shared_state = Arc::new(CommandSessionSharedState::default());
+    *shared_state.mutable_state.lock().await = state;
+    let (control_sender, _control_receiver) = channel(COMMAND_SESSION_CONTROL_QUEUE_LIMIT);
+    let record = CommandSessionRecord {
+        command_session_id: SessionId::from_u128(0xCA15),
+        owner_session_id: SessionId::from_u128(0x0A16),
+        display_name: Some(String::from("bounded output test")),
+        command: String::from("echo bounded"),
+        shell_label: String::from("pwsh"),
+        launcher_shell_label: String::from("pwsh"),
+        interactive_newline: String::from("\r\n"),
+        cwd: PathBuf::from(r"D:\openvulcan\vulcan-code"),
+        backend: CommandSessionBackend::Pipe,
+        control_sender,
+        shared_state,
+    };
+    let outcome = record.read_since(0, 2, false).await;
+    assert_eq!(outcome.snapshot.dropped_before_seq, 2);
+    assert_eq!(outcome.returned_chunks[0].seq, 2);
+    assert!(outcome.returned_chunks[0].text.contains("was evicted"));
+    assert_eq!(outcome.returned_chunks[1].seq, 3);
+    assert!(outcome.has_more);
+}
+
+/// A visible display cursor should prevent later fragments from mutating an already rendered sequence.
+/// 可见显示游标应阻止后续片段修改已经渲染的序号。
+#[tokio::test]
+async fn display_bootstrap_freezes_rendered_chunk_sequence() {
+    let runtime = CommandSessionRuntime::new();
+    let command_session_id = SessionId::from_u128(0xCA17);
+    let owner_session_id = SessionId::from_u128(0x0A18);
+    let shared_state = Arc::new(CommandSessionSharedState::default());
+    let (control_sender, _control_receiver) = channel(COMMAND_SESSION_CONTROL_QUEUE_LIMIT);
+    runtime
+        .sessions
+        .write()
+        .expect("lock runtime registry")
+        .insert(
+            command_session_id,
+            Arc::new(CommandSessionRecord {
+                command_session_id,
+                owner_session_id,
+                display_name: Some(String::from("display cursor test")),
+                command: String::from("echo partial"),
+                shell_label: String::from("pwsh"),
+                launcher_shell_label: String::from("pwsh"),
+                interactive_newline: String::from("\r\n"),
+                cwd: PathBuf::from(r"D:\openvulcan\vulcan-code"),
+                backend: CommandSessionBackend::Pipe,
+                control_sender,
+                shared_state: Arc::clone(&shared_state),
+            }),
+        );
+    shared_state
+        .append_output_chunk(CommandSessionOutputStream::Stdout, String::from("partial"))
+        .await;
+    let attachment = runtime
+        .read_recent_session_for_display(owner_session_id, command_session_id, 8)
+        .await
+        .expect("read display bootstrap");
+    assert_eq!(attachment.returned_chunks[0].seq, 1);
+
+    shared_state
+        .append_output_chunk(CommandSessionOutputStream::Stdout, String::from(" tail"))
+        .await;
+    let changed = runtime
+        .wait_for_session_display_change(
+            owner_session_id,
+            command_session_id,
+            &CommandSessionDisplayCursor {
+                after_seq: 1,
+                running_was_observed: true,
+                screen_frame_seq: None,
+                failure_reason: None,
+            },
+            8,
+        )
+        .await
+        .expect("read display increment");
+    assert_eq!(changed.returned_chunks.len(), 1);
+    assert_eq!(changed.returned_chunks[0].seq, 2);
+    assert_eq!(changed.returned_chunks[0].text, " tail");
+    assert_eq!(shared_state.mutable_state.lock().await.ai_delivered_seq, 0);
+}
+
+/// PTY frame synthesis should keep a complete formatted VT checkpoint for WebUI display.
+/// PTY 帧综合应为 WebUI 展示保留完整的格式化 VT 检查点。
 #[test]
-fn pty_screen_frame_state_builds_rolling_live_frame() {
+fn pty_screen_frame_state_builds_formatted_vt_checkpoint() {
     let mut state = PtyScreenFrameState::new(3, 80);
     let first = state
         .push_output("one\n\x1b[31mtwo\x1b[0m\nthree")
@@ -81,7 +225,8 @@ fn pty_screen_frame_state_builds_rolling_live_frame() {
     assert_eq!(first.0, 1);
     assert_eq!(first.1, 3);
     assert_eq!(first.2, 80);
-    assert!(first.3.contains("\x1b[31mtwo\x1b[0m"));
+    assert!(first.3.contains("\x1b["));
+    assert!(first.3.contains("two"));
     assert!(first.3.contains("three"));
 
     let second = state.push_output("\rTHREE\nfour").expect("second frame");
@@ -112,7 +257,7 @@ fn try_snapshot_owned_session_returns_live_state_without_async_wait() {
         state.last_seq = 5;
         state.pending_stdin_line = true;
     }
-    let (control_sender, _control_receiver) = unbounded_channel();
+    let (control_sender, _control_receiver) = channel(COMMAND_SESSION_CONTROL_QUEUE_LIMIT);
     runtime
         .sessions
         .write()
@@ -158,6 +303,76 @@ fn try_snapshot_owned_session_returns_live_state_without_async_wait() {
     );
 }
 
+/// Display waits should react to screen-frame and failure metadata without advancing the AI output cursor.
+/// 显示等待应响应屏幕帧与故障元数据，同时不推进 AI 输出游标。
+#[tokio::test]
+async fn display_wait_observes_frame_and_failure_metadata_without_output() {
+    // runtime owns one running fixture through the same registry used by visible display subscriptions.
+    // runtime 通过可见显示订阅使用的同一注册表持有一个运行中夹具。
+    let runtime = CommandSessionRuntime::new();
+    // command_session_id and owner_session_id define the exact ownership boundary under test.
+    // command_session_id 与 owner_session_id 定义本测试的精确归属边界。
+    let command_session_id = SessionId::from_u128(0xCA13);
+    let owner_session_id = SessionId::from_u128(0x0A14);
+    // shared_state receives metadata without receiving any output chunk.
+    // shared_state 接收元数据，但不接收任何输出分片。
+    let shared_state = Arc::new(CommandSessionSharedState::default());
+    let (control_sender, _control_receiver) = channel(COMMAND_SESSION_CONTROL_QUEUE_LIMIT);
+    runtime
+        .sessions
+        .write()
+        .expect("lock runtime registry")
+        .insert(
+            command_session_id,
+            Arc::new(CommandSessionRecord {
+                command_session_id,
+                owner_session_id,
+                display_name: Some(String::from("display metadata test")),
+                command: String::from("echo metadata"),
+                shell_label: String::from("pwsh"),
+                launcher_shell_label: String::from("pwsh"),
+                interactive_newline: String::from("\r\n"),
+                cwd: PathBuf::from(r"D:\openvulcan\vulcan-code"),
+                backend: CommandSessionBackend::Pty,
+                control_sender,
+                shared_state: Arc::clone(&shared_state),
+            }),
+        );
+    shared_state
+        .update_screen_frame(7, 24, 80, String::from("formatted screen"))
+        .await;
+    shared_state
+        .remember_failure_reason(String::from("terminal host metadata failure"))
+        .await;
+
+    // outcome must return from metadata comparison even though status and output cursor are unchanged.
+    // outcome 必须通过元数据比较返回，即使状态与输出游标都未变化。
+    let outcome = timeout(
+        Duration::from_millis(100),
+        runtime.wait_for_session_display_change(
+            owner_session_id,
+            command_session_id,
+            &CommandSessionDisplayCursor {
+                after_seq: 0,
+                running_was_observed: true,
+                screen_frame_seq: None,
+                failure_reason: None,
+            },
+            1,
+        ),
+    )
+    .await
+    .expect("display metadata must satisfy the wait")
+    .expect("display change outcome");
+    assert!(outcome.returned_chunks.is_empty());
+    assert_eq!(outcome.snapshot.screen_frame_seq, Some(7));
+    assert_eq!(
+        outcome.snapshot.failure_reason.as_deref(),
+        Some("terminal host metadata failure")
+    );
+    assert_eq!(shared_state.mutable_state.lock().await.ai_delivered_seq, 0);
+}
+
 /// Peeking should not advance the AI-facing cursor used by terminal_session reads.
 /// 窥视读取不应推进 terminal_session 使用的面向 AI 的读取游标。
 #[tokio::test]
@@ -166,7 +381,7 @@ async fn peek_session_for_ai_does_not_advance_ai_cursor() {
     let command_session_id = SessionId::from_u128(0xCA12);
     let owner_session_id = SessionId::from_u128(0x0A13);
     let shared_state = Arc::new(CommandSessionSharedState::default());
-    let (control_sender, _control_receiver) = unbounded_channel();
+    let (control_sender, _control_receiver) = channel(COMMAND_SESSION_CONTROL_QUEUE_LIMIT);
     runtime
         .sessions
         .write()
@@ -236,229 +451,67 @@ async fn peek_session_for_ai_does_not_advance_ai_cursor() {
     assert!(second_read.returned_chunks.is_empty());
 }
 
-/// Verifies the Windows console backend delivers extended keys to `msvcrt.getch`.
-/// 验证 Windows 控制台后端能把扩展按键传递给 `msvcrt.getch`。
-#[cfg(windows)]
-#[tokio::test]
-async fn windows_console_backend_delivers_msvcrt_arrow_keys() {
-    if super::resolve_windows_console_helper_path().is_err() {
-        return;
-    }
-    let python = match resolve_test_python_executable() {
-        Some(python) => python,
-        None => return,
-    };
-    let runtime = Arc::new(CommandSessionRuntime::new());
-    let owner_session_id = SessionId::from_u128(0x0BEE);
-    let script = concat!(
-        "import msvcrt, sys\n",
-        "items=['one','two','three']\n",
-        "idx=0\n",
-        "sys.stdout.write('ready\\n')\n",
-        "sys.stdout.flush()\n",
-        "while True:\n",
-        "    ch=msvcrt.getch()\n",
-        "    if ch in (b'\\x00', b'\\xe0'):\n",
-        "        ext=msvcrt.getch()\n",
-        "        if ext == b'P':\n",
-        "            idx=(idx+1)%len(items)\n",
-        "            sys.stdout.write('index=%d\\n' % idx)\n",
-        "            sys.stdout.flush()\n",
-        "        elif ext == b'H':\n",
-        "            idx=(idx-1)%len(items)\n",
-        "            sys.stdout.write('index=%d\\n' % idx)\n",
-        "            sys.stdout.flush()\n",
-        "    elif ch in (b'\\r', b'\\n'):\n",
-        "        sys.stdout.write('selected=%s\\n' % items[idx])\n",
-        "        sys.stdout.flush()\n",
-        "        break\n",
-    );
-    let snapshot = runtime
-        .start_session(CommandSessionStartRequest {
-            owner_session_id,
-            display_name: Some(String::from("msvcrt test")),
-            command: format!("{python} -c <msvcrt getch>"),
-            shell_label: String::from("python"),
-            launcher_shell_label: String::from("python"),
-            cwd: std::env::current_dir().expect("current dir"),
-            launcher_program: python,
-            launcher_args: vec![String::from("-c"), String::from(script)],
-            initial_stdin: None,
-            initial_stdin_append_newline: false,
-            interactive_newline: String::from("\r\n"),
-            backend: CommandSessionBackend::WindowsConsole,
-        })
-        .await
-        .expect("start windows console session");
+/// Structured terminal events should encode to one deterministic cross-platform ANSI/VT byte stream.
+/// 结构化终端事件应编码为确定且跨平台一致的 ANSI/VT 字节流。
+#[test]
+fn structured_terminal_input_events_encode_cross_platform_ansi_vt() {
+    let encoded = encode_command_session_input_events(
+        &[
+            CommandSessionInputEvent::Text {
+                text: String::from("run"),
+            },
+            CommandSessionInputEvent::Paste {
+                text: String::from(" pasted"),
+            },
+            CommandSessionInputEvent::Key {
+                key: String::from("Enter"),
+            },
+            CommandSessionInputEvent::Key {
+                key: String::from("ArrowDown"),
+            },
+            CommandSessionInputEvent::Key {
+                key: String::from("Backspace"),
+            },
+            CommandSessionInputEvent::Chord {
+                key: String::from("h"),
+                ctrl: true,
+                alt: false,
+                shift: false,
+                meta: false,
+            },
+            CommandSessionInputEvent::Chord {
+                key: String::from("c"),
+                ctrl: true,
+                alt: false,
+                shift: false,
+                meta: false,
+            },
+            CommandSessionInputEvent::Chord {
+                key: String::from("Tab"),
+                ctrl: false,
+                alt: false,
+                shift: true,
+                meta: false,
+            },
+        ],
+        "\r\n",
+    )
+    .expect("encode terminal inputs");
 
-    let (ready_output, ready_seq) = read_test_session_until_text(
-        &runtime,
-        owner_session_id,
-        snapshot.command_session_id,
-        0,
-        "ready",
-    )
-    .await
-    .expect("read ready");
-    assert!(
-        ready_output.contains("ready"),
-        "expected ready output, got {ready_output:?}"
-    );
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-    runtime
-        .write_session_input_events(
-            owner_session_id,
-            snapshot.command_session_id,
-            vec![
-                CommandSessionInputEvent::Key {
-                    key: String::from("ArrowDown"),
-                },
-                CommandSessionInputEvent::Key {
-                    key: String::from("Enter"),
-                },
-            ],
-        )
-        .await
-        .expect("write getch input events");
-    let (output, _) = read_test_session_until_text(
-        &runtime,
-        owner_session_id,
-        snapshot.command_session_id,
-        ready_seq,
-        "selected=two",
-    )
-    .await
-    .expect("read getch result");
-    assert!(
-        output.contains("selected=two"),
-        "unexpected output: {output:?}"
-    );
+    assert_eq!(encoded, b"run pasted\r\n\x1b[B\x7f\x08\x03\x1b[Z");
 }
 
-/// Verifies Windows console text input can deliver ANSI VT escape bytes to stdin readers.
-/// 验证 Windows 控制台文本输入可向 stdin 读取器传递 ANSI VT 转义字节。
-#[cfg(windows)]
-#[tokio::test]
-async fn windows_console_backend_delivers_ansi_vt_text_to_stdin_readers() {
-    if super::resolve_windows_console_helper_path().is_err() {
-        return;
-    }
-    let python = match resolve_test_python_executable() {
-        Some(python) => python,
-        None => return,
-    };
-    let runtime = Arc::new(CommandSessionRuntime::new());
-    let owner_session_id = SessionId::from_u128(0x0BEF);
-    let script = concat!(
-        "import sys\n",
-        "sys.stdout.write('ready\\n')\n",
-        "sys.stdout.flush()\n",
-        "values=[]\n",
-        "while len(values) < 3:\n",
-        "    ch=sys.stdin.read(1)\n",
-        "    if not ch:\n",
-        "        break\n",
-        "    values.append(ord(ch))\n",
-        "sys.stdout.write('codes=' + ','.join(str(v) for v in values) + '\\n')\n",
-        "sys.stdout.flush()\n",
-    );
-    let snapshot = runtime
-        .start_session(CommandSessionStartRequest {
-            owner_session_id,
-            display_name: Some(String::from("stdin vt test")),
-            command: format!("{python} -c <stdin vt>"),
-            shell_label: String::from("python"),
-            launcher_shell_label: String::from("python"),
-            cwd: std::env::current_dir().expect("current dir"),
-            launcher_program: python,
-            launcher_args: vec![String::from("-c"), String::from(script)],
-            initial_stdin: None,
-            initial_stdin_append_newline: false,
-            interactive_newline: String::from("\r\n"),
-            backend: CommandSessionBackend::WindowsConsole,
-        })
-        .await
-        .expect("start windows console session");
-    let (_, ready_seq) = read_test_session_until_text(
-        &runtime,
-        owner_session_id,
-        snapshot.command_session_id,
-        0,
-        "ready",
+/// Unsupported structured keys should fail explicitly instead of guessing a platform-specific byte sequence.
+/// 不受支持的结构化按键应明确失败，而不是猜测平台特定字节序列。
+#[test]
+fn structured_terminal_input_events_reject_unknown_keys() {
+    let error = encode_command_session_input_events(
+        &[CommandSessionInputEvent::Key {
+            key: String::from("VolumeUp"),
+        }],
+        "\n",
     )
-    .await
-    .expect("read ready");
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-    runtime
-        .write_session_input_events(
-            owner_session_id,
-            snapshot.command_session_id,
-            vec![CommandSessionInputEvent::Text {
-                text: String::from("\x1b[B\n"),
-            }],
-        )
-        .await
-        .expect("write ansi vt text input");
-    let (output, _) = read_test_session_until_text(
-        &runtime,
-        owner_session_id,
-        snapshot.command_session_id,
-        ready_seq,
-        "codes=27,91,66",
-    )
-    .await
-    .expect("read stdin result");
-    assert!(
-        output.contains("codes=27,91,66"),
-        "unexpected output: {output:?}"
-    );
-}
+    .expect_err("unknown key must fail");
 
-/// Reads one test command session until the expected text appears or the retry budget is exhausted.
-/// 读取测试命令会话，直到出现预期文本或耗尽重试预算。
-#[cfg(windows)]
-async fn read_test_session_until_text(
-    runtime: &Arc<CommandSessionRuntime>,
-    owner_session_id: SessionId,
-    command_session_id: SessionId,
-    mut after_seq: u64,
-    expected_text: &str,
-) -> Option<(String, u64)> {
-    let mut output = String::new();
-    for _ in 0..20 {
-        let result = runtime
-            .read_session(
-                owner_session_id,
-                command_session_id,
-                Some(after_seq),
-                Some(250),
-                Some(32),
-            )
-            .await
-            .ok()?;
-        for chunk in &result.returned_chunks {
-            after_seq = after_seq.max(chunk.seq);
-            output.push_str(&chunk.text);
-        }
-        if output.contains(expected_text) || result.snapshot.status != CommandSessionStatus::Running
-        {
-            return Some((output, after_seq));
-        }
-    }
-    Some((output, after_seq))
-}
-
-/// Resolves a Python executable for Windows console-input regression tests.
-/// 为 Windows 控制台输入回归测试解析 Python 可执行程序。
-#[cfg(windows)]
-fn resolve_test_python_executable() -> Option<String> {
-    for candidate in ["python", "py"] {
-        let output = std::process::Command::new(candidate)
-            .arg("--version")
-            .output();
-        if output.is_ok_and(|output| output.status.success()) {
-            return Some(candidate.to_string());
-        }
-    }
-    None
+    assert!(error.contains("Unsupported terminal key `VolumeUp`"));
 }

@@ -27,30 +27,25 @@ import type { ProjectSummary } from "@/types";
 import {
   DEFAULT_PROJECT_BADGE_CONFIG,
   PROJECT_BADGE_COLORS,
-  PROJECT_ICON_MAP,
   PROJECT_ICON_STREAM_BATCH_SIZE,
   ProjectIconifyIcon,
   encodeProjectBadgeKey,
   decodeProjectBadgeKey,
   isIconifyProjectIconPack,
   normalizeProjectBadgeText,
-  projectIconOptionsForTab,
   projectIconPackLabel,
   type ProjectIconBadgeConfig,
   type ProjectIconBadgeShape,
   type ProjectIconPack,
+  type ProjectIconOption,
   type ProjectIconSelection,
   type ProjectIconTab,
 } from "./project-icon-model";
+import { loadProjectIconCatalog } from "./project-icon-catalog-loader";
 import { ProjectIcon } from "./project-icons";
+import type { ProjectIconDialogTarget } from "./project-icon-contract";
 
-// ProjectIconDialogTarget stores the project currently editing its icon.
-// ProjectIconDialogTarget 保存当前正在编辑图标的项目。
-export interface ProjectIconDialogTarget {
-  // Project row whose icon is being edited.
-  // 当前正在编辑图标的项目行。
-  project: ProjectSummary;
-}
+export type { ProjectIconDialogTarget } from "./project-icon-contract";
 
 // ProjectIconDialog renders the project icon picker and generated badge editor.
 // ProjectIconDialog 渲染项目图标选择器与生成式徽标编辑器。
@@ -85,6 +80,9 @@ export function ProjectIconDialog(props: {
   // visibleIconLimit stores the streamed icon render limit.
   // visibleIconLimit 保存图标流式渲染上限。
   const [visibleIconLimit, setVisibleIconLimit] = React.useState(PROJECT_ICON_STREAM_BATCH_SIZE);
+  // activeIconOptions stores only the catalog owned by the visible picker tab.
+  // activeIconOptions 只保存当前可见选择器标签所属的图标目录。
+  const [activeIconOptions, setActiveIconOptions] = React.useState<ProjectIconOption[]>([]);
 
   React.useEffect(() => {
     if (!project) {
@@ -109,9 +107,7 @@ export function ProjectIconDialog(props: {
       });
       return;
     }
-    const key = project.iconPack === "lucide" && project.iconKey && PROJECT_ICON_MAP.has(project.iconKey)
-      ? project.iconKey
-      : "Folder";
+    const key = project.iconPack === "lucide" && project.iconKey ? project.iconKey : "Folder";
     setActiveTab("lucide");
     setSelectedIcon({ pack: "lucide", key });
     setIconSearch("");
@@ -125,6 +121,24 @@ export function ProjectIconDialog(props: {
   React.useEffect(() => {
     setVisibleIconLimit(PROJECT_ICON_STREAM_BATCH_SIZE);
   }, [activeTab, iconSearch]);
+
+  React.useEffect(() => {
+    if (activeTab === "badge") {
+      setActiveIconOptions([]);
+      return;
+    }
+    // cancelled prevents a slower previous tab import from replacing the current catalog.
+    // cancelled 防止较慢的前一标签导入覆盖当前图标目录。
+    let cancelled = false;
+    void loadProjectIconCatalog(activeTab).then((catalog) => {
+      if (!cancelled) {
+        setActiveIconOptions(catalog.PROJECT_ICON_OPTIONS);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab]);
 
   // updateBadgeText applies the Chinese-one-or-English-two text rule.
   // updateBadgeText 应用中文一个字或英文两个字母的文字规则。
@@ -157,7 +171,6 @@ export function ProjectIconDialog(props: {
   };
   const finalSelection = activeTab === "badge" ? selectedBadgeIcon : selectedIcon;
   const normalizedSearch = iconSearch.trim().toLowerCase();
-  const activeIconOptions = projectIconOptionsForTab(activeTab);
   const visibleIconOptions = normalizedSearch.length === 0
     ? activeIconOptions
     : activeIconOptions.filter((option) => option.label.toLowerCase().includes(normalizedSearch));

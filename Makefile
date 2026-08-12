@@ -42,7 +42,11 @@ define route-command
 endef
 endif
 
-.PHONY: help build build-release release run run-release br br-release licenses deps deps-all deps-host deps-vldb deps-rtk deps-lua deps-cbm deps-vmm host vldb rtk lua cbm vmm all
+.PHONY: help sync vite start stop status build build-release release run run-release br br-release licenses deps deps-all deps-host deps-vldb deps-rtk deps-lua deps-cbm deps-vmm host vldb rtk lua cbm vmm all
+
+# VITE_ACTION captures the required lifecycle action from `make vite start`, `stop`, or `status`.
+# VITE_ACTION 从 `make vite start`、`stop` 或 `status` 中捕获必需的生命周期操作。
+VITE_ACTION := $(filter start stop status,$(MAKECMDGOALS))
 
 # DEPS_COMPANION_GOALS captures optional secondary dependency goals such as `make deps rtk`.
 # DEPS_COMPANION_GOALS 捕获 `make deps rtk` 这类可选的依赖二级目标。
@@ -56,12 +60,16 @@ DEPS_ROUTE_COMMAND := $(if $(DEPS_COMPANION_GOALS),deps $(DEPS_COMPANION_GOALS),
 # help 输出 Makefile 路由层支持的目标。
 help:
 	@echo "Targets:"
+	@echo "  make sync          # synchronize runtime resources into output"
+	@echo "  make vite start    # start the standalone WebUI Vite dev server"
+	@echo "  make vite stop     # stop the standalone WebUI Vite dev server"
+	@echo "  make vite status   # show the standalone WebUI Vite dev server status"
 	@echo "  make build         # Tauri/WebUI debug build"
 	@echo "  make build-release # Tauri/WebUI release build"
 	@echo "  make release       # Tauri/WebUI release build"
-	@echo "  make run           # run Tauri/WebUI debug build"
+	@echo "  make run           # run Tauri/WebUI debug build; Vite is managed separately"
 	@echo "  make run-release   # run Tauri/WebUI release build"
-	@echo "  make br            # build and run Tauri/WebUI debug"
+	@echo "  make br            # build and run Tauri/WebUI debug; Vite is managed separately"
 	@echo "  make br-release    # build and run Tauri/WebUI release"
 	@echo "  make licenses      # generate Rust third-party notices"
 	@echo "  make deps          # install host + Lua + Codebase Memory + VMM dependencies"
@@ -71,6 +79,46 @@ help:
 	@echo "  make deps-lua      # install Lua dependencies"
 	@echo "  make deps-cbm      # install the pinned native Codebase Memory runtime"
 	@echo "  make deps-vmm      # build and install the managed VMM runtime dependency"
+
+# sync routes the explicit runtime-resource synchronization command.
+# sync 路由显式运行时资源同步命令。
+sync:
+	$(call route-command,sync)
+
+# vite routes one explicit standalone Vite lifecycle action.
+# vite 路由一个显式的独立 Vite 生命周期操作。
+vite:
+	$(call route-command,vite $(VITE_ACTION))
+
+# start is a companion no-op for `make vite start` and rejects ambiguous standalone use.
+# start 在 `make vite start` 中作为伴随空目标，并拒绝含义不明确的单独调用。
+start:
+ifneq ($(filter vite,$(MAKECMDGOALS)),)
+	@:
+else
+	@echo "Use 'make vite start'." >&2
+	@exit 2
+endif
+
+# stop is a companion no-op for `make vite stop` and rejects ambiguous standalone use.
+# stop 在 `make vite stop` 中作为伴随空目标，并拒绝含义不明确的单独调用。
+stop:
+ifneq ($(filter vite,$(MAKECMDGOALS)),)
+	@:
+else
+	@echo "Use 'make vite stop'." >&2
+	@exit 2
+endif
+
+# status is a companion no-op for `make vite status` and rejects ambiguous standalone use.
+# status 在 `make vite status` 中作为伴随空目标，并拒绝含义不明确的单独调用。
+status:
+ifneq ($(filter vite,$(MAKECMDGOALS)),)
+	@:
+else
+	@echo "Use 'make vite status'." >&2
+	@exit 2
+endif
 
 # build routes debug by default, or release when the release companion goal is present.
 # build 默认路由 debug，存在 release 伴随目标时路由 release。

@@ -280,6 +280,12 @@ pub(crate) async fn run_webui_service_http_bridge(
         let state = rpc_state.clone();
         Box::pin(dispatch_service_rpc(event_emitter, state, method, params))
     });
+    // client_disconnected releases every content subscription tied to the exact event socket.
+    // client_disconnected 释放与精确事件套接字绑定的全部内容订阅。
+    let client_disconnected = Arc::new(move |client_id: Uuid| {
+        cancel_command_session_displays_for_client(client_id);
+        cancel_project_terminal_displays_for_client(client_id);
+    });
     let inference_consumer_profile_id = String::from("vmm");
     let inference_access_registry =
         Arc::new(crate::inference_access::InferenceAccessRegistry::new());
@@ -341,6 +347,7 @@ pub(crate) async fn run_webui_service_http_bridge(
         event_bus,
         static_root: webui_static_root(),
         rpc_dispatcher,
+        client_disconnected,
         inference_discovery: shared_inference_discovery,
         inference_dispatcher,
         inference_event_subscriber,

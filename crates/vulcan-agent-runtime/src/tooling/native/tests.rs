@@ -1,22 +1,21 @@
 use super::{
-    CommandSessionBackend, CommandSessionInputEvent, CommandSessionOutputChunk,
-    CommandSessionSnapshot, NativeToolExecutionRequest, SUBMIT_PLAN_MARKER, TerminalSessionInput,
-    TerminalSessionKeyEncoding, ThreadGoal, ThreadGoalStatus, build_agent_list_tool,
-    build_knowledge_browse_tool, build_knowledge_read_tool, build_knowledge_search_tool,
-    build_mcp_server_list_tool, build_prompt_skill_detail_tool, build_shell_command_tool,
-    build_shell_session_tool, build_skill_list_tool, build_submit_plan_tool,
-    build_terminal_session_tool, build_todolist_tool, build_workspace_describe_tool,
-    coalesce_terminal_output_chunks, display_submit_plan_path, effective_start_append_newline,
-    encode_terminal_inputs, goal_response_value, knowledge_document_lines,
-    normalize_terminal_session_name, resolve_session_shell_behavior,
-    resolve_shell_command_launcher, resolve_shell_command_working_directory,
-    shell_command_args_schema, shell_specific_newline, strip_simple_ansi_sequences,
-    strip_terminal_transaction_sentinel, terminal_inputs_request_interrupt,
-    terminal_interrupt_drain_chunk_is_visible, terminal_output_chunks_contain_pattern,
-    terminal_screen_text_from_chunks, terminal_session_args_schema,
-    terminal_transaction_command_text, validate_shell_session_start_stdin_policy,
-    validate_terminal_session_start_shell_policy, validate_terminal_transaction_start,
-    windows_console_input_events_from_inputs, wrap_terminal_transaction_command,
+    CommandSessionBackend, CommandSessionOutputChunk, CommandSessionSnapshot, NativeToolDefinition,
+    NativeToolExecutionRequest, SUBMIT_PLAN_MARKER, TerminalSessionInput, ThreadGoal,
+    ThreadGoalStatus, build_agent_list_tool, build_knowledge_browse_tool,
+    build_knowledge_read_tool, build_knowledge_search_tool, build_mcp_server_list_tool,
+    build_prompt_skill_detail_tool, build_shell_command_tool, build_shell_session_tool,
+    build_skill_list_tool, build_submit_plan_tool, build_terminal_session_tool,
+    build_todolist_tool, build_workspace_describe_tool, coalesce_terminal_output_chunks,
+    default_terminal_session_backend, display_submit_plan_path, effective_start_append_newline,
+    goal_response_value, knowledge_document_lines, normalize_terminal_session_name,
+    resolve_session_shell_behavior, resolve_shell_command_launcher,
+    resolve_shell_command_working_directory, shell_command_args_schema, shell_specific_newline,
+    strip_simple_ansi_sequences, strip_terminal_transaction_sentinel,
+    terminal_inputs_request_interrupt, terminal_interrupt_drain_chunk_is_visible,
+    terminal_output_chunks_contain_pattern, terminal_screen_text_from_chunks,
+    terminal_session_args_schema, terminal_transaction_command_text,
+    validate_shell_session_start_stdin_policy, validate_terminal_session_start_shell_policy,
+    validate_terminal_transaction_start, wrap_terminal_transaction_command,
 };
 use crate::agent_runtime::config::{
     AgentRuntimeConfig, RuntimeAgentDefinition, RuntimeAgentKind, RuntimeAgentRoute,
@@ -57,15 +56,13 @@ fn test_shell_support() -> HostCommandShellSupport {
     )
 }
 
-/// Builds one staged-output test command that emits two chunks with a delay between them so the read cursor can be validated across multiple calls.
-/// 构建一条分阶段输出测试命令：带延时地输出两个分片，便于在多次调用之间校验读取游标。
+/// Builds one interactive child shell that remains available for multiple shell-session writes.
+/// 构建一个可持续接受多次 shell-session 写入的交互式子 shell。
 fn interactive_shell_session_test_command() -> String {
     if cfg!(windows) {
-        String::from(
-            "echo phase-1 & ping -n 2 127.0.0.1 >nul & echo phase-2 & ping -n 2 127.0.0.1 >nul",
-        )
+        String::from("cmd /D /Q /K \"echo phase-1\"")
     } else {
-        String::from("printf 'phase-1\\n'; sleep 0.6; printf 'phase-2\\n'; sleep 0.3")
+        String::from("sh -c 'echo phase-1; exec sh'")
     }
 }
 

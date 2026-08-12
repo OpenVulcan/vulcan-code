@@ -58,6 +58,9 @@ export function ProjectSidebar(props: {
   expandedProjectIds?: string[];
   pinnedConversationIds: Set<string>;
   selectedConversationId: string | null;
+  // Explicit project that owns project-level floating tools.
+  // 持有项目级浮动工具的明确项目。
+  activeProjectId: string | null;
   onConversationMenuAction: (action: ConversationMenuAction, conversation: ConversationSummary) => void;
   onCreateConversation: (project: ProjectSummary) => void;
   onCreateProject: () => void;
@@ -103,6 +106,9 @@ export function ProjectSidebar(props: {
   onExpandedProjectIdsChange: (projectIds: string[]) => void;
   onProjectMenuAction: (action: ProjectMenuAction, project: ProjectSummary) => void;
   onReorderProjects: (projectIds: string[]) => void;
+  // Selects one project without selecting a conversation.
+  // 选择一个项目且不选择会话。
+  onSelectProject: (projectId: string) => void;
   onSelectConversation: (conversationId: string) => void;
 }) {
   // t translates stable sidebar labels while project names remain user data.
@@ -258,6 +264,7 @@ export function ProjectSidebar(props: {
       <SortableProjectRow
         conversations={projectConversations}
         hasSelectedConversation={!featureSurfaceActive && props.selectedConversationId ? projectConversationIds.has(props.selectedConversationId) : false}
+        isActiveProject={props.activeProjectId === project.id}
         isOpen={openProjectIds.has(project.id)}
         isConversationListExpanded={expandedConversationProjectIds.has(project.id)}
         isPinnedConversation={(conversationId) => props.pinnedConversationIds.has(conversationId)}
@@ -267,6 +274,7 @@ export function ProjectSidebar(props: {
         onProjectMenuAction={props.onProjectMenuAction}
         renderConversationRow={renderConversationRow}
         onSelectConversation={props.onSelectConversation}
+        onSelectProject={props.onSelectProject}
         onToggleConversationList={toggleProjectConversations}
         onToggleOpen={toggleProjectOpen}
         project={project}

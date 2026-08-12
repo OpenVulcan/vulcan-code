@@ -1,11 +1,9 @@
 import { Icon as IconifyIcon, addCollection } from "@iconify/react";
-import { icons as materialIconThemeIconSet } from "@iconify-json/material-icon-theme";
-import { icons as skillIconSet } from "@iconify-json/skill-icons";
 import { FileWarning } from "lucide-react";
 import { workspaceFileTreeExtensionLabel } from "@/components/workspace/WorkspaceFileTreeDrawer";
+import { FILE_ICON_COLLECTION } from "@/generated/file-icon-collection";
 
-addCollection(skillIconSet);
-addCollection(materialIconThemeIconSet);
+addCollection(FILE_ICON_COLLECTION);
 
 // FileTypeIconModel describes the resolved icon source for one file path.
 // FileTypeIconModel 描述单个文件路径解析出的图标来源。

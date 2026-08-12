@@ -25,6 +25,37 @@ export interface CredentialUsageOverviewProps {
   showQuotaSection?: boolean
 }
 
+// CredentialUsageOverviewViewModel contains only localized, already-formatted header facts.
+// CredentialUsageOverviewViewModel 只包含已本地化且已经格式化的头部事实。
+export interface CredentialUsageOverviewViewModel {
+  // balanceLabel is the localized balance metric name.
+  // balanceLabel 是已本地化的余额指标名称。
+  balanceLabel: string
+  // balanceValue is the exact formatted provider balance.
+  // balanceValue 是精确格式化后的供应商余额。
+  balanceValue: string
+  // planLabel is the localized plan or account-type metric name.
+  // planLabel 是已本地化的套餐或账号类型指标名称。
+  planLabel: string
+  // planValue is the exact visible plan or account-type value.
+  // planValue 是精确可见的套餐或账号类型值。
+  planValue: string
+}
+
+// CredentialUsageOverviewViewProps combines determined header facts with adapted quota content.
+// CredentialUsageOverviewViewProps 将确定的头部事实与已适配额度内容组合。
+export interface CredentialUsageOverviewViewProps {
+  // model contains already-formatted header facts.
+  // model 包含已经格式化的头部事实。
+  model: CredentialUsageOverviewViewModel
+  // quotaContent contains provider-specific quota presentation from the business adapter.
+  // quotaContent 包含来自业务适配层的供应商专用额度展示。
+  quotaContent?: React.ReactNode
+  // showQuotaSection controls whether the quota region and separator are visible.
+  // showQuotaSection 控制额度区域及分隔线是否可见。
+  showQuotaSection: boolean
+}
+
 // credentialUsageIsNonPlanAccount resolves account presentation from manifest-projected semantics.
 // credentialUsageIsNonPlanAccount 从 Manifest 投影语义解析账号展示方式。
 export function credentialUsageIsNonPlanAccount(
@@ -48,40 +79,57 @@ export function CredentialUsageOverview(props: CredentialUsageOverviewProps) {
     ? t("composer.accountCard.nonPlan")
     : props.usage?.plan_name ?? credentialBillingKindLabel(props.connection.billing_kind, t)
 
+  // model converts account facts into the exact localized values consumed by the pure view.
+  // model 将账号事实转换为纯视图消费的精确本地化值。
+  const model: CredentialUsageOverviewViewModel = {
+    balanceLabel: t("composer.accountCard.balance"),
+    balanceValue: accountBalanceLabel(props.usage),
+    planLabel: t(nonPlanAccount ? "composer.accountCard.accountType" : "composer.accountCard.plan"),
+    planValue: planName,
+  }
+  // quotaContent adapts the declared provider capability before entering the pure display layer.
+  // quotaContent 在进入纯展示层前适配已声明的供应商能力。
+  const quotaContent = nonPlanAccount ? (
+    <span className="text-center text-xs text-muted-foreground">
+      {t("composer.accountCard.noQuotaWindows")}
+    </span>
+  ) : (
+    <CredentialUsageSummary
+      credentialProfile={props.credentialProfile}
+      hasManagementKey={props.connection.has_management_key}
+      usageRequiresManagementKey={props.connection.usage_requires_management_key}
+      usage={props.usage}
+    />
+  )
+
+  return (
+    <CredentialUsageOverviewView
+      model={model}
+      quotaContent={quotaContent}
+      showQuotaSection={props.showQuotaSection !== false}
+    />
+  )
+}
+
+// CredentialUsageOverviewView renders only determined account view data and adapted quota content.
+// CredentialUsageOverviewView 只渲染确定的账号视图数据与已适配额度内容。
+export function CredentialUsageOverviewView(props: CredentialUsageOverviewViewProps) {
   return (
     <>
       <div className="grid grid-cols-2 gap-2 border-t pt-1.5">
         <div className="min-w-0">
-          <p className="text-[11px] text-muted-foreground">
-            {t(nonPlanAccount ? "composer.accountCard.accountType" : "composer.accountCard.plan")}
-          </p>
-          <p className="mt-0.5 truncate text-sm font-medium">{planName}</p>
+          <p className="text-[11px] text-muted-foreground">{props.model.planLabel}</p>
+          <p className="mt-0.5 truncate text-sm font-medium">{props.model.planValue}</p>
         </div>
         <div className="min-w-0">
-          <p className="text-[11px] text-muted-foreground">{t("composer.accountCard.balance")}</p>
-          <p className="mt-0.5 truncate text-sm font-medium">
-            {accountBalanceLabel(props.usage)}
-          </p>
+          <p className="text-[11px] text-muted-foreground">{props.model.balanceLabel}</p>
+          <p className="mt-0.5 truncate text-sm font-medium">{props.model.balanceValue}</p>
         </div>
       </div>
-      {props.showQuotaSection !== false ? (
+      {props.showQuotaSection ? (
         <div className="flex min-h-0 flex-1 flex-col border-t" data-slot="credential-usage">
-          <div
-            className="flex min-h-16 flex-1 items-center justify-center"
-            data-slot="credential-usage-content"
-          >
-            {nonPlanAccount ? (
-              <span className="text-center text-xs text-muted-foreground">
-                {t("composer.accountCard.noQuotaWindows")}
-              </span>
-            ) : (
-              <CredentialUsageSummary
-                credentialProfile={props.credentialProfile}
-                hasManagementKey={props.connection.has_management_key}
-                usageRequiresManagementKey={props.connection.usage_requires_management_key}
-                usage={props.usage}
-              />
-            )}
+          <div className="flex min-h-16 flex-1 items-center justify-center" data-slot="credential-usage-content">
+            {props.quotaContent}
           </div>
         </div>
       ) : null}

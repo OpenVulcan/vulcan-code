@@ -1,27 +1,49 @@
-import {
-  SettingsFeatureContent,
-  type SettingsActionProps,
-} from "@/components/features/settings/SettingsFeatureContent";
-import {
-  SkillsArea,
-  type SkillActionProps,
-  type SkillSubAreaId,
-} from "@/components/features/skills/SkillsArea";
-import { AgentsArea, type AgentActionProps } from "@/components/features/agents/AgentsArea";
-import { AgentSkillsArea } from "@/components/features/agent-skills/AgentSkillsArea";
-import { KnowledgeBaseArea } from "@/components/features/knowledge/KnowledgeBaseArea";
+import React, { type ReactNode } from "react";
+import type { SettingsActionProps } from "@/components/features/settings/settings-action-types";
+import type { SkillActionProps, SkillSubAreaId } from "@/components/features/skills/skill-area-types";
+import type { AgentActionProps } from "@/components/features/agents/agent-area-types";
 import type { AgentSkillActionProps } from "@/components/features/agent-skills/agent-skills-types";
-import {
-  MemoryArea,
-  type MemoryActionProps,
-  type MemorySubAreaId,
-} from "@/components/features/memory/MemoryArea";
+import type { MemoryActionProps } from "@/components/features/memory/use-memory-area-controller";
+import { Spinner } from "@/components/ui/spinner";
 import type {
   MainAreaId,
   SettingsSubAreaId,
   StartupSnapshot,
   WorkbenchSnapshot,
 } from "@/types";
+
+// MemorySubAreaId identifies one service-projected VMM section.
+// MemorySubAreaId 标识一个由服务投影的 VMM 分区。
+type MemorySubAreaId = string;
+
+// LazySettingsFeatureContent isolates settings and Visual Lab from the console-first workbench chunk.
+// LazySettingsFeatureContent 将设置与视觉实验室隔离在控制台优先的工作台分块之外。
+const LazySettingsFeatureContent = React.lazy(() => import("@/components/features/settings/SettingsFeatureContent").then((module) => ({ default: module.SettingsFeatureContent })));
+// LazySkillsArea isolates LuaSkills management from the console-first workbench chunk.
+// LazySkillsArea 将 LuaSkills 管理隔离在控制台优先的工作台分块之外。
+const LazySkillsArea = React.lazy(() => import("@/components/features/skills/SkillsArea").then((module) => ({ default: module.SkillsArea })));
+// LazyAgentsArea isolates agent management from the console-first workbench chunk.
+// LazyAgentsArea 将智能体管理隔离在控制台优先的工作台分块之外。
+const LazyAgentsArea = React.lazy(() => import("@/components/features/agents/AgentsArea").then((module) => ({ default: module.AgentsArea })));
+// LazyAgentSkillsArea isolates prompt skill management from the console-first workbench chunk.
+// LazyAgentSkillsArea 将提示词技能管理隔离在控制台优先的工作台分块之外。
+const LazyAgentSkillsArea = React.lazy(() => import("@/components/features/agent-skills/AgentSkillsArea").then((module) => ({ default: module.AgentSkillsArea })));
+// LazyMemoryArea isolates VMM management from the console-first workbench chunk.
+// LazyMemoryArea 将 VMM 管理隔离在控制台优先的工作台分块之外。
+const LazyMemoryArea = React.lazy(() => import("@/components/features/memory/MemoryArea").then((module) => ({ default: module.MemoryArea })));
+// LazyKnowledgeBaseArea isolates knowledge management from the console-first workbench chunk.
+// LazyKnowledgeBaseArea 将知识库管理隔离在控制台优先的工作台分块之外。
+const LazyKnowledgeBaseArea = React.lazy(() => import("@/components/features/knowledge/KnowledgeBaseArea").then((module) => ({ default: module.KnowledgeBaseArea })));
+
+// FeatureLoadBoundary provides one stable non-layout-shifting fallback for deferred feature chunks.
+// FeatureLoadBoundary 为延迟功能分块提供一个稳定且不改变布局的加载回退。
+function FeatureLoadBoundary(props: { children: ReactNode }) {
+  return (
+    <React.Suspense fallback={<div className="flex min-h-32 items-center justify-center"><Spinner /></div>}>
+      {props.children}
+    </React.Suspense>
+  );
+}
 
 // FeatureContent renders the selected non-console feature area.
 // FeatureContent 渲染当前选中的非控制台功能区域。
@@ -77,62 +99,62 @@ export function FeatureContent(props: {
   if (props.activeArea === "agent-skills") {
     return (
       <div className="feature-content">
-      <AgentSkillsArea actions={props.agentSkillActions} workbench={props.workbench} />
+        <FeatureLoadBoundary><LazyAgentSkillsArea actions={props.agentSkillActions} workbench={props.workbench} /></FeatureLoadBoundary>
       </div>
     );
   }
   if (props.activeArea === "skills") {
     return (
       <div className="feature-content">
-        <SkillsArea
+        <FeatureLoadBoundary><LazySkillsArea
           activeTab={props.activeSkillSubArea}
-        skillActions={props.luaSkillActions}
+          skillActions={props.luaSkillActions}
           workbench={props.workbench}
-        />
+        /></FeatureLoadBoundary>
       </div>
     );
   }
   if (props.activeArea === "agents") {
     return (
       <div className="feature-content">
-        <AgentsArea
+        <FeatureLoadBoundary><LazyAgentsArea
           actions={props.agentActions}
           workbench={props.workbench}
-        />
+        /></FeatureLoadBoundary>
       </div>
     );
   }
   if (props.activeArea === "memory") {
     return (
       <div className="feature-content">
-        <MemoryArea
+        <FeatureLoadBoundary><LazyMemoryArea
           activeSection={props.activeMemorySubArea}
           actions={props.memoryActions}
           onOpenCredentialManagement={props.onOpenCredentialManagement}
           onSelectSection={props.onSelectMemorySubArea}
           snapshot={props.workbench.vmmMemory}
-        />
+        /></FeatureLoadBoundary>
       </div>
     );
   }
   if (props.activeArea === "knowledge") {
     return (
       <div className="feature-content">
-        <KnowledgeBaseArea />
+        <FeatureLoadBoundary><LazyKnowledgeBaseArea /></FeatureLoadBoundary>
       </div>
     );
   }
   if (props.activeArea === "settings") {
     return (
       <div className="feature-content">
-        <SettingsFeatureContent
+        <FeatureLoadBoundary><LazySettingsFeatureContent
           activeSettingsSubArea={props.activeSettingsSubArea}
           actions={props.settingsActions}
           onProviderPickerOpenChange={props.onProviderPickerOpenChange}
           providerPickerOpen={props.providerPickerOpen}
           startup={props.startup}
           workbench={props.workbench}
-        />
+        /></FeatureLoadBoundary>
       </div>
     );
   }

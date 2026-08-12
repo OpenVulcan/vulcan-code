@@ -54,87 +54,14 @@ fn terminal_inputs_request_interrupt_detects_ctrl_c() {
     ]));
 }
 
-/// Terminal key encoding should keep ANSI VT as the default while allowing explicit Windows getch bytes.
-/// 终端按键编码应保持 ANSI VT 为默认，同时允许显式 Windows getch 字节。
+/// Persistent AI terminals should use the same isolated PTY backend on every supported platform.
+/// 持久 AI 终端应在所有受支持平台上使用同一个隔离 PTY 后端。
 #[test]
-fn terminal_key_encoding_supports_ansi_and_windows_getch_extended_keys() {
-    let ansi = encode_terminal_inputs(
-        &[
-            TerminalSessionInput::Key {
-                key: String::from("ArrowDown"),
-            },
-            TerminalSessionInput::Key {
-                key: String::from("Delete"),
-            },
-            TerminalSessionInput::Key {
-                key: String::from("F12"),
-            },
-        ],
-        "\r\n",
-        TerminalSessionKeyEncoding::AnsiVt,
-    )
-    .expect("encode ansi keys");
-    assert_eq!(ansi, b"\x1b[B\x1b[3~\x1b[24~");
-
-    let windows_getch_single_byte = encode_terminal_inputs(
-        &[TerminalSessionInput::Key {
-            key: String::from("Esc"),
-        }],
-        "\r\n",
-        TerminalSessionKeyEncoding::WindowsConsoleGetch,
-    )
-    .expect("encode windows getch single-byte key");
-    assert_eq!(windows_getch_single_byte, vec![0x1b]);
-
-    let windows_getch_arrow = encode_terminal_inputs(
-        &[TerminalSessionInput::Key {
-            key: String::from("ArrowDown"),
-        }],
-        "\r\n",
-        TerminalSessionKeyEncoding::WindowsConsoleGetch,
+fn terminal_session_backend_is_cross_platform_pty() {
+    assert_eq!(
+        default_terminal_session_backend(),
+        CommandSessionBackend::Pty
     );
-    if cfg!(windows) {
-        assert!(
-            windows_getch_arrow
-                .expect_err("byte-oriented backend should reject getch extended keys")
-                .message
-                .contains("cannot synthesize console extended key")
-        );
-    } else {
-        assert_eq!(windows_getch_arrow.expect("encode arrow"), vec![0xe0, b'P']);
-    }
-}
-
-/// Explicit ANSI VT encoding on WindowsConsole should convert keys to text escape sequences instead of native key events.
-/// WindowsConsole 上显式 ANSI VT 编码应把按键转换为文本转义序列，而不是原生按键事件。
-#[test]
-fn windows_console_explicit_ansi_vt_uses_text_escape_sequence() {
-    let events = windows_console_input_events_from_inputs(
-        &[TerminalSessionInput::Key {
-            key: String::from("ArrowDown"),
-        }],
-        "\r\n",
-        Some(TerminalSessionKeyEncoding::AnsiVt),
-    )
-    .expect("convert ansi vt input");
-    assert_eq!(events.len(), 1);
-    match &events[0] {
-        CommandSessionInputEvent::Text { text } => assert_eq!(text, "\x1b[B"),
-        other => panic!("expected text event, got {other:?}"),
-    }
-
-    let native_events = windows_console_input_events_from_inputs(
-        &[TerminalSessionInput::Key {
-            key: String::from("ArrowDown"),
-        }],
-        "\r\n",
-        None,
-    )
-    .expect("convert native input");
-    assert!(matches!(
-        &native_events[0],
-        CommandSessionInputEvent::Key { key } if key == "ArrowDown"
-    ));
 }
 
 /// Interrupt drain should hide pure control fragments while keeping visible prompt or output text.
@@ -289,6 +216,7 @@ fn terminal_transaction_rejects_pending_input_line() {
         stdout_bytes: 0,
         stderr_bytes: 0,
         last_seq: 7,
+        dropped_before_seq: 0,
         pending_stdin_line: true,
         screen_frame_seq: None,
         screen_rows: None,

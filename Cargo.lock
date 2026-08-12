@@ -6542,6 +6542,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "vt100"
+version = "0.16.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "054ff75fb8fa83e609e685106df4faeffdf3a735d3c74ebce97ec557d5d36fd9"
+dependencies = [
+ "itoa",
+ "unicode-width",
+ "vte",
+]
+
+[[package]]
+name = "vte"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a5924018406ce0063cd67f8e008104968b74b563ee1b85dde3ed1f7cb87d3dbd"
+dependencies = [
+ "arrayvec",
+ "memchr",
+]
+
+[[package]]
 name = "vulcan-agent-runtime"
 version = "0.1.0"
 dependencies = [
@@ -6697,13 +6718,14 @@ name = "vulcan-host-tools"
 version = "0.1.0"
 dependencies = [
  "encoding_rs",
- "portable-pty",
  "serde",
  "serde_json",
  "sys-locale",
  "tokio",
  "uuid",
+ "vt100",
  "vulcan-runtime-assets",
+ "vulcan-terminal-host-protocol",
  "vulcan-workbench-model",
 ]
 
@@ -6783,6 +6805,13 @@ dependencies = [
  "vulcan-prompt-skills",
  "vulcan-runtime-assets",
  "vulcan-task-session",
+]
+
+[[package]]
+name = "vulcan-process-lifecycle"
+version = "0.1.0"
+dependencies = [
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6943,6 +6972,7 @@ dependencies = [
  "vulcan-llm-core",
  "vulcan-luaskills-config",
  "vulcan-plugin-runtime",
+ "vulcan-process-lifecycle",
  "vulcan-prompt-composer",
  "vulcan-prompt-skills",
  "vulcan-provider-adapters",
@@ -6957,7 +6987,6 @@ dependencies = [
  "vulcan-task-session",
  "vulcan-tools-manager",
  "vulcan-vmm",
- "vulcan-windows-console-helper",
  "vulcan-workbench-model",
  "vulcan-workspace-store",
 ]
@@ -7032,6 +7061,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "vulcan-terminal-host"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "portable-pty",
+ "serde",
+ "vt100",
+ "vulcan-terminal-host-protocol",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "vulcan-terminal-host-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "vulcan-tools-luaskills-call"
 version = "0.1.0"
 dependencies = [
@@ -7060,15 +7110,6 @@ dependencies = [
  "tonic 0.12.3",
  "tonic-build 0.12.3",
  "vulcan-context-injection",
-]
-
-[[package]]
-name = "vulcan-windows-console-helper"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "windows-sys 0.61.2",
 ]
 
 [[package]]

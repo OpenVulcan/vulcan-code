@@ -29,6 +29,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
+import { getWorkspaceInputOwner } from "@/components/workspace/workspace-input-owner";
 import type {
   ComposerAttachmentCapabilitySummary,
   ComposerAttachmentSummary,
@@ -523,6 +524,10 @@ export function ComposerPanel(props: {
       if (event.defaultPrevented || !isComposerPrintableKey(event)) {
         return;
       }
+      const inputOwner = getWorkspaceInputOwner();
+      if (inputOwner.kind === "project_terminal" || inputOwner.kind === "modal") {
+        return;
+      }
       // textarea is the unique composer input that receives redirected typing.
       // textarea 是接收重定向输入的唯一输入区文本框。
       const textarea = composerTextareaRef.current;
@@ -564,6 +569,7 @@ export function ComposerPanel(props: {
       ) : null}
       <section
         className={cn("composer-panel", isAttachmentDragOver && "attachment-drag-over")}
+        data-workspace-input-owner="composer"
         onDragLeave={() => setIsAttachmentDragOver(false)}
         onDragOver={handleComposerDragOver}
         onDrop={handleComposerDrop}

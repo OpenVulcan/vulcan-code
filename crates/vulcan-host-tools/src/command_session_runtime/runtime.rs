@@ -59,9 +59,6 @@ impl CommandSessionRuntime {
         match request.backend {
             CommandSessionBackend::Pipe => self.start_pipe_session(request).await,
             CommandSessionBackend::Pty => self.start_pty_session(request).await,
-            CommandSessionBackend::WindowsConsole => {
-                self.start_windows_console_session(request).await
-            }
         }
     }
 
@@ -96,7 +93,7 @@ impl CommandSessionRuntime {
 
         let command_session_id = Uuid::new_v4();
         let shared_state = Arc::new(CommandSessionSharedState::default());
-        let (control_sender, control_receiver) = unbounded_channel();
+        let (control_sender, control_receiver) = channel(COMMAND_SESSION_CONTROL_QUEUE_LIMIT);
         let record = Arc::new(CommandSessionRecord {
             command_session_id,
             owner_session_id: request.owner_session_id,
@@ -142,35 +139,20 @@ impl CommandSessionRuntime {
         self: &Arc<Self>,
         request: CommandSessionStartRequest,
     ) -> Result<CommandSessionSnapshot, String> {
-        let pty_system = native_pty_system();
-        let pair = pty_system
-            .openpty(PtySize {
-                rows: 24,
-                cols: 100,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
-            .map_err(|error| format!("Failed to create a pseudo terminal: {error}"))?;
-        let mut command = PtyCommandBuilder::new(&request.launcher_program);
-        command.args(&request.launcher_args);
-        command.cwd(&request.cwd);
-        let child = pair
-            .slave
-            .spawn_command(command)
-            .map_err(|error| format!("Failed to start the PTY command session: {error}"))?;
-        drop(pair.slave);
-        let reader = pair
-            .master
-            .try_clone_reader()
-            .map_err(|error| format!("Failed to capture PTY output: {error}"))?;
-        let writer = pair
-            .master
-            .take_writer()
-            .map_err(|error| format!("Failed to open PTY input: {error}"))?;
+        let connection = crate::terminal_host_client::spawn_terminal_host(
+            crate::terminal_host_protocol::TerminalHostStartRequest {
+                program: request.launcher_program.clone(),
+                args: request.launcher_args.clone(),
+                cwd: request.cwd.clone(),
+                cols: DEFAULT_PTY_SCREEN_COLS,
+                rows: DEFAULT_PTY_SCREEN_ROWS,
+            },
+        )
+        .await?;
 
         let command_session_id = Uuid::new_v4();
         let shared_state = Arc::new(CommandSessionSharedState::default());
-        let (control_sender, control_receiver) = unbounded_channel();
+        let (control_sender, control_receiver) = channel(COMMAND_SESSION_CONTROL_QUEUE_LIMIT);
         let record = Arc::new(CommandSessionRecord {
             command_session_id,
             owner_session_id: request.owner_session_id,
@@ -197,112 +179,11 @@ impl CommandSessionRuntime {
         tokio::spawn(run_pty_command_session_supervisor(
             PtyCommandSessionSupervisorInput {
                 record: Arc::clone(&record),
-                master: pair.master,
-                child,
-                reader,
-                writer,
+                connection,
                 control_receiver,
                 initial_stdin: request.initial_stdin,
                 initial_stdin_append_newline: request.initial_stdin_append_newline,
             },
-        ));
-
-        Ok(record.snapshot().await)
-    }
-
-    /// Starts one Windows native console helper-backed command session and returns its initial snapshot.
-    /// 启动一条 Windows 原生控制台 helper 后端的命令会话并返回其初始快照。
-    async fn start_windows_console_session(
-        self: &Arc<Self>,
-        request: CommandSessionStartRequest,
-    ) -> Result<CommandSessionSnapshot, String> {
-        #[cfg(not(windows))]
-        {
-            let _ = request;
-            Err(String::from(
-                "The Windows native console backend is only available on Windows.",
-            ))
-        }
-        #[cfg(windows)]
-        {
-            self.start_windows_console_session_inner(request).await
-        }
-    }
-
-    /// Starts one Windows helper-backed command session on Windows hosts.
-    /// 在 Windows 宿主上启动一条 helper 后端命令会话。
-    #[cfg(windows)]
-    async fn start_windows_console_session_inner(
-        self: &Arc<Self>,
-        request: CommandSessionStartRequest,
-    ) -> Result<CommandSessionSnapshot, String> {
-        let helper_path = resolve_windows_console_helper_path()?;
-        let mut helper = TokioCommand::new(vulcan_runtime_assets::native_host_path(&helper_path));
-        helper.creation_flags(WINDOWS_CREATE_NO_WINDOW);
-        helper.stdin(Stdio::piped());
-        helper.stdout(Stdio::piped());
-        helper.stderr(Stdio::piped());
-        helper.kill_on_drop(true);
-        let mut child = helper.spawn().map_err(|error| {
-            format!(
-                "Failed to start Windows console helper `{}`: {error}",
-                helper_path.display()
-            )
-        })?;
-        let mut helper_stdin = child.stdin.take().ok_or_else(|| {
-            String::from("The Windows console helper started without a writable stdin pipe.")
-        })?;
-        let helper_stdout = child.stdout.take().ok_or_else(|| {
-            String::from("The Windows console helper started without a readable stdout pipe.")
-        })?;
-        let helper_stderr = child.stderr.take().ok_or_else(|| {
-            String::from("The Windows console helper started without a readable stderr pipe.")
-        })?;
-        let start_request = WindowsConsoleHelperRequest::Start {
-            program: request.launcher_program.clone(),
-            args: request.launcher_args.clone(),
-            cwd: vulcan_runtime_assets::native_host_path_text_from_path(&request.cwd),
-            rows: 24,
-            cols: 100,
-            initial_stdin: request.initial_stdin.clone(),
-            initial_stdin_append_newline: request.initial_stdin_append_newline,
-            interactive_newline: request.interactive_newline.clone(),
-        };
-        write_windows_console_helper_request(&mut helper_stdin, &start_request).await?;
-
-        let command_session_id = Uuid::new_v4();
-        let shared_state = Arc::new(CommandSessionSharedState::default());
-        let (control_sender, control_receiver) = unbounded_channel();
-        let record = Arc::new(CommandSessionRecord {
-            command_session_id,
-            owner_session_id: request.owner_session_id,
-            display_name: request.display_name,
-            command: request.command,
-            shell_label: request.shell_label,
-            launcher_shell_label: request.launcher_shell_label,
-            interactive_newline: request.interactive_newline,
-            cwd: request.cwd,
-            backend: CommandSessionBackend::WindowsConsole,
-            control_sender,
-            shared_state: Arc::clone(&shared_state),
-        });
-
-        self.sessions
-            .write()
-            .map_err(|_| {
-                String::from(
-                    "The command session registry is locked and cannot store a new session.",
-                )
-            })?
-            .insert(command_session_id, Arc::clone(&record));
-
-        tokio::spawn(run_windows_console_helper_supervisor(
-            Arc::clone(&record),
-            child,
-            helper_stdin,
-            helper_stdout,
-            helper_stderr,
-            control_receiver,
         ));
 
         Ok(record.snapshot().await)
@@ -382,17 +263,15 @@ impl CommandSessionRuntime {
         }
 
         let (sender, receiver) = oneshot::channel();
-        record
-            .control_sender
-            .send(CommandSessionControlMessage::Write {
+        send_command_session_control(
+            &record.control_sender,
+            CommandSessionControlMessage::Write {
                 bytes,
                 responder: sender,
-            })
-            .map_err(|_| {
-                String::from(
-                    "The command session supervisor has exited and cannot write more stdin.",
-                )
-            })?;
+            },
+            "The command session supervisor has exited and cannot write more stdin.",
+        )
+        .await?;
         let bytes_written =
             timeout(
                 Duration::from_millis(COMMAND_SESSION_CONTROL_ACK_TIMEOUT_MS),
@@ -423,44 +302,9 @@ impl CommandSessionRuntime {
         events: Vec<CommandSessionInputEvent>,
     ) -> Result<CommandSessionWriteOutcome, String> {
         let record = self.session_for_owner(owner_session_id, command_session_id)?;
-        let snapshot = record.snapshot().await;
-        if snapshot.status != CommandSessionStatus::Running {
-            return Err(format!(
-                "Command session `{}` is already in `{}` state and cannot accept more terminal input.",
-                command_session_id,
-                snapshot.status.as_str()
-            ));
-        }
-        let (sender, receiver) = oneshot::channel();
-        record
-            .control_sender
-            .send(CommandSessionControlMessage::InputEvents {
-                events,
-                responder: sender,
-            })
-            .map_err(|_| {
-                String::from(
-                    "The command session supervisor has exited and cannot send terminal input.",
-                )
-            })?;
-        let accepted_count =
-            timeout(
-                Duration::from_millis(COMMAND_SESSION_CONTROL_ACK_TIMEOUT_MS),
-                receiver,
-            )
+        let bytes = encode_command_session_input_events(&events, &record.interactive_newline)?;
+        self.write_session_bytes(owner_session_id, command_session_id, bytes)
             .await
-            .map_err(|_| {
-                String::from(
-                    "Timed out waiting for the command session supervisor to acknowledge terminal input.",
-                )
-            })?
-            .map_err(|_| {
-                String::from("The command session input acknowledgement channel is closed.")
-            })??;
-        Ok(CommandSessionWriteOutcome {
-            snapshot: record.snapshot().await,
-            bytes_written: accepted_count,
-        })
     }
 
     /// Resizes one owned running terminal session when its backend supports screen dimensions.
@@ -474,18 +318,16 @@ impl CommandSessionRuntime {
     ) -> Result<CommandSessionSnapshot, String> {
         let record = self.session_for_owner(owner_session_id, command_session_id)?;
         let (sender, receiver) = oneshot::channel();
-        record
-            .control_sender
-            .send(CommandSessionControlMessage::Resize {
+        send_command_session_control(
+            &record.control_sender,
+            CommandSessionControlMessage::Resize {
                 rows,
                 cols,
                 responder: sender,
-            })
-            .map_err(|_| {
-                String::from(
-                    "The command session supervisor has exited and cannot resize the terminal.",
-                )
-            })?;
+            },
+            "The command session supervisor has exited and cannot resize the terminal.",
+        )
+        .await?;
         timeout(
             Duration::from_millis(COMMAND_SESSION_CONTROL_ACK_TIMEOUT_MS),
             receiver,
@@ -517,14 +359,12 @@ impl CommandSessionRuntime {
         }
 
         let (sender, receiver) = oneshot::channel();
-        record
-            .control_sender
-            .send(CommandSessionControlMessage::Stop { responder: sender })
-            .map_err(|_| {
-                String::from(
-                    "The command session supervisor has exited and cannot stop the process.",
-                )
-            })?;
+        send_command_session_control(
+            &record.control_sender,
+            CommandSessionControlMessage::Stop { responder: sender },
+            "The command session supervisor has exited and cannot stop the process.",
+        )
+        .await?;
         let stop_acknowledged = timeout(
             Duration::from_millis(COMMAND_SESSION_CONTROL_ACK_TIMEOUT_MS),
             receiver,
@@ -649,6 +489,107 @@ impl CommandSessionRuntime {
             advance_ai_cursor: true,
         })
         .await
+    }
+
+    /// Reads retained output for a visible display without advancing AI or delivery cursors.
+    /// 为可见显示层读取保留输出，但不推进 AI 或交付游标。
+    ///
+    /// # Parameters / 参数
+    /// - `owner_session_id`: Session that owns the terminal.
+    /// - `command_session_id`: Terminal session to display.
+    /// - `after_seq`: Last output sequence already rendered by this display.
+    /// - `max_chunks`: Maximum output chunks returned in this delivery.
+    /// - `owner_session_id`：拥有该终端的会话。
+    /// - `command_session_id`：需要显示的终端会话。
+    /// - `after_seq`：该显示层已经渲染的最后输出序号。
+    /// - `max_chunks`：本次交付返回的最大输出分片数。
+    ///
+    /// # Returns / 返回值
+    /// Returns the current snapshot and retained chunks strictly after `after_seq`.
+    /// 返回当前快照以及严格晚于 `after_seq` 的保留分片。
+    pub async fn read_session_for_display(
+        &self,
+        owner_session_id: SessionId,
+        command_session_id: SessionId,
+        after_seq: u64,
+        max_chunks: usize,
+    ) -> Result<CommandSessionReadOutcome, String> {
+        let record = self.session_for_owner(owner_session_id, command_session_id)?;
+        Ok(record.read_since(after_seq, max_chunks.max(1), true).await)
+    }
+
+    /// Reads the newest retained output for the one-time visible-display bootstrap.
+    /// 为可见显示层的一次性首次加载读取最新保留输出。
+    ///
+    /// # Parameters / 参数
+    /// - `owner_session_id`: Session that owns the terminal.
+    /// - `command_session_id`: Terminal session to display.
+    /// - `max_chunks`: Maximum retained tail chunks returned once.
+    /// - `owner_session_id`：拥有该终端的会话。
+    /// - `command_session_id`：需要显示的终端会话。
+    /// - `max_chunks`：一次返回的最大保留尾部分片数。
+    ///
+    /// # Returns / 返回值
+    /// Returns the current snapshot and an ordered, bounded output tail.
+    /// 返回当前快照以及有序且有界的输出尾部。
+    pub async fn read_recent_session_for_display(
+        &self,
+        owner_session_id: SessionId,
+        command_session_id: SessionId,
+        max_chunks: usize,
+    ) -> Result<CommandSessionReadOutcome, String> {
+        let record = self.session_for_owner(owner_session_id, command_session_id)?;
+        Ok(record.read_recent_for_display(max_chunks).await)
+    }
+
+    /// Waits until one visible display has new output or observes a lifecycle transition.
+    /// 等待一个可见显示层出现新输出或观察到生命周期转换。
+    ///
+    /// This method uses the runtime notification primitive and does not poll.
+    /// 此方法使用运行时通知原语，不执行轮询。
+    ///
+    /// # Parameters / 参数
+    /// - `owner_session_id`: Session that owns the terminal.
+    /// - `command_session_id`: Terminal session being displayed.
+    /// - `display_cursor`: Output, lifecycle, screen-frame, and failure state already rendered.
+    /// - `max_chunks`: Maximum output chunks returned in one notification.
+    /// - `owner_session_id`：拥有该终端的会话。
+    /// - `command_session_id`：正在显示的终端会话。
+    /// - `display_cursor`：已经渲染的输出、生命周期、屏幕帧与故障状态。
+    /// - `max_chunks`：单次通知返回的最大输出分片数。
+    ///
+    /// # Returns / 返回值
+    /// Returns only after output/state differs from the caller's observed cursor and status.
+    /// 仅在输出或状态与调用方观察到的游标及状态不同时返回。
+    pub async fn wait_for_session_display_change(
+        &self,
+        owner_session_id: SessionId,
+        command_session_id: SessionId,
+        display_cursor: &CommandSessionDisplayCursor,
+        max_chunks: usize,
+    ) -> Result<CommandSessionReadOutcome, String> {
+        let record = self.session_for_owner(owner_session_id, command_session_id)?;
+        loop {
+            let notified = record.shared_state.change_notify.notified();
+            tokio::pin!(notified);
+            // Register before reading state so notify_waiters cannot be lost between the read and await.
+            // 在读取状态前完成注册，避免 notify_waiters 在读取与等待之间丢失。
+            notified.as_mut().enable();
+            let outcome = record
+                // A visible cursor makes returned sequence ids immutable for future coalescing.
+                // 可见游标会使已返回序号对后续合并保持不可变。
+                .read_since(display_cursor.after_seq, max_chunks.max(1), true)
+                .await;
+            let running_now = outcome.snapshot.status == CommandSessionStatus::Running;
+            if !outcome.returned_chunks.is_empty()
+                || running_now != display_cursor.running_was_observed
+                || outcome.snapshot.screen_frame_seq != display_cursor.screen_frame_seq
+                || outcome.snapshot.failure_reason != display_cursor.failure_reason
+            {
+                return Ok(outcome);
+            }
+            notified.as_mut().await;
+        }
     }
 
     /// Peeks buffered output for terminal_session without advancing the AI-facing cursor.

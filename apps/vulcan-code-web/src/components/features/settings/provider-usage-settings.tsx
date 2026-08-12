@@ -4,6 +4,7 @@ import { FileUp, LoaderCircle, RefreshCw } from "lucide-react"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import type { UsageMetricViewModel } from "@/components/product/usage"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import {
@@ -29,6 +30,40 @@ import type {
 // ALL_CONSUMERS identifies the unfiltered server-bound consumer view.
 // ALL_CONSUMERS 标识未筛选的服务端绑定消费者视图。
 const ALL_CONSUMERS = "__all_consumers__"
+
+// providerUsageSummaryMetrics transforms exact daily rows into localized display-only metrics.
+// providerUsageSummaryMetrics 将精确每日计量行转换为已本地化的纯展示指标。
+//
+// Parameters
+// 参数
+// `rows` contains the exact consumer-filtered daily aggregates.
+// `rows` 包含精确的消费者筛选后每日聚合。
+// `zh` selects the already-known display locale.
+// `zh` 选择已经确定的展示语言。
+//
+// Returns
+// 返回值
+// Three formatted metrics without retaining service or global-state dependencies.
+// 返回三项格式化指标，不保留服务或全局状态依赖。
+export function providerUsageSummaryMetrics(
+  rows: ProviderUsageDailySummary[],
+  zh: boolean,
+): UsageMetricViewModel[] {
+  // attemptCount is the physical upstream-attempt total in the bounded dashboard window.
+  // attemptCount 是有界仪表盘窗口内真实上游 attempt 总数。
+  const attemptCount = rows.reduce((sum, row) => sum + row.attemptCount, 0)
+  // reportedCount measures direct provider usage coverage rather than fabricated estimates.
+  // reportedCount 衡量供应商直接报告用量的覆盖量，不包含伪造估算。
+  const reportedCount = rows.reduce((sum, row) => sum + row.reportedUsageAttemptCount, 0)
+  // totalTokens sums only known daily token totals; unknown row facts remain absent in detail.
+  // totalTokens 仅汇总已知每日 Token；未知行事实仍在明细中保持缺失。
+  const totalTokens = rows.reduce((sum, row) => sum + (row.totalTokens ?? 0), 0)
+  return [
+    { id: "physical-attempts", label: zh ? "真实调用" : "Physical attempts", value: formatInteger(attemptCount), description: zh ? "包含重试与失败" : "Includes retries and failures" },
+    { id: "usage-coverage", label: zh ? "用量覆盖率" : "Usage coverage", value: attemptCount > 0 ? `${((reportedCount / attemptCount) * 100).toFixed(1)}%` : "—", description: zh ? "供应商直接报告" : "Directly provider-reported" },
+    { id: "total-tokens", label: zh ? "Token 合计" : "Total tokens", value: formatInteger(totalTokens), description: zh ? "仅汇总已知值" : "Known values only" },
+  ]
+}
 
 // ProviderUsageSettingsArea renders native egress accounting without session-only statistics.
 // ProviderUsageSettingsArea 渲染原生出口侧计量，不混入仅会话统计。
@@ -124,19 +159,10 @@ export function ProviderUsageSettingsArea() {
   const filteredRecentAttempts = dashboard?.recentAttempts.filter(
     (row) => consumerFilter === ALL_CONSUMERS || row.consumerId === consumerFilter,
   ) ?? []
-  // attemptCount is the physical upstream-attempt total in the bounded dashboard window.
-  // attemptCount 是有界仪表盘窗口内真实上游 attempt 总数。
-  const attemptCount = filteredDaily.reduce((sum, row) => sum + row.attemptCount, 0)
-  // reportedCount measures direct provider usage coverage rather than fabricated estimates.
-  // reportedCount 衡量供应商直接报告用量的覆盖量，不包含伪造估算。
-  const reportedCount = filteredDaily.reduce(
-    (sum, row) => sum + row.reportedUsageAttemptCount,
-    0,
-  ) ?? 0
-  // totalTokens sums only known daily token totals; unknown values remain absent in row detail.
-  // totalTokens 仅汇总已知每日 Token；未知值仍在行明细中保持缺失。
-  const totalTokens = filteredDaily.reduce((sum, row) => sum + (row.totalTokens ?? 0), 0)
   const zh = locale === "zh-CN"
+  // summaryMetrics is the display-only projection consumed by the product component family.
+  // summaryMetrics 是由产品组件族消费的纯展示投影。
+  const summaryMetrics = providerUsageSummaryMetrics(filteredDaily, zh)
 
   return (
     <div className="space-y-4">
@@ -223,9 +249,14 @@ export function ProviderUsageSettingsArea() {
       </div>
 
       <div className="grid gap-3 md:grid-cols-3">
-        <MetricCard description={zh ? "包含重试与失败" : "Includes retries and failures"} title={zh ? "真实调用" : "Physical attempts"} value={formatInteger(attemptCount)} />
-        <MetricCard description={zh ? "供应商直接报告" : "Directly provider-reported"} title={zh ? "用量覆盖率" : "Usage coverage"} value={attemptCount > 0 ? `${((reportedCount / attemptCount) * 100).toFixed(1)}%` : "—"} />
-        <MetricCard description={zh ? "仅汇总已知值" : "Known values only"} title={zh ? "Token 合计" : "Total tokens"} value={formatInteger(totalTokens)} />
+        {summaryMetrics.map((metric) => (
+          <MetricCard
+            description={metric.description ?? ""}
+            key={metric.id}
+            title={metric.label}
+            value={metric.value}
+          />
+        ))}
       </div>
 
       <Card>
@@ -328,8 +359,8 @@ export function ProviderUsageSettingsArea() {
   )
 }
 
-// MetricCard renders one compact native-accounting metric.
-// MetricCard 渲染一项紧凑原生计量指标。
+// MetricCard renders one compact native-accounting metric with the established page geometry.
+// MetricCard 使用页面既有几何参数渲染一项紧凑原生计量指标。
 function MetricCard(props: { description: string; title: string; value: string }) {
   return (
     <Card>

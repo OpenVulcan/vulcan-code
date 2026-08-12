@@ -465,7 +465,7 @@ fn run_official_vector_rebuild(
         .spawn()
         .map_err(|error| format!("启动 VMM 正式向量重建失败：{error}"))?;
     #[cfg(windows)]
-    let _child_job = vulcan_windows_console_helper::WindowsKillOnCloseJob::attach(&child)
+    let _child_job = vulcan_process_lifecycle::WindowsKillOnCloseJob::attach(&child)
         .map_err(|error| format!("保护 VMM 维护子进程失败：{error}"))?;
     loop {
         if cancel.load(Ordering::SeqCst) {

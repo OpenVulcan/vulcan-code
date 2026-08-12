@@ -72,7 +72,6 @@
 }
 
 .workspace-resizable-body-shell {
-  --workspace-header-height: 46px;
   --workspace-floating-context-panel-width: min(420px, calc(100% - 28px));
   position: relative;
   flex: 1 1 auto;

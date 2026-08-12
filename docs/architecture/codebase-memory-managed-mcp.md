@@ -86,7 +86,7 @@ Vulcan Code 固定使用正式发布的 `v0.1.1` 原生资产。依赖安装命�
 
 默认 `./make.ps1 deps` 和 `./make.ps1 deps all` 也包含 CBM。安装器只下载当前原生平台资产，先校验仓库固定的 `checksums.txt` SHA-256，再从该清单解析并校验平台压缩包摘要；解压后继续校验专版文件名、`--version` 输出，并根据最终二进制字节生成宿主 manifest。验证后的依赖保存在 `third_party/codebase_memory_runtime`，不直接修改运行中的 output。
 
-`make build`、`make br` 与 `make release` 只把已经安装的依赖同步到 `output/dependencies/runtimes/codebase-memory`，不会访问网络或编译 CBM。同步器把可执行文件与 manifest 作为一致性文件对事务化切换；若运行中的 CBM 锁定目标 EXE，则整组保留旧的已验证版本，绝不单独更新 manifest。版本升级只修改安装器中固定的 Release 标签与 `checksums.txt` 摘要。
+`make sync` 把已经安装的依赖同步到 `output/dependencies/runtimes/codebase-memory`，不会访问网络或编译 CBM；`make build`、`make br` 与 `make release` 不再触发该同步。同步器把可执行文件与 manifest 作为一致性文件对事务化切换；若运行中的 CBM 锁定目标 EXE，则整组保留旧的已验证版本，绝不单独更新 manifest。版本升级只修改安装器中固定的 Release 标签与 `checksums.txt` 摘要。
 
 `scripts/package_codebase_memory_runtime.ps1` 保留为开发者对本地原生专版产物执行身份校验、复制和 manifest 生成的底层工具，不是正式依赖下载入口。
 

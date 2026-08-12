@@ -12,6 +12,14 @@ ScriptDir=$(CDPATH= cd "$(dirname "$0")" && pwd -P)
 # TauriBuildScriptPath 用于指向 Unix-like Tauri/WebUI 构建脚本。
 TauriBuildScriptPath="$ScriptDir/scripts/build_tauri.sh"
 
+# TauriSyncScriptPath points at the dedicated Unix-like runtime-resource synchronization script.
+# TauriSyncScriptPath 用于指向专用的 Unix-like 运行时资源同步脚本。
+TauriSyncScriptPath="$ScriptDir/scripts/sync_tauri_runtime.sh"
+
+# ViteDevServerScriptPath points at the standalone Unix-like WebUI development-server lifecycle script.
+# ViteDevServerScriptPath 用于指向独立 Unix-like WebUI 开发服务器生命周期脚本。
+ViteDevServerScriptPath="$ScriptDir/scripts/vite_dev_server.sh"
+
 # TauriRunScriptPath points at the Unix-like Tauri/WebUI run script.
 # TauriRunScriptPath 用于指向 Unix-like Tauri/WebUI 运行脚本。
 TauriRunScriptPath="$ScriptDir/scripts/run_tauri.sh"
@@ -24,8 +32,8 @@ PowerShellScriptPath="$ScriptDir/make.ps1"
 # CommandMode 用于选择顶层命令，例如 build、run、release 或 deps。
 CommandMode=${1:-}
 
-# CommandVariant carries the optional secondary mode such as release after run or host/lua after deps.
-# CommandVariant 用于承接可选的二级模式，例如 run 后面的 release，或 deps 后面的 host/lua。
+# CommandVariant carries a secondary mode such as a Vite action, release after run, or a dependency kind.
+# CommandVariant 用于承接二级模式，例如 Vite 操作、run 后面的 release 或依赖类型。
 CommandVariant=${2:-}
 
 # normalize_command converts command text into a trimmed lower-case token.
@@ -49,6 +57,33 @@ invoke_tauri_build() {
     else
         sh "$TauriBuildScriptPath"
     fi
+}
+
+# invoke_tauri_sync synchronizes runtime resources without compiling the application.
+# invoke_tauri_sync 用于在不编译应用的情况下同步运行时资源。
+# The function accepts no arguments and returns the child synchronization status.
+# 此函数不接收参数，并返回子同步脚本的状态。
+invoke_tauri_sync() {
+    if [ ! -f "$TauriSyncScriptPath" ]; then
+        echo "Missing Tauri runtime synchronization script: $TauriSyncScriptPath" >&2
+        exit 1
+    fi
+    sh "$TauriSyncScriptPath"
+}
+
+# invoke_vite_dev_server delegates one explicit standalone Vite lifecycle action.
+# invoke_vite_dev_server 用于委托一个显式的独立 Vite 生命周期操作。
+# The function accepts start, stop, or status and returns the child script status.
+# 此函数接收 start、stop 或 status，并返回子脚本状态。
+invoke_vite_dev_server() {
+    # Action selects the exact standalone Vite lifecycle operation.
+    # Action 用于选择精确的独立 Vite 生命周期操作。
+    Action=$1
+    if [ ! -f "$ViteDevServerScriptPath" ]; then
+        echo "Missing Vite development-server script: $ViteDevServerScriptPath" >&2
+        exit 1
+    fi
+    sh "$ViteDevServerScriptPath" "$Action"
 }
 
 # invoke_tauri_run forwards the current mode to scripts/run_tauri.sh.
@@ -95,13 +130,17 @@ invoke_powershell_route() {
 # show_usage 用于输出支持的命令形式，方便贡献者在输入无效参数后快速恢复。
 show_usage() {
     echo "Usage:"
+    echo "  ./make.sh sync        # synchronize runtime resources into output"
+    echo "  ./make.sh vite start  # start the standalone WebUI Vite dev server"
+    echo "  ./make.sh vite stop   # stop the standalone WebUI Vite dev server"
+    echo "  ./make.sh vite status # show the standalone WebUI Vite dev server status"
     echo "  ./make.sh             # Tauri/WebUI debug build"
     echo "  ./make.sh build       # Tauri/WebUI debug build"
-    echo "  ./make.sh br          # build and run Tauri/WebUI debug"
+    echo "  ./make.sh br          # build and run Tauri/WebUI debug; Vite is managed separately"
     echo "  ./make.sh br release  # build and run Tauri/WebUI release"
     echo "  ./make.sh release     # Tauri/WebUI release build"
     echo "  ./make.sh licenses    # generate Rust third-party notices for the About page"
-    echo "  ./make.sh run         # run Tauri/WebUI debug build"
+    echo "  ./make.sh run         # run Tauri/WebUI debug build; Vite is managed separately"
     echo "  ./make.sh run release # run Tauri/WebUI release build"
     echo "  ./make.sh deps        # install host + official LuaSkills runtime dependencies"
     echo "  ./make.sh deps host   # install host native dependencies only"
@@ -131,6 +170,26 @@ case "$NormalizedMode" in
             show_usage
             exit 1
         fi
+        ;;
+    sync)
+        if [ "$NormalizedVariant" != "" ]; then
+            echo "Unsupported sync command: '$CommandVariant'" >&2
+            show_usage
+            exit 1
+        fi
+        invoke_tauri_sync
+        ;;
+    vite)
+        case "$NormalizedVariant" in
+            start|stop|status)
+                invoke_vite_dev_server "$NormalizedVariant"
+                ;;
+            *)
+                echo "Unsupported vite command: '$CommandVariant'" >&2
+                show_usage
+                exit 1
+                ;;
+        esac
         ;;
     release)
         invoke_tauri_build 1

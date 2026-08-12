@@ -167,7 +167,7 @@ static MANAGED_MEMORY_MESH_GENERATION: AtomicU64 = AtomicU64::new(0);
 pub(crate) struct ManagedMemoryMeshRuntime {
     child: Option<Child>,
     #[cfg(windows)]
-    child_job: Option<vulcan_windows_console_helper::WindowsKillOnCloseJob>,
+    child_job: Option<vulcan_process_lifecycle::WindowsKillOnCloseJob>,
     manifest_path: PathBuf,
     status_path: PathBuf,
     shutdown_path: PathBuf,
@@ -351,7 +351,7 @@ impl ManagedMemoryMeshRuntime {
             }
         };
         #[cfg(windows)]
-        let child_job = match vulcan_windows_console_helper::WindowsKillOnCloseJob::attach(&child) {
+        let child_job = match vulcan_process_lifecycle::WindowsKillOnCloseJob::attach(&child) {
             Ok(job) => job,
             Err(error) => {
                 stop_child(&mut child);

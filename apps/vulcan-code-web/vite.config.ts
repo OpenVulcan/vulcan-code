@@ -4,6 +4,7 @@ import tailwindcss from "@tailwindcss/vite";
 import path from "node:path";
 import os from "node:os";
 import fs from "node:fs/promises";
+import { configDefaults } from "vitest/config";
 
 // Configure the Vite app used by the Tauri desktop shell.
 // 配置 Tauri 桌面壳使用的 Vite 应用。
@@ -17,6 +18,9 @@ export default defineConfig({
   clearScreen: false,
   worker: {
     format: "es",
+  },
+  test: {
+    exclude: [...configDefaults.exclude, "scripts/*.test.mjs"],
   },
   server: {
     host: "127.0.0.1",

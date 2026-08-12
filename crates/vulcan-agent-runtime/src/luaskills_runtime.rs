@@ -69,7 +69,7 @@ fn bootstrap_luaskills_runtime_blocking(
     controller: PersistedControllerConfiguration,
 ) -> Result<LuaSkillsBootstrapReport, String> {
     let runtime_root = application_luaskills_runtime_root().ok_or_else(|| {
-        String::from("未找到 LuaSkills 活动运行根，请先执行 make build 并从 output 目录启动应用。")
+        String::from("未找到 LuaSkills 活动运行根，请先执行 make sync 并从 output 目录启动应用。")
     })?;
     // runtime_root pins every derived host path to one absolute native directory identity while removing Windows verbatim prefixes before the path reaches LuaSkills.
     // runtime_root 将所有派生宿主路径固定到一个绝对原生目录身份，并在路径进入 LuaSkills 前移除 Windows verbatim 前缀。

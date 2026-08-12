@@ -17,8 +17,19 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_stop_conversation_run",
     "service_stop_command_session",
     "service_get_command_session_snapshot",
+    "service_attach_command_session_display",
+    "service_detach_command_session_display",
     "service_send_command_session_input",
     "service_resize_command_session",
+    "service_list_project_terminals",
+    "service_create_project_terminal",
+    "service_send_project_terminal_input",
+    "service_resize_project_terminal",
+    "service_rename_project_terminal",
+    "service_stop_project_terminal",
+    "service_close_project_terminal",
+    "service_attach_project_terminal_display",
+    "service_detach_project_terminal_display",
     "service_get_user_prompt_edit_draft",
     "service_submit_user_prompt_edit",
     "service_fork_conversation",
@@ -150,6 +161,19 @@ pub(super) async fn dispatch(
             )
             .await,
         ),
+        "service_attach_command_session_display" => rpc_json_result(
+            service_attach_command_session_display(
+                app,
+                state,
+                rpc_required_param(params, "commandSessionId")?,
+                rpc_optional_param(params, "ownerSessionId")?,
+                rpc_required_param(params, "displayClientId")?,
+            )
+            .await,
+        ),
+        "service_detach_command_session_display" => rpc_json_result(
+            service_detach_command_session_display(rpc_required_param(params, "subscriptionId")?),
+        ),
         "service_send_command_session_input" => rpc_json_result(
             service_send_command_session_input(app, state, rpc_required_param(params, "request")?)
                 .await,
@@ -157,6 +181,50 @@ pub(super) async fn dispatch(
         "service_resize_command_session" => rpc_json_result(
             service_resize_command_session(app, state, rpc_required_param(params, "request")?)
                 .await,
+        ),
+        "service_list_project_terminals" => rpc_json_result(
+            service_list_project_terminals(state, rpc_required_param(params, "projectId")?).await,
+        ),
+        "service_create_project_terminal" => rpc_json_result(
+            service_create_project_terminal(app, state, rpc_required_param(params, "request")?)
+                .await,
+        ),
+        "service_send_project_terminal_input" => rpc_json_result(
+            service_send_project_terminal_input(rpc_required_param(params, "request")?).await,
+        ),
+        "service_resize_project_terminal" => rpc_json_result(
+            service_resize_project_terminal(rpc_required_param(params, "request")?).await,
+        ),
+        "service_rename_project_terminal" => rpc_json_result(
+            service_rename_project_terminal(state, rpc_required_param(params, "request")?).await,
+        ),
+        "service_stop_project_terminal" => rpc_json_result(
+            service_stop_project_terminal(
+                rpc_required_param(params, "projectId")?,
+                rpc_required_param(params, "terminalId")?,
+            )
+            .await,
+        ),
+        "service_close_project_terminal" => rpc_json_result(
+            service_close_project_terminal(
+                app,
+                state,
+                rpc_required_param(params, "projectId")?,
+                rpc_required_param(params, "terminalId")?,
+            )
+            .await,
+        ),
+        "service_attach_project_terminal_display" => rpc_json_result(
+            service_attach_project_terminal_display(
+                app,
+                rpc_required_param(params, "projectId")?,
+                rpc_required_param(params, "terminalId")?,
+                rpc_required_param(params, "displayClientId")?,
+            )
+            .await,
+        ),
+        "service_detach_project_terminal_display" => rpc_json_result(
+            service_detach_project_terminal_display(rpc_required_param(params, "subscriptionId")?),
         ),
         "service_get_user_prompt_edit_draft" => rpc_json_result(
             service_get_user_prompt_edit_draft(

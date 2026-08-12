@@ -151,26 +151,9 @@ pub(crate) async fn execute_terminal_session_send_action(
         ));
     }
     let wait_mode = terminal_wait_mode(parsed_args.wait_policy.as_ref());
-    let interactive_newline = shell_specific_newline(before_snapshot.shell_label.as_str());
-    let requested_key_encoding = parsed_args.key_encoding;
-    let key_encoding = requested_key_encoding.unwrap_or(TerminalSessionKeyEncoding::AnsiVt);
-    let key_encoding_label =
-        terminal_effective_key_encoding_label(before_snapshot.backend, requested_key_encoding);
-    let uses_structured_input = before_snapshot.backend == CommandSessionBackend::WindowsConsole;
-    let mut structured_input = if uses_structured_input {
-        Some(windows_console_input_events_from_inputs(
-            &inputs,
-            interactive_newline,
-            requested_key_encoding,
-        )?)
-    } else {
-        None
-    };
-    let mut encoded_input = if uses_structured_input {
-        Vec::new()
-    } else {
-        encode_terminal_inputs(&inputs, interactive_newline, key_encoding)?
-    };
+    let interactive_newline = terminal_session_pty_newline(before_snapshot.shell_label.as_str());
+    let key_encoding_label = "ansi_vt";
+    let mut structured_input = terminal_input_events_from_inputs(&inputs);
     let interrupt_requested = terminal_inputs_request_interrupt(&inputs);
     let mut transaction = None;
     if wait_mode == TerminalSessionWaitMode::UntilExitCode {
@@ -183,13 +166,9 @@ pub(crate) async fn execute_terminal_session_send_action(
             transaction_id.as_str(),
             terminal_generated_command_newline(before_snapshot.shell_label.as_str()),
         )?;
-        if uses_structured_input {
-            structured_input = Some(vec![CommandSessionInputEvent::Text {
-                text: wrapped_command,
-            }]);
-        } else {
-            encoded_input = wrapped_command.into_bytes();
-        }
+        structured_input = vec![CommandSessionInputEvent::Text {
+            text: wrapped_command,
+        }];
         transaction = Some(TerminalTransactionResult {
             id: transaction_id,
             command,
@@ -199,21 +178,10 @@ pub(crate) async fn execute_terminal_session_send_action(
             ended_seq: None,
         });
     }
-    let write_outcome = if uses_structured_input {
-        command_session_runtime
-            .write_session_input_events(
-                owner_session_id,
-                terminal_session_id,
-                structured_input.unwrap_or_default(),
-            )
-            .await
-            .map_err(NativeToolError::new)?
-    } else {
-        command_session_runtime
-            .write_session_bytes(owner_session_id, terminal_session_id, encoded_input)
-            .await
-            .map_err(NativeToolError::new)?
-    };
+    let write_outcome = command_session_runtime
+        .write_session_input_events(owner_session_id, terminal_session_id, structured_input)
+        .await
+        .map_err(NativeToolError::new)?;
     let requested_wait_budget =
         terminal_wait_budget_ms(parsed_args.wait_policy.as_ref()).unwrap_or(0);
     let wait_budget = requested_wait_budget;

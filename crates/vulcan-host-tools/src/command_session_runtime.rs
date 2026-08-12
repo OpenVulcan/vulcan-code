@@ -3,19 +3,16 @@
 
 use crate::model::SessionId;
 use crate::output_decode::ShellOutputStreamDecoder;
-use crate::process_creation::{WINDOWS_CREATE_NO_WINDOW, apply_windows_release_no_window};
-use portable_pty::{CommandBuilder as PtyCommandBuilder, PtySize, native_pty_system};
+use crate::process_creation::apply_windows_release_no_window;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::env;
-use std::io::{Read, Write};
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::process::Command as StdCommand;
 use std::process::Stdio;
-use std::sync::{Arc, Mutex as StdMutex, RwLock};
-use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader};
+use std::sync::{Arc, RwLock};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command as TokioCommand};
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
+use tokio::sync::mpsc::{Receiver, Sender, channel};
 use tokio::sync::{Mutex, Notify, oneshot};
 use tokio::time::{Duration, Instant, timeout};
 use uuid::Uuid;
@@ -36,9 +33,30 @@ pub const DEFAULT_COMMAND_SESSION_READ_MAX_CHUNKS: usize = 128;
 /// 在把相邻未读输出碎片合并成较大读取分片时使用的软字节阈值。
 const COMMAND_SESSION_OUTPUT_CHUNK_COALESCE_SOFT_LIMIT_BYTES: usize = 512;
 
+/// Bounds retained command-session output fragments independently from byte size.
+/// 独立于字节大小限制命令会话保留的输出分片数量。
+const COMMAND_SESSION_RETAINED_CHUNK_LIMIT: usize = 4_096;
+
+/// Bounds decoded command-session output retained in memory for AI and visible display cursors.
+/// 限制为 AI 与可见显示游标保留在内存中的命令会话解码输出大小。
+const COMMAND_SESSION_RETAINED_BYTE_LIMIT: usize = 8 * 1024 * 1024;
+
+/// Explains a bounded-history gap to every AI or display cursor that fell behind eviction.
+/// 向落后于淘汰边界的每个 AI 或显示游标说明有界历史缺口。
+const COMMAND_SESSION_OUTPUT_GAP_MESSAGE: &str =
+    "\n[Earlier terminal output exceeded the 8 MiB retained history and was evicted.]\n";
+
 /// Maximum time allowed for one supervisor control acknowledgement before the caller falls back to a best-effort state transition.
 /// 监管器控制消息确认的最长等待时间，超过后调用方会回退到尽力而为的状态切换。
 const COMMAND_SESSION_CONTROL_ACK_TIMEOUT_MS: u64 = 250;
+
+/// Bounds pending controls for each command-session supervisor.
+/// 限制每个命令会话监管器的待处理控制消息数量。
+const COMMAND_SESSION_CONTROL_QUEUE_LIMIT: usize = 128;
+
+/// Defines the grace period before an unresponsive stopped terminal host is forcibly reaped.
+/// 定义停止请求后无响应终端宿主被强制回收前的宽限时间。
+const TERMINAL_HOST_STOP_GRACE: Duration = Duration::from_secs(2);
 
 /// Maximum time allowed for one stdin pipe write before the runtime treats the child as incompatible with pipe input.
 /// 单次标准输入管道写入的最长等待时间，超过后运行时会认为子进程与管道输入不兼容。
@@ -93,9 +111,6 @@ pub enum CommandSessionBackend {
     /// Pseudo terminal for interactive TUI sessions.
     /// 面向交互式 TUI 会话的伪终端。
     Pty,
-    /// Windows native console helper for Win32 console-input TUI sessions.
-    /// 面向 Win32 控制台输入 TUI 会话的 Windows 原生控制台 helper。
-    WindowsConsole,
 }
 
 impl CommandSessionBackend {
@@ -105,7 +120,6 @@ impl CommandSessionBackend {
         match self {
             Self::Pipe => "pipe",
             Self::Pty => "pty",
-            Self::WindowsConsole => "windows_console",
         }
     }
 }
@@ -146,6 +160,24 @@ pub struct CommandSessionOutputChunk {
     /// Decoded text payload captured for this chunk after host-side charset conversion.
     /// 为该分片捕获到的宿主侧字符集转换后文本载荷。
     pub text: String,
+}
+
+/// Builds one explicit synthetic chunk for a cursor that fell behind bounded output retention.
+/// 为落后于有界输出保留范围的游标构建一个明确的综合分片。
+///
+/// # Parameters / 参数
+/// - `dropped_before_seq`: Highest raw output sequence no longer retained.
+/// - `dropped_before_seq`：已不再保留的最高原始输出序号。
+///
+/// # Returns / 返回值
+/// Returns a stderr-labelled marker whose sequence advances the caller to the eviction boundary.
+/// 返回一个标记为标准错误的提示分片，其序号会把调用方推进到淘汰边界。
+fn command_session_output_gap_chunk(dropped_before_seq: u64) -> CommandSessionOutputChunk {
+    CommandSessionOutputChunk {
+        seq: dropped_before_seq,
+        stream: CommandSessionOutputStream::Stderr,
+        text: String::from(COMMAND_SESSION_OUTPUT_GAP_MESSAGE),
+    }
 }
 
 /// One structured terminal input event that can be delivered to event-capable backends.
@@ -195,6 +227,151 @@ pub enum CommandSessionInputEvent {
     },
 }
 
+/// Encodes backend-neutral terminal input events into the ANSI/VT byte stream accepted by terminal host PTYs.
+/// 将后端无关的终端输入事件编码为 terminal host PTY 接受的 ANSI/VT 字节流。
+///
+/// # Parameters / 参数
+/// - `events`: Ordered text, paste, key, or chord events.
+/// - `interactive_newline`: Shell-specific newline used by the Enter key.
+/// - `events`：保序的文本、粘贴、按键或组合键事件。
+/// - `interactive_newline`：Enter 键使用的 shell 特定换行序列。
+///
+/// # Returns / 返回值
+/// Returns the exact terminal bytes, or an explicit error for an unsupported key/chord.
+/// 返回精确终端字节；按键或组合键不受支持时返回明确错误。
+fn encode_command_session_input_events(
+    events: &[CommandSessionInputEvent],
+    interactive_newline: &str,
+) -> Result<Vec<u8>, String> {
+    let mut encoded = Vec::new();
+    for event in events {
+        match event {
+            CommandSessionInputEvent::Text { text } | CommandSessionInputEvent::Paste { text } => {
+                encoded.extend_from_slice(text.as_bytes());
+            }
+            CommandSessionInputEvent::Key { key } => {
+                encoded.extend_from_slice(&command_session_key_sequence(key, interactive_newline)?);
+            }
+            CommandSessionInputEvent::Chord {
+                key,
+                ctrl,
+                alt,
+                shift,
+                meta,
+            } => {
+                encoded.extend_from_slice(&command_session_chord_sequence(
+                    key,
+                    *ctrl,
+                    *alt,
+                    *shift,
+                    *meta,
+                    interactive_newline,
+                )?);
+            }
+        }
+    }
+    Ok(encoded)
+}
+
+/// Returns the ANSI/VT byte sequence for one standardized terminal key.
+/// 返回一个标准化终端按键对应的 ANSI/VT 字节序列。
+///
+/// # Parameters / 参数
+/// - `key`: Stable key name defined by the command-session input contract.
+/// - `interactive_newline`: Shell-specific newline used by Enter.
+/// - `key`：命令会话输入合同定义的稳定按键名称。
+/// - `interactive_newline`：Enter 使用的 shell 特定换行序列。
+///
+/// # Returns / 返回值
+/// Returns the encoded bytes or an explicit unsupported-key error.
+/// 返回编码字节或明确的不支持按键错误。
+fn command_session_key_sequence(key: &str, interactive_newline: &str) -> Result<Vec<u8>, String> {
+    match key {
+        "Enter" => Ok(interactive_newline.as_bytes().to_vec()),
+        "Tab" => Ok(b"\t".to_vec()),
+        "Esc" | "Escape" => Ok(vec![0x1b]),
+        "Backspace" => {
+            // Xterm-compatible PTYs conventionally encode the Backspace key as DEL; callers
+            // that intentionally need Ctrl+H can still request that chord explicitly.
+            // 与 xterm 兼容的 PTY 通常将退格键编码为 DEL；确实需要 Ctrl+H 的调用方仍可显式请求该组合键。
+            Ok(vec![0x7f])
+        }
+        "Delete" => Ok(b"\x1b[3~".to_vec()),
+        "ArrowUp" => Ok(b"\x1b[A".to_vec()),
+        "ArrowDown" => Ok(b"\x1b[B".to_vec()),
+        "ArrowRight" => Ok(b"\x1b[C".to_vec()),
+        "ArrowLeft" => Ok(b"\x1b[D".to_vec()),
+        "Home" => Ok(b"\x1b[H".to_vec()),
+        "End" => Ok(b"\x1b[F".to_vec()),
+        "PageUp" => Ok(b"\x1b[5~".to_vec()),
+        "PageDown" => Ok(b"\x1b[6~".to_vec()),
+        "Insert" => Ok(b"\x1b[2~".to_vec()),
+        "F1" => Ok(b"\x1bOP".to_vec()),
+        "F2" => Ok(b"\x1bOQ".to_vec()),
+        "F3" => Ok(b"\x1bOR".to_vec()),
+        "F4" => Ok(b"\x1bOS".to_vec()),
+        "F5" => Ok(b"\x1b[15~".to_vec()),
+        "F6" => Ok(b"\x1b[17~".to_vec()),
+        "F7" => Ok(b"\x1b[18~".to_vec()),
+        "F8" => Ok(b"\x1b[19~".to_vec()),
+        "F9" => Ok(b"\x1b[20~".to_vec()),
+        "F10" => Ok(b"\x1b[21~".to_vec()),
+        "F11" => Ok(b"\x1b[23~".to_vec()),
+        "F12" => Ok(b"\x1b[24~".to_vec()),
+        _ => Err(format!(
+            "Unsupported terminal key `{key}`. Use a documented terminal key name."
+        )),
+    }
+}
+
+/// Returns the ANSI/VT byte sequence for one standardized terminal key chord.
+/// 返回一个标准化终端组合键对应的 ANSI/VT 字节序列。
+///
+/// # Parameters / 参数
+/// - `key`: Base key name.
+/// - `ctrl`, `alt`, `shift`, `meta`: Active modifier states.
+/// - `interactive_newline`: Shell-specific newline used by Enter.
+/// - `key`：基础按键名称。
+/// - `ctrl`、`alt`、`shift`、`meta`：已激活的修饰键状态。
+/// - `interactive_newline`：Enter 使用的 shell 特定换行序列。
+///
+/// # Returns / 返回值
+/// Returns the encoded bytes or an explicit unsupported-chord error.
+/// 返回编码字节或明确的不支持组合键错误。
+fn command_session_chord_sequence(
+    key: &str,
+    ctrl: bool,
+    alt: bool,
+    shift: bool,
+    meta: bool,
+    interactive_newline: &str,
+) -> Result<Vec<u8>, String> {
+    if shift && key == "Tab" && !ctrl && !alt && !meta {
+        return Ok(b"\x1b[Z".to_vec());
+    }
+
+    let mut sequence = Vec::new();
+    if alt || meta {
+        sequence.push(0x1b);
+    }
+    if ctrl {
+        let normalized = key.trim().to_ascii_lowercase();
+        let mut chars = normalized.chars();
+        let Some(ch) = chars.next() else {
+            return Err(String::from("Chord key cannot be empty."));
+        };
+        if chars.next().is_none() && ch.is_ascii_alphabetic() {
+            sequence.push((ch as u8) & 0x1f);
+            return Ok(sequence);
+        }
+        return Err(format!(
+            "Unsupported Ctrl chord `{key}`. Use a single alphabetic key such as c, d, z, l, or r."
+        ));
+    }
+    sequence.extend_from_slice(&command_session_key_sequence(key, interactive_newline)?);
+    Ok(sequence)
+}
+
 /// One immutable command-session snapshot exposed back to native tools and tests.
 /// 对原生工具与测试回传的一份不可变命令会话快照。
 #[derive(Debug, Clone)]
@@ -241,6 +418,9 @@ pub struct CommandSessionSnapshot {
     /// Highest output sequence number buffered so far.
     /// 当前已缓冲输出中的最高序号。
     pub last_seq: u64,
+    /// Highest output sequence evicted from bounded retained history.
+    /// 已从有界保留历史中淘汰的最高输出序号。
+    pub dropped_before_seq: u64,
     /// Whether the latest stdin write left one open input line without a trailing newline.
     /// 最近一次标准输入写入是否留下了一条未以换行结束的开放输入行。
     pub pending_stdin_line: bool,
@@ -271,6 +451,24 @@ pub struct CommandSessionReadOutcome {
     /// Whether the runtime still holds more unread chunks beyond the returned subset.
     /// 运行时在已返回子集之外是否仍持有更多未读分片。
     pub has_more: bool,
+}
+
+/// Captures only the AI terminal display state already rendered by one visible subscriber.
+/// 仅捕获一个可见订阅者已经渲染的 AI 终端显示状态。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandSessionDisplayCursor {
+    /// Highest raw output sequence already rendered.
+    /// 已渲染的最高原始输出序号。
+    pub after_seq: u64,
+    /// Whether the last rendered snapshot was running.
+    /// 上一份已渲染快照是否处于运行中。
+    pub running_was_observed: bool,
+    /// Last screen-frame revision already rendered.
+    /// 已渲染的最后屏幕帧修订号。
+    pub screen_frame_seq: Option<u64>,
+    /// Last runtime failure text already rendered.
+    /// 已渲染的最后运行时故障文本。
+    pub failure_reason: Option<String>,
 }
 
 /// One write outcome returned by the command-session runtime.
@@ -331,7 +529,6 @@ mod pipe;
 mod pty;
 mod runtime;
 mod state;
-mod windows_console;
 
 #[cfg(test)]
 mod tests;
@@ -339,7 +536,6 @@ mod tests;
 use pipe::*;
 use pty::*;
 use state::*;
-use windows_console::*;
 
 enum CommandSessionControlMessage {
     /// Request to write one byte payload into the child stdin stream.
@@ -350,16 +546,6 @@ enum CommandSessionControlMessage {
         bytes: Vec<u8>,
         /// One-shot responder used to return the write outcome.
         /// 用于回传写入结果的单次响应通道。
-        responder: oneshot::Sender<Result<usize, String>>,
-    },
-    /// Request to deliver structured terminal input events.
-    /// 请求发送结构化终端输入事件。
-    InputEvents {
-        /// Ordered input events that should be delivered to the terminal.
-        /// 应发送到终端的保序输入事件。
-        events: Vec<CommandSessionInputEvent>,
-        /// One-shot responder used to return the accepted input count.
-        /// 用于回传已接受输入数量的单次响应通道。
         responder: oneshot::Sender<Result<usize, String>>,
     },
     /// Request to resize the terminal screen.
@@ -382,6 +568,38 @@ enum CommandSessionControlMessage {
         /// 用于确认 kill 信号是否成功发出的单次响应通道。
         responder: oneshot::Sender<Result<(), String>>,
     },
+}
+
+/// Enqueues one bounded command-session control without allowing stalled supervisors to grow memory.
+/// 将一条有界命令会话控制消息入队，避免停滞监管器造成内存无界增长。
+///
+/// # Parameters / 参数
+/// - `sender`: Bounded supervisor control sender.
+/// - `message`: Exact control message to enqueue.
+/// - `closed_message`: Diagnostic returned after the supervisor receiver closes.
+/// - `sender`：有界监管器控制发送端。
+/// - `message`：需要入队的精确控制消息。
+/// - `closed_message`：监管器接收端关闭后返回的诊断信息。
+///
+/// # Returns / 返回值
+/// Returns success after enqueue, or an explicit timeout/closed-channel failure.
+/// 入队后返回成功；否则返回明确的超时或通道关闭故障。
+async fn send_command_session_control(
+    sender: &Sender<CommandSessionControlMessage>,
+    message: CommandSessionControlMessage,
+    closed_message: &'static str,
+) -> Result<(), String> {
+    timeout(
+        Duration::from_millis(COMMAND_SESSION_CONTROL_ACK_TIMEOUT_MS),
+        sender.send(message),
+    )
+    .await
+    .map_err(|_| {
+        String::from(
+            "Timed out enqueueing command-session control because the bounded supervisor queue is full.",
+        )
+    })?
+    .map_err(|_| String::from(closed_message))
 }
 
 /// One host-owned command-session record stored in the runtime registry.
@@ -417,7 +635,7 @@ struct CommandSessionRecord {
     backend: CommandSessionBackend,
     /// Shared sender used to control the background process supervisor.
     /// 用于控制后台进程监管器的共享发送端。
-    control_sender: UnboundedSender<CommandSessionControlMessage>,
+    control_sender: Sender<CommandSessionControlMessage>,
     /// Shared mutable session state observed by start/read/write/stop operations.
     /// 由 start/read/write/stop 操作共同观测的共享会话状态。
     shared_state: Arc<CommandSessionSharedState>,
@@ -456,6 +674,7 @@ impl CommandSessionRecord {
             stdout_bytes: 0,
             stderr_bytes: 0,
             last_seq: 0,
+            dropped_before_seq: 0,
             pending_stdin_line: false,
             screen_frame_seq: None,
             screen_rows: None,
@@ -482,6 +701,7 @@ impl CommandSessionRecord {
             stdout_bytes: state.stdout_bytes,
             stderr_bytes: state.stderr_bytes,
             last_seq: state.last_seq,
+            dropped_before_seq: state.dropped_before_seq,
             pending_stdin_line: state.pending_stdin_line,
             screen_frame_seq: state.screen_frame_seq,
             screen_rows: state.screen_rows,
@@ -499,17 +719,28 @@ impl CommandSessionRecord {
         track_delivery: bool,
     ) -> CommandSessionReadOutcome {
         let mut state = self.shared_state.mutable_state.lock().await;
-        let matching_chunks = state
+        let max_chunks = max_chunks.max(1);
+        let gap_required = after_seq < state.dropped_before_seq;
+        let matching_count = state
             .chunks
             .iter()
             .filter(|chunk| chunk.seq > after_seq)
-            .cloned()
-            .collect::<Vec<_>>();
-        let has_more = matching_chunks.len() > max_chunks;
-        let returned_chunks = matching_chunks
-            .into_iter()
-            .take(max_chunks)
-            .collect::<Vec<_>>();
+            .count();
+        let available_count = matching_count.saturating_add(usize::from(gap_required));
+        let has_more = available_count > max_chunks;
+        let mut returned_chunks = Vec::with_capacity(available_count.min(max_chunks));
+        if gap_required {
+            returned_chunks.push(command_session_output_gap_chunk(state.dropped_before_seq));
+        }
+        let remaining_slots = max_chunks.saturating_sub(returned_chunks.len());
+        returned_chunks.extend(
+            state
+                .chunks
+                .iter()
+                .filter(|chunk| chunk.seq > after_seq)
+                .take(remaining_slots)
+                .cloned(),
+        );
         if track_delivery && let Some(last_returned_chunk) = returned_chunks.last() {
             state.highest_delivered_seq = state.highest_delivered_seq.max(last_returned_chunk.seq);
         }
@@ -518,6 +749,43 @@ impl CommandSessionRecord {
             snapshot,
             returned_chunks,
             has_more,
+        }
+    }
+
+    /// Returns the most recent retained output without mutating any delivery cursor.
+    /// 返回最近保留的输出，但不修改任何交付游标。
+    ///
+    /// # Parameters / 参数
+    /// - `max_chunks`: Maximum tail chunks included in the display bootstrap.
+    /// - `max_chunks`：显示层首次加载包含的最大尾部分片数。
+    ///
+    /// # Returns / 返回值
+    /// Returns a display-only snapshot and the ordered tail of retained chunks.
+    /// 返回仅供显示的快照以及有序的保留分片尾部。
+    async fn read_recent_for_display(&self, max_chunks: usize) -> CommandSessionReadOutcome {
+        let mut state = self.shared_state.mutable_state.lock().await;
+        let max_chunks = max_chunks.max(1);
+        let gap_required = state.dropped_before_seq > 0 || state.chunks.len() > max_chunks;
+        let retained_slots = max_chunks.saturating_sub(usize::from(gap_required));
+        let skip_count = state.chunks.len().saturating_sub(retained_slots);
+        let gap_sequence = if skip_count > 0 {
+            state.chunks[skip_count - 1].seq
+        } else {
+            state.dropped_before_seq
+        };
+        let mut returned_chunks = Vec::with_capacity(max_chunks.min(state.chunks.len() + 1));
+        if gap_required {
+            returned_chunks.push(command_session_output_gap_chunk(gap_sequence));
+        }
+        returned_chunks.extend(state.chunks.iter().skip(skip_count).cloned());
+        // The attachment cursor starts at snapshot.last_seq, so freeze the current tail against later coalescing.
+        // 挂接游标从 snapshot.last_seq 开始，因此冻结当前尾部分片，避免后续继续合并到已展示序号。
+        state.highest_delivered_seq = state.highest_delivered_seq.max(state.last_seq);
+        let snapshot = self.snapshot_from_state(&state);
+        CommandSessionReadOutcome {
+            snapshot,
+            returned_chunks,
+            has_more: gap_required,
         }
     }
 

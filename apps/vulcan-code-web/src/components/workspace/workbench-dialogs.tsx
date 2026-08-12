@@ -18,11 +18,7 @@ import {
   RenameDialog,
   type RenameTarget,
 } from "@/components/project/project-action-dialogs";
-import {
-  ProjectIconDialog,
-  type ProjectIconDialogTarget,
-  type ProjectIconSelection,
-} from "@/components/project/project-icons";
+import type { ProjectIconDialogTarget, ProjectIconSelection } from "@/components/project/project-icon-contract";
 import {
   ProjectSettingsDialog,
   projectConversationCount,
@@ -38,6 +34,10 @@ import type {
   StopConversationRunAgentPromptItem,
   StopConversationRunChoice,
 } from "@/components/workspace/workbench-layout/types";
+
+// LazyProjectIconDialog prevents the complete icon catalogs from loading before the picker opens.
+// LazyProjectIconDialog 防止完整图标目录在选择器打开前加载。
+const LazyProjectIconDialog = React.lazy(() => import("@/components/project/project-icon-dialog").then((module) => ({ default: module.ProjectIconDialog })));
 
 // WorkbenchDialogsProps groups globally mounted workbench dialogs and their callbacks.
 // WorkbenchDialogsProps 汇总工作台全局挂载的对话框及其回调。
@@ -165,12 +165,16 @@ export function WorkbenchDialogs(props: WorkbenchDialogsProps) {
         onCancel={props.onCancelRename}
         onConfirm={props.onConfirmRename}
       />
-      <ProjectIconDialog
-        target={props.projectIconTarget}
-        onCancel={props.onCancelProjectIcon}
-        onConfirm={props.onConfirmProjectIcon}
-        onReset={props.onResetProjectIcon}
-      />
+      {props.projectIconTarget ? (
+        <React.Suspense fallback={null}>
+          <LazyProjectIconDialog
+            target={props.projectIconTarget}
+            onCancel={props.onCancelProjectIcon}
+            onConfirm={props.onConfirmProjectIcon}
+            onReset={props.onResetProjectIcon}
+          />
+        </React.Suspense>
+      ) : null}
       <ProjectSettingsDialog
         target={props.projectSettingsTarget}
         settingsRevision={props.projectSettingsRevision}

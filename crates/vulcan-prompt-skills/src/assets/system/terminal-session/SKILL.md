@@ -1,6 +1,6 @@
 ---
 name: terminal-session
-description: Required operating guide for the terminal_session tool. Use before any terminal_session call to understand named persistent terminals, backend capabilities, native Windows console input, incremental output, command transactions with exit codes, TUI screen output, and safe control of long-running processes.
+description: Required operating guide for the terminal_session tool. Use before any terminal_session call to understand named persistent terminals, cross-platform PTY input, incremental output, command transactions with exit codes, TUI screen output, and safe control of long-running processes.
 ---
 
 # Terminal Session
@@ -14,9 +14,8 @@ Before using `terminal_session`, read this skill and follow it. Do not use `term
 - Use `shell_command` for isolated commands.
 - Use `terminal_session` when shell state matters: activated environments, changed directories, REPLs, long-running processes, interactive prompts, or TUI screens.
 - Always give `start` a non-empty, task-oriented `name`.
-- Use standardized `text`, `paste`, `key`, and `chord` inputs. Do not hand-write ANSI escapes, raw getch bytes, or control characters.
-- Check `backend` and `input_capabilities` on tool responses. On `windows_console`, standard `key` and `chord` inputs are delivered as real Windows Console input events.
-- Keep `key_encoding` omitted unless the response reports a byte-oriented compatibility backend. Do not set `windows_console_getch` for normal Windows native console sessions.
+- Use standardized `text`, `paste`, `key`, and `chord` inputs. Do not hand-write ANSI escapes, platform-specific getch bytes, or control characters.
+- Check `backend` and `input_capabilities` on tool responses. Interactive terminal sessions use the same isolated PTY and ANSI/VT input contract on Windows, Linux, and macOS.
 - Prefer `read` after append-style output. For TUI or screen-like output, use `send` with `screen_stable` or `snapshot` to inspect `screen_text`.
 - Before finalizing a task, clean up temporary terminals you started for tests or diagnostics. Do not announce final completion until this cleanup is done.
 
@@ -24,14 +23,13 @@ Before using `terminal_session`, read this skill and follow it. Do not use `term
 
 Every terminal response may include backend and capability metadata:
 
-- `backend`: the concrete runtime backend, such as `windows_console`, `pty`, or `pipe`.
-- `input_capabilities`: whether structured `key` and `chord` inputs are supported, and whether native console events are available.
+- `backend`: the concrete runtime backend, normally `pty` for `terminal_session` and `pipe` only for command-style sessions.
+- `input_capabilities`: whether structured `key` and `chord` inputs are supported and which encoding the host applies.
 - `screen_frame_seq`, `screen_size`, and `screen_text`: the latest frame reported by a screen-capable backend.
 
 Backend rules:
 
-- `windows_console`: default for `terminal_session` on Windows. It is helper-backed and sends real Windows Console key events. Use ordinary `key` and `chord` inputs for `msvcrt.getch()`, `[Console]::ReadKey()`, classic console menus, and Windows TUIs.
-- `pty`: default on Linux/macOS and still used for PTY-style terminals. It writes terminal bytes/ANSI sequences and is suitable for shells and ANSI/VT TUIs.
+- `pty`: the cross-platform `terminal_session` backend on Windows, Linux, and macOS. It runs in the isolated terminal host and converts standardized keys/chords into ANSI/VT input.
 - `pipe`: command-style process I/O. It is not a full TUI backend.
 
 Do not infer key support from the operating system alone. Use the response's `backend` and `input_capabilities` fields.
@@ -65,7 +63,7 @@ Starts one persistent terminal. `name` and `command` must both be non-empty. `na
 
 `cwd` only applies at start time. Later `send` calls inherit the process state; change directories by typing shell commands such as `cd`.
 
-On Windows, `start` uses the native `windows_console` backend by default. On Linux/macOS, it uses the PTY backend. Do not try to switch backends mid-session.
+`start` uses the same isolated PTY backend on Windows, Linux, and macOS. The operating system changes the PTY implementation, not the tool contract, executable, protocol, or lifecycle.
 
 On Windows, if `command` directly launches `bash`, `sh`, or `zsh`, do not use `shell: "auto"`. Select the explicit shell so the host can use deterministic interactive newline behavior.
 
@@ -109,7 +107,7 @@ Returns current terminal metadata and status for an existing terminal. Use it wh
 }
 ```
 
-For `windows_console` sessions, `snapshot` can expose the latest `screen_text` without consuming incremental output. For PTY sessions, visible screen text may still depend on returned chunks; use `send` or `read` with `screen_stable` when you need fresh visible output.
+For PTY sessions, `snapshot` can expose the latest `screen_text` checkpoint without consuming incremental output. Use `send` or `read` with `screen_stable` when you need fresh visible output.
 
 ### stop
 
@@ -214,45 +212,20 @@ Use `chord` for supported shortcuts:
 
 Do not assume arbitrary application shortcuts are supported. If a chord is rejected, use a supported key sequence or normal text input instead.
 
-## Key Encoding
+## Input Encoding
 
-On `windows_console`, omit `key_encoding` by default so standard `key` and `chord` inputs are sent as native Console events. Set `key_encoding: "ansi_vt"` explicitly only when the target program reads stdin/VT bytes, such as `sys.stdin.read(1)` or an ANSI stdin reader.
-
-### ansi_vt
-
-Default for byte-oriented PTY backends. On `windows_console`, explicit `ansi_vt` converts standard keys to VT text sequences such as `ArrowDown -> \x1b[B`; use it for stdin/VT readers, not for `msvcrt.getch()` or `[Console]::ReadKey()`.
+The terminal host always converts standardized keys and chords to the cross-platform ANSI/VT input contract. There is no per-platform `key_encoding` selector.
 
 ```json
 {
   "action": "send",
   "terminal_session_id": "...",
   "inputs": [{ "kind": "key", "key": "ArrowDown" }],
-  "key_encoding": "ansi_vt",
   "wait_policy": { "mode": "screen_stable", "quiet_ms": 150, "max_wait_ms": 1000 }
 }
 ```
 
-You may omit `key_encoding` on PTY backends because `ansi_vt` is their default. Do not omit it when you specifically need VT bytes on `windows_console`; omission means native Console key events there.
-
-### windows_console_getch
-
-Legacy compatibility mode for byte-oriented backends only. Do not use it for `backend: "windows_console"`.
-
-```json
-{
-  "action": "send",
-  "terminal_session_id": "...",
-  "inputs": [
-    { "kind": "key", "key": "Esc" }
-  ],
-  "key_encoding": "windows_console_getch",
-  "wait_policy": { "mode": "screen_stable", "quiet_ms": 150, "max_wait_ms": 1000 }
-}
-```
-
-Do not use `windows_console_getch` as a general Windows setting. On Windows native console sessions, ordinary `key` and `chord` inputs are better because the backend delivers real console events for `msvcrt.getch()` and `[Console]::ReadKey()` style programs.
-
-For `msvcrt.getch()` menus on `windows_console`, use standard keys such as `ArrowDown`, `ArrowUp`, `Enter`, `Esc`, or documented text shortcuts. If a response reports a non-console byte-oriented backend, follow `input_capabilities` instead of assuming extended keys are available.
+Legacy programs that require raw Windows Console `KEY_EVENT` records instead of terminal input are outside this PTY contract. Prefer their ANSI/VT mode, command-line alternatives, or documented text shortcuts.
 
 ## Output
 
@@ -279,14 +252,9 @@ Control strategy:
 4. Read again and verify the screen changed as expected.
 5. Use `Esc`, `q`, or `Ctrl+C` only when the screen or program convention indicates they are appropriate.
 
-Do not send ANSI escapes directly. Use standardized keys. Choose `key_encoding` only when the backend or target input API requires a non-default encoding.
+Do not send ANSI escapes directly. Use standardized keys; the terminal host owns their ANSI/VT encoding on every platform.
 
-Windows native console examples:
-
-- Python `msvcrt.getch()` menu: use `key` inputs like `ArrowDown` and `Enter`; omit `key_encoding`.
-- PowerShell `[Console]::ReadKey($true)`: use `key` and `chord`; omit `key_encoding`.
-- Python `sys.stdin.read(1)` / stdin VT reader: use standard `key` inputs and set `key_encoding: "ansi_vt"` explicitly.
-- If a key does not work, inspect `backend` and `input_capabilities` before retrying with a different strategy.
+If a key does not work, inspect `backend` and `input_capabilities`, verify that the target application accepts terminal/VT input, and prefer documented text shortcuts where available.
 
 ## Interrupts
 

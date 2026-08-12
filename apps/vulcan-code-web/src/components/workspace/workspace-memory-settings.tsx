@@ -1,13 +1,17 @@
 import * as React from "react";
-import {
-  MemoryArea,
-  vmmSectionIcon,
-  type MemoryActionProps,
-  type MemorySubAreaId,
-} from "@/components/features/memory/MemoryArea";
+import { vmmSectionIcon } from "@/components/features/memory/vmm-memory-sections";
+import type { MemoryActionProps } from "@/components/features/memory/use-memory-area-controller";
 import { useI18n } from "@/i18n";
 import type { WorkbenchSnapshot } from "@/types";
 import { WorkspaceToolPanelMenu } from "@/components/workspace/workspace-tool-panel-menu";
+
+// MemorySubAreaId identifies one service-projected VMM section.
+// MemorySubAreaId 标识一个由服务投影的 VMM 分区。
+type MemorySubAreaId = string;
+
+// LazyMemoryArea keeps the full VMM editor outside the console-first workbench chunk.
+// LazyMemoryArea 将完整 VMM 编辑器保留在控制台优先的工作台分块之外。
+const LazyMemoryArea = React.lazy(() => import("@/components/features/memory/MemoryArea").then((module) => ({ default: module.MemoryArea })));
 
 // WorkspaceMemorySettings renders the embedded VMM memory settings page.
 // WorkspaceMemorySettings 渲染内嵌 VMM 记忆设置页面。
@@ -35,13 +39,15 @@ export function WorkspaceMemorySettings(props: {
   } = props;
 
   return (
-    <MemoryArea
-      activeSection={activeSubArea}
-      actions={memoryActions}
-      onOpenCredentialManagement={props.onOpenCredentialManagement}
-      onSelectSection={props.onSelectSubArea}
-      snapshot={workbench.vmmMemory}
-    />
+    <React.Suspense fallback={null}>
+      <LazyMemoryArea
+        activeSection={activeSubArea}
+        actions={memoryActions}
+        onOpenCredentialManagement={props.onOpenCredentialManagement}
+        onSelectSection={props.onSelectSubArea}
+        snapshot={workbench.vmmMemory}
+      />
+    </React.Suspense>
   );
 }
 

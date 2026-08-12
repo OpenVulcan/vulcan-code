@@ -91,7 +91,7 @@ pub(crate) struct ShellSessionToolArgs {
 
 pub(crate) fn shell_session_tool_description() -> String {
     format!(
-        "Start, read, write to, or stop a long-lived host command session. Reads are polling-based, and `cwd` only affects `start`. The `start` result reports the resolved launcher shell used for `auto` and whether stdin is currently left on an open input line. When an inline read result exceeds {SHELL_INLINE_OUTPUT_LIMIT_BYTES} bytes, the host switches to page-mode spill files under the project-local `.vulcan/temp/` directory using names like `tool_output_overflow_page_md_<unix_ms>.md`. After spill, the host preserves the full rendered output instead of truncating it, subject to successful file creation, filesystem limits, and per-line safe-read chunking."
+        "Start, read, write to, or stop a long-lived command session isolated in the cross-platform terminal host. Reads are polling-based for AI tool calls, and `cwd` only affects `start`. The `start` result reports the resolved launcher shell used for `auto` and whether stdin is currently left on an open input line. When an inline read result exceeds {SHELL_INLINE_OUTPUT_LIMIT_BYTES} bytes, the host switches to page-mode spill files under the project-local `.vulcan/temp/` directory using names like `tool_output_overflow_page_md_<unix_ms>.md`. After spill, the host preserves the full rendered output instead of truncating it, subject to successful file creation, filesystem limits, and per-line safe-read chunking."
     )
 }
 
@@ -309,6 +309,7 @@ pub(crate) fn build_shell_session_host_payload(
         "cwd": normalized_workspace_path_text_from_path(&snapshot.cwd),
         "shell": snapshot.shell_label.clone(),
         "launcher_shell": snapshot.launcher_shell_label.clone(),
+        "backend": snapshot.backend.as_str(),
         "status": snapshot.status.as_str(),
         "exit_code": snapshot.exit_code,
         "stdout_bytes": snapshot.stdout_bytes,
@@ -380,7 +381,7 @@ pub(crate) async fn execute_shell_session_start_action(
             launcher_args,
             initial_stdin,
             initial_stdin_append_newline: append_newline,
-            backend: CommandSessionBackend::Pipe,
+            backend: CommandSessionBackend::Pty,
         })
         .await
         .map_err(NativeToolError::new)?;

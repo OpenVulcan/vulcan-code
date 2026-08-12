@@ -44,6 +44,15 @@ impl ServiceEventSink for TauriServiceEventSink {
     /// Emits one event through the desktop Tauri event channel.
     /// 通过桌面 Tauri 事件通道发送单个事件。
     fn emit_service_event(&self, event: ServiceEvent) {
+        if matches!(
+            &event,
+            ServiceEvent::CommandSessionDisplayChanged(_)
+                | ServiceEvent::ProjectTerminalDisplayChanged(_)
+        ) {
+            // Terminal content is routed only by the client-filtered WebSocket sink.
+            // 终端内容仅由按客户端过滤的 WebSocket 接收端路由。
+            return;
+        }
         let _ = self.app.emit("vulcan://service-event", event);
     }
 }

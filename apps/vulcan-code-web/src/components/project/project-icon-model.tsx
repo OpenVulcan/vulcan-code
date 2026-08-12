@@ -1,9 +1,5 @@
 import React from "react";
-import { Icon as IconifyIcon, addCollection } from "@iconify/react";
-import { icons as materialIconThemeIconSet } from "@iconify-json/material-icon-theme";
-import { icons as skillIconSet } from "@iconify-json/skill-icons";
-import * as LucideIcons from "lucide-react";
-import { Folder, FolderOpen, FolderPlus, LayoutDashboard, MessageSquareText, ScrollText } from "lucide-react";
+import { Icon as IconifyIcon } from "@iconify/react";
 
 // ProjectIconBadgeShape names the badge silhouette used by generated project icons.
 // ProjectIconBadgeShape 命名生成式项目图标使用的徽标轮廓。
@@ -86,71 +82,6 @@ export const PROJECT_BADGE_COLORS = ["#111827", "#2563eb", "#0891b2", "#16a34a",
 // PROJECT_ICON_STREAM_BATCH_SIZE 控制每次增量挂载多少个图标单元。
 export const PROJECT_ICON_STREAM_BATCH_SIZE = 120;
 
-addCollection(skillIconSet);
-addCollection(materialIconThemeIconSet);
-
-// SKILL_PROJECT_ICON_OPTIONS lists colored Skill Icons for the project picker.
-// SKILL_PROJECT_ICON_OPTIONS 列出项目选择器使用的彩色 Skill Icons 图标。
-const SKILL_PROJECT_ICON_OPTIONS: ProjectIconOption[] = buildIconifyProjectIconOptions("skill-icons", Object.keys(skillIconSet.icons));
-
-// MATERIAL_PROJECT_ICON_OPTIONS lists colored Material Icon Theme icons for the project picker.
-// MATERIAL_PROJECT_ICON_OPTIONS 列出项目选择器使用的彩色 Material Icon Theme 图标。
-const MATERIAL_PROJECT_ICON_OPTIONS: ProjectIconOption[] = buildIconifyProjectIconOptions("material-icon-theme", Object.keys(materialIconThemeIconSet.icons));
-
-// LUCIDE_PROJECT_ICON_OPTIONS lists every usable exported Lucide icon for the project picker.
-// LUCIDE_PROJECT_ICON_OPTIONS 列出项目选择器可使用的全部 Lucide 导出图标。
-const LUCIDE_PROJECT_ICON_OPTIONS: ProjectIconOption[] = buildLucideProjectIconOptions();
-
-// PROJECT_ICON_MAP resolves persisted lucide icon keys to components.
-// PROJECT_ICON_MAP 将持久化的 lucide 图标键解析为组件。
-export const PROJECT_ICON_MAP = new Map<string, ProjectIconOption>(
-  [
-    ...LUCIDE_PROJECT_ICON_OPTIONS.map((icon) => [icon.key, icon] as const),
-    ["folder", { pack: "lucide", key: "Folder", label: "Folder", Icon: Folder }] as const,
-    ["folder-open", { pack: "lucide", key: "FolderOpen", label: "FolderOpen", Icon: FolderOpen }] as const,
-    ["folder-plus", { pack: "lucide", key: "FolderPlus", label: "FolderPlus", Icon: FolderPlus }] as const,
-    ["layout-dashboard", { pack: "lucide", key: "LayoutDashboard", label: "LayoutDashboard", Icon: LayoutDashboard }] as const,
-    ["scroll-text", { pack: "lucide", key: "ScrollText", label: "ScrollText", Icon: ScrollText }] as const,
-    ["message-square-text", { pack: "lucide", key: "MessageSquareText", label: "MessageSquareText", Icon: MessageSquareText }] as const,
-  ],
-);
-
-// buildIconifyProjectIconOptions converts one Iconify icon set into selectable colored project icons.
-// buildIconifyProjectIconOptions 将一个 Iconify 图标集转换为可选择的彩色项目图标。
-function buildIconifyProjectIconOptions(pack: Extract<ProjectIconPack, "skill-icons" | "material-icon-theme">, keys: string[]): ProjectIconOption[] {
-  return keys
-    .map((key) => ({
-      pack,
-      key,
-      label: key,
-      iconName: `${pack}:${key}`,
-    }))
-    .sort((left, right) => left.label.localeCompare(right.label));
-}
-
-// buildLucideProjectIconOptions extracts usable icon components from lucide-react exports.
-// buildLucideProjectIconOptions 从 lucide-react 导出中提取可用图标组件。
-function buildLucideProjectIconOptions(): ProjectIconOption[] {
-  return Object.entries(LucideIcons)
-    .filter(([name, value]) => /^[A-Z]/.test(name) && !name.endsWith("Icon") && name !== "Icon" && isLucideIconComponent(value))
-    .map(([name, Icon]) => ({
-      pack: "lucide" as const,
-      key: name,
-      label: name,
-      Icon: Icon as React.ComponentType<{ size?: number; className?: string }>,
-    }))
-    .sort((left, right) => left.label.localeCompare(right.label));
-}
-
-// isLucideIconComponent accepts both plain components and React.forwardRef icon objects.
-// isLucideIconComponent 同时接受普通组件与 React.forwardRef 图标对象。
-function isLucideIconComponent(value: unknown): boolean {
-  if (typeof value === "function") {
-    return true;
-  }
-  return Boolean(value && typeof value === "object" && "render" in value && typeof (value as { render?: unknown }).render === "function");
-}
-
 // encodeProjectBadgeKey serializes a generated badge config into the persisted icon key.
 // encodeProjectBadgeKey 将生成式徽标配置序列化为持久化图标键。
 export function encodeProjectBadgeKey(config: ProjectIconBadgeConfig): string {
@@ -210,21 +141,6 @@ export function normalizeProjectIconSelection(icon: ProjectIconSelection): Proje
 // isIconifyProjectIconPack 检查持久化的项目图标包是否属于 Iconify 彩色图标集。
 export function isIconifyProjectIconPack(value: string | null | undefined): value is Extract<ProjectIconPack, "skill-icons" | "material-icon-theme"> {
   return value === "skill-icons" || value === "material-icon-theme";
-}
-
-// projectIconOptionsForTab returns the icon option list owned by one picker tab.
-// projectIconOptionsForTab 返回某个选择器标签页拥有的图标选项列表。
-export function projectIconOptionsForTab(tab: ProjectIconTab): ProjectIconOption[] {
-  if (tab === "skill-icons") {
-    return SKILL_PROJECT_ICON_OPTIONS;
-  }
-  if (tab === "material-icon-theme") {
-    return MATERIAL_PROJECT_ICON_OPTIONS;
-  }
-  if (tab === "lucide") {
-    return LUCIDE_PROJECT_ICON_OPTIONS;
-  }
-  return [];
 }
 
 // projectIconPackLabel returns the user-facing name for one project icon pack.

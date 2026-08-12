@@ -2,7 +2,7 @@
 //! Vulcan Core Service 的 HTTP 与 WebSocket 宿主层。
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap},
     convert::Infallible,
     fs::{self, OpenOptions},
     future::Future,
@@ -62,6 +62,10 @@ pub type WebuiServiceRpcFuture =
 /// 传输无关的浏览器侧 RPC 分发器。
 pub type WebuiServiceRpcDispatcher =
     Arc<dyn Fn(String, Option<serde_json::Value>) -> WebuiServiceRpcFuture + Send + Sync + 'static>;
+
+/// Cleans client-owned display subscriptions when one browser event socket disconnects.
+/// 在浏览器事件套接字断开时清理客户端持有的显示订阅。
+pub type WebuiServiceClientDisconnected = Arc<dyn Fn(Uuid) + Send + Sync + 'static>;
 
 /// Boxed asynchronous result returned by the controlled inference dispatcher.
 /// 受控推理分发器返回的装箱异步结果。
@@ -489,6 +493,9 @@ pub struct WebuiServiceHttpConfig {
     /// Business RPC dispatcher supplied by the service owner.
     /// 服务所有者提供的业务 RPC 分发器。
     pub rpc_dispatcher: WebuiServiceRpcDispatcher,
+    /// Kernel callback that releases display subscriptions owned by a disconnected browser.
+    /// 内核回调，用于释放由已断开浏览器持有的显示订阅。
+    pub client_disconnected: WebuiServiceClientDisconnected,
     /// Protected inference discovery state without browser-token reuse.
     /// 不复用浏览器令牌的受保护推理发现状态。
     pub inference_discovery: SharedInferenceServiceDiscoverySnapshot,
@@ -519,6 +526,12 @@ struct WebuiServiceHttpState {
     /// Business RPC dispatcher supplied by the service owner.
     /// 服务所有者提供的业务 RPC 分发器。
     rpc_dispatcher: WebuiServiceRpcDispatcher,
+    /// Kernel callback that releases display subscriptions owned by a disconnected browser.
+    /// 内核回调，用于释放由已断开浏览器持有的显示订阅。
+    client_disconnected: WebuiServiceClientDisconnected,
+    /// Latest event-socket generation for each browser lifetime.
+    /// 每个浏览器生命周期的最新事件套接字代次。
+    client_connections: Arc<Mutex<HashMap<Uuid, Uuid>>>,
     /// Protected inference discovery state.
     /// 受保护推理发现状态。
     inference_discovery: SharedInferenceServiceDiscoverySnapshot,
@@ -568,6 +581,8 @@ pub fn build_webui_service_router(config: WebuiServiceHttpConfig) -> Router {
         event_bus: config.event_bus,
         static_root: config.static_root,
         rpc_dispatcher: config.rpc_dispatcher,
+        client_disconnected: config.client_disconnected,
+        client_connections: Arc::new(Mutex::new(HashMap::new())),
         inference_discovery: config.inference_discovery,
         inference_dispatcher: config.inference_dispatcher,
         inference_event_subscriber: config.inference_event_subscriber,
@@ -1956,9 +1971,106 @@ async fn webui_service_events_ws_handler(
     if !webui_service_request_token_is_valid(&headers, uri.0.query(), &server_state.service_token) {
         return AxumStatusCode::UNAUTHORIZED.into_response();
     }
+    let Some(client_id) = webui_service_query_uuid(uri.0.query(), "clientId") else {
+        return AxumStatusCode::BAD_REQUEST.into_response();
+    };
+    let connection_id = Uuid::new_v4();
     websocket.on_upgrade(move |socket| {
-        webui_service_events_socket(socket, server_state.event_bus.subscribe())
+        let replaced = register_webui_service_client_connection(
+            &server_state.client_connections,
+            client_id,
+            connection_id,
+        );
+        if replaced {
+            (server_state.client_disconnected)(client_id);
+        }
+        webui_service_events_socket(
+            socket,
+            server_state.event_bus.subscribe(),
+            client_id,
+            connection_id,
+            server_state.client_connections,
+            server_state.client_disconnected,
+        )
     })
+}
+
+/// Registers the newest event-socket generation for one browser lifetime.
+/// 为一个浏览器生命周期注册最新事件套接字代次。
+///
+/// # Parameters / 参数
+/// - `connections`: Shared latest-generation registry.
+/// - `client_id`: Stable browser lifetime identity.
+/// - `connection_id`: Unique identity of the newly upgraded socket.
+/// - `connections`：共享的最新代次注册表。
+/// - `client_id`：稳定浏览器生命周期标识。
+/// - `connection_id`：新升级套接字的唯一标识。
+///
+/// # Returns / 返回值
+/// Returns true when an older socket generation was replaced and its subscriptions must be cleared.
+/// 当旧套接字代次被替换且其订阅必须清理时返回 true。
+fn register_webui_service_client_connection(
+    connections: &Arc<Mutex<HashMap<Uuid, Uuid>>>,
+    client_id: Uuid,
+    connection_id: Uuid,
+) -> bool {
+    connections
+        .lock()
+        .map(|mut connections| connections.insert(client_id, connection_id).is_some())
+        .unwrap_or(true)
+}
+
+/// Releases a browser only when the closing socket is still its newest generation.
+/// 仅当正在关闭的套接字仍是浏览器最新代次时释放该浏览器。
+///
+/// # Parameters / 参数
+/// - `connections`: Shared latest-generation registry.
+/// - `client_id`: Stable browser lifetime identity.
+/// - `connection_id`: Unique identity of the closing socket.
+/// - `connections`：共享的最新代次注册表。
+/// - `client_id`：稳定浏览器生命周期标识。
+/// - `connection_id`：正在关闭套接字的唯一标识。
+///
+/// # Returns / 返回值
+/// Returns true only when the closing socket owned the newest generation and removed it.
+/// 仅当关闭套接字持有最新代次并将其移除时返回 true。
+fn release_webui_service_client_connection(
+    connections: &Arc<Mutex<HashMap<Uuid, Uuid>>>,
+    client_id: Uuid,
+    connection_id: Uuid,
+) -> bool {
+    let Ok(mut connections) = connections.lock() else {
+        return true;
+    };
+    if connections.get(&client_id) != Some(&connection_id) {
+        return false;
+    }
+    connections.remove(&client_id);
+    true
+}
+
+/// Parses one exact UUID query parameter without accepting aliases or malformed identities.
+/// 解析一个精确 UUID 查询参数，不接受别名或格式错误的标识。
+///
+/// # Parameters / 参数
+/// - `query`: Optional raw request query string.
+/// - `key`: Exact ASCII query key.
+/// - `query`：可选原始请求查询字符串。
+/// - `key`：精确 ASCII 查询键。
+///
+/// # Returns / 返回值
+/// Returns the parsed UUID only when one exact parameter is valid.
+/// 仅在一个精确参数有效时返回解析后的 UUID。
+fn webui_service_query_uuid(query: Option<&str>, key: &str) -> Option<Uuid> {
+    let mut matches = query?
+        .split('&')
+        .filter_map(|pair| pair.split_once('='))
+        .filter_map(|(name, value)| (name == key).then_some(value));
+    let value = matches.next()?;
+    if matches.next().is_some() {
+        return None;
+    }
+    Uuid::parse_str(value).ok()
 }
 
 /// Returns whether one browser WebSocket handshake carries an allowed or host-omitted Origin header.
@@ -2006,23 +2118,74 @@ fn webui_service_request_token_is_valid(
 async fn webui_service_events_socket(
     mut socket: WebSocket,
     mut receiver: broadcast::Receiver<ServiceEvent>,
+    client_id: Uuid,
+    connection_id: Uuid,
+    client_connections: Arc<Mutex<HashMap<Uuid, Uuid>>>,
+    client_disconnected: WebuiServiceClientDisconnected,
 ) {
     loop {
-        let event = match receiver.recv().await {
-            Ok(event) => event,
-            Err(broadcast::error::RecvError::Lagged(_)) => continue,
-            Err(broadcast::error::RecvError::Closed) => break,
-        };
-        let text = match serde_json::to_string(&event) {
-            Ok(text) => text,
-            Err(error) => {
-                eprintln!("[service-host] failed to serialize browser service event: {error}");
-                continue;
+        tokio::select! {
+            inbound = socket.recv() => match inbound {
+                Some(Ok(AxumWsMessage::Close(_))) | Some(Err(_)) | None => break,
+                Some(Ok(_)) => {}
+            },
+            event = receiver.recv() => {
+                let event = match event {
+                    Ok(event) => event,
+                    Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                        // A lossy event socket cannot preserve ordered terminal or workbench state;
+                        // closing it forces the browser to reconnect and request authoritative baselines.
+                        // 丢失事件的套接字无法保持终端或工作台有序状态；关闭它会强制浏览器重连并请求权威基线。
+                        eprintln!(
+                            "[service-host] browser event socket lagged by {skipped} events; reconnecting"
+                        );
+                        break;
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                };
+                if !webui_service_event_is_visible_to_client(&event, client_id) {
+                    continue;
+                }
+                let text = match serde_json::to_string(&event) {
+                    Ok(text) => text,
+                    Err(error) => {
+                        eprintln!("[service-host] failed to serialize browser service event: {error}");
+                        continue;
+                    }
+                };
+                if socket.send(AxumWsMessage::Text(text.into())).await.is_err() {
+                    break;
+                }
             }
-        };
-        if socket.send(AxumWsMessage::Text(text.into())).await.is_err() {
-            break;
         }
+    }
+    if release_webui_service_client_connection(&client_connections, client_id, connection_id) {
+        client_disconnected(client_id);
+    }
+}
+
+/// Filters terminal content events to their owning browser while leaving shared events broadcast.
+/// 将终端内容事件限制到其归属浏览器，同时保持共享事件广播。
+///
+/// # Parameters / 参数
+/// - `event`: Service event awaiting WebSocket serialization.
+/// - `client_id`: Exact browser/WebView lifetime owning this event socket.
+/// - `event`：等待 WebSocket 序列化的服务事件。
+/// - `client_id`：持有当前事件套接字的精确浏览器或 WebView 生命周期。
+///
+/// # Returns / 返回值
+/// Returns true for shared events or terminal events explicitly owned by this client.
+/// 对共享事件或由当前客户端明确持有的终端事件返回 true。
+fn webui_service_event_is_visible_to_client(event: &ServiceEvent, client_id: Uuid) -> bool {
+    let expected_client_id = client_id.as_hyphenated().to_string();
+    match event {
+        ServiceEvent::CommandSessionDisplayChanged(event) => {
+            event.display_client_id == expected_client_id
+        }
+        ServiceEvent::ProjectTerminalDisplayChanged(event) => {
+            event.display_client_id == expected_client_id
+        }
+        _ => true,
     }
 }
 
@@ -2150,6 +2313,97 @@ mod tests {
     use serde_json::json;
     use tower::ServiceExt;
     use vulcan_service_api::webui_service_ready_discovery_snapshot;
+
+    /// Verifies the event socket accepts only one exact well-formed client UUID query value.
+    /// 验证事件套接字只接受一个精确且格式正确的客户端 UUID 查询值。
+    #[test]
+    fn event_socket_client_id_query_is_strict() {
+        let client_id = Uuid::new_v4();
+        let query = format!("token=test-token&clientId={client_id}");
+        assert_eq!(
+            webui_service_query_uuid(Some(&query), "clientId"),
+            Some(client_id)
+        );
+        assert_eq!(
+            webui_service_query_uuid(Some("clientId=invalid"), "clientId"),
+            None
+        );
+        assert_eq!(
+            webui_service_query_uuid(Some(&format!("client_id={client_id}")), "clientId"),
+            None
+        );
+        assert_eq!(
+            webui_service_query_uuid(
+                Some(&format!("clientId={client_id}&clientId={client_id}")),
+                "clientId"
+            ),
+            None
+        );
+    }
+
+    /// Verifies a late close from an older socket cannot release a newer replacement generation.
+    /// 验证旧套接字的延迟关闭不能释放较新的替代代次。
+    #[test]
+    fn event_socket_replacement_ignores_late_old_disconnect() {
+        let connections = Arc::new(Mutex::new(HashMap::new()));
+        let client_id = Uuid::new_v4();
+        let old_connection_id = Uuid::new_v4();
+        let new_connection_id = Uuid::new_v4();
+
+        assert!(!register_webui_service_client_connection(
+            &connections,
+            client_id,
+            old_connection_id,
+        ));
+        assert!(register_webui_service_client_connection(
+            &connections,
+            client_id,
+            new_connection_id,
+        ));
+        assert!(!release_webui_service_client_connection(
+            &connections,
+            client_id,
+            old_connection_id,
+        ));
+        assert!(release_webui_service_client_connection(
+            &connections,
+            client_id,
+            new_connection_id,
+        ));
+    }
+
+    /// Verifies terminal content is serialized only onto its exact owning browser socket.
+    /// 验证终端内容只会序列化到其精确归属浏览器套接字。
+    #[test]
+    fn terminal_display_event_is_filtered_by_client_id() {
+        let owner = Uuid::new_v4();
+        let other = Uuid::new_v4();
+        let event = ServiceEvent::ProjectTerminalDisplayChanged(Box::new(
+            vulcan_service_api::ProjectTerminalDisplayChangedEvent {
+                display_client_id: owner.to_string(),
+                subscription_id: String::from("subscription-a"),
+                terminal: vulcan_service_api::ProjectTerminalSummary {
+                    id: Uuid::new_v4().to_string(),
+                    project_id: String::from("project-a"),
+                    name: String::from("Terminal 1"),
+                    shell_id: String::from("pwsh"),
+                    cwd: String::from("."),
+                    status: String::from("running"),
+                    exit_code: None,
+                    failure_reason: None,
+                    last_seq: 1,
+                    dropped_before_seq: 0,
+                    state_revision: 0,
+                    last_accepted_input_seq: 0,
+                    rows: 24,
+                    cols: 80,
+                },
+                chunks: Vec::new(),
+            },
+        ));
+        assert!(webui_service_event_is_visible_to_client(&event, owner));
+        assert!(!webui_service_event_is_visible_to_client(&event, other));
+    }
 
     /// Builds one process-unique temporary path for filesystem publication tests.
     /// 为文件系统发布测试构建一个进程内唯一的临时路径。
@@ -2346,6 +2600,7 @@ mod tests {
             event_bus,
             static_root: None,
             rpc_dispatcher: dispatcher,
+            client_disconnected: Arc::new(|_client_id| {}),
             inference_discovery: Arc::new(Mutex::new(InferenceServiceDiscoverySnapshot {
                 api_version: INFERENCE_SERVICE_API_VERSION,
                 status: String::from("ready"),

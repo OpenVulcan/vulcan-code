@@ -1,6 +1,9 @@
 import type {
   ConversationRunSettledEvent,
+  CommandSessionDisplayChangedEvent,
   PluginUiInvalidatedEvent,
+  ProjectTerminalDisplayChangedEvent,
+  ProjectTerminalRunningCountChangedEvent,
   SessionAddonChangedEvent,
   StartupSnapshot,
   WorkspaceGitChangedEvent,
@@ -61,7 +64,10 @@ type BrowserServiceEvent =
   | { kind: "conversationRunSettled"; payload: ConversationRunSettledEvent }
   | { kind: "sessionAddonChanged"; payload: SessionAddonChangedEvent }
   | { kind: "pluginUiInvalidated"; payload: PluginUiInvalidatedEvent }
-  | { kind: "workspaceGitChanged"; payload: WorkspaceGitChangedEvent };
+  | { kind: "workspaceGitChanged"; payload: WorkspaceGitChangedEvent }
+  | { kind: "commandSessionDisplayChanged"; payload: CommandSessionDisplayChangedEvent }
+  | { kind: "projectTerminalDisplayChanged"; payload: ProjectTerminalDisplayChangedEvent }
+  | { kind: "projectTerminalRunningCountChanged"; payload: ProjectTerminalRunningCountChangedEvent };
 
 // EVENT_KIND_TO_TOPIC maps service event kinds to protocol topics.
 // EVENT_KIND_TO_TOPIC 将服务事件类型映射为协议主题。
@@ -73,6 +79,9 @@ const EVENT_KIND_TO_TOPIC: Record<BrowserServiceEvent["kind"], string> = {
   sessionAddonChanged: "session.addon.changed",
   pluginUiInvalidated: "plugin.ui.invalidated",
   workspaceGitChanged: "workspace.git.changed",
+  commandSessionDisplayChanged: "command.session.display.changed",
+  projectTerminalDisplayChanged: "project.terminal.display.changed",
+  projectTerminalRunningCountChanged: "project.terminal.running-count.changed",
 };
 
 // closeWebSocketWhenReady closes one socket without aborting its opening handshake.

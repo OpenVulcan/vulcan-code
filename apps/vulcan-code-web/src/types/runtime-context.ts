@@ -38,6 +38,9 @@ export interface CommandSessionSummary {
   // Latest renderable terminal screen text.
   // 最新可渲染终端屏幕内容。
   screenText?: string | null;
+  // Highest output sequence evicted from bounded retained history.
+  // 已从有界保留历史中淘汰的最高输出序号。
+  droppedBeforeSeq?: number;
   // Optional process exit code captured by the host.
   // 宿主捕获到的可选进程退出码。
   exitCode?: number | null;
