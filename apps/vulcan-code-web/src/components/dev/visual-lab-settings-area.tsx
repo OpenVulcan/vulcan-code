@@ -23,6 +23,12 @@ import {
 } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
+  FilterChip,
+  FilterChipGroup,
+  SegmentedControl,
+  SegmentedControlItem,
+} from "@/components/ui/choice-controls"
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -66,6 +72,7 @@ import {
 } from "@/components/ui/empty"
 import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import { NavItem, TreeRow } from "@/components/ui/navigation-item"
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card"
 import { Popover, PopoverContent, PopoverDescription, PopoverHeader, PopoverTitle, PopoverTrigger } from "@/components/ui/popover"
 import { Progress } from "@/components/ui/progress"
@@ -194,6 +201,9 @@ export function VisualLabSettingsArea() {
   // dialogPreview identifies the modal surface currently opened from the fixed acceptance section.
   // dialogPreview 标识当前从固定验收区域打开的模态表面。
   const [dialogPreview, setDialogPreview] = useState<"dialog" | "alert" | "sheet" | null>(null)
+  // labFilter stores the interactive filter-chip example without affecting product data.
+  // labFilter 保存交互式筛选标签示例，不影响产品数据。
+  const [labFilter, setLabFilter] = useState<"all" | "active" | "issues">("all")
 
   return (
     <div className="visual-lab">
@@ -444,6 +454,30 @@ export function VisualLabSettingsArea() {
           description={text("导航模式和进度状态用于后续统一前的固定对照。", "Navigation and progress states provide a stable reference for later unification.")}
           title={text("导航与反馈", "Navigation and feedback")}
         >
+          <div className="visual-lab-stack">
+            <SegmentedControl defaultValue="balanced">
+              <SegmentedControlItem value="compact">{text("紧凑", "Compact")}</SegmentedControlItem>
+              <SegmentedControlItem value="balanced">{text("均衡", "Balanced")}</SegmentedControlItem>
+              <SegmentedControlItem value="comfortable">{text("宽松", "Comfortable")}</SegmentedControlItem>
+            </SegmentedControl>
+            <FilterChipGroup aria-label={text("状态筛选", "Status filter")}>
+              <FilterChip onClick={() => setLabFilter("all")} selected={labFilter === "all"}>{text("全部", "All")}</FilterChip>
+              <FilterChip onClick={() => setLabFilter("active")} selected={labFilter === "active"}>{text("启用", "Active")}</FilterChip>
+              <FilterChip onClick={() => setLabFilter("issues")} selected={labFilter === "issues"}>{text("问题", "Issues")}</FilterChip>
+            </FilterChipGroup>
+            <div className="visual-lab-navigation-samples">
+              <nav aria-label={text("导航项示例", "Navigation item example")}>
+                <NavItem selected>{text("当前页面", "Current page")}</NavItem>
+                <NavItem>{text("其他页面", "Other page")}</NavItem>
+                <NavItem disabled>{text("禁用页面", "Disabled page")}</NavItem>
+              </nav>
+              <div role="tree" aria-label={text("树节点示例", "Tree row example")}>
+                <TreeRow depth={0}>{text("工作区", "Workspace")}</TreeRow>
+                <TreeRow depth={1} selected>{text("当前项目", "Current project")}</TreeRow>
+                <TreeRow depth={2}>{text("子目录", "Nested folder")}</TreeRow>
+              </div>
+            </div>
+          </div>
           <Tabs defaultValue="overview">
             <TabsList>
               <TabsTrigger value="overview">{text("概览", "Overview")}</TabsTrigger>

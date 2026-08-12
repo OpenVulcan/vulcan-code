@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { IconButton } from "@/components/ui/button";
+import { SegmentedControl, SegmentedControlItem } from "@/components/ui/choice-controls";
 import { Switch } from "@/components/ui/switch";
 import {
   Dialog,
@@ -332,32 +333,26 @@ function LuaSkillToolRow(props: {
           <span>{props.tool.canonicalName}</span>
         </div>
         <div className="skill-tool-control">
-          <div className="skill-tool-segmented" role="group" aria-label={formatSkillText(t("skills.lua.toolModeAria"), { name: props.tool.localName })}>
-            <button
-              className={selectedState === "explicit" ? "active" : ""}
-              disabled={props.busy || syncing}
-              onClick={() => handleRegistrationChange("explicit")}
-              type="button"
-            >
+          <SegmentedControl
+            aria-label={formatSkillText(t("skills.lua.toolModeAria"), { name: props.tool.localName })}
+            disabled={props.busy || syncing}
+            onValueChange={(value) => {
+              if (value) {
+                void handleRegistrationChange(value as LuaSkillToolSummary["registrationState"])
+              }
+            }}
+            value={selectedState}
+          >
+            <SegmentedControlItem value="explicit">
               {t("skills.lua.toolExplicit")}
-            </button>
-            <button
-              className={selectedState === "implicit" ? "active" : ""}
-              disabled={props.busy || syncing}
-              onClick={() => handleRegistrationChange("implicit")}
-              type="button"
-            >
+            </SegmentedControlItem>
+            <SegmentedControlItem value="implicit">
               {t("skills.lua.toolImplicit")}
-            </button>
-            <button
-              className={selectedState === "disabled" ? "active" : ""}
-              disabled={props.busy || syncing}
-              onClick={() => handleRegistrationChange("disabled")}
-              type="button"
-            >
+            </SegmentedControlItem>
+            <SegmentedControlItem value="disabled">
               {t("skills.lua.toolDisabled")}
-            </button>
-          </div>
+            </SegmentedControlItem>
+          </SegmentedControl>
           {syncing ? <small className="skill-sync-status">{t("skills.lua.syncing")}</small> : null}
         </div>
       </div>

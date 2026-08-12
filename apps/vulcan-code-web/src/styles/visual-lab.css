@@ -170,6 +170,20 @@
   gap: 6px;
 }
 
+.visual-lab-navigation-samples {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.visual-lab-navigation-samples > * {
+  display: grid;
+  gap: 2px;
+  padding: 6px;
+  border: 1px solid var(--vcn-border-subtle);
+  border-radius: var(--vcn-radius-md);
+}
+
 @media (max-width: 720px) {
   .visual-lab {
     padding: 14px;
@@ -181,5 +195,9 @@
 
   .visual-lab-surface-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .visual-lab-navigation-samples {
+    grid-template-columns: minmax(0, 1fr);
   }
 }

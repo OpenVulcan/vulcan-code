@@ -1,6 +1,7 @@
 import * as React from "react";
 import { PackagePlus, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { FilterChip, FilterChipGroup } from "@/components/ui/choice-controls";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   Dialog,
@@ -156,16 +157,11 @@ export function LuaSkillsPanel(props: {
             value={searchQuery}
           />
         </label>
-        <Select onValueChange={(value) => setStatusFilter(value as LuaSkillStatusFilter)} value={statusFilter}>
-          <SelectTrigger aria-label={t("skills.filter.statusLabel")} className="agent-catalog-status-select">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">{t("skills.filter.allStatuses")}</SelectItem>
-            <SelectItem value="enabled">{t("skills.status.enabled")}</SelectItem>
-            <SelectItem value="disabled">{t("skills.status.stopped")}</SelectItem>
-          </SelectContent>
-        </Select>
+        <FilterChipGroup aria-label={t("skills.filter.statusLabel")}>
+          <FilterChip onClick={() => setStatusFilter("all")} selected={statusFilter === "all"}>{t("skills.filter.allStatuses")}</FilterChip>
+          <FilterChip onClick={() => setStatusFilter("enabled")} selected={statusFilter === "enabled"}>{t("skills.status.enabled")}</FilterChip>
+          <FilterChip onClick={() => setStatusFilter("disabled")} selected={statusFilter === "disabled"}>{t("skills.status.stopped")}</FilterChip>
+        </FilterChipGroup>
         <Select onValueChange={(value) => setSourceFilter(value as LuaSkillSourceFilter)} value={sourceFilter}>
           <SelectTrigger aria-label={t("skills.filter.sourceLabel")} className="agent-catalog-status-select">
             <SelectValue />

@@ -9,6 +9,7 @@ import { SourceOriginLink } from "@/components/features/source-origin-link"
 import { Badge } from "@/components/ui/badge"
 import { Button, IconButton } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
+import { SegmentedControl, SegmentedControlItem } from "@/components/ui/choice-controls"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
@@ -923,35 +924,27 @@ function AgentCapabilityPolicyTable(props: {
           <strong>{props.title}</strong>
           <span>{agentPolicyModeSummary(props.mode, selectedPolicyItems.length, locale)}</span>
         </div>
-        <div className="skill-tool-segmented agent-tool-policy-mode" role="group" aria-label={props.title}>
-          <button
-            aria-pressed={props.mode === "all"}
-            className={props.mode === "all" ? "active" : undefined}
-            disabled={props.disabled}
-            onClick={() => props.onModeChange("all")}
-            type="button"
-          >
+        <SegmentedControl
+          aria-label={props.title}
+          className="agent-tool-policy-mode"
+          disabled={props.disabled}
+          onValueChange={(value) => {
+            if (value) {
+              props.onModeChange(value as CapabilityPolicyMode)
+            }
+          }}
+          value={props.mode}
+        >
+          <SegmentedControlItem value="all">
             {text("全部", "All")}
-          </button>
-          <button
-            aria-pressed={props.mode === "allow_only"}
-            className={props.mode === "allow_only" ? "active" : undefined}
-            disabled={props.disabled}
-            onClick={() => props.onModeChange("allow_only")}
-            type="button"
-          >
+          </SegmentedControlItem>
+          <SegmentedControlItem value="allow_only">
             {text("仅允许", "Allow only")}
-          </button>
-          <button
-            aria-pressed={props.mode === "deny_only"}
-            className={props.mode === "deny_only" ? "active" : undefined}
-            disabled={props.disabled}
-            onClick={() => props.onModeChange("deny_only")}
-            type="button"
-          >
+          </SegmentedControlItem>
+          <SegmentedControlItem value="deny_only">
             {text("仅禁止", "Deny only")}
-          </button>
-        </div>
+          </SegmentedControlItem>
+        </SegmentedControl>
         <input
           disabled={props.disabled}
           placeholder={props.searchPlaceholder}

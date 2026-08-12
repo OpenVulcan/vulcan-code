@@ -2,6 +2,7 @@ import * as React from "react"
 import { PanelLeftIcon } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { navigationItemVariants } from "@/components/ui/navigation-item"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { useI18n } from "@/i18n"
 import { cn } from "@/lib/utils"
@@ -214,7 +215,13 @@ function SidebarMenuButton({
   const button = (
     <button
       aria-label={state === "collapsed" && tooltip ? tooltip : props["aria-label"]}
-      className={cn("vcn-sidebar-menu-button", active && "active", className)}
+      aria-current={active ? "page" : undefined}
+      className={cn(
+        navigationItemVariants({ density: "default", selected: active }),
+        "vcn-sidebar-menu-button",
+        active && "active",
+        className,
+      )}
       data-active={active ? "true" : "false"}
       data-slot="sidebar-menu-button"
       type="button"

@@ -8,6 +8,7 @@ import { AgentSkillCategoryManagementDialog, AgentSkillEditorDialog } from "@/co
 import { hasLinkedGitHubSourceOrigin, SourceOriginLink } from "@/components/features/source-origin-link"
 import { Badge } from "@/components/ui/badge"
 import { Button, IconButton } from "@/components/ui/button"
+import { FilterChip, FilterChipGroup } from "@/components/ui/choice-controls"
 import {
   Dialog,
   DialogContent,
@@ -274,17 +275,12 @@ export function AgentSkillsArea(props: {
                 value={searchQuery}
               />
             </label>
-            <Select onValueChange={(value) => setStatusFilter(value as AgentSkillStatusFilter)} value={statusFilter}>
-              <SelectTrigger aria-label={locale.startsWith("zh") ? "按状态筛选技能" : "Filter skills by state"} className="agent-catalog-status-select">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">{locale.startsWith("zh") ? "全部状态" : "All states"}</SelectItem>
-                <SelectItem value="enabled">{locale.startsWith("zh") ? "已启用" : "Enabled"}</SelectItem>
-                <SelectItem value="disabled">{locale.startsWith("zh") ? "已停用" : "Disabled"}</SelectItem>
-                <SelectItem value="issues">{locale.startsWith("zh") ? "存在问题" : "Has issues"}</SelectItem>
-              </SelectContent>
-            </Select>
+            <FilterChipGroup aria-label={locale.startsWith("zh") ? "按状态筛选技能" : "Filter skills by state"}>
+              <FilterChip onClick={() => setStatusFilter("all")} selected={statusFilter === "all"}>{locale.startsWith("zh") ? "全部" : "All"}</FilterChip>
+              <FilterChip onClick={() => setStatusFilter("enabled")} selected={statusFilter === "enabled"}>{locale.startsWith("zh") ? "已启用" : "Enabled"}</FilterChip>
+              <FilterChip onClick={() => setStatusFilter("disabled")} selected={statusFilter === "disabled"}>{locale.startsWith("zh") ? "已停用" : "Disabled"}</FilterChip>
+              <FilterChip onClick={() => setStatusFilter("issues")} selected={statusFilter === "issues"}>{locale.startsWith("zh") ? "问题" : "Issues"}</FilterChip>
+            </FilterChipGroup>
             <Select onValueChange={(value) => setSourceFilter(value as AgentSkillSourceFilter)} value={sourceFilter}>
               <SelectTrigger aria-label={locale.startsWith("zh") ? "按来源筛选技能" : "Filter skills by source"} className="agent-catalog-status-select">
                 <SelectValue />
