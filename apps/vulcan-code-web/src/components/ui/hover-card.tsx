@@ -4,6 +4,12 @@ import * as React from "react"
 import { HoverCard as HoverCardPrimitive } from "radix-ui"
 
 import { cn } from "@/lib/utils"
+import {
+  FLOATING_MOTION_CLASS_NAME,
+  FLOATING_SURFACE_CLASS_NAME,
+  floatingContentWidthClassName,
+  type FloatingContentWidth,
+} from "@/components/ui/floating-surface"
 
 // HoverCard exposes the shared interactive hover-card root.
 // HoverCard 暴露共享的可交互悬浮卡片根节点。
@@ -27,14 +33,22 @@ function HoverCardContent({
   className,
   align = "center",
   sideOffset = 4,
+  width = "md",
   ...props
-}: React.ComponentProps<typeof HoverCardPrimitive.Content>) {
+}: React.ComponentProps<typeof HoverCardPrimitive.Content> & {
+  // Semantic width strategy for the hover-card surface.
+  // HoverCard 表面的语义宽度策略。
+  width?: Exclude<FloatingContentWidth, "trigger">
+}) {
   return (
     <HoverCardPrimitive.Portal>
       <HoverCardPrimitive.Content
         align={align}
         className={cn(
-          "z-50 w-64 origin-(--radix-hover-card-content-transform-origin) rounded-lg bg-popover p-4 text-popover-foreground shadow-md ring-1 ring-foreground/10 outline-hidden data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2",
+          "z-50 origin-(--radix-hover-card-content-transform-origin) p-3 text-sm",
+          FLOATING_SURFACE_CLASS_NAME,
+          FLOATING_MOTION_CLASS_NAME,
+          floatingContentWidthClassName(width),
           className,
         )}
         data-slot="hover-card-content"

@@ -31,6 +31,33 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import {
+  ContextMenu,
+  ContextMenuCheckboxItem,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuShortcut,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu"
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuShortcut,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import {
   Empty,
   EmptyDescription,
   EmptyHeader,
@@ -39,6 +66,8 @@ import {
 } from "@/components/ui/empty"
 import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card"
+import { Popover, PopoverContent, PopoverDescription, PopoverHeader, PopoverTitle, PopoverTrigger } from "@/components/ui/popover"
 import { Progress } from "@/components/ui/progress"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import {
@@ -400,6 +429,78 @@ export function VisualLabSettingsArea() {
               <EmptyDescription>{text("空状态也必须来自统一视觉体系。", "Empty states also belong to the unified visual system.")}</EmptyDescription>
             </EmptyHeader>
           </Empty>
+        </VisualLabSection>
+
+        <VisualLabSection
+          description={text("下拉菜单、右键菜单与轻量浮层共享表面、密度、选中状态和碰撞翻转规则。", "Dropdowns, context menus, and lightweight overlays share surfaces, density, selection states, and collision handling.")}
+          title={text("菜单与浮层", "Menus and overlays")}
+        >
+          <div className="visual-lab-stack">
+            <div className="visual-lab-row">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline">{text("打开下拉菜单", "Open dropdown")}</Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent width="md">
+                  <DropdownMenuLabel>{text("显示设置", "Display settings")}</DropdownMenuLabel>
+                  <DropdownMenuCheckboxItem defaultChecked>{text("显示活动状态", "Show activity")}</DropdownMenuCheckboxItem>
+                  <DropdownMenuRadioGroup defaultValue="balanced">
+                    <DropdownMenuRadioItem value="compact">{text("紧凑密度", "Compact density")}</DropdownMenuRadioItem>
+                    <DropdownMenuRadioItem value="balanced">{text("均衡密度", "Balanced density")}</DropdownMenuRadioItem>
+                  </DropdownMenuRadioGroup>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuSub>
+                    <DropdownMenuSubTrigger>{text("更多操作", "More actions")}</DropdownMenuSubTrigger>
+                    <DropdownMenuSubContent>
+                      <DropdownMenuItem>{text("复制链接", "Copy link")}<DropdownMenuShortcut>Ctrl+C</DropdownMenuShortcut></DropdownMenuItem>
+                      <DropdownMenuItem variant="destructive">{text("删除项目", "Delete project")}</DropdownMenuItem>
+                    </DropdownMenuSubContent>
+                  </DropdownMenuSub>
+                </DropdownMenuContent>
+              </DropdownMenu>
+
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button variant="outline">Popover</Button>
+                </PopoverTrigger>
+                <PopoverContent width="md">
+                  <PopoverHeader>
+                    <PopoverTitle>{text("轻量信息面板", "Lightweight panel")}</PopoverTitle>
+                    <PopoverDescription>{text("用于少量说明或紧凑操作，不承担完整弹窗职责。", "For concise guidance or compact actions, not full dialog workflows.")}</PopoverDescription>
+                  </PopoverHeader>
+                </PopoverContent>
+              </Popover>
+
+              <HoverCard>
+                <HoverCardTrigger asChild>
+                  <Button variant="ghost">HoverCard</Button>
+                </HoverCardTrigger>
+                <HoverCardContent width="md">
+                  <strong>{text("悬停详情", "Hover details")}</strong>
+                  <p className="visual-lab-caption">{text("检查延迟、驻留、边界翻转和长文本换行。", "Review delay, persistence, collision flipping, and long-text wrapping.")}</p>
+                </HoverCardContent>
+              </HoverCard>
+            </div>
+
+            <ContextMenu>
+              <ContextMenuTrigger className="visual-lab-context-target">
+                {text("在此区域点击右键，检查上下文菜单", "Right-click this area to review the context menu")}
+              </ContextMenuTrigger>
+              <ContextMenuContent width="md">
+                <ContextMenuItem>{text("打开", "Open")}<ContextMenuShortcut>Enter</ContextMenuShortcut></ContextMenuItem>
+                <ContextMenuCheckboxItem defaultChecked>{text("固定到侧栏", "Pin to sidebar")}</ContextMenuCheckboxItem>
+                <ContextMenuSub>
+                  <ContextMenuSubTrigger>{text("移动到", "Move to")}</ContextMenuSubTrigger>
+                  <ContextMenuSubContent>
+                    <ContextMenuItem>{text("工作区一", "Workspace one")}</ContextMenuItem>
+                    <ContextMenuItem>{text("工作区二", "Workspace two")}</ContextMenuItem>
+                  </ContextMenuSubContent>
+                </ContextMenuSub>
+                <ContextMenuSeparator />
+                <ContextMenuItem variant="destructive">{text("删除", "Delete")}</ContextMenuItem>
+              </ContextMenuContent>
+            </ContextMenu>
+          </div>
         </VisualLabSection>
       </div>
     </div>

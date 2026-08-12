@@ -963,6 +963,8 @@ impl InternalInferenceTelemetryFacts {
     /// 参数
     /// All inputs are immutable authorization, route, timing, and usage facts.
     /// 所有输入均为不可变授权、路由、计时与用量事实。
+    /// `request_id` is caller-defined; `execution_id` is the canonical UUID that owns usage accounting.
+    /// `request_id` 由调用方定义；`execution_id` 是持有用量统计的规范 UUID。
     ///
     /// # Returns
     /// 返回值
@@ -972,6 +974,7 @@ impl InternalInferenceTelemetryFacts {
         caller: &InferenceCallerContext,
         consumer_profile_id: &str,
         request_id: &str,
+        execution_id: &str,
         owner_kind: &'static str,
         selection: &ResolvedPublicAiSelection,
         started_at_unix_ms: u64,
@@ -982,6 +985,7 @@ impl InternalInferenceTelemetryFacts {
             caller,
             consumer_profile_id,
             request_id,
+            execution_id,
             owner_kind,
             selection,
             started_at_unix_ms,
@@ -999,6 +1003,8 @@ impl InternalInferenceTelemetryFacts {
     /// 参数
     /// All inputs are immutable authorization, route, timing, and normalized failure facts.
     /// 所有输入均为不可变授权、路由、计时与归一化失败事实。
+    /// `request_id` is caller-defined; `execution_id` is the canonical UUID that owns usage accounting.
+    /// `request_id` 由调用方定义；`execution_id` 是持有用量统计的规范 UUID。
     ///
     /// # Returns
     /// 返回值
@@ -1008,6 +1014,7 @@ impl InternalInferenceTelemetryFacts {
         caller: &InferenceCallerContext,
         consumer_profile_id: &str,
         request_id: &str,
+        execution_id: &str,
         owner_kind: &'static str,
         selection: &ResolvedPublicAiSelection,
         started_at_unix_ms: u64,
@@ -1017,6 +1024,7 @@ impl InternalInferenceTelemetryFacts {
             caller,
             consumer_profile_id,
             request_id,
+            execution_id,
             owner_kind,
             selection,
             started_at_unix_ms,
@@ -1038,6 +1046,8 @@ impl InternalInferenceTelemetryFacts {
     /// 参数
     /// Inputs carry host authorization, exact route identity, terminal timing, and optional error.
     /// 输入承载宿主授权、精确路由身份、终态计时与可选错误。
+    /// `request_id` and `execution_id` remain independent identities throughout the lifecycle.
+    /// `request_id` 与 `execution_id` 在整个生命周期中保持为相互独立的身份。
     ///
     /// # Returns
     /// 返回值
@@ -1048,6 +1058,7 @@ impl InternalInferenceTelemetryFacts {
         caller: &InferenceCallerContext,
         consumer_profile_id: &str,
         request_id: &str,
+        execution_id: &str,
         owner_kind: &'static str,
         selection: &ResolvedPublicAiSelection,
         started_at_unix_ms: u64,
@@ -1060,7 +1071,7 @@ impl InternalInferenceTelemetryFacts {
             secondary_route_snapshot(&selection.route.secondary_route);
         Self {
             request_id: request_id.to_string(),
-            execution_id: request_id.to_string(),
+            execution_id: execution_id.to_string(),
             caller_id: caller.caller_id.clone(),
             consumer_profile_id: consumer_profile_id.to_string(),
             usage_scope: caller.usage_scope,
@@ -1112,6 +1123,8 @@ impl InternalInferenceTelemetryFacts {
     /// 参数
     /// Inputs carry caller/profile identity, exact route, terminal timing, usage, and optional error.
     /// 输入承载调用方/配置档身份、精确路由、终态计时、用量与可选错误。
+    /// `execution_id` must be the UUID allocated by the owning LLM execution.
+    /// `execution_id` 必须是所属 LLM 执行分配的 UUID。
     ///
     /// # Returns
     /// 返回值
@@ -1122,6 +1135,7 @@ impl InternalInferenceTelemetryFacts {
         caller_id: &str,
         consumer_profile_id: &str,
         request_id: &str,
+        execution_id: &str,
         owner_kind: &'static str,
         route: &ExecutionRouteSnapshot,
         started_at_unix_ms: u64,
@@ -1132,7 +1146,7 @@ impl InternalInferenceTelemetryFacts {
     ) -> Self {
         Self {
             request_id: request_id.to_string(),
-            execution_id: request_id.to_string(),
+            execution_id: execution_id.to_string(),
             caller_id: caller_id.to_string(),
             consumer_profile_id: consumer_profile_id.to_string(),
             usage_scope: route.usage_scope,
@@ -1349,6 +1363,7 @@ impl ConfiguredInferenceService {
             &caller,
             PROVIDER_MODEL_VALIDATION_CONSUMER_ID,
             execution_id.as_str(),
+            execution_id.as_str(),
             "internal_llm",
             selection,
             started_at_unix_ms,
@@ -1518,6 +1533,7 @@ impl ConfiguredInferenceService {
         let facts = InternalInferenceTelemetryFacts::from_selection(
             caller,
             PROVIDER_MODEL_VALIDATION_CONSUMER_ID,
+            execution_id,
             execution_id,
             "internal_llm",
             selection,
@@ -2113,12 +2129,16 @@ impl ConfiguredInferenceService {
             .resolve_internal_inference_selection(&configuration, route)
             .map_err(configuration_error)?;
         let request = embedding_request_with_internal_defaults(&configuration, &selection, request);
+        // telemetry_execution_id separates the provider request identity from the UUID-owned usage lifecycle.
+        // telemetry_execution_id 将供应商请求身份与由 UUID 持有的用量生命周期分离。
+        let telemetry_execution_id = Uuid::new_v4().to_string();
         let started_at_unix_ms = current_unix_millis();
         let input_item_count = u64::try_from(request.inputs.len()).unwrap_or(u64::MAX);
         let started_facts = InternalInferenceTelemetryFacts::from_selection(
             caller,
             request.consumer_profile_id.as_str(),
             request.request_id.as_str(),
+            telemetry_execution_id.as_str(),
             "internal_embedding",
             &selection,
             started_at_unix_ms,
@@ -2152,6 +2172,7 @@ impl ConfiguredInferenceService {
                     caller,
                     request.consumer_profile_id.as_str(),
                     request.request_id.as_str(),
+                    telemetry_execution_id.as_str(),
                     "internal_embedding",
                     &selection,
                     started_at_unix_ms,
@@ -2175,6 +2196,7 @@ impl ConfiguredInferenceService {
                         caller,
                         request.consumer_profile_id.as_str(),
                         request.request_id.as_str(),
+                        telemetry_execution_id.as_str(),
                         "internal_embedding",
                         &selection,
                         started_at_unix_ms,
@@ -2281,12 +2303,16 @@ impl ConfiguredInferenceService {
             .resolve_internal_inference_selection(&configuration, route)
             .map_err(configuration_error)?;
         let request = rerank_request_with_internal_defaults(&configuration, &selection, request);
+        // telemetry_execution_id separates the provider request identity from the UUID-owned usage lifecycle.
+        // telemetry_execution_id 将供应商请求身份与由 UUID 持有的用量生命周期分离。
+        let telemetry_execution_id = Uuid::new_v4().to_string();
         let started_at_unix_ms = current_unix_millis();
         let input_item_count = u64::try_from(request.candidates.len()).unwrap_or(u64::MAX);
         let started_facts = InternalInferenceTelemetryFacts::from_selection(
             caller,
             request.consumer_profile_id.as_str(),
             request.request_id.as_str(),
+            telemetry_execution_id.as_str(),
             "internal_rerank",
             &selection,
             started_at_unix_ms,
@@ -2310,6 +2336,7 @@ impl ConfiguredInferenceService {
                     caller,
                     request.consumer_profile_id.as_str(),
                     request.request_id.as_str(),
+                    telemetry_execution_id.as_str(),
                     "internal_rerank",
                     &selection,
                     started_at_unix_ms,
@@ -2333,6 +2360,7 @@ impl ConfiguredInferenceService {
                         caller,
                         request.consumer_profile_id.as_str(),
                         request.request_id.as_str(),
+                        telemetry_execution_id.as_str(),
                         "internal_rerank",
                         &selection,
                         started_at_unix_ms,
@@ -2902,6 +2930,7 @@ impl ConfiguredInferenceService {
                 caller_id.as_str(),
                 request.consumer_profile_id.as_str(),
                 request.request_id.as_str(),
+                execution_id.as_str(),
                 "internal_llm",
                 &route,
                 attempt_started_at_unix_ms,
@@ -2955,6 +2984,7 @@ impl ConfiguredInferenceService {
                                 caller_id.as_str(),
                                 request.consumer_profile_id.as_str(),
                                 request.request_id.as_str(),
+                                execution_id.as_str(),
                                 "internal_llm",
                                 &route,
                                 attempt_started_at_unix_ms,
@@ -3034,6 +3064,7 @@ impl ConfiguredInferenceService {
                                     caller_id.as_str(),
                                     request.consumer_profile_id.as_str(),
                                     request.request_id.as_str(),
+                                    execution_id.as_str(),
                                     "internal_llm",
                                     &route,
                                     attempt_started_at_unix_ms,
@@ -3141,6 +3172,7 @@ impl ConfiguredInferenceService {
                 caller_id.as_str(),
                 request.consumer_profile_id.as_str(),
                 request.request_id.as_str(),
+                execution_id.as_str(),
                 "internal_llm",
                 &route,
                 active_attempt_facts.started_at_unix_ms,
@@ -3157,6 +3189,7 @@ impl ConfiguredInferenceService {
                 caller_id.as_str(),
                 request.consumer_profile_id.as_str(),
                 request.request_id.as_str(),
+                execution_id.as_str(),
                 "internal_llm",
                 &route,
                 active_attempt_facts.started_at_unix_ms,
@@ -6237,7 +6270,7 @@ mod tests {
         };
         let facts = InternalInferenceTelemetryFacts {
             request_id: String::from("request-vmm-1"),
-            execution_id: String::from("execution-vmm-1"),
+            execution_id: String::from("2f322d48-09c6-4b9e-b9a5-342b62a22b92"),
             caller_id: String::from("vmm-local"),
             consumer_profile_id: String::from("vmm"),
             usage_scope: InferenceUsageScope::InternalBackground,
@@ -6306,16 +6339,23 @@ mod tests {
         assert_eq!(payload["http_status"], 200);
         assert_eq!(payload["provider_request_id"], "provider-request-1");
         assert_eq!(payload["route_revision"], "sha256:route-1");
+        // native_event proves a caller-defined request id no longer has to parse as the owning UUID.
+        // native_event 证明调用方自定义请求标识不再需要被解析为所属 UUID。
+        let native_event = internal_inference_native_usage_event(&facts, payload)
+            .expect("native usage event should use the independent execution UUID");
+        assert_eq!(native_event.session_id.to_string(), facts.execution_id);
+        assert_eq!(native_event.payload["request_id"], facts.request_id);
     }
 
     /// Verifies unknown usage dimensions remain null in native and shadow telemetry.
     /// 验证未知用量维度在原生与影子遥测中保持为空。
     #[test]
     fn internal_inference_terminal_payload_preserves_unknown_usage() {
-        let mut facts = InternalInferenceTelemetryFacts::from_route(
+        let facts = InternalInferenceTelemetryFacts::from_route(
             "caller",
             "consumer",
             "request",
+            "00000000-0000-0000-0000-000000000000",
             "internal_llm",
             &ExecutionRouteSnapshot {
                 provider_id: String::from("provider"),
@@ -6338,8 +6378,6 @@ mod tests {
             &RequestUsage::default(),
             None,
         );
-        facts.execution_id = Uuid::nil().to_string();
-
         let initial_attempt = facts.clone().with_retry_count(0);
         let retry_attempt = facts.clone().with_retry_count(1);
         assert_eq!(initial_attempt.execution_id, retry_attempt.execution_id);
