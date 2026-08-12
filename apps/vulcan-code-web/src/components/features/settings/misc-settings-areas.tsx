@@ -16,6 +16,8 @@ import {
 import { ModelPickerControl, modelPickerChoiceKey } from "@/components/composer/model-picker-control"
 import { PanelTitle, StatusPill } from "@/components/shared/status"
 import { Badge } from "@/components/ui/badge"
+import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
 import { useI18n } from "@/i18n"
 import type { SettingsActionProps } from "@/components/features/settings/settings-action-types"
 import type {
@@ -87,8 +89,7 @@ export function GitCommitSettingsArea(props: {
       <div className="settings-form-grid">
         <label className="settings-form-field">
           <span>{text("新分支默认前缀", "Default new-branch prefix")}</span>
-          <input
-            className="settings-input"
+          <Input
             onChange={(event) => setDraftPrefix(event.currentTarget.value)}
             placeholder={DEFAULT_COMMIT_BRANCH_PREFIX}
             value={draftPrefix}
@@ -144,8 +145,7 @@ export function GitCommitSettingsArea(props: {
         </article>
         <label className="settings-form-field">
           <span>{t("settings.gitCommit.summaryExtraPrompt")}</span>
-          <textarea
-            className="settings-input"
+          <Textarea
             onChange={(event) => setDraftSummaryExtraPrompt(event.currentTarget.value)}
             placeholder={t("settings.gitCommit.summaryExtraPromptPlaceholder")}
             rows={4}

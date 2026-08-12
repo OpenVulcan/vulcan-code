@@ -1465,9 +1465,17 @@ impl ProviderExecutionClient {
     ) -> Result<EncodedWireRequest, ProviderExecutionFailure> {
         validate_request_policy(route, request)?;
         validate_request_projection_guards_before_encoding(route, request)?;
+        let mut baseline_request = request.clone();
+        if route.protocol_route.protocol_profile_id != OPENAI_CODEX_RESPONSES_PROFILE_ID {
+            // Only the Codex Responses route owns a wire-level previous_response_id cursor. Other
+            // protocols keep the continuation as a local append-only proof and replay full history.
+            // 只有 Codex Responses 路由拥有线路级 previous_response_id 游标；其他协议仅把延续状态
+            // 用作本地追加边界证明，并完整重放历史。
+            baseline_request.continuation = None;
+        }
         // The extracted LLM core owns the canonical Codex Responses request body.
         // 提取后的 LLM 核心拥有规范 Codex Responses 请求正文的唯一编码权。
-        let encoded = encode_codex_responses_request(request).map_err(|error| {
+        let encoded = encode_codex_responses_request(&baseline_request).map_err(|error| {
             pre_dispatch_failure(format!("LLM core request encoding failed: {error}"))
         })?;
         let encoded = project_responses_baseline_for_provider(route, request, encoded)?;
@@ -8910,6 +8918,40 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    // Verifies that local continuation anchors never become Codex cursors on non-Codex routes.
+    // 验证非 Codex 路由上的本地延续锚点绝不会被投影为 Codex 游标。
+    #[test]
+    fn non_codex_routes_replay_history_without_projecting_codex_continuation() {
+        let client = ProviderExecutionClient::new(
+            reqwest::Client::new(),
+            Arc::new(ProtocolRegistry::first_batch().expect("profiles should register")),
+        );
+
+        for protocol_profile_id in [ANTHROPIC_MESSAGES_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID] {
+            let route = deepseek_route(protocol_profile_id);
+            let mut request = minimal_request();
+            request.model_id = if protocol_profile_id == ANTHROPIC_MESSAGES_PROFILE_ID {
+                String::from("deepseek-v4-pro")
+            } else {
+                String::from("deepseek-v4-flash")
+            };
+            request.continuation = Some(AiContinuation {
+                provider_id: route.provider.id.clone(),
+                protocol_profile_id: String::from(protocol_profile_id),
+                model_id: request.model_id.clone(),
+                provider_message_id: String::from("provider-message-1"),
+                covered_local_message_id: String::from("local-boundary-1"),
+                covered_message_count: 1,
+            });
+
+            let encoded = client
+                .encode_request(&route, &request)
+                .expect("non-Codex routes should encode a full-history follow-up");
+
+            assert!(encoded.body.get("previous_response_id").is_none());
+        }
     }
 
     /// Verifies a compact body transport failure preserves its proven dispatched boundary.

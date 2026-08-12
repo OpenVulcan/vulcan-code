@@ -6,6 +6,7 @@ use crate::{
     ResourceTransferState, ToolCall, ToolCallProgress, UsageUpdateKind,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Represents one normalized event emitted by an AI execution.
@@ -179,6 +180,13 @@ pub enum AiStreamEvent {
         /// Stable response item identifier.
         /// 稳定响应项标识。
         item_id: String,
+    },
+    /// One exact provider output item became available for route-bound replay.
+    /// 一项用于精确路由绑定重放的供应商原始输出项已经可用。
+    ProviderContextItemCaptured {
+        /// Exact completed output item returned by the provider.
+        /// 供应商返回的精确已完成输出项。
+        item: Value,
     },
     /// Updated request usage.
     /// 更新后的请求用量。
@@ -364,6 +372,7 @@ impl AiStreamStateMachine {
             }
             AiStreamEvent::ResourceProgress { .. }
             | AiStreamEvent::ImageGenerationPartial { .. }
+            | AiStreamEvent::ProviderContextItemCaptured { .. }
             | AiStreamEvent::UsageUpdated { .. } => {}
         }
         Ok(())
@@ -424,6 +433,7 @@ impl AiStreamEvent {
             Self::ResourceProgress { .. } => "resource_progress",
             Self::ImageGenerationPartial { .. } => "image_generation_partial",
             Self::ResponseItemCompleted { .. } => "response_item_completed",
+            Self::ProviderContextItemCaptured { .. } => "provider_context_item_captured",
             Self::UsageUpdated { .. } => "usage_updated",
             Self::ResponseCompleted => "response_completed",
             Self::ResponseFailed { .. } => "response_failed",

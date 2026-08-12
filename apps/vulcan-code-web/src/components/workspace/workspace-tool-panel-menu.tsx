@@ -1,6 +1,7 @@
 import * as React from "react"
 import { Maximize2, Minimize2 } from "lucide-react"
 
+import { IconButton } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 
 // WorkspaceToolPanelMenuProps defines the shared expandable menu used by adaptive workspace panels.
@@ -59,14 +60,14 @@ export function WorkspaceToolPanelMenu(props: WorkspaceToolPanelMenuProps) {
     >
       <div className="workspace-tool-panel-menu-header">
         <span>{props.heading}</span>
-        <button
+        <IconButton
           aria-label={props.collapseLabel}
-          className="workspace-tool-panel-menu-icon-button"
           onClick={() => props.onExpandedChange(false)}
+          size="xs"
           type="button"
         >
           <Minimize2 size={13} />
-        </button>
+        </IconButton>
       </div>
       <div className="workspace-tool-panel-menu-list">{props.children}</div>
     </aside>

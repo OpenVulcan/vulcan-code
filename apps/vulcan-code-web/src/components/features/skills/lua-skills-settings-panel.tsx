@@ -1,6 +1,9 @@
 import * as React from "react"
 import { CircleHelp } from "lucide-react"
 
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
 import { useI18n } from "@/i18n"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import type {
@@ -122,15 +125,14 @@ function ManagedRuntimeRow(props: {
         <div className="lua-managed-runtime-row-action">
           <span>{installed ? t("skills.luaSettings.managedRuntimeInstalled") : managedRuntimeStatusLabel(props.runtime.status, t)}</span>
           {props.runtime.status === "unavailable" ? (
-            <button
-              className="skill-action-button"
+            <Button
               type="button"
               disabled={props.actionDisabled}
               title={props.runtime.diagnostic}
               onClick={props.onRetry}
             >
               {props.retrying ? t("skills.luaSettings.managedRuntimeRetrying") : t("skills.luaSettings.managedRuntimeReinstall")}
-            </button>
+            </Button>
           ) : null}
         </div>
       </div>
@@ -592,7 +594,7 @@ export function LuaSkillsSettingsPanel(props: {
           />
           <label className="lua-settings-field wide">
             <span>{t("skills.luaSettings.privateAllowlist")}</span>
-            <textarea
+            <Textarea
               value={draft.network.privateSkillSourceAllowlist.join("\n")}
               onChange={(event) => updateNetworkAllowlist(event.currentTarget.value)}
             />
@@ -670,14 +672,13 @@ export function LuaSkillsSettingsPanel(props: {
         {error ? <div className="lua-settings-feedback error">{error}</div> : null}
         {feedback ? <div className="lua-settings-feedback success">{feedback}</div> : null}
         <div className="lua-settings-actions">
-          <button
-            className="skill-action-button"
+          <Button
             type="button"
             disabled={saving || !dirty}
             onClick={() => void saveSettings()}
           >
             {saving ? t("skills.luaSettings.saving") : t("skills.luaSettings.save")}
-          </button>
+          </Button>
         </div>
       </div>
     </section>
@@ -741,7 +742,7 @@ function NumberSettingField(props: {
   return (
     <label className="lua-settings-field">
       <span>{props.label}</span>
-      <input
+      <Input
         type="number"
         min={1}
         step={1}
@@ -771,7 +772,7 @@ function OptionalNumberSettingField(props: {
   return (
     <label className="lua-settings-field">
       <span>{props.label}</span>
-      <input
+      <Input
         type="number"
         min={1}
         step={1}
@@ -802,7 +803,7 @@ function TextSettingField(props: {
   return (
     <label className="lua-settings-field">
       <span>{props.label}</span>
-      <input
+      <Input
         type="text"
         value={props.value}
         onChange={(event) => props.onChange(event.currentTarget.value)}

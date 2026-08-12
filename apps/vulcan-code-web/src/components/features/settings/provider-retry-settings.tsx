@@ -3,6 +3,8 @@ import { RefreshCw } from "lucide-react"
 
 import type { ProviderRetrySettingsSaveRequest, SettingsActionProps } from "@/components/features/settings/settings-action-types"
 import { PanelTitle, StatusPill } from "@/components/shared/status"
+import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
+import { Input } from "@/components/ui/input"
 import { useI18n } from "@/i18n"
 import type { ProviderRetrySettingsSummary } from "@/types"
 
@@ -99,11 +101,15 @@ interface ProviderRetryNumberFieldProps {
 // ProviderRetryNumberField renders one number input with its exact backend constraints.
 // ProviderRetryNumberField 渲染一个带精确后台约束的数字输入。
 function ProviderRetryNumberField(props: ProviderRetryNumberFieldProps) {
+  // inputId binds the shared label and description to this exact numeric control.
+  // inputId 将统一标签和说明绑定到当前数字控件。
+  const inputId = React.useId()
+
   return (
-    <label className="settings-form-field">
-      <span>{props.label}</span>
-      <input
-        className="settings-input"
+    <Field>
+      <FieldLabel htmlFor={inputId}>{props.label}</FieldLabel>
+      <Input
+        id={inputId}
         max={props.max}
         min={props.min}
         onChange={(event) => props.onChange(event.currentTarget.value)}
@@ -111,8 +117,8 @@ function ProviderRetryNumberField(props: ProviderRetryNumberFieldProps) {
         type="number"
         value={props.value}
       />
-      <small className="settings-muted-line">{props.help}</small>
-    </label>
+      <FieldDescription>{props.help}</FieldDescription>
+    </Field>
   )
 }
 

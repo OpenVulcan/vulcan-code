@@ -1239,14 +1239,13 @@ function PublicAiConnectionDialog(props: {
           </label>
           <label className="settings-form-field">
             <span>账号显示名</span>
-            <input className="settings-input" onChange={(event) => setDisplayName(event.target.value)} value={displayName} />
+            <Input onChange={(event) => setDisplayName(event.target.value)} value={displayName} />
           </label>
           {credentialMode === "token" ? (
             <label className="settings-form-field">
               <span>{props.connection ? "替换 Token（留空则不变）" : "API Token"}</span>
-              <input
+              <Input
                 autoComplete="off"
-                className="settings-input"
                 onChange={(event) => setSecret(event.target.value)}
                 type="password"
                 value={secret}
@@ -1269,9 +1268,8 @@ function PublicAiConnectionDialog(props: {
             && usageCapabilityRequiresManagementKey(credentialProfile.account_usage_query) ? (
             <div className="settings-form-field">
               <span>管理密钥（可选）</span>
-              <input
+              <Input
                 autoComplete="off"
-                className="settings-input"
                 onChange={(event) => setManagementKey(event.target.value)}
                 placeholder={props.connection?.has_management_key ? "留空保持现有管理密钥" : ""}
                 type="password"
@@ -1295,13 +1293,12 @@ function PublicAiConnectionDialog(props: {
             <>
               <label className="settings-form-field">
                 <span>Google OAuth Client ID</span>
-                <input className="settings-input" onChange={(event) => setOauthClientId(event.target.value)} value={oauthClientId} />
+                <Input onChange={(event) => setOauthClientId(event.target.value)} value={oauthClientId} />
               </label>
               <label className="settings-form-field">
                 <span>Google OAuth Client Secret（可选）</span>
-                <input
+                <Input
                   autoComplete="off"
-                  className="settings-input"
                   onChange={(event) => setOauthClientSecret(event.target.value)}
                   type="password"
                   value={oauthClientSecret}
@@ -1310,8 +1307,7 @@ function PublicAiConnectionDialog(props: {
               {credentialProfile.oauth_provider === "google_gemini" ? (
                 <label className="settings-form-field">
                   <span>Google Cloud Project ID</span>
-                  <input
-                    className="settings-input"
+                  <Input
                     onChange={(event) => setOauthProjectId(event.target.value)}
                     value={oauthProjectId}
                   />

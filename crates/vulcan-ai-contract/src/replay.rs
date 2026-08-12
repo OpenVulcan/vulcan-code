@@ -47,7 +47,7 @@ pub fn provider_continuation_payload<'a>(provider: &str, signature: &'a str) -> 
 
 /// Current durable replay envelope format version.
 /// 当前可持久化重放封套格式版本。
-pub const PROVIDER_REPLAY_ENVELOPE_VERSION: u16 = 2;
+pub const PROVIDER_REPLAY_ENVELOPE_VERSION: u16 = 3;
 
 /// Canonicalizes official Codex Responses input aliases before durable replay validation.
 /// 在可持久化重放校验前规范化官方 Codex Responses 输入别名。
@@ -141,6 +141,10 @@ pub struct ProviderReplayEnvelope {
     /// Ordered provider-neutral assistant content.
     /// 有序的供应商无关助手内容。
     pub content: Vec<ContentItem>,
+    /// Ordered exact Responses output items for the bound physical route.
+    /// 绑定物理路由使用的有序 Responses 原始输出项。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub provider_context_items: Vec<Value>,
 }
 
 impl ProviderReplayEnvelope {
@@ -150,9 +154,11 @@ impl ProviderReplayEnvelope {
     /// # Parameters
     /// 参数
     /// `provider_id`, `connection_id`, `route_fingerprint`, `protocol_profile_id`, and `model_id`
-    /// define the immutable route scope; `content` contains assistant output in original stream order.
+    /// define the immutable route scope; `content` contains provider-neutral assistant output and
+    /// `provider_context_items` contains exact Responses output items in original output order.
     /// `provider_id`、`connection_id`、`route_fingerprint`、`protocol_profile_id` 与 `model_id`
-    /// 定义不可变路由作用域；`content` 按原始流顺序保存助手输出。
+    /// 定义不可变路由作用域；`content` 按原始流顺序保存供应商无关助手输出，
+    /// `provider_context_items` 按原始输出顺序保存 Responses 原始输出项。
     ///
     /// # Returns
     /// 返回值
@@ -165,6 +171,7 @@ impl ProviderReplayEnvelope {
         protocol_profile_id: impl Into<String>,
         model_id: impl Into<String>,
         content: Vec<ContentItem>,
+        provider_context_items: Vec<Value>,
     ) -> Self {
         Self {
             version: PROVIDER_REPLAY_ENVELOPE_VERSION,
@@ -174,6 +181,7 @@ impl ProviderReplayEnvelope {
             protocol_profile_id: protocol_profile_id.into(),
             model_id: model_id.into(),
             content,
+            provider_context_items,
         }
     }
 
@@ -277,6 +285,7 @@ mod tests {
                 text: String::from("reasoning"),
                 signature: Some(String::from("opaque-signature")),
             }],
+            Vec::new(),
         );
 
         assert!(envelope.matches_route(

@@ -395,6 +395,17 @@ fn provider_visible_history_passes_canonical_tool_topology_validator() {
         None,
     );
 
+    let CoreConversationPayload::Assistant { tool_calls, .. } = &projected[0].payload else {
+        panic!("first projected message should retain the assistant tool batch");
+    };
+    assert_eq!(
+        tool_calls[1].tool_call_id.as_deref(),
+        Some("provider-call-2")
+    );
+    let CoreConversationPayload::ToolResult { tool_call_id, .. } = &projected[2].payload else {
+        panic!("third projected message should retain the second tool result");
+    };
+    assert_eq!(tool_call_id.as_deref(), Some("provider-call-2"));
     validate_provider_visible_tool_topology(&projected).expect("valid provider topology");
 }
 

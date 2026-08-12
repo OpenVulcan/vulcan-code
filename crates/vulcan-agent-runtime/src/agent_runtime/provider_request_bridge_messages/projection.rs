@@ -72,7 +72,6 @@ pub(crate) fn core_messages_to_provider_visible_history_for_model_with_system_up
     );
     apply_provider_visible_system_updates(&mut projected, system_updates, system_update_policy)?;
 
-    #[cfg(debug_assertions)]
     validate_provider_visible_tool_topology(&projected)?;
 
     Ok(projected)
@@ -152,7 +151,8 @@ fn project_core_messages_to_provider_visible_history_for_model(
                         },
                     });
                 } else if tool_calls_are_fully_completed(tool_calls, &completed_tool_call_ids) {
-                    let replayable_tool_call_ids = replayable_tool_call_ids(tool_calls);
+                    let mut active_tool_call_identities =
+                        provider_visible_tool_call_identities(tool_calls);
                     {
                         projected.push(CoreConversationMessage {
                             id: message.id.clone(),
@@ -162,14 +162,13 @@ fn project_core_messages_to_provider_visible_history_for_model(
                                 provider_message_id: provider_message_id.clone(),
                                 provider_message_state: provider_message_state.clone(),
                                 usage: usage.clone(),
-                                tool_calls: tool_calls.clone(),
+                                tool_calls: normalized_provider_visible_tool_calls(tool_calls),
                             },
                         });
-                        let mut active_tool_call_ids = replayable_tool_call_ids;
                         for result_message in &messages[index + 1..result_end] {
                             projected.push(project_tool_result_message(
                                 result_message,
-                                &mut active_tool_call_ids,
+                                &mut active_tool_call_identities,
                             ));
                         }
                     }
@@ -190,10 +189,10 @@ fn project_core_messages_to_provider_visible_history_for_model(
                 index = result_end;
             }
             CoreConversationPayload::ToolResult { .. } => {
-                let mut active_tool_call_ids = BTreeSet::new();
+                let mut active_tool_call_identities = Vec::new();
                 projected.push(project_tool_result_message(
                     message,
-                    &mut active_tool_call_ids,
+                    &mut active_tool_call_identities,
                 ));
                 index += 1;
             }
@@ -369,29 +368,32 @@ fn provider_visible_system_update_message_id(update: &RuntimeSystemUpdateEvent) 
 pub(crate) fn validate_provider_visible_tool_topology(
     messages: &[CoreConversationMessage],
 ) -> Result<(), String> {
-    let mut pending_tool_call_groups = Vec::<Vec<String>>::new();
+    let mut pending_tool_call_ids = BTreeSet::<String>::new();
     let mut pending_assistant_index = None::<usize>;
     for (index, message) in messages.iter().enumerate() {
         match &message.payload {
             CoreConversationPayload::Assistant { tool_calls, .. } if !tool_calls.is_empty() => {
-                if !pending_tool_call_groups.is_empty() {
+                if !pending_tool_call_ids.is_empty() {
                     return Err(format!(
                         "assistant message at index {index} started a new tool batch before index {} completed",
                         pending_assistant_index.unwrap_or(index)
                     ));
                 }
-                pending_tool_call_groups = tool_call_identifier_groups(tool_calls);
+                pending_tool_call_ids = tool_calls
+                    .iter()
+                    .filter_map(provider_visible_tool_call_id)
+                    .collect();
                 pending_assistant_index = Some(index);
-                if pending_tool_call_groups.is_empty() {
+                if pending_tool_call_ids.len() != tool_calls.len() {
                     return Err(format!(
-                        "assistant message at index {index} contains tool calls without replayable identifiers"
+                        "assistant message at index {index} contains tool calls without unique provider-visible identifiers"
                     ));
                 }
             }
             CoreConversationPayload::Assistant { .. }
             | CoreConversationPayload::UserText { .. }
             | CoreConversationPayload::AgentMessage { .. } => {
-                if !pending_tool_call_groups.is_empty() {
+                if !pending_tool_call_ids.is_empty() {
                     return Err(format!(
                         "message at index {index} interrupted assistant tool batch from index {}",
                         pending_assistant_index.unwrap_or(index)
@@ -408,23 +410,18 @@ pub(crate) fn validate_provider_visible_tool_topology(
                         "tool result at index {index} does not carry a replayable tool_call_id"
                     ));
                 };
-                let Some(group_index) = pending_tool_call_groups.iter().position(|identifiers| {
-                    identifiers
-                        .iter()
-                        .any(|identifier| identifier == tool_call_key)
-                }) else {
+                if !pending_tool_call_ids.remove(tool_call_key) {
                     return Err(format!(
                         "tool result at index {index} references unmatched tool call `{tool_call_key}`"
                     ));
-                };
-                pending_tool_call_groups.remove(group_index);
-                if pending_tool_call_groups.is_empty() {
+                }
+                if pending_tool_call_ids.is_empty() {
                     pending_assistant_index = None;
                 }
             }
         }
     }
-    if !pending_tool_call_groups.is_empty() {
+    if !pending_tool_call_ids.is_empty() {
         return Err(format!(
             "assistant tool batch from index {} ended without all tool results",
             pending_assistant_index.unwrap_or(0)
@@ -514,7 +511,7 @@ fn consecutive_tool_result_span(
 /// 将一条工具结果消息投影为原生 Provider 工具响应，或投影为普通文本回退。
 fn project_tool_result_message(
     message: &CoreConversationMessage,
-    active_tool_call_ids: &mut BTreeSet<String>,
+    active_tool_call_identities: &mut Vec<(String, Vec<String>)>,
 ) -> CoreConversationMessage {
     let CoreConversationPayload::ToolResult {
         tool_call_id,
@@ -525,9 +522,17 @@ fn project_tool_result_message(
         return message.clone();
     };
     let tool_call_key = tool_call_id.as_deref().unwrap_or_default().trim();
-    let payload = if !tool_call_key.is_empty() && active_tool_call_ids.remove(tool_call_key) {
+    let matching_identity_index = if tool_call_key.is_empty() {
+        None
+    } else {
+        active_tool_call_identities
+            .iter()
+            .position(|(_, aliases)| aliases.iter().any(|alias| alias == tool_call_key))
+    };
+    let payload = if let Some(identity_index) = matching_identity_index {
+        let (provider_visible_id, _) = active_tool_call_identities.remove(identity_index);
         CoreConversationPayload::ToolResult {
-            tool_call_id: tool_call_id.clone(),
+            tool_call_id: Some(provider_visible_id),
             is_error: *is_error,
             text: text.clone(),
         }
@@ -543,23 +548,73 @@ fn project_tool_result_message(
     }
 }
 
-/// Builds all provider-replayable identifiers for one assistant tool-call batch.
-/// 为一批助手工具调用构建所有可回放到 Provider 的标识。
-fn replayable_tool_call_ids(tool_calls: &[CoreConversationToolCall]) -> BTreeSet<String> {
+/// Selects the exact identifier serialized for one provider-visible tool call.
+/// 选择单个 Provider 可见工具调用在序列化时使用的精确标识。
+///
+/// # Parameters
+/// 参数
+/// `tool_call` is the canonical stored tool call that may contain local and provider identifiers.
+/// `tool_call` 是可能同时包含本地标识与 Provider 标识的规范存储工具调用。
+///
+/// # Returns
+/// 返回值
+/// The non-empty canonical provider-visible identifier.
+/// 返回非空的规范 Provider 可见标识。
+fn provider_visible_tool_call_id(tool_call: &CoreConversationToolCall) -> Option<String> {
+    tool_call
+        .tool_call_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+/// Normalizes assistant tool calls to the identifiers emitted by provider wire encoders.
+/// 将助手工具调用归一化为 Provider 线协议编码器实际发出的标识。
+///
+/// # Parameters
+/// 参数
+/// `tool_calls` contains the canonical stored calls for one completed assistant batch.
+/// `tool_calls` 包含一批已完成助手调用的规范存储记录。
+///
+/// # Returns
+/// 返回值
+/// Cloned calls whose `tool_call_id` exactly matches their provider-visible identifier.
+/// 返回克隆后的调用，其 `tool_call_id` 与 Provider 可见标识完全一致。
+fn normalized_provider_visible_tool_calls(
+    tool_calls: &[CoreConversationToolCall],
+) -> Vec<CoreConversationToolCall> {
     tool_calls
         .iter()
-        .flat_map(|tool_call| {
-            [
-                (!tool_call.id.trim().is_empty()).then(|| tool_call.id.clone()),
-                tool_call
-                    .tool_call_id
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .map(str::to_string),
-            ]
+        .map(|tool_call| {
+            let mut normalized = tool_call.clone();
+            normalized.tool_call_id = provider_visible_tool_call_id(tool_call);
+            normalized
         })
-        .flatten()
+        .collect()
+}
+
+/// Builds provider-visible identifiers together with every accepted historical alias.
+/// 构建 Provider 可见标识及其可接受的全部历史别名。
+///
+/// # Parameters
+/// 参数
+/// `tool_calls` contains the canonical stored calls for one completed assistant batch.
+/// `tool_calls` 包含一批已完成助手调用的规范存储记录。
+///
+/// # Returns
+/// 返回值
+/// Ordered identity groups used to rewrite matching tool results exactly once.
+/// 返回有序身份组，用于将匹配的工具结果精确改写一次。
+fn provider_visible_tool_call_identities(
+    tool_calls: &[CoreConversationToolCall],
+) -> Vec<(String, Vec<String>)> {
+    tool_calls
+        .iter()
+        .filter_map(|tool_call| {
+            provider_visible_tool_call_id(tool_call)
+                .map(|provider_visible_id| (provider_visible_id, tool_call_identifiers(tool_call)))
+        })
         .collect()
 }
 

@@ -8569,6 +8569,21 @@ impl PublicAiRuntime {
                 ));
             }
         };
+        // routeConnection projects a signed system-manifest binding into the immutable request
+        // snapshot. Persisted verified_protocols is creation-time compatibility state and may not
+        // contain a protocol introduced by a later hot manifest; it must not override the current
+        // signed per-model route. Custom and explicit legacy routes retain their persisted set.
+        // routeConnection 把签名系统 Manifest 绑定投影进不可变请求快照。持久化
+        // verified_protocols 是创建时兼容状态，可能不含后续热更新 Manifest 新增的协议；它
+        // 不能覆盖当前签名模型级路由。自定义与显式旧版路由仍保留其持久化集合。
+        let mut route_connection = connection.clone();
+        if protocol_binding.as_ref().is_some_and(|binding| {
+            binding.source == crate::provider_manifest::ModelProtocolBindingSource::SystemManifest
+        }) {
+            route_connection
+                .verified_protocols
+                .insert(effective_protocol_id.to_string());
+        }
         let override_key = PersistedAiConfiguration::provider_model_protocol_key(
             connection.provider_id.as_str(),
             model.id.as_str(),
@@ -8599,7 +8614,7 @@ impl PublicAiRuntime {
         let mut route = ProviderExecutionRoute::resolve(
             provider,
             entry.clone(),
-            connection.clone(),
+            route_connection,
             secondary_route,
             effective_protocol_id,
         )
@@ -16093,6 +16108,114 @@ mod tests {
         );
     }
 
+    /// Verifies the DeepSeek manifest supplies exact protocol variants for its current identities.
+    /// 验证 DeepSeek Manifest 为当前模型身份提供精确协议变体。
+    #[test]
+    fn deepseek_manifest_identity_supplies_current_protocol_variants() {
+        // runtime exposes the same compiled bundled manifest used by production startup.
+        // runtime 暴露生产启动使用的同一份已编译内置 Manifest。
+        let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
+        // configuration owns the persisted connection snapshot activated by the runtime.
+        // configuration 持有由运行时激活的持久化连接快照。
+        let mut configuration = PersistedAiConfiguration::default();
+        // deepseekConnection reproduces an existing credential created before Responses was added.
+        // deepseekConnection 复现一个在加入 Responses 前创建的既有凭据。
+        let mut deepseek_connection = connection("deepseek-existing-account");
+        deepseek_connection.provider_id = String::from("deepseek");
+        deepseek_connection.service_entry_id = String::from("official-api");
+        deepseek_connection.verified_protocols = BTreeSet::from([
+            ANTHROPIC_MESSAGES_PROFILE_ID.to_string(),
+            OPENAI_CHAT_PROFILE_ID.to_string(),
+        ]);
+        configuration
+            .connection_graph
+            .add_connection(
+                &runtime
+                    .providers()
+                    .expect("provider registry should resolve"),
+                deepseek_connection,
+            )
+            .expect("existing DeepSeek connection should register");
+        configuration.set_model_enabled("deepseek", "deepseek-v4-flash", true);
+        configuration.set_model_enabled("deepseek", "deepseek-v4-pro", true);
+        runtime
+            .reapply_model_catalog_overlays(&configuration)
+            .expect("DeepSeek fixed manifest catalog should publish");
+        // catalogs is the production projection consumed by workbench selection and execution.
+        // catalogs 是工作台选择与执行消费的生产投影。
+        let catalogs = runtime
+            .catalog_snapshot()
+            .expect("published DeepSeek catalog should remain readable");
+        // catalog is the exact existing-account projection built without model discovery.
+        // catalog 是无需模型发现构建的精确既有账号投影。
+        let catalog = catalogs
+            .get("deepseek-existing-account")
+            .expect("existing DeepSeek account catalog should exist");
+        assert_eq!(catalog.models.len(), 2);
+        // flash must bind Responses and retain all three protocol variants.
+        // flash 必须绑定 Responses 并保留全部三个协议变体。
+        let flash = catalog
+            .models
+            .iter()
+            .find(|model| model.id == "deepseek-v4-flash")
+            .expect("DeepSeek V4 Flash must exist");
+        assert_eq!(
+            flash
+                .resolved_protocol_binding
+                .as_ref()
+                .map(|binding| binding.protocol_profile_id.as_str()),
+            Some(OPENAI_RESPONSES_PROFILE_ID)
+        );
+        assert_eq!(
+            flash
+                .protocol_variants
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                ANTHROPIC_MESSAGES_PROFILE_ID,
+                OPENAI_CHAT_PROFILE_ID,
+                OPENAI_RESPONSES_PROFILE_ID,
+            ])
+        );
+        // pro must bind Anthropic and must never acquire a Responses variant.
+        // pro 必须绑定 Anthropic，且绝不能获得 Responses 变体。
+        let pro = catalog
+            .models
+            .iter()
+            .find(|model| model.id == "deepseek-v4-pro")
+            .expect("DeepSeek V4 Pro must exist");
+        assert_eq!(
+            pro.resolved_protocol_binding
+                .as_ref()
+                .map(|binding| binding.protocol_profile_id.as_str()),
+            Some(ANTHROPIC_MESSAGES_PROFILE_ID)
+        );
+        assert!(
+            !pro.protocol_variants
+                .contains_key(OPENAI_RESPONSES_PROFILE_ID)
+        );
+        // selection proves the stale persisted protocol set cannot block a newer signed Flash route.
+        // selection 证明陈旧的持久化协议集合无法阻止较新的签名 Flash 路由。
+        let selection = runtime
+            .resolve_connection_model_selection(
+                &configuration,
+                "deepseek-existing-account",
+                "deepseek",
+                "deepseek-v4-flash",
+            )
+            .expect("existing DeepSeek account should execute Flash through Responses");
+        assert_eq!(
+            selection.route.protocol_route.protocol_profile_id,
+            OPENAI_RESPONSES_PROFILE_ID
+        );
+        assert_eq!(
+            selection.model.capabilities.provider_native_tools,
+            vec![vulcan_ai_contract::NativeToolKind::WebSearch],
+            "the executable Flash Responses route must carry native web search"
+        );
+    }
+
     /// Verifies a hot-replaced system manifest drives new bindings on the next resolution.
     /// 验证热替换的系统清单驱动下一次解析的新绑定。
     #[tokio::test]
@@ -17187,16 +17310,47 @@ mod tests {
         runtime
             .reapply_model_catalog_overlays(&configuration)
             .expect("one incompatible discovered model must not block the provider generation");
+        // brokenCatalog starts from a valid published DeepSeek catalog before removing the exact
+        // bound variant to exercise the request-boundary fail-closed guard directly.
+        // brokenCatalog 从有效的已发布 DeepSeek 目录开始，再移除精确绑定变体，以直接验证
+        // 请求边界的失败关闭守卫。
         let published = runtime
             .catalog_snapshot()
             .expect("catalog should remain readable");
-        let model = published["one"]
+        let mut broken_catalog = published["one"].clone();
+        // model is the exact system-bound identity whose selected variant is corrupted by the fixture.
+        // model 是夹具刻意破坏所选变体的精确系统绑定身份。
+        let model = broken_catalog
             .models
-            .iter()
+            .iter_mut()
             .find(|model| model.id == "deepseek-v4-pro")
-            .expect("blocked model should remain visible for diagnostics");
-        assert!(model.resolved_protocol_binding.is_some());
-        assert_eq!(model.capabilities, ModelCapabilities::default());
+            .expect("DeepSeek V4 Pro should be published");
+        // boundProtocol identifies the only variant whose absence must block execution.
+        // boundProtocol 标识缺失后必须阻止执行的唯一绑定变体。
+        let bound_protocol = model
+            .resolved_protocol_binding
+            .as_ref()
+            .expect("system model must have a frozen binding")
+            .protocol_profile_id
+            .clone();
+        assert!(model.protocol_variants.remove(&bound_protocol).is_some());
+        model.capabilities = ModelCapabilities::default();
+        // candidateGeneration publishes the intentionally broken catalog atomically for selection.
+        // candidateGeneration 为请求选择原子发布刻意破坏的目录。
+        let mut candidate_generation = runtime
+            .selection_catalog_snapshot()
+            .expect("published generation should load")
+            .as_ref()
+            .clone();
+        candidate_generation.configuration = Arc::new(configuration.clone());
+        candidate_generation
+            .activated_effective_catalogs
+            .replace(broken_catalog);
+        *runtime
+            .resolved_provider_generation
+            .write()
+            .expect("published generation lock should remain healthy") =
+            Arc::new(candidate_generation);
 
         let error = runtime
             .resolve_connection_model_selection(
@@ -18062,6 +18216,13 @@ mod tests {
             .expect("DeepSeek manifest must be bundled")
             .as_ref()
             .clone();
+        // This precedence fixture intentionally enables a generic unmatched-model default so the
+        // test can compare rule-owned and default-owned profile chains independently of DeepSeek's
+        // production fixed-inventory policy.
+        // 本优先级夹具有意启用通用未匹配模型默认值，使测试可以脱离 DeepSeek 生产固定清单
+        // 策略，独立比较规则持有与默认持有的 Profile 链。
+        manifest.unknown_model_policy =
+            crate::provider_manifest::UnknownModelPolicy::DefaultBindingAllowed;
         let minimax = manifests
             .get("minimax")
             .expect("MiniMax manifest must be bundled");

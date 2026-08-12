@@ -8,6 +8,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
 import { useI18n } from "@/i18n"
 import type { McpServerSummary } from "@/types"
 
@@ -163,7 +165,7 @@ export function McpServerDialog(props: {
         <div className="settings-form-grid two">
           <label className="settings-form-field">
             <span>{text("名称", "Name")}</span>
-            <input className="settings-input" onChange={(event) => setName(event.target.value)} value={name} />
+            <Input onChange={(event) => setName(event.target.value)} value={name} />
           </label>
           <label className="settings-form-field">
             <span>{text("传输", "Transport")}</span>
@@ -181,58 +183,58 @@ export function McpServerDialog(props: {
             <>
               <label className="settings-form-field">
                 <span>{text("命令", "Command")}</span>
-                <input className="settings-input" onChange={(event) => setCommand(event.target.value)} value={command} />
+                <Input onChange={(event) => setCommand(event.target.value)} value={command} />
               </label>
               <label className="settings-form-field">
                 <span>{text("参数", "Arguments")}</span>
-                <textarea className="settings-input textarea" onChange={(event) => setArgsText(event.target.value)} value={argsText} />
+                <Textarea onChange={(event) => setArgsText(event.target.value)} value={argsText} />
               </label>
               <label className="settings-form-field">
                 <span>CWD</span>
-                <input className="settings-input" onChange={(event) => setCwd(event.target.value)} value={cwd} />
+                <Input onChange={(event) => setCwd(event.target.value)} value={cwd} />
               </label>
               <label className="settings-form-field">
                 <span>Env</span>
-                <textarea className="settings-input textarea" onChange={(event) => setEnvText(event.target.value)} value={envText} />
+                <Textarea onChange={(event) => setEnvText(event.target.value)} value={envText} />
               </label>
               <label className="settings-form-field">
                 <span>{text("环境透传", "Env passthrough")}</span>
-                <textarea className="settings-input textarea" onChange={(event) => setEnvPassthroughText(event.target.value)} value={envPassthroughText} />
+                <Textarea onChange={(event) => setEnvPassthroughText(event.target.value)} value={envPassthroughText} />
               </label>
             </>
           ) : (
             <>
               <label className="settings-form-field">
                 <span>URL</span>
-                <input className="settings-input" onChange={(event) => setUrl(event.target.value)} value={url} />
+                <Input onChange={(event) => setUrl(event.target.value)} value={url} />
               </label>
               <label className="settings-form-field">
                 <span>Bearer Token</span>
-                <input className="settings-input" onChange={(event) => setBearerToken(event.target.value)} type="password" value={bearerToken} />
+                <Input onChange={(event) => setBearerToken(event.target.value)} type="password" value={bearerToken} />
               </label>
               <label className="settings-form-field">
                 <span>Headers</span>
-                <textarea className="settings-input textarea" onChange={(event) => setHeadersText(event.target.value)} value={headersText} />
+                <Textarea onChange={(event) => setHeadersText(event.target.value)} value={headersText} />
               </label>
               <label className="settings-form-field">
                 <span>Headers from env</span>
-                <textarea className="settings-input textarea" onChange={(event) => setHeadersFromEnvText(event.target.value)} value={headersFromEnvText} />
+                <Textarea onChange={(event) => setHeadersFromEnvText(event.target.value)} value={headersFromEnvText} />
               </label>
               <label className="settings-form-field">
                 <span>OAuth Client ID</span>
-                <input className="settings-input" onChange={(event) => setOauthClientId(event.target.value)} value={oauthClientId} />
+                <Input onChange={(event) => setOauthClientId(event.target.value)} value={oauthClientId} />
               </label>
               <label className="settings-form-field">
                 <span>OAuth Client Secret</span>
-                <input className="settings-input" onChange={(event) => setOauthClientSecret(event.target.value)} type="password" value={oauthClientSecret} />
+                <Input onChange={(event) => setOauthClientSecret(event.target.value)} type="password" value={oauthClientSecret} />
               </label>
               <label className="settings-form-field">
                 <span>OAuth Scopes</span>
-                <textarea className="settings-input textarea" onChange={(event) => setOauthScopesText(event.target.value)} value={oauthScopesText} />
+                <Textarea onChange={(event) => setOauthScopesText(event.target.value)} value={oauthScopesText} />
               </label>
               <label className="settings-form-field">
                 <span>OAuth Redirect URI</span>
-                <input className="settings-input" onChange={(event) => setOauthRedirectUri(event.target.value)} value={oauthRedirectUri} />
+                <Input onChange={(event) => setOauthRedirectUri(event.target.value)} value={oauthRedirectUri} />
               </label>
             </>
           )}

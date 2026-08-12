@@ -8,6 +8,7 @@ import {
   Wrench,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { IconButton } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -133,41 +134,41 @@ export function LuaSkillCard(props: {
         >
           <span />
         </button>
-        <button
-          className="agent-definition-icon-button"
+        <IconButton
+          aria-label={`${t("skills.action.tools")} (${props.skill.tools.length})`}
           onClick={() => props.onOpenTools(props.skill)}
           title={`${t("skills.action.tools")} (${props.skill.tools.length})`}
           type="button"
         >
           <Wrench size={14} />
-        </button>
+        </IconButton>
         {hasConfigOptions ? (
-          <button
-            className="agent-definition-icon-button"
+          <IconButton
+            aria-label={t("skills.luaConfig.title")}
             onClick={() => props.onOpenConfig(props.skill)}
             title={t("skills.luaConfig.title")}
             type="button"
           >
             <Settings2 size={14} />
-          </button>
+          </IconButton>
         ) : null}
         {props.skill.managed ? (
-          <button
-            className="agent-definition-icon-button"
+          <IconButton
+            aria-label={t("skills.action.update")}
             disabled={props.busy}
             onClick={() => void props.onRunAction("update", () => props.actions.onUpdateLuaSkill(props.skill.skillId))}
             title={t("skills.action.update")}
             type="button"
           >
             <RotateCw size={14} />
-          </button>
+          </IconButton>
         ) : null}
         {!props.skill.systemOwned ? (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <button className="agent-definition-icon-button" disabled={props.busy} title={t("skills.action.action")} type="button">
+              <IconButton aria-label={t("skills.action.action")} disabled={props.busy} title={t("skills.action.action")} type="button">
                 <ChevronDown size={14} />
-              </button>
+              </IconButton>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="lua-skill-action-menu">
               <DropdownMenuItem variant="destructive" onSelect={() => void props.onRunAction("uninstall", () => props.actions.onUninstallLuaSkill(props.skill.skillId))}>

@@ -178,29 +178,6 @@
   gap: 10px;
 }
 
-.agent-catalog-icon-button {
-  width: 24px;
-  height: 24px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--muted-foreground);
-  padding: 0;
-}
-
-.agent-catalog-icon-button:hover {
-  background: var(--muted);
-  color: var(--foreground);
-}
-
-.agent-catalog-icon-button:disabled {
-  cursor: default;
-  opacity: 0.55;
-}
-
 .agent-catalog-filter-row {
   grid-template-columns: minmax(0, 1fr) 144px;
 }
@@ -346,9 +323,7 @@
   font-size: 12px;
 }
 
-.agent-editor-grid input,
-.agent-editor-grid select,
-.agent-editor-grid textarea {
+.agent-editor-grid select {
   min-width: 0;
   border: 1px solid var(--border);
   border-radius: 7px;
@@ -358,14 +333,8 @@
   font-size: 12px;
 }
 
-.agent-editor-grid input,
 .agent-editor-grid select {
   height: 32px;
-}
-
-.agent-editor-grid textarea {
-  resize: vertical;
-  line-height: 1.45;
 }
 
 .agent-editor-color-picker {
@@ -796,9 +765,7 @@
   font-weight: 600;
 }
 
-.lua-settings-field input,
-.lua-settings-field select,
-.lua-settings-field textarea {
+.lua-settings-field select {
   width: 100%;
   min-width: 0;
   box-sizing: border-box;
@@ -810,17 +777,9 @@
   font-size: 13px;
 }
 
-.lua-settings-field input,
 .lua-settings-field select {
   height: 36px;
   padding: 0 10px;
-}
-
-.lua-settings-field textarea {
-  min-height: 88px;
-  resize: vertical;
-  padding: 9px 10px;
-  line-height: 1.45;
 }
 
 .lua-settings-field small {
@@ -1548,8 +1507,6 @@
   font-size: 12px;
 }
 
-.agent-skill-form-field input,
-.agent-skill-form-field textarea,
 .agent-skill-form-field select {
   min-width: 0;
   width: 100%;
@@ -1559,11 +1516,6 @@
   color: var(--foreground);
   padding: 8px 9px;
   font: inherit;
-}
-
-.agent-skill-form-field textarea {
-  resize: vertical;
-  line-height: 1.5;
 }
 
 .agent-skill-source-editor textarea {
@@ -1699,32 +1651,9 @@
   transform: translateX(14px);
 }
 
-.agent-definition-switch:disabled,
-.agent-definition-icon-button:disabled {
+.agent-definition-switch:disabled {
   cursor: default;
   opacity: 0.55;
-}
-
-.agent-definition-icon-button {
-  width: 28px;
-  height: 28px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--muted-foreground);
-  padding: 0;
-}
-
-.agent-definition-icon-button:hover {
-  background: var(--muted);
-  color: var(--foreground);
-}
-
-.agent-definition-icon-button.danger:hover {
-  color: var(--destructive);
 }
 
 .skill-card-header {
@@ -2156,9 +2085,7 @@
   color: var(--muted-foreground);
 }
 
-.lua-skill-config-field input,
-.lua-skill-config-field select,
-.lua-skill-config-field textarea {
+.lua-skill-config-field select {
   width: 100%;
   min-height: 34px;
   border: 1px solid var(--border);
@@ -2170,14 +2097,7 @@
   font: inherit;
 }
 
-.lua-skill-config-field textarea {
-  min-height: 92px;
-  resize: vertical;
-}
-
-.lua-skill-config-field input:focus,
-.lua-skill-config-field select:focus,
-.lua-skill-config-field textarea:focus {
+.lua-skill-config-field select:focus {
   border-color: color-mix(in srgb, var(--primary) 62%, var(--border));
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 15%, transparent);
 }

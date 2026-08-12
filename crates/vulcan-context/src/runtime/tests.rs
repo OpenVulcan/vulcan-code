@@ -1383,6 +1383,40 @@ fn runtime_log_replay_matches_provider_only_failed_result() {
     ));
 }
 
+/// Verifies runtime-only result events replay with the call's stable provider-visible id.
+/// 验证仅含运行时标识的结果事件会使用调用对应的稳定 Provider 可见标识重放。
+#[test]
+fn runtime_log_replay_canonicalizes_runtime_only_result_identity() {
+    let state = conversation_state_from_runtime_log_lines(&[
+        runtime_assistant_line(1, "assistant-1"),
+        runtime_tool_batch_started_line(2, "batch-a", "assistant-1"),
+        runtime_tool_call_line(3, "assistant-1", "runtime-a", Some("provider-a"), "batch-a"),
+        runtime_tool_result_line(
+            4,
+            "result-a",
+            Some("runtime-a"),
+            None,
+            Some("batch-a"),
+            RuntimeToolResultStatus::Completed,
+        ),
+    ])
+    .expect("runtime-only result identity should match the canonical call");
+
+    assert_eq!(state.messages.len(), 2);
+    let SessionConversationPayload::Assistant { tool_calls, .. } = &state.messages[0].payload
+    else {
+        panic!("first message should remain an assistant tool-call batch");
+    };
+    assert_eq!(tool_calls[0].tool_call_id.as_deref(), Some("provider-a"));
+    assert!(matches!(
+        state.messages[1].payload,
+        SessionConversationPayload::ToolResult {
+            ref tool_call_id,
+            ..
+        } if tool_call_id.as_deref() == Some("provider-a")
+    ));
+}
+
 /// Verifies one runtime call cannot consume two matched results.
 /// 验证一个运行时调用不能消费两条已匹配结果。
 #[test]

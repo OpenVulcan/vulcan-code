@@ -144,6 +144,149 @@ fn bundled_manifest_model_defaults_are_self_contained() {
     }
 }
 
+/// Verifies DeepSeek exposes only the two current official identities with exact protocol scopes.
+/// 验证 DeepSeek 仅公开当前两款官方模型身份及其精确协议作用域。
+#[test]
+fn deepseek_manifest_declares_only_current_official_models_and_protocols() {
+    // path identifies the single authoritative DeepSeek bundled manifest.
+    // path 标识唯一权威的 DeepSeek 内置清单。
+    let path = bundled_manifests_directory().join("deepseek.json");
+    // text preserves the exact packaged document consumed by the production loader.
+    // text 保留生产加载器消费的精确打包文档。
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|_| panic!("read bundled manifest {}", path.display()));
+    // compiled is the same resolved authority used by discovery and execution.
+    // compiled 是发现与执行共同使用的同一份解析权威。
+    let compiled =
+        vulcan_provider_adapters::compile_manifest_text(&text, ManifestOwnership::System)
+            .expect("bundled DeepSeek manifest must compile");
+    assert_eq!(
+        compiled
+            .model_source_policy("official-api")
+            .expect("DeepSeek official API must declare a model source policy"),
+        vulcan_provider_adapters::ModelSourcePolicy::ManifestOnly
+    );
+    // declaredModels freezes the exact hot-updatable official model inventory.
+    // declaredModels 冻结可热更新的精确官方模型清单。
+    let declared_models = compiled
+        .catalog_models
+        .get("official-api")
+        .expect("DeepSeek official API must declare its model inventory");
+    // declaredModelIds normalizes ordering for exact identity comparison.
+    // declaredModelIds 规范化顺序以便精确比较模型身份。
+    let declared_model_ids = declared_models
+        .iter()
+        .map(|model| model.model_id.as_str())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        declared_model_ids,
+        BTreeSet::from(["deepseek-v4-flash", "deepseek-v4-pro"])
+    );
+    assert_eq!(
+        compiled.catalog_membership_policy,
+        vulcan_provider_adapters::CatalogMembershipPolicy::DeclaredOnly
+    );
+    assert_eq!(
+        compiled.unknown_model_policy,
+        vulcan_provider_adapters::UnknownModelPolicy::DeclaredRuleRequired
+    );
+    assert!(
+        compiled
+            .rule_for_model("official-api", None, "deepseek-chat")
+            .is_none(),
+        "retired DeepSeek Chat must not remain declared"
+    );
+    assert!(
+        compiled
+            .rule_for_model("official-api", None, "deepseek-reasoner")
+            .is_none(),
+        "retired DeepSeek Reasoner must not remain declared"
+    );
+    assert!(
+        compiled
+            .rule_for_model("official-api", None, "deepseek-v4-flash-preview")
+            .is_none(),
+        "the official Flash identity must use exact matching"
+    );
+    // flash owns Responses, Anthropic, and Chat with Responses selected.
+    // flash 持有 Responses、Anthropic 与 Chat，并选定 Responses。
+    let flash = compiled
+        .rule_for_model("official-api", None, "deepseek-v4-flash")
+        .expect("DeepSeek V4 Flash rule must exist");
+    assert_eq!(
+        flash
+            .supported_protocols
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            "anthropic-messages.v1",
+            "openai-chat-completions.v1",
+            "openai-responses.v1",
+        ])
+    );
+    assert_eq!(
+        flash.selected_protocol.as_deref(),
+        Some("openai-responses.v1")
+    );
+    assert_eq!(
+        flash
+            .protocol_capabilities
+            .get("anthropic-messages.v1")
+            .expect("Flash Anthropic capabilities must exist")
+            .provider_native_tools,
+        vec![vulcan_ai_contract::NativeToolKind::WebSearch]
+    );
+    assert_eq!(
+        flash
+            .protocol_capabilities
+            .get("openai-responses.v1")
+            .expect("Flash Responses capabilities must exist")
+            .provider_native_tools,
+        vec![vulcan_ai_contract::NativeToolKind::WebSearch]
+    );
+    assert!(
+        flash
+            .protocol_capabilities
+            .get("openai-chat-completions.v1")
+            .expect("Flash Chat capabilities must exist")
+            .provider_native_tools
+            .is_empty(),
+        "Flash Chat must not declare provider-native web search"
+    );
+    // pro owns only Anthropic and Chat with Anthropic selected.
+    // pro 仅持有 Anthropic 与 Chat，并选定 Anthropic。
+    let pro = compiled
+        .rule_for_model("official-api", None, "deepseek-v4-pro")
+        .expect("DeepSeek V4 Pro rule must exist");
+    assert_eq!(
+        pro.supported_protocols
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["anthropic-messages.v1", "openai-chat-completions.v1"])
+    );
+    assert_eq!(
+        pro.selected_protocol.as_deref(),
+        Some("anthropic-messages.v1")
+    );
+    assert_eq!(
+        pro.protocol_capabilities
+            .get("anthropic-messages.v1")
+            .expect("Pro Anthropic capabilities must exist")
+            .provider_native_tools,
+        vec![vulcan_ai_contract::NativeToolKind::WebSearch]
+    );
+    assert!(
+        pro.protocol_capabilities
+            .get("openai-chat-completions.v1")
+            .expect("Pro Chat capabilities must exist")
+            .provider_native_tools
+            .is_empty(),
+        "Pro Chat must not declare provider-native web search"
+    );
+}
+
 /// Verifies migrated provider-tool inventories remain complete and uniquely manifest-owned.
 /// 验证已迁移供应商工具清单保持完整、唯一且仅由 Manifest 持有。
 #[test]

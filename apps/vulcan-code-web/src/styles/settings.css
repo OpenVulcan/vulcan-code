@@ -242,20 +242,6 @@
   font-size: 13px;
 }
 
-.settings-input.compact {
-  max-width: 240px;
-  padding: 6px 8px;
-}
-
-.settings-input.textarea {
-  min-height: 78px;
-  resize: vertical;
-}
-
-.settings-input.textarea.large {
-  min-height: 140px;
-}
-
 .settings-checkbox-line {
   min-width: 0;
   display: flex;

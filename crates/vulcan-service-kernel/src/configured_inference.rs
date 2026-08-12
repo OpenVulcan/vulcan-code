@@ -4763,6 +4763,7 @@ fn aggregate_restricted_llm_event(
         | AiStreamEvent::ResponseStarted { .. }
         | AiStreamEvent::ResponseMetadataUpdated { .. }
         | AiStreamEvent::ReasoningStarted { .. }
+        | AiStreamEvent::ProviderContextItemCaptured { .. }
         | AiStreamEvent::ResponseItemCompleted { .. } => {}
     }
     Ok(None)

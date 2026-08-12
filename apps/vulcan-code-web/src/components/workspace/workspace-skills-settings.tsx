@@ -8,6 +8,7 @@ import {
   Route,
   Settings,
 } from "lucide-react";
+import { IconButton } from "@/components/ui/button";
 import {
   LuaSkillInstallDialog,
   SkillsArea,
@@ -123,14 +124,14 @@ export function FloatingSkillMenu(props: {
     <aside className="workspace-tool-panel-menu" aria-label={t("workspaceToolPanel.skillsSettingsMenu")}>
       <div className="workspace-tool-panel-menu-header">
         <span>{t("workspaceToolPanel.menu")}</span>
-        <button
+        <IconButton
           aria-label={t("workspaceToolPanel.collapseToPill")}
-          className="workspace-tool-panel-menu-icon-button"
           onClick={() => props.onExpandedChange(false)}
+          size="xs"
           type="button"
         >
           <Minimize2 size={13} />
-        </button>
+        </IconButton>
       </div>
       <div className="workspace-tool-panel-menu-list">
         {rows.map((row) => (

@@ -928,6 +928,9 @@ struct PublicTurnAccumulator {
     /// Assistant items retained in original stream order.
     /// 按原始流顺序保留的助手项目。
     replay_items: Vec<ReplayAccumulatorItem>,
+    /// Exact provider output items retained in completed-event order.
+    /// 按完成事件顺序保留的原始供应商输出项。
+    provider_context_items: Vec<Value>,
     /// Whether a successful terminal response event was observed.
     /// 是否已经观察到成功响应终态事件。
     completed: bool,
@@ -970,6 +973,90 @@ enum ReplayAccumulatorItemState {
     PendingTool,
 }
 
+/// Returns whether captured Responses items fully cover the provider-neutral assistant replay.
+/// 返回捕获的 Responses 项是否完整覆盖供应商无关的助手重放内容。
+///
+/// # Parameters
+/// 参数
+/// `content` is the complete normalized assistant output and `provider_context_items` is the
+/// ordered provider-owned output-item list observed from completion events.
+/// `content` 是完整的规范助手输出；`provider_context_items` 是从完成事件观察到的有序供应商输出项列表。
+///
+/// # Returns
+/// 返回值
+/// `true` only when raw replay cannot hide any normalized text, reasoning, tool call, or resource.
+/// 仅当原始重放不会隐藏任何规范文本、推理、工具调用或资源时返回 `true`。
+fn provider_context_items_cover_replay_content(
+    content: &[ContentItem],
+    provider_context_items: &[Value],
+) -> bool {
+    // normalizedCounts describe every semantic category that would otherwise be re-encoded.
+    // normalizedCounts 描述原本需要重新编码的每一种语义类别。
+    let normalized_message_count = content
+        .iter()
+        .filter(|item| {
+            matches!(
+                item,
+                ContentItem::Text { .. }
+                    | ContentItem::StructuredJson { .. }
+                    | ContentItem::Refusal { .. }
+            )
+        })
+        .count();
+    let normalized_tool_count = content
+        .iter()
+        .filter(|item| matches!(item, ContentItem::ToolCall { .. }))
+        .count();
+    let normalized_resource_count = content
+        .iter()
+        .filter(|item| matches!(item, ContentItem::Resource { .. }))
+        .count();
+    let normalized_has_reasoning = content
+        .iter()
+        .any(|item| matches!(item, ContentItem::Reasoning { .. }));
+    if content.iter().any(|item| {
+        matches!(
+            item,
+            ContentItem::ToolResult { .. } | ContentItem::Citation { .. }
+        )
+    }) {
+        return false;
+    }
+
+    // providerCounts reflect exact output-item variants accepted by Responses history input.
+    // providerCounts 反映 Responses 历史输入接受的精确输出项变体。
+    let provider_message_count = provider_context_items
+        .iter()
+        .filter(|item| {
+            matches!(
+                item.get("type").and_then(Value::as_str),
+                Some("message" | "agent_message")
+            )
+        })
+        .count();
+    let provider_tool_count = provider_context_items
+        .iter()
+        .filter(|item| {
+            matches!(
+                item.get("type").and_then(Value::as_str),
+                Some("function_call" | "custom_tool_call")
+            )
+        })
+        .count();
+    let provider_resource_count = provider_context_items
+        .iter()
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("image_generation_call"))
+        .count();
+    let provider_has_reasoning = provider_context_items
+        .iter()
+        .any(|item| item.get("type").and_then(Value::as_str) == Some("reasoning"));
+
+    provider_message_count >= normalized_message_count
+        && provider_tool_count >= normalized_tool_count
+        && provider_resource_count >= normalized_resource_count
+        && (!normalized_has_reasoning || provider_has_reasoning)
+}
+
 impl PublicTurnAccumulator {
     /// Creates one accumulator bound to an immutable execution route.
     /// 创建一个绑定到不可变执行路由的累积器。
@@ -1004,6 +1091,7 @@ impl PublicTurnAccumulator {
             usage: None,
             replay_item_indices: BTreeMap::new(),
             replay_items: Vec::new(),
+            provider_context_items: Vec::new(),
             completed: false,
         }
     }
@@ -1320,6 +1408,15 @@ impl PublicTurnAccumulator {
                     "Provider execution was cancelled.",
                 ));
             }
+            AiStreamEvent::ProviderContextItemCaptured { item } => {
+                if !is_replayable_codex_responses_item(&item) {
+                    return Err(provider_failure(
+                        provider_id,
+                        "Provider context capture contained a non-replayable Responses item.",
+                    ));
+                }
+                self.provider_context_items.push(item);
+            }
             AiStreamEvent::ResponseStarted { .. }
             | AiStreamEvent::ResourceProgress { .. }
             | AiStreamEvent::ImageGenerationPartial { .. }
@@ -1338,6 +1435,16 @@ impl PublicTurnAccumulator {
             ));
         }
         let replay_content = self.replay_content()?;
+        // providerContextItems are enabled only when they can replace the entire normalized output.
+        // providerContextItems 仅在能够替代全部规范输出时启用。
+        let provider_context_items = if provider_context_items_cover_replay_content(
+            replay_content.as_slice(),
+            self.provider_context_items.as_slice(),
+        ) {
+            self.provider_context_items
+        } else {
+            Vec::new()
+        };
         let provider_message_state = Some(json!({
             "vulcan_ai": {
                 "replay": ProviderReplayEnvelope::new(
@@ -1347,6 +1454,7 @@ impl PublicTurnAccumulator {
                     self.protocol_profile_id.clone(),
                     self.model_id.clone(),
                     replay_content,
+                    provider_context_items,
                 ),
             }
         }));
@@ -2002,7 +2110,9 @@ fn core_message_to_public(
             tool_calls,
             ..
         } => {
-            let provider_context_items = responses_compaction_items_for_route(
+            // providerContextItems prefer complete ordinary output replay before remote compaction state.
+            // providerContextItems 优先采用完整普通输出重放，其次才采用远端压缩状态。
+            let mut provider_context_items = replay_provider_context_items_for_route(
                 provider_message_state.as_ref(),
                 provider_id,
                 connection_id,
@@ -2010,6 +2120,16 @@ fn core_message_to_public(
                 protocol_profile_id,
                 model_id,
             )?;
+            if provider_context_items.is_empty() {
+                provider_context_items = responses_compaction_items_for_route(
+                    provider_message_state.as_ref(),
+                    provider_id,
+                    connection_id,
+                    route_fingerprint,
+                    protocol_profile_id,
+                    model_id,
+                )?;
+            }
             if let Some(content) = replay_content_for_route(
                 provider_message_state.as_ref(),
                 provider_id,
@@ -2020,7 +2140,11 @@ fn core_message_to_public(
             )? {
                 return Ok(AiMessage {
                     role: MessageRole::Assistant,
-                    content,
+                    content: if provider_context_items.is_empty() {
+                        content
+                    } else {
+                        Vec::new()
+                    },
                     provider_context_items,
                 });
             }
@@ -2037,14 +2161,29 @@ fn core_message_to_public(
                 if !text.is_empty() {
                     content.push(ContentItem::Text { text: text.clone() });
                 }
-                content.extend(tool_calls.iter().map(|call| ContentItem::ToolCall {
-                    call: PublicToolCall {
-                        id: call.tool_call_id.clone().unwrap_or_else(|| call.id.clone()),
-                        name: call.tool_name.clone(),
-                        arguments: call.arguments.clone(),
-                        signature: None,
-                    },
-                }));
+                for call in tool_calls {
+                    // Outbound encoding consumes the canonical wire id only; local runtime aliases never leak.
+                    // 出站编码只使用规范线协议标识；本地运行时别名绝不泄漏。
+                    let call_id = call
+                        .tool_call_id
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .ok_or_else(|| {
+                            provider_failure(
+                                "vulcan",
+                                "Canonical tool call is missing its provider-visible call identifier.",
+                            )
+                        })?;
+                    content.push(ContentItem::ToolCall {
+                        call: PublicToolCall {
+                            id: call_id.to_string(),
+                            name: call.tool_name.clone(),
+                            arguments: call.arguments.clone(),
+                            signature: None,
+                        },
+                    });
+                }
             }
             Ok(AiMessage {
                 role: MessageRole::Assistant,
@@ -2132,6 +2271,65 @@ fn replay_content_for_route(
         return Ok(None);
     }
     Ok(Some(envelope.content))
+}
+
+/// Reads exact Responses output items from one route-matched replay envelope.
+/// 从一份路由匹配的重放封套读取精确 Responses 输出项。
+///
+/// # Parameters
+/// 参数
+/// `provider_message_state` is the persisted assistant extension; the remaining identifiers
+/// define the only physical route allowed to replay provider-owned output items.
+/// `provider_message_state` 是持久化的助手扩展；其余标识定义唯一允许重放供应商输出项的物理路由。
+///
+/// # Returns
+/// 返回值
+/// The validated ordered provider item list for an exact route, or an empty list otherwise.
+/// 精确路由匹配时返回已验证的有序供应商项列表，否则返回空列表。
+fn replay_provider_context_items_for_route(
+    provider_message_state: Option<&Value>,
+    provider_id: &str,
+    connection_id: &str,
+    route_fingerprint: &str,
+    protocol_profile_id: &str,
+    model_id: &str,
+) -> Result<Vec<Value>, VulcanCoreError> {
+    // replayValue is the only durable extension allowed to own ordinary provider output items.
+    // replayValue 是唯一允许持有普通供应商输出项的持久化扩展。
+    let Some(replay_value) =
+        provider_message_state.and_then(|state| state.pointer("/vulcan_ai/replay"))
+    else {
+        return Ok(Vec::new());
+    };
+    // envelope validates the closed format before any route-owned payload becomes visible.
+    // envelope 在任何路由专属载荷可见前校验封闭格式。
+    let envelope: ProviderReplayEnvelope =
+        serde_json::from_value(replay_value.clone()).map_err(|error| {
+            provider_failure(
+                provider_id,
+                format!("Persisted public replay envelope is invalid: {error}").as_str(),
+            )
+        })?;
+    if !envelope.matches_route(
+        provider_id,
+        connection_id,
+        route_fingerprint,
+        protocol_profile_id,
+        model_id,
+    ) {
+        return Ok(Vec::new());
+    }
+    if !envelope
+        .provider_context_items
+        .iter()
+        .all(is_replayable_codex_responses_item)
+    {
+        return Err(provider_failure(
+            provider_id,
+            "Persisted public replay envelope contains a non-replayable provider context item.",
+        ));
+    }
+    Ok(envelope.provider_context_items)
 }
 
 /// Reads route-bound remote Responses compaction items from one canonical assistant state.
@@ -2441,6 +2639,12 @@ mod tests {
                         text: String::from("reasoning"),
                         signature: Some(String::from("opaque-signature")),
                     }],
+                    vec![json!({
+                        "type": "reasoning",
+                        "id": "reasoning-item",
+                        "status": "completed",
+                        "summary": [{"type": "summary_text", "text": "reasoning"}],
+                    })],
                 )
             }
         });
@@ -2481,6 +2685,182 @@ mod tests {
             .expect("endpoint mismatch should be a safe local fallback")
             .is_none()
         );
+        assert_eq!(
+            replay_provider_context_items_for_route(
+                Some(&state),
+                "custom:proxy",
+                "connection-a",
+                "https://proxy.example/v1/responses",
+                "openai-codex-responses.v1",
+                "gpt-5-codex",
+            )
+            .expect("matching provider context should decode")[0]["id"],
+            "reasoning-item"
+        );
+        assert!(
+            replay_provider_context_items_for_route(
+                Some(&state),
+                "custom:proxy",
+                "connection-b",
+                "https://proxy.example/v1/responses",
+                "openai-codex-responses.v1",
+                "gpt-5-codex",
+            )
+            .expect("credential mismatch should not replay provider context")
+            .is_empty()
+        );
+        // switchedRouteMessage proves provider-owned items never cross a protocol boundary.
+        // switchedRouteMessage 证明供应商持有项绝不会跨越协议边界。
+        let switched_route_message = core_message_to_public(
+            &vulcan_core::types::ConversationMessage {
+                id: String::from("assistant-switched"),
+                payload: CoreConversationPayload::Assistant {
+                    text: String::new(),
+                    reasoning: String::from("reasoning"),
+                    provider_message_id: None,
+                    provider_message_state: Some(state.clone()),
+                    usage: None,
+                    tool_calls: Vec::new(),
+                },
+            },
+            "custom:proxy",
+            "connection-a",
+            "https://proxy.example/v1/messages",
+            "anthropic-messages.v1",
+            "gpt-5-codex",
+        )
+        .expect("protocol switch should project provider-neutral content");
+        assert!(switched_route_message.provider_context_items.is_empty());
+        assert_eq!(
+            switched_route_message.content,
+            vec![ContentItem::Reasoning {
+                text: String::from("reasoning"),
+                signature: None,
+            }]
+        );
+        // exactRouteMessage proves raw provider items replace canonical re-encoding only on their owner route.
+        // exactRouteMessage 证明原始供应商项仅在归属路由上替代规范重编码。
+        let exact_route_message = core_message_to_public(
+            &vulcan_core::types::ConversationMessage {
+                id: String::from("assistant-1"),
+                payload: CoreConversationPayload::Assistant {
+                    text: String::new(),
+                    reasoning: String::from("reasoning"),
+                    provider_message_id: None,
+                    provider_message_state: Some(state),
+                    usage: None,
+                    tool_calls: Vec::new(),
+                },
+            },
+            "custom:proxy",
+            "connection-a",
+            "https://proxy.example/v1/responses",
+            "openai-codex-responses.v1",
+            "gpt-5-codex",
+        )
+        .expect("matching assistant should project exact provider context");
+        assert!(exact_route_message.content.is_empty());
+        assert_eq!(exact_route_message.provider_context_items.len(), 1);
+    }
+
+    /// Verifies captured Responses output items survive stream accumulation and durable replay.
+    /// 验证捕获的 Responses 输出项可完整经过流累积与持久化重放。
+    #[test]
+    fn public_turn_persists_exact_responses_provider_context() {
+        // liveChannel and sink satisfy the normal accumulator projection interfaces.
+        // liveChannel 与 sink 满足累积器的常规投影接口。
+        let (live_sender, _live_receiver) = tokio::sync::mpsc::unbounded_channel();
+        let mut sink = RecordingProviderDeltaSink::default();
+        let mut accumulator = PublicTurnAccumulator::new(
+            "deepseek",
+            "connection-deepseek",
+            "https://api.deepseek.com/responses",
+            "openai-responses.v1",
+            "deepseek-v4-flash",
+        );
+        // providerItem mirrors a completed assistant message emitted by Responses SSE.
+        // providerItem 镜像 Responses SSE 发出的一条已完成助手消息。
+        let provider_item = json!({
+            "type": "message",
+            "id": "message-item",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "done"}],
+        });
+
+        for event in [
+            AiStreamEvent::ResponseItemStarted {
+                item_id: String::from("message-item"),
+                item: ContentItem::Text {
+                    text: String::new(),
+                },
+            },
+            AiStreamEvent::ResponseTextDelta {
+                item_id: String::from("message-item"),
+                delta: String::from("done"),
+            },
+            AiStreamEvent::ResponseItemCompleted {
+                item_id: String::from("message-item"),
+            },
+            AiStreamEvent::ProviderContextItemCaptured {
+                item: provider_item.clone(),
+            },
+            AiStreamEvent::ResponseCompleted,
+        ] {
+            accumulator
+                .apply_event("deepseek", &live_sender, &mut sink, event)
+                .expect("completed Responses event should accumulate");
+        }
+
+        // responseState is the exact extension persisted into the assistant conversation node.
+        // responseState 是持久化到助手会话节点中的精确扩展状态。
+        let response = accumulator
+            .finish()
+            .expect("completed Responses turn should finish");
+        let replay_value = response
+            .provider_message_state
+            .as_ref()
+            .and_then(|state| state.pointer("/vulcan_ai/replay"))
+            .expect("replay envelope should be persisted");
+        let replay: ProviderReplayEnvelope = serde_json::from_value(replay_value.clone())
+            .expect("replay envelope should deserialize");
+        assert_eq!(
+            replay.content,
+            vec![ContentItem::Text {
+                text: String::from("done"),
+            }]
+        );
+        assert_eq!(replay.provider_context_items, vec![provider_item]);
+    }
+
+    /// Verifies partial provider captures cannot replace complete normalized assistant history.
+    /// 验证不完整的供应商捕获项无法替代完整的规范助手历史。
+    #[test]
+    fn partial_provider_context_falls_back_to_normalized_replay() {
+        // content requires both reasoning and visible assistant text.
+        // content 同时要求推理与可见助手文本。
+        let content = vec![
+            ContentItem::Reasoning {
+                text: String::from("inspect"),
+                signature: None,
+            },
+            ContentItem::Text {
+                text: String::from("done"),
+            },
+        ];
+        // partialItems intentionally omit the provider message item that owns visible text.
+        // partialItems 刻意缺少承载可见文本的供应商消息项。
+        let partial_items = vec![json!({
+            "type": "reasoning",
+            "id": "reasoning-item",
+            "status": "completed",
+            "summary": [{"type": "summary_text", "text": "inspect"}],
+        })];
+
+        assert!(!provider_context_items_cover_replay_content(
+            content.as_slice(),
+            partial_items.as_slice(),
+        ));
     }
 
     /// Verifies public text and reasoning deltas reach both Core and the live workbench stream.

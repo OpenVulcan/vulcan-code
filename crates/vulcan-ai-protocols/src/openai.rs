@@ -706,7 +706,11 @@ fn encode_responses_input(
                         ContentItem::StructuredJson { value } => {
                             text.push_str(encode_json_or_string(value)?.as_str());
                         }
-                        ContentItem::Reasoning { text, signature } => {
+                        ContentItem::Reasoning {
+                            text: reasoning_text,
+                            signature,
+                        } => {
+                            push_responses_assistant_text(&mut input, &mut text);
                             let Some(signature) = signature.as_deref().and_then(|signature| {
                                 crate::compatible_provider_signature(
                                     crate::SIGNATURE_PROVIDER_OPENAI,
@@ -719,22 +723,27 @@ fn encode_responses_input(
                                 "type": "reasoning",
                                 "summary": [{
                                     "type": "summary_text",
-                                    "text": text,
+                                    "text": reasoning_text,
                                 }],
                             });
                             reasoning["encrypted_content"] = Value::String(signature.to_string());
                             input.push(reasoning);
                         }
-                        ContentItem::ToolCall { call } => input.push(json!({
-                            "type": "function_call",
-                            "call_id": call.id,
-                            "name": call.name,
-                            "arguments": serde_json::to_string(&call.arguments).map_err(|error| {
-                                ProtocolConversionError::new(format!(
-                                    "OpenAI Responses tool arguments could not be encoded: {error}"
-                                ))
-                            })?,
-                        })),
+                        ContentItem::ToolCall { call } => {
+                            // A text item before a function call is a distinct ordered Responses item.
+                            // 工具调用前的文本是一个独立且有序的 Responses 项。
+                            push_responses_assistant_text(&mut input, &mut text);
+                            input.push(json!({
+                                "type": "function_call",
+                                "call_id": call.id,
+                                "name": call.name,
+                                "arguments": serde_json::to_string(&call.arguments).map_err(|error| {
+                                    ProtocolConversionError::new(format!(
+                                        "OpenAI Responses tool arguments could not be encoded: {error}"
+                                    ))
+                                })?,
+                            }));
+                        }
                         ContentItem::Resource { .. } | ContentItem::Citation { .. } => {
                             return Err(ProtocolConversionError::new(
                                 "OpenAI Responses complex assistant content requires a registered provider projector.",
@@ -747,12 +756,7 @@ fn encode_responses_input(
                         }
                     }
                 }
-                if !text.is_empty() {
-                    input.push(json!({
-                        "role": "assistant",
-                        "content": [{"type": "output_text", "text": text}],
-                    }));
-                }
+                push_responses_assistant_text(&mut input, &mut text);
             }
             MessageRole::System | MessageRole::Developer | MessageRole::User => {
                 if message.role == MessageRole::System && !include_system_messages {
@@ -792,6 +796,30 @@ fn encode_responses_input(
         }
     }
     Ok(input)
+}
+
+/// Flushes one accumulated assistant text segment without crossing an ordered Responses item.
+/// 刷新一段已累积的助手文本，且绝不跨越有序 Responses 项。
+///
+/// # Parameters
+/// 参数
+/// - `input`: Ordered Responses input items receiving the assistant message.
+/// - `input`：接收助手消息的有序 Responses 输入项。
+/// - `text`: Mutable text segment consumed when non-empty.
+/// - `text`：非空时会被消费的可变文本片段。
+///
+/// # Returns
+/// 返回值
+/// This function has no return value and appends at most one assistant message.
+/// 此函数没有返回值，最多追加一条助手消息。
+fn push_responses_assistant_text(input: &mut Vec<Value>, text: &mut String) {
+    if text.is_empty() {
+        return;
+    }
+    input.push(json!({
+        "role": "assistant",
+        "content": [{"type": "output_text", "text": std::mem::take(text)}],
+    }));
 }
 
 /// Encodes one standard Responses image or file input without losing its source-field semantics.
@@ -1289,7 +1317,8 @@ mod tests {
     use super::*;
     use std::collections::BTreeMap;
     use vulcan_ai_contract::{
-        AiMessage, AiOperation, ResourceKind, ResourceReference, ToolDefinition,
+        AiMessage, AiOperation, ResourceKind, ResourceReference, ToolCall, ToolDefinition,
+        ToolResult,
     };
 
     /// Builds one request containing system, user, and signed reasoning content.
@@ -1774,5 +1803,211 @@ mod tests {
             encoded.body["include"],
             json!(["reasoning.encrypted_content"])
         );
+    }
+
+    /// Verifies assistant text remains before the first parallel tool call and every matching result.
+    /// 验证助手文本仍位于首次并行工具调用及其全部匹配结果之前。
+    #[test]
+    fn responses_preserves_assistant_text_before_parallel_tool_calls() {
+        // Build the exact first-turn replay shape emitted by the runtime after two tools finish.
+        // 构造运行时在两个工具完成后产出的精确首次轮次回放结构。
+        let mut request = codex_request();
+        request.messages = vec![
+            AiMessage {
+                role: MessageRole::Assistant,
+                content: vec![
+                    ContentItem::Text {
+                        text: String::from("I will inspect the project first."),
+                    },
+                    ContentItem::ToolCall {
+                        call: ToolCall {
+                            id: String::from("call-0"),
+                            name: String::from("lookup"),
+                            arguments: json!({"path": "Cargo.toml"}),
+                            signature: None,
+                        },
+                    },
+                    ContentItem::ToolCall {
+                        call: ToolCall {
+                            id: String::from("call-1"),
+                            name: String::from("lookup"),
+                            arguments: json!({"path": "src"}),
+                            signature: None,
+                        },
+                    },
+                ],
+                provider_context_items: Vec::new(),
+            },
+            AiMessage {
+                role: MessageRole::Tool,
+                content: vec![ContentItem::ToolResult {
+                    result: ToolResult {
+                        call_id: String::from("call-0"),
+                        is_error: false,
+                        content: json!({"found": true}),
+                    },
+                }],
+                provider_context_items: Vec::new(),
+            },
+            AiMessage {
+                role: MessageRole::Tool,
+                content: vec![ContentItem::ToolResult {
+                    result: ToolResult {
+                        call_id: String::from("call-1"),
+                        is_error: false,
+                        content: json!({"entries": 3}),
+                    },
+                }],
+                provider_context_items: Vec::new(),
+            },
+        ];
+
+        // Encode the normalized history through the generic Responses profile used by DeepSeek.
+        // 通过 DeepSeek 使用的通用 Responses 配置编码规范化历史。
+        let encoded = OpenAiResponsesProfile
+            .encode(&request)
+            .expect("parallel tool replay should encode");
+        // Read the ordered wire input once so every assertion checks the same request payload.
+        // 只读取一次有序线端输入，确保所有断言检查同一个请求载荷。
+        let input = encoded.body["input"]
+            .as_array()
+            .expect("Responses input should be an array");
+
+        assert_eq!(input.len(), 5);
+        assert_eq!(input[0]["role"], "assistant");
+        assert_eq!(
+            input[0]["content"][0]["text"],
+            "I will inspect the project first."
+        );
+        assert_eq!(input[1]["type"], "function_call");
+        assert_eq!(input[1]["call_id"], "call-0");
+        assert_eq!(input[2]["type"], "function_call");
+        assert_eq!(input[2]["call_id"], "call-1");
+        assert_eq!(input[3]["type"], "function_call_output");
+        assert_eq!(input[3]["call_id"], "call-0");
+        assert_eq!(input[4]["type"], "function_call_output");
+        assert_eq!(input[4]["call_id"], "call-1");
+    }
+
+    /// Verifies exact route-bound Responses output items bypass provider-neutral re-encoding.
+    /// 验证绑定精确路由的 Responses 原始输出项会绕过供应商无关重编码。
+    #[test]
+    fn responses_replays_exact_provider_output_items_without_reencoding() {
+        // providerItems mirror one reasoning plus function-call response returned by the provider.
+        // providerItems 镜像供应商返回的一项推理与函数调用响应。
+        let provider_items = vec![
+            json!({
+                "type": "reasoning",
+                "id": "reasoning-item",
+                "status": "completed",
+                "summary": [{"type": "summary_text", "text": "inspect the workspace"}],
+            }),
+            json!({
+                "type": "function_call",
+                "id": "function-item",
+                "status": "completed",
+                "call_id": "call-0",
+                "name": "lookup",
+                "arguments": "{\"path\":\"src\"}",
+            }),
+        ];
+        let mut request = codex_request();
+        request.messages = vec![AiMessage {
+            role: MessageRole::Assistant,
+            content: Vec::new(),
+            provider_context_items: provider_items.clone(),
+        }];
+
+        let encoded = OpenAiResponsesProfile
+            .encode(&request)
+            .expect("exact provider output items should encode");
+        assert_eq!(encoded.body["input"], Value::Array(provider_items));
+    }
+
+    /// Verifies returning to Chat preserves the exact prefix encoded before an Anthropic turn.
+    /// 验证经过 Anthropic 轮次后切回 Chat 仍保留此前编码过的精确前缀。
+    #[test]
+    fn chat_history_prefix_is_stable_across_anthropic_protocol_switch() {
+        let mut initial_request = codex_request();
+        initial_request.messages.truncate(2);
+        initial_request.messages.extend([
+            AiMessage {
+                role: MessageRole::Assistant,
+                content: vec![ContentItem::ToolCall {
+                    call: ToolCall {
+                        id: String::from("stable-call-1"),
+                        name: String::from("lookup"),
+                        arguments: json!({"path": "src/lib.rs"}),
+                        signature: None,
+                    },
+                }],
+                provider_context_items: Vec::new(),
+            },
+            AiMessage {
+                role: MessageRole::Tool,
+                content: vec![ContentItem::ToolResult {
+                    result: ToolResult {
+                        call_id: String::from("stable-call-1"),
+                        is_error: false,
+                        content: json!({"found": true}),
+                    },
+                }],
+                provider_context_items: Vec::new(),
+            },
+        ]);
+        let initial_chat = OpenAiChatProfile
+            .encode(&initial_request)
+            .expect("initial Chat history should encode");
+
+        let mut switched_request = initial_request.clone();
+        switched_request.messages.extend([
+            AiMessage {
+                role: MessageRole::Assistant,
+                content: vec![ContentItem::Text {
+                    text: String::from("Chat answer"),
+                }],
+                provider_context_items: Vec::new(),
+            },
+            AiMessage {
+                role: MessageRole::User,
+                content: vec![ContentItem::Text {
+                    text: String::from("Anthropic question"),
+                }],
+                provider_context_items: Vec::new(),
+            },
+            AiMessage {
+                role: MessageRole::Assistant,
+                content: vec![ContentItem::Text {
+                    text: String::from("Anthropic answer"),
+                }],
+                provider_context_items: Vec::new(),
+            },
+            AiMessage {
+                role: MessageRole::User,
+                content: vec![ContentItem::Text {
+                    text: String::from("Return to Chat"),
+                }],
+                provider_context_items: Vec::new(),
+            },
+        ]);
+        crate::anthropic::AnthropicMessagesProfile
+            .encode(&switched_request)
+            .expect("the same canonical history should encode for Anthropic");
+
+        let returned_chat = OpenAiChatProfile
+            .encode(&switched_request)
+            .expect("returned Chat history should encode");
+        let initial_messages = initial_chat.body["messages"]
+            .as_array()
+            .expect("initial Chat messages should be an array");
+        let returned_messages = returned_chat.body["messages"]
+            .as_array()
+            .expect("returned Chat messages should be an array");
+
+        assert_eq!(
+            &returned_messages[..initial_messages.len()],
+            initial_messages.as_slice()
+        );
+        assert_eq!(returned_chat.body["tools"], initial_chat.body["tools"]);
     }
 }

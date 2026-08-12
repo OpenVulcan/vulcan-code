@@ -479,21 +479,24 @@ mod tests {
         assert!(matches!(error, ModelProtocolBindingError::Missing { .. }));
     }
 
-    /// Verifies deepseek falls back to its declared default protocol for unknown models.
-    /// 验证 deepseek 对未知模型回退到其声明的默认协议。
+    /// Verifies DeepSeek rejects identities outside its fixed manifest inventory.
+    /// 验证 DeepSeek 拒绝固定 Manifest 清单之外的模型身份。
     #[test]
-    fn default_binding_allowed_uses_declared_default() {
+    fn deepseek_fixed_inventory_rejects_unknown_models() {
+        // manifest is the production DeepSeek identity and routing authority.
+        // manifest 是生产 DeepSeek 模型身份与路由权威。
         let manifest = compile_manifest_text(&bundled_text("deepseek"), ManifestOwnership::System)
             .expect("deepseek manifest must compile");
-        let binding = resolve_system_model_protocol_binding(
+        // error proves an undeclared identity cannot acquire a default binding.
+        // error 证明未声明身份无法获得默认绑定。
+        let error = resolve_system_model_protocol_binding(
             &manifest,
             "official-api",
             Some("api-key"),
             "deepseek-r2",
         )
-        .expect("unknown deepseek model must bind through the declared default");
-        assert_eq!(binding.protocol_profile_id, "openai-chat-completions.v1");
-        assert!(binding.rule_id.is_empty());
+        .expect_err("unknown DeepSeek model must not bind");
+        assert!(matches!(error, ModelProtocolBindingError::Missing { .. }));
     }
 
     /// Verifies entry-level defaults prevent subscription routes from inheriting another entry's protocol.

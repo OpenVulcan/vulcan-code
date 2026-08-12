@@ -444,11 +444,12 @@ impl RuntimeConversationProjection {
                 assistant_message_id: event.assistant_message_id.clone(),
             });
         };
+        let provider_visible_tool_call_id = provider_tool_call_id
+            .clone()
+            .unwrap_or_else(|| runtime_tool_call_id.clone());
         tool_calls.push(SessionConversationToolCall {
             id: runtime_tool_call_id.clone(),
-            tool_call_id: provider_tool_call_id
-                .clone()
-                .or_else(|| Some(runtime_tool_call_id.clone())),
+            tool_call_id: Some(provider_visible_tool_call_id.clone()),
             tool_name: event.tool_name.clone(),
             arguments: event.arguments.clone(),
         });
@@ -460,6 +461,7 @@ impl RuntimeConversationProjection {
             runtime_tool_call_id,
             RuntimeReplayToolCallState {
                 tool_batch_id,
+                provider_visible_tool_call_id,
                 matched: false,
             },
         );
@@ -571,6 +573,7 @@ impl RuntimeConversationProjection {
         // tool_batch_id is optional on results but normalized before any ownership comparison.
         // tool_batch_id 在结果上是可选字段，但会在任何归属比较前完成规范化。
         let tool_batch_id = normalized_optional_identifier(event.tool_batch_id.as_deref());
+        let mut matched_provider_visible_tool_call_id = None;
         if event.status != RuntimeToolResultStatus::Orphan {
             let resolved_tool_call_id = self.resolve_matched_tool_result_call_id(
                 &event.message_id,
@@ -587,6 +590,8 @@ impl RuntimeConversationProjection {
                     }
                 })?;
             let call_batch_id = call_state_snapshot.tool_batch_id.clone();
+            matched_provider_visible_tool_call_id =
+                Some(call_state_snapshot.provider_visible_tool_call_id.clone());
             if call_state_snapshot.matched {
                 return Err(RuntimeLogReplayError::DuplicateMatchedToolResult {
                     message_id: event.message_id.clone(),
@@ -626,7 +631,11 @@ impl RuntimeConversationProjection {
         let result_message = SessionConversationMessage {
             id: event.message_id.clone(),
             payload: SessionConversationPayload::ToolResult {
-                tool_call_id: provider_tool_call_id.or(runtime_tool_call_id),
+                tool_call_id: if event.status == RuntimeToolResultStatus::Orphan {
+                    provider_tool_call_id.or(runtime_tool_call_id)
+                } else {
+                    matched_provider_visible_tool_call_id
+                },
                 is_error: event.status == RuntimeToolResultStatus::Failed,
                 text: event.text.clone(),
             },
@@ -689,6 +698,9 @@ struct RuntimeReplayToolCallState {
     /// Runtime batch declared by the owning tool-call event.
     /// 所属工具调用事件声明的运行时批次。
     tool_batch_id: String,
+    /// Stable call id used by every model-facing protocol encoder.
+    /// 所有面向模型的协议编码器共同使用的稳定调用标识。
+    provider_visible_tool_call_id: String,
     /// Whether one completed or failed result already consumed this call.
     /// 是否已有一条完成或失败结果消费了当前调用。
     matched: bool,

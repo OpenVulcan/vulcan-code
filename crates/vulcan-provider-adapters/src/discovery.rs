@@ -3593,13 +3593,13 @@ mod tests {
         .expect("explicit discovery evidence must parse");
         let manifests = crate::provider_manifest::load_bundled_resolved_catalog();
         let manifest = manifests
-            .manifest("deepseek")
-            .expect("DeepSeek manifest must exist");
+            .manifest("anthropic")
+            .expect("Anthropic manifest must exist");
         enrich_compatible_model_catalog_with_manifest(
-            "deepseek",
-            "official-api",
+            "anthropic",
+            "public-api",
             Some("api-key"),
-            OPENAI_CHAT_PROFILE_ID,
+            ANTHROPIC_MESSAGES_PROFILE_ID,
             &mut catalog,
             manifest,
         );
@@ -3616,7 +3616,7 @@ mod tests {
         assert!(
             capabilities
                 .evidence_revision
-                .contains("deepseek.default-capabilities.v1+discovery:")
+                .contains("anthropic.default-capabilities.v1+discovery:")
         );
     }
 
@@ -4150,7 +4150,7 @@ mod tests {
             ANTHROPIC_MESSAGES_PROFILE_ID,
             &mut model,
         );
-        assert!(matched, "flash must match the prefix rule");
+        assert!(matched, "flash must match the exact rule");
         assert_eq!(
             model.capabilities.provider_native_tools,
             vec![NativeToolKind::WebSearch]
@@ -4167,6 +4167,28 @@ mod tests {
                 .model_parameters
                 .iter()
                 .any(|parameter| parameter.id == SAMPLING_TEMPERATURE_PARAMETER_ID)
+        );
+
+        // The Responses protocol carries the same provider-native search tool as Anthropic.
+        // Responses 协议与 Anthropic 一样携带供应商原生搜索工具。
+        let mut responses_model = ConnectionModel {
+            id: String::from("deepseek-v4-flash"),
+            display_name: String::from("DeepSeek V4 Flash"),
+            capabilities: ModelCapabilities::default(),
+            capability_evidence: Default::default(),
+            protocol_variants: BTreeMap::new(),
+            resolved_protocol_binding: None,
+        };
+        assert!(apply_manifest_model_rule(
+            &resolved,
+            "official-api",
+            None,
+            OPENAI_RESPONSES_PROFILE_ID,
+            &mut responses_model,
+        ));
+        assert_eq!(
+            responses_model.capabilities.provider_native_tools,
+            vec![NativeToolKind::WebSearch]
         );
 
         // The chat protocol carries no native search tool for the same model.
@@ -4187,6 +4209,46 @@ mod tests {
             &mut chat_model,
         );
         assert!(chat_model.capabilities.provider_native_tools.is_empty());
+
+        // V4 Pro exposes native search only through Anthropic because it has no Responses route.
+        // V4 Pro 仅通过 Anthropic 暴露原生搜索，因为它没有 Responses 路由。
+        let mut pro_anthropic_model = ConnectionModel {
+            id: String::from("deepseek-v4-pro"),
+            display_name: String::from("DeepSeek V4 Pro"),
+            capabilities: ModelCapabilities::default(),
+            capability_evidence: Default::default(),
+            protocol_variants: BTreeMap::new(),
+            resolved_protocol_binding: None,
+        };
+        assert!(apply_manifest_model_rule(
+            &resolved,
+            "official-api",
+            None,
+            ANTHROPIC_MESSAGES_PROFILE_ID,
+            &mut pro_anthropic_model,
+        ));
+        assert_eq!(
+            pro_anthropic_model.capabilities.provider_native_tools,
+            vec![NativeToolKind::WebSearch]
+        );
+        // V4 Pro Chat remains conversation-only and must not inherit native search.
+        // V4 Pro Chat 保持纯会话能力，绝不能继承原生搜索。
+        let mut pro_chat_model = ConnectionModel {
+            id: String::from("deepseek-v4-pro"),
+            display_name: String::from("DeepSeek V4 Pro"),
+            capabilities: ModelCapabilities::default(),
+            capability_evidence: Default::default(),
+            protocol_variants: BTreeMap::new(),
+            resolved_protocol_binding: None,
+        };
+        assert!(apply_manifest_model_rule(
+            &resolved,
+            "official-api",
+            None,
+            OPENAI_CHAT_PROFILE_ID,
+            &mut pro_chat_model,
+        ));
+        assert!(pro_chat_model.capabilities.provider_native_tools.is_empty());
     }
 
     /// Verifies a model-rule parameter replaces a lower-precedence parameter with the same stable id.
@@ -4196,7 +4258,7 @@ mod tests {
         let resolved = bundled_deepseek_manifest();
         let instance = resolved
             .rule_for_model("official-api", None, "deepseek-v4-flash")
-            .expect("flash must match the bundled prefix rule");
+            .expect("flash must match the bundled exact rule");
         let expected = instance
             .model_parameters
             .iter()
@@ -4715,12 +4777,7 @@ mod manifest_migration_tests {
     /// 验证每个已迁移 DeepSeek 模型规则与旧版补全分支等价。
     #[test]
     fn deepseek_rules_equal_legacy_enrichment() {
-        for model_id in [
-            "deepseek-v4-flash",
-            "deepseek-v4-pro",
-            "deepseek-chat",
-            "deepseek-reasoner",
-        ] {
+        for model_id in ["deepseek-v4-flash", "deepseek-v4-pro"] {
             assert_rule_equals_legacy(
                 "deepseek",
                 "official-api",

@@ -2778,7 +2778,7 @@
           }
         ],
         "authentication": "bearer_authorization",
-        "model_discovery": "open_ai",
+        "model_discovery": "manifest_static",
         "request_projector": "compatible",
         "protocol_routes": [
           {

@@ -7,6 +7,9 @@ import { formatSkillText } from "@/components/features/featureText"
 import type { FeatureHeaderSummary } from "@/components/features/feature-area-types"
 import { SourceOriginLink } from "@/components/features/source-origin-link"
 import { Badge } from "@/components/ui/badge"
+import { Button, IconButton } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
 import {
   Dialog,
   DialogContent,
@@ -336,15 +339,15 @@ export function AgentsArea(props: {
           <div className="agent-catalog-toolbar-heading">
             <p>{text("管理 Vulcan Code Agent 运行时消费的用户级智能体 Markdown 文件。", "Manage user-level agent Markdown files consumed by the Vulcan Code Agent runtime.")}</p>
             <div className="agent-catalog-toolbar-actions">
-              <button aria-label={text("新增智能体", "New agent")} className="agent-catalog-icon-button" disabled={catalogActionDisabled} onClick={() => setEditorDraft(emptyAgentDraft(defaultAgentMetadataLocale(locale)))} title={text("新增智能体", "New agent")} type="button">
+              <IconButton aria-label={text("新增智能体", "New agent")} disabled={catalogActionDisabled} onClick={() => setEditorDraft(emptyAgentDraft(defaultAgentMetadataLocale(locale)))} size="xs" title={text("新增智能体", "New agent")} type="button">
                 <Plus size={15} />
-              </button>
-              <button aria-label={text("打开用户目录", "Open user directory")} className="agent-catalog-icon-button" disabled={catalogActionDisabled} onClick={() => runAction("open-user-dir", props.actions.onOpenAgentUserDirectory)} title={text("打开用户目录", "Open user directory")} type="button">
+              </IconButton>
+              <IconButton aria-label={text("打开用户目录", "Open user directory")} disabled={catalogActionDisabled} onClick={() => runAction("open-user-dir", props.actions.onOpenAgentUserDirectory)} size="xs" title={text("打开用户目录", "Open user directory")} type="button">
                 <FolderOpen size={15} />
-              </button>
-              <button aria-label={t("skills.action.refresh")} className="agent-catalog-icon-button" disabled={catalogActionDisabled} onClick={() => runAction("refresh", props.actions.onRefreshAgentCatalog)} title={t("skills.action.refresh")} type="button">
+              </IconButton>
+              <IconButton aria-label={t("skills.action.refresh")} disabled={catalogActionDisabled} onClick={() => runAction("refresh", props.actions.onRefreshAgentCatalog)} size="xs" title={t("skills.action.refresh")} type="button">
                 <RefreshCw className={busyAction === "refresh" ? "spin" : undefined} size={15} />
-              </button>
+              </IconButton>
             </div>
           </div>
           <div className="agent-catalog-filter-row">
@@ -624,11 +627,11 @@ function AgentEditorForm(props: {
             <div className="agent-editor-grid">
               <label>
                 <span>{text("技能文件名", "Skill file name")}</span>
-                <input disabled={props.busy || draft.existing} pattern="[A-Za-z0-9._/-]+" required value={draft.agentId} onChange={(event) => updateDraftField("agentId", normalizeAgentFileNameInput(event.target.value))} />
+                <Input disabled={props.busy || draft.existing} pattern="[A-Za-z0-9._/-]+" required value={draft.agentId} onChange={(event) => updateDraftField("agentId", normalizeAgentFileNameInput(event.target.value))} />
               </label>
               <label>
                 <span>{text("用户包", "User package")}</span>
-                <input disabled={props.busy || editingSystemBackedDefinition} pattern="[A-Za-z0-9._-]*" value={draft.packageId} onChange={(event) => updateDraftField("packageId", event.target.value)} />
+                <Input disabled={props.busy || editingSystemBackedDefinition} pattern="[A-Za-z0-9._-]*" value={draft.packageId} onChange={(event) => updateDraftField("packageId", event.target.value)} />
               </label>
               <label>
                 <span>{text("元数据语言", "Metadata language")}</span>
@@ -640,7 +643,7 @@ function AgentEditorForm(props: {
               </label>
               <label>
                 <span>{text("名称", "Name")}</span>
-                <input disabled={props.busy || readOnlySystemMetadata} value={selectedMetadataName} onChange={(event) => updateDraftMetadataField("name", event.target.value)} />
+                <Input disabled={props.busy || readOnlySystemMetadata} value={selectedMetadataName} onChange={(event) => updateDraftMetadataField("name", event.target.value)} />
               </label>
               <label className="agent-editor-checkbox">
                 <input checked={draft.enabled} disabled={props.busy || readOnlySystemMetadata} type="checkbox" onChange={(event) => updateDraftField("enabled", event.target.checked)} />
@@ -648,11 +651,11 @@ function AgentEditorForm(props: {
               </label>
               <label className="wide">
                 <span>{text("描述", "Description")}</span>
-                <input disabled={props.busy || readOnlySystemMetadata} value={selectedMetadataDescription} onChange={(event) => updateDraftMetadataField("description", event.target.value)} />
+                <Input disabled={props.busy || readOnlySystemMetadata} value={selectedMetadataDescription} onChange={(event) => updateDraftMetadataField("description", event.target.value)} />
               </label>
               <label>
                 <span>{text("图标", "Emoji")}</span>
-                <input disabled={props.busy || readOnlySystemMetadata} value={draft.emoji} onChange={(event) => updateDraftField("emoji", event.target.value)} />
+                <Input disabled={props.busy || readOnlySystemMetadata} value={draft.emoji} onChange={(event) => updateDraftField("emoji", event.target.value)} />
               </label>
               <div className="agent-editor-field">
                 <span>{text("颜色标记", "Color marker")}</span>
@@ -660,15 +663,15 @@ function AgentEditorForm(props: {
               </div>
               <label className="wide">
                 <span>vibe</span>
-                <input disabled={props.busy || readOnlySystemMetadata} value={draft.vibe} onChange={(event) => updateDraftField("vibe", event.target.value)} />
+                <Input disabled={props.busy || readOnlySystemMetadata} value={draft.vibe} onChange={(event) => updateDraftField("vibe", event.target.value)} />
               </label>
               <label className="wide agent-prompt-field primary">
                 <span>{text("系统提示词", "System prompt")}</span>
-                <textarea autoFocus={!readOnlySystemMetadata} disabled={props.busy || readOnlySystemMetadata} rows={14} value={draft.systemPrompt} onChange={(event) => updateDraftField("systemPrompt", event.target.value)} />
+                <Textarea autoFocus={!readOnlySystemMetadata} density="large" disabled={props.busy || readOnlySystemMetadata} rows={14} value={draft.systemPrompt} onChange={(event) => updateDraftField("systemPrompt", event.target.value)} />
               </label>
               <label className="wide agent-prompt-field">
                 <span>{text("追加提示词", "Prompt append")}</span>
-                <textarea autoFocus={readOnlySystemMetadata} disabled={props.busy} rows={5} value={draft.systemPromptAppend} onChange={(event) => updateDraftField("systemPromptAppend", event.target.value)} />
+                <Textarea autoFocus={readOnlySystemMetadata} disabled={props.busy} rows={5} value={draft.systemPromptAppend} onChange={(event) => updateDraftField("systemPromptAppend", event.target.value)} />
               </label>
               <div className="wide agent-editor-model-field">
                 <span>{text("模型", "Model")}</span>
@@ -690,15 +693,15 @@ function AgentEditorForm(props: {
                       fixedModelUnavailableReason: "",
                     })}
                   />
-                  <button
-                    className="skill-action-button secondary"
+                  <Button
                     disabled={props.busy || !fixedModelValue}
                     onClick={() => props.onDraftChange({ ...draft, fixedModelProviderId: "", fixedModelId: "", fixedModelAvailable: null, fixedModelUnavailableReason: "" })}
                     type="button"
+                    variant="secondary"
                   >
                     <RotateCcw size={14} />
                     <span>{text("跟随会话", "Follow session")}</span>
-                  </button>
+                  </Button>
                 </div>
                 <small className="settings-muted-line">
                   {fixedModelValue ? `${text("固定模型", "Fixed model")}: ${draft.fixedModelProviderId}/${draft.fixedModelId}` : text("当前跟随会话模型。", "Currently follows the session model.")}
@@ -748,14 +751,14 @@ function AgentEditorForm(props: {
               {editingSystemBackedDefinition ? <strong>{text("仅保存用户侧元数据覆盖", "Only user metadata override will be saved")}</strong> : null}
             </div>
             <DialogFooter>
-              <button className="skill-action-button secondary" disabled={props.busy} onClick={props.onCancel} type="button">
+              <Button disabled={props.busy} onClick={props.onCancel} type="button" variant="secondary">
                 <X size={15} />
                 <span>{text("取消", "Cancel")}</span>
-              </button>
-              <button className="skill-action-button" disabled={props.busy || draft.agentId.trim().length === 0 || !preferredDraftMetadataField(localizedSaveLocalesFromDraft(draft), "name")} type="submit">
+              </Button>
+              <Button disabled={props.busy || draft.agentId.trim().length === 0 || !preferredDraftMetadataField(localizedSaveLocalesFromDraft(draft), "name")} type="submit">
                 <Save size={15} />
                 <span>{text("保存", "Save")}</span>
-              </button>
+              </Button>
             </DialogFooter>
           </form>
         ) : null}
@@ -1110,20 +1113,21 @@ function AgentDefinitionCard(props: {
           <span />
         </button> : null}
         {definition.canEdit ? (
-          <button className="agent-definition-icon-button" disabled={props.busy} onClick={props.onEdit} title={text("编辑", "Edit")} type="button">
+          <IconButton aria-label={text("编辑", "Edit")} disabled={props.busy} onClick={props.onEdit} title={text("编辑", "Edit")} type="button">
             <Pencil size={15} />
-          </button>
+          </IconButton>
         ) : null}
         {definition.canDelete ? (
-          <button
-            className="agent-definition-icon-button danger"
+          <IconButton
+            aria-label={text("删除", "Delete")}
             disabled={props.busy}
             onClick={() => void props.onRunAction("delete", () => props.actions.onDeleteAgentDefinition(definition.agentId))}
             title={text("删除", "Delete")}
             type="button"
+            variant="destructive"
           >
             <Trash2 size={15} />
-          </button>
+          </IconButton>
         ) : null}
       </div>
     </article>

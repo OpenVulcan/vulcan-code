@@ -11,6 +11,7 @@ use vulcan_ai_contract::{
     AiContinuationUpdate, AiErrorCategory, AiExecutionError, AiStreamEvent, ContentItem,
     RequestUsage, ResourceKind, ResourceReference, ResourceTransferState, ToolCall,
     ToolCallProgress, UsageValue, UsageValueSource, derive_uncached_input,
+    is_replayable_codex_responses_item,
 };
 
 /// Tracks one OpenAI-compatible streamed tool call.
@@ -429,6 +430,9 @@ pub(crate) struct OpenAiResponsesStreamDecoder {
     /// Image-generation output indices that already reached their item completion event.
     /// 已到达项完成事件的图片生成输出索引。
     completed_images: BTreeSet<u32>,
+    /// Provider output-item scopes already captured for exact route-bound replay.
+    /// 已为精确路由绑定重放捕获的供应商输出项作用域。
+    captured_provider_context_scopes: BTreeSet<String>,
 }
 
 impl OpenAiResponsesStreamDecoder {
@@ -463,6 +467,7 @@ impl OpenAiResponsesStreamDecoder {
             tools: BTreeMap::new(),
             image_items: BTreeMap::new(),
             completed_images: BTreeSet::new(),
+            captured_provider_context_scopes: BTreeSet::new(),
         }
     }
 
@@ -1614,6 +1619,23 @@ impl ProtocolStreamDecoder for OpenAiResponsesStreamDecoder {
                     }
                     _ => {}
                 }
+                // providerItem is the authoritative completed Responses item required for exact
+                // same-route history replay and provider prefix-cache continuity.
+                // providerItem 是同路由精确历史重放与供应商前缀缓存连续性所需的权威
+                // Responses 已完成输出项。
+                let provider_item = value.get("item").ok_or_else(|| {
+                    ProtocolConversionError::new("OpenAI Responses item is missing.")
+                })?;
+                let provider_item_scope = Self::reasoning_wire_scope(&value);
+                if is_replayable_codex_responses_item(provider_item)
+                    && self
+                        .captured_provider_context_scopes
+                        .insert(provider_item_scope)
+                {
+                    events.push(AiStreamEvent::ProviderContextItemCaptured {
+                        item: provider_item.clone(),
+                    });
+                }
             }
             "response.image_generation_call.partial_image" => {
                 let index = Self::output_index(&value)?;
@@ -2224,6 +2246,38 @@ mod tests {
         assert!(events.iter().any(|event| matches!(
             event,
             AiStreamEvent::ResponseItemCompleted { item_id } if item_id == "message"
+        )));
+    }
+
+    /// Verifies unsigned Responses reasoning keeps the exact provider item for later replay.
+    /// 验证无签名 Responses 推理会保留原始供应商项以供后续重放。
+    #[test]
+    fn responses_unsigned_reasoning_captures_exact_provider_context_item() {
+        // decoder receives the completed reasoning shape currently returned by DeepSeek Responses.
+        // decoder 接收 DeepSeek Responses 当前返回的已完成推理结构。
+        let mut decoder = OpenAiResponsesStreamDecoder::new(String::from("execution"));
+        let provider_item = json!({
+            "type": "reasoning",
+            "id": "reasoning-item",
+            "status": "completed",
+            "summary": [{"type": "summary_text", "text": "inspect the workspace"}],
+        });
+        let events = decoder
+            .push_sse(
+                Some("response.output_item.done"),
+                serde_json::to_string(&json!({
+                    "type": "response.output_item.done",
+                    "output_index": 0,
+                    "item": provider_item.clone(),
+                }))
+                .expect("reasoning event should serialize")
+                .as_str(),
+            )
+            .expect("unsigned reasoning should decode");
+
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AiStreamEvent::ProviderContextItemCaptured { item } if item == &provider_item
         )));
     }
 

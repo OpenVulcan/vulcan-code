@@ -3,7 +3,7 @@ import type { CSSProperties, ReactNode } from "react"
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
+import { Button, IconButton } from "@/components/ui/button"
 import {
   Card,
   CardContent,
@@ -19,6 +19,7 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty"
+import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Progress } from "@/components/ui/progress"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
@@ -180,12 +181,20 @@ export function VisualLabSettingsArea() {
               <Button disabled>{text("禁用", "Disabled")}</Button>
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <Button size="icon-sm" variant="ghost" aria-label={text("提示示例", "Tooltip example")}>
+                  <IconButton aria-label={text("提示示例", "Tooltip example")}>
                     <Sparkles />
-                  </Button>
+                  </IconButton>
                 </TooltipTrigger>
                 <TooltipContent>{text("统一提示层", "Unified tooltip surface")}</TooltipContent>
               </Tooltip>
+            </div>
+            <div className="visual-lab-row">
+              <IconButton aria-label={text("超小图标按钮", "Extra-small icon button")} size="xs"><Sparkles /></IconButton>
+              <IconButton aria-label={text("小图标按钮", "Small icon button")} size="sm"><Sparkles /></IconButton>
+              <IconButton aria-label={text("中图标按钮", "Medium icon button")} size="md"><Sparkles /></IconButton>
+              <IconButton aria-label={text("大图标按钮", "Large icon button")} size="lg"><Sparkles /></IconButton>
+              <IconButton aria-label={text("危险图标按钮", "Destructive icon button")} variant="destructive"><Sparkles /></IconButton>
+              <IconButton aria-label={text("禁用图标按钮", "Disabled icon button")} disabled><Sparkles /></IconButton>
             </div>
             <div className="visual-lab-row">
               <Badge>{text("默认", "Default")}</Badge>
@@ -202,14 +211,25 @@ export function VisualLabSettingsArea() {
           title={text("表单控件", "Form controls")}
         >
           <div className="visual-lab-stack">
-            <label className="visual-lab-field">
-              <span>{text("普通输入", "Default input")}</span>
-              <Input defaultValue={text("可编辑内容", "Editable value")} />
-            </label>
-            <label className="visual-lab-field">
-              <span>{text("多行输入", "Multiline input")}</span>
-              <Textarea defaultValue={text("用于检查字体、边框、内边距和换行。", "Checks typography, borders, padding, and wrapping.")} />
-            </label>
+            <Field>
+              <FieldLabel htmlFor="visual-lab-default-input">{text("普通输入", "Default input")}</FieldLabel>
+              <Input defaultValue={text("可编辑内容", "Editable value")} id="visual-lab-default-input" />
+              <FieldDescription>{text("标签、说明和控件使用统一间距。", "Label, description, and control use shared spacing.")}</FieldDescription>
+            </Field>
+            <div className="visual-lab-row visual-lab-control-sizes">
+              <Input aria-label={text("紧凑输入", "Compact input")} defaultValue={text("紧凑", "Compact")} density="compact" />
+              <Input aria-label={text("默认输入", "Default input")} defaultValue={text("默认", "Default")} />
+              <Input aria-label={text("大型输入", "Large input")} defaultValue={text("大型", "Large")} density="large" />
+            </div>
+            <Field data-invalid="true">
+              <FieldLabel htmlFor="visual-lab-invalid-input">{text("错误状态", "Invalid state")}</FieldLabel>
+              <Input aria-invalid="true" defaultValue={text("无效内容", "Invalid value")} id="visual-lab-invalid-input" />
+              <FieldError>{text("这里显示统一的字段错误信息。", "A unified field error appears here.")}</FieldError>
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="visual-lab-textarea">{text("多行输入", "Multiline input")}</FieldLabel>
+              <Textarea defaultValue={text("用于检查字体、边框、内边距和换行。", "Checks typography, borders, padding, and wrapping.")} id="visual-lab-textarea" />
+            </Field>
             <Select defaultValue="balanced">
               <SelectTrigger>
                 <SelectValue placeholder={text("选择密度", "Select density")} />

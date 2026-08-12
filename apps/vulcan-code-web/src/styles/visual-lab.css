@@ -78,16 +78,9 @@
   gap: 10px;
 }
 
-.visual-lab-field {
-  min-width: 0;
-  display: grid;
-  gap: 6px;
-}
-
-.visual-lab-field > span {
-  color: var(--vcn-content-secondary);
-  font-size: 12px;
-  font-weight: 600;
+.visual-lab-control-sizes > [data-slot="input"] {
+  width: auto;
+  flex: 1 1 140px;
 }
 
 .visual-lab-token-grid {

@@ -932,6 +932,7 @@ impl ResponsesSseState {
             | AiStreamEvent::ResponseStarted { .. }
             | AiStreamEvent::ResponseMetadataUpdated { .. }
             | AiStreamEvent::ResponseItemCompleted { .. }
+            | AiStreamEvent::ProviderContextItemCaptured { .. }
             | AiStreamEvent::ResourceProgress { .. } => {}
             AiStreamEvent::ReasoningCompleted { item_id, signature } => {
                 let output_index = self.ensure_reasoning_item(item_id.as_str(), &mut projected);

@@ -2,6 +2,8 @@ import * as React from "react"
 import { Pencil, Plus, Trash2 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
 import {
   Dialog,
   DialogContent,
@@ -333,13 +335,13 @@ export function AgentSkillCategoryManagementDialog(props: {
 // AgentSkillTextField renders one compact controlled text field.
 // AgentSkillTextField 渲染一个紧凑受控文本字段。
 function AgentSkillTextField(props: { disabled?: boolean; label: string; onChange: (value: string) => void; required?: boolean; type?: React.HTMLInputTypeAttribute; value: string }) {
-  return <label className="agent-skill-form-field"><span>{props.label}{props.required ? " *" : ""}</span><input disabled={props.disabled} onChange={(event) => props.onChange(event.target.value)} required={props.required} type={props.type ?? "text"} value={props.value} /></label>
+  return <label className="agent-skill-form-field"><span>{props.label}{props.required ? " *" : ""}</span><Input disabled={props.disabled} onChange={(event) => props.onChange(event.target.value)} required={props.required} type={props.type ?? "text"} value={props.value} /></label>
 }
 
 // AgentSkillTextArea renders one controlled multiline prompt or metadata field.
 // AgentSkillTextArea 渲染一个受控多行提示词或元数据字段。
 function AgentSkillTextArea(props: { className?: string; label: string; onChange: (value: string) => void; required?: boolean; rows: number; value: string }) {
-  return <label className={`agent-skill-form-field ${props.className ?? ""}`}><span>{props.label}{props.required ? " *" : ""}</span><textarea onChange={(event) => props.onChange(event.target.value)} required={props.required} rows={props.rows} spellCheck={false} value={props.value} /></label>
+  return <label className={`agent-skill-form-field ${props.className ?? ""}`}><span>{props.label}{props.required ? " *" : ""}</span><Textarea density={props.rows >= 8 ? "large" : "default"} onChange={(event) => props.onChange(event.target.value)} required={props.required} rows={props.rows} spellCheck={false} value={props.value} /></label>
 }
 
 // AgentSkillColorPicker renders the same native color selector used by the agent editor.

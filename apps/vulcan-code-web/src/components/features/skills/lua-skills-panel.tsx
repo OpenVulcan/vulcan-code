@@ -1,5 +1,6 @@
 import * as React from "react";
 import { PackagePlus, Search } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -307,11 +308,11 @@ export function LuaSkillInstallDialog(props: {
             />
           </label>
           <DialogFooter>
-            <button className="skill-action-button secondary" disabled={installing} onClick={() => props.onOpenChange(false)} type="button">{t("skills.action.cancel")}</button>
-            <button className="skill-action-button" disabled={installing || source.trim().length === 0} type="submit">
+            <Button disabled={installing} onClick={() => props.onOpenChange(false)} type="button" variant="secondary">{t("skills.action.cancel")}</Button>
+            <Button disabled={installing || source.trim().length === 0} type="submit">
               <PackagePlus size={15} />
               <span>{installing ? t("skills.action.installing") : t("skills.action.install")}</span>
-            </button>
+            </Button>
           </DialogFooter>
         </form>
       </DialogContent>

@@ -109,6 +109,56 @@ fn transcript_replay_groups_parallel_tool_rows_into_one_batch() {
     ));
 }
 
+/// Verifies legacy local result aliases are rewritten to one stable model-visible call id.
+/// 验证旧本地结果别名会被改写为一个稳定的模型可见调用标识。
+#[test]
+fn replay_normalization_canonicalizes_legacy_tool_result_alias() {
+    let messages = vec![
+        SessionConversationMessage {
+            id: String::from("assistant-1"),
+            payload: SessionConversationPayload::Assistant {
+                text: String::new(),
+                reasoning: String::new(),
+                provider_message_id: None,
+                provider_message_state: None,
+                usage: None,
+                tool_calls: vec![SessionConversationToolCall {
+                    id: String::from("runtime-call-1"),
+                    tool_call_id: Some(String::from("provider-call-1")),
+                    tool_name: String::from("demo"),
+                    arguments: json!({}),
+                }],
+            },
+        },
+        SessionConversationMessage {
+            id: String::from("result-1"),
+            payload: SessionConversationPayload::ToolResult {
+                tool_call_id: Some(String::from("runtime-call-1")),
+                is_error: false,
+                text: String::from("ok"),
+            },
+        },
+    ];
+
+    let normalized = normalize_replayed_protocol_messages(messages);
+
+    assert_eq!(normalized.len(), 2);
+    let SessionConversationPayload::Assistant { tool_calls, .. } = &normalized[0].payload else {
+        panic!("first message should remain an assistant tool-call batch");
+    };
+    assert_eq!(
+        tool_calls[0].tool_call_id.as_deref(),
+        Some("provider-call-1")
+    );
+    assert!(matches!(
+        normalized[1].payload,
+        SessionConversationPayload::ToolResult {
+            ref tool_call_id,
+            ..
+        } if tool_call_id.as_deref() == Some("provider-call-1")
+    ));
+}
+
 /// Verifies interrupted tool calls replay as plain historical text before the next user turn.
 /// 验证被中断的工具调用会在下一条用户回合前重放为普通历史文本。
 #[test]

@@ -5,6 +5,7 @@ import {
 } from "lucide-react"
 
 import { FeatureContent as FeatureShellContent } from "@/components/features/feature-shell-content"
+import { Button } from "@/components/ui/button"
 import { FeatureSidebar, areaIconMap, primaryFeatureAreas } from "@/components/features/feature-shell-sidebar"
 import { activeAgentsHeaderSummary, type AgentActionProps } from "@/components/features/agents/AgentsArea"
 import { WorkspaceTitleMenu } from "@/components/workspace/workspace-title-menu"
@@ -165,19 +166,19 @@ function FeatureShell(props: {
   // skillHeaderAction 在共享标题栏中渲染当前技能页面操作。
   const skillHeaderAction = props.activeArea === "skills" && activeSkillSubArea === "catalog" ? (
     <div className="feature-header-actions">
-      <button
-        className="skill-action-button secondary"
+      <Button
         disabled={skillHeaderBusyAction !== null}
-    onClick={() => void runSkillHeaderAction("lua-refresh", props.luaSkillActions.onRefreshLuaSkills)}
+        onClick={() => void runSkillHeaderAction("lua-refresh", props.luaSkillActions.onRefreshLuaSkills)}
         type="button"
+        variant="secondary"
       >
         <RefreshCw className={skillHeaderBusyAction === "lua-refresh" ? "spin" : undefined} size={15} />
         <span>{skillHeaderBusyAction === "lua-refresh" ? t("skills.action.refreshing") : t("skills.action.refresh")}</span>
-      </button>
-      <button className="skill-action-button" onClick={() => setLuaInstallDialogOpen(true)} type="button">
+      </Button>
+      <Button onClick={() => setLuaInstallDialogOpen(true)} type="button">
         <PackagePlus size={15} />
         <span>{t("skills.action.installLua")}</span>
-      </button>
+      </Button>
     </div>
   ) : null
   // agentsHeaderAction stays empty because the agents page owns a sticky action bar.

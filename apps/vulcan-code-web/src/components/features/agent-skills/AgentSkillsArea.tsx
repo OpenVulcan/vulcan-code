@@ -7,7 +7,7 @@ import type { AgentSkillActionProps } from "@/components/features/agent-skills/a
 import { AgentSkillCategoryManagementDialog, AgentSkillEditorDialog } from "@/components/features/agent-skills/agent-skill-management-dialogs"
 import { hasLinkedGitHubSourceOrigin, SourceOriginLink } from "@/components/features/source-origin-link"
 import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
+import { Button, IconButton } from "@/components/ui/button"
 import {
   Dialog,
   DialogContent,
@@ -346,22 +346,22 @@ export function AgentSkillsArea(props: {
                   <span />
                 </button> : null}
                 {record.effective && record.canEdit ? (
-                  <button className="agent-definition-icon-button" disabled={busyAction !== null} onClick={() => openEditor(record)} title={record.scopeKey === "system" ? (locale.startsWith("zh") ? "创建用户覆盖" : "Create override") : (locale.startsWith("zh") ? "编辑" : "Edit")} type="button">
+                  <IconButton aria-label={record.scopeKey === "system" ? (locale.startsWith("zh") ? "创建用户覆盖" : "Create override") : (locale.startsWith("zh") ? "编辑" : "Edit")} disabled={busyAction !== null} onClick={() => openEditor(record)} title={record.scopeKey === "system" ? (locale.startsWith("zh") ? "创建用户覆盖" : "Create override") : (locale.startsWith("zh") ? "编辑" : "Edit")} type="button">
                     <Pencil size={14} />
-                  </button>
+                  </IconButton>
                 ) : null}
-                {record.canCopy ? <button className="agent-definition-icon-button" disabled={busyAction !== null} onClick={() => openEditor(record, true)} title={locale.startsWith("zh") ? "复制" : "Copy"} type="button">
+                {record.canCopy ? <IconButton aria-label={locale.startsWith("zh") ? "复制" : "Copy"} disabled={busyAction !== null} onClick={() => openEditor(record, true)} title={locale.startsWith("zh") ? "复制" : "Copy"} type="button">
                   <Copy size={14} />
-                </button> : null}
+                </IconButton> : null}
                 {record.canRestoreDefault ? (
-                  <button className="agent-definition-icon-button" disabled={busyAction !== null} onClick={() => void runCatalogAction(`restore:${record.name}`, () => restoreSystemSkill(record))} title={locale.startsWith("zh") ? "恢复系统版本" : "Restore system version"} type="button">
+                  <IconButton aria-label={locale.startsWith("zh") ? "恢复系统版本" : "Restore system version"} disabled={busyAction !== null} onClick={() => void runCatalogAction(`restore:${record.name}`, () => restoreSystemSkill(record))} title={locale.startsWith("zh") ? "恢复系统版本" : "Restore system version"} type="button">
                     <RotateCcw size={14} />
-                  </button>
+                  </IconButton>
                 ) : null}
                 {record.canDelete ? (
-                  <button className="agent-definition-icon-button danger" disabled={busyAction !== null} onClick={() => void runCatalogAction(`delete:${record.name}`, () => deleteUserSkill(record))} title={locale.startsWith("zh") ? "删除" : "Delete"} type="button">
+                  <IconButton aria-label={locale.startsWith("zh") ? "删除" : "Delete"} disabled={busyAction !== null} onClick={() => void runCatalogAction(`delete:${record.name}`, () => deleteUserSkill(record))} title={locale.startsWith("zh") ? "删除" : "Delete"} type="button" variant="destructive">
                     <Trash2 size={14} />
-                  </button>
+                  </IconButton>
                 ) : null}
               </div>
             </article>
@@ -446,9 +446,9 @@ export function FloatingAgentSkillCategoryMenu(props: {
       <aside className="workspace-tool-panel-menu agent-category-floating-menu" aria-label={locale.startsWith("zh") ? "技能分类" : "Skill categories"}>
         <div className="workspace-tool-panel-menu-header">
           <span>{locale.startsWith("zh") ? "分类" : "Categories"}</span>
-          <button aria-label={t("workspaceToolPanel.collapseToPill")} className="workspace-tool-panel-menu-icon-button" onClick={() => props.onExpandedChange(false)} type="button">
+          <IconButton aria-label={t("workspaceToolPanel.collapseToPill")} onClick={() => props.onExpandedChange(false)} size="xs" type="button">
             <Minimize2 size={13} />
-          </button>
+          </IconButton>
         </div>
         <div className="workspace-tool-panel-menu-list">
           <button className={`workspace-tool-panel-menu-row agent-category-floating-row ${props.selectedCategoryId === "" ? "active" : ""}`} onClick={() => props.onSelectCategory("")} type="button">

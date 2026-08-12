@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v1",
   "provider_id": "deepseek",
-  "revision": 4,
-  "published_at": "2026-08-08T00:00:00Z",
+  "revision": 5,
+  "published_at": "2026-08-11T00:00:00Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -50,8 +50,12 @@
       "default_authentication": "bearer_authorization",
       "request_projector": "compatible",
       "model_catalog": {
-        "source_policy": "manifest_and_discovery",
-        "discovery_kind": "open_ai"
+        "source_policy": "manifest_only",
+        "discovery_kind": "manifest_static",
+        "models": [
+          { "model_id": "deepseek-v4-flash", "display_name": "DeepSeek V4 Flash" },
+          { "model_id": "deepseek-v4-pro", "display_name": "DeepSeek V4 Pro" }
+        ]
       },
       "protocol_routes": [
         {
@@ -99,8 +103,8 @@
   ],
   "model_defaults": {
     "default_enabled": true,
-    "catalog_membership_policy": "declared_and_discovery",
-    "unknown_model_policy": "default_binding_allowed",
+    "catalog_membership_policy": "declared_only",
+    "unknown_model_policy": "declared_rule_required",
     "supported_protocols": [
       "openai-chat-completions.v1",
       "anthropic-messages.v1",
@@ -125,7 +129,7 @@
         "credential_profile_ids": []
       },
       "matcher": {
-        "kind": "prefix",
+        "kind": "exact",
         "value": "deepseek-v4-flash"
       },
       "supported_protocols": [
@@ -203,7 +207,7 @@
         "credential_profile_ids": []
       },
       "matcher": {
-        "kind": "prefix",
+        "kind": "exact",
         "value": "deepseek-v4-pro"
       },
       "supported_protocols": [
@@ -266,72 +270,6 @@
           "evidence_revision": "deepseek.api-docs.temperature.2026-07-30"
         }
       ]
-    },
-    {
-      "rule_id": "deepseek-chat",
-      "scope": {
-        "service_entry_ids": [],
-        "credential_profile_ids": []
-      },
-      "matcher": {
-        "kind": "exact",
-        "value": "deepseek-chat"
-      },
-      "supported_protocols": [
-        "openai-responses.v1",
-        "anthropic-messages.v1",
-        "openai-chat-completions.v1"
-      ],
-      "selected_protocol": "openai-responses.v1",
-      "protocol_capabilities": {
-        "anthropic-messages.v1": {
-          "provider_native_tools": [
-            "web_search"
-          ]
-        },
-        "openai-chat-completions.v1": {
-          "provider_native_tools": []
-        },
-        "openai-responses.v1": {
-          "provider_native_tools": [
-            "web_search"
-          ]
-        }
-      },
-      "model_parameters": []
-    },
-    {
-      "rule_id": "deepseek-reasoner",
-      "scope": {
-        "service_entry_ids": [],
-        "credential_profile_ids": []
-      },
-      "matcher": {
-        "kind": "exact",
-        "value": "deepseek-reasoner"
-      },
-      "supported_protocols": [
-        "openai-responses.v1",
-        "anthropic-messages.v1",
-        "openai-chat-completions.v1"
-      ],
-      "selected_protocol": "openai-responses.v1",
-      "protocol_capabilities": {
-        "anthropic-messages.v1": {
-          "provider_native_tools": [
-            "web_search"
-          ]
-        },
-        "openai-chat-completions.v1": {
-          "provider_native_tools": []
-        },
-        "openai-responses.v1": {
-          "provider_native_tools": [
-            "web_search"
-          ]
-        }
-      },
-      "model_parameters": []
     }
   ],
   "usage_profiles": [

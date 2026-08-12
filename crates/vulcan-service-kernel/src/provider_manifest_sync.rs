@@ -8287,10 +8287,10 @@ mod tests {
         let http = build_sync_http_client().expect("sync client");
         let service = ProviderManifestSyncService::new(directory.path(), http, Vec::new(), None);
         let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
-        // configuration owns one exact DeepSeek discovery account.
-        // configuration 持有一个精确 DeepSeek 发现账号。
+        // configuration owns one exact OpenAI discovery account.
+        // configuration 持有一个精确 OpenAI 发现账号。
         let mut configuration = PersistedAiConfiguration::default();
-        let connection_id = String::from("deepseek-discovery-status");
+        let connection_id = String::from("openai-discovery-status");
         configuration
             .connection_graph
             .add_connection(
@@ -8299,30 +8299,30 @@ mod tests {
                     .expect("provider registry should resolve"),
                 vulcan_provider_adapters::CredentialConnection {
                     id: connection_id.clone(),
-                    provider_id: String::from("deepseek"),
-                    service_entry_id: String::from("official-api"),
+                    provider_id: String::from("openai"),
+                    service_entry_id: String::from("public-api"),
                     credential_profile_id: String::from("api-key"),
                     credential_mode: vulcan_provider_adapters::CredentialMode::Token,
-                    credential_id: String::from("deepseek-discovery-credential"),
-                    display_name: String::from("DeepSeek Discovery Status"),
-                    secret_reference: String::from("deepseek-discovery-secret"),
+                    credential_id: String::from("openai-discovery-credential"),
+                    display_name: String::from("OpenAI Discovery Status"),
+                    secret_reference: String::from("openai-discovery-secret"),
                     management_secret_reference: None,
                     service_origin_override: None,
                     verified_protocols: BTreeSet::from([
                         vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID.to_string(),
-                        vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID.to_string(),
+                        vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID.to_string(),
                     ]),
                     selected_protocol: vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID.to_string(),
                     prompt_cache_by_protocol: BTreeMap::new(),
                     usage_scope_override: None,
                 },
             )
-            .expect("DeepSeek connection should register");
+            .expect("OpenAI connection should register");
         // readyModel proves an unknown discovered model can use the Manifest default binding.
         // readyModel 证明未知发现模型可使用 Manifest 默认绑定。
         let mut ready_model = vulcan_provider_adapters::ConnectionModel {
-            id: String::from("deepseek-dynamic-ready"),
-            display_name: String::from("DeepSeek Dynamic Ready"),
+            id: String::from("openai-dynamic-ready"),
+            display_name: String::from("OpenAI Dynamic Ready"),
             capabilities: vulcan_provider_adapters::ModelCapabilities::default(),
             capability_evidence: Default::default(),
             protocol_variants: BTreeMap::new(),
@@ -8333,26 +8333,26 @@ mod tests {
             vulcan_provider_adapters::ProtocolModelVariant {
                 capabilities: vulcan_provider_adapters::ModelCapabilities::default(),
                 capability_evidence: Default::default(),
-                discovery_signature: String::from("deepseek-status-chat-signature"),
+                discovery_signature: String::from("openai-status-chat-signature"),
                 catalog_generation: 1,
             },
         );
         // missingModel intentionally lacks the Manifest-selected Chat variant.
         // missingModel 有意缺少 Manifest 选择的 Chat 变体。
         let mut missing_model = vulcan_provider_adapters::ConnectionModel {
-            id: String::from("deepseek-dynamic-missing"),
-            display_name: String::from("DeepSeek Dynamic Missing"),
+            id: String::from("openai-dynamic-missing"),
+            display_name: String::from("OpenAI Dynamic Missing"),
             capabilities: vulcan_provider_adapters::ModelCapabilities::default(),
             capability_evidence: Default::default(),
             protocol_variants: BTreeMap::new(),
             resolved_protocol_binding: None,
         };
         missing_model.protocol_variants.insert(
-            vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID.to_string(),
+            vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID.to_string(),
             vulcan_provider_adapters::ProtocolModelVariant {
                 capabilities: vulcan_provider_adapters::ModelCapabilities::default(),
                 capability_evidence: Default::default(),
-                discovery_signature: String::from("deepseek-status-anthropic-signature"),
+                discovery_signature: String::from("openai-status-responses-signature"),
                 catalog_generation: 1,
             },
         );
@@ -8362,7 +8362,7 @@ mod tests {
                 models: vec![ready_model, missing_model],
                 generation: 1,
                 page_count: 1,
-                discovery_schema_revision: String::from("deepseek-status-fixture-v1"),
+                discovery_schema_revision: String::from("openai-status-fixture-v1"),
             })
             .expect("discovered source catalog should stage");
         runtime
@@ -8373,14 +8373,14 @@ mod tests {
             .expect("status configuration should publish");
 
         let status = service
-            .provider_manifest_status(&runtime, "deepseek")
+            .provider_manifest_status(&runtime, "openai")
             .expect("status snapshot should build");
         let ready = status
             .model_bindings
             .iter()
             .find(|binding| {
                 binding.connection_id.as_deref() == Some(connection_id.as_str())
-                    && binding.model_id == "deepseek-dynamic-ready"
+                    && binding.model_id == "openai-dynamic-ready"
             })
             .expect("discovery-only ready model must be present");
         assert_eq!(ready.model_source, ManifestModelSourceStatus::Discovery);
@@ -8403,13 +8403,13 @@ mod tests {
             .iter()
             .find(|binding| {
                 binding.connection_id.as_deref() == Some(connection_id.as_str())
-                    && binding.model_id == "deepseek-dynamic-missing"
+                    && binding.model_id == "openai-dynamic-missing"
             })
             .expect("discovery-only missing-variant model must be present");
         assert_eq!(missing.model_source, ManifestModelSourceStatus::Discovery);
         assert_eq!(
             missing.available_protocols,
-            vec![vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID.to_string()]
+            vec![vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID.to_string()]
         );
         assert!(
             !missing.executable,
@@ -8418,7 +8418,7 @@ mod tests {
         assert_eq!(
             missing.unavailable_reason.as_deref(),
             Some(
-                "Model `deepseek-dynamic-missing` has no capability variant for its bound protocol `openai-chat-completions.v1`; execution is blocked."
+                "Model `openai-dynamic-missing` has no capability variant for its bound protocol `openai-chat-completions.v1`; execution is blocked."
             )
         );
     }

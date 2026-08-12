@@ -247,6 +247,7 @@ pub(crate) fn normalize_replayed_protocol_messages(
             SessionConversationPayload::Assistant { tool_calls, .. } if !tool_calls.is_empty() => {
                 let (assistant_end, merged_assistant) =
                     collect_adjacent_tool_call_assistant_messages(&messages, index);
+                let merged_assistant = normalize_provider_visible_tool_call_ids(merged_assistant);
                 let (result_end, matched_results, complete) =
                     collect_matching_tool_results(&messages, assistant_end, &merged_assistant);
                 if complete {
@@ -346,7 +347,7 @@ fn collect_matching_tool_results(
         return (start_index, Vec::new(), false);
     };
     let mut pending_groups = tool_call_identifier_groups(tool_calls);
-    if pending_groups.is_empty() {
+    if pending_groups.len() != tool_calls.len() {
         return (start_index, Vec::new(), false);
     }
     let mut cursor = start_index;
@@ -363,15 +364,23 @@ fn collect_matching_tool_results(
         else {
             break;
         };
-        let Some(group_index) = pending_groups.iter().position(|identifiers| {
+        let Some(group_index) = pending_groups.iter().position(|(_, identifiers)| {
             identifiers
                 .iter()
                 .any(|identifier| identifier == tool_call_key)
         }) else {
             break;
         };
-        pending_groups.remove(group_index);
-        results.push(messages[cursor].clone());
+        let (provider_visible_tool_call_id, _) = pending_groups.remove(group_index);
+        let mut result = messages[cursor].clone();
+        let SessionConversationPayload::ToolResult { tool_call_id, .. } = &mut result.payload
+        else {
+            unreachable!("tool-result payload was matched immediately before normalization")
+        };
+        // Legacy aliases are accepted only at the load boundary; canonical history keeps one wire id.
+        // 旧别名仅在载入边界被接受；规范历史只保留一个线协议调用标识。
+        *tool_call_id = Some(provider_visible_tool_call_id);
+        results.push(result);
         cursor += 1;
     }
     let complete = pending_groups.is_empty();
@@ -389,12 +398,64 @@ fn push_non_empty_text_part(parts: &mut Vec<String>, text: &str) {
 
 /// Builds grouped identifiers for matching local and provider tool-call ids.
 /// 构建分组标识，用于同时匹配本地与 Provider 工具调用 id。
-fn tool_call_identifier_groups(tool_calls: &[SessionConversationToolCall]) -> Vec<Vec<String>> {
+fn tool_call_identifier_groups(
+    tool_calls: &[SessionConversationToolCall],
+) -> Vec<(String, Vec<String>)> {
     tool_calls
         .iter()
-        .map(tool_call_identifiers)
-        .filter(|identifiers| !identifiers.is_empty())
+        .filter_map(|tool_call| {
+            provider_visible_tool_call_id(tool_call)
+                .map(|call_id| (call_id, tool_call_identifiers(tool_call)))
+        })
         .collect()
+}
+
+/// Normalizes one replayed assistant batch to stable provider-visible call identifiers.
+/// 将一个重放助手批次归一化为稳定的 Provider 可见调用标识。
+///
+/// # Parameters
+/// 参数
+/// - `message`: Replayed assistant message that may still contain legacy local aliases.
+/// - `message`：仍可能包含旧本地别名的重放助手消息。
+///
+/// # Returns
+/// 返回值
+/// The same message with every model-visible tool-call id selected exactly once.
+/// 返回同一消息，其中每个模型可见工具调用标识仅被选择一次。
+fn normalize_provider_visible_tool_call_ids(
+    mut message: SessionConversationMessage,
+) -> SessionConversationMessage {
+    if let SessionConversationPayload::Assistant { tool_calls, .. } = &mut message.payload {
+        for tool_call in tool_calls {
+            tool_call.tool_call_id = provider_visible_tool_call_id(tool_call);
+        }
+    }
+    message
+}
+
+/// Selects the single call identifier serialized by every outbound protocol encoder.
+/// 选择所有出站协议编码器共同序列化的唯一调用标识。
+///
+/// # Parameters
+/// 参数
+/// - `tool_call`: Replayed call containing a stable wire id and an optional local runtime alias.
+/// - `tool_call`：包含稳定线协议标识及可选本地运行时别名的重放调用。
+///
+/// # Returns
+/// 返回值
+/// The non-empty provider-visible id, or the legacy local id when migrating old history.
+/// 返回非空 Provider 可见标识；迁移旧历史时才使用旧本地标识。
+fn provider_visible_tool_call_id(tool_call: &SessionConversationToolCall) -> Option<String> {
+    tool_call
+        .tool_call_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            let local_id = tool_call.id.trim();
+            (!local_id.is_empty()).then_some(local_id)
+        })
+        .map(str::to_string)
 }
 
 /// Builds every replay identifier for one tool call.

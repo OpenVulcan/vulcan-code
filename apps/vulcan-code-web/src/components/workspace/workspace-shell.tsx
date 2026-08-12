@@ -1070,19 +1070,19 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     if (props.activeSkillSubArea === "catalog") {
       return (
         <div className="feature-header-actions workspace-skills-header-actions">
-          <button
-            className="skill-action-button secondary"
+          <Button
             disabled={skillHeaderBusyAction !== null}
-    onClick={() => void runSkillHeaderAction("lua-refresh", props.luaSkillActions.onRefreshLuaSkills)}
+            onClick={() => void runSkillHeaderAction("lua-refresh", props.luaSkillActions.onRefreshLuaSkills)}
             type="button"
+            variant="secondary"
           >
             <RefreshCw className={skillHeaderBusyAction === "lua-refresh" ? "spin" : undefined} size={15} />
             <span>{skillHeaderBusyAction === "lua-refresh" ? t("skills.action.refreshing") : t("skills.action.refresh")}</span>
-          </button>
-          <button className="skill-action-button" onClick={() => setLuaInstallDialogOpen(true)} type="button">
+          </Button>
+          <Button onClick={() => setLuaInstallDialogOpen(true)} type="button">
             <PackagePlus size={15} />
             <span>{t("skills.action.installLua")}</span>
-          </button>
+          </Button>
         </div>
       );
     }

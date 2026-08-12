@@ -1,6 +1,9 @@
 import * as React from "react";
 import { RefreshCw, Settings2, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { Button, IconButton } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Dialog,
   DialogContent,
@@ -578,7 +581,8 @@ export function LuaSkillConfigDialog(props: {
             ))}
           </select>
         ) : item.format === "multiline" ? (
-          <textarea
+          <Textarea
+            density="large"
             disabled={busy}
             id={fieldId}
             maxLength={item.constraints.max_length}
@@ -588,7 +592,7 @@ export function LuaSkillConfigDialog(props: {
             value={String(currentValue)}
           />
         ) : (
-          <input
+          <Input
             disabled={busy}
             id={fieldId}
             max={item.constraints.maximum}
@@ -605,15 +609,15 @@ export function LuaSkillConfigDialog(props: {
         <div className="lua-skill-config-field-footer">
           <span>{item.key} · {item.state}</span>
           {item.state === "configured" ? (
-            <button
-              className="agent-definition-icon-button"
+            <IconButton
+              aria-label={t("skills.luaConfig.deleteValue")}
               disabled={busy}
               onClick={() => void deleteValue(item.key)}
               title={t("skills.luaConfig.deleteValue")}
               type="button"
             >
               <Trash2 size={14} />
-            </button>
+            </IconButton>
           ) : null}
         </div>
         {item.validationError ? (
@@ -641,15 +645,15 @@ export function LuaSkillConfigDialog(props: {
                 {descriptor.complete ? t("skills.luaConfig.complete") : t("skills.luaConfig.incomplete")}
               </Badge>
               <span>{descriptor.storeScope} · rev {descriptor.revision}</span>
-              <button
-                className="agent-definition-icon-button"
+              <IconButton
+                aria-label={t("skills.luaConfig.reload")}
                 disabled={busy}
                 onClick={() => void reloadDescriptor()}
                 title={t("skills.luaConfig.reload")}
                 type="button"
               >
                 <RefreshCw size={14} />
-              </button>
+              </IconButton>
             </div>
             {conflictMessage ? <p className="lua-skill-config-warning">{conflictMessage}</p> : null}
             {errorMessage ? <p className="lua-skill-config-error">{errorMessage}</p> : null}
@@ -683,15 +687,15 @@ export function LuaSkillConfigDialog(props: {
                 {descriptor.orphaned.map((key) => (
                   <div key={key}>
                     <code>{key}</code>
-                    <button
-                      className="agent-definition-icon-button"
+                    <IconButton
+                      aria-label={t("skills.luaConfig.deleteValue")}
                       disabled={busy}
                       onClick={() => void deleteValue(key)}
                       title={t("skills.luaConfig.deleteValue")}
                       type="button"
                     >
                       <Trash2 size={14} />
-                    </button>
+                    </IconButton>
                   </div>
                 ))}
               </div>
@@ -699,22 +703,21 @@ export function LuaSkillConfigDialog(props: {
           </div>
         ) : errorMessage ? <p className="lua-skill-config-error">{errorMessage}</p> : null}
         <DialogFooter>
-          <button
-            className="skill-action-button secondary"
+          <Button
             disabled={busy}
             onClick={() => props.onOpenChange(false)}
             type="button"
+            variant="secondary"
           >
             {t("skills.action.cancel")}
-          </button>
-          <button
-            className="skill-action-button"
+          </Button>
+          <Button
             disabled={busy || changedKeys.length === 0}
             onClick={() => void submitChangedValues()}
             type="button"
           >
             {busy ? t("skills.luaConfig.saving") : t("skills.luaConfig.save")}
-          </button>
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
