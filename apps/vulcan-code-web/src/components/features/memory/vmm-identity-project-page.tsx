@@ -568,7 +568,7 @@ function CatalogCard({
       </CardHeader>
       <CardContent>
         {rows.length === 0 ? (
-          <Empty className="min-h-40 border">
+          <Empty className="min-h-40" variant="outlined">
             <EmptyHeader>
               <EmptyMedia variant="icon">{icon}</EmptyMedia>
               <EmptyTitle>{title}</EmptyTitle>

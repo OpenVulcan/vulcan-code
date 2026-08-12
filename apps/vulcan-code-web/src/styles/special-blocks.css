@@ -909,8 +909,7 @@
   gap: 6px;
 }
 
-.chip,
-.status-pill {
+.chip {
   width: fit-content;
   border: 1px solid var(--border);
   background: var(--secondary);
@@ -922,26 +921,6 @@
 .chip {
   padding: 5px 7px;
   border-radius: 7px;
-}
-
-.status-pill {
-  padding: 4px 8px;
-  border-radius: 999px;
-}
-
-.status-pill.ready {
-  border-color: var(--border);
-  color: var(--foreground);
-}
-
-.status-pill.warning {
-  border-color: var(--border);
-  color: var(--muted-foreground);
-}
-
-.status-pill.error {
-  border-color: var(--destructive);
-  color: var(--destructive);
 }
 
 .global-actions .status-pill,

@@ -139,6 +139,21 @@
   gap: 10px;
 }
 
+.visual-lab-surface-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.visual-lab-surface-sample {
+  display: grid;
+  min-height: 56px;
+  place-items: center;
+  padding: 10px;
+  color: var(--vcn-content-secondary);
+  font-size: 12px;
+}
+
 .visual-lab-card-grid [data-slot="card"] {
   min-width: 0;
 }
@@ -162,5 +177,9 @@
 
   .visual-lab-grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .visual-lab-surface-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }

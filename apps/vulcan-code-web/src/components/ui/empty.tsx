@@ -1,15 +1,24 @@
 import { cva, type VariantProps } from "class-variance-authority"
 
 import { cn } from "@/lib/utils"
+import { surfaceVariants, type SurfaceVariant } from "@/components/ui/surface"
 
 // Empty renders a structured empty-state container for missing content or setup.
 // Empty 为缺失内容或未完成设置渲染结构化空状态容器。
-function Empty({ className, ...props }: React.ComponentProps<"div">) {
+function Empty({
+  className,
+  variant = "muted",
+  ...props
+}: React.ComponentProps<"div"> & {
+  variant?: Extract<SurfaceVariant, "muted" | "outlined">
+}) {
   return (
     <div
       data-slot="empty"
+      data-variant={variant}
       className={cn(
-        "flex w-full min-w-0 flex-1 flex-col items-center justify-center gap-4 rounded-xl border-dashed p-6 text-center text-balance",
+        surfaceVariants({ variant }),
+        "flex w-full min-w-0 flex-1 flex-col items-center justify-center gap-4 border-dashed p-6 text-center text-balance",
         className
       )}
       {...props}

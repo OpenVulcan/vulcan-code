@@ -77,7 +77,7 @@ function VmmOverviewPage({
   if (!configured) {
     return (
       <div className="mx-auto flex w-full max-w-5xl flex-col gap-4">
-        <Card className="border-dashed">
+        <Card variant="outlined">
           <CardHeader className="items-start gap-3 sm:flex-row">
             <div className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
               <BrainCircuit className="size-5" aria-hidden="true" />

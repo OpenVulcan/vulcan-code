@@ -312,7 +312,7 @@ function VmmProfilePage({
       </Card>
 
       {nodes.length === 0 ? (
-        <Empty className="min-h-48 border">
+        <Empty className="min-h-48" variant="outlined">
           <EmptyHeader>
             <EmptyMedia variant="icon"><BrainCircuit className="size-5" /></EmptyMedia>
             <EmptyTitle>{t("memory.profile.title")}</EmptyTitle>

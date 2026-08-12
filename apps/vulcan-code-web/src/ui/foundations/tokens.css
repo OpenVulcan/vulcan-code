@@ -9,6 +9,10 @@
   --vcn-content-primary: var(--foreground);
   --vcn-content-secondary: var(--muted-foreground);
   --vcn-content-danger: var(--destructive);
+  --vcn-content-success: hsl(142 62% 34%);
+  --vcn-content-warning: hsl(38 72% 34%);
+  --vcn-status-success-background: hsl(142 62% 34% / 0.1);
+  --vcn-status-warning-background: hsl(38 72% 46% / 0.1);
   --vcn-border-default: var(--border);
   --vcn-border-subtle: color-mix(in oklch, var(--border) 62%, transparent);
   --vcn-focus-ring: var(--ring);
@@ -25,4 +29,13 @@
   --vcn-space-4: 16px;
   --vcn-space-5: 20px;
   --vcn-shadow-floating: 0 12px 32px color-mix(in oklch, var(--foreground) 12%, transparent);
+}
+
+/* Keeps semantic status contrast readable on dark surfaces. */
+/* 保持语义状态在深色表面上的可读对比度。 */
+.dark {
+  --vcn-content-success: hsl(142 52% 58%);
+  --vcn-content-warning: hsl(42 78% 62%);
+  --vcn-status-success-background: hsl(142 52% 58% / 0.12);
+  --vcn-status-warning-background: hsl(42 78% 62% / 0.12);
 }

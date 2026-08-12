@@ -229,7 +229,7 @@ function VmmContentPage({
       </form>
 
       {searchHits.length === 0 ? (
-        <Empty className="min-h-72 border">
+        <Empty className="min-h-72" variant="outlined">
           <EmptyHeader>
             <EmptyMedia variant="icon"><Search className="size-5" /></EmptyMedia>
             <EmptyTitle>

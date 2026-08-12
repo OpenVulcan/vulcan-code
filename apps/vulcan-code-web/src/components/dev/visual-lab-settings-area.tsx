@@ -86,6 +86,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet"
 import { Spinner } from "@/components/ui/spinner"
+import { Surface } from "@/components/ui/surface"
 import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
@@ -95,6 +96,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { useI18n } from "@/i18n"
+import { StatusPill } from "@/components/shared/status"
 
 // VisualLabSectionProps describes one independently reviewable component family.
 // VisualLabSectionProps 描述一个可独立验收的组件分组。
@@ -341,15 +343,50 @@ export function VisualLabSettingsArea() {
                 <CardDescription>{text("用于密集设置区域", "For dense settings surfaces")}</CardDescription>
               </CardHeader>
             </Card>
+            <Card variant="interactive">
+              <CardHeader>
+                <CardTitle>{text("可交互卡片", "Interactive card")}</CardTitle>
+                <CardDescription>{text("悬停与键盘聚焦来自统一表面状态。", "Hover and keyboard focus come from the shared surface state.")}</CardDescription>
+              </CardHeader>
+            </Card>
+            <Card variant="selected">
+              <CardHeader>
+                <CardTitle>{text("已选卡片", "Selected card")}</CardTitle>
+                <CardDescription>{text("选中状态不再由页面自行定义。", "Selection is no longer restyled by each page.")}</CardDescription>
+              </CardHeader>
+            </Card>
+          </div>
+          <div className="visual-lab-surface-grid">
+            <Surface className="visual-lab-surface-sample" variant="default">Default</Surface>
+            <Surface className="visual-lab-surface-sample" variant="muted">Muted</Surface>
+            <Surface className="visual-lab-surface-sample" variant="outlined">Outlined</Surface>
+            <Surface className="visual-lab-surface-sample" variant="selected">Selected</Surface>
+          </div>
+          <div className="visual-lab-row">
+            <StatusPill label={text("就绪", "Ready")} status="ready" />
+            <StatusPill label={text("等待", "Pending")} status="pending" />
+            <StatusPill label={text("警告", "Warning")} status="warning" />
+            <StatusPill label={text("错误", "Error")} status="error" />
           </div>
           <Alert>
             <AlertTitle>{text("普通提示", "Informational alert")}</AlertTitle>
             <AlertDescription>{text("用于确认边框、正文和图标层级。", "Checks border, body copy, and icon hierarchy.")}</AlertDescription>
           </Alert>
+          <Alert variant="warning">
+            <AlertTitle>{text("注意事项", "Warning alert")}</AlertTitle>
+            <AlertDescription>{text("警告使用稳定语义色，不与危险错误混用。", "Warnings use a stable semantic color distinct from destructive errors.")}</AlertDescription>
+          </Alert>
           <Alert variant="destructive">
             <AlertTitle>{text("危险提示", "Destructive alert")}</AlertTitle>
             <AlertDescription>{text("危险语义必须保持清晰但不过度抢眼。", "Danger must remain clear without overwhelming the interface.")}</AlertDescription>
           </Alert>
+          <Empty variant="outlined">
+            <EmptyHeader>
+              <EmptyMedia variant="icon"><Palette /></EmptyMedia>
+              <EmptyTitle>{text("描边空状态", "Outlined empty state")}</EmptyTitle>
+              <EmptyDescription>{text("空状态的表面由语义参数明确选择。", "The empty-state surface is selected through a semantic variant.")}</EmptyDescription>
+            </EmptyHeader>
+          </Empty>
         </VisualLabSection>
 
         <VisualLabSection

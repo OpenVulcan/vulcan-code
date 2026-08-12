@@ -830,7 +830,7 @@ function TurnWorkspace(props: {
       {props.turns.length === 0 ? <DataEmpty description={t("memory.data.noTurns")} /> : (
         <div className="space-y-2">
           {props.turns.map((turn) => (
-            <Card className="transition-colors hover:bg-muted/30" key={turn.turn_id}>
+            <Card key={turn.turn_id} variant="interactive">
               <CardHeader className="pb-2">
                 <div className="flex items-center justify-between gap-2">
                   <CardTitle className="line-clamp-2 text-sm">{turn.display_excerpt}</CardTitle>
@@ -1035,7 +1035,7 @@ function ImpactMetric(props: { label: string; value: number; danger?: boolean })
 function DataEmpty(props: { description: string }) {
   const { t } = useI18n()
   return (
-    <Empty className="rounded-lg border py-12">
+    <Empty className="py-12" variant="outlined">
       <EmptyHeader>
         <EmptyMedia variant="icon"><Database /></EmptyMedia>
         <EmptyTitle>{t("memory.data.title")}</EmptyTitle>

@@ -49,7 +49,17 @@ function StatusPill(props: {
   // 可见状态标签。
   label: string
 }) {
-  return <Badge className={cn("status-pill", props.status)} variant="outline">{props.label}</Badge>
+  // variant maps runtime status meanings onto the shared badge vocabulary.
+  // variant 将运行时状态含义映射到共享徽标语汇。
+  const variant = props.status === "ready"
+    ? "success"
+    : props.status === "error"
+      ? "destructive"
+      : props.status === "warning"
+        ? "warning"
+        : "outline"
+
+  return <Badge className={cn("status-pill", props.status)} variant={variant}>{props.label}</Badge>
 }
 
 export { PanelTitle, StatusIcon, StatusPill }
