@@ -63,6 +63,10 @@ $TauriRunScriptPath = Join-Path $ScriptDir "scripts\run_tauri.ps1"
 # HostDepsScriptPath 用于指向专用的 PowerShell 宿主依赖初始化脚本。
 $HostDepsScriptPath = Join-Path $ScriptDir "scripts\install_host_deps.ps1"
 
+# BundledToolsDepsScriptPath points at the latest sg and rg dependency installer.
+# BundledToolsDepsScriptPath 用于指向最新版 sg 与 rg 依赖安装器。
+$BundledToolsDepsScriptPath = Join-Path $ScriptDir "scripts\install_bundled_tools.ps1"
+
 # LuaDepsScriptPath points at the dedicated PowerShell Lua dependency bootstrap script.
 # LuaDepsScriptPath 用于指向专用的 PowerShell Lua 依赖初始化脚本。
 $LuaDepsScriptPath = Join-Path $ScriptDir "scripts\install_lua_deps.ps1"
@@ -198,7 +202,7 @@ function Invoke-TauriBuildAndRun {
 # DependencyKind 用于选择要初始化的依赖域。
 function Invoke-DependencyInstall {
     param(
-        [ValidateSet("host", "vldb", "rtk", "lua", "cbm", "vmm")]
+        [ValidateSet("host", "vldb", "rtk", "tools", "lua", "cbm", "vmm")]
         [string]$DependencyKind
     )
 
@@ -206,6 +210,7 @@ function Invoke-DependencyInstall {
         "host" { $HostDepsScriptPath }
         "vldb" { $HostDepsScriptPath }
         "rtk"  { $HostDepsScriptPath }
+        "tools" { $BundledToolsDepsScriptPath }
         "lua"  { $LuaDepsScriptPath }
         "cbm"  { $CodebaseMemoryDepsScriptPath }
         "vmm"  { $VmmDepsScriptPath }
@@ -266,6 +271,7 @@ function Show-Usage {
     Write-Host "  ./make deps host   # install host native dependencies only"
     Write-Host "  ./make deps vldb   # install vldb-controller host dependency only"
     Write-Host "  ./make deps rtk    # install RTK host dependency only"
+    Write-Host "  ./make deps tools  # install the latest bundled sg and rg tools"
     Write-Host "  ./make deps lua    # install official LuaSkills runtime dependencies only"
     Write-Host "  ./make deps cbm    # install the pinned native Codebase Memory runtime only"
     Write-Host "  ./make deps vmm    # build and install the managed VMM runtime dependency only"
@@ -352,12 +358,14 @@ switch ($NormalizedMode) {
         switch ($NormalizedVariant) {
             "" {
                 Invoke-DependencyInstall -DependencyKind "host"
+                Invoke-DependencyInstall -DependencyKind "tools"
                 Invoke-DependencyInstall -DependencyKind "lua"
                 Invoke-DependencyInstall -DependencyKind "cbm"
                 Invoke-DependencyInstall -DependencyKind "vmm"
             }
             "all" {
                 Invoke-DependencyInstall -DependencyKind "host"
+                Invoke-DependencyInstall -DependencyKind "tools"
                 Invoke-DependencyInstall -DependencyKind "lua"
                 Invoke-DependencyInstall -DependencyKind "cbm"
                 Invoke-DependencyInstall -DependencyKind "vmm"
@@ -370,6 +378,9 @@ switch ($NormalizedMode) {
             }
             "rtk" {
                 Invoke-DependencyInstall -DependencyKind "rtk"
+            }
+            "tools" {
+                Invoke-DependencyInstall -DependencyKind "tools"
             }
             "lua" {
                 Invoke-DependencyInstall -DependencyKind "lua"

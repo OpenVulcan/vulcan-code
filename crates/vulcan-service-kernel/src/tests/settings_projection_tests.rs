@@ -200,6 +200,30 @@ fn full_workbench_rebuild_preserves_project_settings_revisions() {
     );
 }
 
+/// Verifies a focused settings refresh immediately projects the Provider request-trace switch.
+/// 验证聚焦设置刷新会立即投影 Provider 请求追踪开关。
+#[test]
+fn focused_settings_refresh_projects_provider_request_trace_switch() {
+    // service_state models the retained workbench that the save RPC returns without a restart.
+    // service_state 模拟保存 RPC 无需重启便会返回的保留工作台。
+    let mut service_state = test_service_state_with_parent_session(SessionId::new_v4());
+    // configuration carries the newly persisted switch value into the focused projection.
+    // configuration 将刚持久化的开关值送入聚焦投影。
+    let mut configuration = ProviderConfigurationFile {
+        provider_request_trace_enabled: true,
+        ..ProviderConfigurationFile::default()
+    };
+
+    refresh_settings_projection_locked(&mut service_state, &configuration);
+
+    assert!(service_state.workbench.provider_request_trace_enabled);
+
+    configuration.provider_request_trace_enabled = false;
+    refresh_settings_projection_locked(&mut service_state, &configuration);
+
+    assert!(!service_state.workbench.provider_request_trace_enabled);
+}
+
 /// Verifies identical progress is deduplicated and terminal clearing is always broadcast once.
 /// 验证相同进度会被去重，且终态清理始终只广播一次。
 #[test]

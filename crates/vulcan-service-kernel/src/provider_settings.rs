@@ -74,6 +74,16 @@ struct ProviderRateLimitRetrySettingsSaveRequest {
     backoff_factor_milli: u32,
 }
 
+/// Provider request-trace settings submitted by the runtime diagnostics page.
+/// 运行诊断页面提交的 Provider 请求追踪设置。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct ProviderRequestTraceSettingsSaveRequest {
+    /// Whether real Provider dispatches write complete request traces into session temp directories.
+    /// 真实 Provider 分派是否将完整请求追踪写入会话临时目录。
+    enabled: bool,
+}
+
 /// Saves Provider retry settings from the WebUI settings page.
 /// 从 WebUI 设置页保存 Provider 重试设置。
 pub(super) async fn service_save_provider_retry_settings(
@@ -113,6 +123,40 @@ pub(super) async fn service_save_provider_retry_settings(
                     .configured_inference_service
                     .update_retry_configuration(&configuration.retry);
             }
+            refresh_settings_projection_locked(guard, configuration);
+            guard.workbench.clone()
+        },
+    )
+    .await?;
+    emit_workbench_event(&app, &workbench);
+    Ok(workbench)
+}
+
+/// Saves the complete Provider request-trace diagnostic switch from system settings.
+/// 从系统设置保存完整 Provider 请求追踪诊断开关。
+///
+/// # Parameters
+/// 参数
+/// `app` emits the refreshed workbench, `state` owns shared configuration, and `request` carries the exact boolean selection.
+/// `app` 发出刷新后的工作台，`state` 持有共享配置，`request` 承载精确布尔选择。
+///
+/// # Returns
+/// 返回值
+/// The refreshed workbench snapshot after durable configuration persistence.
+/// 持久化配置完成后返回刷新的工作台快照。
+pub(super) async fn service_save_provider_request_trace_settings(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    request: ProviderRequestTraceSettingsSaveRequest,
+) -> Result<WorkbenchSnapshot, String> {
+    let workbench = mutate_provider_configuration(
+        &state,
+        "保存 Provider 请求追踪设置失败",
+        |configuration| {
+            configuration.provider_request_trace_enabled = request.enabled;
+            Ok(())
+        },
+        |guard, configuration| {
             refresh_settings_projection_locked(guard, configuration);
             guard.workbench.clone()
         },

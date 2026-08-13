@@ -276,6 +276,14 @@ function floatingLayerRect(rect: Pick<DOMRectReadOnly, "left" | "top" | "width" 
 // PROJECT_FLOATING_LAYER_LEGACY_TOP_INSET_PX 在浮层移到 46px 会话标题栏下方后，从 v3 之前的坐标中扣除。
 const PROJECT_FLOATING_LAYER_LEGACY_TOP_INSET_PX = 46;
 
+// PROJECT_FLOATING_LAYER_BASE_STACK_ORDER keeps floating terminals above ordinary workspace overlays.
+// PROJECT_FLOATING_LAYER_BASE_STACK_ORDER 使浮动终端保持在普通工作区覆盖层之上。
+const PROJECT_FLOATING_LAYER_BASE_STACK_ORDER = 42;
+
+// projectFloatingLayerStackSequence assigns the most recently activated floating window to the front.
+// projectFloatingLayerStackSequence 将最近激活的浮动窗口分配到最前方。
+let projectFloatingLayerStackSequence = PROJECT_FLOATING_LAYER_BASE_STACK_ORDER;
+
 // projectFloatingWindowStateCache preserves geometry across React remounts in the same desktop session.
 // projectFloatingWindowStateCache 在同一桌面会话的 React 重挂载之间保留几何状态。
 const projectFloatingWindowStateCache = new Map<string, ProjectFloatingWindowState>();
@@ -312,6 +320,9 @@ export function ProjectFloatingLayer(props: ProjectFloatingLayerProps) {
   const [animationState, setAnimationState] = React.useState<FloatingLayerAnimationState>(
     props.expanded ? "open" : "closed",
   );
+  // stackOrder keeps independently mounted terminal windows selectable when their rectangles overlap.
+  // stackOrder 使独立挂载的终端窗口在矩形重叠时仍可按激活顺序选择。
+  const [stackOrder, setStackOrder] = React.useState(nextProjectFloatingLayerStackOrder);
   // windowState stores project-scoped normal geometry, maximized geometry, and restore geometry.
   // windowState 保存项目级普通几何、最大化几何与还原几何。
   const [windowState, setWindowState] = React.useState<ProjectFloatingWindowState>(
@@ -331,6 +342,12 @@ export function ProjectFloatingLayer(props: ProjectFloatingLayerProps) {
   // expectedRenderedLayoutRef 区分 React 应用的显示投影与用户原生缩放。
   const expectedRenderedLayoutRef = React.useRef<FloatingLayerLayout | null>(layout);
   expectedRenderedLayoutRef.current = layout;
+
+  // bringToFront raises only this floating window without changing terminal visibility or ownership.
+  // bringToFront 仅提升当前浮动窗口，不改变终端可见性或所有权。
+  const bringToFront = React.useCallback(() => {
+    setStackOrder(nextProjectFloatingLayerStackOrder());
+  }, []);
 
   // Load project geometry before paint so a project switch never shows the previous project's size for one frame.
   // 在绘制前加载项目几何，避免项目切换时出现一帧上一个项目的尺寸。
@@ -669,7 +686,13 @@ export function ProjectFloatingLayer(props: ProjectFloatingLayerProps) {
   const renderedHeader = typeof props.header === "function" ? props.header(headerControls) : props.header;
 
   return (
-    <div ref={layerRef} className="project-floating-layer" data-project-id={props.projectId}>
+    <div
+      ref={layerRef}
+      className="project-floating-layer"
+      data-project-id={props.projectId}
+      data-stack-order={stackOrder}
+      style={{ zIndex: stackOrder }}
+    >
       {surfaceMounted ? (
         <section
           ref={surfaceRef}
@@ -678,6 +701,7 @@ export function ProjectFloatingLayer(props: ProjectFloatingLayerProps) {
           data-animation-state={animationState}
           data-maximized={windowState.maximized ? "true" : "false"}
           data-workspace-input-preserve-owner="true"
+          onPointerDownCapture={bringToFront}
           style={layout ? {
             right: "auto",
             bottom: "auto",
@@ -699,6 +723,17 @@ export function ProjectFloatingLayer(props: ProjectFloatingLayerProps) {
       ) : null}
     </div>
   );
+}
+
+// nextProjectFloatingLayerStackOrder returns one monotonically increasing activation order.
+// nextProjectFloatingLayerStackOrder 返回一个单调递增的激活顺序。
+//
+// Returns / 返回值:
+// Returns the next z-index reserved for a newly mounted or activated floating window.
+// 返回为新挂载或新激活浮动窗口保留的下一个层级。
+export function nextProjectFloatingLayerStackOrder(): number {
+  projectFloatingLayerStackSequence += 1;
+  return projectFloatingLayerStackSequence;
 }
 
 // projectFloatingPositionStorageKey returns the exact project-scoped layout key.

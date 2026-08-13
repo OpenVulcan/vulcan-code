@@ -379,6 +379,7 @@ pub(crate) async fn execute_shell_session_start_action(
             cwd: effective_cwd,
             launcher_program,
             launcher_args,
+            path_prefixes: Vec::new(),
             initial_stdin,
             initial_stdin_append_newline: append_newline,
             backend: CommandSessionBackend::Pty,

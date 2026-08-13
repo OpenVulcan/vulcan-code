@@ -738,6 +738,17 @@ export async function saveProviderRetrySettings(request: {
   return serviceClient.request<WorkbenchSnapshot>("service_save_provider_retry_settings", { request });
 }
 
+// saveProviderRequestTraceSettings persists the global complete request trace switch.
+// saveProviderRequestTraceSettings 持久化全局完整请求追踪开关。
+export async function saveProviderRequestTraceSettings(enabled: boolean): Promise<WorkbenchSnapshot | null> {
+  if (!hasServiceRuntime()) {
+    return null;
+  }
+  return serviceClient.request<WorkbenchSnapshot>("service_save_provider_request_trace_settings", {
+    request: { enabled },
+  });
+}
+
 // saveMcpServerConfiguration persists one MCP server through the desktop service.
 // saveMcpServerConfiguration 通过桌面服务持久化单个 MCP 服务器。
 export async function saveMcpServerConfiguration(request: Record<string, unknown>): Promise<WorkbenchSnapshot | null> {

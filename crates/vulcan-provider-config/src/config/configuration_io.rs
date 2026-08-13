@@ -53,6 +53,14 @@ impl Default for WorkbenchThinkingDisplayMode {
 /// 保存到 Vulcan 家目录中的根级供应商配置文件。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProviderConfigurationFile {
+    /// Whether complete provider request traces are written to each owning session temp directory.
+    /// 是否将完整 Provider 请求追踪写入各自所属会话的临时目录。
+    #[serde(
+        default,
+        rename = "providerRequestTraceEnabled",
+        skip_serializing_if = "is_false"
+    )]
+    pub provider_request_trace_enabled: bool,
     /// Remembered workbench reasoning preference selected by the user before any model-specific capability downgrade is applied.
     /// 在应用任意模型级能力回退前，由用户选定并记忆的工作台思考偏好。
     #[serde(
@@ -976,5 +984,28 @@ mod public_ai_connections_tests {
             Some(ReasoningEffortLevel::Max)
         );
         assert!(restored.workbench_reasoning_effort_explicit);
+    }
+
+    /// Verifies complete Provider request tracing defaults off and persists only after explicit enablement.
+    /// 验证完整 Provider 请求追踪默认关闭，并且仅在显式启用后持久化。
+    #[test]
+    fn provider_request_trace_switch_defaults_off_and_round_trips_when_enabled() {
+        let default_configuration: ProviderConfigurationFile =
+            serde_json::from_str("{}").expect("default provider configuration should parse");
+        assert!(!default_configuration.provider_request_trace_enabled);
+        let default_json = serde_json::to_string(&default_configuration)
+            .expect("default provider configuration should serialize");
+        assert!(!default_json.contains("providerRequestTraceEnabled"));
+
+        let enabled_configuration = ProviderConfigurationFile {
+            provider_request_trace_enabled: true,
+            ..ProviderConfigurationFile::default()
+        };
+        let enabled_json = serde_json::to_string(&enabled_configuration)
+            .expect("enabled provider trace configuration should serialize");
+        assert!(enabled_json.contains("\"providerRequestTraceEnabled\":true"));
+        let restored: ProviderConfigurationFile = serde_json::from_str(enabled_json.as_str())
+            .expect("enabled provider trace configuration should restore");
+        assert!(restored.provider_request_trace_enabled);
     }
 }

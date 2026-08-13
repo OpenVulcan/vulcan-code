@@ -1,4 +1,4 @@
-# sync_tauri_runtime.ps1 synchronizes runtime resources into the stable output tree.
+﻿# sync_tauri_runtime.ps1 synchronizes runtime resources into the stable output tree.
 # sync_tauri_runtime.ps1 用于把运行时资源同步到稳定的 output 目录树。
 
 $ErrorActionPreference = "Stop"
@@ -49,6 +49,37 @@ $SourceSystemPromptSkillsDir = Join-Path $ProjectDir "crates\vulcan-prompt-skill
 # SourceLuaRuntimeDir 指向 make deps-lua 安装的官方 LuaSkills 运行时载荷。
 $SourceLuaRuntimeDir = Join-Path $ProjectDir "third_party\luaskills_runtime"
 
+# BundledToolsArchitecture stores the normalized current-host architecture.
+# BundledToolsArchitecture 保存规范化后的当前宿主架构。
+$BundledToolsArchitecture = [System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture.ToString().ToLowerInvariant()
+
+# BundledToolsArchitectureKey maps the runtime architecture to upstream target spelling.
+# BundledToolsArchitectureKey 把运行时架构映射为上游目标拼写。
+$BundledToolsArchitectureKey = switch ($BundledToolsArchitecture) {
+    "x64" { "x86_64" }
+    "arm64" { "aarch64" }
+    default { throw "Unsupported bundled-tools synchronization architecture: $BundledToolsArchitecture" }
+}
+
+# BundledToolsTarget selects the exact dependency payload prepared by make deps tools.
+# BundledToolsTarget 选择由 make deps tools 准备的精确依赖载荷。
+$BundledToolsTarget = if ($IsWindowsPlatform) {
+    "$BundledToolsArchitectureKey-pc-windows-msvc"
+}
+elseif ([System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::OSX)) {
+    "$BundledToolsArchitectureKey-apple-darwin"
+}
+elseif ([System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Linux)) {
+    "$BundledToolsArchitectureKey-unknown-linux-gnu"
+}
+else {
+    throw "Unsupported bundled-tools synchronization operating system."
+}
+
+# SourceBundledToolsDir points at the verified current-target sg and rg payload.
+# SourceBundledToolsDir 指向已校验的当前目标 sg 与 rg 载荷。
+$SourceBundledToolsDir = Join-Path $ProjectDir "third_party\tools\$BundledToolsTarget"
+
 # CodebaseMemoryRuntimeSyncScriptPath points at the verified dependency-to-output synchronizer.
 # CodebaseMemoryRuntimeSyncScriptPath 指向经过校验的依赖到输出目录同步器。
 $CodebaseMemoryRuntimeSyncScriptPath = Join-Path $ProjectDir "scripts\sync_codebase_memory_runtime.ps1"
@@ -84,6 +115,10 @@ $OutputSystemPromptSkillsDir = Join-Path $OutputResourcesDir "prompt-skills\syst
 # OutputLuaRuntimeDir stores the application-owned LuaSkills runtime root.
 # OutputLuaRuntimeDir 保存应用持有的 LuaSkills 运行时根目录。
 $OutputLuaRuntimeDir = Join-Path $ProjectDir "output\lua_runtime"
+
+# OutputBundledToolsDir is the runtime-owned sg and rg distribution root.
+# OutputBundledToolsDir 是运行时持有的 sg 与 rg 发行根目录。
+$OutputBundledToolsDir = Join-Path $ProjectDir "output\tools"
 
 # LegacyManagedRuntimeScriptsDir stores obsolete downloader scripts removed by native Rust bootstrap.
 # LegacyManagedRuntimeScriptsDir 保存由 Rust 原生初始化取代的废弃下载脚本。
@@ -249,6 +284,22 @@ Copy-DirectoryContents -SourceDirectory $SourceSystemPromptSkillsDir -Destinatio
 
 Write-Host "==> Syncing LuaSkills runtime payload..."
 Copy-DirectoryContents -SourceDirectory $SourceLuaRuntimeDir -DestinationDirectory $OutputLuaRuntimeDir
+
+# BundledToolBinarySuffix selects the executable suffix required by the current host.
+# BundledToolBinarySuffix 选择当前宿主所需的可执行文件后缀。
+$BundledToolBinarySuffix = if ($IsWindowsPlatform) { ".exe" } else { "" }
+# BundledToolName iterates the exact commands required by the runtime PATH contract.
+# BundledToolName 遍历运行时 PATH 契约要求的精确命令。
+foreach ($BundledToolName in @("sg", "rg")) {
+    # SourceBundledToolBinary is the exact verified dependency required before synchronization.
+    # SourceBundledToolBinary 是同步前必需的精确已校验依赖。
+    $SourceBundledToolBinary = Join-Path $SourceBundledToolsDir "bin\$BundledToolName$BundledToolBinarySuffix"
+    if (-not (Test-Path -LiteralPath $SourceBundledToolBinary -PathType Leaf)) {
+        throw "Bundled tool '$BundledToolName' is missing; run make deps tools before synchronization."
+    }
+}
+Write-Host "==> Syncing bundled sg and rg tools..."
+Copy-DirectoryContents -SourceDirectory $SourceBundledToolsDir -DestinationDirectory $OutputBundledToolsDir -Clean
 
 if (-not (Test-Path -LiteralPath $CodebaseMemoryRuntimeSyncScriptPath -PathType Leaf)) {
     throw "Missing Codebase Memory runtime synchronization script: $CodebaseMemoryRuntimeSyncScriptPath"

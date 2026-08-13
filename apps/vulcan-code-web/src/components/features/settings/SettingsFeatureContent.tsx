@@ -94,7 +94,14 @@ export function SettingsFeatureContent(props: SettingsFeatureContentProps) {
     return <McpSettingsArea actions={props.actions} logs={props.workbench.logs} modules={props.workbench.modules} servers={props.workbench.mcpServers ?? []} startup={props.startup} />;
   }
   if (props.activeSettingsSubArea === "runtime-diagnostics") {
-    return <LogsArea startup={props.startup} logs={props.workbench.logs} />;
+    return (
+      <LogsArea
+        actions={props.actions}
+        providerRequestTraceEnabled={props.workbench.providerRequestTraceEnabled === true}
+        startup={props.startup}
+        logs={props.workbench.logs}
+      />
+    );
   }
   if (props.activeSettingsSubArea === "visual-lab") {
     return <VisualLabSettingsArea />;

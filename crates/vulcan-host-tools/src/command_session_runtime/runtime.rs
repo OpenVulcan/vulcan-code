@@ -76,6 +76,7 @@ impl CommandSessionRuntime {
         command.stderr(Stdio::piped());
         command.kill_on_drop(true);
         apply_windows_release_no_window(&mut command);
+        apply_child_path_prefixes(&mut command, &request.path_prefixes)?;
 
         let mut child = command.spawn().map_err(|error| {
             format!(
@@ -147,11 +148,15 @@ impl CommandSessionRuntime {
                 cols: DEFAULT_PTY_SCREEN_COLS,
                 rows: DEFAULT_PTY_SCREEN_ROWS,
             },
+            &request.path_prefixes,
         )
         .await?;
 
         let command_session_id = Uuid::new_v4();
-        let shared_state = Arc::new(CommandSessionSharedState::default());
+        let shared_state = Arc::new(CommandSessionSharedState::new_pty(
+            DEFAULT_PTY_SCREEN_ROWS,
+            DEFAULT_PTY_SCREEN_COLS,
+        ));
         let (control_sender, control_receiver) = channel(COMMAND_SESSION_CONTROL_QUEUE_LIMIT);
         let record = Arc::new(CommandSessionRecord {
             command_session_id,

@@ -4,8 +4,9 @@ use super::{
     CommandSessionBackend, CommandSessionDisplayCursor, CommandSessionInputEvent,
     CommandSessionMutableState, CommandSessionOutputChunk, CommandSessionOutputStream,
     CommandSessionRecord, CommandSessionRuntime, CommandSessionSharedState, CommandSessionStatus,
-    PtyScreenFrameState, append_output_chunk_to_state, can_coalesce_output_chunk,
-    encode_command_session_input_events, output_chunk_ends_with_line_boundary,
+    DEFAULT_PTY_SCREEN_COLS, DEFAULT_PTY_SCREEN_ROWS, PtyScreenFrameState,
+    append_output_chunk_to_state, can_coalesce_output_chunk, encode_command_session_input_events,
+    output_chunk_ends_with_line_boundary,
 };
 use crate::model::SessionId;
 use std::path::PathBuf;
@@ -499,6 +500,90 @@ fn structured_terminal_input_events_encode_cross_platform_ansi_vt() {
     .expect("encode terminal inputs");
 
     assert_eq!(encoded, b"run pasted\r\n\x1b[B\x7f\x08\x03\x1b[Z");
+}
+
+/// Text and paste events should preserve ordering while normalizing every source newline convention.
+/// 文本与粘贴事件应保留顺序，同时统一所有来源换行约定。
+#[test]
+fn structured_terminal_text_and_paste_normalize_shell_newlines_in_order() {
+    // events mixes LF, CR, and CRLF across adjacent text and paste boundaries.
+    // events 在相邻文本与粘贴边界中混合 LF、CR 与 CRLF。
+    let events = [
+        CommandSessionInputEvent::Text {
+            text: String::from("text-a\ntext-b\rtext-c\r\n"),
+        },
+        CommandSessionInputEvent::Paste {
+            text: String::from("paste-a\r\npaste-b\n"),
+        },
+        CommandSessionInputEvent::Text {
+            text: String::from("tail"),
+        },
+    ];
+
+    // windowsEncoded proves the single-CR Windows PTY contract without changing event order.
+    // windowsEncoded 验证单 CR 的 Windows PTY 合同，同时不改变事件顺序。
+    let windows_encoded =
+        encode_command_session_input_events(&events, "\r").expect("encode Windows terminal inputs");
+    assert_eq!(
+        windows_encoded,
+        b"text-a\rtext-b\rtext-c\rpaste-a\rpaste-b\rtail",
+    );
+
+    // posixEncoded proves the LF POSIX PTY contract over the identical structured events.
+    // posixEncoded 验证相同结构化事件上的 LF POSIX PTY 合同。
+    let posix_encoded =
+        encode_command_session_input_events(&events, "\n").expect("encode POSIX terminal inputs");
+    assert_eq!(
+        posix_encoded,
+        b"text-a\ntext-b\ntext-c\npaste-a\npaste-b\ntail",
+    );
+
+    // crlfEncoded proves every source convention produces exactly one two-byte target newline.
+    // crlfEncoded 验证每种来源约定都只生成一个双字节目标换行。
+    let crlf_encoded =
+        encode_command_session_input_events(&events, "\r\n").expect("encode CRLF terminal inputs");
+    assert_eq!(
+        crlf_encoded,
+        b"text-a\r\ntext-b\r\ntext-c\r\npaste-a\r\npaste-b\r\ntail",
+    );
+}
+
+/// Newline normalization should preserve Unicode, consecutive empty lines, and empty payloads exactly.
+/// 换行归一化应精确保留 Unicode、连续空行与空载荷。
+#[test]
+fn structured_terminal_text_normalization_preserves_unicode_and_empty_lines() {
+    // encoded contains Chinese, Emoji, two logical empty lines, and a trailing empty event.
+    // encoded 包含中文、Emoji、两个逻辑空行以及一个末尾空事件。
+    let encoded = encode_command_session_input_events(
+        &[
+            CommandSessionInputEvent::Text {
+                text: String::from("中文🙂\n\r\n\rend"),
+            },
+            CommandSessionInputEvent::Paste {
+                text: String::new(),
+            },
+        ],
+        "\r",
+    )
+    .expect("encode Unicode terminal inputs");
+    assert_eq!(encoded, "中文🙂\r\r\rend".as_bytes());
+}
+
+/// PTY state should expose its authoritative grid before output without claiming a confirmed screen frame.
+/// PTY 状态应在输出前暴露权威网格，同时不得声称已经存在确认屏幕帧。
+#[tokio::test]
+async fn pty_initial_state_exposes_fixed_grid_before_first_frame() {
+    // sharedState uses the same initial dimensions passed to the isolated terminal host.
+    // sharedState 使用传给隔离终端宿主的相同初始尺寸。
+    let shared_state =
+        CommandSessionSharedState::new_pty(DEFAULT_PTY_SCREEN_ROWS, DEFAULT_PTY_SCREEN_COLS);
+    // state is read atomically exactly like a command-session snapshot.
+    // state 像命令会话快照一样被原子读取。
+    let state = shared_state.mutable_state.lock().await;
+    assert_eq!(state.screen_rows, Some(DEFAULT_PTY_SCREEN_ROWS));
+    assert_eq!(state.screen_cols, Some(DEFAULT_PTY_SCREEN_COLS));
+    assert_eq!(state.screen_frame_seq, None);
+    assert_eq!(state.screen_text, None);
 }
 
 /// Unsupported structured keys should fail explicitly instead of guessing a platform-specific byte sequence.

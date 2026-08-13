@@ -175,6 +175,7 @@ pub(crate) fn prepare_provider_transport_stream_launch(
     request: ProviderTransportExecutionRequest,
 ) -> PreparedProviderTransportStreamLaunch {
     let ProviderTransportExecutionRequest {
+        provider_request_trace_enabled: _,
         provider_id,
         model_id,
         workspace_path: _,

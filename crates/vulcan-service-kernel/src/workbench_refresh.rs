@@ -1130,6 +1130,7 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
         thinking_display_mode: workbench_thinking_display_mode(provider_configuration),
         git_commit: git_commit_settings(provider_configuration),
         provider_retry: provider_retry_settings(provider_configuration),
+        provider_request_trace_enabled: provider_configuration.provider_request_trace_enabled,
         host_tools: host_tools_settings_with_native_tools(provider_configuration, native_tools),
         composer_attachment_capabilities: composer_attachment_capabilities(
             public_ai_selection

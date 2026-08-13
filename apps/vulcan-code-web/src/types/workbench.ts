@@ -204,6 +204,9 @@ export interface WorkbenchSnapshot {
   // Provider retry settings resolved from the shared service configuration.
   // 从共享服务配置解析出的 Provider 重试设置。
   providerRetry?: ProviderRetrySettingsSummary;
+  // Whether complete Provider request tracing is enabled for real dispatches.
+  // 是否为真实分派启用完整 Provider 请求追踪。
+  providerRequestTraceEnabled?: boolean;
   // Host-owned tool settings resolved from the shared service configuration.
   // 从共享服务配置解析出的宿主自有工具设置。
   hostTools?: HostToolsSettingsSummary;

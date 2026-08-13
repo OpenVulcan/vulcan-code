@@ -1850,6 +1850,13 @@ export type TranslationKey =
   | "settings.diagnostics.logs"
   | "settings.diagnostics.startupStatus"
   | "settings.diagnostics.waitingStatus"
+  | "settings.diagnostics.providerRequestTrace"
+  | "settings.diagnostics.providerRequestTrace.completeRequests"
+  | "settings.diagnostics.providerRequestTrace.description"
+  | "settings.diagnostics.providerRequestTrace.disabled"
+  | "settings.diagnostics.providerRequestTrace.enabled"
+  | "settings.diagnostics.providerRequestTrace.saveFailed"
+  | "settings.diagnostics.providerRequestTrace.switch"
   | "settings.diagnostics.runtimeModules"
   | "settings.gitCommit.description"
   | "settings.gitCommit.active"
@@ -4475,6 +4482,13 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.diagnostics.logs": "诊断日志",
     "settings.diagnostics.startupStatus": "启动状态",
     "settings.diagnostics.waitingStatus": "等待状态更新",
+    "settings.diagnostics.providerRequestTrace": "Provider 请求追踪",
+    "settings.diagnostics.providerRequestTrace.completeRequests": "完整请求日志",
+    "settings.diagnostics.providerRequestTrace.description": "开启后，每次真实 Provider API 调用都会把控制器请求、统一请求与最终协议请求完整写入所属会话的 temp/provider-request-trace 目录。内容可能包含提示词、工具参数与工具结果，仅应在诊断期间开启。",
+    "settings.diagnostics.providerRequestTrace.disabled": "已关闭",
+    "settings.diagnostics.providerRequestTrace.enabled": "诊断中",
+    "settings.diagnostics.providerRequestTrace.saveFailed": "保存失败",
+    "settings.diagnostics.providerRequestTrace.switch": "记录完整 Provider 请求",
     "settings.diagnostics.runtimeModules": "运行时模块",
     "settings.gitCommit.description": "提交弹窗的新分支命名、自动总结模型与额外提示词。",
     "settings.gitCommit.active": "已生效",
@@ -7097,6 +7111,13 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.diagnostics.logs": "Diagnostic logs",
     "settings.diagnostics.startupStatus": "Startup status",
     "settings.diagnostics.waitingStatus": "Waiting for status update",
+    "settings.diagnostics.providerRequestTrace": "Provider request tracing",
+    "settings.diagnostics.providerRequestTrace.completeRequests": "Complete request logs",
+    "settings.diagnostics.providerRequestTrace.description": "When enabled, every real Provider API call writes its controller request, canonical request, and final protocol request into the owning session's temp/provider-request-trace directory. The files may contain prompts, tool arguments, and tool results; enable this only while diagnosing a problem.",
+    "settings.diagnostics.providerRequestTrace.disabled": "Off",
+    "settings.diagnostics.providerRequestTrace.enabled": "Tracing",
+    "settings.diagnostics.providerRequestTrace.saveFailed": "Save failed",
+    "settings.diagnostics.providerRequestTrace.switch": "Record complete Provider requests",
     "settings.diagnostics.runtimeModules": "Runtime modules",
     "settings.gitCommit.description": "New-branch naming, automatic summary model, and extra prompt text for the commit dialog.",
     "settings.gitCommit.active": "Active",

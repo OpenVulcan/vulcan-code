@@ -59,8 +59,11 @@ pub(crate) fn wrap_terminal_transaction_command(
     let sentinel = format!("__VULCAN_TERMINAL_TX_EXIT__:{transaction_id}:");
     let lower_shell = shell_label.to_ascii_lowercase();
     if lower_shell.contains("pwsh") || lower_shell.contains("powershell") {
+        // historyCommand adds the real user command after PSReadLine has already accepted the internal wrapper.
+        // historyCommand 在 PSReadLine 已接收内部包装后追加真实用户命令。
+        let history_command = powershell_single_quoted_literal(command);
         return Ok(format!(
-            "$global:LASTEXITCODE = $null; $vulcanErrorCount = $Error.Count; & {{ {command} }}; $vulcanSuccess = $?; $vulcanNativeCode = $LASTEXITCODE; $vulcanNewErrors = $Error.Count - $vulcanErrorCount; if ($null -ne $vulcanNativeCode) {{ $vulcanCode = $vulcanNativeCode }} elseif ($vulcanSuccess -and $vulcanNewErrors -le 0) {{ $vulcanCode = 0 }} else {{ $vulcanCode = 1 }}; Write-Output \"{sentinel}$vulcanCode\"{interactive_newline}"
+            "$global:LASTEXITCODE = $null; $vulcanErrorCount = $Error.Count; & {{ {command} }}; $vulcanSuccess = $?; $vulcanNativeCode = $LASTEXITCODE; $vulcanNewErrors = $Error.Count - $vulcanErrorCount; if ($null -ne $vulcanNativeCode) {{ $vulcanCode = $vulcanNativeCode }} elseif ($vulcanSuccess -and $vulcanNewErrors -le 0) {{ $vulcanCode = 0 }} else {{ $vulcanCode = 1 }}; if ('Microsoft.PowerShell.PSConsoleReadLine' -as [type]) {{ try {{ [Microsoft.PowerShell.PSConsoleReadLine]::AddToHistory({history_command}) }} catch {{ }} }}; Write-Output \"{sentinel}$vulcanCode\"{interactive_newline}"
         ));
     }
     if lower_shell.contains("cmd") {
@@ -76,6 +79,20 @@ pub(crate) fn wrap_terminal_transaction_command(
     Err(NativeToolError::new(format!(
         "`until_exit_code` is not supported for shell `{shell_label}`. Use until_quiet or an explicit supported shell."
     )))
+}
+
+/// Encodes one PowerShell single-quoted string literal without executing or re-parsing its content.
+/// 编码一个 PowerShell 单引号字符串字面量，且不执行或重新解析其内容。
+///
+/// # Parameters / 参数
+/// - `text`: Exact user command retained for PSReadLine history.
+/// - `text`：为 PSReadLine 历史保留的精确用户命令。
+///
+/// # Returns / 返回值
+/// Returns a single-quoted literal whose embedded apostrophes are doubled per PowerShell syntax.
+/// 返回按 PowerShell 语法将内部单引号加倍后的单引号字面量。
+fn powershell_single_quoted_literal(text: &str) -> String {
+    format!("'{}'", text.replace('\'', "''"))
 }
 
 pub(crate) fn strip_terminal_transaction_sentinel(

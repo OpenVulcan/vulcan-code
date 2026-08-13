@@ -1,7 +1,7 @@
 //! Parent-side client for one isolated `vulcan-terminal-host` process.
 //! 单个隔离 `vulcan-terminal-host` 进程的父端客户端。
 
-use crate::process_creation::apply_windows_no_window;
+use crate::process_creation::{apply_child_path_prefixes, apply_windows_no_window};
 use crate::terminal_host_protocol::{
     TERMINAL_HOST_CONTRACT, TERMINAL_HOST_MAX_COLS, TERMINAL_HOST_MAX_ROWS, TerminalHostErrorEvent,
     TerminalHostFrame, TerminalHostFrameKind, TerminalHostResizeRequest, TerminalHostStartRequest,
@@ -297,12 +297,15 @@ pub fn resolve_terminal_host_path() -> Result<PathBuf, String> {
 /// # Parameters / 参数
 /// - `request`: Exact terminal program, arguments, cwd, and initial dimensions.
 /// - `request`：精确的终端程序、参数、工作目录及初始尺寸。
+/// - `path_prefixes`: Ordered directories inherited by the isolated host and its terminal child.
+/// - `path_prefixes`：由隔离宿主及其终端子进程继承的有序目录。
 ///
 /// # Returns / 返回值
 /// Returns owned host pipes only after receiving a valid `Started` event.
 /// 仅在收到有效 `Started` 事件后返回宿主管道所有权。
 pub async fn spawn_terminal_host(
     request: TerminalHostStartRequest,
+    path_prefixes: &[PathBuf],
 ) -> Result<TerminalHostConnection, String> {
     let host_path = resolve_terminal_host_path()?;
     let mut command = Command::new(crate::runtime_assets::native_host_path(&host_path));
@@ -314,6 +317,7 @@ pub async fn spawn_terminal_host(
         .stderr(Stdio::piped())
         .kill_on_drop(true);
     apply_windows_no_window(&mut command);
+    apply_child_path_prefixes(&mut command, path_prefixes)?;
     let mut child = command.spawn().map_err(|error| {
         format!(
             "Failed to start terminal host `{}`: {error}",
@@ -386,7 +390,11 @@ pub async fn spawn_terminal_host(
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_terminal_host_path, wait_for_terminal_host_stop_deadline};
+    use super::{
+        resolve_terminal_host_path, spawn_terminal_host, wait_for_terminal_host_stop_deadline,
+    };
+    use crate::terminal_host_protocol::{TerminalHostFrameKind, TerminalHostStartRequest};
+    use std::fs;
     use tokio::time::{Duration, Instant, timeout};
 
     /// Verifies the test build can locate the sibling Cargo terminal-host binary when present.
@@ -397,6 +405,74 @@ mod tests {
         if let Ok(path) = result {
             assert!(path.is_file());
         }
+    }
+
+    /// Verifies the isolated terminal host and its PTY child inherit caller-owned PATH prefixes.
+    /// 验证隔离终端宿主及其 PTY 子进程继承调用方持有的 PATH 前缀。
+    #[cfg(target_os = "windows")]
+    #[tokio::test]
+    async fn terminal_host_child_inherits_path_prefixes() {
+        if resolve_terminal_host_path().is_err() {
+            return;
+        }
+        // tempRoot owns the only command shim visible through the injected child PATH.
+        // tempRoot 持有只能通过注入子进程 PATH 发现的唯一命令垫片。
+        let temp_root = std::env::temp_dir().join(format!(
+            "vulcan_terminal_path_{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        fs::create_dir_all(&temp_root).expect("create terminal PATH test directory");
+        // probePath is resolved by cmd.exe only when the terminal child inherited the prefix.
+        // probePath 仅在终端子进程继承前缀后才能被 cmd.exe 解析。
+        let probe_path = temp_root.join("vulcan-terminal-path-probe.cmd");
+        fs::write(&probe_path, "@echo terminal-path-ok\r\n")
+            .expect("write terminal PATH command shim");
+        // connection owns the real terminal-host process used for the inheritance check.
+        // connection 持有用于继承检查的真实终端宿主进程。
+        let mut connection = spawn_terminal_host(
+            TerminalHostStartRequest {
+                program: String::from("cmd.exe"),
+                args: vec![
+                    String::from("/Q"),
+                    String::from("/D"),
+                    String::from("/C"),
+                    String::from("vulcan-terminal-path-probe"),
+                ],
+                cwd: temp_root.clone(),
+                cols: 80,
+                rows: 24,
+            },
+            std::slice::from_ref(&temp_root),
+        )
+        .await
+        .expect("start terminal host with PATH prefix");
+        // output collects raw PTY bytes until the terminal child exits.
+        // output 收集终端子进程退出前的原始 PTY 字节。
+        let mut output = Vec::new();
+        loop {
+            // frame is the next bounded terminal-host event required by this finite command.
+            // frame 是该有限命令要求的下一条有界终端宿主事件。
+            let frame = timeout(Duration::from_secs(10), connection.event_receiver.recv())
+                .await
+                .expect("terminal host event timeout")
+                .expect("terminal host event channel closed")
+                .expect("terminal host event read failed");
+            match frame.kind {
+                TerminalHostFrameKind::OutputBytes => output.extend_from_slice(&frame.payload),
+                TerminalHostFrameKind::Exited => break,
+                _ => {}
+            }
+        }
+        connection
+            .child
+            .wait()
+            .await
+            .expect("reap terminal host after PATH test");
+        fs::remove_dir_all(&temp_root).expect("remove terminal PATH test directory");
+        // outputText is decoded only for the stable ASCII probe assertion.
+        // outputText 仅为稳定 ASCII 探针断言而解码。
+        let output_text = String::from_utf8_lossy(&output);
+        assert!(output_text.contains("terminal-path-ok"));
     }
 
     /// Verifies forced reaping is armed only by an explicit stop request.

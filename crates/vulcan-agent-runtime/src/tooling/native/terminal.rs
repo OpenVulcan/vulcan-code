@@ -393,7 +393,7 @@ pub(crate) fn terminal_session_args_schema(shell_support: &HostCommandShellSuppo
                             "type": "object",
                             "properties": {
                                 "kind": { "type": "string", "enum": ["text"] },
-                                "text": { "type": "string", "description": "Text typed into the terminal. Include a newline when submitting a command." }
+                                "text": { "type": "string", "description": "Text typed into the terminal. Use ordinary newline characters for logical submissions; the host normalizes CRLF, CR, and LF to the active interactive shell newline." }
                             },
                             "required": ["kind", "text"],
                             "additionalProperties": false
@@ -402,7 +402,7 @@ pub(crate) fn terminal_session_args_schema(shell_support: &HostCommandShellSuppo
                             "type": "object",
                             "properties": {
                                 "kind": { "type": "string", "enum": ["paste"] },
-                                "text": { "type": "string", "description": "Text pasted into the terminal as one payload." }
+                                "text": { "type": "string", "description": "Text pasted into the terminal as one ordered payload. The host normalizes CRLF, CR, and LF to the active interactive shell newline; bracketed-paste mode is not implied." }
                             },
                             "required": ["kind", "text"],
                             "additionalProperties": false

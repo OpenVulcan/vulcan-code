@@ -12,6 +12,7 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_select_workbench_model_secondary_route",
     "service_select_workbench_thinking_display_mode",
     "service_select_webui_locale",
+    "service_save_provider_request_trace_settings",
     "service_save_provider_retry_settings",
     "service_output_style_catalog",
     "service_save_prompt_output_style",
@@ -128,6 +129,14 @@ pub(super) async fn dispatch(
         ),
         "service_select_webui_locale" => rpc_json_result(
             service_select_webui_locale(app, state, rpc_required_param(params, "locale")?).await,
+        ),
+        "service_save_provider_request_trace_settings" => rpc_json_result(
+            service_save_provider_request_trace_settings(
+                app,
+                state,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
         ),
         "service_save_provider_retry_settings" => rpc_json_result(
             service_save_provider_retry_settings(

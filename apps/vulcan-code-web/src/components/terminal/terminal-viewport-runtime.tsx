@@ -28,10 +28,22 @@ export function TerminalViewportRuntime(props: TerminalViewportProps) {
   React.useLayoutEffect(() => {
     const host = hostRef.current;
     if (!host) return;
+    // fixedGrid retains the backend-owned screen geometry for display-only terminals.
+    // fixedGrid 为只负责显示的终端保留后端持有的屏幕几何。
+    const fixedGrid = Number.isInteger(callbacksRef.current.fixedRows)
+      && Number.isInteger(callbacksRef.current.fixedCols)
+      && (callbacksRef.current.fixedRows ?? 0) > 0
+      && (callbacksRef.current.fixedCols ?? 0) > 0
+      ? {
+          rows: callbacksRef.current.fixedRows as number,
+          cols: callbacksRef.current.fixedCols as number,
+        }
+      : null;
     // terminal is the only emulator instance owned by this mounted viewport.
     // terminal 是当前已挂载视口拥有的唯一模拟器实例。
     const terminal = new Terminal({
       allowProposedApi: false,
+      cols: fixedGrid?.cols,
       convertEol: false,
       cursorBlink: !callbacksRef.current.readOnly,
       cursorStyle: callbacksRef.current.readOnly ? "bar" : "block",
@@ -39,6 +51,7 @@ export function TerminalViewportRuntime(props: TerminalViewportProps) {
       fontFamily: '"Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace',
       fontSize: 13,
       lineHeight: 1.15,
+      rows: fixedGrid?.rows,
       scrollback: 10_000,
       theme: {
         background: "#111318",
@@ -48,10 +61,10 @@ export function TerminalViewportRuntime(props: TerminalViewportProps) {
         selectionBackground: "#4e6b955c",
       },
     });
-    // fitAddon converts container pixels into the terminal character grid.
-    // fitAddon 将容器像素转换为终端字符网格。
-    const fitAddon = new FitAddon();
-    terminal.loadAddon(fitAddon);
+    // fitAddon exists only for interactive or otherwise container-fitted terminals.
+    // fitAddon 仅为交互式或其他需要容器拟合的终端创建。
+    const fitAddon = fixedGrid ? null : new FitAddon();
+    if (fitAddon) terminal.loadAddon(fitAddon);
     terminal.open(host);
     terminalRef.current = terminal;
     // lastDimensions suppresses duplicate backend resize requests.
@@ -60,12 +73,16 @@ export function TerminalViewportRuntime(props: TerminalViewportProps) {
     // animationFrame coalesces synchronous layout changes without interval polling.
     // animationFrame 合并同步布局变化，不使用定时轮询。
     let animationFrame: number | null = null;
+    // resizeObserver remains absent for a backend-sized read-only grid so window resizing cannot reflow it.
+    // resizeObserver 在后端定尺寸只读网格下保持为空，使窗口缩放无法重排它。
+    let resizeObserver: ResizeObserver | null = null;
 
     // fit measures the visible host and reports only changed positive dimensions.
     // fit 测量可见宿主，并仅报告变化后的正尺寸。
     const fit = () => {
       animationFrame = null;
       if (host.clientWidth <= 0 || host.clientHeight <= 0) return;
+      if (!fitAddon) return;
       // wasAtBottom preserves live-output following without stealing an intentionally scrolled-back viewport.
       // wasAtBottom 保留实时输出跟随，同时不抢占用户主动回看的历史视口。
       const wasAtBottom = terminal.buffer.active.viewportY === terminal.buffer.active.baseY;
@@ -87,20 +104,24 @@ export function TerminalViewportRuntime(props: TerminalViewportProps) {
       if (animationFrame !== null) return;
       animationFrame = window.requestAnimationFrame(fit);
     };
-    // resizeObserver reacts only to actual viewport geometry changes.
-    // resizeObserver 仅响应真实视口几何变化。
-    const resizeObserver = new ResizeObserver(scheduleFit);
-    resizeObserver.observe(host);
     const dataDisposable = terminal.onData((data) => {
       if (!callbacksRef.current.readOnly) callbacksRef.current.onData?.(data);
     });
     const binaryDisposable = terminal.onBinary((data) => {
       if (!callbacksRef.current.readOnly) callbacksRef.current.onBinary?.(data);
     });
-    scheduleFit();
+    if (fixedGrid) {
+      terminal.refresh(0, fixedGrid.rows - 1);
+    } else {
+      // resizeObserver reacts only to actual viewport geometry changes for fitted terminals.
+      // resizeObserver 仅为拟合型终端响应真实视口几何变化。
+      resizeObserver = new ResizeObserver(scheduleFit);
+      resizeObserver.observe(host);
+      scheduleFit();
+    }
 
     return () => {
-      resizeObserver.disconnect();
+      resizeObserver?.disconnect();
       if (animationFrame !== null) window.cancelAnimationFrame(animationFrame);
       dataDisposable.dispose();
       binaryDisposable.dispose();

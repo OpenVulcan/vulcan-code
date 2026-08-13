@@ -1,10 +1,15 @@
 import React from "react";
+import { Maximize2, Minimize2, Minus, TerminalSquare } from "lucide-react";
+import { createPortal } from "react-dom";
 
 import type { TerminalSessionViewModel } from "@/components/conversation/conversation-terminal-model";
 import { acquireVisibleTerminalDisplayListener } from "@/components/terminal/terminal-display-listener";
 import { TerminalViewport } from "@/components/terminal/terminal-viewport";
 import { useTerminalDisplayConnectionState } from "@/components/terminal/use-terminal-display-connection-epoch";
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
+import {
+  ProjectFloatingLayer,
+  type ProjectFloatingLayerControls,
+} from "@/components/workspace/project-floating-layer";
 import { useI18n } from "@/i18n";
 import { serviceClient } from "@/service/webui-service-runtime";
 import { attachCommandSessionDisplay, detachCommandSessionDisplay } from "@/service/terminal-service";
@@ -17,6 +22,9 @@ import type {
 // ConversationReadOnlyTerminalSurfaceProps binds a visible dialog to one AI-owned terminal.
 // ConversationReadOnlyTerminalSurfaceProps 将可见对话框绑定到一个 AI 持有的终端。
 export interface ConversationReadOnlyTerminalSurfaceProps {
+  // Live row button used as the macOS-style minimize and restore animation anchor.
+  // 用作 macOS 风格收回与显示动画锚点的实时行按钮。
+  minimizeAnchorRef: React.RefObject<HTMLButtonElement | null>;
   // Whether the read-only display is currently visible and subscribed.
   // 只读显示当前是否可见且已订阅。
   open: boolean;
@@ -75,9 +83,12 @@ export function ConversationReadOnlyTerminalSurface(props: ConversationReadOnlyT
   // connectionState detaches display delivery during interruption and forces a new baseline after recovery.
   // connectionState 在中断期间解除显示交付，并在恢复后强制获取新基线。
   const { connectionAvailable, connectionEpoch } = useTerminalDisplayConnectionState();
+  // workspaceHost keeps every AI terminal constrained below the conversation title bar like project terminals.
+  // workspaceHost 使每个 AI 终端像项目终端一样限制在会话标题栏下方。
+  const workspaceHost = props.minimizeAnchorRef.current?.closest<HTMLElement>(".workspace") ?? null;
 
   React.useEffect(() => {
-    if (!props.open || !props.summary || !connectionAvailable) return;
+    if (!props.open || !props.summary || !connectionAvailable || !workspaceHost) return;
     let cancelled = false;
     let subscriptionId: string | null = null;
     let unsubscribe: (() => void) | null = null;
@@ -173,19 +184,63 @@ export function ConversationReadOnlyTerminalSurface(props: ConversationReadOnlyT
     props.session.id,
     props.summary?.ownerSessionId,
     publishScreenBaseline,
+    workspaceHost,
   ]);
 
-  return (
-    <Dialog open={props.open} onOpenChange={props.onOpenChange}>
-      <DialogContent className="conversation-session-terminal-screen-dialog">
-        <DialogTitle>{props.session.name}</DialogTitle>
-        <DialogDescription>
-          {liveSummary?.backend ?? props.summary?.backend ?? "unknown"} · AI 控制 · 只读显示
-        </DialogDescription>
+  if (!workspaceHost) return null;
+
+  // floatingIdentity keeps layout persistence isolated by owner conversation and terminal identity.
+  // floatingIdentity 按归属会话与终端标识隔离布局持久化。
+  const floatingIdentity = conversationTerminalFloatingIdentity(
+    props.session.id,
+    props.summary?.ownerSessionId ?? null,
+  );
+  // header renders read-only ownership plus the shared floating window commands.
+  // header 渲染只读归属以及共享浮动窗口命令。
+  const header = (floatingControls: ProjectFloatingLayerControls) => (
+    <div className="project-terminal-header conversation-session-terminal-floating-header">
+      <span className="project-terminal-current-title" title={props.session.name}>
+        <TerminalSquare size={15} />
+        <span className="project-terminal-current-title-copy">
+          <strong>{props.session.name}</strong>
+          <small>{liveSummary?.backend ?? props.summary?.backend ?? "unknown"} · AI 控制 · 只读显示</small>
+        </span>
+      </span>
+      <div className="project-terminal-header-actions">
+        <button
+          aria-label={floatingControls.maximized ? "还原 AI 终端窗口" : "最大化 AI 终端窗口"}
+          onClick={floatingControls.toggleMaximized}
+          title={floatingControls.maximized ? "还原" : "最大化"}
+          type="button"
+        >
+          {floatingControls.maximized ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+        </button>
+        <button
+          aria-label="收起 AI 终端"
+          onClick={() => props.onOpenChange(false)}
+          title="收起"
+          type="button"
+        >
+          <Minus size={14} />
+        </button>
+      </div>
+    </div>
+  );
+
+  return createPortal(
+    <ProjectFloatingLayer
+      expanded={props.open}
+      header={header}
+      minimizeAnchorRef={props.minimizeAnchorRef}
+      projectId={floatingIdentity}
+    >
+      <div className="conversation-session-terminal-floating-body">
         <div className="conversation-session-terminal-screen-frame">
           <TerminalViewport
             ariaLabel={`${props.session.name} · ${t("terminalSession.openScreen")}`}
             chunks={chunks}
+            fixedCols={liveSummary?.screenCols ?? props.summary?.screenCols}
+            fixedRows={liveSummary?.screenRows ?? props.summary?.screenRows}
             onChunksRendered={(lastRenderedSeq) => {
               setChunks((current) => retainRenderedTerminalCursor(current, lastRenderedSeq));
             }}
@@ -194,9 +249,27 @@ export function ConversationReadOnlyTerminalSurface(props: ConversationReadOnlyT
             screenText={screenBaseline?.text}
           />
         </div>
-      </DialogContent>
-    </Dialog>
+      </div>
+    </ProjectFloatingLayer>,
+    workspaceHost,
   );
+}
+
+// conversationTerminalFloatingIdentity returns one collision-safe persistent layout identity.
+// conversationTerminalFloatingIdentity 返回一个无碰撞的持久化布局标识。
+//
+// Parameters / 参数:
+// - `terminalId`: Exact AI terminal identifier. / 精确的 AI 终端标识。
+// - `ownerSessionId`: Optional owning conversation identifier. / 可选的归属会话标识。
+//
+// Returns / 返回值:
+// Returns a stable serialized tuple reserved for the floating layer cache and storage key.
+// 返回为浮动层缓存与存储键保留的稳定序列化元组。
+export function conversationTerminalFloatingIdentity(
+  terminalId: string,
+  ownerSessionId: string | null,
+): string {
+  return JSON.stringify(["ai-terminal", ownerSessionId ?? "", terminalId]);
 }
 
 // commandSessionScreenText extracts complete frame text only when both backend fields exist.

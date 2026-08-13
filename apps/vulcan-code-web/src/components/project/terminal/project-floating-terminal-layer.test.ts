@@ -240,6 +240,10 @@ describe("project terminal data contracts", () => {
     expect(componentSource).toContain('floatingControls.maximized ? "还原" : "最大化"');
     expect(componentSource).toContain("projectTerminalUiStateCache");
     expect(componentSource).toContain("projectTerminalSeenOpenRequests");
+    expect(componentSource).toContain("sidebarCollapsed: false");
+    expect(componentSource).toContain('className="project-terminal-compact-session-list"');
+    expect(componentSource).toContain('{index + 1}');
+    expect(componentSource).toContain('data-sidebar-collapsed={sidebarCollapsed ? "true" : "false"}');
     expect(componentSource).not.toContain('className="project-terminal-tab-list"');
     expect(componentSource).not.toContain('aria-label="选择项目终端"');
   });

@@ -29,6 +29,12 @@ export interface TerminalViewportProps {
   // Renderable plain or VT-formatted content belonging to `screenFrameSeq`.
   // 属于 `screenFrameSeq` 的可渲染纯文本或 VT 格式内容。
   screenText?: string | null;
+  // Optional fixed backend row count that disables container-driven fitting when paired with `fixedCols`.
+  // 与 `fixedCols` 配对时禁用容器驱动拟合的可选后端固定行数。
+  fixedRows?: number | null;
+  // Optional fixed backend column count that disables container-driven fitting when paired with `fixedRows`.
+  // 与 `fixedRows` 配对时禁用容器驱动拟合的可选后端固定列数。
+  fixedCols?: number | null;
   // Called with normal UTF-8 xterm input data.
   // 使用普通 UTF-8 xterm 输入数据调用。
   onData?: (data: string) => void;

@@ -349,7 +349,10 @@ use project_conversation_services::*;
 pub use project_directories::service_add_project_from_path;
 use project_directories::service_browse_project_directories;
 use project_terminals::*;
-use provider_settings::{provider_retry_settings, service_save_provider_retry_settings};
+use provider_settings::{
+    provider_retry_settings, service_save_provider_request_trace_settings,
+    service_save_provider_retry_settings,
+};
 use provider_usage_runtime::*;
 use public_ai_settings::*;
 use rpc_dispatch::dispatch_service_rpc;

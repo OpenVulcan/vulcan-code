@@ -556,13 +556,16 @@ impl ProjectTerminalRuntime {
         request: ProjectTerminalStartRequest,
     ) -> Result<ProjectTerminalSnapshot, String> {
         validate_project_terminal_start_request(&request)?;
-        let connection = spawn_terminal_host(TerminalHostStartRequest {
-            program: request.program,
-            args: request.args,
-            cwd: request.cwd.clone(),
-            cols: request.cols,
-            rows: request.rows,
-        })
+        let connection = spawn_terminal_host(
+            TerminalHostStartRequest {
+                program: request.program,
+                args: request.args,
+                cwd: request.cwd.clone(),
+                cols: request.cols,
+                rows: request.rows,
+            },
+            &[],
+        )
         .await?;
         let terminal_id = Uuid::new_v4();
         let creation_order = self

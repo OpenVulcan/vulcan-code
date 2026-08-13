@@ -92,6 +92,32 @@ pub(super) struct CommandSessionSharedState {
 }
 
 impl CommandSessionSharedState {
+    /// Creates shared PTY state with authoritative initial screen dimensions before the first output frame.
+    /// 在首个输出帧之前，使用权威初始屏幕尺寸创建共享 PTY 状态。
+    ///
+    /// # Parameters / 参数
+    /// - `rows`: Positive row count passed to the terminal host at process creation.
+    /// - `cols`: Positive column count passed to the terminal host at process creation.
+    /// - `rows`：进程创建时传给终端宿主的正行数。
+    /// - `cols`：进程创建时传给终端宿主的正列数。
+    ///
+    /// # Returns / 返回值
+    /// Returns running shared state whose frame remains unconfirmed until screen text arrives.
+    /// 返回运行中的共享状态；在屏幕文本到达前，其帧仍保持未确认。
+    pub(super) fn new_pty(rows: u16, cols: u16) -> Self {
+        // mutableState starts from the same lifecycle defaults as every command session.
+        // mutableState 从与所有命令会话相同的生命周期默认值开始。
+        let mutable_state = CommandSessionMutableState {
+            screen_rows: Some(rows),
+            screen_cols: Some(cols),
+            ..CommandSessionMutableState::default()
+        };
+        Self {
+            mutable_state: Mutex::new(mutable_state),
+            change_notify: Notify::new(),
+        }
+    }
+
     /// Appends one decoded output chunk and wakes pending readers.
     /// 追加一条解码后的输出分片并唤醒等待中的读取方。
     pub(super) async fn append_output_chunk(

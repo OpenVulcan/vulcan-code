@@ -42,7 +42,7 @@ define route-command
 endef
 endif
 
-.PHONY: help sync vite start stop status build build-release release run run-release br br-release licenses deps deps-all deps-host deps-vldb deps-rtk deps-lua deps-cbm deps-vmm host vldb rtk lua cbm vmm all
+.PHONY: help sync vite start stop status build build-release release run run-release br br-release licenses deps deps-all deps-host deps-vldb deps-rtk deps-tools deps-lua deps-cbm deps-vmm host vldb rtk tools lua cbm vmm all
 
 # VITE_ACTION captures the required lifecycle action from `make vite start`, `stop`, or `status`.
 # VITE_ACTION 从 `make vite start`、`stop` 或 `status` 中捕获必需的生命周期操作。
@@ -76,6 +76,7 @@ help:
 	@echo "  make deps-host     # install host dependencies"
 	@echo "  make deps-vldb     # install vldb-controller host dependency"
 	@echo "  make deps-rtk      # install RTK host dependency"
+	@echo "  make deps-tools    # install the latest bundled sg and rg tools"
 	@echo "  make deps-lua      # install Lua dependencies"
 	@echo "  make deps-cbm      # install the pinned native Codebase Memory runtime"
 	@echo "  make deps-vmm      # build and install the managed VMM runtime dependency"
@@ -189,6 +190,11 @@ deps-vldb:
 deps-rtk:
 	$(call route-command,deps rtk)
 
+# deps-tools routes the latest bundled sg and rg installation step.
+# deps-tools 路由最新版内建 sg 与 rg 安装步骤。
+deps-tools:
+	$(call route-command,deps tools)
+
 # deps-lua routes Lua dependency installation.
 # deps-lua 路由 Lua 依赖安装步骤。
 deps-lua:
@@ -238,6 +244,15 @@ ifneq ($(filter deps,$(MAKECMDGOALS)),)
 	@:
 else
 	$(call route-command,deps rtk)
+endif
+
+# tools is a deps companion no-op when used as `make deps tools`.
+# tools 在 `make deps tools` 形式中作为 deps 的伴随空目标。
+tools:
+ifneq ($(filter deps,$(MAKECMDGOALS)),)
+	@:
+else
+	$(call route-command,deps tools)
 endif
 
 # lua is a deps companion no-op when used as `make deps lua`.

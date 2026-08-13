@@ -173,13 +173,13 @@ PowerShell note: native `$LASTEXITCODE` is authoritative when present. For cmdle
 { "kind": "text", "text": "Get-Date\n" }
 ```
 
-Use `text` for typed command lines and REPL input. Include `\n` when submitting a command.
+Use `text` for typed command lines and REPL input. Use ordinary `\n` when submitting a logical line. The host normalizes `CRLF`, standalone `CR`, and standalone `LF` to the newline required by the active interactive shell, so the same structured input works on Windows, Linux, and macOS.
 
 ```json
 { "kind": "paste", "text": "multi-line content" }
 ```
 
-Use `paste` for larger text blocks. Do not combine `paste` with `until_exit_code`.
+Use `paste` for larger ordered text blocks. Its logical newlines receive the same shell-specific normalization as `text`. The current contract does not imply bracketed-paste mode. Do not combine `paste` with `until_exit_code`.
 
 ```json
 { "kind": "key", "key": "ArrowDown" }
@@ -200,7 +200,7 @@ Enter is encoded for the current backend and interactive shell, but child progra
 
 On Windows PTY sessions, the terminal host writes ANSI/VT input to ConPTY. ConPTY may present supported special keys to console-mode child programs as Windows Console key events. For example, Python `msvcrt.getch()` normally reports an arrow as an extended prefix (`b"\xe0"` or `b"\x00"`) followed by `b"H"`, `b"P"`, `b"K"`, or `b"M"` for Up, Down, Left, or Right. A Python Windows-console TUI must use `msvcrt.getch()` or an equivalent Console-input API for these keys; `sys.stdin.read()` does not expose the arrow-key Console events as VT bytes. The AI must still send standardized `key` inputs such as `ArrowDown` and must never send those scan-code bytes manually.
 
-Generated Enter/key-submit input uses a single carriage return for PowerShell and cmd-style shells on Windows PTY sessions. Avoid sending manual `\r\n` as a key substitute; the extra line-feed can leave PowerShell in continuation mode.
+Generated Enter/key-submit input uses a single carriage return for PowerShell and cmd-style shells on Windows PTY sessions. Structured `text` and `paste` input is normalized to that same submission contract. Do not send manual platform newline bytes as a key substitute; use ordinary logical newlines or a standardized `Enter` key.
 
 ```json
 { "kind": "chord", "key": "c", "ctrl": true }
@@ -258,7 +258,9 @@ Check `output_mode` on every response.
 - `mixed`: both log-like and screen-like behavior. Prefer small steps and verify each result.
 - `unknown`: not enough evidence yet. Use bounded waits and conservative reads.
 
-For `screen` and `mixed` responses, prefer `[screen_text]`, `screen_frame_seq`, `screen_size`, and `[controls_hint]` over raw ANSI chunks when they are present.
+For `screen` and `mixed` responses, prefer `[screen_text frame_seq=... confirmed=...]`, `screen_frame_seq`, `screen_frame_confirmed`, `screen_size`, and `[controls_hint]` over raw ANSI chunks when they are present. Compare `screen_frame_seq` across actions before assuming a new frame arrived; `screen_frame_confirmed` means the returned text, dimensions, and sequence form one atomic backend checkpoint, not that the sequence necessarily advanced since an earlier call.
+
+Inspect `pending_input_line` (and the retained compatibility field `pending_stdin_line`) after writes. When true, the shell still owns an unsubmitted input line; submit it, clear it, or send `Ctrl+C` according to the active program before starting an `until_exit_code` transaction.
 
 If `has_more` is true, call `read` again with the same terminal id before making conclusions from partial output.
 

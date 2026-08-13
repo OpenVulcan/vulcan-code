@@ -25,6 +25,18 @@ pub(crate) fn build_terminal_session_render_input(
         format!("Status: {}", snapshot.status.as_str()),
         format!("Output mode: {output_mode}"),
         format!("Last sequence: {}", snapshot.last_seq),
+        format!("Pending input line: {}", snapshot.pending_stdin_line),
+        format!(
+            "Screen frame sequence: {}",
+            snapshot
+                .screen_frame_seq
+                .map(|sequence| sequence.to_string())
+                .unwrap_or_else(|| String::from("none"))
+        ),
+        format!(
+            "Screen frame confirmed: {}",
+            terminal_snapshot_has_confirmed_screen_frame(snapshot)
+        ),
         format!("Returned chunks: {}", returned_chunks.len()),
         format!(
             "Has more buffered output: {}",
@@ -62,7 +74,14 @@ pub(crate) fn build_terminal_session_render_input(
     lines.extend(extra_lines);
     let mut content = lines.join("\n");
     if let Some(screen_text) = screen_text {
-        content.push_str("\n\n[screen_text]\n");
+        content.push_str(&format!(
+            "\n\n[screen_text frame_seq={} confirmed={}]\n",
+            snapshot
+                .screen_frame_seq
+                .map(|sequence| sequence.to_string())
+                .unwrap_or_else(|| String::from("none")),
+            terminal_snapshot_has_confirmed_screen_frame(snapshot),
+        ));
         content.push_str(&screen_text);
     }
     if output_mode == "screen" || output_mode == "mixed" {
@@ -128,7 +147,9 @@ pub(crate) fn build_terminal_session_host_payload(
         "stderr_bytes": snapshot.stderr_bytes,
         "last_seq": snapshot.last_seq,
         "pending_stdin_line": snapshot.pending_stdin_line,
+        "pending_input_line": snapshot.pending_stdin_line,
         "screen_frame_seq": snapshot.screen_frame_seq,
+        "screen_frame_confirmed": terminal_snapshot_has_confirmed_screen_frame(snapshot),
         "screen_size": {
             "rows": snapshot.screen_rows,
             "cols": snapshot.screen_cols,
@@ -163,4 +184,21 @@ pub(crate) fn build_terminal_session_host_payload(
         payload_object.extend(extra_object);
     }
     payload
+}
+
+/// Reports whether one snapshot contains an internally consistent backend screen checkpoint.
+/// 判断一份快照是否包含内部一致的后端屏幕检查点。
+///
+/// # Parameters / 参数
+/// - `snapshot`: Atomic command-session state observed by the current tool action.
+/// - `snapshot`：当前工具动作观测到的原子命令会话状态。
+///
+/// # Returns / 返回值
+/// Returns true only when sequence, dimensions, and screen text all belong to a confirmed frame.
+/// 仅当序号、尺寸与屏幕文本均属于已确认帧时返回 true。
+fn terminal_snapshot_has_confirmed_screen_frame(snapshot: &CommandSessionSnapshot) -> bool {
+    snapshot.screen_frame_seq.is_some()
+        && snapshot.screen_rows.is_some()
+        && snapshot.screen_cols.is_some()
+        && snapshot.screen_text.is_some()
 }

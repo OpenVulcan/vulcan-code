@@ -19,7 +19,10 @@ use async_trait::async_trait;
 use base64::Engine;
 use futures_util::StreamExt;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 use vulcan_ai_contract::{
     AiContinuation, AiExecutionRequest, AiMessage, AiOperation, AiStreamEvent, ContentItem,
     MessageRole, ModelParameterValue, NativeToolKind, ParallelToolCallPolicy, PromptCachePolicy,
@@ -53,6 +56,114 @@ use vulcan_tools_manager::{
 /// Vulcan-owned default output budget used when the provider reports no independent output limit.
 /// 当供应商未报告独立输出上限时使用的 Vulcan 本地默认输出预算。
 const DEFAULT_PUBLIC_OUTPUT_TOKEN_LIMIT: u64 = 32_000;
+/// Versioned on-disk contract for complete provider request traces.
+/// 完整 Provider 请求追踪使用的版本化磁盘契约。
+const PROVIDER_REQUEST_TRACE_SCHEMA_VERSION: &str = "vulcan.provider-request-trace.v1";
+/// Process-local monotonic tie breaker used when multiple requests start within one millisecond.
+/// 多个请求在同一毫秒启动时使用的进程本地单调消歧序号。
+static PROVIDER_REQUEST_TRACE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+/// Returns the current Unix timestamp in milliseconds for an ordered trace identity.
+/// 返回用于有序追踪标识的当前 Unix 毫秒时间戳。
+///
+/// # Returns
+/// 返回值
+/// The current timestamp, or an explicit clock error when the host clock predates Unix epoch.
+/// 返回当前时间戳；当宿主时钟早于 Unix 纪元时返回明确时钟错误。
+fn provider_request_trace_timestamp_ms() -> Result<u128, String> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .map_err(|error| format!("Provider request trace clock failed: {error}"))
+}
+
+/// Computes the stable SHA-256 digest of one serialized JSON stage.
+/// 计算一个已序列化 JSON 阶段的稳定 SHA-256 摘要。
+///
+/// # Parameters
+/// 参数
+/// `value` is the exact diagnostic JSON value whose bytes must be compared.
+/// `value` 是需要按字节比较的精确诊断 JSON 值。
+///
+/// # Returns
+/// 返回值
+/// A lowercase hexadecimal digest, or an explicit serialization error.
+/// 返回小写十六进制摘要，或明确的序列化错误。
+fn provider_request_trace_sha256(value: &Value) -> Result<String, String> {
+    let encoded = serde_json::to_vec(value)
+        .map_err(|error| format!("Provider request trace digest serialization failed: {error}"))?;
+    let mut hasher = Sha256::new();
+    hasher.update(encoded);
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+/// Computes per-field digests for every top-level JSON object member.
+/// 为 JSON 对象的每个顶层成员计算逐字段摘要。
+///
+/// # Parameters
+/// 参数
+/// `value` is the complete canonical or wire request stage.
+/// `value` 是完整的规范请求或 Wire 请求阶段。
+///
+/// # Returns
+/// 返回值
+/// A lexically ordered field-to-digest map; non-object values produce an empty map.
+/// 返回按字典序排列的字段到摘要映射；非对象值返回空映射。
+fn provider_request_trace_top_level_digests(
+    value: &Value,
+) -> Result<BTreeMap<String, String>, String> {
+    let Some(object) = value.as_object() else {
+        return Ok(BTreeMap::new());
+    };
+    object
+        .iter()
+        .map(|(field, value)| {
+            provider_request_trace_sha256(value).map(|digest| (field.clone(), digest))
+        })
+        .collect()
+}
+
+/// Redacts credential-shaped header values before a trace reaches disk.
+/// 在追踪写入磁盘前脱敏具有凭据形态的请求头值。
+///
+/// # Parameters
+/// 参数
+/// `headers` are the final protocol-projected non-transport headers.
+/// `headers` 是协议最终投影的非传输请求头。
+///
+/// # Returns
+/// 返回值
+/// A complete header map with sensitive values replaced by a fixed marker.
+/// 返回完整请求头映射，其中敏感值被固定标记替换。
+fn provider_request_trace_headers(headers: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+    headers
+        .iter()
+        .map(|(name, value)| {
+            let normalized = name.trim().to_ascii_lowercase();
+            let sensitive = matches!(
+                normalized.as_str(),
+                "authorization"
+                    | "proxy-authorization"
+                    | "x-api-key"
+                    | "api-key"
+                    | "x-goog-api-key"
+                    | "anthropic-api-key"
+                    | "cookie"
+                    | "set-cookie"
+            ) || normalized.contains("token")
+                || normalized.contains("secret")
+                || normalized.ends_with("-key");
+            (
+                name.clone(),
+                if sensitive {
+                    String::from("<redacted>")
+                } else {
+                    value.clone()
+                },
+            )
+        })
+        .collect()
+}
 
 /// Resolves the requested output budget while treating catalog output limits as upper bounds.
 /// 在将目录输出限制视为上限的前提下解析请求输出预算。
@@ -94,6 +205,7 @@ pub(crate) fn execute_vulcan_public_stream(
     resolved: ResolvedPublicAiExecution,
     reasoning_effort: Option<ReasoningEffort>,
 ) -> ProviderDeltaStream {
+    let provider_request_trace_enabled = request.provider_request_trace_enabled;
     let cache_scope_id = request.session_id.to_string();
     let workspace_path = request.workspace_path.clone();
     let output_token_limit = resolved_public_output_token_limit(
@@ -112,6 +224,7 @@ pub(crate) fn execute_vulcan_public_stream(
         core_snapshot,
         move |live_sender, adapter_inputs| {
             VulcanPublicContractAdapter::new(
+                provider_request_trace_enabled,
                 resolved.route.clone(),
                 resolved.model.id.clone(),
                 cache_scope_id.clone(),
@@ -168,6 +281,7 @@ pub(crate) fn capture_vulcan_public_stream(
             .provider_tool_definitions;
         let (live_sender, _live_receiver) = tokio::sync::mpsc::unbounded_channel();
         let adapter = VulcanPublicContractAdapter::new(
+            false,
             resolved.route.clone(),
             resolved.model.id.clone(),
             cache_scope_id,
@@ -206,6 +320,9 @@ pub(crate) fn capture_vulcan_public_stream(
 /// 将 Vulcan 公共请求与事件桥接到宿主控制器。
 #[derive(Clone)]
 pub(crate) struct VulcanPublicContractAdapter {
+    /// Frozen system-setting decision for complete request tracing during this controller run.
+    /// 当前控制器运行期间冻结的完整请求追踪系统设置决策。
+    provider_request_trace_enabled: bool,
     /// Immutable provider execution route.
     /// 不可变供应商执行路由。
     route: ProviderExecutionRoute,
@@ -287,18 +404,20 @@ impl VulcanPublicContractAdapter {
     ///
     /// # Parameters
     /// 参数
-    /// `route`, `secret`, and `client` identify the exact execution path; `tools` are host
-    /// definitions; `output_token_limit`, `prompt_cache`, and `model_parameters` are resolved
-    /// before dispatch; `live_sender` projects tool construction to the WebUI.
-    /// `route`、`secret` 与 `client` 标识精确执行路径；`tools` 是宿主工具定义；
-    /// `output_token_limit`、`prompt_cache` 与 `model_parameters` 在分派前解析；
-    /// `live_sender` 将工具构造投影到 WebUI。
+    /// `provider_request_trace_enabled` freezes the persisted diagnostic switch; `route`,
+    /// `secret`, and `client` identify the exact execution path; `tools` are host definitions;
+    /// `output_token_limit`, `prompt_cache`, and `model_parameters` are resolved before dispatch;
+    /// `live_sender` projects tool construction to the WebUI.
+    /// `provider_request_trace_enabled` 冻结持久化诊断开关；`route`、`secret` 与 `client`
+    /// 标识精确执行路径；`tools` 是宿主工具定义；`output_token_limit`、`prompt_cache` 与
+    /// `model_parameters` 在分派前解析；`live_sender` 将工具构造投影到 WebUI。
     ///
     /// # Returns
     /// 返回值
     /// A reusable adapter whose route remains fixed for the controller run.
     /// 返回在控制器运行期间路由保持固定的可复用适配器。
     pub(crate) fn new(
+        provider_request_trace_enabled: bool,
         route: ProviderExecutionRoute,
         model_id: String,
         cache_scope_id: String,
@@ -326,6 +445,7 @@ impl VulcanPublicContractAdapter {
         // publicTools 应用与独立远端压缩相同的路由绑定 Schema 投影。
         let public_tools = project_public_tool_definitions(&route, model_id.as_str(), tools);
         Self {
+            provider_request_trace_enabled,
             route,
             model_id,
             cache_scope_id,
@@ -346,6 +466,141 @@ impl VulcanPublicContractAdapter {
                 initial_provider_request,
             )),
         }
+    }
+
+    /// Persists the controller, canonical, and final wire stages for one exact provider dispatch.
+    /// 为一次精确 Provider 分派持久化控制器、规范请求与最终 Wire 三个阶段。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `controller_request` is the complete secret-free controller request captured before ownership moves.
+    /// `controller_request` 是所有权移动前捕获的不含秘钥完整控制器请求。
+    /// `public` is the immutable provider-neutral request used by dispatch.
+    /// `public` 是分派使用的不可变供应商无关请求。
+    /// `execution_id` is the physical call identity shared with the real execution client.
+    /// `execution_id` 是与真实执行客户端共享的物理调用标识。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success only after the trace has been atomically published in the owning session directory.
+    /// 仅在追踪已原子发布到所属会话目录后返回成功。
+    async fn persist_complete_provider_request_trace(
+        &self,
+        controller_request: Value,
+        public: &AiExecutionRequest,
+        execution_id: &str,
+    ) -> Result<(), VulcanCoreError> {
+        let encoded = self
+            .client
+            .encode_effective_request_with_credential(&self.route, public, &self.secret)
+            .await
+            .map_err(|mut failure| {
+                attach_execution_route_context(
+                    &mut failure.error,
+                    self.provider_id(),
+                    self.route.entry.id.as_str(),
+                    self.model_id(),
+                );
+                public_execution_failure(self.provider_id(), *failure.error)
+            })?;
+        let captured_at_unix_ms = provider_request_trace_timestamp_ms()
+            .map_err(|error| provider_failure(self.provider_id(), &error))?;
+        let sequence = PROVIDER_REQUEST_TRACE_SEQUENCE
+            .fetch_add(1, Ordering::Relaxed)
+            .saturating_add(1);
+        let session_id = uuid::Uuid::parse_str(self.cache_scope_id.as_str()).map_err(|error| {
+            provider_failure(
+                self.provider_id(),
+                &format!(
+                    "Provider request trace session id `{}` is invalid: {error}",
+                    self.cache_scope_id
+                ),
+            )
+        })?;
+        let public_request = serde_json::to_value(public).map_err(|error| {
+            provider_failure(
+                self.provider_id(),
+                &format!("Canonical provider request trace serialization failed: {error}"),
+            )
+        })?;
+        let controller_sha256 = provider_request_trace_sha256(&controller_request)
+            .map_err(|error| provider_failure(self.provider_id(), &error))?;
+        let public_sha256 = provider_request_trace_sha256(&public_request)
+            .map_err(|error| provider_failure(self.provider_id(), &error))?;
+        let wire_body_sha256 = provider_request_trace_sha256(&encoded.body)
+            .map_err(|error| provider_failure(self.provider_id(), &error))?;
+        let public_field_sha256 = provider_request_trace_top_level_digests(&public_request)
+            .map_err(|error| provider_failure(self.provider_id(), &error))?;
+        let wire_field_sha256 = provider_request_trace_top_level_digests(&encoded.body)
+            .map_err(|error| provider_failure(self.provider_id(), &error))?;
+        let resolved_request_url = self.route.request_url(encoded.path.as_str());
+        let headers = provider_request_trace_headers(&encoded.headers);
+        let trace = json!({
+            "schema_version": PROVIDER_REQUEST_TRACE_SCHEMA_VERSION,
+            "captured_at_unix_ms": captured_at_unix_ms,
+            "process_sequence": sequence,
+            "session_id": self.cache_scope_id,
+            "execution_id": execution_id,
+            "model_id": self.model_id,
+            "route": {
+                "provider": &self.route.provider,
+                "service_entry": &self.route.entry,
+                "connection": &self.route.connection,
+                "protocol_route": &self.route.protocol_route,
+                "secondary_route": &self.route.secondary_route,
+                "custom_model_projection": &self.route.custom_model_projection,
+                "billing_profile": self.route.billing_profile.as_ref().map(|profile| &profile.snapshot),
+                "request_projection_profiles": &self.route.request_projection_profiles,
+                "response_projection_profiles": &self.route.response_projection_profiles,
+                "upload_channels": &self.route.upload_channels,
+                "manifest_revision": self.route.manifest_revision,
+                "manifest_generation": self.route.manifest_generation,
+                "route_revision": self.route.route_revision,
+            },
+            "digests": {
+                "controller_request_sha256": controller_sha256,
+                "canonical_public_request_sha256": public_sha256,
+                "final_wire_body_sha256": wire_body_sha256,
+                "canonical_public_top_level_sha256": public_field_sha256,
+                "final_wire_top_level_sha256": wire_field_sha256,
+            },
+            "stages": {
+                "controller_request": controller_request,
+                "canonical_public_request": public_request,
+                "final_wire_request": {
+                    "path": encoded.path,
+                    "resolved_url": resolved_request_url,
+                    "headers": headers,
+                    "authentication_headers_included": false,
+                    "body": encoded.body,
+                },
+            },
+        });
+        let file_stem = format!("{captured_at_unix_ms}-{sequence:06}-{execution_id}");
+        let data_root = crate::data_plane::application_data_root();
+        let trace_path = tokio::task::spawn_blocking(move || {
+            vulcan_workspace_store::workspace_store::persist_provider_request_trace(
+                &data_root,
+                session_id,
+                file_stem.as_str(),
+                &trace,
+            )
+        })
+        .await
+        .map_err(|error| {
+            provider_failure(
+                self.provider_id(),
+                &format!("Provider request trace writer task failed: {error}"),
+            )
+        })?
+        .map_err(|error| provider_failure(self.provider_id(), &error))?;
+        eprintln!(
+            "[provider-request-trace] session={} execution={} path={}",
+            self.cache_scope_id,
+            execution_id,
+            trace_path.display()
+        );
+        Ok(())
     }
 }
 
@@ -706,6 +961,23 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
     where
         S: VulcanProviderDeltaSink,
     {
+        let trace_controller_request = if self.provider_request_trace_enabled {
+            let serialized_request = serde_json::to_value(&request).map_err(|error| {
+                provider_failure(
+                    self.provider_id(),
+                    &format!("Controller provider request trace serialization failed: {error}"),
+                )
+            })?;
+            Some(json!({
+                "serialized_request": serialized_request,
+                "context_budget_debug": request
+                    .context_budget
+                    .as_ref()
+                    .map(|snapshot| format!("{snapshot:#?}")),
+            }))
+        } else {
+            None
+        };
         let VulcanPublicContractRequest {
             public,
             controller_config,
@@ -746,6 +1018,14 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
                 )
             })?;
         let execution_id = uuid::Uuid::new_v4().to_string();
+        if let Some(controller_request) = trace_controller_request {
+            self.persist_complete_provider_request_trace(
+                controller_request,
+                &public,
+                execution_id.as_str(),
+            )
+            .await?;
+        }
         let mut stream = self.client.execute(
             self.route.clone(),
             public.clone(),
@@ -2516,6 +2796,66 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::path::PathBuf;
+
+    /// Verifies field digests isolate one changed wire component without obscuring stable prefixes.
+    /// 验证逐字段摘要能够隔离单个变化的 Wire 组件，同时保留稳定前缀证据。
+    #[test]
+    fn provider_request_trace_digests_isolate_changed_wire_field() {
+        let first = json!({
+            "instructions": "stable system prompt",
+            "input": [{"role": "user", "content": "first"}],
+            "tools": [{"name": "shell_command"}],
+        });
+        let second = json!({
+            "instructions": "stable system prompt",
+            "input": [{"role": "user", "content": "second"}],
+            "tools": [{"name": "shell_command"}],
+        });
+
+        let first_digests = provider_request_trace_top_level_digests(&first)
+            .expect("first trace digests should encode");
+        let second_digests = provider_request_trace_top_level_digests(&second)
+            .expect("second trace digests should encode");
+
+        assert_eq!(
+            first_digests.get("instructions"),
+            second_digests.get("instructions")
+        );
+        assert_eq!(first_digests.get("tools"), second_digests.get("tools"));
+        assert_ne!(first_digests.get("input"), second_digests.get("input"));
+    }
+
+    /// Verifies trace headers preserve ordinary protocol fields while removing access material.
+    /// 验证追踪请求头保留普通协议字段，同时移除访问凭据材料。
+    #[test]
+    fn provider_request_trace_headers_redact_access_material() {
+        let headers = BTreeMap::from([
+            (
+                String::from("content-type"),
+                String::from("application/json"),
+            ),
+            (String::from("Authorization"), String::from("Bearer secret")),
+            (
+                String::from("x-session-token"),
+                String::from("secret-token"),
+            ),
+        ]);
+
+        let traced = provider_request_trace_headers(&headers);
+
+        assert_eq!(
+            traced.get("content-type").map(String::as_str),
+            Some("application/json")
+        );
+        assert_eq!(
+            traced.get("Authorization").map(String::as_str),
+            Some("<redacted>")
+        );
+        assert_eq!(
+            traced.get("x-session-token").map(String::as_str),
+            Some("<redacted>")
+        );
+    }
 
     /// Verifies every native Gemini protocol profile resolves to the shared function-declaration schema family.
     /// 验证每个原生 Gemini 协议配置都会解析到共享函数声明 Schema 族。

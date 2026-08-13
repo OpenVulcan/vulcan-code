@@ -3,7 +3,7 @@
 
 use crate::model::SessionId;
 use crate::output_decode::ShellOutputStreamDecoder;
-use crate::process_creation::apply_windows_release_no_window;
+use crate::process_creation::{apply_child_path_prefixes, apply_windows_release_no_window};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
@@ -246,8 +246,17 @@ fn encode_command_session_input_events(
     let mut encoded = Vec::new();
     for event in events {
         match event {
-            CommandSessionInputEvent::Text { text } | CommandSessionInputEvent::Paste { text } => {
-                encoded.extend_from_slice(text.as_bytes());
+            CommandSessionInputEvent::Text { text } => {
+                encoded.extend_from_slice(&normalize_command_session_text_newlines(
+                    text,
+                    interactive_newline,
+                ));
+            }
+            CommandSessionInputEvent::Paste { text } => {
+                encoded.extend_from_slice(&normalize_command_session_text_newlines(
+                    text,
+                    interactive_newline,
+                ));
             }
             CommandSessionInputEvent::Key { key } => {
                 encoded.extend_from_slice(&command_session_key_sequence(key, interactive_newline)?);
@@ -271,6 +280,52 @@ fn encode_command_session_input_events(
         }
     }
     Ok(encoded)
+}
+
+/// Normalizes every logical line break in one text or paste event to the active interactive shell newline.
+/// 将一个文本或粘贴事件中的每个逻辑换行统一为当前交互式 shell 的换行序列。
+///
+/// # Parameters / 参数
+/// - `text`: Exact Unicode payload supplied by the structured input event.
+/// - `interactive_newline`: Shell-specific newline selected when the session starts.
+/// - `text`：结构化输入事件提供的精确 Unicode 内容。
+/// - `interactive_newline`：会话启动时选定的 shell 特定换行序列。
+///
+/// # Returns / 返回值
+/// Returns bytes whose CRLF, CR, and LF line endings are replaced without changing non-newline UTF-8 bytes.
+/// 返回将 CRLF、CR 与 LF 换行替换后且不改变其他 UTF-8 字节的字节序列。
+fn normalize_command_session_text_newlines(text: &str, interactive_newline: &str) -> Vec<u8> {
+    // sourceBytes is scanned once so CRLF can never become two logical submissions.
+    // sourceBytes 仅扫描一次，确保 CRLF 绝不会变成两个逻辑提交。
+    let source_bytes = text.as_bytes();
+    // normalized reserves the common no-expansion case while allowing a longer target newline.
+    // normalized 为常见的不扩容情况预留空间，同时允许更长的目标换行。
+    let mut normalized = Vec::with_capacity(source_bytes.len());
+    // segmentStart marks the first unchanged byte not yet copied into the result.
+    // segmentStart 标记尚未复制到结果中的第一个未变化字节。
+    let mut segment_start = 0usize;
+    // cursor visits only UTF-8 bytes and treats ASCII CR/LF as safe code-point boundaries.
+    // cursor 仅遍历 UTF-8 字节，并将 ASCII CR/LF 视为安全码点边界。
+    let mut cursor = 0usize;
+    while cursor < source_bytes.len() {
+        // currentByte selects whether this position begins one logical line break.
+        // currentByte 判断当前位置是否开始一个逻辑换行。
+        let current_byte = source_bytes[cursor];
+        if current_byte != b'\r' && current_byte != b'\n' {
+            cursor += 1;
+            continue;
+        }
+        normalized.extend_from_slice(&source_bytes[segment_start..cursor]);
+        normalized.extend_from_slice(interactive_newline.as_bytes());
+        cursor += if current_byte == b'\r' && source_bytes.get(cursor + 1) == Some(&b'\n') {
+            2
+        } else {
+            1
+        };
+        segment_start = cursor;
+    }
+    normalized.extend_from_slice(&source_bytes[segment_start..]);
+    normalized
 }
 
 /// Returns the ANSI/VT byte sequence for one standardized terminal key.
@@ -511,6 +566,9 @@ pub struct CommandSessionStartRequest {
     /// Concrete launcher arguments that should be passed to the spawned program.
     /// 应传给已启动程序的具体启动参数。
     pub launcher_args: Vec<String>,
+    /// Ordered host-resolved directories prepended only to this command session's PATH.
+    /// 仅前置到当前命令会话 PATH 的宿主解析有序目录。
+    pub path_prefixes: Vec<PathBuf>,
     /// Optional stdin text that should be written immediately after the process starts.
     /// 进程启动后应立即写入的可选标准输入文本。
     pub initial_stdin: Option<String>,

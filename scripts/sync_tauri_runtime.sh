@@ -28,6 +28,34 @@ SourceSystemPromptSkillsDir="$ProjectDir/crates/vulcan-prompt-skills/src/assets/
 # SourceLuaRuntimeDir 指向 make deps-lua 安装的官方 LuaSkills 运行时载荷。
 SourceLuaRuntimeDir="$ProjectDir/third_party/luaskills_runtime"
 
+# BundledToolsHostIdentity captures the operating system and architecture used to select one verified payload.
+# BundledToolsHostIdentity 捕获用于选择一个已校验载荷的操作系统与架构。
+BundledToolsHostIdentity="$(uname -s 2>/dev/null || printf unknown):$(uname -m 2>/dev/null || printf unknown)"
+
+# BundledToolsTarget stores the canonical current-host target prepared by make deps tools.
+# BundledToolsTarget 保存由 make deps tools 准备的规范当前宿主目标。
+BundledToolsTarget=""
+
+# BundledToolBinarySuffix stores the executable suffix required by the current host.
+# BundledToolBinarySuffix 保存当前宿主所需的可执行文件后缀。
+BundledToolBinarySuffix=""
+case "$BundledToolsHostIdentity" in
+    MINGW*:aarch64|MSYS*:aarch64|CYGWIN*:aarch64) BundledToolsTarget="aarch64-pc-windows-msvc"; BundledToolBinarySuffix=".exe" ;;
+    MINGW*:*|MSYS*:*|CYGWIN*:*) BundledToolsTarget="x86_64-pc-windows-msvc"; BundledToolBinarySuffix=".exe" ;;
+    Darwin:arm64|Darwin:aarch64) BundledToolsTarget="aarch64-apple-darwin" ;;
+    Darwin:x86_64) BundledToolsTarget="x86_64-apple-darwin" ;;
+    Linux:aarch64|Linux:arm64) BundledToolsTarget="aarch64-unknown-linux-gnu" ;;
+    Linux:x86_64) BundledToolsTarget="x86_64-unknown-linux-gnu" ;;
+    *)
+        echo "Unsupported bundled-tools synchronization target: $BundledToolsHostIdentity" >&2
+        exit 1
+        ;;
+esac
+
+# SourceBundledToolsDir points at the verified current-target sg and rg payload.
+# SourceBundledToolsDir 指向已校验的当前目标 sg 与 rg 载荷。
+SourceBundledToolsDir="$ProjectDir/third_party/tools/$BundledToolsTarget"
+
 # CodebaseMemoryRuntimeSyncScriptPath points at the verified dependency-to-output synchronizer.
 # CodebaseMemoryRuntimeSyncScriptPath 指向经过校验的依赖到输出目录同步器。
 CodebaseMemoryRuntimeSyncScriptPath="$ProjectDir/scripts/sync_codebase_memory_runtime.ps1"
@@ -55,6 +83,10 @@ OutputSystemPromptSkillsDir="$OutputResourcesDir/prompt-skills/system"
 # OutputLuaRuntimeDir stores the application-owned LuaSkills runtime root.
 # OutputLuaRuntimeDir 保存应用持有的 LuaSkills 运行时根目录。
 OutputLuaRuntimeDir="$ProjectDir/output/lua_runtime"
+
+# OutputBundledToolsDir is the runtime-owned sg and rg distribution root.
+# OutputBundledToolsDir 是运行时持有的 sg 与 rg 发行根目录。
+OutputBundledToolsDir="$ProjectDir/output/tools"
 
 # LegacyManagedRuntimeDistributionDir is the obsolete LuaSkills-private Python/Node location.
 # LegacyManagedRuntimeDistributionDir 是已经废弃的 LuaSkills 私有 Python/Node 位置。
@@ -137,6 +169,20 @@ copy_directory_contents "$SourceSystemPromptSkillsDir" "$OutputSystemPromptSkill
 echo "==> Syncing LuaSkills runtime payload..."
 copy_directory_contents "$SourceLuaRuntimeDir" "$OutputLuaRuntimeDir" 0
 
+# BundledToolName iterates the exact commands required by the runtime PATH contract.
+# BundledToolName 遍历运行时 PATH 契约要求的精确命令。
+for BundledToolName in sg rg; do
+    # SourceBundledToolBinary is the exact verified dependency required before synchronization.
+    # SourceBundledToolBinary 是同步前必需的精确已校验依赖。
+    SourceBundledToolBinary="$SourceBundledToolsDir/bin/$BundledToolName$BundledToolBinarySuffix"
+    if [ ! -f "$SourceBundledToolBinary" ]; then
+        echo "Bundled tool '$BundledToolName' is missing; run make deps tools before synchronization." >&2
+        exit 1
+    fi
+done
+echo "==> Syncing bundled sg and rg tools..."
+copy_directory_contents "$SourceBundledToolsDir" "$OutputBundledToolsDir" 1
+
 if [ ! -f "$CodebaseMemoryRuntimeSyncScriptPath" ]; then
     echo "Missing Codebase Memory runtime synchronization script: $CodebaseMemoryRuntimeSyncScriptPath" >&2
     exit 1
@@ -183,9 +229,15 @@ if [ "$FoundVulcanPlugin" -ne 1 ]; then
 fi
 mkdir -p "$OutputVulcanPluginsDir"
 if [ -f "$ManagedVulcanPluginIndexPath" ]; then
+    # CarriageReturn normalizes ownership indexes previously written by the Windows synchronization route.
+    # CarriageReturn 规范化此前由 Windows 同步路由写入的所有权索引。
+    CarriageReturn=$(printf '\r')
     # PluginName receives each previously managed plugin name from the ownership index.
     # PluginName 接收所有权索引中的每个既有受管插件名称。
     while IFS= read -r PluginName || [ -n "$PluginName" ]; do
+        # PluginName drops one trailing CR while preserving the exact managed plugin identifier.
+        # PluginName 去除一个尾随 CR，同时保留精确的受管插件标识。
+        PluginName=${PluginName%"$CarriageReturn"}
         [ -n "$PluginName" ] || continue
         case "$PluginName" in
             [a-z]* ) ;;

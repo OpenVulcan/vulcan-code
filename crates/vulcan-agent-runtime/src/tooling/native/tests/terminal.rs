@@ -15,6 +15,18 @@ fn terminal_session_tool_stays_visible_in_plan_mode() {
     );
 }
 
+/// Terminal input schema should promise host-normalized logical newlines without exposing platform bytes.
+/// 终端输入 Schema 应承诺由宿主归一化逻辑换行，且不暴露平台字节。
+#[test]
+fn terminal_session_schema_documents_logical_newline_normalization() {
+    // schemaText captures the complete model-visible terminal contract for exact wording assertions.
+    // schemaText 捕获完整的模型可见终端合同，用于精确文案断言。
+    let schema_text = terminal_session_args_schema(&test_shell_support()).to_string();
+    assert!(schema_text.contains("normalizes CRLF, CR, and LF"));
+    assert!(schema_text.contains("bracketed-paste mode is not implied"));
+    assert!(!schema_text.contains("send manual carriage return"));
+}
+
 /// Screen-like terminal chunks should expose a plain screen text view for AI navigation.
 /// 屏幕型终端分片应暴露用于 AI 导航的纯文本屏幕视图。
 #[test]
@@ -227,6 +239,94 @@ fn terminal_transaction_rejects_pending_input_line() {
     let error = validate_terminal_transaction_start(&snapshot)
         .expect_err("pending input line should reject command transactions");
     assert!(error.message.contains("pending input line"));
+
+    // payload keeps the original field while exposing the clearer pending_input_line alias.
+    // payload 保留原字段，同时暴露更清晰的 pending_input_line 别名。
+    let payload = build_terminal_session_host_payload(
+        TerminalSessionToolAction::Snapshot,
+        &snapshot,
+        "dirty shell",
+        &[],
+        false,
+        "log",
+        1.0,
+        String::from("test"),
+        None,
+        json!({}),
+    );
+    assert_eq!(payload["pending_stdin_line"], json!(true));
+    assert_eq!(payload["pending_input_line"], json!(true));
+    assert_eq!(payload["screen_frame_confirmed"], json!(false));
+}
+
+/// Confirmed screen checkpoints should expose their exact frame sequence in text and host payloads.
+/// 已确认屏幕检查点应在文本与宿主载荷中暴露精确帧序号。
+#[test]
+fn terminal_render_labels_confirmed_screen_frame_sequence() {
+    // snapshot models one atomic backend screen checkpoint after output processing.
+    // snapshot 模拟输出处理后的一份原子后端屏幕检查点。
+    let snapshot = CommandSessionSnapshot {
+        command_session_id: Uuid::from_u128(0x61),
+        display_name: Some(String::from("screen shell")),
+        owner_session_id: Uuid::from_u128(0x62),
+        command: String::from("pwsh -NoLogo"),
+        shell_label: String::from("pwsh"),
+        launcher_shell_label: String::from("pwsh"),
+        cwd: PathBuf::from(r"D:\openvulcan\vulcan-code"),
+        backend: CommandSessionBackend::Pty,
+        status: CommandSessionStatus::Running,
+        exit_code: None,
+        failure_reason: None,
+        stdout_bytes: 12,
+        stderr_bytes: 0,
+        last_seq: 9,
+        dropped_before_seq: 0,
+        pending_stdin_line: false,
+        screen_frame_seq: Some(7),
+        screen_rows: Some(24),
+        screen_cols: Some(80),
+        screen_text: Some(String::from("PS> ready")),
+    };
+    // renderInput is the AI-visible text contract for the confirmed frame.
+    // renderInput 是已确认帧面向 AI 的文本合同。
+    let render_input = build_terminal_session_render_input(
+        TerminalSessionToolAction::Snapshot,
+        &snapshot,
+        "screen shell",
+        &[],
+        false,
+        "screen",
+        None,
+        Vec::new(),
+    );
+    assert!(render_input.content.contains("Screen frame sequence: 7"));
+    assert!(
+        render_input
+            .content
+            .contains("Screen frame confirmed: true")
+    );
+    assert!(
+        render_input
+            .content
+            .contains("[screen_text frame_seq=7 confirmed=true]")
+    );
+
+    // payload is the host-only structured contract consumed by UI and diagnostics.
+    // payload 是界面与诊断使用的宿主专用结构化合同。
+    let payload = build_terminal_session_host_payload(
+        TerminalSessionToolAction::Snapshot,
+        &snapshot,
+        "screen shell",
+        &[],
+        false,
+        "screen",
+        1.0,
+        String::from("test"),
+        None,
+        json!({}),
+    );
+    assert_eq!(payload["screen_frame_seq"], json!(7));
+    assert_eq!(payload["screen_frame_confirmed"], json!(true));
 }
 
 /// Literal readiness matching should work within one chunk and across chunk boundaries.
@@ -285,6 +385,74 @@ async fn terminal_powershell_transaction_leaves_shell_usable() {
         .and_then(|result| result.payload["terminal_session_id"].as_str())
         .expect("terminal id should exist")
         .to_string();
+
+    // immediateSend proves an ordinary LF text submission is accepted without a transaction wrapper.
+    // immediateSend 验证普通 LF 文本提交无需事务包装即可被接受。
+    let immediate_send = tool
+        .invoke(NativeToolExecutionRequest {
+            arguments: json!({
+                "action": "send",
+                "terminal_session_id": terminal_session_id,
+                "inputs": [{ "kind": "text", "text": "Write-Output 'immediate_submit'\n" }],
+                "wait_policy": { "mode": "return_immediately" }
+            }),
+            session_id: Some(owner_session_id),
+            workspace_root: None,
+            controller_runtime: None,
+            knowledge_access: None,
+            spill_root: None,
+            enabled_prompt_skill_names: Vec::new(),
+            prepared_prompt_skills: Vec::new(),
+            prompt_skill_user_root: None,
+            project_vmm: VmmConfigLayer::default(),
+            session_vmm: VmmConfigLayer::default(),
+        })
+        .await
+        .expect("immediate LF submission should execute");
+    assert!(
+        immediate_send
+            .host_result
+            .as_ref()
+            .expect("host result")
+            .payload["bytes_written"]
+            .as_u64()
+            .is_some_and(|bytes| bytes > 0)
+    );
+
+    // immediateRead proves the same logical newline committed the command instead of entering continuation mode.
+    // immediateRead 验证相同逻辑换行已提交命令，而不是进入续行模式。
+    let immediate_read = tool
+        .invoke(NativeToolExecutionRequest {
+            arguments: json!({
+                "action": "read",
+                "terminal_session_id": terminal_session_id,
+                "wait_policy": {
+                    "mode": "until_pattern",
+                    "pattern": "immediate_submit",
+                    "max_wait_ms": 10000
+                }
+            }),
+            session_id: Some(owner_session_id),
+            workspace_root: None,
+            controller_runtime: None,
+            knowledge_access: None,
+            spill_root: None,
+            enabled_prompt_skill_names: Vec::new(),
+            prepared_prompt_skills: Vec::new(),
+            prompt_skill_user_root: None,
+            project_vmm: VmmConfigLayer::default(),
+            session_vmm: VmmConfigLayer::default(),
+        })
+        .await
+        .expect("immediate LF output should be readable");
+    assert_eq!(
+        immediate_read
+            .host_result
+            .as_ref()
+            .expect("host result")
+            .payload["pattern_matched"],
+        json!(true)
+    );
 
     let transaction_result = tool
         .invoke(NativeToolExecutionRequest {
@@ -388,11 +556,16 @@ async fn terminal_powershell_transaction_leaves_shell_usable() {
 /// PowerShell 事务包装应将 cmdlet 非终止错误报告为失败事务。
 #[test]
 fn terminal_transaction_powershell_wrapper_tracks_non_terminating_errors() {
-    let wrapped = wrap_terminal_transaction_command("Get-Item missing", "pwsh", "tx-id", "\r\n")
+    let wrapped = wrap_terminal_transaction_command("Get-Item 'missing'", "pwsh", "tx-id", "\r\n")
         .expect("pwsh wrapper should be supported");
 
     assert!(wrapped.contains("$vulcanErrorCount = $Error.Count"));
     assert!(wrapped.contains("$vulcanNewErrors = $Error.Count - $vulcanErrorCount"));
     assert!(wrapped.contains("$vulcanSuccess -and $vulcanNewErrors -le 0"));
+    assert!(wrapped.contains(
+        "[Microsoft.PowerShell.PSConsoleReadLine]::AddToHistory('Get-Item ''missing''')"
+    ));
+    assert!(wrapped.contains("try { [Microsoft.PowerShell.PSConsoleReadLine]::AddToHistory"));
+    assert!(wrapped.contains("catch { }"));
     assert!(wrapped.contains("__VULCAN_TERMINAL_TX_EXIT__:tx-id:"));
 }

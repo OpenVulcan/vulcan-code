@@ -31,6 +31,63 @@ impl SessionLifecycleHook for NoopSessionLifecycleHook {
     }
 }
 
+/// Verifies complete provider traces are published only inside the exact owning session temp directory.
+/// 验证完整 Provider 追踪只会发布到精确所属会话的临时目录中。
+#[test]
+fn provider_request_trace_is_persisted_in_owning_session_temp_directory() {
+    let root = std::env::temp_dir().join(format!(
+        "vulcan-provider-request-trace-test-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let session_id = SessionId::from_u128(7020);
+    let session_dir = create_segmented_session_in_location(
+        &root,
+        false,
+        SegmentedSessionCreateRequest {
+            session_id: session_id.to_string(),
+            project_tag: String::from("provider-trace-project"),
+            created_date: String::from("2026-08-13"),
+            created_at: String::from("100"),
+            project_id: Some(String::from("provider-trace-project")),
+            title: Some(String::from("provider trace")),
+            title_source: Some(String::from("test")),
+            segment_policy: SegmentPolicy::default(),
+        },
+    )
+    .expect("create provider trace session");
+    let trace = serde_json::json!({
+        "schema_version": "vulcan.provider-request-trace.v1",
+        "final_wire_request": {"body": {"model": "test-model"}},
+    });
+
+    let trace_path = persist_provider_request_trace(
+        &root,
+        session_id,
+        "100-000001-00000000-0000-0000-0000-000000000001",
+        &trace,
+    )
+    .expect("persist provider request trace");
+
+    assert_eq!(
+        trace_path,
+        session_dir
+            .join("temp")
+            .join(PROVIDER_REQUEST_TRACE_DIRECTORY)
+            .join("100-000001-00000000-0000-0000-0000-000000000001.json")
+    );
+    let restored = serde_json::from_slice::<serde_json::Value>(
+        &std::fs::read(&trace_path).expect("read provider request trace"),
+    )
+    .expect("decode provider request trace");
+    assert_eq!(restored, trace);
+    assert!(
+        persist_provider_request_trace(&root, session_id, "../escape", &trace).is_err(),
+        "path-like trace identities must be rejected"
+    );
+
+    std::fs::remove_dir_all(&root).expect("remove provider trace test root");
+}
+
 /// Verifies freshly loaded runtime state drops stale process-scoped precheck latches.
 /// 验证刚加载的运行态会丢弃陈旧的进程级预检查闩锁。
 #[test]

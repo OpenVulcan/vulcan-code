@@ -14,7 +14,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 use vldb_controller_client::ControllerSqliteValue;
@@ -48,7 +48,8 @@ use self::segmented_session_store::{
     read_state, record_runtime_audit_event, record_runtime_injection_applied,
     replace_session_boundary_state, reset_vmm_state_for_history_rewrite,
     segmented_session_directory, segmented_session_directory_exists,
-    state_document_from_runtime_state, write_core_vmm_controller_state, write_state,
+    state_document_from_runtime_state, write_core_vmm_controller_state, write_file_bytes_atomic,
+    write_state,
 };
 use self::session_addon_store::read_session_addon_state;
 pub use ai_credentials::{
@@ -115,6 +116,9 @@ const COLLAPSED_TASK_PROJECTS_METADATA_KEY: &str = "workspace.collapsed_task_pro
 /// Removed hidden-user injection group that represented the historical VMM profile owner.
 /// 表示历史 VMM 画像所有者的已移除隐藏用户注入分组。
 const HISTORICAL_VMM_PROFILE_CONTEXT_INJECTION_TAG: &str = "vmm_profile";
+/// Session-local directory that owns complete opt-in provider request traces.
+/// 保存显式启用的完整 Provider 请求追踪文件的会话本地目录。
+const PROVIDER_REQUEST_TRACE_DIRECTORY: &str = "provider-request-trace";
 
 /// Loads the strict Core-owned VMM state for one persisted session.
 /// 加载单个持久化会话中由 Core 所有的严格 VMM 状态。
@@ -182,6 +186,58 @@ pub fn persist_execution_retry_snapshot(
         )
     })?;
     ExecutionRetrySnapshotStore::new(session_directory).write(snapshot)
+}
+
+/// Atomically persists one complete provider request trace below its owning session temp directory.
+/// 在所属会话的临时目录下原子持久化一份完整 Provider 请求追踪。
+///
+/// # Parameters
+/// 参数
+/// `data_root` is the controller-managed Vulcan data root.
+/// `data_root` 是控制器管理的 Vulcan 数据根目录。
+/// `session_id` is the exact session that owns the traced provider request.
+/// `session_id` 是拥有被追踪 Provider 请求的精确会话。
+/// `file_stem` is an internally generated filesystem-safe trace identity without an extension.
+/// `file_stem` 是内部生成且不含扩展名的文件系统安全追踪标识。
+/// `trace` is the complete secret-free diagnostic document.
+/// `trace` 是不含秘钥的完整诊断文档。
+///
+/// # Returns
+/// 返回值
+/// The final trace path after atomic publication, or an explicit validation and storage error.
+/// 原子发布完成后返回最终追踪路径，或返回明确的校验与存储错误。
+pub fn persist_provider_request_trace(
+    data_root: &Path,
+    session_id: SessionId,
+    file_stem: &str,
+    trace: &Value,
+) -> Result<PathBuf, String> {
+    if file_stem.is_empty()
+        || !file_stem
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err(String::from(
+            "Provider request trace file stem must contain only ASCII letters, digits, hyphens, or underscores.",
+        ));
+    }
+    let session_directory = find_segmented_session_directory_by_id(
+        data_root,
+        &session_id.to_string(),
+    )?
+    .ok_or_else(|| {
+        format!("Session `{session_id}` has no segmented directory for provider request tracing.")
+    })?;
+    // encoded is completed before filesystem publication so a serialization failure cannot leave a partial trace.
+    // encoded 在文件系统发布前已经完整生成，因此序列化失败不会留下不完整追踪文件。
+    let encoded = serde_json::to_vec_pretty(trace)
+        .map_err(|error| format!("Provider request trace JSON serialization failed: {error}"))?;
+    let trace_path = session_directory
+        .join("temp")
+        .join(PROVIDER_REQUEST_TRACE_DIRECTORY)
+        .join(format!("{file_stem}.json"));
+    write_file_bytes_atomic(&trace_path, &encoded, "provider request trace")?;
+    Ok(trace_path)
 }
 
 /// Loads one exact retry snapshot through its digest-bound runtime-state reference.

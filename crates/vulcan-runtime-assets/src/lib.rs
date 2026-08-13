@@ -163,6 +163,14 @@ const LUASKILLS_RUNTIME_ROOT_DIR_NAME: &str = "lua_runtime";
 /// 包含 Vulcan 托管插件包的相对目录。
 const PLUGINS_DIR_NAME: &str = "plugins";
 
+/// Relative directory containing host-owned bundled command-line tools.
+/// 包含宿主自有内建命令行工具的相对目录。
+const TOOLS_DIR_NAME: &str = "tools";
+
+/// Relative executable directory nested below the bundled-tools root.
+/// 位于内建工具根目录下的相对可执行文件目录。
+const TOOLS_BIN_DIR_NAME: &str = "bin";
+
 /// Relative dependency directory name shared by host subsystems below the output root.
 /// output 根目录下由宿主各子系统共享的相对依赖目录名称。
 const DEPENDENCIES_DIR_NAME: &str = "dependencies";
@@ -384,6 +392,36 @@ pub fn resolve_bundled_plugin_root() -> Option<PathBuf> {
         .then(|| repository_output_root.join(PLUGINS_DIR_NAME))
 }
 
+/// Returns the bundled command-line tool directory below the active output root.
+/// 返回当前 output 根目录下的内建命令行工具目录。
+///
+/// # Returns
+/// 返回值
+/// The exact existing `<VULCAN_CODE_ROOT>/tools/bin` directory, or `None` when it is not deployed.
+/// 返回精确且已存在的 `<VULCAN_CODE_ROOT>/tools/bin` 目录；尚未部署时返回 `None`。
+pub fn resolve_bundled_tool_bin_directory() -> Option<PathBuf> {
+    // candidates preserves packaged-output precedence before the repository development output.
+    // candidates 保持打包 output 优先于仓库开发 output 的顺序。
+    let mut candidates = Vec::new();
+    // outputRoot is the packaged runtime root resolved from environment or executable location.
+    // outputRoot 是从环境变量或可执行文件位置解析的打包运行时根目录。
+    if let Some(output_root) = resolve_output_root() {
+        candidates.push(output_root.join(TOOLS_DIR_NAME).join(TOOLS_BIN_DIR_NAME));
+    }
+    // repositoryOutputRoot supports binaries launched through Cargo while make sync owns deployment.
+    // repositoryOutputRoot 支持通过 Cargo 启动的二进制，同时仍由 make sync 持有部署过程。
+    let repository_output_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("output");
+    candidates.push(
+        repository_output_root
+            .join(TOOLS_DIR_NAME)
+            .join(TOOLS_BIN_DIR_NAME),
+    );
+    candidates.into_iter().find(|path| path.is_dir())
+}
+
 /// Returns the current user's Vulcan plugin installation root.
 /// 返回当前用户的 Vulcan 插件安装根目录。
 ///
@@ -466,6 +504,7 @@ fn resolve_output_root() -> Option<PathBuf> {
             || candidate.join(CONFIG_DIR_NAME).is_dir()
             || candidate.join(LUASKILLS_RUNTIME_ROOT_DIR_NAME).is_dir()
             || candidate.join(LUA_PACKAGES_DIR_NAME).is_dir()
+            || candidate.join(TOOLS_DIR_NAME).is_dir()
             || candidate.join(CONTROLLER_BIN_DIR_NAME).is_dir()
     })
 }

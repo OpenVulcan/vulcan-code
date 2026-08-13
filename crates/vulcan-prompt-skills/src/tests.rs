@@ -39,6 +39,28 @@ fn packaged_runlua_skill_requires_native_skill_lookup() {
     assert!(content.contains("LuaSkills: `0.5.5`"));
 }
 
+/// Verifies the packaged terminal skill keeps cross-platform logical newline and frame-observability guidance.
+/// 验证打包终端技能保留跨平台逻辑换行与帧可观测性指引。
+#[test]
+fn packaged_terminal_skill_documents_normalized_newlines_and_confirmed_frames() {
+    // skillFile resolves the exact packaged terminal-session source rather than a generated runtime copy.
+    // skillFile 解析精确的打包 terminal-session 源文件，而不是生成的运行时副本。
+    let skill_file = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("assets")
+        .join("system")
+        .join("terminal-session")
+        .join(SKILL_FILE_NAME);
+    // content is the authoritative model guidance shipped with the application.
+    // content 是随应用发布的权威模型指引。
+    let content =
+        fs::read_to_string(skill_file).expect("packaged terminal-session Skill should be readable");
+    assert!(content.contains("normalizes `CRLF`, standalone `CR`, and standalone `LF`"));
+    assert!(content.contains("screen_frame_confirmed"));
+    assert!(content.contains("pending_input_line"));
+    assert!(!content.contains("Windows pwsh text newlines are unreliable"));
+}
+
 /// Builds one complete user prompt skill fixture for policy and rendering tests.
 /// 为策略与渲染测试构建一个完整用户提示词技能夹具。
 fn prompt_skill_fixture(name: &str, description: &str) -> PromptSkill {

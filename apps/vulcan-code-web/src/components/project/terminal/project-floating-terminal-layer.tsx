@@ -4,6 +4,8 @@ import {
   Maximize2,
   Minus,
   Minimize2,
+  PanelLeftClose,
+  PanelLeftOpen,
   Pencil,
   Plus,
   Square,
@@ -92,6 +94,9 @@ interface ProjectTerminalUiState {
   // Whether this project's terminal surface is expanded.
   // 当前项目的终端表面是否展开。
   expanded: boolean;
+  // Whether the project terminal list is reduced to compact numeric selectors.
+  // 项目终端列表是否缩减为紧凑编号选择器。
+  sidebarCollapsed: boolean;
   // Last metadata catalog loaded for this project.
   // 当前项目最后加载的元数据目录。
   catalog: ProjectTerminalCatalog | null;
@@ -217,6 +222,7 @@ export function ProjectFloatingTerminalLayer(props: ProjectFloatingTerminalLayer
     : createProjectTerminalUiState();
   const {
     expanded,
+    sidebarCollapsed,
     catalog,
     selectedTerminalId,
     terminalFocusRequestNonce,
@@ -241,6 +247,14 @@ export function ProjectFloatingTerminalLayer(props: ProjectFloatingTerminalLayer
   // setExpanded 仅控制所捕获项目的显示订阅可见性。
   const setExpanded = React.useCallback((action: React.SetStateAction<boolean>) => {
     updateActiveState((current) => ({ ...current, expanded: resolveStateAction(action, current.expanded) }));
+  }, [updateActiveState]);
+  // setSidebarCollapsed preserves the project-owned navigation density independently from window visibility.
+  // setSidebarCollapsed 独立于窗口可见性保留项目持有的导航密度。
+  const setSidebarCollapsed = React.useCallback((action: React.SetStateAction<boolean>) => {
+    updateActiveState((current) => ({
+      ...current,
+      sidebarCollapsed: resolveStateAction(action, current.sidebarCollapsed),
+    }));
   }, [updateActiveState]);
   // setCatalog updates project metadata without storing terminal screen output.
   // setCatalog 更新项目元数据，但不保存终端屏幕输出。
@@ -441,6 +455,14 @@ export function ProjectFloatingTerminalLayer(props: ProjectFloatingTerminalLayer
       </span>
       <div className="project-terminal-header-actions">
         <button
+          aria-label={sidebarCollapsed ? "展开项目终端列表" : "折叠项目终端列表"}
+          onClick={() => setSidebarCollapsed((current) => !current)}
+          title={sidebarCollapsed ? "展开终端列表" : "折叠终端列表"}
+          type="button"
+        >
+          {sidebarCollapsed ? <PanelLeftOpen size={14} /> : <PanelLeftClose size={14} />}
+        </button>
+        <button
           aria-label={floatingControls.maximized ? "还原项目终端窗口" : "最大化项目终端窗口"}
           onClick={floatingControls.toggleMaximized}
           title={floatingControls.maximized ? "还原" : "最大化"}
@@ -476,14 +498,45 @@ export function ProjectFloatingTerminalLayer(props: ProjectFloatingTerminalLayer
         minimizeAnchorRef={props.minimizeAnchorRef}
         projectId={project.id}
       >
-        <div className="project-terminal-body">
+        <div className="project-terminal-body" data-sidebar-collapsed={sidebarCollapsed ? "true" : "false"}>
           {error ? <div className="project-terminal-error" role="alert">{error}</div> : null}
           {!catalog ? (
             <div className="project-terminal-placeholder">正在加载项目终端…</div>
           ) : (
             <>
-              <aside className="project-terminal-sidebar" data-workspace-input-preserve-owner="true">
-                <div className="project-terminal-sidebar-create">
+              <aside
+                className="project-terminal-sidebar"
+                data-collapsed={sidebarCollapsed ? "true" : "false"}
+                data-workspace-input-preserve-owner="true"
+              >
+                {sidebarCollapsed ? (
+                  <div
+                    aria-label="项目终端编号列表"
+                    aria-orientation="vertical"
+                    className="project-terminal-compact-session-list"
+                    role="tablist"
+                  >
+                    {catalog.terminals.map((terminal, index) => (
+                      <button
+                        aria-controls={`project-terminal-panel-${terminal.id}`}
+                        aria-label={`切换到终端 ${index + 1}：${terminal.name}`}
+                        aria-selected={terminal.id === selectedTerminalId}
+                        className="project-terminal-compact-session-button"
+                        data-active={terminal.id === selectedTerminalId ? "true" : "false"}
+                        data-status={terminal.status}
+                        key={terminal.id}
+                        onClick={() => handleSelectTerminal(terminal.id)}
+                        role="tab"
+                        title={`${index + 1} · ${terminal.name} · ${terminal.shellId}`}
+                        type="button"
+                      >
+                        {index + 1}
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <>
+                    <div className="project-terminal-sidebar-create">
                   <Select
                     disabled={catalog.shells.length === 0 || busyAction !== null}
                     onValueChange={(value) => setSelectedShellId(value)}
@@ -512,14 +565,14 @@ export function ProjectFloatingTerminalLayer(props: ProjectFloatingTerminalLayer
                   >
                     <Plus size={14} />
                   </button>
-                </div>
-                <div
+                    </div>
+                    <div
                   aria-label="项目终端列表"
                   aria-orientation="vertical"
                   className="project-terminal-session-list"
                   role="tablist"
-                >
-                  {catalog.terminals.map((terminal) => (
+                    >
+                      {catalog.terminals.map((terminal) => (
                     <div
                       className="project-terminal-session-row"
                       data-active={terminal.id === selectedTerminalId ? "true" : "false"}
@@ -616,8 +669,10 @@ export function ProjectFloatingTerminalLayer(props: ProjectFloatingTerminalLayer
                         </button>
                       </div>
                     </div>
-                  ))}
-                </div>
+                      ))}
+                    </div>
+                  </>
+                )}
               </aside>
               <div
                 className="project-terminal-stage"
@@ -1164,6 +1219,7 @@ function retainRenderedTerminalCursor(
 function createProjectTerminalUiState(): ProjectTerminalUiState {
   return {
     expanded: false,
+    sidebarCollapsed: false,
     catalog: null,
     selectedTerminalId: null,
     terminalFocusRequestNonce: 0,

@@ -532,6 +532,8 @@ pub(crate) fn refresh_settings_projection_locked(
     guard.workbench.thinking_display_mode = workbench_thinking_display_mode(provider_configuration);
     guard.workbench.git_commit = git_commit_settings(provider_configuration);
     guard.workbench.provider_retry = provider_retry_settings(provider_configuration);
+    guard.workbench.provider_request_trace_enabled =
+        provider_configuration.provider_request_trace_enabled;
     guard.workbench.host_tools = host_tools_settings(provider_configuration);
     guard.workbench.output_style_catalog = output_style_catalog_summary(provider_configuration);
     guard.workbench.composer_attachment_capabilities = composer_attachment_capabilities(

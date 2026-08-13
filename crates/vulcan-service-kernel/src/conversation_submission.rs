@@ -1955,17 +1955,6 @@ async fn service_start_conversation_execution(
         submission_target_label,
         current_unix_millis_value(),
     )?;
-    if !submission_mode.is_continuation() {
-        // This synchronous boundary closes the accepted-but-not-yet-prepared Stop race.
-        // 该同步边界关闭“已接纳但尚未准备”阶段的 Stop 竞态窗口。
-        persist_accepted_preparation_retry_checkpoint(
-            &controller_runtime,
-            &mut workspace_snapshot,
-            session_id,
-            &client_submission_id,
-            &precheck_start,
-        )?;
-    }
     if let Some((expected_generation, expected_ledger_revision)) =
         submission_mode.continuation_expectation()
     {
@@ -2103,6 +2092,48 @@ async fn service_start_conversation_execution(
     }
     mark_webui_prompt_snapshot_preparing(&mut workspace_snapshot, session_id);
     let begin_commit_started_at = current_unix_millis_value();
+    if materialized_session.kind == PromptSessionMaterializationKind::Created {
+        // New-session persistence establishes the segmented directory before optional retry sidecar publication.
+        // 新会话持久化会在可选重试 sidecar 发布前建立分段目录。
+        persist_workspace_session_update(
+            None,
+            controller_runtime.clone(),
+            &workspace_snapshot,
+            session_id,
+        )
+        .await?;
+    }
+    if !submission_mode.is_continuation()
+        && let Err(error) = persist_accepted_preparation_retry_checkpoint(
+            &controller_runtime,
+            &mut workspace_snapshot,
+            session_id,
+            &client_submission_id,
+            &precheck_start,
+        )
+    {
+        // Retry-point publication is auxiliary for ordinary submissions and must never reject user input.
+        // 重试点发布是常规提交的辅助能力，绝不能因此拒绝用户输入。
+        eprintln!("[webui-service] accepted preparation retry checkpoint skipped: {error}");
+        if let Some(runtime_state) = workspace_snapshot
+            .session_runtime_state
+            .get_mut(&session_id)
+        {
+            if let Some(stale_reference) = runtime_state.execution_retry_snapshot.take()
+                && let Err(cleanup_error) =
+                    vulcan_workspace_store::workspace_store::delete_execution_retry_snapshot(
+                        &controller_runtime.data_root,
+                        session_id,
+                        &stale_reference.snapshot_id,
+                    )
+            {
+                eprintln!(
+                    "[webui-service] stale execution retry cleanup after skipped checkpoint failed: {cleanup_error}"
+                );
+            }
+            runtime_state.updated_at = current_unix_millis_text();
+        }
+    }
     if materialized_session.kind == PromptSessionMaterializationKind::Created {
         commit_created_submission_workspace_slice(
             &state,

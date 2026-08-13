@@ -126,6 +126,7 @@ import {
 import {
   removeMcpServerConfiguration,
   saveGitCommitSettings,
+  saveProviderRequestTraceSettings,
   saveProviderRetrySettings,
   saveMcpServerConfiguration,
   savePromptOutputStyle,
@@ -2055,6 +2056,7 @@ export function WorkbenchLayout(props: {
                 return (await loadWorkbenchSnapshot()) ?? workbenchStateRef.current;
               }),
               onSaveGitCommitSettings: (request) => applySkillWorkbenchAction(async () => (await saveGitCommitSettings(request)) ?? workbenchStateRef.current),
+              onSaveProviderRequestTraceSettings: (enabled) => applySkillWorkbenchAction(async () => (await saveProviderRequestTraceSettings(enabled)) ?? workbenchStateRef.current),
               onSaveProviderRetrySettings: (request) => applySkillWorkbenchAction(async () => (await saveProviderRetrySettings(request)) ?? workbenchStateRef.current),
               onSaveMcpServer: (request) => applySkillWorkbenchAction(async () => (await saveMcpServerConfiguration(request as unknown as Record<string, unknown>)) ?? workbenchStateRef.current),
               onRemoveMcpServer: (serverId) => applySkillWorkbenchAction(async () => (await removeMcpServerConfiguration(serverId)) ?? workbenchStateRef.current),

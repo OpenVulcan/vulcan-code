@@ -28,6 +28,10 @@ TauriRunScriptPath="$ScriptDir/scripts/run_tauri.sh"
 # PowerShellScriptPath 指向共享旧操作使用的 PowerShell 任务入口。
 PowerShellScriptPath="$ScriptDir/make.ps1"
 
+# BundledToolsDepsScriptPath points at the native Unix-like sg and rg dependency installer.
+# BundledToolsDepsScriptPath 指向 Unix-like 原生 sg 与 rg 依赖安装器。
+BundledToolsDepsScriptPath="$ScriptDir/scripts/install_bundled_tools.sh"
+
 # CommandMode selects the top-level command such as build, run, release, or deps.
 # CommandMode 用于选择顶层命令，例如 build、run、release 或 deps。
 CommandMode=${1:-}
@@ -126,6 +130,16 @@ invoke_powershell_route() {
     fi
 }
 
+# invoke_bundled_tools_deps installs latest sg and rg payloads without requiring PowerShell.
+# invoke_bundled_tools_deps 在不依赖 PowerShell 的情况下安装最新版 sg 与 rg 载荷。
+invoke_bundled_tools_deps() {
+    if [ ! -f "$BundledToolsDepsScriptPath" ]; then
+        echo "Missing bundled-tools dependency script: $BundledToolsDepsScriptPath" >&2
+        exit 1
+    fi
+    sh "$BundledToolsDepsScriptPath"
+}
+
 # show_usage prints the supported command forms so contributors can recover from invalid input.
 # show_usage 用于输出支持的命令形式，方便贡献者在输入无效参数后快速恢复。
 show_usage() {
@@ -144,6 +158,7 @@ show_usage() {
     echo "  ./make.sh run release # run Tauri/WebUI release build"
     echo "  ./make.sh deps        # install host + official LuaSkills runtime dependencies"
     echo "  ./make.sh deps host   # install host native dependencies only"
+    echo "  ./make.sh deps tools  # install the latest bundled sg and rg tools"
     echo "  ./make.sh deps lua    # install official LuaSkills runtime dependencies only"
     echo "  ./make.sh deps cbm    # install the pinned native Codebase Memory runtime only"
 }
@@ -226,6 +241,9 @@ case "$NormalizedMode" in
         ;;
     deps)
         case "$NormalizedVariant" in
+            tools)
+                invoke_bundled_tools_deps
+                ;;
             ""|all|host|lua|cbm)
                 invoke_powershell_route deps "$NormalizedVariant"
                 ;;

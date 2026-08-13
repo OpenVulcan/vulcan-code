@@ -3,7 +3,9 @@ use crate::agent_runtime::conversation_hooks::HOOK_TOOL_SHELL_COMMAND_BEFORE_EXE
 use crate::agent_runtime::vulcan_plugin_hooks::dispatch_vulcan_plugin_hook;
 use std::collections::BTreeMap;
 use vulcan_hooks::{HookActor, HookCapabilitySet, HookContext, HookScope};
-use vulcan_host_tools::process_creation::apply_windows_release_no_window;
+use vulcan_host_tools::process_creation::{
+    apply_child_path_prefixes, apply_windows_release_no_window,
+};
 
 /// Builds the one-shot shell-command host-owned native tool.
 /// 构建一次性 shell 命令宿主自有原生工具。
@@ -345,22 +347,8 @@ fn apply_shell_command_process_options(
         command.env(name, value);
     }
 
-    if !process_options.path_prefixes.is_empty() {
-        // paths puts host-resolved plugin directories before the inherited process search path.
-        // paths 把宿主解析出的插件目录放在继承的进程搜索路径之前。
-        let mut paths = process_options.path_prefixes.clone();
-        if let Some(existing_path) = std::env::var_os("PATH") {
-            paths.extend(std::env::split_paths(&existing_path));
-        }
-        // joinedPath is applied last so no plugin environment contribution can shadow it.
-        // joinedPath 最后应用，确保任何插件环境变量贡献都无法覆盖它。
-        let joined_path = std::env::join_paths(paths).map_err(|error| {
-            NativeToolError::new(format!(
-                "Failed to construct the host-owned plugin binary PATH: {error}"
-            ))
-        })?;
-        command.env("PATH", joined_path);
-    }
+    apply_child_path_prefixes(command, &process_options.path_prefixes)
+        .map_err(NativeToolError::new)?;
     Ok(())
 }
 
@@ -390,6 +378,11 @@ async fn apply_shell_command_plugin_hooks(
     ),
     NativeToolError,
 > {
+    // hostPathPrefixes gives packaged sg and rg precedence over plugin and inherited PATH entries.
+    // hostPathPrefixes 让已打包 sg 与 rg 优先于插件及继承的 PATH 条目。
+    let host_path_prefixes = vulcan_runtime_assets::resolve_bundled_tool_bin_directory()
+        .into_iter()
+        .collect::<Vec<_>>();
     let original_cwd = normalized_workspace_path_text_from_path(effective_cwd);
     let shell = parsed_args
         .shell
@@ -407,7 +400,10 @@ async fn apply_shell_command_plugin_hooks(
     let Some(plugin_runtime) = plugin_runtime else {
         return Ok((
             parsed_args.clone(),
-            ShellCommandProcessOptions::default(),
+            ShellCommandProcessOptions {
+                path_prefixes: host_path_prefixes,
+                environment: BTreeMap::new(),
+            },
             ShellCommandHookReport {
                 original_command: parsed_args.command.clone(),
                 effective_command: parsed_args.command.clone(),
@@ -470,7 +466,9 @@ async fn apply_shell_command_plugin_hooks(
         .iter()
         .map(ToString::to_string)
         .collect::<Vec<_>>();
-    let mut path_prefixes = Vec::new();
+    // pathPrefixes starts with host-owned tools before accepting validated plugin binary directories.
+    // pathPrefixes 首先放入宿主自有工具，再接收已校验的插件二进制目录。
+    let mut path_prefixes = host_path_prefixes;
     for request in &transformed.binary_path_requests {
         if !completed_hooks.contains(&request.registration_id) {
             return Err(NativeToolError::new(format!(

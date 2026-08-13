@@ -146,6 +146,9 @@ pub(crate) async fn execute_terminal_session_start_action(
             cwd: effective_cwd,
             launcher_program,
             launcher_args,
+            path_prefixes: vulcan_runtime_assets::resolve_bundled_tool_bin_directory()
+                .into_iter()
+                .collect(),
             initial_stdin: None,
             initial_stdin_append_newline: false,
             backend: default_terminal_session_backend(),

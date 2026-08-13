@@ -75,6 +75,9 @@ function ConversationSessionTerminalRow(props: {
   // screenOpen is the sole display-attachment visibility source.
   // screenOpen 是显示订阅可见性的唯一来源。
   const [screenOpen, setScreenOpen] = React.useState(false);
+  // screenButtonRef is the exact macOS-style minimize and restore animation anchor for this terminal.
+  // screenButtonRef 是当前终端 macOS 风格收回与显示动画的精确锚点。
+  const screenButtonRef = React.useRef<HTMLButtonElement | null>(null);
   const handleStopRequest = React.useCallback(() => {
     if (props.session.canStop && !stopping) setConfirmOpen(true);
   }, [props.session.canStop, stopping]);
@@ -104,6 +107,7 @@ function ConversationSessionTerminalRow(props: {
         </TooltipContent>
       </Tooltip>
       <button
+        ref={screenButtonRef}
         aria-label={t("terminalSession.openScreen")}
         className="conversation-session-terminal-action conversation-session-terminal-screen-button"
         disabled={!props.summary}
@@ -134,6 +138,7 @@ function ConversationSessionTerminalRow(props: {
         }}
       />
       <ConversationReadOnlyTerminalSurface
+        minimizeAnchorRef={screenButtonRef}
         open={screenOpen}
         session={props.session}
         summary={props.summary}
