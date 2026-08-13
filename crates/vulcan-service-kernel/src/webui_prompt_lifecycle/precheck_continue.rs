@@ -4,6 +4,7 @@
 use vulcan_service_api::ServiceEvent;
 
 use super::*;
+use crate::refreeze_claimed_execution_retry_snapshot;
 use crate::{
     apply_session_phase_to_state, emit_context_injection_changed_delta,
     emit_service_event_with_trace, owning_project_id_for_session, persist_workspace_session_update,
@@ -1105,6 +1106,7 @@ pub(crate) async fn mark_webui_prompt_preparation_failed(
         "workbench_phase_delta_emit",
         ServiceEvent::WorkbenchDelta(Box::new(event)),
     );
+    refreeze_claimed_execution_retry_snapshot(state, controller_runtime, session_id, error)?;
     let snapshot = current_workspace_snapshot_from_shared_state(state)?
         .ok_or_else(|| String::from("precheck failed persist snapshot is unavailable"))?;
     persist_workspace_session_update(

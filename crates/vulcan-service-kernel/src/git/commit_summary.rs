@@ -532,6 +532,7 @@ async fn run_git_commit_summary_model(
         },
         runtime_policy: ExecutionRuntimePolicy::context_compaction(),
         conversation_hook_turn_id: None,
+        execution_retry_snapshot: None,
         execution_agent_id: None,
         agent_prompt_snapshot: None,
         provider_id_override: None,

@@ -11,6 +11,7 @@ use crate::provider_config::{
     ProjectPromptSkillsConfiguration,
 };
 use futures_util::future::BoxFuture;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{fmt, path::PathBuf, sync::Arc};
 use vulcan_context::{
@@ -99,7 +100,7 @@ impl ExecutionAgentPromptSnapshot {
 
 /// Provider-visible typed agent message that starts or joins one runtime turn.
 /// 用于启动或加入运行回合的 Provider 可见类型化智能体消息。
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExecutionProviderVisibleAgentMessage {
     /// Stable delivery identifier shared by mailbox, runtime, and display records.
     /// 由 mailbox、runtime 与显示记录共享的稳定投递标识。
@@ -275,6 +276,9 @@ pub struct ExecutionPreparationRequest {
     /// Optional immutable conversation Hook turn identifier captured by a Hook-enabled main-session request.
     /// 启用 Hook 的主会话请求捕获的可选不可变会话 Hook 回合标识。
     pub conversation_hook_turn_id: Option<String>,
+    /// Exact claimed execution snapshot that replaces prompt reconstruction for manual retry.
+    /// 在手动重试时替代提示词重构的精确已领取执行快照。
+    pub execution_retry_snapshot: Option<Box<vulcan_workbench_model::ExecutionRetrySnapshot>>,
     /// Optional agent identifier that should own this execution instead of the globally active agent.
     /// 可选的本次执行代理标识，用于替代全局激活代理。
     pub execution_agent_id: Option<String>,
@@ -428,7 +432,7 @@ pub enum ExecutionTurnStartMode {
     UserPrompt,
     /// Start from the canonical provider-visible snapshot without appending a new prompt.
     /// 从规范 Provider 可见快照直接启动，不追加新的提示词。
-    SeededProviderInput,
+    RestoredCheckpoint,
 }
 
 /// Runtime purpose attached to one provider-facing prompt execution.
@@ -438,6 +442,9 @@ pub enum ExecutionPromptPurpose {
     /// Normal user-authored conversation turn.
     /// 普通用户发起的会话回合。
     UserTurn,
+    /// Prompt-free continuation of retained provider-visible state without opening a new user-authored turn.
+    /// 在不打开新用户编写回合的前提下，无提示词继续保留的 Provider 可见状态。
+    ExecutionRetry,
     /// Cache-preserving internal context-compaction summary request.
     /// 保持缓存的内部上下文压缩摘要请求。
     ContextCompactionCachePreserving,
@@ -480,7 +487,7 @@ impl ExecutionPromptPurpose {
     pub const fn supports_user_turn_tooling(self) -> bool {
         matches!(
             self,
-            Self::UserTurn | Self::ContextCompactionCachePreserving
+            Self::UserTurn | Self::ExecutionRetry | Self::ContextCompactionCachePreserving
         )
     }
 
@@ -495,6 +502,7 @@ impl ExecutionPromptPurpose {
     pub const fn diagnostics_label(self) -> &'static str {
         match self {
             Self::UserTurn => "user-turn",
+            Self::ExecutionRetry => "execution-retry",
             Self::ContextCompactionCachePreserving => "context-compaction-cache-preserving",
             Self::ContextCompaction => "context-compaction",
             Self::GitCommitSummary => "git-commit-summary",

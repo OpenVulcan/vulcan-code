@@ -27,7 +27,7 @@ use vulcan_core::types::ConversationSnapshot as CoreConversationSnapshot;
 /// 返回值
 /// Returns the lossless core snapshot, or an identity error without producing a partial snapshot.
 /// 返回无损 core 快照；身份无效时返回错误且不产生部分快照。
-pub(crate) fn build_core_conversation_snapshot(
+pub fn build_core_conversation_snapshot(
     conversation_state: &SessionConversationState,
 ) -> Result<CoreConversationSnapshot, String> {
     validate_session_conversation_message_identities(&conversation_state.messages)

@@ -8,6 +8,7 @@ use crate::model::SessionId;
 use serde_json::Value;
 use std::sync::{Arc, Mutex};
 use tokio::sync::oneshot;
+use vulcan_ai_contract::AiExecutionRequest;
 use vulcan_context::RuntimeProviderLoweringRepairEvent;
 use vulcan_core::types::{
     ProviderRequestSnapshot as CoreProviderRequestSnapshot,
@@ -188,6 +189,15 @@ pub enum ExecutionStreamEvent {
         /// Provider-neutral request snapshot captured before wire lowering.
         /// 线协议转换前捕获的 Provider 中立请求快照。
         snapshot: CoreProviderRequestSnapshot,
+        /// Exact provider-neutral request persisted before network dispatch.
+        /// 网络分派前持久化的精确 Provider 中立请求。
+        exact_request: Option<AiExecutionRequest>,
+        /// Exact controller configuration frozen for retry restoration.
+        /// 为重试恢复冻结的精确控制器配置。
+        controller_config: Option<vulcan_core::types::ControllerConfig>,
+        /// Exact canonical controller snapshot frozen at this request boundary.
+        /// 在当前请求边界冻结的精确规范控制器快照。
+        controller_snapshot: Option<vulcan_core::types::ConversationSnapshot>,
     },
     /// Provider-specific wire request payload has been built immediately before the HTTP/API call.
     /// Provider 专用线缆请求载荷已在 HTTP/API 调用前构建完成。

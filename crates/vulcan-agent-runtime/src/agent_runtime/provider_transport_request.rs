@@ -7,6 +7,7 @@ use crate::agent_runtime::runtime_stream_intervention::RuntimePromptIntervention
 use crate::agent_runtime::task_runtime::TaskRuntime;
 use crate::model::SessionId;
 use std::sync::Arc;
+use vulcan_ai_contract::AiExecutionRequest;
 use vulcan_core::types::{
     ConversationSnapshot as CoreConversationSnapshot,
     ProviderContextInjection as CoreProviderContextInjection,
@@ -22,7 +23,7 @@ pub(crate) enum ProviderTransportTurnStartMode {
     UserPrompt,
     /// The controller should run from provider-visible input already in the snapshot.
     /// 控制器应从快照中已有的 Provider 可见输入启动。
-    SeededProviderInput,
+    RestoredCheckpoint,
 }
 
 /// Owned provider transport execution request used to route one prepared runtime turn into the correct provider-specific adapter.
@@ -103,6 +104,12 @@ pub(crate) struct ProviderTransportExecutionRequest {
     /// Canonical conversation snapshot consumed by the host-owned controller loop.
     /// 供宿主自有控制器循环消费的规范会话快照。
     pub(crate) core_snapshot: CoreConversationSnapshot,
+    /// Exact first public request used only by a claimed execution retry.
+    /// 仅由已认领执行重试使用的精确首个公共请求。
+    pub(crate) initial_provider_request: Option<AiExecutionRequest>,
+    /// Exact controller configuration restored by a claimed execution retry.
+    /// 由已认领执行重试恢复的精确控制器配置。
+    pub(crate) controller_config_override: Option<vulcan_core::types::ControllerConfig>,
     /// Optional temperature override already normalized by the executor.
     /// 已由执行器归一化后的可选 temperature 覆盖值。
     pub(crate) temperature: Option<f64>,
@@ -160,6 +167,8 @@ pub(crate) fn build_provider_transport_execution_request(
     prompt: &str,
     turn_start_mode: ProviderTransportTurnStartMode,
     core_snapshot: CoreConversationSnapshot,
+    initial_provider_request: Option<AiExecutionRequest>,
+    controller_config_override: Option<vulcan_core::types::ControllerConfig>,
     temperature: Option<f64>,
     max_turns: usize,
     task_runtime: Arc<TaskRuntime>,
@@ -184,6 +193,8 @@ pub(crate) fn build_provider_transport_execution_request(
         prompt: prompt.to_string(),
         turn_start_mode,
         core_snapshot,
+        initial_provider_request,
+        controller_config_override,
         temperature,
         max_turns,
         task_runtime,

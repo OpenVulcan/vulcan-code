@@ -766,6 +766,7 @@ pub(crate) fn stop_webui_session_work(
     workspace_snapshot: &mut WorkspaceSnapshot,
     session_id: SessionId,
     had_active_kernel_turn: bool,
+    had_active_stream_task: bool,
     stopped_running_subagents: bool,
 ) -> Result<bool, String> {
     let now = current_unix_millis_text();
@@ -784,16 +785,29 @@ pub(crate) fn stop_webui_session_work(
     let had_pending_precheck =
         had_pending_precheck || runtime_state.active_precheck_turn_id.is_some();
     let cleared_system_queue = clear_internal_pending_prompt_queue_for_stop(&mut runtime_state);
+    // hadActiveRunProjection closes a retained Running state even when a prior abnormal exit already lost both live owners.
+    // hadActiveRunProjection 即使先前异常退出已经丢失两个实时所有者，也会收敛保留的 Running 状态。
+    let had_active_run_projection = workspace_snapshot
+        .session_run_phases
+        .get(&session_id)
+        .is_some_and(|phase| is_active_session_run_phase(*phase))
+        || workspace_session_summary_for_session(workspace_snapshot, session_id)
+            .is_some_and(|session| session.status == SessionState::Running);
     if !had_active_kernel_turn
+        && !had_active_stream_task
         && !stopped_running_subagents
         && !had_pending_precheck
         && !cleared_system_queue
+        && !had_active_run_projection
     {
         return Ok(false);
     }
     runtime_state.active_precheck_turn_id = None;
     runtime_state.updated_at = now.clone();
-    let stop_body = match (had_active_kernel_turn, stopped_running_subagents) {
+    // hadActiveExecution treats the stream registry and session kernel as equal live-run evidence.
+    // hadActiveExecution 将流注册表与会话内核同等视为实时运行证据。
+    let had_active_execution = had_active_kernel_turn || had_active_stream_task;
+    let stop_body = match (had_active_execution, stopped_running_subagents) {
         (true, true) => {
             "已按用户请求停止当前 AI 调用、运行中的智能体以及系统内部等待任务；尚未真正执行的排队消息已恢复到可再次插入状态。"
         }

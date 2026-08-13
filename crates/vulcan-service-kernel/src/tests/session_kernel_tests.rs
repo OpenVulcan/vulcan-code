@@ -614,6 +614,7 @@ async fn early_stream_exhaustion_cleans_exact_owner_and_kernel_turn() {
 
     assert_eq!(
         handle_stream_task_exit(
+            &ServiceEventEmitter::new(Vec::new()),
             &state,
             session_id,
             task_id,
@@ -632,6 +633,21 @@ async fn early_stream_exhaustion_cleans_exact_owner_and_kernel_turn() {
             .get(&session_id)
             .expect("kernel should exist")
             .has_active_turn()
+    );
+    assert_eq!(
+        guard
+            .workspace_snapshot
+            .as_ref()
+            .and_then(|workspace| workspace.session_run_phases.get(&session_id)),
+        Some(&SessionRunPhase::Failed)
+    );
+    assert_eq!(
+        guard
+            .workspace_snapshot
+            .as_ref()
+            .and_then(|workspace| workspace_session_summary_for_session(workspace, session_id))
+            .map(|session| session.status),
+        Some(SessionState::Blocked)
     );
 }
 
@@ -677,6 +693,7 @@ async fn stale_generation_exit_preserves_replacement_owner_and_kernel_turn() {
 
     assert_eq!(
         handle_stream_task_exit(
+            &ServiceEventEmitter::new(Vec::new()),
             &state,
             session_id,
             stale_task_id,

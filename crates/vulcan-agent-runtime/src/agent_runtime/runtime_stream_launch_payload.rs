@@ -13,6 +13,7 @@ use crate::agent_runtime::runtime_stream_delta::RuntimeStreamDeltaState;
 use crate::agent_runtime::task_runtime::{TaskExecutionRuntimeContext, TaskRuntime};
 use crate::model::SessionId;
 use std::sync::Arc;
+use vulcan_ai_contract::AiExecutionRequest;
 use vulcan_context::RuntimeProviderLoweringRepairEvent;
 use vulcan_core::types::{
     ConversationPayload as CoreConversationPayload,
@@ -29,7 +30,7 @@ pub(crate) enum RuntimeStreamTurnStartMode {
     UserPrompt,
     /// Start from provider-visible messages already seeded into the snapshot.
     /// 从已经播种到快照中的 Provider 可见消息启动。
-    SeededProviderInput,
+    RestoredCheckpoint,
 }
 
 /// Launch payload that captures everything the outer runtime stream needs after preparation and bootstrap have both succeeded.
@@ -80,6 +81,12 @@ pub struct RuntimeStreamLaunch {
     /// Canonical conversation snapshot handed to `vulcan-core`.
     /// 交给 `vulcan-core` 的规范会话快照。
     pub(crate) core_snapshot: CoreConversationSnapshot,
+    /// Exact first provider request restored from a claimed retry snapshot.
+    /// 从已认领重试快照恢复的精确首个 Provider 请求。
+    pub(crate) initial_provider_request: Option<AiExecutionRequest>,
+    /// Exact controller configuration restored with the retry snapshot.
+    /// 随重试快照一并恢复的精确控制器配置。
+    pub(crate) controller_config_override: Option<vulcan_core::types::ControllerConfig>,
     /// Mutable streaming-loop state seeded from the bootstrapped core controller.
     /// 由已启动核心控制器播种得到的可变流式循环状态。
     pub(crate) stream_state: RuntimeStreamDeltaState,
@@ -135,7 +142,33 @@ pub(crate) fn build_runtime_stream_launch_payload(
         discovery_errors: bootstrap.discovery_errors,
         warnings: bootstrap.warnings,
         system_preamble: bootstrap.system_preamble,
-        core_snapshot: bootstrap.core_snapshot,
+        core_snapshot:
+            request
+                .execution_retry_snapshot
+                .as_ref()
+                .filter(|snapshot| {
+                    matches!(
+                    &snapshot.pending_action,
+                    vulcan_workbench_model::ExecutionRetryPendingAction::DispatchProviderRequest {
+                        ..
+                    }
+                )
+                })
+                .map(|snapshot| snapshot.controller_snapshot.clone())
+                .unwrap_or(bootstrap.core_snapshot),
+        initial_provider_request: request
+            .execution_retry_snapshot
+            .as_ref()
+            .and_then(|snapshot| match &snapshot.pending_action {
+                vulcan_workbench_model::ExecutionRetryPendingAction::DispatchProviderRequest {
+                    request,
+                } => Some(request.as_ref().clone()),
+                _ => None,
+            }),
+        controller_config_override: request
+            .execution_retry_snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.controller_config.clone()),
         stream_state: RuntimeStreamDeltaState::new(bootstrap.core_controller, protocol_profile_id)
             .with_tool_request_stream(&stream_resolved_tools)
             .with_provider_request_telemetry_context(provider_telemetry_context),
@@ -152,15 +185,15 @@ fn runtime_stream_turn_start_mode_for_request(
     if let Some(mode) = request.turn_start_mode {
         return match mode {
             ExecutionTurnStartMode::UserPrompt => RuntimeStreamTurnStartMode::UserPrompt,
-            ExecutionTurnStartMode::SeededProviderInput => {
-                RuntimeStreamTurnStartMode::SeededProviderInput
+            ExecutionTurnStartMode::RestoredCheckpoint => {
+                RuntimeStreamTurnStartMode::RestoredCheckpoint
             }
         };
     }
     if request.provider_visible_agent_messages.is_empty() {
         RuntimeStreamTurnStartMode::UserPrompt
     } else {
-        RuntimeStreamTurnStartMode::SeededProviderInput
+        RuntimeStreamTurnStartMode::RestoredCheckpoint
     }
 }
 
@@ -345,6 +378,7 @@ mod tests {
             },
             runtime_policy: vulcan_session_core::ExecutionRuntimePolicy::main_session(),
             conversation_hook_turn_id: Some(String::from("test-hook-turn")),
+            execution_retry_snapshot: None,
             execution_agent_id: None,
             agent_prompt_snapshot: None,
             provider_id_override: None,
@@ -522,7 +556,7 @@ mod tests {
 
         assert_eq!(
             launch.turn_start_mode,
-            RuntimeStreamTurnStartMode::SeededProviderInput
+            RuntimeStreamTurnStartMode::RestoredCheckpoint
         );
         assert!(launch.effective_prompt.contains("<agent_message>"));
         assert_eq!(

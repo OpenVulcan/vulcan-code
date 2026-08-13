@@ -319,8 +319,30 @@ pub(crate) async fn service_stop_conversation_run(
         &mut workspace_snapshot,
         target_session_id,
         had_active_kernel_turn,
+        had_active_stream_task,
         !running_subagent_task_states.is_empty(),
     )?;
+    if did_stop_work {
+        refreeze_claimed_execution_retry_snapshot(
+            &state,
+            &controller_runtime,
+            target_session_id,
+            "The user stopped the claimed retry execution.",
+        )?;
+        let refreshed_retry_reference = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?
+            .workspace_snapshot
+            .as_ref()
+            .and_then(|workspace| workspace.session_runtime_state.get(&target_session_id))
+            .and_then(|runtime_state| runtime_state.execution_retry_snapshot.clone());
+        if let Some(runtime_state) = workspace_snapshot
+            .session_runtime_state
+            .get_mut(&target_session_id)
+        {
+            runtime_state.execution_retry_snapshot = refreshed_retry_reference;
+        }
+    }
     if did_stop_work
         && !workspace_snapshot
             .session_runtime_state

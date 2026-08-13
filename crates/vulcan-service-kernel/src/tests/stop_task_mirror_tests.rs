@@ -72,6 +72,86 @@ fn seed_terminal_provider_calls(runtime_state: &mut SessionRuntimeStateEntry, co
     }
 }
 
+/// Builds one minimal retained Running session for stop-state convergence tests.
+/// 为停止状态收敛测试构建一个最小的保留 Running 会话。
+fn running_stop_workspace_snapshot(
+    session_id: SessionId,
+    run_phase: SessionRunPhase,
+) -> WorkspaceSnapshot {
+    WorkspaceSnapshot {
+        task_projects: Vec::new(),
+        archived_task_projects: Vec::new(),
+        sessions: vec![SessionSummary::new(
+            session_id,
+            Some(String::from("project-a")),
+            "停止收敛测试",
+            "正在运行",
+            SessionState::Running,
+            0,
+            0,
+            "刚刚",
+        )],
+        archived_sessions: Vec::new(),
+        session_messages: BTreeMap::new(),
+        archived_session_messages: BTreeMap::new(),
+        session_compactions: BTreeMap::new(),
+        archived_session_compactions: BTreeMap::new(),
+        session_runtime_state: BTreeMap::from([(session_id, SessionRuntimeStateEntry::default())]),
+        archived_session_runtime_state: BTreeMap::new(),
+        session_run_phases: BTreeMap::from([(session_id, run_phase)]),
+        expanded_task_projects: BTreeSet::new(),
+        selected_session: session_id,
+        hydrated_session_ids: BTreeSet::new(),
+    }
+}
+
+/// Verifies a live stream task is sufficient to terminalize a session whose kernel turn is missing.
+/// 验证实时流任务足以终结内核回合已经缺失的会话。
+#[test]
+fn webui_stop_session_work_uses_stream_owner_without_kernel_turn() {
+    let session_id = SessionId::new_v4();
+    let mut workspace_snapshot =
+        running_stop_workspace_snapshot(session_id, SessionRunPhase::Requesting);
+
+    let did_stop = stop_webui_session_work(&mut workspace_snapshot, session_id, false, true, false)
+        .expect("stream-owned stop should converge every session status surface");
+
+    assert!(did_stop);
+    assert_eq!(
+        workspace_snapshot.session_run_phases.get(&session_id),
+        Some(&SessionRunPhase::Stopped)
+    );
+    assert_eq!(
+        workspace_session_summary_for_session(&workspace_snapshot, session_id)
+            .map(|session| session.status),
+        Some(SessionState::Blocked)
+    );
+}
+
+/// Verifies Stop repairs a retained Running summary after both live owners have already disappeared.
+/// 验证两个实时所有者均已消失后，Stop 仍会修复残留的 Running 会话摘要。
+#[test]
+fn webui_stop_session_work_repairs_orphaned_running_summary() {
+    let session_id = SessionId::new_v4();
+    let mut workspace_snapshot =
+        running_stop_workspace_snapshot(session_id, SessionRunPhase::Stopped);
+
+    let did_stop =
+        stop_webui_session_work(&mut workspace_snapshot, session_id, false, false, false)
+            .expect("orphaned Running summary should be repaired idempotently");
+
+    assert!(did_stop);
+    assert_eq!(
+        workspace_snapshot.session_run_phases.get(&session_id),
+        Some(&SessionRunPhase::Stopped)
+    );
+    assert_eq!(
+        workspace_session_summary_for_session(&workspace_snapshot, session_id)
+            .map(|session| session.status),
+        Some(SessionState::Blocked)
+    );
+}
+
 /// Verifies WebUI stop projects the same stopped turn records as the WebUI transcript chain.
 /// 验证 WebUI 停止流程投影与 WebUI 转录链条一致的已停止轮次记录。
 #[test]
@@ -126,7 +206,7 @@ fn webui_stop_session_work_appends_stopped_turn_projection_once() {
         hydrated_session_ids: BTreeSet::new(),
     };
 
-    let did_stop = stop_webui_session_work(&mut workspace_snapshot, session_id, true, true)
+    let did_stop = stop_webui_session_work(&mut workspace_snapshot, session_id, true, true, true)
         .expect("active stop should append stopped projection");
 
     assert!(did_stop);
@@ -172,8 +252,9 @@ fn webui_stop_session_work_appends_stopped_turn_projection_once() {
     assert_eq!(continuation.canonical_tail_kind.as_deref(), Some("error"));
     let stopped_message_count = messages.len();
 
-    let did_stop_again = stop_webui_session_work(&mut workspace_snapshot, session_id, false, false)
-        .expect("repeated stop should remain idempotent");
+    let did_stop_again =
+        stop_webui_session_work(&mut workspace_snapshot, session_id, false, false, false)
+            .expect("repeated stop should remain idempotent");
 
     assert!(!did_stop_again);
     let messages_after_second_stop = workspace_snapshot
@@ -237,7 +318,7 @@ fn webui_stop_session_work_rejects_open_provider_call() {
         hydrated_session_ids: BTreeSet::new(),
     };
 
-    let error = stop_webui_session_work(&mut workspace_snapshot, session_id, true, false)
+    let error = stop_webui_session_work(&mut workspace_snapshot, session_id, true, false, false)
         .expect_err("open Provider calls must block stopped Continue projection");
 
     assert_eq!(
@@ -288,7 +369,7 @@ fn webui_stop_session_work_uses_kernel_active_state_without_stream_handle() {
         hydrated_session_ids: BTreeSet::new(),
     };
 
-    let did_stop = stop_webui_session_work(&mut workspace_snapshot, session_id, true, false)
+    let did_stop = stop_webui_session_work(&mut workspace_snapshot, session_id, true, false, false)
         .expect("kernel-active stop should append stopped projection");
 
     assert!(did_stop);

@@ -140,6 +140,7 @@ impl ProviderRequestTelemetryContext {
             ExecutionPromptPurpose::ContextCompaction
             | ExecutionPromptPurpose::ContextCompactionCachePreserving => "context_compaction",
             ExecutionPromptPurpose::GitCommitSummary => "git_commit_summary",
+            ExecutionPromptPurpose::ExecutionRetry => "main_agent",
             ExecutionPromptPurpose::UserTurn if preparation.subagent_prompt_context.is_some() => {
                 "subagent"
             }
@@ -151,6 +152,7 @@ impl ProviderRequestTelemetryContext {
             ExecutionPromptPurpose::ContextCompaction
             | ExecutionPromptPurpose::ContextCompactionCachePreserving => "compact",
             ExecutionPromptPurpose::GitCommitSummary => "git_commit_summary",
+            ExecutionPromptPurpose::ExecutionRetry => "conversation",
             ExecutionPromptPurpose::UserTurn => "conversation",
         };
         // Secondary-route fields come only from the validated immutable route snapshot.

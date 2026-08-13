@@ -7120,6 +7120,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "uuid",
+ "vulcan-ai-contract",
  "vulcan-context",
  "vulcan-context-injection",
  "vulcan-core",

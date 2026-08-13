@@ -72,6 +72,9 @@ pub(crate) struct PreparedProviderTransportStreamLaunch {
     /// Canonical conversation snapshot consumed by the host-owned controller loop.
     /// 由宿主自有控制器循环消费的规范会话快照。
     pub(crate) core_snapshot: CoreConversationSnapshot,
+    /// Exact first public request restored for retry execution.
+    /// 为重试执行恢复的精确首个公共请求。
+    pub(crate) initial_provider_request: Option<vulcan_ai_contract::AiExecutionRequest>,
     /// Resolved API key passed down to the concrete provider adapter constructor.
     /// 下传给具体 Provider 适配器构造函数的已解析 API Key。
     /// Optional normalized base URL override used by providers that support custom endpoints.
@@ -180,6 +183,8 @@ pub(crate) fn prepare_provider_transport_stream_launch(
         prompt,
         turn_start_mode,
         core_snapshot,
+        initial_provider_request,
+        controller_config_override,
         temperature,
         max_turns,
         tools_manager,
@@ -195,7 +200,7 @@ pub(crate) fn prepare_provider_transport_stream_launch(
         tool_request_rejection_tool_ids,
         route_identity,
     } = request;
-    let runtime_inputs = prepare_provider_transport_runtime_inputs(
+    let mut runtime_inputs = prepare_provider_transport_runtime_inputs(
         provider_id.as_str(),
         model_id.as_str(),
         system_preamble.as_str(),
@@ -216,10 +221,14 @@ pub(crate) fn prepare_provider_transport_stream_launch(
         tool_request_rejection_tool_ids,
         route_identity,
     );
+    if let Some(controller_config_override) = controller_config_override {
+        runtime_inputs.entry_inputs.controller_config = controller_config_override;
+    }
 
     PreparedProviderTransportStreamLaunch {
         runtime_inputs,
         core_snapshot,
+        initial_provider_request,
         prompt_intervention,
     }
 }

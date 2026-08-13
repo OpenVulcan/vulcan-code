@@ -39,6 +39,7 @@ fn build_task_start_test_runtime_context(
             },
             runtime_policy: vulcan_session_core::ExecutionRuntimePolicy::main_session(),
             conversation_hook_turn_id: Some(String::from("test-hook-turn")),
+            execution_retry_snapshot: None,
             execution_agent_id: Some(String::from("main")),
             agent_prompt_snapshot: None,
             provider_id_override: None,

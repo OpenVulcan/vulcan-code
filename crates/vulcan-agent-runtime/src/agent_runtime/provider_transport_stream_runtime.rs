@@ -286,7 +286,7 @@ where
                     };
                     let run_future = async {
                         let effective_turn_start_mode = if retry_resumes_seeded_input {
-                            ProviderTransportTurnStartMode::SeededProviderInput
+                            ProviderTransportTurnStartMode::RestoredCheckpoint
                         } else {
                             turn_start_mode
                         };
@@ -302,7 +302,7 @@ where
                                 )
                                 .await
                             }
-                            ProviderTransportTurnStartMode::SeededProviderInput => {
+                            ProviderTransportTurnStartMode::RestoredCheckpoint => {
                                 controller.run_seeded_turn_streaming_with_checkpoints_and_interventions(
                                     &provider_adapter,
                                     &tool_executor,
@@ -1029,6 +1029,13 @@ mod tests {
         let (completion, _receiver) = provider_request_durability_barrier();
         ProviderStreamDelta::RequestPrepared {
             snapshot: test_request_snapshot(),
+            exact_request: serde_json::from_value(json!({
+                "operation": "conversation_respond",
+                "model_id": "test-model"
+            }))
+            .expect("the minimal public AI request fixture must be valid"),
+            controller_config: CoreControllerConfig::default(),
+            controller_snapshot: CoreConversationSnapshot::default(),
             context_budget: None,
             completion,
         }

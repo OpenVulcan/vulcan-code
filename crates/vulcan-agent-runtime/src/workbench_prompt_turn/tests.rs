@@ -79,6 +79,46 @@ fn visible_user_prompt_reuses_authoritative_canonical_message_id() {
     assert_eq!(runtime_state.conversation_state.records.len(), 1);
 }
 
+/// Verifies pre-provider retry restoration reuses the original turn and prompt without appending a user message.
+/// 验证 Provider 调用前重试恢复会复用原回合与提示词，且不会追加用户消息。
+#[test]
+fn resume_preparation_restores_exact_started_turn_without_duplicate_user_message() {
+    let mut runtime_state = SessionRuntimeStateEntry::default();
+    let start = begin_user_prompt(&mut runtime_state);
+    let original_message_count = runtime_state.conversation_state.messages.len();
+    let original_record_count = runtime_state.conversation_state.records.len();
+    let original_turn_id = start.preparation_turn_id.clone();
+    let original_prompt = start.prompt.clone();
+    let original_canonical_user_message_id = start.canonical_user_message_id.clone();
+    let frozen_input = start
+        .execution_retry_preparation_input()
+        .expect("accepted prompt turn should freeze exactly");
+    let mut restored_hook_runtime = ConversationHookRuntime::new();
+
+    let restored = restore_shared_prompt_turn_from_execution_retry(
+        start.session_id,
+        &mut restored_hook_runtime,
+        frozen_input,
+    )
+    .expect("frozen accepted prompt turn should restore");
+
+    assert_eq!(restored.preparation_turn_id, original_turn_id);
+    assert_eq!(restored.prompt, original_prompt);
+    assert_eq!(
+        restored.canonical_user_message_id,
+        original_canonical_user_message_id
+    );
+    assert_eq!(restored.source, PendingSessionPromptSource::UserFollowup);
+    assert_eq!(
+        runtime_state.conversation_state.messages.len(),
+        original_message_count
+    );
+    assert_eq!(
+        runtime_state.conversation_state.records.len(),
+        original_record_count
+    );
+}
+
 /// Verifies typed VMM recall anchors target the exact visible canonical user message.
 /// 验证类型化 VMM 召回锚点会指向精确的可见规范用户消息。
 #[test]
@@ -317,6 +357,77 @@ fn goal_continuation_begin_never_persists_user_message() {
     assert_eq!(
         start.boundary_events[1].payload["canonical"],
         serde_json::json!(false)
+    );
+}
+
+/// Verifies manual Continue preserves process-continuation semantics without opening completed-turn hooks.
+/// 验证手动 Continue 保持过程续跑语义，且不会打开完成回合 Hook。
+#[test]
+fn manual_continuation_preparation_does_not_claim_a_user_turn() {
+    // runtime_state owns the retained provider-visible state resumed by Continue.
+    // runtime_state 持有 Continue 要恢复的 Provider 可见状态。
+    let mut runtime_state = SessionRuntimeStateEntry::default();
+    // hook_runtime creates the shared preparation identity without a user-authored message.
+    // hook_runtime 在没有用户编写消息的情况下创建共享准备身份。
+    let mut hook_runtime = ConversationHookRuntime::new();
+    // start models the current prompt-free Continue path before it migrates to retry snapshots.
+    // start 模拟迁移到重试快照前的当前无提示词 Continue 路径。
+    let start = begin_shared_prompt_turn_with_runtime_state(
+        &mut runtime_state,
+        &mut hook_runtime,
+        SharedPromptTurnRuntimeBeginInput {
+            session_id: SessionId::from_u128(908),
+            session_title: "主会话",
+            workspace_path: "D:/workspace",
+            prompt_entry_id: String::from("continuation-entry"),
+            prompt: "",
+            hidden_model_guidance: None,
+            provider_visible_agent_messages: Vec::new(),
+            attachments: Vec::new(),
+            append_canonical_user_message: false,
+            append_visible_user_prompt_record: false,
+            source: PendingSessionPromptSource::ExecutionRetry,
+            execution_mode: String::from("Build"),
+            reasoning_effort: None,
+            owning_project_id: Some(String::from("project-a")),
+            prior_session_messages: None,
+        },
+    )
+    .expect("manual continuation should prepare retained state");
+    // vmm_session_memory remains unchanged because Continue owns no new user boundary.
+    // vmm_session_memory 保持不变，因为 Continue 不拥有新的用户边界。
+    let mut vmm_session_memory = test_vmm_session_memory(start.session_id);
+    // continuation builds the provider request from the retained canonical state.
+    // continuation 从保留的规范状态构建 Provider 请求。
+    let continuation = continue_shared_prompt_turn_after_preparation_with_runtime_state(
+        &mut runtime_state,
+        &mut vmm_session_memory,
+        SharedPromptTurnContinueInput {
+            precheck_outcome: start.precheck_request.clone().skip(),
+            profile_outcome: start.profile_request.clone().skip(),
+            start,
+            project_configuration: ProjectVulcanCodeConfigurationFile::default(),
+            runtime_reasoning_effort: None,
+            provider_reasoning_effort: None,
+            patch_visible_user_prompt_record: false,
+        },
+    )
+    .expect("manual continuation should build a provider request");
+
+    assert_eq!(
+        continuation.request.prompt_purpose,
+        ExecutionPromptPurpose::ExecutionRetry
+    );
+    assert!(continuation.request.conversation_hook_turn_id.is_none());
+    assert_eq!(
+        continuation.request.turn_start_mode,
+        Some(ExecutionTurnStartMode::RestoredCheckpoint)
+    );
+    assert!(
+        !continuation
+            .request
+            .prompt_purpose
+            .runs_completed_turn_hooks()
     );
 }
 

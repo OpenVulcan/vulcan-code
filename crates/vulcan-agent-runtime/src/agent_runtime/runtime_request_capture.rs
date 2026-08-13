@@ -83,8 +83,8 @@ pub async fn capture_runtime_provider_wire_request(
             crate::agent_runtime::runtime_stream_launch_payload::RuntimeStreamTurnStartMode::UserPrompt => {
                 ProviderTransportTurnStartMode::UserPrompt
             }
-            crate::agent_runtime::runtime_stream_launch_payload::RuntimeStreamTurnStartMode::SeededProviderInput => {
-                ProviderTransportTurnStartMode::SeededProviderInput
+            crate::agent_runtime::runtime_stream_launch_payload::RuntimeStreamTurnStartMode::RestoredCheckpoint => {
+                ProviderTransportTurnStartMode::RestoredCheckpoint
             }
         },
         launch.core_snapshot,

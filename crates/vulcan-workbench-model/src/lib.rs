@@ -12,6 +12,9 @@ mod turn_stats;
 pub use activity::{ActivityEntry, ActivityLevel};
 pub use project::TaskProjectSummary;
 pub use runtime_state::{
+    EXECUTION_RETRY_SNAPSHOT_SCHEMA_VERSION, ExecutionRetryPendingAction,
+    ExecutionRetryPreparationInput, ExecutionRetrySnapshot, ExecutionRetrySnapshotRef,
+    ExecutionRetrySnapshotState, ExecutionRetryToolProgress, ExecutionRetryToolState,
     PENDING_PROMPT_QUEUE_LIMIT, PendingPromptBusyLaneContext, PendingPromptDispatchBlockReason,
     PendingPromptDispatchContext, PendingPromptInternalQueueEnqueueError,
     PendingPromptInternalQueueEnqueueOutcome, PendingPromptInternalQueueEnqueuePlan,

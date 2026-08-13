@@ -475,6 +475,9 @@ pub(crate) fn process_provider_stream_delta(
                     session_id,
                     provider_family: state.protocol_profile_id.clone(),
                     snapshot,
+                    exact_request: None,
+                    controller_config: None,
+                    controller_snapshot: None,
                 },
                 ExecutionStreamEvent::RequestReady { session_id },
                 ExecutionStreamEvent::RequestStarted { session_id },
@@ -483,6 +486,9 @@ pub(crate) fn process_provider_stream_delta(
         }
         Ok(ProviderStreamDelta::RequestPrepared {
             snapshot,
+            exact_request,
+            controller_config,
+            controller_snapshot,
             context_budget,
             completion,
         }) => {
@@ -503,14 +509,21 @@ pub(crate) fn process_provider_stream_delta(
                     return Vec::new();
                 }
             };
-            let mut events =
-                provider_request_events_with_durability_boundary(telemetry_events, completion);
+            // checkpoint must reach the host before the telemetry boundary can release network dispatch.
+            // checkpoint 必须先到达宿主，随后遥测屏障才可放行网络分派。
+            let mut events = vec![ExecutionStreamEvent::ProviderRequestCheckpoint {
+                session_id,
+                provider_family: state.protocol_profile_id.clone(),
+                snapshot,
+                exact_request: Some(exact_request),
+                controller_config: Some(controller_config),
+                controller_snapshot: Some(controller_snapshot),
+            }];
+            events.extend(provider_request_events_with_durability_boundary(
+                telemetry_events,
+                completion,
+            ));
             events.extend([
-                ExecutionStreamEvent::ProviderRequestCheckpoint {
-                    session_id,
-                    provider_family: state.protocol_profile_id.clone(),
-                    snapshot,
-                },
                 ExecutionStreamEvent::RequestReady { session_id },
                 ExecutionStreamEvent::RequestStarted { session_id },
             ]);

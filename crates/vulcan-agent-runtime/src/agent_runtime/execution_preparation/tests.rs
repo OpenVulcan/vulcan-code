@@ -747,6 +747,7 @@ fn test_execution_preparation_request() -> ExecutionPreparationRequest {
         },
         runtime_policy: ExecutionRuntimePolicy::main_session(),
         conversation_hook_turn_id: Some(String::from("test-hook-turn")),
+        execution_retry_snapshot: None,
         execution_agent_id: None,
         agent_prompt_snapshot: None,
         provider_id_override: None,

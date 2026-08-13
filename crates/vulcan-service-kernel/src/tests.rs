@@ -56,6 +56,7 @@ mod conversation_submission_preflight_tests;
 mod conversation_submission_queue_tests;
 mod conversation_tool_detail_tests;
 mod detached_subagent_tests;
+mod execution_retry_tests;
 mod goal_todolist_tests;
 mod mailbox_tests;
 mod mcp_settings_tests;

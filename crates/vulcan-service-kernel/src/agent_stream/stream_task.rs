@@ -4,7 +4,7 @@
 use super::*;
 
 mod content_delta;
-mod conversation_checkpoint;
+pub(crate) mod conversation_checkpoint;
 mod finished;
 mod launch_failure;
 mod prepared;
@@ -13,7 +13,10 @@ mod request_trace;
 mod runtime_event;
 mod stream_exit;
 
-use conversation_checkpoint::handle_conversation_checkpoint_stream_event;
+pub(crate) use conversation_checkpoint::refreeze_claimed_execution_retry_snapshot;
+use conversation_checkpoint::{
+    handle_conversation_checkpoint_stream_event, persist_prepared_execution_retry_checkpoint,
+};
 use finished::{FinishedStreamEventOutcome, handle_finished_stream_event};
 pub(crate) use launch_failure::StreamTaskLaunchFailureCommit;
 #[cfg(test)]
@@ -29,7 +32,6 @@ use prepared::{PreparedStreamEventAction, handle_prepared_stream_event};
 use request_phase::{RequestPhaseStreamEvent, handle_request_phase_stream_event};
 use request_trace::StreamRequestTraceState;
 use runtime_event::{handle_runtime_stream_event, runtime_event_hook_policy_for_execution_scope};
-#[cfg(test)]
 pub(crate) use stream_exit::StreamTaskExitOutcome;
 pub(crate) use stream_exit::{StreamTaskExitReason, handle_stream_task_exit};
 
@@ -174,6 +176,9 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
         // active_preparation preserves the exact provider/model budget facts for a mid-turn compaction restart.
         // active_preparation 保留中途回合压缩重启所需的精确 Provider/模型预算事实。
         let mut active_preparation: Option<ExecutionPreparation> = None;
+        // preparedRetryCheckpointError blocks the next network-dispatch durability boundary fail closed.
+        // preparedRetryCheckpointError 以失败关闭方式阻止下一次网络分派持久化屏障。
+        let mut prepared_retry_checkpoint_error: Option<String> = None;
         let intervention_started_at = current_unix_millis_value();
         let prompt_intervention = build_webui_prompt_intervention(app.clone(), task_state.clone());
         webui_after_precheck_trace(
@@ -286,6 +291,9 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                     session_id,
                     provider_family,
                     snapshot,
+                    exact_request,
+                    controller_config,
+                    controller_snapshot,
                 } => {
                     if let Err(error) = record_webui_provider_request_checkpoint(
                         &controller_runtime,
@@ -294,6 +302,38 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                         &snapshot,
                     ) {
                         eprintln!("[webui-service] provider request checkpoint failed: {error}");
+                    }
+                    if let (
+                        Some(exact_request),
+                        Some(controller_config),
+                        Some(controller_snapshot),
+                    ) = (exact_request, controller_config, controller_snapshot)
+                    {
+                        let checkpoint_result = active_preparation
+                            .as_ref()
+                            .ok_or_else(|| {
+                                String::from(
+                                    "Execution retry checkpoint arrived before prepared execution state.",
+                                )
+                            })
+                            .and_then(|preparation| {
+                                persist_prepared_execution_retry_checkpoint(
+                                    &task_state,
+                                    &controller_runtime,
+                                    session_id,
+                                    active_stream_task_id,
+                                    preparation,
+                                    exact_request,
+                                    controller_config,
+                                    controller_snapshot,
+                                )
+                            });
+                        if let Err(error) = checkpoint_result {
+                            eprintln!(
+                                "[webui-service] execution retry checkpoint persistence failed: {error}"
+                            );
+                            prepared_retry_checkpoint_error = Some(error);
+                        }
                     }
                 }
                 ExecutionStreamEvent::ProviderRequestTelemetry(event) => {
@@ -316,6 +356,10 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                     }
                 }
                 ExecutionStreamEvent::ProviderRequestDurabilityBoundary { event, completion } => {
+                    if let Some(error) = prepared_retry_checkpoint_error.take() {
+                        let _ = completion.complete(Err(error));
+                        continue;
+                    }
                     if let Err(error) = handle_stream_provider_request_telemetry(
                         &task_state,
                         &controller_runtime,
@@ -409,6 +453,16 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                     );
                 }
                 ExecutionStreamEvent::RuntimeEvent { session_id, event } => {
+                    if event.kind
+                        == vulcan_agent_runtime::agent_runtime::events::RuntimeEventKind::ToolStarted
+                        && let Err(error) = conversation_checkpoint::mark_execution_retry_snapshot_tool_execution_unsafe(
+                            &task_state,
+                            &controller_runtime,
+                            session_id,
+                        )
+                    {
+                        eprintln!("[webui-service] mark tool retry boundary unsafe failed: {error}");
+                    }
                     handle_runtime_stream_event(
                         &app,
                         &task_state,
@@ -594,11 +648,22 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
         // stream_exit_outcome records the exact ownership decision made after polling stops.
         // stream_exit_outcome 记录轮询停止后作出的精确所有权决策。
         let stream_exit_outcome = handle_stream_task_exit(
+            &app,
             &task_state,
             session_id,
             active_stream_task_id,
             stream_exit_reason,
         );
+        if stream_exit_outcome == StreamTaskExitOutcome::EarlyTerminationCleaned
+            && let Err(error) = conversation_checkpoint::refreeze_claimed_execution_retry_snapshot(
+                &task_state,
+                &controller_runtime,
+                session_id,
+                "The execution stream ended before an authoritative Finished event.",
+            )
+        {
+            eprintln!("[webui-service] refreeze interrupted execution retry failed: {error}");
+        }
         webui_trace(
             "stream_task_exit_handled",
             format!(

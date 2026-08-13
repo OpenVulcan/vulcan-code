@@ -111,8 +111,8 @@ pub(crate) fn drive_runtime_stream_provider_loop(
         let effective_prompt = launch.effective_prompt;
         let turn_start_mode = match launch.turn_start_mode {
             RuntimeStreamTurnStartMode::UserPrompt => ProviderTransportTurnStartMode::UserPrompt,
-            RuntimeStreamTurnStartMode::SeededProviderInput => {
-                ProviderTransportTurnStartMode::SeededProviderInput
+            RuntimeStreamTurnStartMode::RestoredCheckpoint => {
+                ProviderTransportTurnStartMode::RestoredCheckpoint
             }
         };
         let preparation = launch.preparation;
@@ -125,6 +125,8 @@ pub(crate) fn drive_runtime_stream_provider_loop(
         let warnings = launch.warnings;
         let system_preamble = launch.system_preamble;
         let core_snapshot = launch.core_snapshot;
+        let initial_provider_request = launch.initial_provider_request;
+        let controller_config_override = launch.controller_config_override;
         let mut stream_state = launch.stream_state;
         let provider_usage_budget_baseline = stream_state
             .provider_usage_budget_baseline_handle()
@@ -162,6 +164,8 @@ pub(crate) fn drive_runtime_stream_provider_loop(
             &effective_prompt,
             turn_start_mode,
             core_snapshot,
+            initial_provider_request,
+            controller_config_override,
             task_runtime,
             tools_manager,
             resolved_tool_definitions,

@@ -1,6 +1,10 @@
 //! Finished stream event orchestration.
 //! 流终态事件编排。
 
+use super::conversation_checkpoint::{
+    consume_execution_retry_snapshot, invalidate_execution_retry_reference,
+    refreeze_claimed_execution_retry_snapshot,
+};
 use super::*;
 
 /// Outcome of handling one finished stream report.
@@ -56,6 +60,7 @@ pub(super) async fn handle_finished_stream_event(
     // The report session is the sole owner key for all terminal mutations.
     // 报告会话是全部终态变更的唯一所有权键。
     let finished_session_id = report.session_id;
+    let terminal_error = report.error.clone();
     webui_trace(
         "stream_finished",
         format!(
@@ -195,12 +200,33 @@ pub(super) async fn handle_finished_stream_event(
     );
     // The optional apply result gates lifecycle, hook, and persistence work after projection failure.
     // 可选应用结果在投影失败后阻止生命周期、Hook 与持久化工作。
-    let final_report_apply =
+    // terminalProjectionFallbackSnapshot persists the fail-closed projection when rich report application fails.
+    // terminalProjectionFallbackSnapshot 在完整报告应用失败时持久化失败关闭投影。
+    let (final_report_apply, terminal_projection_fallback_snapshot) =
         match apply_execution_report_to_memory(app, task_state, agent_runtime, report) {
-            Ok(apply) => Some(apply),
+            Ok(apply) => (Some(apply), None),
             Err(error) => {
                 eprintln!("[webui-service] apply final report failed: {error}");
-                None
+                // A terminal report projection error must never leave the visible conversation running after ownership is released.
+                // 终态报告投影错误绝不能在所有权释放后仍让可见会话保持运行中。
+                let fallback_snapshot = match apply_session_phase(
+                    app,
+                    task_state,
+                    finished_session_id,
+                    SessionRunPhase::Failed,
+                ) {
+                    Ok(()) => task_state
+                        .lock()
+                        .ok()
+                        .and_then(|guard| guard.workspace_snapshot.clone()),
+                    Err(projection_error) => {
+                        eprintln!(
+                            "[webui-service] apply final report fallback phase failed: {projection_error}"
+                        );
+                        None
+                    }
+                };
+                (None, fallback_snapshot)
             }
         };
     webui_trace_if_slow(
@@ -211,6 +237,46 @@ pub(super) async fn handle_finished_stream_event(
             final_report_apply.is_some()
         ),
     );
+    let retry_lifecycle_result = match (terminal_error.as_deref(), final_report_apply.is_some()) {
+        (Some(error), _) => refreeze_claimed_execution_retry_snapshot(
+            task_state,
+            controller_runtime,
+            finished_session_id,
+            error,
+        ),
+        (None, true) => {
+            consume_execution_retry_snapshot(task_state, controller_runtime, finished_session_id)
+        }
+        (None, false) => invalidate_execution_retry_reference(
+            task_state,
+            finished_session_id,
+            "The provider completed, but the terminal projection failed; replay is unsafe.",
+        ),
+    };
+    if let Err(error) = retry_lifecycle_result {
+        eprintln!("[webui-service] execution retry terminal transition failed: {error}");
+        if let Err(invalidation_error) = invalidate_execution_retry_reference(
+            task_state,
+            finished_session_id,
+            "The execution retry sidecar failed its terminal transition and was invalidated.",
+        ) {
+            eprintln!(
+                "[webui-service] execution retry reference invalidation failed: {invalidation_error}"
+            );
+        }
+    }
+
+    if let Some(workspace_snapshot) = terminal_projection_fallback_snapshot
+        && let Err(error) = persist_workspace_session_update(
+            Some(task_state),
+            controller_runtime.clone(),
+            &workspace_snapshot,
+            finished_session_id,
+        )
+        .await
+    {
+        eprintln!("[webui-service] persist final report fallback failed: {error}");
+    }
 
     if let Some(apply) = final_report_apply.as_ref()
         && !apply.vmm_lifecycle_events.is_empty()

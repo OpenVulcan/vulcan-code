@@ -28,6 +28,67 @@ pub struct ConversationHookRuntime {
 }
 
 impl ConversationHookRuntime {
+    /// Restores prepared Hook requests for an already-recorded logical user turn.
+    /// 为已经记录的逻辑用户回合恢复已准备 Hook 请求。
+    ///
+    /// # Parameters
+    /// 参数
+    /// - `session_id`: Session that owns the restored logical turn.
+    /// - `session_id`：拥有恢复后逻辑回合的会话。
+    /// - `turn_id`: Exact logical turn identity captured at acceptance.
+    /// - `turn_id`：接纳时捕获的精确逻辑回合身份。
+    /// - `prompt`: Original immutable prompt used only to restore Hook timeline ownership.
+    /// - `prompt`：仅用于恢复 Hook 时间线所有权的原始不可变提示词。
+    /// - `precheck_payload`: Exact precheck payload captured before interruption.
+    /// - `precheck_payload`：中断前捕获的精确 precheck 载荷。
+    /// - `profile_payload`: Exact profile payload captured before interruption.
+    /// - `profile_payload`：中断前捕获的精确画像载荷。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Prepared sibling Hook requests without redispatching the original user event.
+    /// 不重复派发原始用户事件的已准备同级 Hook 请求。
+    pub fn restore_user_prompt_hook_requests(
+        &mut self,
+        session_id: SessionId,
+        turn_id: String,
+        prompt: &str,
+        precheck_payload: Value,
+        profile_payload: Value,
+    ) -> Result<ConversationPromptHookRequests, String> {
+        match self.active_turns.get(&session_id) {
+            Some(active_turn)
+                if active_turn.turn_id != turn_id || active_turn.user_content != prompt =>
+            {
+                return Err(String::from(
+                    "ERR_CONVERSATION_CONTINUE_RETRY_LOGICAL_TURN_CHANGED",
+                ));
+            }
+            Some(_) => {}
+            None => {
+                self.active_turns.insert(
+                    session_id,
+                    ActiveConversationTurn::new(turn_id.clone(), prompt.to_string()),
+                );
+            }
+        }
+        Ok(ConversationPromptHookRequests {
+            profile: ConversationProfileRequest::new(
+                self.dispatcher.clone(),
+                session_id,
+                profile_payload,
+                turn_id.clone(),
+            ),
+            precheck: ConversationPrecheckRequest::new(
+                self.dispatcher.clone(),
+                session_id,
+                precheck_payload,
+                turn_id.clone(),
+            ),
+            turn_id,
+        })
+    }
+
     /// Builds an empty conversation hook runtime.
     /// 构建一个空的会话 hook 运行时。
     pub fn new() -> Self {

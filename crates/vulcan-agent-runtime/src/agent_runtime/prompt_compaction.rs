@@ -1377,6 +1377,7 @@ fn build_prompt_compaction_launch_request(
         },
         runtime_policy: vulcan_session_core::ExecutionRuntimePolicy::context_compaction(),
         conversation_hook_turn_id: None,
+        execution_retry_snapshot: None,
         execution_agent_id: execution_agent_id.map(str::to_string),
         agent_prompt_snapshot: launch_context.agent_prompt_snapshot.clone(),
         provider_id_override: model_target.map(|target| target.provider_id.clone()),

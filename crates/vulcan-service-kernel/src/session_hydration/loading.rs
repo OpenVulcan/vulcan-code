@@ -309,7 +309,11 @@ pub(crate) async fn hydrate_selected_session_runtime_if_needed(
     session_id: SessionId,
 ) -> Result<(), String> {
     if retained_submission_snapshot_has_session_context(workspace_snapshot, session_id) {
-        return Ok(());
+        return recover_interrupted_execution_retry_snapshot(
+            &controller_runtime,
+            workspace_snapshot,
+            session_id,
+        );
     }
     let hydration_result = if let Some((project_id, created_at)) =
         session_project_created_at_for_hydration(workspace_snapshot, session_id)
@@ -333,6 +337,72 @@ pub(crate) async fn hydrate_selected_session_runtime_if_needed(
         Err(error) => return Err(error),
     }
     ensure_hydrated_session_dialogue_context(workspace_snapshot, session_id)?;
+    recover_interrupted_execution_retry_snapshot(
+        &controller_runtime,
+        workspace_snapshot,
+        session_id,
+    )
+}
+
+/// Recovers a crash-interrupted claimed retry as a frozen, explicitly retryable snapshot.
+/// 将因崩溃中断的已认领重试恢复为冻结且明确可重试的快照。
+fn recover_interrupted_execution_retry_snapshot(
+    controller_runtime: &ControllerRuntimeHandle,
+    workspace_snapshot: &mut WorkspaceSnapshot,
+    session_id: SessionId,
+) -> Result<(), String> {
+    let reference = workspace_snapshot
+        .session_runtime_state
+        .get(&session_id)
+        .and_then(|runtime_state| runtime_state.execution_retry_snapshot.clone());
+    let Some(reference) = reference else {
+        return Ok(());
+    };
+    if reference.state != vulcan_workbench_model::ExecutionRetrySnapshotState::Claimed {
+        return Ok(());
+    }
+    let mut snapshot = vulcan_workspace_store::workspace_store::load_execution_retry_snapshot(
+        &controller_runtime.data_root,
+        session_id,
+        &reference,
+    )?;
+    snapshot.state = vulcan_workbench_model::ExecutionRetrySnapshotState::Frozen;
+    snapshot.claimed_attempt_id = None;
+    snapshot.updated_at = current_unix_millis_value().to_string();
+    snapshot.error = Some(vulcan_ai_contract::AiExecutionError {
+        category: vulcan_ai_contract::AiErrorCategory::Cancelled,
+        subcategory: Some(String::from("service_restart_interrupted")),
+        stage: String::from("startup_recovery"),
+        http_status: None,
+        transport: None,
+        websocket_close_code: None,
+        upstream_code: None,
+        upstream_type: None,
+        upstream_parameter: None,
+        upstream_message: None,
+        request_id: None,
+        provider_id: Some(snapshot.provider_route.provider_id.clone()),
+        entry_id: None,
+        model_id: Some(snapshot.provider_route.model_id.clone()),
+        message: String::from("The service restarted while the retry execution was claimed."),
+        dispatch_outcome: vulcan_ai_contract::DispatchOutcome::Unknown,
+        semantic_output_observed: false,
+        side_effect_observed: false,
+        terminal: true,
+        retryable: true,
+        retry_after: None,
+    });
+    let updated_reference =
+        vulcan_workspace_store::workspace_store::persist_execution_retry_snapshot(
+            &controller_runtime.data_root,
+            session_id,
+            &snapshot,
+        )?;
+    let runtime_state = workspace_snapshot
+        .session_runtime_state
+        .get_mut(&session_id)
+        .ok_or_else(|| String::from("Recovered retry runtime state disappeared."))?;
+    runtime_state.execution_retry_snapshot = Some(updated_reference);
     Ok(())
 }
 

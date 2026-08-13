@@ -9,7 +9,7 @@ use futures_util::Stream;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::pin::Pin;
-use vulcan_ai_contract::{AiExecutionError, AiTransportKind};
+use vulcan_ai_contract::{AiExecutionError, AiExecutionRequest, AiTransportKind};
 use vulcan_context::RuntimeProviderLoweringRepairEvent;
 use vulcan_core::types::{
     ProviderRequestSnapshot as CoreProviderRequestSnapshot,
@@ -32,6 +32,15 @@ pub(crate) enum ProviderStreamDelta {
         /// Exact Provider-neutral request snapshot.
         /// 精确 Provider 中立请求快照。
         snapshot: CoreProviderRequestSnapshot,
+        /// Exact provider-neutral request that will be dispatched after the durability barrier.
+        /// 可靠持久化屏障后将被分派的精确 Provider 中立请求。
+        exact_request: AiExecutionRequest,
+        /// Exact controller configuration frozen for subsequent tool-result turns.
+        /// 为后续工具结果回合冻结的精确控制器配置。
+        controller_config: vulcan_core::types::ControllerConfig,
+        /// Exact canonical Core snapshot used to build this request.
+        /// 用于构建当前请求的精确规范 Core 快照。
+        controller_snapshot: vulcan_core::types::ConversationSnapshot,
         /// Context-budget decision made from this exact request before dispatch.
         /// 根据当前精确请求在分派前作出的上下文预算决策。
         context_budget: Option<crate::context_budget::ContextBudgetSnapshot>,

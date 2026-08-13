@@ -17,9 +17,9 @@ pub enum PendingSessionPromptSource {
     /// Host-created hidden continuation that advances an active session goal while the thread is idle.
     /// 宿主创建的隐藏续跑输入，用于在线程空闲时推进活跃会话目标。
     GoalContinuation,
-    /// Host-created prompt-free continuation from the retained canonical state.
-    /// 宿主从保留规范状态创建的无提示词 Continue 输入。
-    Continuation,
+    /// Host-created attempt that restores a claimed execution checkpoint.
+    /// 宿主创建的已领取执行 checkpoint 恢复尝试。
+    ExecutionRetry,
 }
 
 impl PendingSessionPromptSource {

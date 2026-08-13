@@ -61,6 +61,7 @@ fn is_zero_usize(value: &usize) -> bool {
     *value == 0
 }
 
+mod execution_retry;
 mod internal_queue;
 mod panel_queue;
 mod planning;
@@ -70,6 +71,7 @@ mod provider_usage;
 mod session_entry;
 mod vmm_state;
 
+pub use execution_retry::*;
 pub use internal_queue::*;
 pub use panel_queue::*;
 pub use planning::*;

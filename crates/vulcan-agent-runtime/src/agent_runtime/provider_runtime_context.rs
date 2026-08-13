@@ -225,6 +225,7 @@ fn prompt_assembly_mode_for_preparation(preparation: &ExecutionPreparation) -> P
     }
     match preparation.prompt_purpose {
         ExecutionPromptPurpose::UserTurn
+        | ExecutionPromptPurpose::ExecutionRetry
         | ExecutionPromptPurpose::ContextCompactionCachePreserving => PromptAssemblyMode::Primary,
         ExecutionPromptPurpose::ContextCompaction => PromptAssemblyMode::ContextCompactionMinimal,
         ExecutionPromptPurpose::GitCommitSummary => PromptAssemblyMode::ContextCompactionMinimal,
@@ -236,6 +237,7 @@ fn prompt_assembly_mode_for_preparation(preparation: &ExecutionPreparation) -> P
 fn build_prompt_purpose_developer_segments(purpose: ExecutionPromptPurpose) -> Vec<String> {
     match purpose {
         ExecutionPromptPurpose::UserTurn
+        | ExecutionPromptPurpose::ExecutionRetry
         | ExecutionPromptPurpose::ContextCompactionCachePreserving => Vec::new(),
         ExecutionPromptPurpose::ContextCompaction => {
             vec![build_context_compaction_developer_segment()]

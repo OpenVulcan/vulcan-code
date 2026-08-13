@@ -56,6 +56,9 @@ pub(crate) enum StreamTaskExitOutcome {
     /// The service-state mutex was poisoned and ownership could not be checked.
     /// 服务状态互斥锁已中毒，无法检查所有权。
     OwnershipUnavailable,
+    /// The exact owner was removed but its terminal workspace projection could not be committed.
+    /// 精确所有者已移除，但其终态工作区投影无法提交。
+    StateUnavailable,
 }
 
 /// Finalizes root stream-task ownership according to the exact polling-loop exit reason.
@@ -77,6 +80,7 @@ pub(crate) enum StreamTaskExitOutcome {
 /// A strong ownership outcome describing the exact cleanup decision.
 /// 返回描述精确清理决策的强类型所有权结果。
 pub(crate) fn handle_stream_task_exit(
+    app: &ServiceEventEmitter,
     task_state: &SharedServiceBridgeState,
     session_id: SessionId,
     active_stream_task_id: Uuid,
@@ -95,8 +99,20 @@ pub(crate) fn handle_stream_task_exit(
         format!("session={session_id} reason={early_termination_label}"),
     );
 
-    // guard protects the identity check and kernel terminalization as one ownership transaction.
-    // guard 将身份检查与内核终结保护为一个所有权事务。
+    // terminalPhase classifies natural exhaustion as a failure and stopped-generation invalidation as stopped.
+    // terminalPhase 将自然耗尽归类为失败，并将已停止代际失效归类为已停止。
+    let terminal_phase = match exit_reason {
+        StreamTaskExitReason::StreamExhausted => SessionRunPhase::Failed,
+        StreamTaskExitReason::StaleKernelGeneration => SessionRunPhase::Stopped,
+        StreamTaskExitReason::FinishedEventHandled => unreachable!("Finished exits return above"),
+    };
+    let terminal_status = match terminal_phase {
+        SessionRunPhase::Failed => TurnTerminalStatus::Failed,
+        SessionRunPhase::Stopped => TurnTerminalStatus::Stopped,
+        _ => unreachable!("early stream exits use terminal phases"),
+    };
+    // guard protects phase projection, identity removal, and kernel terminalization as one ownership transaction.
+    // guard 将阶段投影、身份移除与内核终结保护为一个所有权事务。
     let mut guard = match task_state.lock() {
         Ok(guard) => guard,
         Err(error) => {
@@ -108,18 +124,48 @@ pub(crate) fn handle_stream_task_exit(
             return StreamTaskExitOutcome::OwnershipUnavailable;
         }
     };
-    // removed_task is present only when this exact task still owns the session slot.
-    // removed_task 仅在当前精确任务仍拥有会话槽位时存在。
-    let removed_task =
-        remove_active_stream_task_if_id(&mut guard, session_id, active_stream_task_id);
-    if removed_task.is_none() {
+    // The exact owner is validated before phase projection so a stale task cannot terminalize its replacement.
+    // 在阶段投影前验证精确所有者，避免过期任务终结替代任务。
+    if !active_stream_task_matches_id(&guard, session_id, active_stream_task_id) {
         webui_trace(
             "stream_task_exit_stale_owner",
             format!("session={session_id} reason={early_termination_label}"),
         );
         return StreamTaskExitOutcome::StaleOwner;
     }
-
-    finish_webui_session_kernel_turn(&mut guard, session_id, TurnTerminalStatus::Stopped);
+    // terminalPhaseEvent is retained before ownership cleanup can make a later Stop appear idle.
+    // terminalPhaseEvent 在所有权清理可能使后续 Stop 看似空闲之前完成保留。
+    let terminal_phase_event = match apply_session_phase_to_state(
+        &mut guard,
+        session_id,
+        terminal_phase,
+    ) {
+        Ok(event) => event,
+        Err(error) => {
+            let _ = remove_active_stream_task_if_id(&mut guard, session_id, active_stream_task_id);
+            eprintln!(
+                "[webui-service] early stream termination phase projection failed: session={session_id} reason={early_termination_label} error={error}"
+            );
+            finish_webui_session_kernel_turn(&mut guard, session_id, terminal_status);
+            return StreamTaskExitOutcome::StateUnavailable;
+        }
+    };
+    // removedTask consumes the exact owner only after every retained status surface reaches terminal state.
+    // removedTask 仅在所有保留状态面进入终态后消费精确所有者。
+    let removed_task =
+        remove_active_stream_task_if_id(&mut guard, session_id, active_stream_task_id);
+    if removed_task.is_none() {
+        eprintln!(
+            "[webui-service] early stream termination exact owner disappeared inside terminal transaction: session={session_id} task={active_stream_task_id}"
+        );
+        return StreamTaskExitOutcome::StateUnavailable;
+    }
+    finish_webui_session_kernel_turn(&mut guard, session_id, terminal_status);
+    drop(guard);
+    emit_service_event_with_trace(
+        app,
+        "workbench_early_stream_terminal_phase_delta_emit",
+        ServiceEvent::WorkbenchDelta(Box::new(terminal_phase_event)),
+    );
     StreamTaskExitOutcome::EarlyTerminationCleaned
 }

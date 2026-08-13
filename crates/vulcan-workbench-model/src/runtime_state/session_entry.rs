@@ -296,6 +296,10 @@ pub struct SessionRuntimeStateEntry {
         skip_serializing_if = "SessionProviderCallLedger::is_empty"
     )]
     pub provider_call_ledger: SessionProviderCallLedger,
+    /// Lightweight durable reference to the exact execution snapshot eligible for retry.
+    /// 指向可重试精确执行快照的轻量持久化引用。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_retry_snapshot: Option<ExecutionRetrySnapshotRef>,
     /// Absolute input-token baseline for the current BodyAfterPrefix compaction window.
     /// 当前 BodyAfterPrefix 压缩窗口使用的绝对输入 Token 基线。
     #[serde(default, skip_serializing_if = "Option::is_none")]

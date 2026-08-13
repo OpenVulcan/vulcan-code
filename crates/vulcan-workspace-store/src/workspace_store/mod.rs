@@ -146,6 +146,110 @@ pub fn load_core_session_vmm_state(
     load_core_vmm_controller_state(&session_dir, &session_id_text)
 }
 
+/// Atomically persists one exact retry snapshot below its owning segmented session directory.
+/// 在所属分段会话目录下原子持久化一份精确重试快照。
+///
+/// # Parameters
+/// 参数
+/// `data_root` is the controller-managed Vulcan data root.
+/// `data_root` 是控制器管理的 Vulcan 数据根目录。
+/// `session_id` is the exact main-session owner.
+/// `session_id` 是精确的主会话所有者。
+/// `snapshot` is the complete retry sidecar candidate.
+/// `snapshot` 是完整的重试 sidecar 候选。
+///
+/// # Returns
+/// 返回值
+/// A digest-bound lightweight reference only after atomic sidecar publication succeeds.
+/// 仅在 sidecar 原子发布成功后返回摘要绑定的轻量引用。
+pub fn persist_execution_retry_snapshot(
+    data_root: &Path,
+    session_id: SessionId,
+    snapshot: &vulcan_workbench_model::ExecutionRetrySnapshot,
+) -> Result<vulcan_workbench_model::ExecutionRetrySnapshotRef, String> {
+    if snapshot.session_id != session_id.to_string() {
+        return Err(String::from(
+            "Execution retry snapshot owner does not match the requested session.",
+        ));
+    }
+    let session_directory = find_segmented_session_directory_by_id(
+        data_root,
+        &session_id.to_string(),
+    )?
+    .ok_or_else(|| {
+        format!(
+            "Session `{session_id}` has no segmented directory for execution retry persistence."
+        )
+    })?;
+    ExecutionRetrySnapshotStore::new(session_directory).write(snapshot)
+}
+
+/// Loads one exact retry snapshot through its digest-bound runtime-state reference.
+/// 通过运行态中的摘要绑定引用加载一份精确重试快照。
+///
+/// # Parameters
+/// 参数
+/// `data_root` is the controller-managed Vulcan data root.
+/// `data_root` 是控制器管理的 Vulcan 数据根目录。
+/// `session_id` is the exact main-session owner.
+/// `session_id` 是精确的主会话所有者。
+/// `reference` is the lightweight reference committed in session runtime state.
+/// `reference` 是提交在会话运行态中的轻量引用。
+///
+/// # Returns
+/// 返回值
+/// The complete sidecar only when every strict identity and digest check succeeds.
+/// 仅当全部严格身份与摘要校验成功时返回完整 sidecar。
+pub fn load_execution_retry_snapshot(
+    data_root: &Path,
+    session_id: SessionId,
+    reference: &vulcan_workbench_model::ExecutionRetrySnapshotRef,
+) -> Result<vulcan_workbench_model::ExecutionRetrySnapshot, String> {
+    let session_directory = find_segmented_session_directory_by_id(
+        data_root,
+        &session_id.to_string(),
+    )?
+    .ok_or_else(|| {
+        format!("Session `{session_id}` has no segmented directory for execution retry loading.")
+    })?;
+    let snapshot = ExecutionRetrySnapshotStore::new(session_directory).read(reference)?;
+    if snapshot.session_id != session_id.to_string() {
+        return Err(String::from(
+            "Execution retry snapshot owner does not match the requested session.",
+        ));
+    }
+    Ok(snapshot)
+}
+
+/// Deletes one exact retry sidecar after its consumed or replacement reference is durable.
+/// 在消费状态或替代引用可靠写入后删除一个精确重试 sidecar。
+///
+/// # Parameters
+/// 参数
+/// `data_root` is the controller-managed Vulcan data root.
+/// `data_root` 是控制器管理的 Vulcan 数据根目录。
+/// `session_id` is the exact main-session owner.
+/// `session_id` 是精确的主会话所有者。
+/// `snapshot_id` is the exact UUID sidecar identity.
+/// `snapshot_id` 是精确的 UUID sidecar 身份。
+///
+/// # Returns
+/// 返回值
+/// Success when the session and sidecar are absent or the sidecar is removed.
+/// 会话或 sidecar 不存在，或 sidecar 已删除时返回成功。
+pub fn delete_execution_retry_snapshot(
+    data_root: &Path,
+    session_id: SessionId,
+    snapshot_id: &str,
+) -> Result<(), String> {
+    let Some(session_directory) =
+        find_segmented_session_directory_by_id(data_root, &session_id.to_string())?
+    else {
+        return Ok(());
+    };
+    ExecutionRetrySnapshotStore::new(session_directory).delete(snapshot_id)
+}
+
 /// Returns the exact rebuild reason when one session contains a rejected historical or damaged VMM attachment.
 /// 当单个会话包含已拒绝的历史或损坏 VMM 附件时返回精确重建原因。
 ///
@@ -347,6 +451,7 @@ fn reject_historical_vmm_profile_context_injection(
 }
 
 mod boundary_store;
+mod execution_retry_store;
 mod loading;
 mod models;
 mod queries;
@@ -354,6 +459,7 @@ mod runtime_logs;
 mod serialization;
 
 pub use boundary_store::*;
+pub use execution_retry_store::*;
 pub use loading::*;
 pub use models::*;
 pub use runtime_logs::*;

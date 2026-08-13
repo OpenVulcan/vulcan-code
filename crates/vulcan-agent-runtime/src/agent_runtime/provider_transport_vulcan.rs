@@ -104,6 +104,7 @@ pub(crate) fn execute_vulcan_public_stream(
     let PreparedProviderTransportStreamLaunch {
         runtime_inputs,
         core_snapshot,
+        initial_provider_request,
         prompt_intervention,
     } = prepare_provider_transport_stream_launch(request);
     execute_host_controlled_stream_with_prepared_inputs(
@@ -126,6 +127,7 @@ pub(crate) fn execute_vulcan_public_stream(
                 resolved.model.capabilities.output_resources.clone(),
                 workspace_path.clone(),
                 live_sender,
+                initial_provider_request.clone(),
             )
         },
         "Vulcan 公共契约",
@@ -181,6 +183,7 @@ pub(crate) fn capture_vulcan_public_stream(
             resolved.model.capabilities.output_resources,
             workspace_path,
             live_sender,
+            prepared.initial_provider_request,
         );
         let public_request = adapter
             .build_request(&prepared.core_snapshot, &controller_config)
@@ -251,6 +254,9 @@ pub(crate) struct VulcanPublicContractAdapter {
     /// Live host sender for tool request construction.
     /// 工具请求构造使用的宿主实时发送器。
     live_sender: ProviderLiveDeltaSender,
+    /// One-shot exact public request restored from a claimed retry snapshot.
+    /// 从已认领重试快照恢复的一次性精确公共请求。
+    initial_provider_request: std::sync::Arc<std::sync::Mutex<Option<AiExecutionRequest>>>,
 }
 
 /// Carries the public request together with the controller budget snapshot.
@@ -260,6 +266,12 @@ pub(crate) struct VulcanPublicContractRequest {
     /// Provider-neutral execution request.
     /// 供应商无关执行请求。
     pub(crate) public: AiExecutionRequest,
+    /// Exact controller configuration used to build this public request.
+    /// 用于构建当前公共请求的精确控制器配置。
+    pub(crate) controller_config: CoreControllerConfig,
+    /// Exact canonical controller snapshot used to build this public request.
+    /// 用于构建当前公共请求的精确规范控制器快照。
+    pub(crate) controller_snapshot: CoreConversationSnapshot,
     /// Exact canonical snapshot used by the request budget guard.
     /// 请求预算门使用的精确规范快照。
     pub(crate) budget: CoreProviderRequestSnapshot,
@@ -302,6 +314,7 @@ impl VulcanPublicContractAdapter {
         output_resources: Vec<ResourceKind>,
         workspace_path: String,
         live_sender: ProviderLiveDeltaSender,
+        initial_provider_request: Option<AiExecutionRequest>,
     ) -> Self {
         // toolSources preserves exact source ownership before protocol projection removes host metadata.
         // toolSources 在协议投影移除宿主元数据前保留精确来源归属。
@@ -329,6 +342,9 @@ impl VulcanPublicContractAdapter {
             output_resources,
             workspace_path,
             live_sender,
+            initial_provider_request: std::sync::Arc::new(std::sync::Mutex::new(
+                initial_provider_request,
+            )),
         }
     }
 }
@@ -501,7 +517,7 @@ impl VulcanProviderAdapter for VulcanPublicContractAdapter {
             self.output_resources.as_slice(),
             self.provider_native_tools.clone(),
         );
-        let public = AiExecutionRequest {
+        let rebuilt_public = AiExecutionRequest {
             operation: AiOperation::ConversationRespond,
             model_id: config.model_id.clone(),
             cache_scope_id: Some(self.cache_scope_id.clone()),
@@ -555,8 +571,29 @@ impl VulcanProviderAdapter for VulcanPublicContractAdapter {
             request_headers: None,
             continuation: snapshot.continuation.clone(),
         };
+        // initialPublicRequest is consumed exactly once; every later tool-result turn is rebuilt from the restored controller.
+        // initialPublicRequest 仅消费一次；后续每个工具结果回合都从已恢复控制器重新构建。
+        let initial_public = self
+            .initial_provider_request
+            .lock()
+            .map_err(|_| {
+                provider_failure(self.provider_id(), "The retry request lock is poisoned.")
+            })?
+            .take();
+        if let Some(initial_public) = initial_public.as_ref()
+            && (initial_public.tools != rebuilt_public.tools
+                || initial_public.native_tools != rebuilt_public.native_tools)
+        {
+            return Err(provider_failure(
+                self.provider_id(),
+                "The frozen retry request tool contract no longer matches the active runtime.",
+            ));
+        }
+        let public = initial_public.unwrap_or(rebuilt_public);
         Ok(VulcanPublicContractRequest {
             public,
+            controller_config: config.clone(),
+            controller_snapshot: snapshot.clone(),
             budget,
             context_budget: None,
         })
@@ -671,6 +708,8 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
     {
         let VulcanPublicContractRequest {
             public,
+            controller_config,
+            controller_snapshot,
             budget,
             context_budget,
         } = request;
@@ -678,6 +717,9 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
         self.live_sender
             .send(Ok(ProviderStreamDelta::RequestPrepared {
                 snapshot: budget,
+                exact_request: public.clone(),
+                controller_config,
+                controller_snapshot,
                 context_budget,
                 completion: prepared_completion,
             }))

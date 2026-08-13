@@ -6,7 +6,8 @@ use std::collections::BTreeMap;
 use crate::{apply_output_style_snapshot, resolve_output_style_snapshot};
 use uuid::Uuid;
 use vulcan_agent_runtime::workbench_prompt_turn::{
-    SharedPromptPrecheckPlan, SharedPromptTurnBeginInput, begin_shared_prompt_turn,
+    SharedPromptPrecheckPlan, SharedPromptTurnBeginInput, SharedPromptTurnStart,
+    begin_shared_prompt_turn, restore_shared_prompt_turn_from_execution_retry,
 };
 use vulcan_service_api::{
     ComposerAttachmentSummary, ServiceEvent, ServiceEventEmitter, SubmitConversationPromptAck,
@@ -77,7 +78,7 @@ pub(super) enum ExistingSessionHydrationPolicy {
 
 /// Selects whether a submission creates visible user input or continues retained provider state.
 /// 选择本次提交是创建可见用户输入还是继续保留的 Provider 状态。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub(super) enum ConversationSubmissionMode {
     /// Normal composer submission authored by the user.
     /// 用户通过输入区发起的普通提交。
@@ -91,42 +92,276 @@ pub(super) enum ConversationSubmissionMode {
         /// Exact provider-call ledger revision projected to the caller.
         /// 投影给调用方的精确 Provider 调用账本修订号。
         expected_ledger_revision: u64,
+        /// Exact frozen execution snapshot loaded and digest-validated before admission.
+        /// 准入前加载并完成摘要校验的精确冻结执行快照。
+        retry_snapshot: Box<vulcan_workbench_model::ExecutionRetrySnapshot>,
     },
 }
 
 impl ConversationSubmissionMode {
     /// Returns the prompt source recorded in the shared turn state.
     /// 返回共享回合状态中记录的提示词来源。
-    fn prompt_source(self) -> PendingSessionPromptSource {
+    fn prompt_source(&self) -> PendingSessionPromptSource {
         match self {
             Self::UserPrompt => PendingSessionPromptSource::UserFollowup,
-            Self::Continuation { .. } => PendingSessionPromptSource::Continuation,
+            Self::Continuation { .. } => PendingSessionPromptSource::ExecutionRetry,
         }
     }
 
     /// Returns whether this mode should append user-authored conversation records.
     /// 返回本模式是否应追加用户编写的会话记录。
-    fn appends_user_records(self) -> bool {
+    fn appends_user_records(&self) -> bool {
         matches!(self, Self::UserPrompt)
     }
 
     /// Returns whether this submission is a prompt-free continuation.
     /// 返回本次提交是否为无提示词 Continue。
-    fn is_continuation(self) -> bool {
+    fn is_continuation(&self) -> bool {
         matches!(self, Self::Continuation { .. })
     }
 
     /// Returns the exact continuation generation and ledger revision when applicable.
     /// 在适用时返回精确 Continue 代际与账本修订号。
-    fn continuation_expectation(self) -> Option<(u64, u64)> {
+    fn continuation_expectation(&self) -> Option<(u64, u64)> {
         match self {
             Self::UserPrompt => None,
             Self::Continuation {
                 expected_generation,
                 expected_ledger_revision,
-            } => Some((expected_generation, expected_ledger_revision)),
+                ..
+            } => Some((*expected_generation, *expected_ledger_revision)),
         }
     }
+
+    /// Returns the exact frozen retry snapshot carried by a manual continuation.
+    /// 返回手动 Continue 携带的精确冻结重试快照。
+    fn retry_snapshot(&self) -> Option<&vulcan_workbench_model::ExecutionRetrySnapshot> {
+        match self {
+            Self::UserPrompt => None,
+            Self::Continuation { retry_snapshot, .. } => Some(retry_snapshot),
+        }
+    }
+}
+
+/// Validates one frozen retry sidecar against the exact current session state before CAS claim.
+/// 在 CAS 领取前，根据精确当前会话状态校验一份冻结的重试 sidecar。
+///
+/// # Parameters
+/// 参数
+/// `runtime_state` is the authoritative retained session state at admission.
+/// `runtime_state` 是准入时的权威保留会话状态。
+/// `session_id` is the exact owner selected by the Continue RPC.
+/// `session_id` 是 Continue RPC 选定的精确所有者。
+/// `snapshot` is the digest-validated complete sidecar loaded from storage.
+/// `snapshot` 是从存储加载且已完成摘要校验的完整 sidecar。
+///
+/// # Returns
+/// 返回值
+/// Success only when route, context generation, canonical state, lifecycle, and pending action are all replay-safe.
+/// 仅当路由、上下文代际、规范状态、生命周期与待执行动作全部可安全重放时返回成功。
+pub(crate) fn validate_execution_retry_snapshot_for_claim(
+    runtime_state: &vulcan_workbench_model::SessionRuntimeStateEntry,
+    session_id: SessionId,
+    snapshot: &vulcan_workbench_model::ExecutionRetrySnapshot,
+) -> Result<(), String> {
+    if snapshot.session_id != session_id.to_string() {
+        return Err(String::from(
+            "ERR_CONVERSATION_CONTINUE_RETRY_SNAPSHOT_OWNER_MISMATCH",
+        ));
+    }
+    if snapshot.state != vulcan_workbench_model::ExecutionRetrySnapshotState::Frozen
+        || snapshot.claimed_attempt_id.is_some()
+    {
+        return Err(String::from(
+            "ERR_CONVERSATION_CONTINUE_RETRY_SNAPSHOT_NOT_FROZEN",
+        ));
+    }
+    if !matches!(
+        &snapshot.pending_action,
+        vulcan_workbench_model::ExecutionRetryPendingAction::ResumePreparation { .. }
+            | vulcan_workbench_model::ExecutionRetryPendingAction::DispatchProviderRequest { .. }
+    ) {
+        return Err(String::from(
+            "ERR_CONVERSATION_CONTINUE_RETRY_ACTION_UNSUPPORTED",
+        ));
+    }
+    if snapshot
+        .error
+        .as_ref()
+        .is_some_and(|error| !error.retryable)
+    {
+        return Err(String::from(
+            "ERR_CONVERSATION_CONTINUE_RETRY_SNAPSHOT_UNSAFE",
+        ));
+    }
+    if runtime_state.provider_route_lease.as_ref() != Some(&snapshot.provider_route) {
+        return Err(String::from(
+            "ERR_CONVERSATION_CONTINUE_RETRY_ROUTE_CHANGED",
+        ));
+    }
+    if runtime_state
+        .provider_call_ledger
+        .active_context_generation_id
+        != snapshot.context_generation_id
+    {
+        return Err(String::from(
+            "ERR_CONVERSATION_CONTINUE_RETRY_CONTEXT_GENERATION_CHANGED",
+        ));
+    }
+    // canonicalSnapshot uses the same lossless bridge used by provider runtime bootstrap.
+    // canonicalSnapshot 使用与 Provider 运行时 bootstrap 相同的无损桥接。
+    let canonical_snapshot =
+        vulcan_agent_runtime::agent_runtime::provider_request_bridge_conversation::build_core_conversation_snapshot(
+            &runtime_state.conversation_state,
+        )?;
+    let canonical_bytes = serde_json::to_vec(&canonical_snapshot)
+        .map_err(|error| format!("Failed to serialize current retry-claim Core state: {error}"))?;
+    if execution_retry_sha256_hex(&canonical_bytes) != snapshot.canonical_digest {
+        return Err(String::from(
+            "ERR_CONVERSATION_CONTINUE_RETRY_CANONICAL_STATE_CHANGED",
+        ));
+    }
+    Ok(())
+}
+
+/// Invalidates an older retry snapshot when the user starts a different logical execution.
+/// 当用户启动不同逻辑执行时使旧重试快照失效。
+fn invalidate_execution_retry_snapshot_for_user_prompt(
+    controller_runtime: &vulcan_workspace_store::data_plane::ControllerRuntimeHandle,
+    workspace_snapshot: &mut WorkspaceSnapshot,
+    session_id: SessionId,
+) -> Result<(), String> {
+    let reference = workspace_snapshot
+        .session_runtime_state
+        .get(&session_id)
+        .and_then(|runtime_state| runtime_state.execution_retry_snapshot.clone());
+    let Some(reference) = reference else {
+        return Ok(());
+    };
+    if matches!(
+        reference.state,
+        vulcan_workbench_model::ExecutionRetrySnapshotState::Consumed
+            | vulcan_workbench_model::ExecutionRetrySnapshotState::Invalidated
+    ) {
+        return Ok(());
+    }
+    let mut snapshot = vulcan_workspace_store::workspace_store::load_execution_retry_snapshot(
+        &controller_runtime.data_root,
+        session_id,
+        &reference,
+    )?;
+    snapshot.state = vulcan_workbench_model::ExecutionRetrySnapshotState::Invalidated;
+    snapshot.claimed_attempt_id = None;
+    snapshot.updated_at = current_unix_millis_text();
+    let invalidated_reference =
+        vulcan_workspace_store::workspace_store::persist_execution_retry_snapshot(
+            &controller_runtime.data_root,
+            session_id,
+            &snapshot,
+        )?;
+    let runtime_state = workspace_snapshot
+        .session_runtime_state
+        .get_mut(&session_id)
+        .ok_or_else(|| {
+            String::from("Execution retry runtime state disappeared while invalidating.")
+        })?;
+    runtime_state.execution_retry_snapshot = Some(invalidated_reference);
+    Ok(())
+}
+
+/// Computes a lowercase SHA-256 digest for exact retry-claim comparison bytes.
+/// 为精确重试领取比较字节计算小写 SHA-256 摘要。
+fn execution_retry_sha256_hex(encoded: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+
+    let digest = Sha256::digest(encoded);
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// Persists the accepted pre-provider preparation boundary before the submit acknowledgement.
+/// 在提交确认返回前持久化已接纳的 Provider 调用前准备边界。
+///
+/// # Parameters
+/// 参数
+/// - `controller_runtime`: Workspace data-plane owner used for atomic sidecar persistence.
+/// - `controller_runtime`：用于原子持久化 sidecar 的工作区数据面所有者。
+/// - `workspace_snapshot`: Detached accepted workspace state that receives the lightweight reference.
+/// - `workspace_snapshot`：接收轻量引用的分离已接纳工作区状态。
+/// - `session_id`: Session that owns the accepted prompt turn.
+/// - `session_id`：拥有已接纳提示词回合的会话。
+/// - `physical_attempt_id`: Submission identity that owns the first physical attempt.
+/// - `physical_attempt_id`：拥有首次物理尝试的提交身份。
+/// - `start`: Exact started prompt-turn state captured before deferred preparation.
+/// - `start`：延迟准备前捕获的精确已启动提示词回合状态。
+///
+/// # Returns
+/// 返回值
+/// Success after both sidecar persistence and runtime-reference publication complete.
+/// sidecar 持久化与运行态引用发布均完成后返回成功。
+fn persist_accepted_preparation_retry_checkpoint(
+    controller_runtime: &vulcan_workspace_store::data_plane::ControllerRuntimeHandle,
+    workspace_snapshot: &mut WorkspaceSnapshot,
+    session_id: SessionId,
+    physical_attempt_id: &str,
+    start: &SharedPromptTurnStart,
+) -> Result<(), String> {
+    let runtime_state = workspace_snapshot
+        .session_runtime_state
+        .get_mut(&session_id)
+        .ok_or_else(|| String::from("Accepted preparation retry runtime state is missing."))?;
+    let provider_route = runtime_state
+        .provider_route_lease
+        .clone()
+        .ok_or_else(|| String::from("Accepted preparation retry has no frozen provider route."))?;
+    let controller_snapshot = vulcan_agent_runtime::agent_runtime::provider_request_bridge_conversation::build_core_conversation_snapshot(
+        &runtime_state.conversation_state,
+    )?;
+    let canonical_bytes = serde_json::to_vec(&controller_snapshot).map_err(|error| {
+        format!("Failed to serialize accepted preparation retry Core state: {error}")
+    })?;
+    let generation = runtime_state
+        .execution_retry_snapshot
+        .as_ref()
+        .map(|reference| reference.generation)
+        .unwrap_or_default()
+        .checked_add(1)
+        .ok_or_else(|| String::from("Execution retry generation overflowed."))?;
+    let now = current_unix_millis_text();
+    let snapshot = vulcan_workbench_model::ExecutionRetrySnapshot {
+        schema_version: vulcan_workbench_model::EXECUTION_RETRY_SNAPSHOT_SCHEMA_VERSION,
+        snapshot_id: Uuid::new_v4().to_string(),
+        session_id: session_id.to_string(),
+        generation,
+        state: vulcan_workbench_model::ExecutionRetrySnapshotState::Frozen,
+        logical_execution_id: physical_attempt_id.to_string(),
+        logical_turn_id: Some(start.preparation_turn_id.clone()),
+        physical_attempt_id: physical_attempt_id.to_string(),
+        claimed_attempt_id: None,
+        provider_route,
+        provider_service_entry_id: None,
+        credential_profile_id: None,
+        controller_config: None,
+        controller_snapshot,
+        pending_action: vulcan_workbench_model::ExecutionRetryPendingAction::ResumePreparation {
+            input: Box::new(start.execution_retry_preparation_input()?),
+        },
+        error: None,
+        canonical_digest: execution_retry_sha256_hex(&canonical_bytes),
+        context_generation_id: runtime_state
+            .provider_call_ledger
+            .active_context_generation_id
+            .clone(),
+        created_at: now.clone(),
+        updated_at: now.clone(),
+    };
+    let reference = vulcan_workspace_store::workspace_store::persist_execution_retry_snapshot(
+        &controller_runtime.data_root,
+        session_id,
+        &snapshot,
+    )?;
+    runtime_state.execution_retry_snapshot = Some(reference);
+    runtime_state.updated_at = now;
+    Ok(())
 }
 
 /// Freezes the exact provider, model, and credential selected when a prompt is submitted.
@@ -1187,7 +1422,9 @@ pub(super) async fn service_continue_conversation(
 ) -> Result<SubmitConversationPromptAck, String> {
     let session_id = parse_session_id(&conversation_id)
         .ok_or_else(|| String::from("ERR_CONVERSATION_CONTINUE_INVALID_CONVERSATION"))?;
-    {
+    // retryReference is read with eligibility so Continue cannot race a changed runtime snapshot.
+    // retryReference 与资格信息在同一锁内读取，避免 Continue 与变化后的运行态快照竞争。
+    let (controller_runtime, retry_reference) = {
         let guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -1212,15 +1449,57 @@ pub(super) async fn service_continue_conversation(
             Some((expected_generation, expected_ledger_revision)),
         )
         .map_err(String::from)?;
-    }
+        let retry_reference = runtime_state
+            .execution_retry_snapshot
+            .clone()
+            .ok_or_else(|| String::from("ERR_CONVERSATION_CONTINUE_RETRY_SNAPSHOT_MISSING"))?;
+        if retry_reference.state != vulcan_workbench_model::ExecutionRetrySnapshotState::Frozen {
+            return Err(String::from(
+                "ERR_CONVERSATION_CONTINUE_RETRY_SNAPSHOT_NOT_FROZEN",
+            ));
+        }
+        let controller_runtime = guard
+            .controller_runtime
+            .clone()
+            .ok_or_else(|| String::from("ERR_CONTROLLER_RUNTIME_NOT_READY"))?;
+        (controller_runtime, retry_reference)
+    };
+    // retrySnapshot is the exact sidecar payload; missing, damaged, or unknown versions fail closed.
+    // retrySnapshot 是精确 sidecar 载荷；缺失、损坏或未知版本均失败关闭。
+    let retry_snapshot = vulcan_workspace_store::workspace_store::load_execution_retry_snapshot(
+        &controller_runtime.data_root,
+        session_id,
+        &retry_reference,
+    )?;
 
-    service_submit_conversation_prompt(
+    service_retry_frozen_execution(
+        app,
+        state,
+        conversation_id,
+        expected_generation,
+        expected_ledger_revision,
+        retry_snapshot,
+    )
+    .await
+}
+
+/// Starts a claimed frozen execution without creating or accepting prompt text.
+/// 在不创建或接收提示词文本的情况下启动一份已领取冻结执行。
+async fn service_retry_frozen_execution(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    conversation_id: String,
+    expected_generation: u64,
+    expected_ledger_revision: u64,
+    retry_snapshot: vulcan_workbench_model::ExecutionRetrySnapshot,
+) -> Result<SubmitConversationPromptAck, String> {
+    service_start_conversation_execution(
         app,
         state,
         Uuid::new_v4().to_string(),
         None,
         Some(conversation_id),
-        String::new(),
+        None,
         None,
         None,
         None,
@@ -1232,7 +1511,48 @@ pub(super) async fn service_continue_conversation(
         ConversationSubmissionMode::Continuation {
             expected_generation,
             expected_ledger_revision,
+            retry_snapshot: Box::new(retry_snapshot),
         },
+    )
+    .await
+}
+
+/// Starts an ordinary user-authored conversation submission through the shared execution admission path.
+/// 通过共享执行准入路径启动普通用户编写的会话提交。
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn service_submit_conversation_prompt(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    client_submission_id: String,
+    project_id: Option<String>,
+    conversation_id: Option<String>,
+    prompt: String,
+    hidden_model_guidance: Option<String>,
+    execution_mode: Option<String>,
+    reasoning_effort: Option<String>,
+    model_selection: Option<SubmissionModelSelection>,
+    session_settings: Option<SubmissionSessionSettings>,
+    attachments: Option<Vec<ComposerAttachmentSummary>>,
+    preauthorized_turn_admission: Option<ExistingSubmissionAdmissionAuthorization>,
+    existing_session_hydration_policy: ExistingSessionHydrationPolicy,
+    submission_mode: ConversationSubmissionMode,
+) -> Result<SubmitConversationPromptAck, String> {
+    service_start_conversation_execution(
+        app,
+        state,
+        client_submission_id,
+        project_id,
+        conversation_id,
+        Some(prompt),
+        hidden_model_guidance,
+        execution_mode,
+        reasoning_effort,
+        model_selection,
+        session_settings,
+        attachments,
+        preauthorized_turn_admission,
+        existing_session_hydration_policy,
+        submission_mode,
     )
     .await
 }
@@ -1262,13 +1582,13 @@ pub(super) async fn service_continue_conversation(
 ///
 /// `submission_mode` selects ordinary user input or a revision-bound prompt-free continuation.
 /// `submission_mode` 选择普通用户输入或绑定修订号的无提示词 Continue。
-pub(super) async fn service_submit_conversation_prompt(
+async fn service_start_conversation_execution(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     client_submission_id: String,
     project_id: Option<String>,
     conversation_id: Option<String>,
-    prompt: String,
+    prompt: Option<String>,
     hidden_model_guidance: Option<String>,
     execution_mode: Option<String>,
     reasoning_effort: Option<String>,
@@ -1286,7 +1606,21 @@ pub(super) async fn service_submit_conversation_prompt(
     if client_submission_id.is_empty() {
         return Err(String::from("clientSubmissionId must not be empty."));
     }
-    let prompt = prompt.trim().to_string();
+    let prompt = match (&submission_mode, prompt) {
+        (ConversationSubmissionMode::UserPrompt, Some(prompt)) => prompt.trim().to_string(),
+        (ConversationSubmissionMode::UserPrompt, None) => {
+            return Err(String::from("A user submission requires prompt text."));
+        }
+        (ConversationSubmissionMode::Continuation { .. }, None) => String::new(),
+        (ConversationSubmissionMode::Continuation { .. }, Some(_)) => {
+            return Err(String::from(
+                "An execution retry must not carry prompt text.",
+            ));
+        }
+    };
+    // claimedRetrySnapshot carries the exact sidecar through admission into deferred runtime preparation.
+    // claimedRetrySnapshot 将精确 sidecar 从准入阶段传递到延迟运行时准备阶段。
+    let mut claimed_retry_snapshot = submission_mode.retry_snapshot().cloned();
     let prompt_source = submission_mode.prompt_source();
     let append_user_records = submission_mode.appends_user_records();
     webui_submit_trace(
@@ -1510,7 +1844,7 @@ pub(super) async fn service_submit_conversation_prompt(
     // session_id is copied from the authoritative materialization result after activation consumes its classification.
     // session_id 在激活阶段消费物化分类后，从权威物化结果中复制。
     let session_id = materialized_session.session_id;
-    if submission_mode == ConversationSubmissionMode::UserPrompt
+    if matches!(submission_mode, ConversationSubmissionMode::UserPrompt)
         && let Some(runtime_state) = workspace_snapshot
             .session_runtime_state
             .get_mut(&session_id)
@@ -1521,6 +1855,122 @@ pub(super) async fn service_submit_conversation_prompt(
                 client_submission_id.clone(),
                 i64::try_from(current_unix_millis_value()).unwrap_or(i64::MAX),
             );
+    }
+    if matches!(submission_mode, ConversationSubmissionMode::UserPrompt) {
+        invalidate_execution_retry_snapshot_for_user_prompt(
+            &controller_runtime,
+            &mut workspace_snapshot,
+            session_id,
+        )?;
+    }
+    // session_title borrows the authoritative title through the final activation commit.
+    // session_title 借用权威标题直到最终激活提交完成。
+    let session_title = materialized_session.session_title.as_str();
+    // workspace_path borrows the owning project path through precheck dispatch preparation.
+    // workspace_path 借用所属项目路径直到 precheck 分发准备完成。
+    let workspace_path = materialized_session.workspace_path.as_str();
+    webui_submit_trace(
+        "submit_prompt_starting_run",
+        format!(
+            "session={session_id} title_chars={}",
+            session_title.chars().count()
+        ),
+    );
+    let submit_run_prepare_started_at = current_unix_millis_value();
+    let runtime_options = prepare_submission_runtime_options(
+        &controller_runtime,
+        &mut workspace_snapshot,
+        session_id,
+        SubmissionRuntimeOptionsInput {
+            execution_mode,
+            reasoning_effort,
+        },
+    )
+    .await?;
+    webui_submit_trace(
+        "submit_prompt_runtime_options_ready",
+        format!(
+            "session={session_id} elapsed_ms={}",
+            current_unix_millis_value().saturating_sub(submit_run_prepare_started_at)
+        ),
+    );
+    let turn_begin_started_at = current_unix_millis_value();
+    let resume_preparation_input =
+        claimed_retry_snapshot
+            .as_ref()
+            .and_then(|snapshot| match &snapshot.pending_action {
+                vulcan_workbench_model::ExecutionRetryPendingAction::ResumePreparation {
+                    input,
+                } => Some(input.as_ref().clone()),
+                _ => None,
+            });
+    let mut precheck_start = {
+        let mut hook_runtime = agent_runtime
+            .conversation_hook_runtime
+            .lock()
+            .map_err(|error| format!("会话 hook runtime 加锁失败：{error}"))?;
+        if let Some(input) = resume_preparation_input {
+            let restored_turn_id = input.preparation_turn_id.clone();
+            let restored = restore_shared_prompt_turn_from_execution_retry(
+                session_id,
+                &mut hook_runtime,
+                input,
+            )?;
+            let runtime_state = workspace_snapshot
+                .session_runtime_state
+                .get_mut(&session_id)
+                .ok_or_else(|| String::from("ERR_CONVERSATION_CONTINUE_RUNTIME_STATE_MISSING"))?;
+            runtime_state.active_precheck_turn_id = Some(restored_turn_id);
+            restored
+        } else {
+            begin_shared_prompt_turn(
+                &mut workspace_snapshot,
+                &mut hook_runtime,
+                SharedPromptTurnBeginInput {
+                    session_id,
+                    session_title,
+                    workspace_path,
+                    prompt_entry_id: format!(
+                        "webui-prompt-{session_id}-{}",
+                        current_unix_millis_text()
+                    ),
+                    prompt: &prompt,
+                    hidden_model_guidance: hidden_model_guidance.as_deref(),
+                    provider_visible_agent_messages: Vec::new(),
+                    attachments,
+                    append_canonical_user_message: append_user_records,
+                    append_visible_user_prompt_record: append_user_records,
+                    source: prompt_source,
+                    execution_mode: runtime_options.execution_mode,
+                    reasoning_effort: runtime_options.reasoning_effort,
+                },
+            )?
+        }
+    };
+    let accepted_message_id = precheck_start.visible_user_prompt_record_id.clone();
+    let submission_target_label = if submission_session_id.is_some() {
+        "existing"
+    } else {
+        "new"
+    };
+    attach_client_submission_id_to_visible_user_record(
+        &mut workspace_snapshot,
+        session_id,
+        accepted_message_id.as_deref(),
+        &client_submission_id,
+        submission_target_label,
+        current_unix_millis_value(),
+    )?;
+    if !submission_mode.is_continuation() {
+        // This synchronous boundary closes the accepted-but-not-yet-prepared Stop race.
+        // 该同步边界关闭“已接纳但尚未准备”阶段的 Stop 竞态窗口。
+        persist_accepted_preparation_retry_checkpoint(
+            &controller_runtime,
+            &mut workspace_snapshot,
+            session_id,
+            &client_submission_id,
+            &precheck_start,
+        )?;
     }
     if let Some((expected_generation, expected_ledger_revision)) =
         submission_mode.continuation_expectation()
@@ -1559,82 +2009,49 @@ pub(super) async fn service_submit_conversation_prompt(
             client_submission_id.clone(),
             claimed_at_ms,
         )?;
-    }
-    // session_title borrows the authoritative title through the final activation commit.
-    // session_title 借用权威标题直到最终激活提交完成。
-    let session_title = materialized_session.session_title.as_str();
-    // workspace_path borrows the owning project path through precheck dispatch preparation.
-    // workspace_path 借用所属项目路径直到 precheck 分发准备完成。
-    let workspace_path = materialized_session.workspace_path.as_str();
-    webui_submit_trace(
-        "submit_prompt_starting_run",
-        format!(
-            "session={session_id} title_chars={}",
-            session_title.chars().count()
-        ),
-    );
-    let submit_run_prepare_started_at = current_unix_millis_value();
-    let runtime_options = prepare_submission_runtime_options(
-        &controller_runtime,
-        &mut workspace_snapshot,
-        session_id,
-        SubmissionRuntimeOptionsInput {
-            execution_mode,
-            reasoning_effort,
-        },
-    )
-    .await?;
-    webui_submit_trace(
-        "submit_prompt_runtime_options_ready",
-        format!(
-            "session={session_id} elapsed_ms={}",
-            current_unix_millis_value().saturating_sub(submit_run_prepare_started_at)
-        ),
-    );
-    let turn_begin_started_at = current_unix_millis_value();
-    let precheck_start = {
-        let mut hook_runtime = agent_runtime
-            .conversation_hook_runtime
-            .lock()
-            .map_err(|error| format!("会话 hook runtime 加锁失败：{error}"))?;
-        begin_shared_prompt_turn(
-            &mut workspace_snapshot,
-            &mut hook_runtime,
-            SharedPromptTurnBeginInput {
+        let retry_snapshot = claimed_retry_snapshot
+            .as_mut()
+            .ok_or_else(|| String::from("ERR_CONVERSATION_CONTINUE_RETRY_SNAPSHOT_MISSING"))?;
+        validate_execution_retry_snapshot_for_claim(runtime_state, session_id, retry_snapshot)?;
+        retry_snapshot.state = vulcan_workbench_model::ExecutionRetrySnapshotState::Claimed;
+        retry_snapshot.claimed_attempt_id = Some(client_submission_id.clone());
+        retry_snapshot.updated_at = current_unix_millis_text();
+        let retry_reference =
+            vulcan_workspace_store::workspace_store::persist_execution_retry_snapshot(
+                &controller_runtime.data_root,
                 session_id,
-                session_title,
-                workspace_path,
-                prompt_entry_id: format!(
-                    "webui-prompt-{session_id}-{}",
-                    current_unix_millis_text()
-                ),
-                prompt: &prompt,
-                hidden_model_guidance: hidden_model_guidance.as_deref(),
-                provider_visible_agent_messages: Vec::new(),
-                attachments,
-                append_canonical_user_message: append_user_records,
-                append_visible_user_prompt_record: append_user_records,
-                source: prompt_source,
-                execution_mode: runtime_options.execution_mode,
-                reasoning_effort: runtime_options.reasoning_effort,
-            },
+                retry_snapshot,
+            )?;
+        runtime_state.execution_retry_snapshot = Some(retry_reference);
+        precheck_start.execution_retry_snapshot = claimed_retry_snapshot.clone().map(Box::new);
+        store_workspace_snapshot_without_workbench_rebuild(&state, workspace_snapshot.clone())?;
+        if let Err(error) = persist_workspace_session_update(
+            Some(&state),
+            controller_runtime.clone(),
+            &workspace_snapshot,
+            session_id,
         )
-    }?;
-    let accepted_message_id = precheck_start.visible_user_prompt_record_id.clone();
-    let submission_target_label = if submission_session_id.is_some() {
-        "existing"
-    } else {
-        "new"
-    };
-    attach_client_submission_id_to_visible_user_record(
-        &mut workspace_snapshot,
-        session_id,
-        accepted_message_id.as_deref(),
-        &client_submission_id,
-        submission_target_label,
-        current_unix_millis_value(),
-    )?;
+        .await
+        {
+            let cleanup_error = mark_webui_prompt_preparation_failed(
+                &app,
+                &state,
+                &controller_runtime,
+                &agent_runtime,
+                session_id,
+                &precheck_start.preparation_turn_id,
+                &error,
+            )
+            .await
+            .err();
+            return Err(match cleanup_error {
+                Some(cleanup_error) => format!("{error}; cleanup failed: {cleanup_error}"),
+                None => error,
+            });
+        }
+    }
     let turn_id = Some(precheck_start.preparation_turn_id.clone());
+    let preparation_prompt_source = precheck_start.source;
     webui_submit_trace(
         "submit_prompt_turn_begin_ready",
         format!(
@@ -1645,25 +2062,25 @@ pub(super) async fn service_submit_conversation_prompt(
     // Every accepted turn starts in Preparing; post-ACK precheck moves it to MemoryRecall only when required.
     // 每个已接纳回合都从 Preparing 开始；仅在需要时由 ACK 后预检推进到 MemoryRecall。
     let submit_visible_run_phase = SessionRunPhase::Preparing;
-    {
+    let kernel_start_result = {
         let kernel_turn_started_at = current_unix_millis_value();
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
-        if let Some(kernel_reservation_id) = kernel_reservation_id {
+        let result = if let Some(kernel_reservation_id) = kernel_reservation_id {
             start_reserved_webui_session_kernel_user_turn(
                 &mut guard,
                 session_id,
                 &precheck_start.preparation_turn_id,
                 kernel_reservation_id,
-            )?;
+            )
         } else {
             start_webui_session_kernel_user_turn(
                 &mut guard,
                 session_id,
                 &precheck_start.preparation_turn_id,
-            )?;
-        }
+            )
+        };
         webui_submit_trace(
             "submit_prompt_kernel_turn_started",
             format!(
@@ -1671,6 +2088,24 @@ pub(super) async fn service_submit_conversation_prompt(
                 current_unix_millis_value().saturating_sub(kernel_turn_started_at)
             ),
         );
+        result
+    };
+    if let Err(error) = kernel_start_result {
+        let cleanup_error = mark_webui_prompt_preparation_failed(
+            &app,
+            &state,
+            &controller_runtime,
+            &agent_runtime,
+            session_id,
+            &precheck_start.preparation_turn_id,
+            &error,
+        )
+        .await
+        .err();
+        return Err(match cleanup_error {
+            Some(cleanup_error) => format!("{error}; cleanup failed: {cleanup_error}"),
+            None => error,
+        });
     }
     mark_webui_prompt_snapshot_preparing(&mut workspace_snapshot, session_id);
     let begin_commit_started_at = current_unix_millis_value();
@@ -1826,7 +2261,7 @@ pub(super) async fn service_submit_conversation_prompt(
                 &controller_runtime_for_preparation,
                 &workspace_snapshot,
                 session_id,
-                prompt_source,
+                preparation_prompt_source,
             )?;
             webui_submit_trace(
                 "submit_prompt_context_snapshot_ready",
@@ -1836,7 +2271,7 @@ pub(super) async fn service_submit_conversation_prompt(
                 ),
             );
             let precheck_plan_started_at = current_unix_millis_value();
-            let precheck_plan = if prompt_source.runs_user_prompt_precheck() {
+            let precheck_plan = if preparation_prompt_source.runs_user_prompt_precheck() {
                 webui_shared_prompt_precheck_plan(
                     &agent_runtime_for_preparation,
                     &workspace_snapshot,
