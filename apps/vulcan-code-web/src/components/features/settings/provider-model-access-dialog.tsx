@@ -13,7 +13,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
-import { ScrollArea } from "@/components/ui/scroll-area"
 import { Switch } from "@/components/ui/switch"
 import { useI18n } from "@/i18n"
 import {
@@ -343,7 +342,7 @@ export function ProviderModelAccessDialog(props: ProviderModelAccessDialogProps)
           </div>
           {error ? <p className="text-sm text-destructive" role="alert">{error}</p> : null}
         </div>
-        <ScrollArea className="min-h-0 flex-1 px-6 py-4">
+        <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain px-6 py-4">
           {rows.length === 0 ? (
             <p className="rounded-lg border border-dashed px-4 py-10 text-center text-sm text-muted-foreground">
               {t("settings.providerModels.empty")}
@@ -409,7 +408,7 @@ export function ProviderModelAccessDialog(props: ProviderModelAccessDialogProps)
               ))}
             </div>
           )}
-        </ScrollArea>
+        </div>
       </DialogContent>
       <PublicAiModelCapabilityDialog
         model={editingCapabilityModel?.model ?? null}
