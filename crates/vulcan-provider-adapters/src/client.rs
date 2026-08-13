@@ -4591,7 +4591,7 @@ mod tests {
             ANTHROPIC_MESSAGES_PROFILE_ID,
             "deepseek-v4-pro",
         ));
-        assert!(!manifest_protocol_authorizes_model_variant(
+        assert!(manifest_protocol_authorizes_model_variant(
             deepseek,
             "official-api",
             "api-key",

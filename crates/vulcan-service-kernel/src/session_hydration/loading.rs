@@ -381,9 +381,15 @@ fn recover_interrupted_execution_retry_snapshot(
         upstream_parameter: None,
         upstream_message: None,
         request_id: None,
-        provider_id: Some(snapshot.provider_route.provider_id.clone()),
+        provider_id: snapshot
+            .provider_route
+            .as_ref()
+            .map(|route| route.provider_id.clone()),
         entry_id: None,
-        model_id: Some(snapshot.provider_route.model_id.clone()),
+        model_id: snapshot
+            .provider_route
+            .as_ref()
+            .map(|route| route.model_id.clone()),
         message: String::from("The service restarted while the retry execution was claimed."),
         dispatch_outcome: vulcan_ai_contract::DispatchOutcome::Unknown,
         semantic_output_observed: false,

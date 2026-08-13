@@ -133,6 +133,9 @@ pub(crate) fn build_runtime_bootstrap_core(
             )
         });
     if let Some(snapshot) = dispatch_retry_snapshot {
+        let provider_route = snapshot.provider_route.as_ref().ok_or_else(|| {
+            String::from("The claimed provider retry has no frozen provider route.")
+        })?;
         let credential_profile_id = preparation
             .model_blueprint
             .frozen_selection
@@ -145,15 +148,14 @@ pub(crate) fn build_runtime_bootstrap_core(
             .as_ref()
             .map(|selection| selection.route.connection.id.as_str())
             .unwrap_or_default();
-        if preparation.model_blueprint.provider_id != snapshot.provider_route.provider_id
-            || preparation.model_blueprint.model_id != snapshot.provider_route.model_id
-            || preparation.model_blueprint.protocol_profile_id
-                != snapshot.provider_route.protocol_profile_id
-            || preparation.model_blueprint.route_revision != snapshot.provider_route.route_revision
+        if preparation.model_blueprint.provider_id != provider_route.provider_id
+            || preparation.model_blueprint.model_id != provider_route.model_id
+            || preparation.model_blueprint.protocol_profile_id != provider_route.protocol_profile_id
+            || preparation.model_blueprint.route_revision != provider_route.route_revision
             || Some(preparation.model_blueprint.service_entry_id.as_str())
                 != snapshot.provider_service_entry_id.as_deref()
             || Some(credential_profile_id) != snapshot.credential_profile_id.as_deref()
-            || connection_id != snapshot.provider_route.connection_id
+            || connection_id != provider_route.connection_id
         {
             return Err(String::from(
                 "The claimed execution retry route no longer matches the frozen runtime selection.",

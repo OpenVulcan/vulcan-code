@@ -379,7 +379,7 @@ mod tests {
             "deepseek-v4-pro",
         )
         .expect("v4-pro must bind");
-        assert_eq!(binding.protocol_profile_id, "anthropic-messages.v1");
+        assert_eq!(binding.protocol_profile_id, "openai-responses.v1");
         assert_eq!(binding.source, ModelProtocolBindingSource::SystemManifest);
         assert_eq!(binding.rule_id, "v4-pro");
         assert_eq!(binding.manifest_revision, manifest.revision);
@@ -392,6 +392,7 @@ mod tests {
         )
         .expect("v4-flash must bind");
         assert_eq!(flash.protocol_profile_id, "openai-responses.v1");
+        assert_eq!(binding.protocol_profile_id, flash.protocol_profile_id);
     }
 
     /// Verifies a credential-scoped rule outranks a global rule with the same matcher.

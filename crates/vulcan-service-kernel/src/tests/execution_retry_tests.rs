@@ -64,7 +64,7 @@ fn retry_snapshot(session_id: SessionId) -> ExecutionRetrySnapshot {
         logical_turn_id: Some(String::from("turn-a")),
         physical_attempt_id: String::from("attempt-a"),
         claimed_attempt_id: None,
-        provider_route: retry_route(),
+        provider_route: Some(retry_route()),
         provider_service_entry_id: Some(String::from("entry-a")),
         credential_profile_id: Some(String::from("credential-a")),
         controller_config: Some(vulcan_core::types::ControllerConfig::default()),
@@ -107,6 +107,9 @@ fn execution_retry_claim_accepts_frozen_resume_preparation_snapshot() {
             preparation_turn_id: String::from("turn-a"),
             session_title: String::from("session-a"),
             workspace_path: String::from("D:\\workspace"),
+            active_provider_id: Some(String::from("provider-a")),
+            active_connection_id: Some(String::from("connection-a")),
+            active_model_id: Some(String::from("model-a")),
             original_source: PendingSessionPromptSource::UserFollowup,
             prompt: String::from("original prompt"),
             hidden_model_guidance: None,
@@ -120,9 +123,58 @@ fn execution_retry_claim_accepts_frozen_resume_preparation_snapshot() {
             profile_payload: serde_json::json!({"turn_id": "turn-a"}),
         }),
     };
+    snapshot.provider_route = None;
+    let mut runtime_state = retry_runtime_state();
+    runtime_state.provider_route_lease = None;
+    runtime_state.active_provider_id = Some(String::from("provider-a"));
+    runtime_state.active_connection_id = Some(String::from("connection-a"));
+    runtime_state.active_model_id = Some(String::from("model-a"));
 
-    validate_execution_retry_snapshot_for_claim(&retry_runtime_state(), session_id, &snapshot)
+    validate_execution_retry_snapshot_for_claim(&runtime_state, session_id, &snapshot)
         .expect("frozen accepted preparation should be claimable");
+}
+
+/// Verifies a changed pre-route model selection invalidates preparation retry.
+/// 验证路由形成前的模型选择发生变化会使准备态重试失效。
+#[test]
+fn execution_retry_claim_rejects_resume_preparation_selection_drift() {
+    let session_id = Uuid::new_v4();
+    let mut snapshot = retry_snapshot(session_id);
+    snapshot.provider_route = None;
+    snapshot.provider_service_entry_id = None;
+    snapshot.credential_profile_id = None;
+    snapshot.controller_config = None;
+    snapshot.pending_action = ExecutionRetryPendingAction::ResumePreparation {
+        input: Box::new(ExecutionRetryPreparationInput {
+            preparation_turn_id: String::from("turn-a"),
+            session_title: String::from("session-a"),
+            workspace_path: String::from("D:\\workspace"),
+            active_provider_id: Some(String::from("provider-a")),
+            active_connection_id: Some(String::from("connection-a")),
+            active_model_id: Some(String::from("model-a")),
+            original_source: PendingSessionPromptSource::UserFollowup,
+            prompt: String::from("original prompt"),
+            hidden_model_guidance: None,
+            provider_visible_agent_messages: Vec::new(),
+            attachments: Vec::new(),
+            execution_mode: String::from("agent"),
+            reasoning_effort: None,
+            boundary_events: Vec::new(),
+            canonical_user_message_id: Some(String::from("user-message-a")),
+            precheck_payload: serde_json::json!({"turn_id": "turn-a"}),
+            profile_payload: serde_json::json!({"turn_id": "turn-a"}),
+        }),
+    };
+    let mut runtime_state = retry_runtime_state();
+    runtime_state.provider_route_lease = None;
+    runtime_state.active_provider_id = Some(String::from("provider-a"));
+    runtime_state.active_connection_id = Some(String::from("connection-a"));
+    runtime_state.active_model_id = Some(String::from("changed-model"));
+
+    let error = validate_execution_retry_snapshot_for_claim(&runtime_state, session_id, &snapshot)
+        .expect_err("changed pre-route selection must not be claimable");
+
+    assert_eq!(error, "ERR_CONVERSATION_CONTINUE_RETRY_ROUTE_CHANGED");
 }
 
 /// Verifies a tool-side-effect boundary blocks automatic replay.

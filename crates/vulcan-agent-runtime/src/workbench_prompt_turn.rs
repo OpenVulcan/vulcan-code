@@ -189,6 +189,7 @@ impl SharedPromptTurnStart {
     /// 一份可序列化的重试输入，可在不读取输入框的情况下恢复准备。
     pub fn execution_retry_preparation_input(
         &self,
+        runtime_state: &SessionRuntimeStateEntry,
     ) -> Result<ExecutionRetryPreparationInput, String> {
         let provider_visible_agent_messages = self
             .provider_visible_agent_messages
@@ -211,6 +212,9 @@ impl SharedPromptTurnStart {
             preparation_turn_id: self.preparation_turn_id.clone(),
             session_title: self.session_title.clone(),
             workspace_path: self.workspace_path.clone(),
+            active_provider_id: runtime_state.active_provider_id.clone(),
+            active_connection_id: runtime_state.active_connection_id.clone(),
+            active_model_id: runtime_state.active_model_id.clone(),
             original_source: self.source,
             prompt: self.prompt.clone(),
             hidden_model_guidance: self.hidden_model_guidance.clone(),

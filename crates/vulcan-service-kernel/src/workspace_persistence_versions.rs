@@ -501,8 +501,23 @@ pub(crate) fn reasoning_selection(
             note: None,
         });
     }
-    let options = capabilities
-        .reasoning_efforts
+    // displayEfforts separates canonical UI ordering from the model-owned order that declares its default.
+    // displayEfforts 将规范的界面排序与用于声明模型默认值的模型自有顺序分离。
+    let mut display_efforts = capabilities.reasoning_efforts.clone();
+    display_efforts.sort_by_key(|effort| match effort {
+        vulcan_ai_contract::ReasoningEffort::None => 0,
+        vulcan_ai_contract::ReasoningEffort::Adaptive => 1,
+        vulcan_ai_contract::ReasoningEffort::Minimal => 2,
+        vulcan_ai_contract::ReasoningEffort::Low => 3,
+        vulcan_ai_contract::ReasoningEffort::Medium => 4,
+        vulcan_ai_contract::ReasoningEffort::High => 5,
+        vulcan_ai_contract::ReasoningEffort::XHigh => 6,
+        vulcan_ai_contract::ReasoningEffort::Max => 7,
+        vulcan_ai_contract::ReasoningEffort::Ultra => 8,
+    });
+    // options projects canonical display order without changing execution-time default resolution.
+    // options 投影规范展示顺序，但不改变执行期默认档位解析。
+    let options = display_efforts
         .iter()
         .copied()
         .map(|effort| {
@@ -1028,6 +1043,7 @@ mod tests {
             reasoning_efforts: vec![
                 vulcan_ai_contract::ReasoningEffort::None,
                 vulcan_ai_contract::ReasoningEffort::High,
+                vulcan_ai_contract::ReasoningEffort::Low,
                 vulcan_ai_contract::ReasoningEffort::Max,
             ],
             ..vulcan_ai_contract::ModelCapabilities::default()
@@ -1043,7 +1059,7 @@ mod tests {
                 .iter()
                 .map(|option| option.value.as_str())
                 .collect::<Vec<_>>(),
-            vec!["none", "high", "max"]
+            vec!["none", "low", "high", "max"]
         );
         assert_eq!(selection.selected_effort, "high");
     }

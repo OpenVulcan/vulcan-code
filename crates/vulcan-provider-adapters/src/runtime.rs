@@ -16178,8 +16178,8 @@ mod tests {
                 OPENAI_RESPONSES_PROFILE_ID,
             ])
         );
-        // pro must bind Anthropic and must never acquire a Responses variant.
-        // pro 必须绑定 Anthropic，且绝不能获得 Responses 变体。
+        // pro must bind Responses and retain the same three protocol variants as flash.
+        // pro 必须绑定 Responses，并保留与 flash 相同的三个协议变体。
         let pro = catalog
             .models
             .iter()
@@ -16189,15 +16189,22 @@ mod tests {
             pro.resolved_protocol_binding
                 .as_ref()
                 .map(|binding| binding.protocol_profile_id.as_str()),
-            Some(ANTHROPIC_MESSAGES_PROFILE_ID)
+            Some(OPENAI_RESPONSES_PROFILE_ID)
         );
-        assert!(
-            !pro.protocol_variants
-                .contains_key(OPENAI_RESPONSES_PROFILE_ID)
+        assert_eq!(
+            pro.protocol_variants
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                ANTHROPIC_MESSAGES_PROFILE_ID,
+                OPENAI_CHAT_PROFILE_ID,
+                OPENAI_RESPONSES_PROFILE_ID,
+            ])
         );
-        // selection proves the stale persisted protocol set cannot block a newer signed Flash route.
-        // selection 证明陈旧的持久化协议集合无法阻止较新的签名 Flash 路由。
-        let selection = runtime
+        // flashSelection proves the stale persisted protocol set cannot block a newer signed route.
+        // flashSelection 证明陈旧的持久化协议集合无法阻止较新的签名路由。
+        let flash_selection = runtime
             .resolve_connection_model_selection(
                 &configuration,
                 "deepseek-existing-account",
@@ -16206,13 +16213,32 @@ mod tests {
             )
             .expect("existing DeepSeek account should execute Flash through Responses");
         assert_eq!(
-            selection.route.protocol_route.protocol_profile_id,
+            flash_selection.route.protocol_route.protocol_profile_id,
             OPENAI_RESPONSES_PROFILE_ID
         );
         assert_eq!(
-            selection.model.capabilities.provider_native_tools,
+            flash_selection.model.capabilities.provider_native_tools,
             vec![vulcan_ai_contract::NativeToolKind::WebSearch],
             "the executable Flash Responses route must carry native web search"
+        );
+        // proSelection proves V4 Pro now follows the exact same Responses route contract.
+        // proSelection 证明 V4 Pro 现在遵循完全相同的 Responses 路由契约。
+        let pro_selection = runtime
+            .resolve_connection_model_selection(
+                &configuration,
+                "deepseek-existing-account",
+                "deepseek",
+                "deepseek-v4-pro",
+            )
+            .expect("existing DeepSeek account should execute Pro through Responses");
+        assert_eq!(
+            pro_selection.route.protocol_route.protocol_profile_id,
+            OPENAI_RESPONSES_PROFILE_ID
+        );
+        assert_eq!(
+            pro_selection.model.capabilities.provider_native_tools,
+            vec![vulcan_ai_contract::NativeToolKind::WebSearch],
+            "the executable Pro Responses route must carry native web search"
         );
     }
 
@@ -16255,8 +16281,8 @@ mod tests {
             .reapply_model_catalog_overlays(&configuration)
             .expect("initial deepseek generation should publish");
 
-        // The bundled manifest binds v4-pro to anthropic by rule.
-        // 内置清单按规则把 v4-pro 绑定到 anthropic。
+        // The bundled manifest binds v4-pro to Responses by rule.
+        // 内置清单按规则把 v4-pro 绑定到 Responses。
         let before = runtime
             .resolve_connection_model_selection(
                 &configuration,
@@ -16267,7 +16293,7 @@ mod tests {
             .expect("bundled binding must resolve");
         assert_eq!(
             before.route.protocol_route.protocol_profile_id,
-            ANTHROPIC_MESSAGES_PROFILE_ID
+            OPENAI_RESPONSES_PROFILE_ID
         );
 
         // A fully compiled replacement re-binds the same rule to chat; the write lock is held
@@ -16303,7 +16329,7 @@ mod tests {
             )
             .expect("selection must retain the published generation before activation");
         assert_eq!(
-            staged.route.protocol_route.protocol_profile_id, ANTHROPIC_MESSAGES_PROFILE_ID,
+            staged.route.protocol_route.protocol_profile_id, OPENAI_RESPONSES_PROFILE_ID,
             "a staged manifest must remain invisible before the explicit activation boundary"
         );
         runtime
@@ -17827,7 +17853,7 @@ mod tests {
                         .protocol_binding
                         .expect("deepseek must retain a system binding");
                     let expected_protocol = match binding.manifest_revision {
-                        revision if revision == old_revision => ANTHROPIC_MESSAGES_PROFILE_ID,
+                        revision if revision == old_revision => OPENAI_RESPONSES_PROFILE_ID,
                         revision if revision == new_revision => OPENAI_CHAT_PROFILE_ID,
                         revision => panic!("unexpected published revision {revision}"),
                     };

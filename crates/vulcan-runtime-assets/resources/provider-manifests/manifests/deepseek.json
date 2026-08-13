@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v1",
   "provider_id": "deepseek",
-  "revision": 5,
-  "published_at": "2026-08-11T00:00:00Z",
+  "revision": 7,
+  "published_at": "2026-08-13T00:00:00Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -148,6 +148,7 @@
         "reasoning_efforts": [
           "none",
           "high",
+          "low",
           "max"
         ],
         "context_limit": 1000000,
@@ -158,7 +159,7 @@
           "supported_ttl_options": []
         },
         "model_parameters": [],
-        "evidence_revision": "deepseek.api-docs.2026-07-30"
+        "evidence_revision": "deepseek.api-docs.thinking-mode.2026-08-13"
       },
       "protocol_capabilities": {
         "anthropic-messages.v1": {
@@ -211,10 +212,11 @@
         "value": "deepseek-v4-pro"
       },
       "supported_protocols": [
+        "openai-responses.v1",
         "anthropic-messages.v1",
         "openai-chat-completions.v1"
       ],
-      "selected_protocol": "anthropic-messages.v1",
+      "selected_protocol": "openai-responses.v1",
       "capabilities": {
         "operations": ["conversation_respond"],
         "input_resources": [],
@@ -225,6 +227,7 @@
         "reasoning_efforts": [
           "none",
           "high",
+          "low",
           "max"
         ],
         "context_limit": 1000000,
@@ -235,7 +238,7 @@
           "supported_ttl_options": []
         },
         "model_parameters": [],
-        "evidence_revision": "deepseek.api-docs.2026-07-30"
+        "evidence_revision": "deepseek.api-docs.thinking-mode.2026-08-13"
       },
       "protocol_capabilities": {
         "anthropic-messages.v1": {
@@ -245,6 +248,11 @@
         },
         "openai-chat-completions.v1": {
           "provider_native_tools": []
+        },
+        "openai-responses.v1": {
+          "provider_native_tools": [
+            "web_search"
+          ]
         }
       },
       "model_parameters": [
@@ -449,6 +457,9 @@
               "none": {
                 "type": "disabled"
               },
+              "low": {
+                "type": "enabled"
+              },
               "high": {
                 "type": "enabled"
               },
@@ -492,6 +503,9 @@
               "none": {
                 "type": "disabled"
               },
+              "low": {
+                "type": "enabled"
+              },
               "high": {
                 "type": "enabled"
               },
@@ -510,6 +524,13 @@
           {
             "op": "delete_if_equals",
             "path": "/output_config/effort",
+            "source": "request_field",
+            "source_path": "@reasoning_effort",
+            "equals": "none"
+          },
+          {
+            "op": "delete_unless_equals",
+            "path": "/temperature",
             "source": "request_field",
             "source_path": "@reasoning_effort",
             "equals": "none"

@@ -1873,13 +1873,15 @@ fn enrich_deepseek_model(protocol_id: &str, model: &mut ConnectionModel) {
     model.capabilities.reasoning_efforts = vec![
         ReasoningEffort::None,
         ReasoningEffort::High,
+        ReasoningEffort::Low,
         ReasoningEffort::Max,
     ];
     model
         .capabilities
         .model_parameters
         .extend(deepseek_model_parameters(model.id.as_str(), protocol_id));
-    model.capabilities.evidence_revision = String::from("deepseek.api-docs.2026-07-30");
+    model.capabilities.evidence_revision =
+        String::from("deepseek.api-docs.thinking-mode.2026-08-13");
 }
 
 /// Builds optional DeepSeek sampling controls for the two documented compatible interfaces.
@@ -3967,6 +3969,7 @@ mod tests {
             vec![
                 ReasoningEffort::None,
                 ReasoningEffort::High,
+                ReasoningEffort::Low,
                 ReasoningEffort::Max,
             ]
         );
@@ -4210,8 +4213,8 @@ mod tests {
         );
         assert!(chat_model.capabilities.provider_native_tools.is_empty());
 
-        // V4 Pro exposes native search only through Anthropic because it has no Responses route.
-        // V4 Pro 仅通过 Anthropic 暴露原生搜索，因为它没有 Responses 路由。
+        // V4 Pro exposes the same native search capability through Anthropic and Responses.
+        // V4 Pro 通过 Anthropic 与 Responses 暴露相同的原生搜索能力。
         let mut pro_anthropic_model = ConnectionModel {
             id: String::from("deepseek-v4-pro"),
             display_name: String::from("DeepSeek V4 Pro"),
@@ -4229,6 +4232,27 @@ mod tests {
         ));
         assert_eq!(
             pro_anthropic_model.capabilities.provider_native_tools,
+            vec![NativeToolKind::WebSearch]
+        );
+        // V4 Pro Responses must stay capability-equivalent to V4 Flash Responses.
+        // V4 Pro Responses 必须与 V4 Flash Responses 保持能力等价。
+        let mut pro_responses_model = ConnectionModel {
+            id: String::from("deepseek-v4-pro"),
+            display_name: String::from("DeepSeek V4 Pro"),
+            capabilities: ModelCapabilities::default(),
+            capability_evidence: Default::default(),
+            protocol_variants: BTreeMap::new(),
+            resolved_protocol_binding: None,
+        };
+        assert!(apply_manifest_model_rule(
+            &resolved,
+            "official-api",
+            None,
+            OPENAI_RESPONSES_PROFILE_ID,
+            &mut pro_responses_model,
+        ));
+        assert_eq!(
+            pro_responses_model.capabilities.provider_native_tools,
             vec![NativeToolKind::WebSearch]
         );
         // V4 Pro Chat remains conversation-only and must not inherit native search.
@@ -4298,24 +4322,26 @@ mod tests {
         assert_eq!(actual, &expected);
     }
 
-    /// Verifies V4 Pro rules exclude Responses until the upstream formal release.
-    /// 验证 V4 Pro 规则在上游正式版发布前排除 Responses。
+    /// Verifies V4 Pro selects Responses and matches every V4 Flash protocol parameter.
+    /// 验证 V4 Pro 选择 Responses，并与 V4 Flash 的全部协议参数保持一致。
     #[test]
-    fn manifest_rule_v4_pro_excludes_responses() {
+    fn manifest_rule_v4_pro_matches_flash_responses_parameters() {
         let resolved = bundled_deepseek_manifest();
-        let instance = resolved
+        let flash = resolved
+            .rule_for_model("official-api", None, "deepseek-v4-flash")
+            .expect("flash must match a rule");
+        let pro = resolved
             .rule_for_model("official-api", None, "deepseek-v4-pro")
             .expect("pro must match a rule");
         assert_eq!(
-            instance.selected_protocol.as_deref(),
-            Some(ANTHROPIC_MESSAGES_PROFILE_ID)
+            pro.selected_protocol.as_deref(),
+            Some(OPENAI_RESPONSES_PROFILE_ID)
         );
-        assert!(
-            !instance
-                .supported_protocols
-                .iter()
-                .any(|protocol| protocol == OPENAI_RESPONSES_PROFILE_ID)
-        );
+        assert_eq!(pro.selected_protocol, flash.selected_protocol);
+        assert_eq!(pro.supported_protocols, flash.supported_protocols);
+        assert_eq!(pro.capabilities, flash.capabilities);
+        assert_eq!(pro.protocol_capabilities, flash.protocol_capabilities);
+        assert_eq!(pro.model_parameters, flash.model_parameters);
     }
 
     /// Verifies unmatched models report no manifest match so legacy enrichment remains.

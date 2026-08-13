@@ -2932,6 +2932,9 @@
                       "high": {
                         "type": "enabled"
                       },
+                      "low": {
+                        "type": "enabled"
+                      },
                       "max": {
                         "type": "enabled"
                       },
@@ -2981,6 +2984,9 @@
                       "high": {
                         "type": "enabled"
                       },
+                      "low": {
+                        "type": "enabled"
+                      },
                       "max": {
                         "type": "enabled"
                       },
@@ -2998,6 +3004,13 @@
                   {
                     "op": "delete_if_equals",
                     "path": "/output_config/effort",
+                    "source": "request_field",
+                    "source_path": "@reasoning_effort",
+                    "equals": "none"
+                  },
+                  {
+                    "op": "delete_unless_equals",
+                    "path": "/temperature",
                     "source": "request_field",
                     "source_path": "@reasoning_effort",
                     "equals": "none"

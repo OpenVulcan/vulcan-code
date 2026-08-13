@@ -91,7 +91,7 @@ fn resume_preparation_restores_exact_started_turn_without_duplicate_user_message
     let original_prompt = start.prompt.clone();
     let original_canonical_user_message_id = start.canonical_user_message_id.clone();
     let frozen_input = start
-        .execution_retry_preparation_input()
+        .execution_retry_preparation_input(&runtime_state)
         .expect("accepted prompt turn should freeze exactly");
     let mut restored_hook_runtime = ConversationHookRuntime::new();
 

@@ -2,8 +2,8 @@
 //! 流终态事件编排。
 
 use super::conversation_checkpoint::{
-    consume_execution_retry_snapshot, invalidate_execution_retry_reference,
-    refreeze_claimed_execution_retry_snapshot,
+    invalidate_execution_retry_reference, refreeze_claimed_execution_retry_snapshot,
+    remove_execution_retry_snapshot_after_success,
 };
 use super::*;
 
@@ -244,9 +244,11 @@ pub(super) async fn handle_finished_stream_event(
             finished_session_id,
             error,
         ),
-        (None, true) => {
-            consume_execution_retry_snapshot(task_state, controller_runtime, finished_session_id)
-        }
+        (None, true) => remove_execution_retry_snapshot_after_success(
+            task_state,
+            controller_runtime,
+            finished_session_id,
+        ),
         (None, false) => invalidate_execution_retry_reference(
             task_state,
             finished_session_id,
@@ -367,19 +369,33 @@ pub(super) async fn handle_finished_stream_event(
             completion_request,
         );
     }
-    if !started_next_prompt && let Some(apply) = final_report_apply {
+    if !started_next_prompt && final_report_apply.is_some() {
         // Measures final session persistence only when no chained turn starts immediately.
         // 仅在没有立即链式启动下一回合时衡量最终会话持久化耗时。
         let final_persist_started_at = current_unix_millis_value();
-        if let Err(error) = persist_workspace_session_update(
-            Some(task_state),
-            controller_runtime.clone(),
-            &apply.workspace_snapshot,
-            finished_session_id,
-        )
-        .await
-        {
-            eprintln!("[webui-service] persist final report failed: {error}");
+        // latestWorkspaceSnapshot includes retry-sidecar cleanup completed after report projection.
+        // latestWorkspaceSnapshot 包含报告投影后完成的重试 sidecar 清理结果。
+        match current_workspace_snapshot_from_shared_state(task_state) {
+            Ok(Some(latest_workspace_snapshot)) => {
+                if let Err(error) = persist_workspace_session_update(
+                    Some(task_state),
+                    controller_runtime.clone(),
+                    &latest_workspace_snapshot,
+                    finished_session_id,
+                )
+                .await
+                {
+                    eprintln!("[webui-service] persist final report failed: {error}");
+                }
+            }
+            Ok(None) => {
+                eprintln!(
+                    "[webui-service] persist final report skipped: retained workspace is unavailable"
+                );
+            }
+            Err(error) => {
+                eprintln!("[webui-service] read final retained workspace failed: {error}");
+            }
         }
         webui_trace_if_slow(
             "stream_final_persist_slow",

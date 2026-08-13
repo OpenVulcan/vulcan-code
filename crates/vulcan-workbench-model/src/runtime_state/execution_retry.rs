@@ -75,6 +75,18 @@ pub struct ExecutionRetryPreparationInput {
     /// Exact workspace path frozen for the accepted submission.
     /// 为已接纳提交冻结的精确工作区路径。
     pub workspace_path: String,
+    /// Session-selected provider identity frozen before route resolution.
+    /// 在路由解析前冻结的会话级 Provider 选择身份。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_provider_id: Option<String>,
+    /// Session-selected connection identity frozen before route resolution.
+    /// 在路由解析前冻结的会话级连接选择身份。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_connection_id: Option<String>,
+    /// Session-selected model identity frozen before route resolution.
+    /// 在路由解析前冻结的会话级模型选择身份。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_model_id: Option<String>,
     /// Original logical source whose completed-turn semantics must be preserved.
     /// 必须保留完成回合语义的原始逻辑来源。
     pub original_source: PendingSessionPromptSource,
@@ -183,9 +195,10 @@ pub struct ExecutionRetrySnapshot {
     /// 当前领取快照的物理尝试身份。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claimed_attempt_id: Option<String>,
-    /// Frozen non-secret provider route identity.
-    /// 冻结的非秘密 Provider 路由身份。
-    pub provider_route: SessionProviderRouteLeaseIdentity,
+    /// Frozen non-secret provider route identity when route resolution already completed.
+    /// 路由解析已经完成时冻结的非秘密 Provider 路由身份。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_route: Option<SessionProviderRouteLeaseIdentity>,
     /// Exact provider service entry selected for the frozen request.
     /// 冻结请求选择的精确 Provider 服务入口。
     #[serde(default, skip_serializing_if = "Option::is_none")]

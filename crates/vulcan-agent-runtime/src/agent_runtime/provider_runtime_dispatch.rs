@@ -854,8 +854,8 @@ mod tests {
             .reapply_model_catalog_overlays(&configuration)
             .expect("bundled generation must publish before selection");
 
-        // The bundled manifest freezes v4-pro to anthropic at its declared revision.
-        // 内置清单在其声明修订处把 v4-pro 冻结到 anthropic。
+        // The bundled manifest freezes v4-pro to Responses at its declared revision.
+        // 内置清单在其声明修订处把 v4-pro 冻结到 Responses。
         // sessionId owns the route lease across multiple turns of the same conversation.
         // sessionId 在同一会话的多个回合之间持有路由租约。
         let session_id = "session-frozen-route";

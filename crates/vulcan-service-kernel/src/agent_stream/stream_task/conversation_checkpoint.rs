@@ -148,7 +148,7 @@ pub(super) fn persist_prepared_execution_retry_checkpoint(
         logical_turn_id: preparation.conversation_hook_turn_id.clone(),
         physical_attempt_id,
         claimed_attempt_id: None,
-        provider_route,
+        provider_route: Some(provider_route),
         provider_service_entry_id: Some(preparation.model_blueprint.service_entry_id.clone()),
         credential_profile_id: preparation
             .model_blueprint
@@ -189,52 +189,63 @@ pub(super) fn persist_prepared_execution_retry_checkpoint(
     Ok(())
 }
 
-/// Marks the retry sidecar consumed before the accepted success projection is persisted.
-/// 在已接纳成功投影持久化前将重试 sidecar 标记为已消费。
-pub(super) fn consume_execution_retry_snapshot(
+/// Deletes the retry sidecar after the accepted success projection is committed.
+/// 在已接纳成功投影提交后删除重试 sidecar。
+///
+/// # Parameters
+/// 参数
+/// - `task_state`: Shared retained workspace state whose reference is cleared first.
+/// - `task_state`：首先清除引用的共享保留工作区状态。
+/// - `controller_runtime`: Workspace data-plane owner used to delete the sidecar.
+/// - `controller_runtime`：用于删除 sidecar 的工作区数据面所有者。
+/// - `session_id`: Session whose successful execution no longer needs recovery.
+/// - `session_id`：成功执行后不再需要恢复的会话。
+///
+/// # Returns
+/// 返回值
+/// Success after no retry reference or sidecar remains; deletion failure restores the reference.
+/// 不再保留重试引用或 sidecar 后返回成功；删除失败时恢复引用。
+pub(super) fn remove_execution_retry_snapshot_after_success(
     task_state: &SharedServiceBridgeState,
     controller_runtime: &ControllerRuntimeHandle,
     session_id: SessionId,
 ) -> Result<(), String> {
     let reference = {
-        let guard = task_state
+        let mut guard = task_state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
-        guard
+        let runtime_state = guard
             .workspace_snapshot
-            .as_ref()
-            .and_then(|workspace| workspace.session_runtime_state.get(&session_id))
-            .and_then(|runtime_state| runtime_state.execution_retry_snapshot.clone())
+            .as_mut()
+            .and_then(|workspace| workspace.session_runtime_state.get_mut(&session_id))
+            .ok_or_else(|| {
+                String::from("Execution retry runtime state disappeared while removing success.")
+            })?;
+        let reference = runtime_state.execution_retry_snapshot.take();
+        runtime_state.updated_at = current_unix_millis_text();
+        reference
     };
     let Some(reference) = reference else {
         return Ok(());
     };
-    let mut snapshot = vulcan_workspace_store::workspace_store::load_execution_retry_snapshot(
+    if let Err(error) = vulcan_workspace_store::workspace_store::delete_execution_retry_snapshot(
         &controller_runtime.data_root,
         session_id,
-        &reference,
-    )?;
-    snapshot.state = ExecutionRetrySnapshotState::Consumed;
-    snapshot.claimed_attempt_id = None;
-    snapshot.error = None;
-    snapshot.updated_at = current_unix_millis_text();
-    let consumed_reference =
-        vulcan_workspace_store::workspace_store::persist_execution_retry_snapshot(
-            &controller_runtime.data_root,
-            session_id,
-            &snapshot,
-        )?;
-    let mut guard = task_state
-        .lock()
-        .map_err(|error| format!("failed to lock service state: {error}"))?;
-    let runtime_state = guard
-        .workspace_snapshot
-        .as_mut()
-        .and_then(|workspace| workspace.session_runtime_state.get_mut(&session_id))
-        .ok_or_else(|| {
-            String::from("Execution retry runtime state disappeared while consuming.")
+        &reference.snapshot_id,
+    ) {
+        let mut guard = task_state.lock().map_err(|lock_error| {
+            format!("{error}; failed to restore retry reference: {lock_error}")
         })?;
-    runtime_state.execution_retry_snapshot = Some(consumed_reference);
+        let runtime_state = guard
+            .workspace_snapshot
+            .as_mut()
+            .and_then(|workspace| workspace.session_runtime_state.get_mut(&session_id))
+            .ok_or_else(|| format!("{error}; retry runtime state disappeared during rollback"))?;
+        if runtime_state.execution_retry_snapshot.is_none() {
+            runtime_state.execution_retry_snapshot = Some(reference);
+        }
+        return Err(error);
+    }
     Ok(())
 }
 
@@ -286,9 +297,15 @@ pub(crate) fn refreeze_claimed_execution_retry_snapshot(
             upstream_parameter: None,
             upstream_message: None,
             request_id: None,
-            provider_id: Some(snapshot.provider_route.provider_id.clone()),
+            provider_id: snapshot
+                .provider_route
+                .as_ref()
+                .map(|route| route.provider_id.clone()),
             entry_id: None,
-            model_id: Some(snapshot.provider_route.model_id.clone()),
+            model_id: snapshot
+                .provider_route
+                .as_ref()
+                .map(|route| route.model_id.clone()),
             message: message.to_string(),
             dispatch_outcome: vulcan_ai_contract::DispatchOutcome::Unknown,
             semantic_output_observed: false,
@@ -358,9 +375,15 @@ pub(crate) fn mark_execution_retry_snapshot_tool_execution_unsafe(
         upstream_parameter: None,
         upstream_message: None,
         request_id: None,
-        provider_id: Some(snapshot.provider_route.provider_id.clone()),
+        provider_id: snapshot
+            .provider_route
+            .as_ref()
+            .map(|route| route.provider_id.clone()),
         entry_id: None,
-        model_id: Some(snapshot.provider_route.model_id.clone()),
+        model_id: snapshot
+            .provider_route
+            .as_ref()
+            .map(|route| route.model_id.clone()),
         message: String::from(
             "A tool started and its external side effects cannot be proven safe to replay.",
         ),

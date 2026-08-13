@@ -194,10 +194,34 @@ pub(crate) fn validate_execution_retry_snapshot_for_claim(
             "ERR_CONVERSATION_CONTINUE_RETRY_SNAPSHOT_UNSAFE",
         ));
     }
-    if runtime_state.provider_route_lease.as_ref() != Some(&snapshot.provider_route) {
-        return Err(String::from(
-            "ERR_CONVERSATION_CONTINUE_RETRY_ROUTE_CHANGED",
-        ));
+    match &snapshot.pending_action {
+        vulcan_workbench_model::ExecutionRetryPendingAction::ResumePreparation { input } => {
+            if runtime_state.active_provider_id != input.active_provider_id
+                || runtime_state.active_connection_id != input.active_connection_id
+                || runtime_state.active_model_id != input.active_model_id
+                || runtime_state.provider_route_lease != snapshot.provider_route
+            {
+                return Err(String::from(
+                    "ERR_CONVERSATION_CONTINUE_RETRY_ROUTE_CHANGED",
+                ));
+            }
+        }
+        vulcan_workbench_model::ExecutionRetryPendingAction::DispatchProviderRequest { .. } => {
+            let provider_route = snapshot
+                .provider_route
+                .as_ref()
+                .ok_or_else(|| String::from("ERR_CONVERSATION_CONTINUE_RETRY_ROUTE_MISSING"))?;
+            if runtime_state.provider_route_lease.as_ref() != Some(provider_route) {
+                return Err(String::from(
+                    "ERR_CONVERSATION_CONTINUE_RETRY_ROUTE_CHANGED",
+                ));
+            }
+        }
+        _ => {
+            return Err(String::from(
+                "ERR_CONVERSATION_CONTINUE_RETRY_ACTION_UNSUPPORTED",
+            ));
+        }
     }
     if runtime_state
         .provider_call_ledger
@@ -224,51 +248,6 @@ pub(crate) fn validate_execution_retry_snapshot_for_claim(
     Ok(())
 }
 
-/// Invalidates an older retry snapshot when the user starts a different logical execution.
-/// 当用户启动不同逻辑执行时使旧重试快照失效。
-fn invalidate_execution_retry_snapshot_for_user_prompt(
-    controller_runtime: &vulcan_workspace_store::data_plane::ControllerRuntimeHandle,
-    workspace_snapshot: &mut WorkspaceSnapshot,
-    session_id: SessionId,
-) -> Result<(), String> {
-    let reference = workspace_snapshot
-        .session_runtime_state
-        .get(&session_id)
-        .and_then(|runtime_state| runtime_state.execution_retry_snapshot.clone());
-    let Some(reference) = reference else {
-        return Ok(());
-    };
-    if matches!(
-        reference.state,
-        vulcan_workbench_model::ExecutionRetrySnapshotState::Consumed
-            | vulcan_workbench_model::ExecutionRetrySnapshotState::Invalidated
-    ) {
-        return Ok(());
-    }
-    let mut snapshot = vulcan_workspace_store::workspace_store::load_execution_retry_snapshot(
-        &controller_runtime.data_root,
-        session_id,
-        &reference,
-    )?;
-    snapshot.state = vulcan_workbench_model::ExecutionRetrySnapshotState::Invalidated;
-    snapshot.claimed_attempt_id = None;
-    snapshot.updated_at = current_unix_millis_text();
-    let invalidated_reference =
-        vulcan_workspace_store::workspace_store::persist_execution_retry_snapshot(
-            &controller_runtime.data_root,
-            session_id,
-            &snapshot,
-        )?;
-    let runtime_state = workspace_snapshot
-        .session_runtime_state
-        .get_mut(&session_id)
-        .ok_or_else(|| {
-            String::from("Execution retry runtime state disappeared while invalidating.")
-        })?;
-    runtime_state.execution_retry_snapshot = Some(invalidated_reference);
-    Ok(())
-}
-
 /// Computes a lowercase SHA-256 digest for exact retry-claim comparison bytes.
 /// 为精确重试领取比较字节计算小写 SHA-256 摘要。
 fn execution_retry_sha256_hex(encoded: &[u8]) -> String {
@@ -278,8 +257,8 @@ fn execution_retry_sha256_hex(encoded: &[u8]) -> String {
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-/// Persists the accepted pre-provider preparation boundary before the submit acknowledgement.
-/// 在提交确认返回前持久化已接纳的 Provider 调用前准备边界。
+/// Persists the accepted pre-provider preparation boundary and replaces any older retry sidecar before acknowledgement.
+/// 在提交确认返回前持久化已接纳的 Provider 调用前准备边界，并替换任何旧重试 sidecar。
 ///
 /// # Parameters
 /// 参数
@@ -309,10 +288,8 @@ fn persist_accepted_preparation_retry_checkpoint(
         .session_runtime_state
         .get_mut(&session_id)
         .ok_or_else(|| String::from("Accepted preparation retry runtime state is missing."))?;
-    let provider_route = runtime_state
-        .provider_route_lease
-        .clone()
-        .ok_or_else(|| String::from("Accepted preparation retry has no frozen provider route."))?;
+    let previous_reference = runtime_state.execution_retry_snapshot.clone();
+    let provider_route = runtime_state.provider_route_lease.clone();
     let controller_snapshot = vulcan_agent_runtime::agent_runtime::provider_request_bridge_conversation::build_core_conversation_snapshot(
         &runtime_state.conversation_state,
     )?;
@@ -343,7 +320,7 @@ fn persist_accepted_preparation_retry_checkpoint(
         controller_config: None,
         controller_snapshot,
         pending_action: vulcan_workbench_model::ExecutionRetryPendingAction::ResumePreparation {
-            input: Box::new(start.execution_retry_preparation_input()?),
+            input: Box::new(start.execution_retry_preparation_input(runtime_state)?),
         },
         error: None,
         canonical_digest: execution_retry_sha256_hex(&canonical_bytes),
@@ -359,6 +336,30 @@ fn persist_accepted_preparation_retry_checkpoint(
         session_id,
         &snapshot,
     )?;
+    if let Some(previous_reference) = previous_reference
+        && previous_reference.snapshot_id != reference.snapshot_id
+        && let Err(error) = vulcan_workspace_store::workspace_store::delete_execution_retry_snapshot(
+            &controller_runtime.data_root,
+            session_id,
+            &previous_reference.snapshot_id,
+        )
+    {
+        let cleanup_error =
+            vulcan_workspace_store::workspace_store::delete_execution_retry_snapshot(
+                &controller_runtime.data_root,
+                session_id,
+                &reference.snapshot_id,
+            )
+            .err();
+        return Err(cleanup_error.map_or_else(
+            || format!("Failed to remove the previous execution retry snapshot: {error}"),
+            |cleanup_error| {
+                format!(
+                    "Failed to remove the previous execution retry snapshot: {error}; new snapshot cleanup also failed: {cleanup_error}"
+                )
+            },
+        ));
+    }
     runtime_state.execution_retry_snapshot = Some(reference);
     runtime_state.updated_at = now;
     Ok(())
@@ -1855,13 +1856,6 @@ async fn service_start_conversation_execution(
                 client_submission_id.clone(),
                 i64::try_from(current_unix_millis_value()).unwrap_or(i64::MAX),
             );
-    }
-    if matches!(submission_mode, ConversationSubmissionMode::UserPrompt) {
-        invalidate_execution_retry_snapshot_for_user_prompt(
-            &controller_runtime,
-            &mut workspace_snapshot,
-            session_id,
-        )?;
     }
     // session_title borrows the authoritative title through the final activation commit.
     // session_title 借用权威标题直到最终激活提交完成。

@@ -213,6 +213,12 @@ fn deepseek_manifest_declares_only_current_official_models_and_protocols() {
     let flash = compiled
         .rule_for_model("official-api", None, "deepseek-v4-flash")
         .expect("DeepSeek V4 Flash rule must exist");
+    // flashCapabilities is the required model-level capability declaration for Flash.
+    // flashCapabilities 是 Flash 必须提供的模型级能力声明。
+    let flash_capabilities = flash
+        .capabilities
+        .as_ref()
+        .expect("DeepSeek V4 Flash capabilities must exist");
     assert_eq!(
         flash
             .supported_protocols
@@ -228,6 +234,15 @@ fn deepseek_manifest_declares_only_current_official_models_and_protocols() {
     assert_eq!(
         flash.selected_protocol.as_deref(),
         Some("openai-responses.v1")
+    );
+    assert_eq!(
+        flash_capabilities.reasoning_efforts,
+        vec![
+            vulcan_ai_contract::ReasoningEffort::None,
+            vulcan_ai_contract::ReasoningEffort::High,
+            vulcan_ai_contract::ReasoningEffort::Low,
+            vulcan_ai_contract::ReasoningEffort::Max,
+        ]
     );
     assert_eq!(
         flash
@@ -254,26 +269,47 @@ fn deepseek_manifest_declares_only_current_official_models_and_protocols() {
             .is_empty(),
         "Flash Chat must not declare provider-native web search"
     );
-    // pro owns only Anthropic and Chat with Anthropic selected.
-    // pro 仅持有 Anthropic 与 Chat，并选定 Anthropic。
+    // pro owns the same protocol set and selected Responses route as flash.
+    // pro 持有与 flash 相同的协议集合，并同样选定 Responses 路由。
     let pro = compiled
         .rule_for_model("official-api", None, "deepseek-v4-pro")
         .expect("DeepSeek V4 Pro rule must exist");
+    // proCapabilities is the required model-level capability declaration for Pro.
+    // proCapabilities 是 Pro 必须提供的模型级能力声明。
+    let pro_capabilities = pro
+        .capabilities
+        .as_ref()
+        .expect("DeepSeek V4 Pro capabilities must exist");
     assert_eq!(
         pro.supported_protocols
             .iter()
             .map(String::as_str)
             .collect::<BTreeSet<_>>(),
-        BTreeSet::from(["anthropic-messages.v1", "openai-chat-completions.v1"])
+        BTreeSet::from([
+            "anthropic-messages.v1",
+            "openai-chat-completions.v1",
+            "openai-responses.v1",
+        ])
     );
     assert_eq!(
         pro.selected_protocol.as_deref(),
-        Some("anthropic-messages.v1")
+        Some("openai-responses.v1")
+    );
+    assert_eq!(
+        pro_capabilities.reasoning_efforts,
+        flash_capabilities.reasoning_efforts
     );
     assert_eq!(
         pro.protocol_capabilities
             .get("anthropic-messages.v1")
             .expect("Pro Anthropic capabilities must exist")
+            .provider_native_tools,
+        vec![vulcan_ai_contract::NativeToolKind::WebSearch]
+    );
+    assert_eq!(
+        pro.protocol_capabilities
+            .get("openai-responses.v1")
+            .expect("Pro Responses capabilities must exist")
             .provider_native_tools,
         vec![vulcan_ai_contract::NativeToolKind::WebSearch]
     );

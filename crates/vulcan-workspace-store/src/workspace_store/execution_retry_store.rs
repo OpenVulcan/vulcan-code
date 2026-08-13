@@ -251,7 +251,7 @@ mod tests {
             logical_turn_id: Some(String::from("turn-1")),
             physical_attempt_id: String::from("attempt-1"),
             claimed_attempt_id: None,
-            provider_route: SessionProviderRouteLeaseIdentity {
+            provider_route: Some(SessionProviderRouteLeaseIdentity {
                 schema_version: 1,
                 provider_id: String::from("provider-a"),
                 connection_id: String::from("connection-a"),
@@ -261,7 +261,7 @@ mod tests {
                 manifest_generation: 1,
                 catalog_revision: String::from("catalog-a"),
                 route_revision: String::from("route-a"),
-            },
+            }),
             provider_service_entry_id: Some(String::from("entry-a")),
             credential_profile_id: Some(String::from("credential-a")),
             controller_config: Some(vulcan_core::types::ControllerConfig::default()),
@@ -295,6 +295,25 @@ mod tests {
         assert_eq!(restored.canonical_digest, snapshot.canonical_digest);
         assert_eq!(reference.content_sha256.len(), 64);
         assert!(reference.content_bytes > 0);
+    }
+
+    /// Verifies a successful lifecycle cleanup removes the sidecar instead of retaining a consumed snapshot.
+    /// 验证成功生命周期清理会删除 sidecar，而不是保留已消费快照。
+    #[test]
+    fn retry_snapshot_delete_removes_persisted_sidecar() {
+        let temp_root = tempfile::tempdir().expect("temporary session directory should exist");
+        let store = ExecutionRetrySnapshotStore::new(temp_root.path());
+        let snapshot = test_snapshot(uuid::Uuid::new_v4().to_string());
+        let reference = store.write(&snapshot).expect("snapshot should persist");
+        let path = store
+            .snapshot_path(reference.snapshot_id.as_str())
+            .expect("snapshot path should resolve");
+
+        store
+            .delete(reference.snapshot_id.as_str())
+            .expect("successful cleanup should delete the sidecar");
+
+        assert!(!path.exists());
     }
 
     /// Verifies changed sidecar bytes fail closed instead of being decoded as a retry candidate.

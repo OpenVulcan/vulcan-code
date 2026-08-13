@@ -50,7 +50,6 @@ pub trait ProtocolRuntimeSource {
     /// 将来源转换成一个客户端共享的不可变运行时。
     fn into_protocol_runtime(self) -> Arc<LlmProtocolRuntime>;
 }
-
 impl ProtocolRuntimeSource for Arc<LlmProtocolRuntime> {
     /// Keeps the already core-owned runtime unchanged.
     /// 保持已经由核心拥有的运行时不变。
@@ -9652,18 +9651,29 @@ mod tests {
             reqwest::Client::new(),
             Arc::new(ProtocolRegistry::first_batch().expect("profiles should register")),
         );
-        let mut request = minimal_request();
-        request.model_id = String::from("deepseek-v4-flash");
-        request.reasoning_effort = Some(ReasoningEffort::Max);
-        request.native_tools = vec![vulcan_ai_contract::NativeToolKind::WebSearch];
-        let encoded = client
-            .encode_request(&deepseek_route(OPENAI_RESPONSES_PROFILE_ID), &request)
-            .expect("DeepSeek Responses request should encode");
-        assert_eq!(encoded.path, "/responses");
-        assert_eq!(encoded.body["tools"][0]["type"], "web_search");
-        assert!(encoded.body.get("store").is_none());
-        assert!(encoded.body.get("include").is_none());
-        assert_eq!(encoded.body["reasoning"]["effort"], "max");
+        // modelIds covers both official models that share the DeepSeek Responses contract.
+        // modelIds 覆盖共享 DeepSeek Responses 契约的两个官方模型。
+        let model_ids = ["deepseek-v4-flash", "deepseek-v4-pro"];
+        for model_id in model_ids {
+            let mut request = minimal_request();
+            request.model_id = String::from(model_id);
+            request.reasoning_effort = Some(ReasoningEffort::Max);
+            request.native_tools = vec![vulcan_ai_contract::NativeToolKind::WebSearch];
+            let encoded = client
+                .encode_request(&deepseek_route(OPENAI_RESPONSES_PROFILE_ID), &request)
+                .expect("DeepSeek Responses request should encode");
+            assert_eq!(encoded.path, "/responses", "model {model_id}");
+            assert_eq!(
+                encoded.body["tools"][0]["type"], "web_search",
+                "model {model_id}"
+            );
+            assert!(encoded.body.get("store").is_none(), "model {model_id}");
+            assert!(encoded.body.get("include").is_none(), "model {model_id}");
+            assert_eq!(
+                encoded.body["reasoning"]["effort"], "max",
+                "model {model_id}"
+            );
+        }
     }
 
     /// Verifies every OpenRouter protocol route converges on the unified reasoning object.
@@ -10100,14 +10110,22 @@ connection: close
         )
     }
 
-    /// Verifies the bundled DeepSeek request profiles produce the legacy-equivalent wire.
-    /// 验证内置 DeepSeek 请求 Profile 产生与旧版等价的 Wire 请求。
+    /// Verifies every bundled DeepSeek protocol projects the current official reasoning contract.
+    /// 验证每个内置 DeepSeek 协议都投影当前官方思考控制契约。
     #[test]
     fn deepseek_manifest_profiles_produce_legacy_equivalent_wire() {
+        // client executes the same protocol encoder and manifest projection chain as production.
+        // client 执行与生产环境相同的协议编码器和 Manifest 投影链。
         let client = projection_test_client();
+        // chatRoute owns the DeepSeek OpenAI Chat projection.
+        // chatRoute 持有 DeepSeek OpenAI Chat 投影。
         let chat_route = bundled_manifest_route("deepseek", "official-api", OPENAI_CHAT_PROFILE_ID);
+        // anthropicRoute owns the DeepSeek Anthropic projection.
+        // anthropicRoute 持有 DeepSeek Anthropic 投影。
         let anthropic_route =
             bundled_manifest_route("deepseek", "official-api", ANTHROPIC_MESSAGES_PROFILE_ID);
+        // responsesRoute owns the DeepSeek Responses projection.
+        // responsesRoute 持有 DeepSeek Responses 投影。
         let responses_route =
             bundled_manifest_route("deepseek", "official-api", OPENAI_RESPONSES_PROFILE_ID);
         assert!(
@@ -10117,47 +10135,98 @@ connection: close
             "bundled DeepSeek routes must install manifest request profiles"
         );
 
-        // Chat: none -> thinking disabled, effort removed.
-        let mut request = minimal_request();
-        request.model_id = String::from("deepseek-chat");
-        request.reasoning_effort = Some(ReasoningEffort::None);
-        let encoded = client
-            .encode_request(&chat_route, &request)
-            .expect("DeepSeek Chat request should encode");
-        assert_eq!(encoded.body["thinking"]["type"], "disabled");
-        assert!(encoded.body.get("reasoning_effort").is_none());
+        // enabledEfforts is the exact current DeepSeek effort set shared by all three protocols.
+        // enabledEfforts 是三个协议当前共享的精确 DeepSeek 思考强度集合。
+        let enabled_efforts = [
+            (ReasoningEffort::Low, "low"),
+            (ReasoningEffort::High, "high"),
+            (ReasoningEffort::Max, "max"),
+        ];
+        for (effort, wire_label) in enabled_efforts {
+            // request carries one enabled effort and a temperature that thinking mode must remove.
+            // request 携带一个已启用强度，以及思考模式必须移除的 temperature。
+            let mut request = minimal_request();
+            request.model_id = String::from("deepseek-v4-pro");
+            request.reasoning_effort = Some(effort);
+            request.model_parameters.insert(
+                String::from(SAMPLING_TEMPERATURE_PARAMETER_ID),
+                ModelParameterValue::Decimal(String::from("0.7")),
+            );
 
-        // Chat: high -> thinking enabled.
-        request.reasoning_effort = Some(ReasoningEffort::High);
-        let encoded = client
-            .encode_request(&chat_route, &request)
-            .expect("DeepSeek Chat high request should encode");
-        assert_eq!(encoded.body["thinking"]["type"], "enabled");
+            // chatEncoded must retain the OpenAI-format effort and enable thinking.
+            // chatEncoded 必须保留 OpenAI 格式强度并开启思考。
+            let chat_encoded = client
+                .encode_request(&chat_route, &request)
+                .expect("DeepSeek Chat enabled-effort request should encode");
+            assert_eq!(chat_encoded.body["thinking"]["type"], "enabled");
+            assert_eq!(chat_encoded.body["reasoning_effort"], wire_label);
+            assert!(chat_encoded.body.get("temperature").is_none());
 
-        // Anthropic: high -> thinking enabled + output_config.effort.
-        let encoded = client
-            .encode_request(&anthropic_route, &request)
-            .expect("DeepSeek Anthropic request should encode");
-        assert_eq!(encoded.body["thinking"]["type"], "enabled");
-        assert_eq!(encoded.body["output_config"]["effort"], "high");
+            // anthropicEncoded must move the effort to output_config and enable thinking.
+            // anthropicEncoded 必须把强度放入 output_config 并开启思考。
+            let anthropic_encoded = client
+                .encode_request(&anthropic_route, &request)
+                .expect("DeepSeek Anthropic enabled-effort request should encode");
+            assert_eq!(anthropic_encoded.body["thinking"]["type"], "enabled");
+            assert_eq!(
+                anthropic_encoded.body["output_config"]["effort"],
+                wire_label
+            );
+            assert!(anthropic_encoded.body.get("temperature").is_none());
+            assert!(anthropic_encoded.body.get("reasoning_effort").is_none());
 
-        // Anthropic: none -> thinking disabled, no output_config.
-        request.reasoning_effort = Some(ReasoningEffort::None);
-        let encoded = client
-            .encode_request(&anthropic_route, &request)
-            .expect("DeepSeek Anthropic none request should encode");
-        assert_eq!(encoded.body["thinking"]["type"], "disabled");
-        assert!(encoded.body.get("output_config").is_none());
+            // responsesEncoded must use only the Responses reasoning object.
+            // responsesEncoded 必须只使用 Responses reasoning 对象。
+            let responses_encoded = client
+                .encode_request(&responses_route, &request)
+                .expect("DeepSeek Responses enabled-effort request should encode");
+            assert_eq!(responses_encoded.body["reasoning"]["effort"], wire_label);
+            assert!(responses_encoded.body.get("thinking").is_none());
+            assert!(responses_encoded.body.get("reasoning_effort").is_none());
+            assert!(responses_encoded.body.get("output_config").is_none());
+            assert!(responses_encoded.body.get("store").is_none());
+            assert!(responses_encoded.body.get("include").is_none());
+        }
 
-        // Responses: documented-unsupported fields removed.
-        request.reasoning_effort = None;
-        let mut request = minimal_request();
-        request.model_id = String::from("deepseek-chat");
-        let encoded = client
-            .encode_request(&responses_route, &request)
-            .expect("DeepSeek Responses request should encode");
-        assert!(encoded.body.get("store").is_none());
-        assert!(encoded.body.get("include").is_none());
+        // disabledRequest verifies every protocol's explicit no-thinking representation.
+        // disabledRequest 验证每个协议显式关闭思考时的表达。
+        let mut disabled_request = minimal_request();
+        disabled_request.model_id = String::from("deepseek-v4-pro");
+        disabled_request.reasoning_effort = Some(ReasoningEffort::None);
+        disabled_request.model_parameters.insert(
+            String::from(SAMPLING_TEMPERATURE_PARAMETER_ID),
+            ModelParameterValue::Decimal(String::from("0.7")),
+        );
+
+        // chatDisabled uses thinking.disabled and removes the incompatible effort field.
+        // chatDisabled 使用 thinking.disabled，并移除不兼容的强度字段。
+        let chat_disabled = client
+            .encode_request(&chat_route, &disabled_request)
+            .expect("DeepSeek Chat disabled request should encode");
+        assert_eq!(chat_disabled.body["thinking"]["type"], "disabled");
+        assert!(chat_disabled.body.get("reasoning_effort").is_none());
+        assert_eq!(chat_disabled.body["temperature"], 0.7);
+
+        // anthropicDisabled uses thinking.disabled without an empty output_config object.
+        // anthropicDisabled 使用 thinking.disabled，且不保留空的 output_config 对象。
+        let anthropic_disabled = client
+            .encode_request(&anthropic_route, &disabled_request)
+            .expect("DeepSeek Anthropic disabled request should encode");
+        assert_eq!(anthropic_disabled.body["thinking"]["type"], "disabled");
+        assert!(anthropic_disabled.body.get("output_config").is_none());
+        assert_eq!(anthropic_disabled.body["temperature"], 0.7);
+
+        // responsesDisabled expresses no-thinking directly as reasoning.effort=none.
+        // responsesDisabled 通过 reasoning.effort=none 直接表达关闭思考。
+        let responses_disabled = client
+            .encode_request(&responses_route, &disabled_request)
+            .expect("DeepSeek Responses disabled request should encode");
+        assert_eq!(responses_disabled.body["reasoning"]["effort"], "none");
+        assert!(responses_disabled.body.get("thinking").is_none());
+        assert!(responses_disabled.body.get("reasoning_effort").is_none());
+        assert!(responses_disabled.body.get("output_config").is_none());
+        assert!(responses_disabled.body.get("store").is_none());
+        assert!(responses_disabled.body.get("include").is_none());
     }
 
     /// Verifies the bundled Alibaba request profiles produce the legacy-equivalent wire.
