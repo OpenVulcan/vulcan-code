@@ -500,7 +500,9 @@ mod tests {
     use vulcan_ai_contract::{
         CapabilitySupport, ModelCapabilities, ReasoningControlMode, ReasoningEffort,
     };
-    use vulcan_ai_protocols::{ANTHROPIC_MESSAGES_PROFILE_ID, OPENAI_CHAT_PROFILE_ID};
+    use vulcan_ai_protocols::{
+        ANTHROPIC_MESSAGES_PROFILE_ID, OPENAI_CHAT_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID,
+    };
     use vulcan_provider_adapters::{
         ActiveAiModelSelection, CredentialConnection, CredentialMode, CredentialSecretEnvelope,
         CredentialSecretResolver, CredentialSecretStore, PersistedAiConfiguration, PublicAiRuntime,
@@ -653,6 +655,7 @@ mod tests {
             verified_protocols: BTreeSet::from([
                 ANTHROPIC_MESSAGES_PROFILE_ID.to_string(),
                 OPENAI_CHAT_PROFILE_ID.to_string(),
+                OPENAI_RESPONSES_PROFILE_ID.to_string(),
             ]),
             selected_protocol: OPENAI_CHAT_PROFILE_ID.to_string(),
             prompt_cache_by_protocol: BTreeMap::new(),
@@ -674,7 +677,7 @@ mod tests {
                 r#"{"data":[{"id":"deepseek-v4-pro","context_window":131072,"max_output_tokens":8192,"input_modalities":["text"],"output_modalities":["text"]}]}"#,
             )
             .expect("catalog should parse"),
-            &[ANTHROPIC_MESSAGES_PROFILE_ID],
+            &[ANTHROPIC_MESSAGES_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID],
         );
         runtime
             .stage_source_catalog_for_testing(catalog)
@@ -695,7 +698,7 @@ mod tests {
         for expected in [
             String::from("provider=deepseek"),
             String::from("model=deepseek-v4-pro"),
-            format!("protocol={ANTHROPIC_MESSAGES_PROFILE_ID}"),
+            format!("protocol={OPENAI_RESPONSES_PROFILE_ID}"),
             String::from("manifest_revision="),
             String::from("manifest_generation="),
             String::from("request_profiles=["),

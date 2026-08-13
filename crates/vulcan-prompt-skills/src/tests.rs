@@ -39,10 +39,10 @@ fn packaged_runlua_skill_requires_native_skill_lookup() {
     assert!(content.contains("LuaSkills: `0.5.5`"));
 }
 
-/// Verifies the packaged terminal skill keeps cross-platform logical newline and frame-observability guidance.
-/// 验证打包终端技能保留跨平台逻辑换行与帧可观测性指引。
+/// Verifies the packaged terminal skill states the complete current input, wait, and exit-code contract.
+/// 验证打包终端技能说明完整的当前输入、等待与退出码契约。
 #[test]
-fn packaged_terminal_skill_documents_normalized_newlines_and_confirmed_frames() {
+fn packaged_terminal_skill_documents_current_terminal_contract() {
     // skillFile resolves the exact packaged terminal-session source rather than a generated runtime copy.
     // skillFile 解析精确的打包 terminal-session 源文件，而不是生成的运行时副本。
     let skill_file = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -58,6 +58,14 @@ fn packaged_terminal_skill_documents_normalized_newlines_and_confirmed_frames() 
     assert!(content.contains("normalizes `CRLF`, standalone `CR`, and standalone `LF`"));
     assert!(content.contains("screen_frame_confirmed"));
     assert!(content.contains("pending_input_line"));
+    assert!(content.contains("does not add shell wrappers"));
+    assert!(content.contains("Use `shell_command` for an isolated command"));
+    assert!(content.contains("send a structured `key` input with `Enter`"));
+    assert!(content.contains("PowerShell external-command example"));
+    assert!(content.contains("POSIX-shell example"));
+    assert!(content.contains("CMD example"));
+    assert!(content.contains("Never branch AI tool calls by operating system"));
+    assert!(!content.contains("until_exit_code"));
     assert!(!content.contains("Windows pwsh text newlines are unreliable"));
 }
 

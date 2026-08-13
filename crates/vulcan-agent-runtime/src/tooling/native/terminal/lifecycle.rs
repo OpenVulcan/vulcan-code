@@ -164,7 +164,6 @@ pub(crate) async fn execute_terminal_session_start_action(
         &returned_chunks,
         false,
         output_mode,
-        None,
         vec![
             format!("Requested shell selector: {}", requested_shell_selector),
             format!(
@@ -188,7 +187,6 @@ pub(crate) async fn execute_terminal_session_start_action(
         output_mode,
         confidence,
         reason,
-        None,
         json!({
             "requested_shell": requested_shell_selector,
             "nested_shell_inferred": shell_behavior.nested_shell_inferred,
@@ -240,7 +238,6 @@ pub(crate) async fn execute_terminal_session_stop_action(
         &returned_chunks,
         false,
         output_mode,
-        None,
         vec![format!(
             "Stop wait ms: {DEFAULT_COMMAND_SESSION_STOP_WAIT_MS}"
         )],
@@ -255,7 +252,6 @@ pub(crate) async fn execute_terminal_session_stop_action(
         output_mode,
         confidence,
         reason,
-        None,
         json!({
             "stop_wait_ms": DEFAULT_COMMAND_SESSION_STOP_WAIT_MS,
         }),

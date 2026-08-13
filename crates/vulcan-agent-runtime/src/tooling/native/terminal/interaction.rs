@@ -59,7 +59,6 @@ pub(crate) async fn execute_terminal_session_read_like_action(
         &returned_chunks,
         wait_result.has_more,
         output_mode,
-        None,
         vec![
             format!(
                 "Wait mode: {}",
@@ -92,7 +91,6 @@ pub(crate) async fn execute_terminal_session_read_like_action(
         output_mode,
         confidence,
         reason,
-        None,
         json!({
             "requested_after_seq": parsed_args.after_seq.unwrap_or(0),
             "read_from_start": read_from_start,
@@ -153,44 +151,17 @@ pub(crate) async fn execute_terminal_session_send_action(
     let wait_mode = terminal_wait_mode(parsed_args.wait_policy.as_ref());
     let interactive_newline = terminal_session_pty_newline(before_snapshot.shell_label.as_str());
     let key_encoding_label = "ansi_vt";
-    let mut structured_input = terminal_input_events_from_inputs(&inputs);
+    let structured_input = terminal_input_events_from_inputs(&inputs);
     let interrupt_requested = terminal_inputs_request_interrupt(&inputs);
-    let mut transaction = None;
-    if wait_mode == TerminalSessionWaitMode::UntilExitCode {
-        validate_terminal_transaction_start(&before_snapshot)?;
-        let command = terminal_transaction_command_text(&inputs)?;
-        let transaction_id = Uuid::new_v4().to_string();
-        let wrapped_command = wrap_terminal_transaction_command(
-            &command,
-            before_snapshot.shell_label.as_str(),
-            transaction_id.as_str(),
-            terminal_generated_command_newline(before_snapshot.shell_label.as_str()),
-        )?;
-        structured_input = vec![CommandSessionInputEvent::Text {
-            text: wrapped_command,
-        }];
-        transaction = Some(TerminalTransactionResult {
-            id: transaction_id,
-            command,
-            exit_code: None,
-            status: String::from("pending"),
-            started_seq: before_snapshot.last_seq,
-            ended_seq: None,
-        });
-    }
     let write_outcome = command_session_runtime
         .write_session_input_events(owner_session_id, terminal_session_id, structured_input)
         .await
         .map_err(NativeToolError::new)?;
-    let requested_wait_budget =
-        terminal_wait_budget_ms(parsed_args.wait_policy.as_ref()).unwrap_or(0);
-    let wait_budget = requested_wait_budget;
     let mut interrupt_drain_elapsed_ms = 0u64;
     let mut interrupt_drain_discarded_chunks = 0usize;
     let mut interrupt_cleanup_elapsed_ms = 0u64;
     let mut interrupt_cleanup_discarded_chunks = 0usize;
     let mut interrupt_cleanup_failure: Option<String> = None;
-    let response_wait_started_at = Instant::now();
     let (
         read_snapshot,
         returned_chunks,
@@ -198,37 +169,7 @@ pub(crate) async fn execute_terminal_session_send_action(
         wait_elapsed_ms,
         pattern_matched,
         quiet_observed,
-    ) = if let Some(transaction_ref) = transaction.as_mut() {
-        let (read_outcome, stripped_chunks, exit_code) = read_terminal_transaction_output(
-            &command_session_runtime,
-            owner_session_id,
-            terminal_session_id,
-            before_snapshot.last_seq,
-            wait_budget,
-            parsed_args.max_chunks,
-            transaction_ref.id.as_str(),
-        )
-        .await?;
-        transaction_ref.exit_code = exit_code;
-        transaction_ref.status = if exit_code.is_some() {
-            String::from("completed")
-        } else {
-            String::from("timeout")
-        };
-        transaction_ref.ended_seq = read_outcome
-            .returned_chunks
-            .last()
-            .map(|chunk| chunk.seq)
-            .or(Some(read_outcome.snapshot.last_seq));
-        (
-            read_outcome.snapshot,
-            stripped_chunks,
-            read_outcome.has_more,
-            response_wait_started_at.elapsed().as_millis() as u64,
-            None,
-            None,
-        )
-    } else if interrupt_requested {
+    ) = if interrupt_requested {
         let drain_result = drain_terminal_interrupt_output(
             &command_session_runtime,
             owner_session_id,
@@ -301,7 +242,6 @@ pub(crate) async fn execute_terminal_session_send_action(
         &returned_chunks,
         has_more,
         output_mode,
-        transaction.as_ref(),
         vec![
             format!("Inputs: {input_labels}"),
             format!("Key encoding: {key_encoding_label}"),
@@ -344,7 +284,6 @@ pub(crate) async fn execute_terminal_session_send_action(
         output_mode,
         confidence,
         reason,
-        transaction.as_ref(),
         json!({
             "input_labels": input_labels,
             "key_encoding": key_encoding_label,

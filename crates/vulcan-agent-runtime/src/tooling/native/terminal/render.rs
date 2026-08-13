@@ -7,7 +7,6 @@ pub(crate) fn build_terminal_session_render_input(
     returned_chunks: &[CommandSessionOutputChunk],
     has_more: bool,
     output_mode: &str,
-    transaction: Option<&TerminalTransactionResult>,
     extra_lines: Vec<String>,
 ) -> HostTextRenderInput {
     let mut lines = vec![
@@ -48,18 +47,6 @@ pub(crate) fn build_terminal_session_render_input(
     }
     if let Some(reason) = snapshot.failure_reason.as_deref() {
         lines.push(format!("Reason: {reason}"));
-    }
-    if let Some(transaction) = transaction {
-        lines.push(format!("Transaction: {}", transaction.id));
-        lines.push(format!("Transaction command: {}", transaction.command));
-        lines.push(format!("Transaction status: {}", transaction.status));
-        lines.push(format!(
-            "Transaction exit code: {}",
-            transaction
-                .exit_code
-                .map(|code| code.to_string())
-                .unwrap_or_else(|| String::from("unknown"))
-        ));
     }
     let screen_text = snapshot
         .screen_text
@@ -122,7 +109,6 @@ pub(crate) fn build_terminal_session_host_payload(
     output_mode: &str,
     output_mode_confidence: f64,
     output_mode_reason: String,
-    transaction: Option<&TerminalTransactionResult>,
     extra_fields: Value,
 ) -> Value {
     let screen_text = snapshot
@@ -163,21 +149,6 @@ pub(crate) fn build_terminal_session_host_payload(
         "screen_text": screen_text,
         "controls_hint": terminal_controls_hint(output_mode),
     });
-    if let Some(transaction) = transaction
-        && let Some(payload_object) = payload.as_object_mut()
-    {
-        payload_object.insert(
-            String::from("transaction"),
-            json!({
-                "id": transaction.id,
-                "command": transaction.command,
-                "exit_code": transaction.exit_code,
-                "status": transaction.status,
-                "started_seq": transaction.started_seq,
-                "ended_seq": transaction.ended_seq,
-            }),
-        );
-    }
     if let (Some(payload_object), Value::Object(extra_object)) =
         (payload.as_object_mut(), extra_fields)
     {

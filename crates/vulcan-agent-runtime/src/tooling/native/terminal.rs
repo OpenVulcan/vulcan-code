@@ -9,7 +9,6 @@ mod lifecycle;
 mod output;
 mod render;
 mod shell;
-mod transaction;
 mod wait;
 
 pub(crate) use input::*;
@@ -18,7 +17,6 @@ pub(crate) use lifecycle::*;
 pub(crate) use output::*;
 pub(crate) use render::*;
 pub(crate) use shell::*;
-pub(crate) use transaction::*;
 pub(crate) use wait::*;
 
 pub(crate) fn build_terminal_session_tool(
@@ -149,9 +147,6 @@ pub(crate) enum TerminalSessionWaitMode {
     /// Wait using the same bounded behavior while prompt detection remains best-effort.
     /// 在提示符检测仍为尽力而为时使用相同有界等待行为。
     UntilPrompt,
-    /// Wrap one command transaction and wait for the host exit-code sentinel.
-    /// 包装一条命令事务并等待宿主退出码哨兵。
-    UntilExitCode,
     /// Wait for output matching a known readiness pattern.
     /// 等待匹配已知就绪模式的输出。
     UntilPattern,
@@ -168,7 +163,6 @@ impl TerminalSessionWaitMode {
             Self::ReturnImmediately => "return_immediately",
             Self::UntilQuiet => "until_quiet",
             Self::UntilPrompt => "until_prompt",
-            Self::UntilExitCode => "until_exit_code",
             Self::UntilPattern => "until_pattern",
             Self::ScreenStable => "screen_stable",
         }
@@ -230,30 +224,6 @@ pub(crate) struct TerminalSessionToolArgs {
     /// Optional maximum chunk count returned by one read-like action.
     /// 一次读取类动作返回的可选最大分片数量。
     max_chunks: Option<usize>,
-}
-
-/// One parsed terminal command transaction sentinel result.
-/// 一份已解析的终端命令事务哨兵结果。
-#[derive(Debug, Clone)]
-pub(crate) struct TerminalTransactionResult {
-    /// Stable host-generated transaction identifier.
-    /// 由宿主生成的稳定事务标识。
-    id: String,
-    /// User command wrapped by this transaction.
-    /// 本次事务包装的用户命令。
-    command: String,
-    /// Optional exit code captured from the sentinel line.
-    /// 从哨兵行捕获到的可选退出码。
-    exit_code: Option<i32>,
-    /// Stable transaction status.
-    /// 稳定事务状态。
-    status: String,
-    /// First output sequence observed for the transaction.
-    /// 本次事务观测到的首个输出序号。
-    started_seq: u64,
-    /// Last output sequence observed for the transaction.
-    /// 本次事务观测到的最后输出序号。
-    ended_seq: Option<u64>,
 }
 
 /// Result summary produced by an interrupt drain pass.
@@ -339,7 +309,7 @@ pub(crate) struct ResolvedSessionShellBehavior {
 
 fn terminal_session_tool_description() -> String {
     String::from(
-        "Operate named persistent host terminal sessions. Before using terminal_session, you must call skill(\"terminal-session\") and follow its instructions. Do not use this tool from memory. The start action requires a non-empty name. Use shell_command for isolated one-shot commands. terminal_session supports list/start/send/read/snapshot/stop, ordered cross-platform ANSI/VT text/paste/key/chord input, incremental output, TUI-aware output mode hints, and command transactions with per-send exit codes via wait_policy.mode=until_exit_code.",
+        "Operate named persistent host terminal sessions. Before using terminal_session, you must call skill(\"terminal-session\") and follow its instructions. Do not use this tool from memory. The start action requires a non-empty name. Use shell_command for isolated one-shot commands and exact process exit codes. terminal_session supports list/start/send/read/snapshot/stop, ordered cross-platform ANSI/VT text/paste/key/chord input, incremental output, and TUI-aware output mode hints. The host never wraps or rewrites commands to infer per-command exit codes.",
     )
 }
 
@@ -434,11 +404,11 @@ pub(crate) fn terminal_session_args_schema(shell_support: &HostCommandShellSuppo
             },
             "wait_policy": {
                 "type": "object",
-                "description": "Optional bounded wait behavior for send/read. Use until_exit_code only with exactly one text input containing one ordinary shell command transaction, not paste/key/chord, REPL/TUI, or long-running services.",
+                "description": "Optional bounded wait behavior for send/read. Use until_pattern for a caller-chosen visible completion or readiness marker, until_prompt for best-effort prompt detection, until_quiet for bounded output settling, screen_stable for TUI frames, or return_immediately for asynchronous work.",
                 "properties": {
                     "mode": {
                         "type": "string",
-                        "enum": ["return_immediately", "until_quiet", "until_prompt", "until_exit_code", "until_pattern", "screen_stable"]
+                        "enum": ["return_immediately", "until_quiet", "until_prompt", "until_pattern", "screen_stable"]
                     },
                     "quiet_ms": { "type": "integer" },
                     "max_wait_ms": { "type": "integer" },

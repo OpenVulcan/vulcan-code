@@ -1,6 +1,6 @@
 ---
 name: terminal-session
-description: Required operating guide for the terminal_session tool. Use before any terminal_session call to understand named persistent terminals, cross-platform PTY input and child-side platform semantics, incremental output, command transactions with exit codes, TUI screen output, and safe control of long-running processes.
+description: Required operating guide for the terminal_session tool. Use before any terminal_session call to understand named persistent terminals, normalized cross-platform PTY input, child-side platform semantics, bounded output waits, TUI screen output, and safe control of long-running processes.
 ---
 
 # Terminal Session
@@ -15,6 +15,8 @@ Before using `terminal_session`, read this skill and follow it. Do not use `term
 - Use `terminal_session` when shell state matters: activated environments, changed directories, REPLs, long-running processes, interactive prompts, or TUI screens.
 - Always give `start` a non-empty, task-oriented `name`.
 - Use standardized `text`, `paste`, `key`, and `chord` inputs. Do not hand-write ANSI escapes, platform-specific getch bytes, or control characters.
+- The host sends the input content you provide and does not add shell wrappers or hidden completion commands.
+- Use `shell_command` when an exact process exit code is required. In a persistent terminal, any completion marker must be part of the visible command you explicitly send.
 - Check `backend` and `input_capabilities` on tool responses. Interactive terminal sessions use the same isolated PTY and ANSI/VT host-input contract on Windows, Linux, and macOS. On Windows, ConPTY may translate that host input into Console key events before a console-mode child reads it.
 - Prefer `read` after append-style output. For TUI or screen-like output, use `send` with `screen_stable` or `snapshot` to inspect `screen_text`.
 - Before finalizing a task, clean up temporary terminals you started for tests or diagnostics. Do not announce final completion until this cleanup is done.
@@ -75,8 +77,8 @@ Sends ordered inputs to an existing terminal. `terminal_session_id` is required 
 {
   "action": "send",
   "terminal_session_id": "...",
-  "inputs": [{ "kind": "text", "text": "npm test\n" }],
-  "wait_policy": { "mode": "until_exit_code", "max_wait_ms": 120000 }
+  "inputs": [{ "kind": "text", "text": "npm run dev\n" }],
+  "wait_policy": { "mode": "until_pattern", "pattern": "ready", "max_wait_ms": 30000 }
 }
 ```
 
@@ -98,7 +100,7 @@ Use `read_from_start: true` only for explicit history review. Use `after_seq` on
 
 ### snapshot
 
-Returns current terminal metadata and status for an existing terminal. Use it when you need `status`, `backend`, `input_capabilities`, `last_seq`, byte counts, exit code, or the latest screen frame. It does not advance the AI-facing read cursor.
+Returns current terminal metadata and status for an existing terminal. Use it when you need `status`, `backend`, `input_capabilities`, `last_seq`, byte counts, the eventual terminal-process exit code, or the latest screen frame. It does not advance the AI-facing read cursor.
 
 ```json
 {
@@ -127,43 +129,55 @@ If preserving the shell matters, try `Ctrl+C` first and then `read` to verify th
 Every wait policy is bounded. Timeouts do not stop the terminal.
 
 - `return_immediately`: return after sending input or checking for available output.
-- `until_exit_code`: wrap exactly one ordinary shell command and return a per-command exit code.
 - `until_quiet`: wait until a real quiet window is observed or the bounded budget expires; inspect `quiet_observed`.
-- `until_prompt`: best-effort prompt-oriented bounded wait; prefer `until_exit_code` for ordinary command success/failure.
+- `until_prompt`: best-effort prompt-oriented bounded wait. A prompt match does not prove a particular exit code.
 - `until_pattern`: bounded wait intended for readiness output. Treat readiness as true only when `pattern_matched` is `true`.
 - `screen_stable`: bounded screen-oriented wait for TUI or alternate-screen output; inspect `quiet_observed`.
 
 For readiness-sensitive flows, use a target-specific literal pattern such as a prompt, menu title, or `ready` line. Do not send navigation keys merely because a timeout elapsed.
 
-### Command Transactions
+### Completion And Exit Codes
 
-Use `until_exit_code` when you need the result of one ordinary shell command inside an existing terminal state.
+`terminal_session` does not infer a per-command exit code. A persistent shell process remains alive after ordinary commands, so the operating system exposes only the eventual shell-process exit code, not the status of each line typed into it.
 
-Good:
+Use `shell_command` for an isolated command when you need an exact exit status. Its result includes the process exit status without changing a persistent terminal.
+
+When existing terminal state is required and you need an explicit completion signal, send a shell-native command that visibly prints a unique marker, then wait for that marker with `until_pattern`. The marker and status expression are part of your real command and remain visible in terminal history and output.
+
+PowerShell external-command example:
 
 ```json
 {
   "action": "send",
   "terminal_session_id": "...",
-  "inputs": [{ "kind": "text", "text": "npm run build\n" }],
-  "wait_policy": { "mode": "until_exit_code", "max_wait_ms": 120000 }
+  "inputs": [{ "kind": "text", "text": "npm test; $code = $LASTEXITCODE; Write-Output \"__AI_DONE_7F3A__:$code\"\n" }],
+  "wait_policy": { "mode": "until_pattern", "pattern": "__AI_DONE_7F3A__:", "max_wait_ms": 120000 }
 }
 ```
 
-`until_exit_code` requires exactly one `text` input containing one complete non-empty command ending with a newline.
+POSIX-shell example:
 
-The terminal must be on a clean command line. If the tool reports a pending input line, send `Ctrl+C` or otherwise clear/submit that line, then verify the shell is usable before retrying `until_exit_code`.
+```json
+{
+  "action": "send",
+  "terminal_session_id": "...",
+  "inputs": [{ "kind": "text", "text": "npm test; code=$?; printf '__AI_DONE_7F3A__:%s\\n' \"$code\"\n" }],
+  "wait_policy": { "mode": "until_pattern", "pattern": "__AI_DONE_7F3A__:", "max_wait_ms": 120000 }
+}
+```
 
-Do not use `until_exit_code` for:
+CMD example:
 
-- `paste`, `key`, or `chord` inputs.
-- REPL input.
-- Interactive prompts that ask follow-up questions.
-- Long-running servers.
-- TUI or screen-mode programs.
-- Half-written command lines.
+```json
+{
+  "action": "send",
+  "terminal_session_id": "...",
+  "inputs": [{ "kind": "text", "text": "npm test & call echo __AI_DONE_7F3A__:^%ERRORLEVEL^%\n" }],
+  "wait_policy": { "mode": "until_pattern", "pattern": "__AI_DONE_7F3A__:", "max_wait_ms": 120000 }
+}
+```
 
-PowerShell note: native `$LASTEXITCODE` is authoritative when present. For cmdlet-only commands, the host also checks whether new PowerShell errors appeared during the transaction.
+Choose a fresh marker for each wait. Read and interpret the numeric suffix yourself. Do not use completion-marker commands for REPL steps, interactive prompts, long-running servers, or TUI navigation; use their natural output, `until_pattern`, `until_quiet`, or `screen_stable` instead.
 
 ## Inputs
 
@@ -179,7 +193,7 @@ Use `text` for typed command lines and REPL input. Use ordinary `\n` when submit
 { "kind": "paste", "text": "multi-line content" }
 ```
 
-Use `paste` for larger ordered text blocks. Its logical newlines receive the same shell-specific normalization as `text`. The current contract does not imply bracketed-paste mode. Do not combine `paste` with `until_exit_code`.
+Use `paste` for larger ordered text blocks. Its logical newlines receive the same shell-specific normalization as `text`. The contract does not imply bracketed-paste mode. If the target REPL or TUI requires an additional confirmation after pasted content, send a structured `key` input with `Enter`.
 
 ```json
 { "kind": "key", "key": "ArrowDown" }
@@ -260,7 +274,7 @@ Check `output_mode` on every response.
 
 For `screen` and `mixed` responses, prefer `[screen_text frame_seq=... confirmed=...]`, `screen_frame_seq`, `screen_frame_confirmed`, `screen_size`, and `[controls_hint]` over raw ANSI chunks when they are present. Compare `screen_frame_seq` across actions before assuming a new frame arrived; `screen_frame_confirmed` means the returned text, dimensions, and sequence form one atomic backend checkpoint, not that the sequence necessarily advanced since an earlier call.
 
-Inspect `pending_input_line` (and the retained compatibility field `pending_stdin_line`) after writes. When true, the shell still owns an unsubmitted input line; submit it, clear it, or send `Ctrl+C` according to the active program before starting an `until_exit_code` transaction.
+Inspect `pending_input_line` after writes; `pending_stdin_line` reports the same state. When true, the active program still owns an unsubmitted input line; submit it, clear it, or send `Ctrl+C` before sending an unrelated complete command.
 
 If `has_more` is true, call `read` again with the same terminal id before making conclusions from partial output.
 
@@ -295,7 +309,7 @@ Use `Ctrl+C` to interrupt a stuck foreground process before `stop` when preservi
 }
 ```
 
-After `Ctrl+C`, perform one stabilizing `read` and verify the shell prompt or expected application state returned before the next `until_exit_code` command.
+After `Ctrl+C`, perform one stabilizing `read` and verify the shell prompt or expected application state returned before sending the next complete command.
 
 If the response contains a standalone `\x03`, `^C`, or a PowerShell message for that control character, treat it as interrupt cleanup noise when the next command behaves normally. Do not retry destructive commands only because of that cleanup noise.
 
@@ -334,16 +348,15 @@ Avoid saying the work is final, finished, stopped, or ended while you still need
 }
 ```
 
-### Run One Command With Exit Code
+### Run One Isolated Command With An Exit Code
 
 ```json
 {
-  "action": "send",
-  "terminal_session_id": "...",
-  "inputs": [{ "kind": "text", "text": "cargo test -p vulcan-agent-runtime\n" }],
-  "wait_policy": { "mode": "until_exit_code", "max_wait_ms": 120000 }
+  "command": "cargo test -p vulcan-agent-runtime"
 }
 ```
+
+Use this payload with `shell_command`, not `terminal_session`.
 
 ### Read More Output
 

@@ -26,7 +26,6 @@ pub(crate) fn terminal_wait_budget_ms(
                 .clamp(500, 5_000)
         }),
         TerminalSessionWaitMode::UntilPrompt => policy.max_wait_ms.unwrap_or(3_000),
-        TerminalSessionWaitMode::UntilExitCode => policy.max_wait_ms.unwrap_or(120_000),
         TerminalSessionWaitMode::UntilPattern => {
             let has_pattern = policy
                 .pattern
@@ -421,79 +420,4 @@ pub(crate) async fn cleanup_terminal_interrupt_input_line(
         discarded_chunk_count,
         failure_reason: None,
     }
-}
-
-/// Reads terminal output until a command transaction sentinel is observed or the wait budget expires.
-/// 读取终端输出直到观测到命令事务哨兵或等待预算耗尽。
-pub(crate) async fn read_terminal_transaction_output(
-    command_session_runtime: &Arc<CommandSessionRuntime>,
-    owner_session_id: SessionId,
-    terminal_session_id: SessionId,
-    after_seq: u64,
-    wait_budget_ms: u64,
-    max_chunks: Option<usize>,
-    transaction_id: &str,
-) -> Result<
-    (
-        CommandSessionReadOutcome,
-        Vec<CommandSessionOutputChunk>,
-        Option<i32>,
-    ),
-    NativeToolError,
-> {
-    let started_at = Instant::now();
-    let mut all_chunks = Vec::new();
-    let mut latest_outcome = read_terminal_session_output_for_ai(
-        command_session_runtime,
-        owner_session_id,
-        terminal_session_id,
-        Some(after_seq),
-        false,
-        Some(wait_budget_ms.min(500)),
-        max_chunks,
-    )
-    .await?;
-    all_chunks.extend(latest_outcome.returned_chunks.clone());
-    let coalesced_chunks = coalesce_terminal_output_chunks(all_chunks.clone());
-    let (stripped_chunks, exit_code) =
-        strip_terminal_transaction_sentinel(&coalesced_chunks, transaction_id);
-    if exit_code.is_some() {
-        return Ok((latest_outcome, stripped_chunks, exit_code));
-    }
-
-    while started_at.elapsed().as_millis() < wait_budget_ms as u128 {
-        let elapsed_ms = started_at.elapsed().as_millis() as u64;
-        let remaining_ms = wait_budget_ms.saturating_sub(elapsed_ms);
-        if remaining_ms == 0 {
-            break;
-        }
-        latest_outcome = read_terminal_session_output_for_ai(
-            command_session_runtime,
-            owner_session_id,
-            terminal_session_id,
-            None,
-            false,
-            Some(remaining_ms.min(500)),
-            max_chunks,
-        )
-        .await?;
-        if latest_outcome.returned_chunks.is_empty() {
-            if latest_outcome.snapshot.status.as_str() != "running" {
-                break;
-            }
-            continue;
-        }
-        all_chunks.extend(latest_outcome.returned_chunks.clone());
-        let coalesced_chunks = coalesce_terminal_output_chunks(all_chunks.clone());
-        let (stripped_chunks, exit_code) =
-            strip_terminal_transaction_sentinel(&coalesced_chunks, transaction_id);
-        if exit_code.is_some() {
-            return Ok((latest_outcome, stripped_chunks, exit_code));
-        }
-    }
-
-    let coalesced_chunks = coalesce_terminal_output_chunks(all_chunks);
-    let (stripped_chunks, exit_code) =
-        strip_terminal_transaction_sentinel(&coalesced_chunks, transaction_id);
-    Ok((latest_outcome, stripped_chunks, exit_code))
 }

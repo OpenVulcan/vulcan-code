@@ -23,12 +23,9 @@ pub(crate) fn shell_selector_uses_auto(raw_shell_selector: Option<&str>) -> bool
 
 /// Reports whether one stdin payload already ends with a line terminator.
 /// 判断一段标准输入载荷是否已经以行终止符结束。
+#[cfg(test)]
 pub(crate) fn stdin_payload_has_trailing_newline(text: &str) -> bool {
     text.ends_with(['\n', '\r'])
-}
-
-pub(crate) fn terminal_generated_command_newline(shell_label: &str) -> &'static str {
-    terminal_session_pty_newline(shell_label)
 }
 
 /// Returns the PTY-facing newline sequence used by generated terminal key/control input.

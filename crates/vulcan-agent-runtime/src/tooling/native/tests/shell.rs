@@ -139,7 +139,7 @@ fn shell_tool_schema_descriptions_document_defaults_in_english() {
         session_tool
             .descriptor
             .description
-            .contains("until_exit_code")
+            .contains("exact process exit codes")
     );
     assert!(
         command_schema["properties"]["timeout_ms"]["description"]
@@ -187,7 +187,13 @@ fn shell_tool_schema_descriptions_document_defaults_in_english() {
         session_schema["properties"]["wait_policy"]["description"]
             .as_str()
             .unwrap_or_default()
-            .contains("until_exit_code")
+            .contains("caller-chosen visible completion")
+    );
+    assert!(
+        !session_schema["properties"]["wait_policy"]["properties"]["mode"]["enum"]
+            .as_array()
+            .unwrap_or(&Vec::new())
+            .contains(&json!("until_exit_code"))
     );
     assert!(
         session_schema["properties"]["cwd"]["description"]

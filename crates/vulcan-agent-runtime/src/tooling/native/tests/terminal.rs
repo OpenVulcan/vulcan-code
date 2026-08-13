@@ -125,63 +125,6 @@ fn terminal_output_chunks_coalesce_adjacent_same_stream() {
     assert_eq!(coalesced[1].stream, CommandSessionOutputStream::Stderr);
 }
 
-/// Windows console screen frames should parse the transaction marker even when the visible frame loses the leading host prefix.
-/// Windows 控制台屏幕帧即使丢失宿主前缀的可见开头，也应解析事务标记。
-#[test]
-fn terminal_transaction_sentinel_accepts_windows_screen_visible_suffix() {
-    let chunks = vec![CommandSessionOutputChunk {
-        seq: 3,
-        stream: CommandSessionOutputStream::Stdout,
-        text: String::from(
-            "[screen #3]\n\x1b[37;40m_TERMINAL_TX_EXIT__:tx-screen:0\x1b[0m\nPS D:\\repo>",
-        ),
-    }];
-
-    let (stripped_chunks, exit_code) = strip_terminal_transaction_sentinel(&chunks, "tx-screen");
-
-    assert_eq!(exit_code, Some(0));
-    assert!(stripped_chunks.iter().all(|chunk| {
-        !strip_simple_ansi_sequences(&chunk.text).contains("_TERMINAL_TX_EXIT__:tx-screen")
-    }));
-}
-
-/// Windows console screen frames should still parse transaction markers after deeper left clipping.
-/// Windows 控制台屏幕帧在更深的左侧裁剪后仍应解析事务标记。
-#[test]
-fn terminal_transaction_sentinel_accepts_deeply_clipped_visible_suffix() {
-    let chunks = vec![CommandSessionOutputChunk {
-        seq: 4,
-        stream: CommandSessionOutputStream::Stdout,
-        text: String::from(
-            "[screen #4]\n\x1b[37;40mINAL_TX_EXIT__:tx-screen:0\x1b[0m\nPS D:\\repo>",
-        ),
-    }];
-
-    let (stripped_chunks, exit_code) = strip_terminal_transaction_sentinel(&chunks, "tx-screen");
-
-    assert_eq!(exit_code, Some(0));
-    assert!(stripped_chunks.iter().all(|chunk| {
-        !strip_simple_ansi_sequences(&chunk.text).contains("INAL_TX_EXIT__:tx-screen")
-    }));
-}
-
-/// Later echoed transaction wrapper text should not erase a previously parsed transaction exit code.
-/// 后续回显的事务包装文本不应清空先前已解析到的事务退出码。
-#[test]
-fn terminal_transaction_sentinel_keeps_parsed_code_when_echo_later_matches() {
-    let chunks = vec![CommandSessionOutputChunk {
-        seq: 4,
-        stream: CommandSessionOutputStream::Stdout,
-        text: String::from(
-            "__VULCAN_TERMINAL_TX_EXIT__:tx-keep:0\nWrite-Output \"__VULCAN_TERMINAL_TX_EXIT__:tx-keep:$vulcanCode\"\n",
-        ),
-    }];
-
-    let (_stripped_chunks, exit_code) = strip_terminal_transaction_sentinel(&chunks, "tx-keep");
-
-    assert_eq!(exit_code, Some(0));
-}
-
 /// Terminal names should preserve explicit labels and fall back to compact command text when omitted.
 /// 终端名称应保留显式标签，并在省略时回退到紧凑命令文本。
 #[test]
@@ -197,22 +140,31 @@ fn terminal_session_name_normalization_uses_explicit_or_command_fallback() {
     assert_eq!(normalize_terminal_session_name(Some("   "), ""), "terminal");
 }
 
-/// Terminal command transactions must reject paste input because wrapping pasted payloads can corrupt interactive shell state.
-/// 终端命令事务必须拒绝粘贴输入，因为包装粘贴载荷可能破坏交互式 shell 状态。
+/// Removed host-owned exit-code waits should fail parsing instead of degrading to another wait mode.
+/// 已移除的宿主退出码等待应解析失败，而不是降级为其他等待模式。
 #[test]
-fn terminal_transaction_rejects_paste_input() {
-    let error = terminal_transaction_command_text(&[TerminalSessionInput::Paste {
-        text: String::from("echo pasted\n"),
-    }])
-    .expect_err("paste input should not be accepted for exit-code transactions");
+fn terminal_session_rejects_removed_exit_code_wait_mode() {
+    // error proves the public typed contract has no hidden compatibility branch for the removed mode.
+    // error 证明公共强类型契约没有为已移除模式保留隐藏兼容分支。
+    let error = serde_json::from_value::<TerminalSessionToolArgs>(json!({
+        "action": "send",
+        "terminal_session_id": Uuid::nil().to_string(),
+        "inputs": [{ "kind": "text", "text": "echo visible\n" }],
+        "wait_policy": { "mode": "until_exit_code" }
+    }))
+    .expect_err("removed wait mode should be rejected");
 
-    assert!(error.message.contains("cannot be used with paste"));
+    assert!(
+        error
+            .to_string()
+            .contains("unknown variant `until_exit_code`")
+    );
 }
 
-/// Terminal command transactions should reject dirty interactive state before wrapper injection.
-/// 终端命令事务应在注入包装命令前拒绝脏交互状态。
+/// Terminal snapshots should expose pending input state without interpreting or rewriting it.
+/// 终端快照应公开待提交输入状态，而不解释或改写该输入。
 #[test]
-fn terminal_transaction_rejects_pending_input_line() {
+fn terminal_snapshot_exposes_pending_input_state() {
     let snapshot = CommandSessionSnapshot {
         command_session_id: Uuid::from_u128(0x51),
         display_name: Some(String::from("dirty shell")),
@@ -236,10 +188,6 @@ fn terminal_transaction_rejects_pending_input_line() {
         screen_text: None,
     };
 
-    let error = validate_terminal_transaction_start(&snapshot)
-        .expect_err("pending input line should reject command transactions");
-    assert!(error.message.contains("pending input line"));
-
     // payload keeps the original field while exposing the clearer pending_input_line alias.
     // payload 保留原字段，同时暴露更清晰的 pending_input_line 别名。
     let payload = build_terminal_session_host_payload(
@@ -251,7 +199,6 @@ fn terminal_transaction_rejects_pending_input_line() {
         "log",
         1.0,
         String::from("test"),
-        None,
         json!({}),
     );
     assert_eq!(payload["pending_stdin_line"], json!(true));
@@ -296,7 +243,6 @@ fn terminal_render_labels_confirmed_screen_frame_sequence() {
         &[],
         false,
         "screen",
-        None,
         Vec::new(),
     );
     assert!(render_input.content.contains("Screen frame sequence: 7"));
@@ -322,7 +268,6 @@ fn terminal_render_labels_confirmed_screen_frame_sequence() {
         "screen",
         1.0,
         String::from("test"),
-        None,
         json!({}),
     );
     assert_eq!(payload["screen_frame_seq"], json!(7));
@@ -350,11 +295,11 @@ fn terminal_pattern_matching_checks_joined_output_chunks() {
     assert!(!terminal_output_chunks_contain_pattern(&chunks, "MISSING"));
 }
 
-/// PowerShell terminal transactions should not leave the interactive shell in continuation mode.
-/// PowerShell 终端事务不应让交互式 shell 停留在续行模式。
+/// PowerShell terminal text should reach the PTY literally and leave the interactive shell usable.
+/// PowerShell 终端文本应原样到达 PTY，并保持交互式 shell 可继续使用。
 #[cfg(windows)]
 #[tokio::test]
-async fn terminal_powershell_transaction_leaves_shell_usable() {
+async fn terminal_powershell_text_is_literal_and_shell_remains_usable() {
     let runtime = Arc::new(CommandSessionRuntime::new());
     let tool = build_terminal_session_tool(Arc::clone(&runtime), test_shell_support());
     let owner_session_id = Uuid::from_u128(0x7001);
@@ -362,7 +307,7 @@ async fn terminal_powershell_transaction_leaves_shell_usable() {
         .invoke(NativeToolExecutionRequest {
             arguments: json!({
                 "action": "start",
-                "name": "transaction regression",
+                "name": "literal input regression",
                 "command": "pwsh -NoLogo -NoProfile",
                 "shell": "pwsh"
             }),
@@ -386,8 +331,8 @@ async fn terminal_powershell_transaction_leaves_shell_usable() {
         .expect("terminal id should exist")
         .to_string();
 
-    // immediateSend proves an ordinary LF text submission is accepted without a transaction wrapper.
-    // immediateSend 验证普通 LF 文本提交无需事务包装即可被接受。
+    // immediateSend proves an ordinary LF text submission is accepted as caller-authored input.
+    // immediateSend 验证普通 LF 文本提交会作为调用方编写的输入被接受。
     let immediate_send = tool
         .invoke(NativeToolExecutionRequest {
             arguments: json!({
@@ -454,13 +399,19 @@ async fn terminal_powershell_transaction_leaves_shell_usable() {
         json!(true)
     );
 
-    let transaction_result = tool
+    // literalResult waits for real output without asking the host to generate or hide shell syntax.
+    // literalResult 等待真实输出，且不要求宿主生成或隐藏 shell 语法。
+    let literal_result = tool
         .invoke(NativeToolExecutionRequest {
             arguments: json!({
                 "action": "send",
                 "terminal_session_id": terminal_session_id,
-                "inputs": [{ "kind": "text", "text": "Write-Output 'txn_test'\n" }],
-                "wait_policy": { "mode": "until_exit_code", "max_wait_ms": 10000 }
+                "inputs": [{ "kind": "text", "text": "Write-Output 'literal_test'\n" }],
+                "wait_policy": {
+                    "mode": "until_pattern",
+                    "pattern": "literal_test",
+                    "max_wait_ms": 10000
+                }
             }),
             session_id: Some(owner_session_id),
             workspace_root: None,
@@ -474,31 +425,49 @@ async fn terminal_powershell_transaction_leaves_shell_usable() {
             session_vmm: VmmConfigLayer::default(),
         })
         .await
-        .expect("transaction send should execute");
-    let transaction_output = transaction_result
+        .expect("literal send should execute");
+    let literal_output = literal_result
         .model_output
         .as_str()
-        .expect("transaction output should render");
-    let transaction_payload = &transaction_result
+        .expect("literal output should render");
+    let literal_payload = &literal_result
         .host_result
         .as_ref()
         .expect("host result")
         .payload;
     assert_eq!(
-        transaction_payload["transaction"]["exit_code"],
-        json!(0),
-        "transaction output was: {transaction_output}\npayload was: {transaction_payload}"
+        literal_payload["pattern_matched"],
+        json!(true),
+        "literal output was: {literal_output}\npayload was: {literal_payload}"
     );
+    // literalPublicText proves AI text and host payload expose only the command actually supplied by the caller.
+    // literalPublicText 验证 AI 文本与宿主载荷仅公开调用方实际提供的命令。
+    let literal_public_text = format!("{literal_output}\n{literal_payload}");
+    assert!(
+        literal_public_text.contains("Write-Output 'literal_test'"),
+        "original command was missing: {literal_public_text}"
+    );
+    assert!(
+        literal_public_text.contains("literal_test"),
+        "real command output was missing: {literal_public_text}"
+    );
+    for forbidden_fragment in ["__VULCAN_TERMINAL_TX_", "PSConsoleReadLine]::AddToHistory"] {
+        assert!(
+            !literal_public_text.contains(forbidden_fragment),
+            "host-generated shell syntax was present: {forbidden_fragment}\n{literal_public_text}"
+        );
+    }
+    assert!(literal_payload.get("transaction").is_none());
 
     let followup_result = tool
         .invoke(NativeToolExecutionRequest {
             arguments: json!({
                 "action": "send",
                 "terminal_session_id": terminal_session_id,
-                "inputs": [{ "kind": "text", "text": "Write-Output 'after_tx'\n" }],
+                "inputs": [{ "kind": "text", "text": "Write-Output 'after_literal'\n" }],
                 "wait_policy": {
                     "mode": "until_pattern",
-                    "pattern": "after_tx",
+                    "pattern": "after_literal",
                     "max_wait_ms": 10000
                 }
             }),
@@ -520,7 +489,7 @@ async fn terminal_powershell_transaction_leaves_shell_usable() {
         .as_str()
         .expect("follow-up output should render");
     assert!(
-        followup_output.contains("after_tx"),
+        followup_output.contains("after_literal"),
         "follow-up output was: {followup_output}"
     );
     assert_eq!(
@@ -550,22 +519,4 @@ async fn terminal_powershell_transaction_leaves_shell_usable() {
             session_vmm: VmmConfigLayer::default(),
         })
         .await;
-}
-
-/// PowerShell transaction wrapping should report non-terminating cmdlet errors as a failed transaction.
-/// PowerShell 事务包装应将 cmdlet 非终止错误报告为失败事务。
-#[test]
-fn terminal_transaction_powershell_wrapper_tracks_non_terminating_errors() {
-    let wrapped = wrap_terminal_transaction_command("Get-Item 'missing'", "pwsh", "tx-id", "\r\n")
-        .expect("pwsh wrapper should be supported");
-
-    assert!(wrapped.contains("$vulcanErrorCount = $Error.Count"));
-    assert!(wrapped.contains("$vulcanNewErrors = $Error.Count - $vulcanErrorCount"));
-    assert!(wrapped.contains("$vulcanSuccess -and $vulcanNewErrors -le 0"));
-    assert!(wrapped.contains(
-        "[Microsoft.PowerShell.PSConsoleReadLine]::AddToHistory('Get-Item ''missing''')"
-    ));
-    assert!(wrapped.contains("try { [Microsoft.PowerShell.PSConsoleReadLine]::AddToHistory"));
-    assert!(wrapped.contains("catch { }"));
-    assert!(wrapped.contains("__VULCAN_TERMINAL_TX_EXIT__:tx-id:"));
 }
