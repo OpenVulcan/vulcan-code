@@ -34,8 +34,12 @@ export function projectConversationRenderItems(
   const compactionSectionInstanceKeys = new Map<string, string>();
   let activeCompactionSectionId: string | null = null;
 
-  const drainTrailingCompactionThinkingBlocks = (sectionId: string): ConversationBlock[] => {
+  const drainTrailingCompactionThinkingBlocks = (sectionId: string): {
+    blocks: ConversationBlock[];
+    sourceMessages: ConversationMessage[];
+  } => {
     const collected: ConversationBlock[] = [];
+    const sourceMessages: ConversationMessage[] = [];
     while (items.length > 0) {
       const candidate = items[items.length - 1];
       if (!candidate || candidate.role !== "assistant" || !candidate.blocks.every((block) => block.kind === "thinking")) {
@@ -47,23 +51,30 @@ export function projectConversationRenderItems(
         compactionSectionId: sectionId,
         compactionRole: "thinking",
       })));
+      for (const sourceMessage of candidate.sourceMessages) {
+        if (!sourceMessages.includes(sourceMessage)) {
+          sourceMessages.push(sourceMessage);
+        }
+      }
     }
-    return collected;
+    return { blocks: collected, sourceMessages };
   };
 
   const appendCompactionBlock = (sectionId: string, block: ConversationBlock, message: ConversationMessage) => {
     const existing = compactionItems.get(sectionId);
     if (existing) {
       existing.blocks = mergeContextCompactionBlocks(existing.blocks, block);
+      existing.sourceMessages = appendConversationRenderItemSourceMessage(existing.sourceMessages, message);
       return existing;
     }
-    const leadingThinkingBlocks = drainTrailingCompactionThinkingBlocks(sectionId);
+    const leadingThinking = drainTrailingCompactionThinkingBlocks(sectionId);
     const item: ConversationRenderItem = {
       id: `context-compaction-${sectionId}`,
       renderKey: `context-compaction:${sectionId}`,
       role: message.role === "system" ? "system" : "assistant",
-      blocks: mergeContextCompactionBlocks(leadingThinkingBlocks, block),
+      blocks: mergeContextCompactionBlocks(leadingThinking.blocks, block),
       sourceMessage: message,
+      sourceMessages: appendConversationRenderItemSourceMessage(leadingThinking.sourceMessages, message),
     };
     items.push(item);
     compactionItems.set(sectionId, item);
@@ -81,6 +92,7 @@ export function projectConversationRenderItems(
         role: "user",
         blocks: [],
         sourceMessage: message,
+        sourceMessages: [message],
         userMessage: message,
       });
       return;
@@ -125,6 +137,7 @@ export function projectConversationRenderItems(
         const existing = block.kind !== "tool-call" ? findToolMergeItem(toolMergeState.itemsByKey, mergeKeys) : undefined;
         if (existing) {
           existing.blocks = mergeToolBlocks(existing.blocks, block);
+          existing.sourceMessages = appendConversationRenderItemSourceMessage(existing.sourceMessages, message);
           registerToolMergeItem(toolMergeState.itemsByKey, existing, mergeKeys);
           continue;
         }
@@ -135,6 +148,7 @@ export function projectConversationRenderItems(
           role: message.role === "system" ? "system" : "assistant",
           blocks: [block],
           sourceMessage: message,
+          sourceMessages: [message],
         };
         items.push(item);
         registerToolMergeItem(toolMergeState.itemsByKey, item, mergeKeys);
@@ -147,11 +161,31 @@ export function projectConversationRenderItems(
         role: message.role === "system" ? "system" : "assistant",
         blocks: [block],
         sourceMessage: message,
+        sourceMessages: [message],
       });
     }
   });
 
   return items;
+}
+
+// appendConversationRenderItemSourceMessage appends one exact source without duplicating its immutable reference.
+// appendConversationRenderItemSourceMessage 追加一个精确来源，同时避免重复保存其不可变引用。
+// Parameters: current contains sources already owned by the row; message is the source contributing the next block.
+// 参数：current 包含该行已拥有的来源；message 是为下一个块贡献内容的来源。
+// Returns: the unchanged source list when already present, otherwise a new ordered source list.
+// 返回值：来源已存在时返回原集合，否则返回新的有序来源集合。
+function appendConversationRenderItemSourceMessage(
+  current: readonly ConversationMessage[],
+  message: ConversationMessage,
+): readonly ConversationMessage[] {
+  if (current.length === 0) {
+    return [message];
+  }
+  if (current.includes(message)) {
+    return current;
+  }
+  return [...current, message];
 }
 
 // ToolMergeProjectionState tracks tool-call/result grouping per repeated historical execution instance.

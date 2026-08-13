@@ -3,10 +3,6 @@ import {
   GeneratedMediaPlayerWindow,
   type GeneratedMediaAttachment,
 } from "@/components/media/generated-media";
-import {
-  conversationScrollToDistanceFromBottom,
-  type ConversationTimelineUserScrollDirection,
-} from "@/components/conversation/chat-area-scroll";
 import { Split } from "lucide-react";
 import {
   createEmptyConversationSurfaceExpandedState,
@@ -17,7 +13,6 @@ import {
   conversationMeasuredCollapseMapEqual,
   type ConversationMeasuredCollapseMap,
 } from "@/components/conversation/conversation-measured-collapse";
-import { CONVERSATION_MANUAL_VIEWPORT_INTERACTION_EVENT } from "@/components/conversation/conversation-layout-events";
 import { MarkdownImageWorkspacePathProvider } from "@/components/conversation/conversation-markdown";
 import {
   ConversationDetailModal,
@@ -38,6 +33,7 @@ import {
 } from "@/components/conversation/conversation-plan-artifact";
 import type { ConversationPlanArtifact } from "@/components/conversation/conversation-model";
 import {
+  conversationTimelineItemKey,
   latestThinkingBlockIdAfterLastUser,
   projectConversationTimelineItems,
 } from "@/components/conversation/conversation-timeline";
@@ -54,52 +50,11 @@ import type {
   SessionProviderUsageSummary,
 } from "@/types";
 import { useI18n } from "@/i18n";
-
-// CONVERSATION_VIRTUAL_ITEM_ESTIMATE_PX is the fallback row height before measurement.
-// CONVERSATION_VIRTUAL_ITEM_ESTIMATE_PX 是测量前使用的兜底行高。
-const CONVERSATION_VIRTUAL_ITEM_ESTIMATE_PX = 220;
-
-// CONVERSATION_VIRTUAL_PROCESS_ESTIMATE_PX is the fallback process-group height before measurement.
-// CONVERSATION_VIRTUAL_PROCESS_ESTIMATE_PX 是测量前处理过程分组使用的兜底高度。
-const CONVERSATION_VIRTUAL_PROCESS_ESTIMATE_PX = 320;
-
-// CONVERSATION_VIRTUAL_FINAL_META_ESTIMATE_PX is the fallback final-answer metadata row height.
-// CONVERSATION_VIRTUAL_FINAL_META_ESTIMATE_PX 是最终回答元信息行测量前使用的兜底高度。
-const CONVERSATION_VIRTUAL_FINAL_META_ESTIMATE_PX = 28;
-// CONVERSATION_VIRTUAL_FORK_SOURCE_ESTIMATE_PX is the fallback fork-source separator row height.
-// CONVERSATION_VIRTUAL_FORK_SOURCE_ESTIMATE_PX 是分叉来源分隔行测量前使用的兜底行高。
-const CONVERSATION_VIRTUAL_FORK_SOURCE_ESTIMATE_PX = 40;
-
-// CONVERSATION_TURN_RESTORE_FRAME_COUNT limits repeated restore frames after a surface switch.
-// CONVERSATION_TURN_RESTORE_FRAME_COUNT 限制界面切换后的重复恢复帧数。
-const CONVERSATION_TURN_RESTORE_FRAME_COUNT = 4;
-
-// ConversationTurnGroup represents one stable rendered conversation turn shell.
-// ConversationTurnGroup 表示单个稳定渲染的会话轮次外壳。
-interface ConversationTurnGroup {
-  // Stable group key used for shell identity and height memory.
-  // 用于外壳身份与高度记忆的稳定分组键。
-  key: string;
-  // Timeline items that belong to this rendered turn.
-  // 归属于该渲染轮次的时间线条目。
-  items: ConversationTimelineItem[];
-}
-
-// ConversationWorkspaceInitialScrollRestore assigns initial viewport restoration to exactly one owner.
-// ConversationWorkspaceInitialScrollRestore 将初始视口恢复分配给唯一所有者。
-type ConversationWorkspaceInitialScrollRestore =
-  | {
-      // Parent owns initial restoration, so workspace distance input is forbidden.
-      // 父级拥有初始恢复，因此禁止工作区距离输入。
-      restoreInitialScrollDistance: false;
-      initialScrollDistanceFromBottom?: never;
-    }
-  | {
-      // Workspace owns initial restoration and requires an exact bottom distance.
-      // 工作区拥有初始恢复，并要求精确底部距离。
-      restoreInitialScrollDistance: true;
-      initialScrollDistanceFromBottom: number;
-    };
+import { ConversationTurnSeatList } from "@/components/conversation/conversation-turn-seat";
+import {
+  ConversationTimelineProjectionStore,
+  type ConversationTurnProjection,
+} from "@/components/conversation/conversation-timeline-projection-store";
 
 // ConversationWorkspace renders the conversation transcript surface.
 // ConversationWorkspace 渲染会话转录展示面。
@@ -137,6 +92,9 @@ export function ConversationWorkspace(props: {
   // Loads one older history page for this conversation.
   // 为当前会话加载一页更早历史。
   onLoadMoreHistory: (conversationId: string) => Promise<boolean>;
+  // Preserves the semantic viewport while one older history page is prepended.
+  // 在前置一页更早历史时保留语义视口。
+  onPreserveHistoryPrepend: (load: () => Promise<boolean>) => Promise<boolean>;
   // Parent conversation id used by subagent navigation.
   // 子代理导航使用的父会话标识。
   parentConversationId: string | null;
@@ -149,24 +107,12 @@ export function ConversationWorkspace(props: {
   // Called when scroll position changes.
   // 滚动位置变化时调用。
   onScrollStateChange: () => void;
-  // Called before user-driven scrolling mutates the transcript viewport.
-  // 用户驱动滚动改变转录视口前调用。
-  onUserScrollStart: (direction?: ConversationTimelineUserScrollDirection) => void;
   // Opens a routed subagent panel.
   // 打开已路由的子代理面板。
   onOpenSubagentPanel: (parentConversationId: string, taskId: string) => Promise<boolean>;
   // Scroll container ref owned by the shell.
   // 由外壳持有的滚动容器引用。
   scrollRef: React.RefObject<HTMLElement | null>;
-  // Previously measured turn-shell heights for the active surface.
-  // 当前界面此前测量的轮次外壳高度。
-  initialTurnHeightsByKey?: Readonly<Record<string, number>> | null;
-  // Persists one measured turn-shell height for an owning surface.
-  // 为所属界面保存一条轮次外壳实测高度。
-  onTurnHeightChange?: (surfaceId: string, turnKey: string, height: number) => void;
-  // Removes stored turn heights that no longer belong to the active surface projection.
-  // 删除已不属于当前界面投影的轮次高度。
-  onRetainTurnHeights?: (surfaceId: string, liveTurnKeys: ReadonlySet<string>) => void;
   // Previously captured runtime expansion state for this surface.
   // 当前界面此前捕获的运行期展开状态。
   initialExpandedState: ConversationSurfaceExpandedState | null;
@@ -218,40 +164,55 @@ export function ConversationWorkspace(props: {
   // Optional trace callback for local diagnostics.
   // 用于本地诊断的可选埋点回调。
   onTrace?: (action: string, detail?: Record<string, unknown>) => void;
-} & ConversationWorkspaceInitialScrollRestore) {
-  const { t } = useI18n();
+}) {
+  const { locale, t } = useI18n();
   // detail stores the currently opened transcript detail modal.
   // detail 保存当前打开的转录详情弹窗。
   const [detail, setDetail] = React.useState<ConversationDetail | null>(null);
   // mediaPlayer stores the generated media currently opened in the independent player window.
   // mediaPlayer 保存当前在独立播放窗口中打开的生成媒体。
   const [mediaPlayer, setMediaPlayer] = React.useState<GeneratedMediaAttachment | null>(null);
-  const [nowMs, setNowMs] = React.useState(() => Date.now());
   // processCollapseOverrides stores user-toggled process fold states for the current UI session.
   // processCollapseOverrides 存储当前 UI 会话中用户手动切换的处理过程折叠状态。
   const [processCollapseOverrides, setProcessCollapseOverrides] = React.useState<Map<string, boolean>>(
     () => new Map(Object.entries(props.initialExpandedState?.processCollapsedByKey ?? {})),
   );
-  // userPromptExpansionOverrides mirrors WebUI-session-only user prompt expansion memory for virtualized rows.
-  // userPromptExpansionOverrides 镜像仅当前 WebUI 会话有效的用户提示词展开记忆，供虚拟行复挂载使用。
+  // userPromptExpansionOverrides mirrors WebUI-session-only user prompt expansion memory for stable Turn Seats.
+  // userPromptExpansionOverrides 镜像仅当前 WebUI 会话有效的用户提示词展开记忆，供稳定 Turn Seat 使用。
   const [userPromptExpansionOverrides, setUserPromptExpansionOverrides] = React.useState<Set<string>>(
     () => new Set(props.initialExpandedState?.expandedUserPromptIds ?? []),
   );
-  // toolPresentationExpansionOverrides mirrors WebUI-session-only tool card expansion memory for virtualized rows.
-  // toolPresentationExpansionOverrides 镜像仅当前 WebUI 会话有效的工具卡片展开记忆，供虚拟行复挂载使用。
+  // toolPresentationExpansionOverrides mirrors WebUI-session-only tool card expansion memory for stable Turn Seats.
+  // toolPresentationExpansionOverrides 镜像仅当前 WebUI 会话有效的工具卡片展开记忆，供稳定 Turn Seat 使用。
   const [toolPresentationExpansionOverrides, setToolPresentationExpansionOverrides] = React.useState<Set<string>>(
     () => new Set(props.initialExpandedState?.expandedToolPresentationIds ?? []),
   );
-  // measuredCollapseById mirrors stable collapse state and height memory for the current surface.
-  // measuredCollapseById 镜像当前界面的稳定折叠状态与高度记忆。
+  // measuredCollapseById mirrors stable expanded state for measured-collapse components on the current surface.
+  // measuredCollapseById 镜像当前界面中实测折叠组件的稳定展开状态。
   const [measuredCollapseById, setMeasuredCollapseById] = React.useState<ConversationMeasuredCollapseMap>(
     () => ({ ...(props.initialExpandedState?.measuredCollapseById ?? {}) }),
   );
+  // processCollapseOverridesRef exposes current process choices without changing the shared row renderer.
+  // processCollapseOverridesRef 暴露当前过程选择，同时不改变共享行渲染器。
+  const processCollapseOverridesRef = React.useRef(processCollapseOverrides);
+  processCollapseOverridesRef.current = processCollapseOverrides;
+  // userPromptExpansionOverridesRef exposes current prompt choices to exact row renders.
+  // userPromptExpansionOverridesRef 向精确行渲染暴露当前提示词选择。
+  const userPromptExpansionOverridesRef = React.useRef(userPromptExpansionOverrides);
+  userPromptExpansionOverridesRef.current = userPromptExpansionOverrides;
+  // toolPresentationExpansionOverridesRef exposes current tool-card choices to exact row renders.
+  // toolPresentationExpansionOverridesRef 向精确行渲染暴露当前工具卡片选择。
+  const toolPresentationExpansionOverridesRef = React.useRef(toolPresentationExpansionOverrides);
+  toolPresentationExpansionOverridesRef.current = toolPresentationExpansionOverrides;
+  // measuredCollapseByIdRef supplies the latest expanded-state memory to persistence callbacks.
+  // measuredCollapseByIdRef 向持久化回调提供最新展开状态记忆。
+  const measuredCollapseByIdRef = React.useRef(measuredCollapseById);
+  measuredCollapseByIdRef.current = measuredCollapseById;
   const surfaceRestoreId = props.conversation?.id ?? props.parentConversationId ?? null;
   const expandedStateSurfaceRestoreIdRef = React.useRef(surfaceRestoreId);
   const timelineItems = React.useMemo(
-    () => projectConversationTimelineItems(props.renderItems, props.conversation, nowMs, props.sessionRunning),
-    [props.renderItems, props.conversation, nowMs, props.sessionRunning],
+    () => projectConversationTimelineItems(props.renderItems, props.conversation, props.sessionRunning),
+    [props.renderItems, props.conversation, props.sessionRunning],
   );
   const visibleTimelineItems = React.useMemo(
     () => timelineItems.filter((item) => timelineItemVisibleInMainTranscript(item, props.hiddenThinkingBlockIds)),
@@ -266,9 +227,11 @@ export function ConversationWorkspace(props: {
     }
     return visibleTimelineItems.some((item) => timelineItemContainsPlanArtifact(item, artifact));
   }, [props.pendingPlanArtifact, visibleTimelineItems]);
-  // lockedTimelineActionKeys identifies rows before the latest completed compaction runtime boundary.
-  // lockedTimelineActionKeys 标识最后一次成功压缩运行时边界之前的只读行。
-  const lockedTimelineActionKeys = React.useMemo(() => {
+  // lockedTimelineActionKeyList identifies rows before the latest completed compaction runtime boundary.
+  // lockedTimelineActionKeyList 标识最后一次成功压缩运行时边界之前的只读行。
+  const lockedTimelineActionKeyList = React.useMemo(() => {
+    // latestCompletedCompactionIndex is the final durable read-only boundary in visible order.
+    // latestCompletedCompactionIndex 是可见顺序中的最后一个持久只读边界。
     let latestCompletedCompactionIndex = -1;
     visibleTimelineItems.forEach((item, index) => {
       if (timelineItemHasCompletedContextCompaction(item)) {
@@ -276,103 +239,108 @@ export function ConversationWorkspace(props: {
       }
     });
     if (latestCompletedCompactionIndex < 0) {
-      return new Set<string>();
+      return [];
     }
-    return new Set(
-      visibleTimelineItems
-        .slice(0, latestCompletedCompactionIndex + 1)
-        .map(conversationTimelineItemKey),
-    );
+    return visibleTimelineItems
+      .slice(0, latestCompletedCompactionIndex + 1)
+      .map(conversationTimelineItemKey);
   }, [visibleTimelineItems]);
-  const timelineCacheScopeKey = props.conversation?.id ?? props.parentConversationId ?? "conversation";
-  // ownedInitialScrollDistance is exact only when the workspace is the declared restoration owner.
-  // ownedInitialScrollDistance 仅在工作区是已声明恢复所有者时保持精确。
-  const ownedInitialScrollDistance = props.restoreInitialScrollDistance
-    ? props.initialScrollDistanceFromBottom
-    : 0;
+  // lockedTimelineActionSignature changes only when the effective compaction boundary changes.
+  // lockedTimelineActionSignature 仅在生效压缩边界变化时改变。
+  const lockedTimelineActionSignature = JSON.stringify(lockedTimelineActionKeyList);
+  // lockedTimelineActionKeys preserves Set identity across unrelated row projection updates.
+  // lockedTimelineActionKeys 在无关行投影更新期间保留 Set 身份。
+  const lockedTimelineActionKeys = React.useMemo(
+    () => new Set<string>(JSON.parse(lockedTimelineActionSignature) as string[]),
+    [lockedTimelineActionSignature],
+  );
+  // timelineCacheScopeKey is the exact owning surface identity; null represents an unowned empty transcript.
+  // timelineCacheScopeKey 是精确所属界面身份；null 表示无所属者的空转录。
+  const timelineCacheScopeKey = surfaceRestoreId;
   const turnGroups = React.useMemo(
     () => groupConversationTimelineItems(visibleTimelineItems),
     [visibleTimelineItems],
   );
-  // liveTurnKeys is the authoritative set of turn shells in the current projection.
-  // liveTurnKeys 是当前投影中轮次外壳的权威键集合。
-  const liveTurnKeys = React.useMemo(
-    () => new Set(turnGroups.map((group) => group.key)),
+  // timelineProjectionStore is the single exact row-subscription owner recreated only when surface ownership changes.
+  // timelineProjectionStore 是唯一精确行订阅所有者，仅在界面所有权变化时重建。
+  const timelineProjectionStore = React.useMemo(
+    () => new ConversationTimelineProjectionStore(),
+    [timelineCacheScopeKey],
+  );
+  // projectedTurnOrder is the freshly projected visual order before value stabilization.
+  // projectedTurnOrder 是按值稳定前本次新投影的视觉顺序。
+  const projectedTurnOrder = React.useMemo(
+    () => turnGroups.map((group) => group.key),
     [turnGroups],
   );
-  // Retention removes measurements only after the current projection establishes its authoritative keys.
-  // 仅当当前投影建立权威键后，保留流程才删除旧测量值。
-  React.useEffect(() => {
-    props.onRetainTurnHeights?.(timelineCacheScopeKey, liveTurnKeys);
-  }, [liveTurnKeys, props.onRetainTurnHeights, timelineCacheScopeKey]);
-  const turnRestoreFrameIdsRef = React.useRef<number[]>([]);
-  // restoredTurnSurfaceKeyRef tracks the last surface actually restored by this workspace.
-  // restoredTurnSurfaceKeyRef 跟踪最近一个由当前工作区实际恢复的界面。
-  const restoredTurnSurfaceKeyRef = React.useRef<string | null>(null);
-  // clearTurnSurfaceRestoreFrames cancels pending surface-scoped scroll restore frames.
-  // clearTurnSurfaceRestoreFrames 取消待执行的界面级滚动恢复帧。
-  const clearTurnSurfaceRestoreFrames = React.useCallback(() => {
-    for (const frameId of turnRestoreFrameIdsRef.current) {
-      window.cancelAnimationFrame(frameId);
-    }
-    turnRestoreFrameIdsRef.current = [];
-  }, []);
-  // restoreTurnSurfaceBottomDistance restores the saved bottom distance for the active surface.
-  // restoreTurnSurfaceBottomDistance 为当前界面恢复已保存的底部距离。
-  const restoreTurnSurfaceBottomDistance = React.useCallback(() => {
-    const element = props.scrollRef.current;
-    if (!element || element.dataset.conversationSurfaceId !== timelineCacheScopeKey) {
-      return;
-    }
-    conversationScrollToDistanceFromBottom(element, ownedInitialScrollDistance);
-  }, [ownedInitialScrollDistance, props.scrollRef, timelineCacheScopeKey]);
+  // turnOrderSignature changes only when stable business ordering changes.
+  // turnOrderSignature 仅在稳定业务顺序变化时改变。
+  const turnOrderSignature = JSON.stringify(projectedTurnOrder);
+  // turnOrder preserves array identity across content-only updates so Seat-list reconciliation can be skipped.
+  // turnOrder 在纯内容更新期间保留数组身份，使 Seat 列表可以跳过协调。
+  const turnOrder = React.useMemo(
+    () => JSON.parse(turnOrderSignature) as string[],
+    [turnOrderSignature],
+  );
+  // turnGroupByKey supplies the explicit first-mount snapshot for rows not committed to the Store yet.
+  // turnGroupByKey 为尚未提交到 Store 的行提供显式首次挂载快照。
+  const turnGroupByKey = React.useMemo(
+    () => new Map(turnGroups.map((group) => [group.key, group] as const)),
+    [turnGroups],
+  );
+  // timelineProjectionLocaleRef forces complete row replacement only when localized projection content changes.
+  // timelineProjectionLocaleRef 仅在本地化投影内容变化时强制完整替换行。
+  const timelineProjectionLocaleRef = React.useRef(locale);
+  // projectionLocaleChanged records the explicit non-message reason for replacing every projected row.
+  // projectionLocaleChanged 记录替换全部投影行的显式非消息原因。
+  const projectionLocaleChanged = timelineProjectionLocaleRef.current !== locale;
   React.useLayoutEffect(() => {
-    if (!props.restoreInitialScrollDistance) {
-      restoredTurnSurfaceKeyRef.current = null;
-      clearTurnSurfaceRestoreFrames();
+    timelineProjectionStore.reconcile(turnGroups, projectionLocaleChanged);
+    timelineProjectionLocaleRef.current = locale;
+    timelineProjectionStore.flushNotifications();
+  }, [locale, projectionLocaleChanged, timelineProjectionStore, turnGroups]);
+  // previousCommandSessionsRef identifies command-runtime changes that affect only terminal-owning Turns.
+  // previousCommandSessionsRef 标识仅影响终端所属 Turn 的命令运行时变化。
+  const previousCommandSessionsRef = React.useRef(props.commandSessions);
+  React.useLayoutEffect(() => {
+    if (previousCommandSessionsRef.current === props.commandSessions) {
       return;
     }
-    if (restoredTurnSurfaceKeyRef.current === timelineCacheScopeKey) {
+    previousCommandSessionsRef.current = props.commandSessions;
+    timelineProjectionStore.invalidateRows(conversationTurnProjectionOwnsCommandSession);
+    timelineProjectionStore.flushNotifications();
+  }, [props.commandSessions, timelineProjectionStore]);
+  // previousSessionProviderUsageRef limits live usage refreshes to the active process Turn.
+  // previousSessionProviderUsageRef 将实时用量刷新限制在活动过程 Turn。
+  const previousSessionProviderUsageRef = React.useRef(props.sessionProviderUsage);
+  React.useLayoutEffect(() => {
+    if (previousSessionProviderUsageRef.current === props.sessionProviderUsage) {
       return;
     }
-    restoredTurnSurfaceKeyRef.current = timelineCacheScopeKey;
-    clearTurnSurfaceRestoreFrames();
-    restoreTurnSurfaceBottomDistance();
-    // runRestoreFrame schedules exactly the remaining number of workspace-owned correction frames.
-    // runRestoreFrame 精确调度剩余数量的工作区所有校正帧。
-    // Parameters: remainingFrames is the positive number of callbacks still required.
-    // 参数：remainingFrames 是仍需执行的正回调数量。
-    // Returns: nothing; zero remaining frames terminate recursion without scheduling.
-    // 返回值：无；剩余帧为零时终止递归且不再调度。
-    const runRestoreFrame = (remainingFrames: number) => {
-      if (remainingFrames <= 0) {
-        return;
-      }
-      const frameId = window.requestAnimationFrame(() => {
-        turnRestoreFrameIdsRef.current = turnRestoreFrameIdsRef.current.filter((candidate) => candidate !== frameId);
-        restoreTurnSurfaceBottomDistance();
-        runRestoreFrame(remainingFrames - 1);
-      });
-      turnRestoreFrameIdsRef.current.push(frameId);
-    };
-    runRestoreFrame(CONVERSATION_TURN_RESTORE_FRAME_COUNT);
-    return clearTurnSurfaceRestoreFrames;
-  }, [clearTurnSurfaceRestoreFrames, props.restoreInitialScrollDistance, restoreTurnSurfaceBottomDistance, timelineCacheScopeKey]);
+    previousSessionProviderUsageRef.current = props.sessionProviderUsage;
+    timelineProjectionStore.invalidateRows(conversationTurnGroupIsRunning);
+    timelineProjectionStore.flushNotifications();
+  }, [props.sessionProviderUsage, timelineProjectionStore]);
   const autoExpandThinkingBlockId = (props.autoExpandStreamingThinking ?? true)
     && props.sessionRunning
     && props.hiddenThinkingBlockIds.size === 0
     ? latestThinkingBlockIdAfterLastUser(props.renderItems)
     : null;
-  const processCollapseKey = React.useCallback((process: ConversationProcessRenderItem) => {
-    const surfaceId = props.conversation?.id ?? props.parentConversationId ?? "unknown";
-    return `${surfaceId}:${process.id}`;
-  }, [props.conversation?.id, props.parentConversationId]);
+  // processCollapseKey binds one process choice to its authoritative surface identity.
+  // processCollapseKey 将单个过程选择绑定到其权威界面身份。
+  // Parameters: process is the exact projected process row.
+  // 参数：process 是精确投影出的处理过程行。
+  // Returns: a surface-scoped key, or null when no business surface owns the transcript.
+  // 返回值：界面级键；当转录没有业务界面所有者时返回 null。
+  const processCollapseKey = React.useCallback((process: ConversationProcessRenderItem): string | null => (
+    surfaceRestoreId ? `${surfaceRestoreId}:${process.id}` : null
+  ), [surfaceRestoreId]);
   const onExpandedStateChange = props.onExpandedStateChange;
   const persistExpandedState = React.useCallback((
     processCollapsedByKey: Map<string, boolean>,
     expandedUserPromptIds: Set<string>,
     expandedToolPresentationIds: Set<string>,
-    nextMeasuredCollapseById: ConversationMeasuredCollapseMap = measuredCollapseById,
+    nextMeasuredCollapseById: ConversationMeasuredCollapseMap,
   ) => {
     if (!surfaceRestoreId) {
       return;
@@ -383,46 +351,77 @@ export function ConversationWorkspace(props: {
       measuredCollapseById: nextMeasuredCollapseById,
       processCollapsedByKey: Object.fromEntries(processCollapsedByKey),
     });
-  }, [measuredCollapseById, onExpandedStateChange, surfaceRestoreId]);
+  }, [onExpandedStateChange, surfaceRestoreId]);
   const handleMeasuredCollapseMemoryChange = React.useCallback((nextMeasuredCollapseById: ConversationMeasuredCollapseMap) => {
+    measuredCollapseByIdRef.current = nextMeasuredCollapseById;
     setMeasuredCollapseById(nextMeasuredCollapseById);
-    persistExpandedState(processCollapseOverrides, userPromptExpansionOverrides, toolPresentationExpansionOverrides, nextMeasuredCollapseById);
-  }, [persistExpandedState, processCollapseOverrides, toolPresentationExpansionOverrides, userPromptExpansionOverrides]);
+    persistExpandedState(
+      processCollapseOverridesRef.current,
+      userPromptExpansionOverridesRef.current,
+      toolPresentationExpansionOverridesRef.current,
+      nextMeasuredCollapseById,
+    );
+  }, [persistExpandedState]);
   const handleProcessCollapsedChange = React.useCallback((process: ConversationProcessRenderItem, collapsed: boolean) => {
     const key = processCollapseKey(process);
-    setProcessCollapseOverrides((current) => {
-      const next = new Map(current);
-      next.set(key, collapsed);
-      persistExpandedState(next, userPromptExpansionOverrides, toolPresentationExpansionOverrides);
-      return next;
-    });
-  }, [persistExpandedState, processCollapseKey, toolPresentationExpansionOverrides, userPromptExpansionOverrides]);
+    if (!key) {
+      return;
+    }
+    // next is created synchronously so the exact invalidated Seat reads the new override immediately.
+    // next 同步创建，使精确失效的 Seat 立即读取新的覆盖值。
+    const next = new Map(processCollapseOverridesRef.current);
+    next.set(key, collapsed);
+    processCollapseOverridesRef.current = next;
+    setProcessCollapseOverrides(next);
+    persistExpandedState(
+      next,
+      userPromptExpansionOverridesRef.current,
+      toolPresentationExpansionOverridesRef.current,
+      measuredCollapseByIdRef.current,
+    );
+    timelineProjectionStore.invalidateRows((row) => row.items.some((item) => (
+      item.kind === "process" && item.process.id === process.id
+    )));
+    timelineProjectionStore.flushNotifications();
+  }, [persistExpandedState, processCollapseKey, timelineProjectionStore]);
   const handleUserPromptExpandedChange = React.useCallback((messageKey: string, expanded: boolean) => {
-    setUserPromptExpansionOverrides((current) => {
-      const next = new Set(current);
-      if (expanded) {
-        next.add(messageKey);
-      } else {
-        next.delete(messageKey);
-      }
-      persistExpandedState(processCollapseOverrides, next, toolPresentationExpansionOverrides);
-      return next;
-    });
-  }, [persistExpandedState, processCollapseOverrides, toolPresentationExpansionOverrides]);
+    // next mirrors the locally measured prompt expansion for later remount restoration.
+    // next 镜像本地实测提示词展开状态，用于后续重新挂载恢复。
+    const next = new Set(userPromptExpansionOverridesRef.current);
+    if (expanded) {
+      next.add(messageKey);
+    } else {
+      next.delete(messageKey);
+    }
+    userPromptExpansionOverridesRef.current = next;
+    setUserPromptExpansionOverrides(next);
+    persistExpandedState(
+      processCollapseOverridesRef.current,
+      next,
+      toolPresentationExpansionOverridesRef.current,
+      measuredCollapseByIdRef.current,
+    );
+  }, [persistExpandedState]);
   const handleToolPresentationExpandedChange = React.useCallback((presentationId: string, expanded: boolean) => {
-    setToolPresentationExpansionOverrides((current) => {
-      const next = new Set(current);
-      if (expanded) {
-        next.add(presentationId);
-      } else {
-        next.delete(presentationId);
-      }
-      persistExpandedState(processCollapseOverrides, userPromptExpansionOverrides, next);
-      return next;
-    });
-  }, [persistExpandedState, processCollapseOverrides, userPromptExpansionOverrides]);
+    // next mirrors the card's local expansion for later remount restoration.
+    // next 镜像卡片本地展开状态，用于后续重新挂载恢复。
+    const next = new Set(toolPresentationExpansionOverridesRef.current);
+    if (expanded) {
+      next.add(presentationId);
+    } else {
+      next.delete(presentationId);
+    }
+    toolPresentationExpansionOverridesRef.current = next;
+    setToolPresentationExpansionOverrides(next);
+    persistExpandedState(
+      processCollapseOverridesRef.current,
+      userPromptExpansionOverridesRef.current,
+      next,
+      measuredCollapseByIdRef.current,
+    );
+  }, [persistExpandedState]);
 
-  React.useEffect(() => {
+  React.useLayoutEffect(() => {
     if (expandedStateSurfaceRestoreIdRef.current === surfaceRestoreId) {
       return;
     }
@@ -441,47 +440,9 @@ export function ConversationWorkspace(props: {
     ));
   }, [props.initialExpandedState, surfaceRestoreId]);
 
-  React.useEffect(() => {
-    if (!props.sessionRunning) {
-      return;
-    }
-    const interval = window.setInterval(() => setNowMs(Date.now()), 1000);
-    return () => window.clearInterval(interval);
-  }, [props.sessionRunning]);
-
   const handleConversationScroll = React.useCallback(() => {
     props.onScrollStateChange();
   }, [props.onScrollStateChange]);
-  // handleConversationUserScrollStart cancels automatic viewport correction before real user scroll input.
-  // handleConversationUserScrollStart 在真实用户滚动输入前取消自动视口校正。
-  const handleConversationUserScrollStart = React.useCallback((direction: ConversationTimelineUserScrollDirection = "unknown") => {
-    clearTurnSurfaceRestoreFrames();
-    props.onUserScrollStart(direction);
-  }, [clearTurnSurfaceRestoreFrames, props.onUserScrollStart]);
-  // handleConversationWheel records the wheel direction before the scroll event changes viewport metrics.
-  // handleConversationWheel 在滚动事件改变视口指标前记录滚轮方向。
-  const handleConversationWheel = React.useCallback((event: React.WheelEvent<HTMLElement>) => {
-    handleConversationUserScrollStart(event.deltaY < 0 ? "up" : "down");
-  }, [handleConversationUserScrollStart]);
-  // handleConversationPointerDown only treats scrollbar-gutter presses as scroll intent.
-  // handleConversationPointerDown 只将滚动条边缘按下视为滚动意图。
-  const handleConversationPointerDown = React.useCallback((event: React.PointerEvent<HTMLElement>) => {
-    const rect = event.currentTarget.getBoundingClientRect();
-    if (event.clientX < rect.right - 20) {
-      return;
-    }
-    handleConversationUserScrollStart("unknown");
-  }, [handleConversationUserScrollStart]);
-
-  React.useEffect(() => {
-    const handleManualViewportInteraction = () => {
-      clearTurnSurfaceRestoreFrames();
-      props.onUserScrollStart("unknown");
-    };
-    window.addEventListener(CONVERSATION_MANUAL_VIEWPORT_INTERACTION_EVENT, handleManualViewportInteraction);
-    return () => window.removeEventListener(CONVERSATION_MANUAL_VIEWPORT_INTERACTION_EVENT, handleManualViewportInteraction);
-  }, [clearTurnSurfaceRestoreFrames, props.onUserScrollStart]);
-
   // handleLoadMoreHistory preserves the first visible position while older turns are prepended.
   // handleLoadMoreHistory 在前置更早轮次时保持当前可见位置。
   const handleLoadMoreHistory = React.useCallback(async () => {
@@ -490,31 +451,29 @@ export function ConversationWorkspace(props: {
     if (!conversationId || !element || props.historyLoading) {
       return;
     }
-    const previousScrollHeight = element.scrollHeight;
-    const previousScrollTop = element.scrollTop;
-    const loaded = await props.onLoadMoreHistory(conversationId);
-    if (!loaded) {
-      return;
-    }
-    window.requestAnimationFrame(() => {
-      const nextElement = props.scrollRef.current;
-      if (!nextElement) {
-        return;
-      }
-      const heightDelta = nextElement.scrollHeight - previousScrollHeight;
-      nextElement.scrollTop = previousScrollTop + Math.max(0, heightDelta);
-      props.onScrollStateChange();
-    });
+    await props.onPreserveHistoryPrepend(() => props.onLoadMoreHistory(conversationId));
   }, [
     props.conversation?.id,
     props.historyLoading,
     props.onLoadMoreHistory,
-    props.onScrollStateChange,
+    props.onPreserveHistoryPrepend,
     props.parentConversationId,
     props.scrollRef,
   ]);
 
-  const renderTimelineItem = (timelineItem: ConversationTimelineItem): React.ReactNode => {
+  // commandSessionsRef supplies current runtime truth without invalidating unrelated historical Seats.
+  // commandSessionsRef 提供当前运行时真值，同时不使无关历史 Seat 失效。
+  const commandSessionsRef = React.useRef(props.commandSessions);
+  commandSessionsRef.current = props.commandSessions;
+  // sessionProviderUsageRef supplies live usage to the exact active process Turn.
+  // sessionProviderUsageRef 向精确活动过程 Turn 提供实时用量。
+  const sessionProviderUsageRef = React.useRef(props.sessionProviderUsage);
+  sessionProviderUsageRef.current = props.sessionProviderUsage;
+
+  const renderTimelineItem = React.useCallback((
+    timelineItem: ConversationTimelineItem,
+    seatNowMs: number,
+  ): React.ReactNode => {
     if (timelineItem.kind === "fork-source") {
       return (
         <ConversationForkSourceSeparator
@@ -550,10 +509,10 @@ export function ConversationWorkspace(props: {
           hiddenThinkingBlockIds={props.hiddenThinkingBlockIds}
           parentConversationId={props.parentConversationId}
           sessionRunning={props.sessionRunning}
-          expandedUserPromptIds={userPromptExpansionOverrides}
-          expandedToolPresentationIds={toolPresentationExpansionOverrides}
+          expandedUserPromptIds={userPromptExpansionOverridesRef.current}
+          expandedToolPresentationIds={toolPresentationExpansionOverridesRef.current}
           workspacePath={props.workspacePath}
-          commandSessions={props.commandSessions}
+          commandSessions={commandSessionsRef.current}
           onCopyText={props.onCopyText}
           onEditUserPrompt={props.onEditUserPrompt}
           userPromptEditDisabled={lockedByCompaction}
@@ -574,20 +533,23 @@ export function ConversationWorkspace(props: {
         />
       );
     }
+    // collapseKey is absent only when no authoritative business surface owns this transcript.
+    // collapseKey 仅在没有权威业务界面拥有当前转录时缺失。
+    const collapseKey = processCollapseKey(timelineItem.process);
     return (
       <ConversationProcessGroup
         autoExpandThinkingBlockId={autoExpandThinkingBlockId}
-        collapsedOverride={processCollapseOverrides.get(processCollapseKey(timelineItem.process))}
+        collapsedOverride={collapseKey ? processCollapseOverridesRef.current.get(collapseKey) : undefined}
         hiddenThinkingBlockIds={props.hiddenThinkingBlockIds}
-        nowMs={nowMs}
+        nowMs={seatNowMs}
         parentConversationId={props.parentConversationId}
         process={timelineItem.process}
         sessionRunning={props.sessionRunning}
-        sessionProviderUsage={props.sessionProviderUsage}
-        expandedUserPromptIds={userPromptExpansionOverrides}
-        expandedToolPresentationIds={toolPresentationExpansionOverrides}
+        sessionProviderUsage={sessionProviderUsageRef.current}
+        expandedUserPromptIds={userPromptExpansionOverridesRef.current}
+        expandedToolPresentationIds={toolPresentationExpansionOverridesRef.current}
         workspacePath={props.workspacePath}
-        commandSessions={props.commandSessions}
+        commandSessions={commandSessionsRef.current}
         onCollapsedChange={(collapsed) => handleProcessCollapsedChange(timelineItem.process, collapsed)}
         onCopyText={props.onCopyText}
         onEditUserPrompt={props.onEditUserPrompt}
@@ -608,8 +570,34 @@ export function ConversationWorkspace(props: {
         onTrace={props.onTrace}
       />
     );
-  };
-
+  }, [
+    autoExpandThinkingBlockId,
+    handleProcessCollapsedChange,
+    handleToolPresentationExpandedChange,
+    handleUserPromptExpandedChange,
+    lockedTimelineActionKeys,
+    processCollapseKey,
+    props.conversation?.forkSource?.sourceConversationId,
+    props.hiddenThinkingBlockIds,
+    props.onCopyText,
+    props.onEditUserPrompt,
+    props.onExtractGeneratedMediaAttachments,
+    props.onForkConversation,
+    props.onLoadToolDetail,
+    props.onOpenSubagentPanel,
+    props.onPlanArtifactCancel,
+    props.onPlanArtifactExecute,
+    props.onPlanArtifactSuggest,
+    props.onSelectForkSourceConversation,
+    props.onTrace,
+    props.parentConversationId,
+    props.pendingPlanArtifact,
+    props.resolveComposerAttachmentMedia,
+    props.resolveMediaSourceUrl,
+    props.sessionRunning,
+    props.workspacePath,
+    t,
+  ]);
   return (
     <MarkdownImageWorkspacePathProvider value={props.workspacePath}>
       <ConversationMeasuredCollapseProvider
@@ -620,10 +608,7 @@ export function ConversationWorkspace(props: {
         <section
           className="conversation-panel"
           data-conversation-surface-id={props.conversation?.id ?? props.parentConversationId ?? undefined}
-          onPointerDown={handleConversationPointerDown}
           onScroll={handleConversationScroll}
-          onTouchStart={() => handleConversationUserScrollStart("unknown")}
-          onWheel={handleConversationWheel}
           ref={props.scrollRef}
         >
           <div className="conversation-scroll-content">
@@ -652,22 +637,13 @@ export function ConversationWorkspace(props: {
                   </button>
                 </div>
               ) : null}
-              {turnGroups.map((group) => (
-                <ConversationTurnShell
-                  estimatedHeight={conversationTurnGroupEstimatedHeight(group)}
-                  initialHeight={props.initialTurnHeightsByKey?.[group.key] ?? null}
-                  key={`${timelineCacheScopeKey}:${group.key}`}
-                  onHeightChange={props.onTurnHeightChange}
-                  shellKey={group.key}
-                  surfaceKey={timelineCacheScopeKey}
-                >
-                  {group.items.map((timelineItem) => (
-                    <React.Fragment key={conversationTimelineItemKey(timelineItem)}>
-                      {renderTimelineItem(timelineItem)}
-                    </React.Fragment>
-                  ))}
-                </ConversationTurnShell>
-              ))}
+              <ConversationTurnSeatList
+                cacheScopeKey={timelineCacheScopeKey}
+                renderItem={renderTimelineItem}
+                rowKeys={turnOrder}
+                rows={turnGroupByKey}
+                store={timelineProjectionStore}
+              />
               {props.pendingPlanArtifact && !pendingPlanArtifactAlreadyVisible ? (
                 <PlanArtifactBlock
                   artifact={props.pendingPlanArtifact}
@@ -767,87 +743,6 @@ function conversationPlanArtifactsMatch(
   return left.name === right.name && left.content.trim() === right.content.trim();
 }
 
-// ConversationTurnShell keeps one loaded turn's outer height stable across remounts.
-// ConversationTurnShell 在重新挂载之间保持单个已加载轮次的外壳高度稳定。
-// Parameters: props identifies the surface and turn, supplies initial height guidance, and reports measurements.
-// 参数：props 标识界面与轮次，提供初始高度指引并上报测量值。
-// Returns: one measured section that releases its temporary minimum height after the first measurement.
-// 返回值：一个实测 section，在首次测量后释放临时最小高度。
-function ConversationTurnShell(props: {
-  // Stable surface key used to isolate height memory between conversations.
-  // 用于在不同会话之间隔离高度记忆的稳定界面键。
-  surfaceKey: string;
-  // Stable turn shell key inside the surface.
-  // 界面内部稳定的轮次外壳键。
-  shellKey: string;
-  // Conservative height used before the first real measurement.
-  // 首次真实测量之前使用的保守高度。
-  estimatedHeight: number;
-  // Previously measured height restored for this exact turn shell.
-  // 当前精确轮次外壳此前测量的恢复高度。
-  initialHeight: number | null;
-  // Persists a changed measured height in the owning surface memory.
-  // 将变化后的实测高度保存到所属界面记忆中。
-  onHeightChange?: (surfaceId: string, turnKey: string, height: number) => void;
-  // Rendered turn content.
-  // 渲染出的轮次内容。
-  children: React.ReactNode;
-}) {
-  // minimumHeight stabilizes the first paint with a measured height or the conservative estimate.
-  // minimumHeight 用实测高度或保守估算值稳定首帧绘制。
-  const [minimumHeight, setMinimumHeight] = React.useState<number | null>(
-    props.initialHeight ?? props.estimatedHeight,
-  );
-  // measuredHeightRef lets the observer reject identical measurements without reconnecting.
-  // measuredHeightRef 让观察器在不重连的前提下拒绝相同测量值。
-  const measuredHeightRef = React.useRef<number | null>(props.initialHeight);
-  // shellRef points to the measured turn-shell element.
-  // shellRef 指向被测量的轮次外壳元素。
-  const shellRef = React.useRef<HTMLDivElement | null>(null);
-
-  React.useEffect(() => {
-    const element = shellRef.current;
-    if (!element) {
-      return;
-    }
-    // updateHeight publishes changed measurements and releases the first-paint stabilizer.
-    // updateHeight 发布变化后的测量值，并释放首帧稳定高度。
-    // Parameters: none; the callback measures shellRef's current element.
-    // 参数：无；回调测量 shellRef 当前元素。
-    // Returns: nothing; local state and optional owner memory receive the result.
-    // 返回值：无；结果写入本地状态与可选的所有者记忆。
-    const updateHeight = () => {
-      const nextHeight = Math.ceil(element.getBoundingClientRect().height);
-      if (!Number.isFinite(nextHeight) || nextHeight <= 0) {
-        return;
-      }
-      if (measuredHeightRef.current === nextHeight) {
-        setMinimumHeight(null);
-        return;
-      }
-      measuredHeightRef.current = nextHeight;
-      props.onHeightChange?.(props.surfaceKey, props.shellKey, nextHeight);
-      setMinimumHeight(null);
-    };
-    updateHeight();
-    const observer = new ResizeObserver(updateHeight);
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, [props.onHeightChange, props.shellKey, props.surfaceKey]);
-
-  return (
-    <section
-      className="conversation-turn-shell"
-      data-conversation-row-key={props.shellKey}
-      data-conversation-turn-shell={props.shellKey}
-      ref={shellRef}
-      style={minimumHeight === null ? undefined : { minHeight: minimumHeight }}
-    >
-      {props.children}
-    </section>
-  );
-}
-
 // ConversationForkSourceSeparator renders the display-only source marker for a forked conversation.
 // ConversationForkSourceSeparator 渲染分叉会话的纯展示来源标记。
 function ConversationForkSourceSeparator(props: {
@@ -870,26 +765,11 @@ function ConversationForkSourceSeparator(props: {
   );
 }
 
-// conversationTimelineItemKey returns a stable measurement key for one timeline entry.
-// conversationTimelineItemKey 返回单条时间线记录的稳定测量键。
-function conversationTimelineItemKey(item: ConversationTimelineItem): string {
-  if (item.kind === "fork-source") {
-    return "fork-source";
-  }
-  if (item.kind === "item") {
-    return item.item.renderKey ?? `item:${item.item.id}`;
-  }
-  if (item.kind === "final-assistant-meta") {
-    return `final-assistant-meta:${item.item.renderKey ?? item.item.id}`;
-  }
-  return item.process.renderKey ?? `process:${item.process.id}`;
-}
-
 // groupConversationTimelineItems groups projected rows into stable rendered turns.
 // groupConversationTimelineItems 将已投影行组合为稳定的渲染轮次。
-function groupConversationTimelineItems(items: ConversationTimelineItem[]): ConversationTurnGroup[] {
-  const groups: ConversationTurnGroup[] = [];
-  let current: ConversationTurnGroup | null = null;
+function groupConversationTimelineItems(items: ConversationTimelineItem[]): ConversationTurnProjection[] {
+  const groups: ConversationTurnProjection[] = [];
+  let current: ConversationTurnProjection | null = null;
   const flushCurrent = () => {
     if (!current || current.items.length === 0) {
       current = null;
@@ -925,32 +805,47 @@ function timelineItemStartsConversationTurn(item: ConversationTimelineItem): boo
   return item.kind === "item" && item.item.role === "user";
 }
 
-// conversationTurnGroupEstimatedHeight returns a conservative initial shell height.
-// conversationTurnGroupEstimatedHeight 返回保守的轮次外壳初始高度。
-function conversationTurnGroupEstimatedHeight(group: ConversationTurnGroup): number {
-  return group.items.reduce(
-    (total, item) => total + conversationTimelineItemEstimatedHeight(item),
-    0,
-  );
+// conversationTurnGroupIsRunning reports whether one Turn owns a live process clock.
+// conversationTurnGroupIsRunning 判断单个 Turn 是否拥有正在运行的过程计时器。
+// Parameters: group is the exact ordered timeline projection for one visible Turn.
+// 参数：group 是单个可见 Turn 的精确有序时间线投影。
+// Returns: true only when the Turn contains a process row marked as running.
+// 返回值：仅当该 Turn 包含标记为运行中的过程行时返回 true。
+function conversationTurnGroupIsRunning(group: ConversationTurnProjection): boolean {
+  return group.items.some((item) => item.kind === "process" && item.process.running);
 }
 
-// conversationTimelineItemEstimatedHeight returns a conservative initial height by entry kind.
-// conversationTimelineItemEstimatedHeight 按记录类型返回保守初始高度。
-function conversationTimelineItemEstimatedHeight(item: ConversationTimelineItem): number {
-  if (item.kind === "process") {
-    return CONVERSATION_VIRTUAL_PROCESS_ESTIMATE_PX;
-  }
-  if (item.kind === "fork-source") {
-    return CONVERSATION_VIRTUAL_FORK_SOURCE_ESTIMATE_PX;
-  }
-  if (item.kind === "final-assistant-meta") {
-    return CONVERSATION_VIRTUAL_FINAL_META_ESTIMATE_PX;
-  }
-  return CONVERSATION_VIRTUAL_ITEM_ESTIMATE_PX;
+// conversationTurnProjectionOwnsCommandSession reports whether one Turn renders live terminal state.
+// conversationTurnProjectionOwnsCommandSession 判断单个 Turn 是否渲染实时终端状态。
+// Parameters: group is one exact retained Turn projection.
+// 参数：group 是一个精确保留的 Turn 投影。
+// Returns: true when any direct, process, or guidance block carries a command-session id.
+// 返回值：任意直接、过程或引导块携带命令会话标识时返回 true。
+function conversationTurnProjectionOwnsCommandSession(group: ConversationTurnProjection): boolean {
+  return group.items.some((item) => {
+    if (item.kind === "fork-source") {
+      return false;
+    }
+    if (item.kind === "item" || item.kind === "final-assistant-meta") {
+      return conversationRenderItemOwnsCommandSession(item.item);
+    }
+    return item.process.items.some(conversationRenderItemOwnsCommandSession)
+      || item.process.guidanceItems.some(conversationRenderItemOwnsCommandSession);
+  });
 }
 
-// timelineItemVisibleInMainTranscript filters virtualized rows before height estimation.
-// timelineItemVisibleInMainTranscript 在高度估算前过滤主转录中不可见的虚拟行。
+// conversationRenderItemOwnsCommandSession checks one projected row for terminal runtime identity.
+// conversationRenderItemOwnsCommandSession 检查单个投影行是否包含终端运行时身份。
+// Parameters: item is one direct or grouped transcript render row.
+// 参数：item 是一条直接或分组转录渲染行。
+// Returns: true when at least one block is bound to a command session.
+// 返回值：至少一个块绑定命令会话时返回 true。
+function conversationRenderItemOwnsCommandSession(item: ConversationRenderItem): boolean {
+  return item.blocks.some((block) => Boolean(block.commandSessionId));
+}
+
+// timelineItemVisibleInMainTranscript filters hidden business rows before stable Turn grouping.
+// timelineItemVisibleInMainTranscript 在稳定 Turn 分组前过滤隐藏业务行。
 function timelineItemVisibleInMainTranscript(item: ConversationTimelineItem, hiddenThinkingBlockIds: ReadonlySet<string>): boolean {
   if (item.kind === "fork-source") {
     return true;

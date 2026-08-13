@@ -4509,7 +4509,7 @@
     },
     {
       "operation_id": "alibaba.alibaba_qwen_omni_media_analyze",
-      "operation": "media_analyze",
+      "operation": "image_understand",
       "carrier": "provider_tool",
       "input_resources": ["image", "audio"],
       "output_resources": [],
@@ -5912,7 +5912,7 @@
       "upstream_target_id": "qwen3-asr-flash"
     },
     {
-      "capability": "media_analyze",
+        "capability": "image_understand",
       "credential_profile_ids": [
         "api-key"
       ],
@@ -5988,11 +5988,11 @@
       },
       "service_entry_id": "model-studio-cn",
       "target_id": "model-studio-cn.qwen3.5-omni-plus.media-analyze",
-      "tool_id": "vulcan_media_analyze",
+      "tool_id": "vulcan_image_understand",
       "upstream_target_id": "qwen3.5-omni-plus"
     },
     {
-      "capability": "media_analyze",
+        "capability": "image_understand",
       "credential_profile_ids": [
         "api-key"
       ],
@@ -6068,7 +6068,7 @@
       },
       "service_entry_id": "model-studio-cn",
       "target_id": "model-studio-cn.qwen3.5-omni-flash.media-analyze",
-      "tool_id": "vulcan_media_analyze",
+      "tool_id": "vulcan_image_understand",
       "upstream_target_id": "qwen3.5-omni-flash"
     },
     {
@@ -7565,7 +7565,7 @@
       "upstream_target_id": "qwen3-asr-flash"
     },
     {
-      "capability": "media_analyze",
+      "capability": "image_understand",
       "credential_profile_ids": [
         "api-key"
       ],
@@ -7641,11 +7641,11 @@
       },
       "service_entry_id": "model-studio-singapore",
       "target_id": "model-studio-singapore.qwen3.5-omni-plus.media-analyze",
-      "tool_id": "vulcan_media_analyze",
+      "tool_id": "vulcan_image_understand",
       "upstream_target_id": "qwen3.5-omni-plus"
     },
     {
-      "capability": "media_analyze",
+      "capability": "image_understand",
       "credential_profile_ids": [
         "api-key"
       ],
@@ -7721,7 +7721,7 @@
       },
       "service_entry_id": "model-studio-singapore",
       "target_id": "model-studio-singapore.qwen3.5-omni-flash.media-analyze",
-      "tool_id": "vulcan_media_analyze",
+      "tool_id": "vulcan_image_understand",
       "upstream_target_id": "qwen3.5-omni-flash"
     },
     {

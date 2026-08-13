@@ -959,11 +959,13 @@ pub(crate) fn expand_tool_target_templates(
                 service_entry_id: binding.service_entry_id.clone(),
                 credential_profile_ids: template.credential_profile_ids.clone(),
                 upstream_target_id: binding.model_id.clone(),
+                availability_model_ids_any: BTreeSet::new(),
                 display_name,
                 tool_id: template.tool_id.clone(),
                 capability: template.capability,
                 input_schema: template.input_schema.clone(),
                 input_numeric_product_ranges: template.input_numeric_product_ranges.clone(),
+                extension_profile: template.extension_profile.clone(),
                 output: template.output.clone(),
                 execution: template.execution.clone(),
             });
@@ -1454,6 +1456,7 @@ fn compile_tool_targets(manifest: &ProviderManifestV1) -> Vec<crate::ProviderToo
             },
             credential_profile_ids: target.credential_profile_ids.clone(),
             upstream_target_id: target.upstream_target_id.clone(),
+            availability_model_ids_any: target.availability_model_ids_any.clone(),
             display_name: target.display_name.clone(),
             contract: crate::ProviderToolContract {
                 tool_id: target.tool_id.clone(),
@@ -1461,11 +1464,277 @@ fn compile_tool_targets(manifest: &ProviderManifestV1) -> Vec<crate::ProviderToo
                 capability: target.capability,
                 input_schema: target.input_schema.clone(),
                 input_numeric_product_ranges: target.input_numeric_product_ranges.clone(),
+                extension_profile: target
+                    .extension_profile
+                    .clone()
+                    .or_else(|| synthesize_provider_tool_extension_profile(manifest, target)),
                 output: target.output.clone(),
             },
             execution: target.execution.clone(),
         })
         .collect()
+}
+
+/// Synthesizes one deterministic model-extension profile from an exact native target schema.
+/// 根据精确原生目标 Schema 确定性生成一个模型扩展说明档案。
+///
+/// # Parameters
+/// 参数
+/// `manifest` supplies provider provenance and `target` supplies the already reviewed model-native
+/// schema, description, output contract, and hard product ranges.
+/// `manifest` 提供供应商溯源，`target` 提供已经审核的模型原生 Schema、说明、输出契约与硬乘积约束。
+///
+/// # Returns
+/// 返回值
+/// A complete runtime discovery profile for generative capabilities, or `None` for direct tools.
+/// 为生成类能力返回完整运行时查询档案；直连工具返回 `None`。
+fn synthesize_provider_tool_extension_profile(
+    manifest: &ProviderManifestV1,
+    target: &super::ToolTargetDeclaration,
+) -> Option<crate::ProviderToolExtensionProfile> {
+    if !target.capability.is_model_extension() {
+        return None;
+    }
+    let properties = target
+        .input_schema
+        .get("properties")
+        .and_then(serde_json::Value::as_object);
+    let mut input_modes = BTreeSet::new();
+    if let Some(properties) = properties {
+        for property_name in properties.keys() {
+            let name = property_name.to_ascii_lowercase();
+            if name.contains("image") || name.contains("mask") {
+                input_modes.insert(String::from("image"));
+            }
+            if name.contains("video") {
+                input_modes.insert(String::from("video"));
+            }
+            if name.contains("audio") || name.contains("voice") {
+                input_modes.insert(String::from("audio"));
+            }
+            if name.contains("prompt") || name.contains("text") || name.contains("lyrics") {
+                input_modes.insert(String::from("text"));
+            }
+        }
+    }
+    if input_modes.is_empty() {
+        input_modes.insert(String::from("structured_arguments"));
+    }
+    let resolution_policy = synthesize_provider_tool_resolution_policy(properties).or_else(|| {
+        matches!(
+            target.capability,
+            crate::ProviderToolCapabilityKind::ImageGenerate
+                | crate::ProviderToolCapabilityKind::ImageEdit
+                | crate::ProviderToolCapabilityKind::VideoGenerate
+                | crate::ProviderToolCapabilityKind::VideoEdit
+                | crate::ProviderToolCapabilityKind::VideoExtend
+        )
+        .then_some(crate::ProviderToolResolutionPolicy {
+            mode: crate::ProviderToolResolutionMode::ProviderManaged,
+            presets: Vec::new(),
+            aspect_ratios: Vec::new(),
+            custom_bounds: None,
+        })
+    });
+    let duration_policy = synthesize_provider_tool_duration_policy(properties);
+    let format_policy = synthesize_provider_tool_format_policy(properties, target);
+    let required = target
+        .input_schema
+        .get("required")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .collect::<Vec<_>>();
+    let mut constraints = vec![String::from(
+        "Arguments must satisfy the exact model-specific JSON Schema returned by get_model_extension_parameters.",
+    )];
+    if !required.is_empty() {
+        constraints.push(format!("Required arguments: {}.", required.join(", ")));
+    }
+    if !target.input_numeric_product_ranges.is_empty() {
+        constraints.push(String::from(
+            "Declared width, height, or other numeric factors must satisfy the host-enforced product ranges.",
+        ));
+    }
+    let mut limitations = vec![String::from(
+        "No capability beyond the returned schema and reviewed output contract is implied.",
+    )];
+    if resolution_policy
+        .as_ref()
+        .is_some_and(|policy| policy.mode == crate::ProviderToolResolutionMode::ProviderManaged)
+    {
+        limitations.push(String::from(
+            "The provider controls final output dimensions; requested dimensions are not a pixel guarantee.",
+        ));
+    }
+    let summary = if target.description.trim().is_empty() {
+        format!(
+            "Use the native {} model for the {:?} extension capability.",
+            target.display_name, target.capability
+        )
+    } else {
+        target.description.trim().to_string()
+    };
+    Some(crate::ProviderToolExtensionProfile {
+        summary,
+        characteristics: vec![
+            format!("Native provider model: {}.", target.display_name),
+            format!("Extension capability: {:?}.", target.capability),
+        ],
+        input_modes: input_modes.into_iter().collect(),
+        resolution_policy,
+        duration_policy,
+        format_policy,
+        constraints,
+        limitations,
+        evidence_refs: vec![format!(
+            "manifest:{}#tool_target:{}",
+            manifest.provider_id, target.target_id
+        )],
+    })
+}
+
+/// Derives reviewed resolution behavior from closed schema properties.
+/// 从封闭 Schema 属性推导经过审核的分辨率行为。
+fn synthesize_provider_tool_resolution_policy(
+    properties: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> Option<crate::ProviderToolResolutionPolicy> {
+    let properties = properties?;
+    let presets = ["size", "resolution"]
+        .iter()
+        .filter_map(|name| properties.get(*name))
+        .flat_map(json_schema_string_enum)
+        .map(|value| {
+            let dimensions = parse_resolution_dimensions(value.as_str());
+            crate::ProviderToolResolutionPreset {
+                value,
+                width: dimensions.map(|(width, _)| width),
+                height: dimensions.map(|(_, height)| height),
+            }
+        })
+        .collect::<Vec<_>>();
+    let aspect_ratios = properties
+        .get("aspect_ratio")
+        .into_iter()
+        .flat_map(json_schema_string_enum)
+        .collect::<Vec<_>>();
+    if !presets.is_empty() {
+        return Some(crate::ProviderToolResolutionPolicy {
+            mode: crate::ProviderToolResolutionMode::FixedPresets,
+            presets,
+            aspect_ratios,
+            custom_bounds: None,
+        });
+    }
+    let width = properties.get("width");
+    let height = properties.get("height");
+    if let (Some(width), Some(height)) = (width, height) {
+        let minimum_width = json_schema_u32(width, "minimum")?;
+        let maximum_width = json_schema_u32(width, "maximum")?;
+        let minimum_height = json_schema_u32(height, "minimum")?;
+        let maximum_height = json_schema_u32(height, "maximum")?;
+        let step = json_schema_u32(width, "multipleOf")
+            .or_else(|| json_schema_u32(height, "multipleOf"))
+            .unwrap_or(1);
+        return Some(crate::ProviderToolResolutionPolicy {
+            mode: crate::ProviderToolResolutionMode::BoundedCustom,
+            presets: Vec::new(),
+            aspect_ratios,
+            custom_bounds: Some(crate::ProviderToolResolutionBounds {
+                minimum_width,
+                maximum_width,
+                minimum_height,
+                maximum_height,
+                step,
+                minimum_pixels: None,
+                maximum_pixels: None,
+            }),
+        });
+    }
+    Some(crate::ProviderToolResolutionPolicy {
+        mode: crate::ProviderToolResolutionMode::ProviderManaged,
+        presets: Vec::new(),
+        aspect_ratios,
+        custom_bounds: None,
+    })
+}
+
+/// Derives one duration range from exact schema bounds or enumerated presets.
+/// 从精确 Schema 边界或枚举预设推导时长范围。
+fn synthesize_provider_tool_duration_policy(
+    properties: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> Option<crate::ProviderToolDurationPolicy> {
+    let schema = properties?.get("duration")?;
+    let presets_seconds = schema
+        .get("enum")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_u64)
+        .filter_map(|value| u32::try_from(value).ok())
+        .collect::<Vec<_>>();
+    let minimum_seconds =
+        json_schema_u32(schema, "minimum").or_else(|| presets_seconds.iter().min().copied())?;
+    let maximum_seconds =
+        json_schema_u32(schema, "maximum").or_else(|| presets_seconds.iter().max().copied())?;
+    Some(crate::ProviderToolDurationPolicy {
+        minimum_seconds,
+        maximum_seconds,
+        default_seconds: json_schema_u32(schema, "default"),
+        presets_seconds,
+    })
+}
+
+/// Derives declared request formats and normalized output MIME types.
+/// 推导声明的请求格式与归一化输出 MIME 类型。
+fn synthesize_provider_tool_format_policy(
+    properties: Option<&serde_json::Map<String, serde_json::Value>>,
+    target: &super::ToolTargetDeclaration,
+) -> Option<crate::ProviderToolFormatPolicy> {
+    let input_formats = ["format", "output_format", "response_format"]
+        .into_iter()
+        .filter_map(|name| properties.and_then(|properties| properties.get(name)))
+        .flat_map(json_schema_string_enum)
+        .collect::<Vec<_>>();
+    let output_formats = target.output.mime_types.clone();
+    (!input_formats.is_empty() || !output_formats.is_empty()).then_some(
+        crate::ProviderToolFormatPolicy {
+            input_formats,
+            output_formats,
+            sample_rates_hz: Vec::new(),
+            channel_counts: Vec::new(),
+        },
+    )
+}
+
+/// Extracts exact string enum values from one JSON Schema node.
+/// 从一个 JSON Schema 节点提取精确字符串枚举值。
+fn json_schema_string_enum(schema: &serde_json::Value) -> Vec<String> {
+    schema
+        .get("enum")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .map(str::to_string)
+        .collect()
+}
+
+/// Reads one non-negative 32-bit integer keyword from a JSON Schema node.
+/// 从一个 JSON Schema 节点读取非负 32 位整数关键字。
+fn json_schema_u32(schema: &serde_json::Value, keyword: &str) -> Option<u32> {
+    schema
+        .get(keyword)
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok())
+}
+
+/// Parses an exact `WIDTHxHEIGHT` resolution preset when present.
+/// 在存在时解析精确 `宽x高` 分辨率预设。
+fn parse_resolution_dimensions(value: &str) -> Option<(u32, u32)> {
+    let (width, height) = value.split_once('x')?;
+    Some((width.parse().ok()?, height.parse().ok()?))
 }
 
 /// Compiles one promotion block.

@@ -584,6 +584,137 @@ fn opencode_go_manifest_matches_source_derived_model_contracts() {
     );
 }
 
+/// Verifies APIKEY.FUN exposes only the reviewed credential-scoped model union and media routes.
+/// 验证 APIKEY.FUN 仅暴露已审核的凭据作用域模型并集与媒体路由。
+#[test]
+fn apikeyfun_manifest_is_a_closed_group_intersection() {
+    // text is the exact bundled APIKEY.FUN authority read by production tests.
+    // text 是生产测试读取的精确内置 APIKEY.FUN 权威。
+    let text = load_bundled_manifests()
+        .remove("apikeyfun")
+        .expect("apikeyfun bundled manifest should exist");
+    // document retains presence-sensitive rule and target declarations for structural guards.
+    // document 保留存在性敏感的规则与目标声明用于结构守卫。
+    let document: Value = serde_json::from_str(&text).expect("apikeyfun manifest should parse");
+    assert_eq!(
+        document["services"][0]["model_catalog"]["source_policy"],
+        "discovery_only"
+    );
+    assert_eq!(
+        document["model_defaults"]["catalog_membership_policy"],
+        "declared_only"
+    );
+    assert_eq!(
+        document["model_defaults"]["unknown_model_policy"],
+        "declared_rule_required"
+    );
+    // expectedProtocols is the complete local whitelist paired with its only declared wire route.
+    // expectedProtocols 是完整本地白名单及其唯一声明 Wire 路由。
+    let expected_protocols = [
+        ("gpt-5.6-sol", "openai-responses.v1"),
+        ("gpt-5.6-terra", "openai-responses.v1"),
+        ("gpt-5.6-luna", "openai-responses.v1"),
+        ("gpt-5.5", "openai-responses.v1"),
+        ("gpt-5.4", "openai-responses.v1"),
+        ("gpt-5.3-codex-spark", "openai-responses.v1"),
+        ("claude-opus-5", "anthropic-messages.v1"),
+        ("claude-fable-5", "anthropic-messages.v1"),
+        ("claude-opus-4-8", "anthropic-messages.v1"),
+        ("claude-opus-4-7", "anthropic-messages.v1"),
+        ("claude-opus-4-6", "anthropic-messages.v1"),
+        ("claude-sonnet-5", "anthropic-messages.v1"),
+        ("claude-sonnet-4-6", "anthropic-messages.v1"),
+        ("claude-opus-4-5-20251101", "anthropic-messages.v1"),
+        ("claude-haiku-4-5", "anthropic-messages.v1"),
+        ("grok-4.5", "openai-responses.v1"),
+        ("grok-4.6", "openai-responses.v1"),
+        ("grok-imagine-image", "openai-responses.v1"),
+        ("grok-imagine-image-quality", "openai-responses.v1"),
+        ("grok-imagine-video", "openai-responses.v1"),
+        ("gemini-3.6-flash", "google.gemini.generate_content"),
+        ("gemini-3.5-flash", "google.gemini.generate_content"),
+        ("gemini-3.1-pro", "google.gemini.generate_content"),
+        ("gemini-3.1-flash-lite", "google.gemini.generate_content"),
+        ("gemini-3-flash", "google.gemini.generate_content"),
+        ("glm-5.2", "openai-responses.v1"),
+        ("glm-5.1", "openai-responses.v1"),
+        ("kimi-k3", "anthropic-messages-video.v1"),
+        ("kimi-k2.7-code", "anthropic-messages-video.v1"),
+        ("kimi-k2.6", "anthropic-messages-video.v1"),
+        ("deepseek-v4-pro", "openai-responses.v1"),
+        ("deepseek-v4-flash", "openai-responses.v1"),
+    ]
+    .into_iter()
+    .collect::<BTreeMap<_, _>>();
+    // actualProtocols rejects prefixes and captures every exact discovery-intersection member.
+    // actualProtocols 拒绝前缀并捕获每个精确发现交集成员。
+    let actual_protocols = document["model_rules"]
+        .as_array()
+        .expect("apikeyfun model_rules should be an array")
+        .iter()
+        .map(|rule| {
+            assert_eq!(rule["matcher"]["kind"], "exact");
+            (
+                rule["matcher"]["value"]
+                    .as_str()
+                    .expect("apikeyfun rule should declare an exact model id"),
+                rule["selected_protocol"]
+                    .as_str()
+                    .expect("apikeyfun rule should bind one protocol"),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(actual_protocols, expected_protocols);
+
+    // targets is the exact reviewed extension inventory; the unusable Grok edit id is absent.
+    // targets 是精确已审核扩展清单；不可用的 Grok 编辑标识不存在。
+    let targets = document["tool_targets"]
+        .as_array()
+        .expect("apikeyfun tool_targets should be an array");
+    // targetIds protects the five verified media routes as a closed set.
+    // targetIds 把五条已验证媒体路由保护为封闭集合。
+    let target_ids = targets
+        .iter()
+        .map(|target| {
+            target["target_id"]
+                .as_str()
+                .expect("apikeyfun target should have an id")
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        target_ids,
+        BTreeSet::from([
+            "gpt-image-2.generate",
+            "gpt-image-2.edit",
+            "grok-imagine-image.generate",
+            "grok-imagine-image-quality.generate",
+            "grok-imagine-video.generate",
+        ])
+    );
+    assert!(text.contains("\"availability_model_ids_any\""));
+    assert!(text.contains("\"response_body\": \"binary_resource\""));
+    assert!(text.contains("\"path\": \"/generationConfig/maxOutputTokens\", \"value\": 65536"));
+    assert!(text.contains("\"mapping\": {\"32000\": 32768}"));
+    assert!(text.contains("\"unmatched\": \"keep_literal\""));
+    // referenceBinding guarantees local multi-reference paths are not leaked into the wire body.
+    // referenceBinding 保证本地多参考路径不会泄漏到 Wire 请求正文。
+    let reference_binding = document["operations"]
+        .as_array()
+        .expect("apikeyfun operations should be an array")
+        .iter()
+        .find(|operation| operation["operation_id"] == "apikeyfun.grok-imagine-video.generate")
+        .and_then(|operation| operation["upload_bindings"].as_array())
+        .and_then(|bindings| {
+            bindings
+                .iter()
+                .find(|binding| binding["source_path"] == "/reference_images")
+        })
+        .expect("grok video reference-image upload binding should exist");
+    assert_eq!(reference_binding["item_source_path"], "/path");
+    assert_eq!(reference_binding["item_target_path"], "/url");
+    assert_eq!(reference_binding["remove_source"], true);
+}
+
 /// Verifies migrated provider-tool inventories remain complete and uniquely manifest-owned.
 /// 验证已迁移供应商工具清单保持完整、唯一且仅由 Manifest 持有。
 #[test]
@@ -631,8 +762,8 @@ fn migrated_tool_target_inventories_are_complete_and_unique() {
 /// 验证每个内置系统工具目标只使用通用执行适配器。
 ///
 /// This is the stable R0 guard against restoring a provider-named production adapter after the
-/// 87-target migration. It checks the compiled authority rather than raw JSON spelling.
-/// 这是防止 87 条目标迁移后恢复供应商命名生产适配器的稳定 R0 守卫；它检查编译后的
+/// 92-target inventory. It checks the compiled authority rather than raw JSON spelling.
+/// 这是防止 92 条目标清单恢复供应商命名生产适配器的稳定 R0 守卫；它检查编译后的
 /// 权威，而不是原始 JSON 拼写。
 #[test]
 fn bundled_system_tool_targets_use_only_generic_execution() {
@@ -658,7 +789,7 @@ fn bundled_system_tool_targets_use_only_generic_execution() {
         }
     }
     assert_eq!(
-        target_count, 87,
+        target_count, 92,
         "the complete production target inventory must remain covered"
     );
 }

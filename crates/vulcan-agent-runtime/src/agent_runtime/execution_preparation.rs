@@ -265,6 +265,7 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         public_ai_configuration,
         workspace_root.clone(),
         &request.provider_tool_selections_override,
+        &request.provider_extension_target_sets_override,
         suppress_external_web_search,
     )?;
     after_precheck_trace(

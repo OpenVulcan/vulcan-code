@@ -3978,9 +3978,11 @@ fn apply_response_mapping_step(
         } => {
             ensure_response_body_source(*source)?;
             let source_value = pointer_value(body, source_path).cloned();
-            let mapped = source_value
-                .as_ref()
-                .and_then(|value| value.as_str().and_then(|text| mapping.get(text).cloned()));
+            let mapped = source_value.as_ref().and_then(|value| {
+                projection_scalar_key(value)
+                    .as_deref()
+                    .and_then(|key| mapping.get(key).cloned())
+            });
             match (source_value, mapped, unmatched, default) {
                 (None, _, _, Some(fallback)) => {
                     write_response_json_pointer(body, path, fallback.clone())?;
@@ -4879,9 +4881,11 @@ fn apply_mapping_step(
             default,
         } => {
             let value = projection_source_value(*source, source_path, request, body);
-            let mapped = value
-                .as_ref()
-                .and_then(|value| value.as_str().and_then(|text| mapping.get(text).cloned()));
+            let mapped = value.as_ref().and_then(|value| {
+                projection_scalar_key(value)
+                    .as_deref()
+                    .and_then(|key| mapping.get(key).cloned())
+            });
             match (value, mapped, unmatched, default) {
                 (None, _, _, Some(fallback)) => {
                     write_json_pointer(body, path, fallback.clone())?;
@@ -5190,6 +5194,27 @@ fn projection_source_value(
                 request_field_value(source_path, request)
             }
         }
+    }
+}
+
+/// Converts one bounded JSON scalar into the canonical enum-map lookup key.
+/// 把一个有界 JSON 标量转换为枚举映射使用的规范查找键。
+///
+/// # Parameters
+/// 参数
+/// `value` is the exact request-field or body value selected by the manifest source.
+/// `value` 是 Manifest 来源选中的精确请求字段值或请求体值。
+///
+/// # Returns
+/// 返回值
+/// A stable textual key for strings, numbers, and booleans; arrays, objects, and null are rejected.
+/// 为字符串、数字与布尔值返回稳定文本键；数组、对象与空值不参与映射。
+fn projection_scalar_key(value: &Value) -> Option<String> {
+    match value {
+        Value::String(value) => Some(value.clone()),
+        Value::Number(value) => Some(value.to_string()),
+        Value::Bool(value) => Some(value.to_string()),
+        Value::Null | Value::Array(_) | Value::Object(_) => None,
     }
 }
 
@@ -10693,5 +10718,25 @@ connection: close
         )
         .expect_err("oversized rendered output must fail");
         assert!(output_error.contains("byte limit"), "{output_error}");
+    }
+
+    /// Verifies enum maps use one deterministic key representation for every supported scalar.
+    /// 验证枚举映射为每一种受支持标量使用统一且确定的键表示。
+    #[test]
+    fn projection_scalar_keys_cover_string_number_and_boolean_values() {
+        assert_eq!(
+            projection_scalar_key(&json!("32000")),
+            Some(String::from("32000"))
+        );
+        assert_eq!(
+            projection_scalar_key(&json!(32000)),
+            Some(String::from("32000"))
+        );
+        assert_eq!(
+            projection_scalar_key(&json!(true)),
+            Some(String::from("true"))
+        );
+        assert_eq!(projection_scalar_key(&Value::Null), None);
+        assert_eq!(projection_scalar_key(&json!([32000])), None);
     }
 }

@@ -13,6 +13,7 @@ function targetFixture(
   return {
     connectionId,
     connectionDisplayName: connectionId,
+    manifestSourceLayer: "bundled",
     target: {
       target_id: targetId,
       provider_id: "provider",

@@ -123,6 +123,9 @@ export interface ConversationRenderItem {
   // Original transcript message used for timing and fallback projection.
   // 用于耗时与兜底投影的原始转录消息。
   sourceMessage?: ConversationMessage;
+  // Exact immutable transcript messages that contributed content to this projected row.
+  // 为当前投影行贡献内容的精确不可变转录消息集合。
+  sourceMessages: readonly ConversationMessage[];
   // Original user message when this row is a user bubble.
   // 当该行为用户气泡时对应的原始用户消息。
   userMessage?: ConversationMessage;
@@ -134,8 +137,8 @@ export interface ConversationProcessRenderItem {
   // Stable process row identifier.
   // 稳定过程行标识。
   id: string;
-  // Stable render-instance key used by virtual measurement and React reconciliation.
-  // 虚拟测量与 React 协调使用的稳定渲染实例键。
+  // Stable render-instance key used by Turn projection and React reconciliation.
+  // Turn 投影与 React 协调使用的稳定渲染实例键。
   renderKey?: string;
   // Process rows that belong to the current turn before final assistant output.
   // 属于当前轮次最终助手输出前的过程行。

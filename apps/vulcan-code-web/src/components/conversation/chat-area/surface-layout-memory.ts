@@ -26,20 +26,14 @@ export interface ConversationSurfaceLayoutMemory {
   // Stores one transcript expansion state.
   // 保存一条转录展开状态。
   writeExpandedState: (surfaceId: string, state: ConversationSurfaceExpandedState) => void;
-  // Stores one measured turn-shell height.
-  // 保存一条轮次外壳实测高度。
-  writeTurnHeight: (surfaceId: string, turnKey: string, height: number) => void;
-  // Removes measured heights for turns no longer present in one surface.
-  // 删除单个界面中已不存在轮次的实测高度。
-  retainTurnHeights: (surfaceId: string, liveTurnKeys: ReadonlySet<string>) => void;
 }
 
 // useConversationSurfaceLayoutMemory owns the runtime restore registry for conversation and subagent surfaces.
 // useConversationSurfaceLayoutMemory 管理会话与子代理界面的运行期恢复注册表。
 // Parameters: options provides the authoritative set of live surface ids used for pruning.
 // 参数：options 提供用于清理的权威存活界面标识集合。
-// Returns: stable typed operations for scroll, expansion state, and turn-shell height memory.
-// 返回值：滚动、展开状态与轮次外壳高度记忆的稳定类型化操作。
+// Returns: stable typed operations for semantic scroll and expansion-state memory.
+// 返回值：语义滚动与展开状态记忆的稳定类型化操作。
 export function useConversationSurfaceLayoutMemory(
   options: UseConversationSurfaceLayoutMemoryOptions,
 ): ConversationSurfaceLayoutMemory {
@@ -97,8 +91,8 @@ export function useConversationSurfaceLayoutMemory(
   }, []);
   // writeScroll stores the latest viewport restoration point.
   // writeScroll 保存最近的视口恢复点。
-  // Parameters: surfaceId selects the record; snapshot contains the exact viewport anchor or bottom distance.
-  // 参数：surfaceId 选择记录；snapshot 包含精确视口锚点或底部距离。
+  // Parameters: surfaceId selects the record; snapshot contains exact anchor, native position, and tail ownership.
+  // 参数：surfaceId 选择记录；snapshot 包含精确锚点、原生位置与尾部所有权。
   // Returns: nothing; the snapshot is retained in runtime memory.
   // 返回值：无；快照保留在运行期内存中。
   const writeScroll = React.useCallback((surfaceId: string, snapshot: ConversationScrollSnapshot): void => {
@@ -120,55 +114,9 @@ export function useConversationSurfaceLayoutMemory(
         : { ...current, expandedState: state }
     ));
   }, [update]);
-  // writeTurnHeight stores one finite positive shell height when its value changed.
-  // writeTurnHeight 仅在有限正高度变化时保存轮次外壳高度。
-  // Parameters: surfaceId and turnKey select the exact record; height is the measured pixel height.
-  // 参数：surfaceId 与 turnKey 选择精确记录；height 是实测像素高度。
-  // Returns: nothing; invalid or unchanged measurements leave the registry unchanged.
-  // 返回值：无；无效或未变测量值保持注册表不变。
-  const writeTurnHeight = React.useCallback((surfaceId: string, turnKey: string, height: number): void => {
-    if (!turnKey || !Number.isFinite(height) || height <= 0) {
-      return;
-    }
-    update(surfaceId, (current) => (
-      current.turnHeightsByKey[turnKey] === height
-        ? current
-        : {
-            ...current,
-            turnHeightsByKey: {
-              ...current.turnHeightsByKey,
-              [turnKey]: height,
-            },
-          }
-    ));
-  }, [update]);
-  // retainTurnHeights removes stale turn keys without allocating records for unseen surfaces.
-  // retainTurnHeights 删除过期轮次键，且不为未见界面分配记录。
-  // Parameters: surfaceId selects the record; liveTurnKeys is the authoritative rendered-turn key set.
-  // 参数：surfaceId 选择记录；liveTurnKeys 是权威已渲染轮次键集合。
-  // Returns: nothing; the record changes only when at least one stored turn disappeared.
-  // 返回值：无；仅当至少一个已保存轮次消失时修改记录。
-  const retainTurnHeights = React.useCallback((surfaceId: string, liveTurnKeys: ReadonlySet<string>): void => {
-    update(surfaceId, (current) => {
-      // retainedEntries contains only measurements whose turn keys still exist.
-      // retainedEntries 仅包含轮次键仍存在的测量值。
-      const retainedEntries = Object.entries(current.turnHeightsByKey)
-        .filter(([turnKey]) => liveTurnKeys.has(turnKey));
-      if (retainedEntries.length === Object.keys(current.turnHeightsByKey).length) {
-        return current;
-      }
-      return {
-        ...current,
-        turnHeightsByKey: Object.fromEntries(retainedEntries),
-      };
-    });
-  }, [update]);
-
   return {
     read,
-    retainTurnHeights,
     writeScroll,
     writeExpandedState,
-    writeTurnHeight,
   };
 }

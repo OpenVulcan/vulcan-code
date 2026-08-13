@@ -1157,6 +1157,9 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
                     .collect()
             },
         ),
+        provider_extension_target_sets_override: runtime_state
+            .provider_tool_settings_initialized
+            .then(|| runtime_state.provider_extension_target_sets.clone()),
         subagent_prompt_context: None,
         task_session_store_root: None,
         session_title: input.start.session_title,

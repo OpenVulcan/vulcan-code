@@ -43,8 +43,8 @@ export interface CommandExecutionPresentation {
   // Discriminator for future presentation adapters.
   // 供未来展示适配器使用的判别字段。
   kind: "command_execution";
-  // Stable id used for expansion state across virtualized remounts.
-  // 用于跨虚拟滚动重挂保持展开状态的稳定标识。
+  // Stable id used for expansion state across ordinary remounts.
+  // 用于跨普通重新挂载保持展开状态的稳定标识。
   id: string;
   // Command text shown in both collapsed and expanded states.
   // 折叠与展开状态都会展示的命令文本。
@@ -192,8 +192,8 @@ export interface MarkdownToolPresentation {
   // Discriminator for Markdown-output presentation cards.
   // Markdown 输出展示卡片的判别字段。
   kind: "markdown_tool_output";
-  // Stable id used for expansion state across virtualized remounts.
-  // 用于跨虚拟滚动重挂保持展开状态的稳定标识。
+  // Stable id used for expansion state across ordinary remounts.
+  // 用于跨普通重新挂载保持展开状态的稳定标识。
   id: string;
   // Exact tool id that selected this presentation adapter.
   // 选择该展示适配器的精确工具标识。
@@ -221,8 +221,8 @@ export interface LuaExecutionPresentation {
   // Discriminator for the dedicated Lua execution card.
   // 专用 Lua 执行卡片的判别字段。
   kind: "lua_execution";
-  // Stable id used for expansion state across virtualized remounts.
-  // 用于跨虚拟滚动重挂保持展开状态的稳定标识。
+  // Stable id used for expansion state across ordinary remounts.
+  // 用于跨普通重新挂载保持展开状态的稳定标识。
   id: string;
   // Exact public tool id that produced the execution.
   // 生成本次执行的精确公开工具标识。
@@ -282,8 +282,8 @@ export interface AskQuestionPresentation {
   // Discriminator for ask/question presentation cards.
   // ask/question 展示卡片的判别字段。
   kind: "ask_question";
-  // Stable id used for expansion state across virtualized remounts.
-  // 用于跨虚拟滚动重挂保持展开状态的稳定标识。
+  // Stable id used for expansion state across ordinary remounts.
+  // 用于跨普通重新挂载保持展开状态的稳定标识。
   id: string;
   // Hidden detail reference carrying completed structured answers.
   // 承载完成态结构化答案的隐藏详情引用。
@@ -328,8 +328,8 @@ export interface SubagentOrchestrationPresentation {
   // Discriminator for subagent orchestration cards.
   // 子代理调度卡片的判别字段。
   kind: "subagent_orchestration";
-  // Stable id used for expansion state across virtualized remounts.
-  // 用于跨虚拟滚动重挂保持展开状态的稳定标识。
+  // Stable id used for expansion state across ordinary remounts.
+  // 用于跨普通重新挂载保持展开状态的稳定标识。
   id: string;
   // Current compact display state.
   // 当前紧凑展示状态。

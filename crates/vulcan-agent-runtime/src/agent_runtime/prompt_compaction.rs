@@ -31,7 +31,11 @@ use crate::provider_config::{
 use crate::tooling::CommandSessionRuntime;
 use async_stream::stream;
 use futures_util::{StreamExt, stream::Stream};
-use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::PathBuf,
+    sync::Arc,
+};
 use vulcan_ai_contract::{
     AiErrorCategory, AiExecutionRequest, AiMessage, AiOperation, ContentItem, MessageRole,
     NativeToolKind, ReasoningOutputPolicy, ToolDefinition,
@@ -117,6 +121,10 @@ pub struct PromptCompactionLaunchContext {
     /// 按语义能力索引的可选供应商工具选择。
     pub provider_tool_selections_override:
         Option<BTreeMap<String, SessionProviderToolTargetSelection>>,
+    /// Optional model-extension target sets captured from the source turn.
+    /// 从来源回合捕获的可选模型扩展目标集合。
+    pub provider_extension_target_sets_override:
+        Option<BTreeMap<String, BTreeSet<SessionProviderToolTargetSelection>>>,
     /// Optional child-agent prompt context captured by the source turn.
     /// 来源回合捕获的可选子代理提示词上下文。
     pub subagent_prompt_context: Option<ExecutionSubagentPromptContext>,
@@ -169,6 +177,7 @@ impl Default for PromptCompactionLaunchContext {
             runtime_policy: ExecutionRuntimePolicy::main_session(),
             agent_prompt_snapshot: None,
             provider_tool_selections_override: None,
+            provider_extension_target_sets_override: None,
             subagent_prompt_context: None,
             task_session_store_root: None,
             output_style_snapshot: None,
@@ -204,6 +213,9 @@ impl PromptCompactionLaunchContext {
             runtime_policy: request.runtime_policy,
             agent_prompt_snapshot: request.agent_prompt_snapshot.clone(),
             provider_tool_selections_override: request.provider_tool_selections_override.clone(),
+            provider_extension_target_sets_override: request
+                .provider_extension_target_sets_override
+                .clone(),
             subagent_prompt_context: request.subagent_prompt_context.clone(),
             task_session_store_root: request.task_session_store_root.clone(),
             output_style_snapshot: request.output_style_snapshot.clone(),
@@ -1408,6 +1420,9 @@ fn build_prompt_compaction_launch_request(
         provider_usage_budget_baseline: None,
         provider_usage_context_generation_id: None,
         provider_tool_selections_override: launch_context.provider_tool_selections_override.clone(),
+        provider_extension_target_sets_override: launch_context
+            .provider_extension_target_sets_override
+            .clone(),
         subagent_prompt_context: launch_context.subagent_prompt_context.clone(),
         task_session_store_root: launch_context.task_session_store_root.clone(),
         session_title: session_title.to_string(),

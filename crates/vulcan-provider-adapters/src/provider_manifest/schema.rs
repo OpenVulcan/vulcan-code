@@ -1700,12 +1700,58 @@ pub struct GenericJsonAsyncSuccessFollowUpDeclaration {
     /// Closed bodyless HTTP method used by the follow-up endpoint.
     /// 后续端点使用的封闭无正文 HTTP 方法。
     pub method: GenericJsonAsyncRequestMethod,
-    /// JSON Pointer extracting the follow-up identifier from the successful poll response.
-    /// 从成功轮询响应提取后续请求标识的 JSON Pointer。
-    pub identifier_pointer: String,
-    /// Exact query parameter carrying the extracted identifier.
-    /// 携带所提取标识的精确查询参数。
-    pub identifier_query_parameter: String,
+    /// Closed source of the follow-up identifier.
+    /// 后续请求标识的封闭来源。
+    #[serde(default)]
+    pub identifier_source: GenericJsonAsyncFollowUpIdentifierSource,
+    /// Optional JSON Pointer extracting the follow-up identifier from the successful poll response.
+    /// 从成功轮询响应提取后续请求标识的可选 JSON Pointer。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identifier_pointer: Option<String>,
+    /// Optional exact query parameter carrying the extracted identifier.
+    /// 携带所提取标识的可选精确查询参数。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identifier_query_parameter: Option<String>,
+    /// Whether the extracted identifier is appended as one percent-encoded path segment.
+    /// 是否把提取的标识作为一个经百分号编码的路径段追加。
+    #[serde(default)]
+    pub identifier_in_path: bool,
+    /// Optional stable path segment appended after a path-carried identifier.
+    /// 在通过路径携带的标识之后追加的可选稳定路径段。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identifier_path_suffix: Option<String>,
+    /// Closed response body projection used by the follow-up request.
+    /// 后续请求使用的封闭响应正文投影。
+    #[serde(default)]
+    pub response_body: GenericJsonAsyncFollowUpResponseBody,
+}
+
+/// Closed source for one successful asynchronous follow-up identifier.
+/// 一次成功异步后续请求标识的封闭来源。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GenericJsonAsyncFollowUpIdentifierSource {
+    /// Read the identifier from the successful poll response using a declared JSON Pointer.
+    /// 使用已声明 JSON Pointer 从成功轮询响应读取标识。
+    #[default]
+    ResponsePointer,
+    /// Reuse the frozen provider task identifier returned by task creation.
+    /// 复用任务创建返回的冻结供应商任务标识。
+    ProviderTaskId,
+}
+
+/// Closed response body projection for one successful asynchronous follow-up.
+/// 一次成功异步后续请求的封闭响应正文投影。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GenericJsonAsyncFollowUpResponseBody {
+    /// Decode and project one bounded JSON document.
+    /// 解码并投影一份有界 JSON 文档。
+    #[default]
+    Json,
+    /// Materialize one bounded binary resource from the authenticated response body.
+    /// 从已鉴权响应正文物化一项有界二进制资源。
+    BinaryResource,
 }
 
 /// One bounded public-HTTPS fan-out that preserves submitted identity order.
@@ -1818,6 +1864,10 @@ pub struct ToolTargetDeclaration {
     /// Exact upstream model or service identifier.
     /// 精确的上游模型或服务标识。
     pub upstream_target_id: String,
+    /// Optional catalog model ids of which at least one gates this target.
+    /// 可选目录模型标识；至少一个存在时才开放当前目标。
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub availability_model_ids_any: BTreeSet<String>,
     /// User-visible target name.
     /// 用户可见目标名称。
     pub display_name: String,
@@ -1834,6 +1884,10 @@ pub struct ToolTargetDeclaration {
     /// 位于 AI 可见 JSON Schema 之外的仅宿主可见有界乘积断言。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub input_numeric_product_ranges: Vec<crate::ProviderToolNumericProductRange>,
+    /// Required model-discovery profile for a stable model-extension target.
+    /// 稳定模型扩展目标必需的模型查询说明。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extension_profile: Option<crate::ProviderToolExtensionProfile>,
     /// Exact output contract.
     /// 精确输出契约。
     pub output: ProviderToolOutputContract,
@@ -1883,6 +1937,10 @@ pub struct ToolTargetTemplateDeclaration {
     /// 位于 AI 可见 JSON Schema 之外的仅宿主可见有界乘积断言。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub input_numeric_product_ranges: Vec<crate::ProviderToolNumericProductRange>,
+    /// Required model-discovery profile inherited by every model-extension instance.
+    /// 每个模型扩展实例继承的必需模型查询说明。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extension_profile: Option<crate::ProviderToolExtensionProfile>,
     /// Exact output contract inherited by every instance.
     /// 每个实例继承的精确输出契约。
     pub output: ProviderToolOutputContract,

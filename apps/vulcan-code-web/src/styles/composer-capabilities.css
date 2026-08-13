@@ -170,6 +170,46 @@
   font-size: 12px;
 }
 
+.composer-capability-extension-count {
+  min-width: 18px;
+  height: 18px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--primary) 14%, transparent);
+  color: var(--foreground);
+  font-size: 11px;
+}
+
+.composer-capability-extension-list {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 8px;
+}
+
+.composer-capability-extension-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) minmax(130px, 180px);
+  align-items: center;
+  gap: 10px;
+  padding: 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.composer-capability-extension-copy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.composer-capability-extension-copy small {
+  color: var(--muted-foreground);
+  line-height: 1.4;
+}
+
 .composer-capability-target-row:hover {
   background: var(--accent);
 }

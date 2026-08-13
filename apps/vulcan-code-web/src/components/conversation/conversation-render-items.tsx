@@ -206,8 +206,8 @@ function ConversationToolSequenceGroup(props: {
   // Whether newly grouped live tools may enter the automatic retirement lifecycle.
   // 新成组的实时工具是否允许进入自动收纳生命周期。
   animateRetirement: boolean;
-  // Stable collapse identity for virtualization-safe expansion memory.
-  // 用于虚拟滚动安全展开记忆的稳定折叠标识。
+  // Stable collapse identity for remount-safe expansion memory.
+  // 用于可安全重新挂载展开记忆的稳定折叠标识。
   collapseId: string;
   // Successfully completed tool rows owned by the fold.
   // 折叠区包含的成功完成工具记录。
@@ -228,8 +228,8 @@ function ConversationToolSequenceGroup(props: {
   // t resolves the localized sequence summary.
   // t 解析本地化工具序列摘要。
   const { t } = useI18n();
-  // expanded stores virtualization-safe manual expansion state for this tool sequence.
-  // expanded 保存当前工具序列可安全跨虚拟滚动恢复的手动展开状态。
+  // expanded stores remount-safe manual expansion state for this tool sequence.
+  // expanded 保存当前工具序列可安全重新挂载的手动展开状态。
   const [expanded, setExpanded] = useConversationMeasuredExpansion(props.collapseId, false);
   // firstVisibleAtRef stores client-observed visibility times without triggering renders.
   // firstVisibleAtRef 保存前端观察到的首次显示时间且不触发渲染。

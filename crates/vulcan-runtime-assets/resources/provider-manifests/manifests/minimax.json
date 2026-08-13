@@ -975,7 +975,7 @@
   "operations": [
     {
       "operation_id": "minimax.mini_max_coding_plan_vision",
-      "operation": "media_analyze",
+      "operation": "image_understand",
       "carrier": "provider_tool",
       "input_resources": [],
       "output_resources": [],
@@ -1218,7 +1218,7 @@
   ],
   "tool_targets": [
     {
-      "capability": "media_analyze",
+        "capability": "image_understand",
       "credential_profile_ids": [
         "token-plan-key",
         "token-plan-oauth"
@@ -3209,7 +3209,7 @@
       "upstream_target_id": "S2V-01"
     },
     {
-      "capability": "media_analyze",
+        "capability": "image_understand",
       "credential_profile_ids": [
         "token-plan-key",
         "token-plan-oauth"

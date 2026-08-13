@@ -11,8 +11,10 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { useI18n } from "@/i18n";
+import { isModelExtensionCapability } from "@/lib/provider-tool-capabilities";
 import {
   loadPublicAiSettings,
+  savePublicAiProviderExtensionTargetSet,
   savePublicAiProviderToolCapabilityEnabled,
   savePublicAiProviderToolSelection,
 } from "@/service/settings-actions-service";
@@ -56,8 +58,16 @@ export function ProviderToolSelectionSettingsArea(props: {
   }, []);
 
   const targets = snapshot?.providerToolTargets.filter(
-    (target) => target.target.contract.capability === props.capability,
+    (target) => target.target.contract.capability === props.capability
+      && (!isModelExtensionCapability(props.capability)
+        || target.manifestSourceLayer !== "custom"),
   ) ?? [];
+  // extensionMode selects stable native multi-model configuration for generative capabilities.
+  // extensionMode 为生成类能力选择稳定原生多模型配置。
+  const extensionMode = isModelExtensionCapability(props.capability);
+  // extensionSelections is the complete persisted target set for the current capability.
+  // extensionSelections 是当前能力完整的持久化目标集合。
+  const extensionSelections = snapshot?.providerExtensionTargetSets[props.capability] ?? [];
   const models = uniqueProviderToolModels(targets);
   const defaultSelection = snapshot?.providerToolSelections[props.capability];
   const selectedTarget = targets.find((target) => (
@@ -70,6 +80,26 @@ export function ProviderToolSelectionSettingsArea(props: {
     target.connectionId === defaultSelection?.connection_id
   )) ?? accounts[0] ?? null;
   const enabled = snapshot?.providerToolEnabledCapabilities.includes(props.capability) ?? false;
+
+  // saveExtensionSelections persists one complete native model-extension target set.
+  // saveExtensionSelections 持久化一份完整原生模型扩展目标集合。
+  const saveExtensionSelections = React.useCallback(async (
+    selections: Array<{ connection_id: string; target_id: string }>,
+  ) => {
+    setPending(true);
+    try {
+      const next = await savePublicAiProviderExtensionTargetSet({
+        capability: props.capability,
+        selections,
+      });
+      setSnapshot(next);
+      setError(null);
+    } catch (reason) {
+      setError(errorMessage(reason));
+    } finally {
+      setPending(false);
+    }
+  }, [props.capability]);
 
   // saveSelection persists one exact model-account pair without changing the capability switch.
   // saveSelection 持久化一个精确模型账号组合且不修改能力开关。
@@ -130,6 +160,103 @@ export function ProviderToolSelectionSettingsArea(props: {
         <div className="composer-capability-dialog-empty settings-capability-empty">
           <span>{t("settings.providerTools.noTargets")}</span>
         </div>
+      ) : extensionMode ? (
+        <section className="settings-provider-tool-defaults">
+          <header className="settings-provider-tool-defaults-header">
+            <span>
+              <strong>{t("settings.providerTools.systemDefault")}</strong>
+              <small>选择允许 AI 查询并按需调用的原生扩展模型；工具名保持稳定。</small>
+            </span>
+          </header>
+          <div className="settings-provider-tool-extension-list">
+            {uniqueProviderToolModels(targets).map((model) => {
+              // modelTargets contains every configured account for one native extension model.
+              // modelTargets 包含一个原生扩展模型的全部已配置账号。
+              const modelTargets = targets.filter((target) => (
+                target.target.provider_id === model.target.provider_id
+                && target.target.upstream_target_id === model.target.upstream_target_id
+              ));
+              // selectedExtension resolves the exact selected account for this model.
+              // selectedExtension 解析当前模型精确选中的账号。
+              const selectedExtension = extensionSelections.find((selection) => (
+                modelTargets.some((target) => (
+                  target.connectionId === selection.connection_id
+                  && target.target.target_id === selection.target_id
+                ))
+              ));
+              // selectedExtensionTarget is the browser target paired with the saved selection.
+              // selectedExtensionTarget 是与已保存选择配对的浏览器目标。
+              const selectedExtensionTarget = modelTargets.find((target) => (
+                target.connectionId === selectedExtension?.connection_id
+                && target.target.target_id === selectedExtension.target_id
+              )) ?? modelTargets[0];
+              // profile is reviewed manifest metadata displayed for this native model.
+              // profile 是为当前原生模型显示的已审核清单元数据。
+              const profile = model.target.contract.extension_profile;
+              return (
+                <article className="settings-provider-tool-extension-row" key={`${model.target.provider_id}/${model.target.upstream_target_id}`}>
+                  <input
+                    checked={Boolean(selectedExtension)}
+                    disabled={pending || !profile}
+                    onChange={(event) => {
+                      const retained = extensionSelections.filter((selection) => !modelTargets.some((target) => (
+                        target.connectionId === selection.connection_id
+                        && target.target.target_id === selection.target_id
+                      )));
+                      if (event.currentTarget.checked && selectedExtensionTarget) {
+                        retained.push({
+                          connection_id: selectedExtensionTarget.connectionId,
+                          target_id: selectedExtensionTarget.target.target_id,
+                        });
+                      }
+                      void saveExtensionSelections(retained);
+                    }}
+                    type="checkbox"
+                  />
+                  <span className="settings-provider-tool-extension-copy">
+                    <strong>{model.target.display_name}</strong>
+                    <small>{profile?.summary ?? "缺少已审核模型扩展说明，当前不可选择。"}</small>
+                    {profile?.characteristics?.length ? (
+                      <small>{profile.characteristics.join(" · ")}</small>
+                    ) : null}
+                    {profile?.constraints?.length ? (
+                      <small>约束：{profile.constraints.join("；")}</small>
+                    ) : null}
+                    {profile?.limitations?.length ? (
+                      <small>限制：{profile.limitations.join("；")}</small>
+                    ) : null}
+                  </span>
+                  <Select
+                    disabled={pending || !selectedExtension}
+                    onValueChange={(connectionId) => {
+                      const replacement = modelTargets.find((target) => target.connectionId === connectionId);
+                      if (!replacement) return;
+                      const retained = extensionSelections.filter((selection) => !modelTargets.some((target) => (
+                        target.connectionId === selection.connection_id
+                        && target.target.target_id === selection.target_id
+                      )));
+                      retained.push({
+                        connection_id: replacement.connectionId,
+                        target_id: replacement.target.target_id,
+                      });
+                      void saveExtensionSelections(retained);
+                    }}
+                    value={selectedExtensionTarget?.connectionId ?? ""}
+                  >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {modelTargets.map((target) => (
+                        <SelectItem key={target.connectionId} value={target.connectionId}>
+                          {target.connectionDisplayName}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </article>
+              );
+            })}
+          </div>
+        </section>
       ) : (
         <section className="settings-provider-tool-defaults">
           <header className="settings-provider-tool-defaults-header">
@@ -218,7 +345,10 @@ export function uniqueProviderToolModels(
 ): PublicAiProviderToolTargetSnapshot[] {
   const models = new Map<string, PublicAiProviderToolTargetSnapshot>();
   for (const target of targets) {
-    if (!models.has(target.target.target_id)) models.set(target.target.target_id, target);
+    // modelKey prevents collisions between providers that reuse an upstream model id.
+    // modelKey 防止复用上游模型标识的不同供应商发生冲突。
+    const modelKey = `${target.target.provider_id}/${target.target.upstream_target_id}`;
+    if (!models.has(modelKey)) models.set(modelKey, target);
   }
   return Array.from(models.values()).sort((left, right) => (
     left.target.display_name.localeCompare(right.target.display_name)

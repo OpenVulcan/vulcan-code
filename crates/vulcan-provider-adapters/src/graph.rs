@@ -849,6 +849,18 @@ pub struct ConnectionModelCatalog {
     pub discovery_schema_revision: String,
 }
 
+/// Identifies how one provider-tool capability is exposed to the model.
+/// 标识一种供应商工具能力向模型暴露的方式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderToolExposureMode {
+    /// Registers one explicitly selected target with its native contract.
+    /// 使用目标原生契约注册一个明确选中的目标。
+    DirectSelection,
+    /// Registers one stable facade and resolves among selected native targets at invocation time.
+    /// 注册一个稳定外壳，并在调用时从多个已选原生目标中解析。
+    ModelExtension,
+}
+
 /// Identifies one semantic provider tool capability.
 /// 标识一种语义化供应商工具能力。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -860,9 +872,18 @@ pub enum ProviderToolCapabilityKind {
     /// Extracts structured content from public web pages.
     /// 从公开网页提取结构化内容。
     WebExtract,
-    /// Analyzes one or more media resources.
-    /// 分析一个或多个媒体资源。
+    /// Retired migration sentinel for historical mixed-media analysis selections.
+    /// 历史混合媒体分析选择使用的已退役迁移哨兵。
     MediaAnalyze,
+    /// Understands image content through one explicitly selected target.
+    /// 通过一个明确选中的目标理解图片内容。
+    ImageUnderstand,
+    /// Understands video content through one explicitly selected target.
+    /// 通过一个明确选中的目标理解视频内容。
+    VideoUnderstand,
+    /// Understands audio content through one explicitly selected target.
+    /// 通过一个明确选中的目标理解音频内容。
+    AudioUnderstand,
     /// Generates images.
     /// 生成图片。
     ImageGenerate,
@@ -904,10 +925,68 @@ impl ProviderToolCapabilityKind {
     ///
     /// # Returns
     /// 返回值
-    /// `false` for retired embedding and rerank migration sentinels.
-    /// 对已退役向量与重排迁移哨兵返回 `false`。
+    /// `false` for every retired migration sentinel.
+    /// 对全部已退役迁移哨兵返回 `false`。
     pub const fn is_ai_visible(self) -> bool {
-        !matches!(self, Self::EmbeddingCreate | Self::RerankDocuments)
+        !matches!(
+            self,
+            Self::MediaAnalyze | Self::EmbeddingCreate | Self::RerankDocuments
+        )
+    }
+
+    /// Returns the one closed model-exposure mode for an AI-visible capability.
+    /// 返回 AI 可见能力唯一封闭的模型暴露方式。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The direct or model-extension mode, or `None` for retired sentinels.
+    /// 返回直连或模型扩展模式；已退役哨兵返回 `None`。
+    pub const fn exposure_mode(self) -> Option<ProviderToolExposureMode> {
+        match self {
+            Self::WebSearch
+            | Self::WebExtract
+            | Self::ImageUnderstand
+            | Self::VideoUnderstand
+            | Self::AudioUnderstand => Some(ProviderToolExposureMode::DirectSelection),
+            Self::ImageGenerate
+            | Self::ImageEdit
+            | Self::VideoGenerate
+            | Self::VideoEdit
+            | Self::VideoExtend
+            | Self::SpeechSynthesize
+            | Self::SpeechTranscribe
+            | Self::MusicGenerate
+            | Self::MusicCover => Some(ProviderToolExposureMode::ModelExtension),
+            Self::MediaAnalyze | Self::EmbeddingCreate | Self::RerankDocuments => None,
+        }
+    }
+
+    /// Reports whether this capability uses one directly selected provider target.
+    /// 报告当前能力是否使用一个直接选择的供应商目标。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` only for the five direct-selection capabilities.
+    /// 仅对五项指定直连能力返回 `true`。
+    pub const fn is_direct_selection(self) -> bool {
+        matches!(
+            self.exposure_mode(),
+            Some(ProviderToolExposureMode::DirectSelection)
+        )
+    }
+
+    /// Reports whether this capability uses the stable model-extension facade.
+    /// 报告当前能力是否使用稳定模型扩展外壳。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` only for the nine model-extension capabilities.
+    /// 仅对九项模型扩展能力返回 `true`。
+    pub const fn is_model_extension(self) -> bool {
+        matches!(
+            self.exposure_mode(),
+            Some(ProviderToolExposureMode::ModelExtension)
+        )
     }
 }
 
@@ -959,6 +1038,9 @@ pub enum ProviderToolResourceEncoding {
     /// Raw hexadecimal bytes stored in one JSON string.
     /// 存放在单个 JSON 字符串中的原始十六进制字节。
     Hex,
+    /// Raw authenticated response bytes from one declared asynchronous success follow-up.
+    /// 来自一次已声明异步成功后续请求的原始鉴权响应字节。
+    BinaryBody,
 }
 
 /// Declares one bounded provider-response resource extractor.
@@ -1041,8 +1123,180 @@ pub struct ProviderToolOutputContract {
     pub resource_decoders: Vec<ProviderToolResourceDecoder>,
 }
 
-/// Declares one exact AI-visible tool contract owned by a provider model or service.
-/// 声明由一个供应商模型或服务持有的精确 AI 可见工具契约。
+/// Identifies how an image or video target accepts resolution requests.
+/// 标识图片或视频目标接受分辨率请求的方式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderToolResolutionMode {
+    /// Only reviewed resolution presets may be sent.
+    /// 只允许发送已审核的分辨率预设。
+    FixedPresets,
+    /// Arbitrary dimensions are allowed inside explicit reviewed bounds.
+    /// 允许在明确审核的边界内使用自由尺寸。
+    BoundedCustom,
+    /// The provider decides the final output resolution.
+    /// 最终输出分辨率由供应商决定。
+    ProviderManaged,
+}
+
+/// Describes one exact reviewed resolution preset.
+/// 描述一个经过审核的精确分辨率预设。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderToolResolutionPreset {
+    /// Stable model-facing preset value.
+    /// 面向模型的稳定预设值。
+    pub value: String,
+    /// Exact pixel width when the provider guarantees it.
+    /// 供应商保证精确尺寸时使用的像素宽度。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+    /// Exact pixel height when the provider guarantees it.
+    /// 供应商保证精确尺寸时使用的像素高度。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
+}
+
+/// Declares explicit free-resolution bounds for one reviewed target.
+/// 声明一个已审核目标的明确自由分辨率边界。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderToolResolutionBounds {
+    /// Inclusive minimum width in pixels.
+    /// 像素宽度闭区间下限。
+    pub minimum_width: u32,
+    /// Inclusive maximum width in pixels.
+    /// 像素宽度闭区间上限。
+    pub maximum_width: u32,
+    /// Inclusive minimum height in pixels.
+    /// 像素高度闭区间下限。
+    pub minimum_height: u32,
+    /// Inclusive maximum height in pixels.
+    /// 像素高度闭区间上限。
+    pub maximum_height: u32,
+    /// Required dimension increment.
+    /// 尺寸必须满足的递增步长。
+    pub step: u32,
+    /// Inclusive minimum total pixel count.
+    /// 总像素数量闭区间下限。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minimum_pixels: Option<u64>,
+    /// Inclusive maximum total pixel count.
+    /// 总像素数量闭区间上限。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maximum_pixels: Option<u64>,
+}
+
+/// Declares the reviewed resolution behavior of one image or video extension target.
+/// 声明一个图片或视频扩展目标经过审核的分辨率行为。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderToolResolutionPolicy {
+    /// Closed resolution behavior.
+    /// 封闭的分辨率行为。
+    pub mode: ProviderToolResolutionMode,
+    /// Exact accepted presets.
+    /// 精确允许的预设。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub presets: Vec<ProviderToolResolutionPreset>,
+    /// Exact accepted aspect-ratio values.
+    /// 精确允许的宽高比值。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aspect_ratios: Vec<String>,
+    /// Required bounds when `mode` is `bounded_custom`.
+    /// `mode` 为 `bounded_custom` 时必需的边界。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_bounds: Option<ProviderToolResolutionBounds>,
+}
+
+/// Declares the reviewed duration behavior of one media extension target.
+/// 声明一个媒体扩展目标经过审核的时长行为。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderToolDurationPolicy {
+    /// Inclusive minimum duration in seconds.
+    /// 时长秒数闭区间下限。
+    pub minimum_seconds: u32,
+    /// Inclusive maximum duration in seconds.
+    /// 时长秒数闭区间上限。
+    pub maximum_seconds: u32,
+    /// Default duration in seconds.
+    /// 默认时长秒数。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_seconds: Option<u32>,
+    /// Exact allowed duration presets when the provider does not accept a continuous range.
+    /// 供应商不接受连续区间时允许的精确时长预设。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub presets_seconds: Vec<u32>,
+}
+
+/// Declares reviewed media formats and audio layout details.
+/// 声明经过审核的媒体格式与音频布局详情。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderToolFormatPolicy {
+    /// Accepted input MIME types or provider format identifiers.
+    /// 允许的输入 MIME 类型或供应商格式标识。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub input_formats: Vec<String>,
+    /// Produced output MIME types or provider format identifiers.
+    /// 产生的输出 MIME 类型或供应商格式标识。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub output_formats: Vec<String>,
+    /// Exact supported audio sample rates.
+    /// 精确支持的音频采样率。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sample_rates_hz: Vec<u32>,
+    /// Exact supported audio channel counts.
+    /// 精确支持的音频声道数量。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub channel_counts: Vec<u8>,
+}
+
+/// Describes one reviewed native model-extension target for model-side discovery.
+/// 描述一个供模型查询的已审核原生模型扩展目标。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderToolExtensionProfile {
+    /// Concise model-facing purpose summary.
+    /// 面向模型的简明用途说明。
+    pub summary: String,
+    /// Ordered model characteristics and recommended scenarios.
+    /// 有序的模型特点与推荐场景。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub characteristics: Vec<String>,
+    /// Exact verified input-mode identifiers.
+    /// 精确验证的输入模式标识。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub input_modes: Vec<String>,
+    /// Optional image or video resolution behavior.
+    /// 可选的图片或视频分辨率行为。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolution_policy: Option<ProviderToolResolutionPolicy>,
+    /// Optional media duration behavior.
+    /// 可选的媒体时长行为。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_policy: Option<ProviderToolDurationPolicy>,
+    /// Optional media format behavior.
+    /// 可选的媒体格式行为。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format_policy: Option<ProviderToolFormatPolicy>,
+    /// Hard invocation constraints.
+    /// 调用必须满足的硬约束。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub constraints: Vec<String>,
+    /// Reviewed quality or provider limitations.
+    /// 已审核的质量或供应商限制。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub limitations: Vec<String>,
+    /// Auditable evidence references supporting this profile.
+    /// 支撑该说明的可审计证据引用。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence_refs: Vec<String>,
+}
+
+/// Declares one exact provider-owned target contract.
+/// 声明由一个供应商持有的精确目标契约。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProviderToolContract {
     /// Stable public tool identifier.
@@ -1061,6 +1315,10 @@ pub struct ProviderToolContract {
     /// 在 JSON Schema 默认值之后应用的仅宿主可见有界乘积断言。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub input_numeric_product_ranges: Vec<ProviderToolNumericProductRange>,
+    /// Required discovery profile for stable model-extension targets.
+    /// 稳定模型扩展目标必需的查询说明。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extension_profile: Option<ProviderToolExtensionProfile>,
     /// Closed provider-response normalization contract.
     /// 封闭的供应商响应归一化契约。
     pub output: ProviderToolOutputContract,
@@ -1117,6 +1375,14 @@ pub struct ProviderToolExecutionContract {
     /// Generic execution family driving the transport primitive (plan §16.2).
     /// 驱动传输原语的通用执行族（方案 §16.2）。
     pub execution_kind: ProviderToolExecutionKind,
+    /// Multipart projection required only by multipart execution families.
+    /// 仅 Multipart 执行族需要的 Multipart 投影。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub multipart_request: Option<ProviderToolMultipartRequestContract>,
+    /// Structured SSE decoder required only by SSE execution families.
+    /// 仅 SSE 执行族需要的结构化 SSE 解码器。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sse_events: Option<ProviderToolSseEventContract>,
     /// Exact non-sensitive fixed headers required by this target.
     /// 当前目标要求的精确非敏感固定请求头。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -1192,6 +1458,12 @@ pub enum ProviderToolExecutionKind {
     /// Synchronous JSON request/response execution.
     /// 同步 JSON 请求/响应执行。
     HttpJsonSync,
+    /// JSON request with a bounded structured SSE response.
+    /// JSON 请求与有界结构化 SSE 响应。
+    HttpJsonSse,
+    /// Multipart form request with a bounded structured SSE response.
+    /// Multipart 表单请求与有界结构化 SSE 响应。
+    HttpMultipartSse,
     /// Synchronous binary request or response execution.
     /// 同步二进制请求或响应执行。
     HttpBinarySync,
@@ -1204,6 +1476,58 @@ pub enum ProviderToolExecutionKind {
     /// Stateful Streamable HTTP MCP initialization, notification, and one tool call.
     /// 有状态 Streamable HTTP MCP 初始化、通知与单次工具调用。
     McpHttpCall,
+}
+
+/// Maps one canonical argument to one multipart form part.
+/// 把一个规范参数映射为一个 Multipart 表单部分。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderToolMultipartField {
+    /// Exact root JSON Pointer selecting the canonical argument.
+    /// 选择规范参数的精确根 JSON Pointer。
+    pub argument_path: String,
+    /// Exact multipart field name.
+    /// 精确 Multipart 字段名。
+    pub field_name: String,
+    /// Whether the selected argument is a Data URL file instead of a scalar text field.
+    /// 所选参数是否为 Data URL 文件而非标量文本字段。
+    #[serde(default)]
+    pub file: bool,
+    /// Whether the field must be present after request projection.
+    /// 请求投影后字段是否必须存在。
+    #[serde(default)]
+    pub required: bool,
+}
+
+/// Declares the complete multipart projection for one provider tool target.
+/// 声明一个供应商工具目标的完整 Multipart 投影。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderToolMultipartRequestContract {
+    /// Closed ordered multipart fields; undeclared arguments are never sent.
+    /// 封闭有序 Multipart 字段；未声明参数绝不发送。
+    pub fields: Vec<ProviderToolMultipartField>,
+}
+
+/// Declares one bounded structured SSE event stream.
+/// 声明一条有界结构化 SSE 事件流。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderToolSseEventContract {
+    /// JSON Pointer selecting the event type discriminator.
+    /// 选择事件类型判别器的 JSON Pointer。
+    pub event_type_path: String,
+    /// Non-terminal event types that may be ignored after validation.
+    /// 校验后可忽略的非终止事件类型。
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub nonterminal_event_types: BTreeSet<String>,
+    /// Terminal event types whose complete JSON object is normalized.
+    /// 其完整 JSON 对象会被归一化的终止事件类型。
+    pub terminal_event_types: BTreeSet<String>,
+    /// Whether an optional `[DONE]` record may follow the terminal event.
+    /// 终止事件后是否允许可选 `[DONE]` 记录。
+    #[serde(default)]
+    pub allow_done_record: bool,
 }
 
 /// Describes one provider tool target without merging it with other model contracts.
@@ -1225,6 +1549,10 @@ pub struct ProviderToolTarget {
     /// Exact upstream model or service identifier.
     /// 精确的上游模型或服务标识。
     pub upstream_target_id: String,
+    /// Optional catalog model ids of which at least one must be available on the same credential.
+    /// 可选目录模型标识；同一凭据必须至少存在其中一个模型。
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub availability_model_ids_any: BTreeSet<String>,
     /// User-visible target name.
     /// 用户可见目标名称。
     pub display_name: String,

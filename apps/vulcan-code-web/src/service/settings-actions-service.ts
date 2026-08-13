@@ -527,6 +527,18 @@ export async function savePublicAiProviderToolSelection(request: {
   );
 }
 
+// savePublicAiProviderExtensionTargetSet replaces one complete native extension-model set.
+// savePublicAiProviderExtensionTargetSet 替换一项完整原生扩展模型集合。
+export async function savePublicAiProviderExtensionTargetSet(request: {
+  capability: PublicAiProviderToolCapabilityKind;
+  selections: PublicAiProviderToolTargetSelection[];
+}): Promise<PublicAiSettingsSnapshot> {
+  return serviceClient.request<PublicAiSettingsSnapshot>(
+    "service_save_public_ai_provider_extension_target_set",
+    { request },
+  );
+}
+
 // testPublicAiProviderTool executes one exact settings-row diagnostic without changing defaults.
 // testPublicAiProviderTool 在不修改默认项的情况下执行一个精确设置行诊断。
 export async function testPublicAiProviderTool(request: {
@@ -558,8 +570,8 @@ export async function savePublicAiProviderToolCapabilityEnabled(request: {
   );
 }
 
-// loadPublicAiSessionProviderToolSelections loads the effective single-select targets for one session.
-// loadPublicAiSessionProviderToolSelections 加载单个会话生效的单选目标。
+// loadPublicAiSessionProviderToolSelections loads direct and extension targets for one session.
+// loadPublicAiSessionProviderToolSelections 加载单个会话生效的直连与扩展目标。
 export async function loadPublicAiSessionProviderToolSelections(
   conversationId: string,
 ): Promise<PublicAiSessionProviderToolSettings> {
@@ -569,13 +581,16 @@ export async function loadPublicAiSessionProviderToolSelections(
   );
 }
 
-// savePublicAiSessionProviderToolSelections replaces all session-level single-select targets.
-// savePublicAiSessionProviderToolSelections 替换全部会话级单选目标。
+// savePublicAiSessionProviderToolSelections replaces all session-level direct and extension targets.
+// savePublicAiSessionProviderToolSelections 替换全部会话级直连与扩展目标。
 export async function savePublicAiSessionProviderToolSelections(request: {
   conversationId: string;
   enabledCapabilities: PublicAiProviderToolCapabilityKind[];
   selections: Partial<
     Record<PublicAiProviderToolCapabilityKind, PublicAiProviderToolTargetSelection>
+  >;
+  extensionTargetSets: Partial<
+    Record<PublicAiProviderToolCapabilityKind, PublicAiProviderToolTargetSelection[]>
   >;
 }): Promise<PublicAiSessionProviderToolSettings> {
   return serviceClient.request(

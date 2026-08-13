@@ -558,6 +558,8 @@ fn validate_mapping_transformer_contract(
 fn provider_tool_execution_primitive_id(kind: crate::ProviderToolExecutionKind) -> &'static str {
     match kind {
         crate::ProviderToolExecutionKind::HttpJsonSync => "http_json_sync",
+        crate::ProviderToolExecutionKind::HttpJsonSse => "http_json_sse",
+        crate::ProviderToolExecutionKind::HttpMultipartSse => "http_multipart_sse",
         crate::ProviderToolExecutionKind::HttpBinarySync => "http_binary_sync",
         crate::ProviderToolExecutionKind::ConversationMediaAnalyze => "conversation_media_analyze",
         crate::ProviderToolExecutionKind::HttpJsonAsyncPoll => "http_json_async_poll",
@@ -4278,6 +4280,13 @@ fn validate_operation_closure(
             target_path.as_str(),
             errors,
         );
+        validate_provider_tool_extension_profile(
+            target.capability,
+            target.extension_profile.as_ref(),
+            target_path.as_str(),
+            ownership,
+            errors,
+        );
         validate_provider_tool_output_contract(
             &target.output,
             format!("{target_path}.output").as_str(),
@@ -4345,6 +4354,56 @@ fn validate_provider_tool_execution_contract(
             format!("{execution_path}.adapter"),
             "the asynchronous JSON execution family requires the installed generic JSON adapter",
         ));
+    }
+    let is_sse = matches!(
+        execution.execution_kind,
+        crate::ProviderToolExecutionKind::HttpJsonSse
+            | crate::ProviderToolExecutionKind::HttpMultipartSse
+    );
+    if is_sse != execution.sse_events.is_some() {
+        errors.push(ManifestValidationError::new(
+            "provider_tool_sse_contract_mismatch",
+            format!("{execution_path}.sse_events"),
+            "SSE execution families require exactly one structured SSE event contract",
+        ));
+    }
+    let is_multipart =
+        execution.execution_kind == crate::ProviderToolExecutionKind::HttpMultipartSse;
+    if is_multipart != execution.multipart_request.is_some() {
+        errors.push(ManifestValidationError::new(
+            "provider_tool_multipart_contract_mismatch",
+            format!("{execution_path}.multipart_request"),
+            "the multipart SSE execution family requires exactly one multipart request contract",
+        ));
+    }
+    if let Some(events) = execution.sse_events.as_ref() {
+        if !events.event_type_path.starts_with('/')
+            || events.terminal_event_types.is_empty()
+            || events
+                .terminal_event_types
+                .iter()
+                .chain(events.nonterminal_event_types.iter())
+                .any(|event_type| event_type.trim().is_empty())
+        {
+            errors.push(ManifestValidationError::new(
+                "invalid_provider_tool_sse_contract",
+                format!("{execution_path}.sse_events"),
+                "SSE event contracts require a JSON Pointer and non-empty terminal event types",
+            ));
+        }
+    }
+    if let Some(multipart) = execution.multipart_request.as_ref() {
+        if multipart.fields.is_empty()
+            || multipart.fields.iter().any(|field| {
+                !field.argument_path.starts_with('/') || field.field_name.trim().is_empty()
+            })
+        {
+            errors.push(ManifestValidationError::new(
+                "invalid_provider_tool_multipart_contract",
+                format!("{execution_path}.multipart_request"),
+                "multipart contracts require non-empty root JSON Pointers and field names",
+            ));
+        }
     }
     validate_provider_tool_fixed_headers(execution, execution_path, errors);
     validate_provider_tool_mcp_http_call(execution, execution_path, errors);
@@ -4465,6 +4524,13 @@ fn validate_provider_tool_templates(
             template_path.as_str(),
             errors,
         );
+        validate_provider_tool_extension_profile(
+            template.capability,
+            template.extension_profile.as_ref(),
+            template_path.as_str(),
+            ownership,
+            errors,
+        );
         validate_provider_tool_output_contract(
             &template.output,
             format!("{template_path}.output").as_str(),
@@ -4546,6 +4612,185 @@ fn validate_provider_tool_templates(
                     ),
                 ));
             }
+        }
+    }
+}
+
+/// Validates one provider-tool extension profile against its closed exposure mode.
+/// 根据封闭暴露模式校验一份供应商工具扩展说明。
+///
+/// # Parameters
+/// 参数
+/// `capability` selects the exposure mode, `profile` is the optional reviewed description,
+/// `target_path` scopes diagnostics, `ownership` distinguishes system from custom authority, and
+/// `errors` receives every independent validation failure.
+/// `capability` 选择暴露模式，`profile` 是可选的已审核说明，`target_path` 限定诊断范围，
+/// `ownership` 区分系统与自定义权限，`errors` 接收每项独立校验失败。
+///
+/// # Returns
+/// 返回值
+/// This function appends deterministic errors and returns no value.
+/// 本函数追加确定性错误且不返回值。
+fn validate_provider_tool_extension_profile(
+    capability: crate::ProviderToolCapabilityKind,
+    profile: Option<&crate::ProviderToolExtensionProfile>,
+    target_path: &str,
+    ownership: ManifestOwnership,
+    errors: &mut Vec<ManifestValidationError>,
+) {
+    let profile_path = format!("{target_path}.extension_profile");
+    if capability.is_direct_selection() {
+        if profile.is_some() {
+            errors.push(ManifestValidationError::new(
+                "direct_provider_tool_has_extension_profile",
+                profile_path,
+                format!(
+                    "direct-selection capability `{capability:?}` must not declare an extension profile"
+                ),
+            ));
+        }
+        return;
+    }
+    if !capability.is_model_extension() {
+        return;
+    }
+    if ownership == ManifestOwnership::Custom {
+        errors.push(ManifestValidationError::new(
+            "custom_model_extension_not_supported",
+            format!("{target_path}.capability"),
+            format!("custom manifests cannot declare model-extension capability `{capability:?}`"),
+        ));
+    }
+    let Some(profile) = profile else {
+        // System manifests may rely on the compiler's deterministic schema-derived profile.
+        // 系统清单可以依赖编译器根据精确 Schema 确定性生成的说明档案。
+        return;
+    };
+    if profile.summary.trim().is_empty() || profile.summary.chars().count() > MAX_STRING_LEN {
+        errors.push(ManifestValidationError::new(
+            "invalid_provider_tool_extension_summary",
+            format!("{profile_path}.summary"),
+            format!(
+                "extension summary must contain between 1 and {MAX_STRING_LEN} Unicode characters"
+            ),
+        ));
+    }
+    if profile.input_modes.is_empty() {
+        errors.push(ManifestValidationError::new(
+            "missing_provider_tool_extension_input_modes",
+            format!("{profile_path}.input_modes"),
+            "extension profile must declare at least one verified input mode",
+        ));
+    }
+    if profile.evidence_refs.is_empty() {
+        errors.push(ManifestValidationError::new(
+            "missing_provider_tool_extension_evidence",
+            format!("{profile_path}.evidence_refs"),
+            "extension profile must declare at least one auditable evidence reference",
+        ));
+    }
+    for (field, values) in [
+        ("characteristics", &profile.characteristics),
+        ("input_modes", &profile.input_modes),
+        ("constraints", &profile.constraints),
+        ("limitations", &profile.limitations),
+        ("evidence_refs", &profile.evidence_refs),
+    ] {
+        for (index, value) in values.iter().enumerate() {
+            if value.trim().is_empty() || value.chars().count() > MAX_STRING_LEN {
+                errors.push(ManifestValidationError::new(
+                    "invalid_provider_tool_extension_text",
+                    format!("{profile_path}.{field}[{index}]"),
+                    format!(
+                        "extension profile text must contain between 1 and {MAX_STRING_LEN} Unicode characters"
+                    ),
+                ));
+            }
+        }
+    }
+    let visual_capability = matches!(
+        capability,
+        crate::ProviderToolCapabilityKind::ImageGenerate
+            | crate::ProviderToolCapabilityKind::ImageEdit
+            | crate::ProviderToolCapabilityKind::VideoGenerate
+            | crate::ProviderToolCapabilityKind::VideoEdit
+            | crate::ProviderToolCapabilityKind::VideoExtend
+    );
+    if visual_capability && profile.resolution_policy.is_none() {
+        errors.push(ManifestValidationError::new(
+            "missing_provider_tool_resolution_policy",
+            format!("{profile_path}.resolution_policy"),
+            format!(
+                "visual model-extension capability `{capability:?}` requires a resolution policy"
+            ),
+        ));
+    }
+    if let Some(resolution) = profile.resolution_policy.as_ref() {
+        match resolution.mode {
+            crate::ProviderToolResolutionMode::FixedPresets => {
+                if resolution.presets.is_empty() || resolution.custom_bounds.is_some() {
+                    errors.push(ManifestValidationError::new(
+                        "invalid_fixed_resolution_policy",
+                        format!("{profile_path}.resolution_policy"),
+                        "fixed_presets requires at least one preset and forbids custom bounds",
+                    ));
+                }
+            }
+            crate::ProviderToolResolutionMode::BoundedCustom => {
+                let Some(bounds) = resolution.custom_bounds.as_ref() else {
+                    errors.push(ManifestValidationError::new(
+                        "missing_custom_resolution_bounds",
+                        format!("{profile_path}.resolution_policy.custom_bounds"),
+                        "bounded_custom requires explicit resolution bounds",
+                    ));
+                    return;
+                };
+                if bounds.minimum_width == 0
+                    || bounds.minimum_height == 0
+                    || bounds.step == 0
+                    || bounds.minimum_width > bounds.maximum_width
+                    || bounds.minimum_height > bounds.maximum_height
+                    || bounds
+                        .minimum_pixels
+                        .zip(bounds.maximum_pixels)
+                        .is_some_and(|(minimum, maximum)| minimum > maximum)
+                {
+                    errors.push(ManifestValidationError::new(
+                        "invalid_custom_resolution_bounds",
+                        format!("{profile_path}.resolution_policy.custom_bounds"),
+                        "custom resolution bounds must be non-zero ordered ranges",
+                    ));
+                }
+            }
+            crate::ProviderToolResolutionMode::ProviderManaged => {
+                if resolution.custom_bounds.is_some() {
+                    errors.push(ManifestValidationError::new(
+                        "provider_managed_resolution_has_bounds",
+                        format!("{profile_path}.resolution_policy.custom_bounds"),
+                        "provider_managed resolution must not declare custom bounds",
+                    ));
+                }
+            }
+        }
+    }
+    if let Some(duration) = profile.duration_policy.as_ref() {
+        let default_invalid = duration.default_seconds.is_some_and(|value| {
+            value < duration.minimum_seconds || value > duration.maximum_seconds
+        });
+        let preset_invalid = duration
+            .presets_seconds
+            .iter()
+            .any(|value| *value < duration.minimum_seconds || *value > duration.maximum_seconds);
+        if duration.minimum_seconds == 0
+            || duration.minimum_seconds > duration.maximum_seconds
+            || default_invalid
+            || preset_invalid
+        {
+            errors.push(ManifestValidationError::new(
+                "invalid_provider_tool_duration_policy",
+                format!("{profile_path}.duration_policy"),
+                "duration values must remain inside one non-zero ordered range",
+            ));
         }
     }
 }
@@ -5070,6 +5315,7 @@ fn validate_provider_tool_output_contract(
             crate::ProviderToolResourceEncoding::DataUrl
                 | crate::ProviderToolResourceEncoding::Base64
                 | crate::ProviderToolResourceEncoding::Hex
+                | crate::ProviderToolResourceEncoding::BinaryBody
         );
         let url_carrier = matches!(
             decoder.encoding,
@@ -5363,25 +5609,51 @@ fn validate_generic_json_async_lifecycle(
                 "generic asynchronous success follow-up cannot use HTTP DELETE",
             ));
         }
-        if !is_valid_json_pointer_path(follow_up.identifier_pointer.as_str()) {
-            errors.push(ManifestValidationError::new(
-                "invalid_generic_async_follow_up_identifier_pointer",
+        match (
+            follow_up.identifier_source,
+            follow_up.identifier_pointer.as_deref(),
+        ) {
+            (
+                crate::provider_manifest::GenericJsonAsyncFollowUpIdentifierSource::ResponsePointer,
+                Some(pointer),
+            ) if is_valid_json_pointer_path(pointer) => {}
+            (
+                crate::provider_manifest::GenericJsonAsyncFollowUpIdentifierSource::ProviderTaskId,
+                None,
+            ) => {}
+            _ => errors.push(ManifestValidationError::new(
+                "invalid_generic_async_follow_up_identifier_source",
                 format!("{follow_up_path}.identifier_pointer"),
-                "generic asynchronous success follow-up identifier pointer must be absolute",
-            ));
+                "success follow-up must declare exactly one valid response pointer or reuse the frozen provider task id",
+            )),
         }
-        if follow_up.identifier_query_parameter.is_empty()
-            || !follow_up
-                .identifier_query_parameter
-                .chars()
-                .all(|character| {
-                    character.is_ascii_alphanumeric() || matches!(character, '_' | '-')
-                })
+        match (
+            follow_up.identifier_query_parameter.as_deref(),
+            follow_up.identifier_in_path,
+        ) {
+            (Some(parameter), false)
+                if !parameter.is_empty()
+                    && parameter.chars().all(|character| {
+                        character.is_ascii_alphanumeric() || matches!(character, '_' | '-')
+                    }) => {}
+            (None, true) => {}
+            _ => errors.push(ManifestValidationError::new(
+                "invalid_generic_async_follow_up_identifier_location",
+                format!("{follow_up_path}.identifier_query_parameter"),
+                "generic asynchronous success follow-up identifier must use exactly one valid query parameter or encoded path segment",
+            )),
+        }
+        if let Some(suffix) = follow_up.identifier_path_suffix.as_deref()
+            && (!follow_up.identifier_in_path
+                || suffix.is_empty()
+                || !suffix.chars().all(|character| {
+                    character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.' | '~')
+                }))
         {
             errors.push(ManifestValidationError::new(
-                "invalid_generic_async_follow_up_query_parameter",
-                format!("{follow_up_path}.identifier_query_parameter"),
-                "generic asynchronous success follow-up query parameter must use stable ASCII identifier characters",
+                "invalid_generic_async_follow_up_path_suffix",
+                format!("{follow_up_path}.identifier_path_suffix"),
+                "success follow-up path suffix requires path identifiers and one stable path segment",
             ));
         }
     }
@@ -5596,6 +5868,9 @@ fn provider_tool_capability_name(capability: crate::ProviderToolCapabilityKind) 
         crate::ProviderToolCapabilityKind::WebSearch => "web_search",
         crate::ProviderToolCapabilityKind::WebExtract => "web_extract",
         crate::ProviderToolCapabilityKind::MediaAnalyze => "media_analyze",
+        crate::ProviderToolCapabilityKind::ImageUnderstand => "image_understand",
+        crate::ProviderToolCapabilityKind::VideoUnderstand => "video_understand",
+        crate::ProviderToolCapabilityKind::AudioUnderstand => "audio_understand",
         crate::ProviderToolCapabilityKind::ImageGenerate => "image_generate",
         crate::ProviderToolCapabilityKind::ImageEdit => "image_edit",
         crate::ProviderToolCapabilityKind::VideoGenerate => "video_generate",
@@ -7927,6 +8202,7 @@ mod tests {
                 capability: crate::ProviderToolCapabilityKind::WebSearch,
                 input_schema: serde_json::json!({"type": "string"}),
                 input_numeric_product_ranges: Vec::new(),
+                extension_profile: None,
                 output: target.output,
                 execution,
             },
@@ -8375,11 +8651,13 @@ mod tests {
             service_entry_id: service_entry_id.to_string(),
             credential_profile_ids: BTreeSet::from([String::from("api-key")]),
             upstream_target_id: String::from("search"),
+            availability_model_ids_any: BTreeSet::new(),
             display_name: String::from("Test Search"),
             tool_id: String::from("vulcan_web_search"),
             capability,
             input_schema: serde_json::json!({"type": "object"}),
             input_numeric_product_ranges: Vec::new(),
+            extension_profile: None,
             output: crate::ProviderToolOutputContract {
                 kind: crate::ProviderToolOutputKind::Search,
                 source_path: String::from("results"),
@@ -8394,6 +8672,8 @@ mod tests {
                 authentication: crate::AuthenticationProjection::BearerAuthorization,
                 adapter: crate::ProviderToolAdapterKind::GenericJson,
                 execution_kind,
+                multipart_request: None,
+                sse_events: None,
                 fixed_headers: BTreeMap::new(),
                 start_fixed_headers: BTreeMap::new(),
                 start_conditional_headers: Vec::new(),

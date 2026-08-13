@@ -19,7 +19,7 @@ fn is_false(value: &bool) -> bool {
 
 /// Current schema version for the durable session addon document.
 /// 当前持久化会话附属状态文档的结构版本。
-pub const SESSION_ADDON_SCHEMA_VERSION: u32 = 3;
+pub const SESSION_ADDON_SCHEMA_VERSION: u32 = 4;
 
 /// One stable namespace inside the session addon document.
 /// 会话附属状态文档中的一个稳定命名空间。
@@ -297,11 +297,30 @@ impl<'de> Deserialize<'de> for SessionAddonState {
         }
 
         let raw = RawSessionAddonState::deserialize(deserializer)?;
-        let namespaces = raw
+        let mut namespaces = raw
             .namespaces
             .into_iter()
             .filter(|(namespace, _)| namespace.is_known())
-            .collect();
+            .collect::<BTreeMap<_, _>>();
+        if raw.schema_version < SESSION_ADDON_SCHEMA_VERSION {
+            // Schema 4 intentionally drops the incompatible provider-tool selection payload.
+            // Schema 4 有意丢弃不兼容的 Provider Tool 选择载荷。
+            if let Some(runtime_controls) =
+                namespaces.get_mut(&SessionAddonNamespace::RuntimeControls)
+                && let Some(object) = runtime_controls.value.as_object_mut()
+            {
+                for field in [
+                    "providerToolSelections",
+                    "providerToolEnabledCapabilities",
+                    "providerExtensionTargetSets",
+                    "providerToolSettingsInitialized",
+                    "providerToolSelectionsOverridden",
+                ] {
+                    object.remove(field);
+                }
+                runtime_controls.hash = stable_json_hash(&runtime_controls.value);
+            }
+        }
 
         Ok(Self {
             schema_version: raw.schema_version.max(SESSION_ADDON_SCHEMA_VERSION),
@@ -860,6 +879,11 @@ pub struct SessionRuntimeControls {
     /// 仅为当前会话启用的供应商工具能力。
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub provider_tool_enabled_capabilities: BTreeSet<String>,
+    /// Session-selected native model-extension target sets keyed by extension capability.
+    /// 按扩展能力索引的会话级原生模型扩展目标集合。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub provider_extension_target_sets:
+        BTreeMap<String, BTreeSet<SessionProviderToolTargetSelection>>,
     /// Whether provider tool defaults have been materialized into this session.
     /// 供应商工具默认值是否已经物化到当前会话。
     #[serde(default)]
@@ -897,6 +921,7 @@ impl SessionRuntimeControls {
             provider_tool_enabled_capabilities: runtime_state
                 .provider_tool_enabled_capabilities
                 .clone(),
+            provider_extension_target_sets: runtime_state.provider_extension_target_sets.clone(),
             provider_tool_settings_initialized: runtime_state.provider_tool_settings_initialized,
             provider_tool_selections_overridden: runtime_state.provider_tool_selections_overridden,
         };
@@ -922,6 +947,7 @@ impl SessionRuntimeControls {
         runtime_state.provider_tool_selections = self.provider_tool_selections.clone();
         runtime_state.provider_tool_enabled_capabilities =
             self.provider_tool_enabled_capabilities.clone();
+        runtime_state.provider_extension_target_sets = self.provider_extension_target_sets.clone();
         runtime_state.provider_tool_settings_initialized = self.provider_tool_settings_initialized;
         runtime_state.provider_tool_selections_overridden =
             self.provider_tool_selections_overridden;
@@ -945,6 +971,7 @@ impl SessionRuntimeControls {
             || self.active_temperature.is_some()
             || !self.provider_tool_selections.is_empty()
             || !self.provider_tool_enabled_capabilities.is_empty()
+            || !self.provider_extension_target_sets.is_empty()
             || self.provider_tool_settings_initialized
             || self.provider_tool_selections_overridden
     }

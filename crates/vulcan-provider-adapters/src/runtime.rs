@@ -6161,32 +6161,48 @@ impl PublicAiRuntime {
                         connection.service_entry_id, provider.id
                     )
                 })?;
-            for target in
-                Self::resolved_provider_tool_targets_in_generation(generation, provider.id.as_str())
-            {
+            let targets = Self::resolved_provider_tool_targets_in_generation(
+                generation,
+                provider.id.as_str(),
+            );
+            if targets.is_empty() {
+                continue;
+            }
+            let provider_manifest = generation
+                .manifests
+                .manifest(provider.id.as_str())
+                .ok_or_else(|| {
+                    format!(
+                        "Provider tool manifest for `{}` disappeared from the frozen generation.",
+                        provider.id
+                    )
+                })?;
+            for target in targets {
                 if target.contract.capability.is_ai_visible()
                     && target.service_entry_id == entry.id
                     && provider_tool_target_allows_credential(
                         &target,
                         connection.credential_profile_id.as_str(),
                     )
-                    && generation
-                        .manifests
-                        .manifest(provider.id.as_str())
-                        .is_none_or(|manifest| {
-                            provider_tool_template_target_is_enabled(
-                                configuration,
-                                provider.id.as_str(),
-                                entry.id.as_str(),
-                                connection.credential_profile_id.as_str(),
-                                manifest,
-                                target.target_id.as_str(),
-                            )
-                        })
+                    && provider_tool_target_availability_catalog_matches(
+                        &target,
+                        generation
+                            .activated_effective_catalogs
+                            .get(connection.id.as_str()),
+                    )
+                    && provider_tool_template_target_is_enabled(
+                        configuration,
+                        provider.id.as_str(),
+                        entry.id.as_str(),
+                        connection.credential_profile_id.as_str(),
+                        provider_manifest,
+                        target.target_id.as_str(),
+                    )
                 {
                     available.push(AvailableProviderToolTarget {
                         connection_id: connection.id.clone(),
                         connection_display_name: connection.display_name.clone(),
+                        manifest_source_layer: provider_manifest.snapshot_provenance.source_layer,
                         target,
                     });
                 }
@@ -6385,7 +6401,7 @@ impl PublicAiRuntime {
     /// 返回值
     /// The normalized result or a controlled resolution, upload, credential, or execution error.
     /// 返回归一化结果，或受控的解析、上传、凭据与执行错误。
-    async fn execute_provider_tool_target_for_owner_in_workspace(
+    pub async fn execute_provider_tool_target_for_owner_in_workspace(
         &self,
         configuration: &PersistedAiConfiguration,
         capability: ProviderToolCapabilityKind,
@@ -7480,6 +7496,17 @@ impl PublicAiRuntime {
                     selection.target_id
                 )
             })?;
+        if !provider_tool_target_availability_catalog_matches(
+            &target,
+            generation
+                .activated_effective_catalogs
+                .get(connection.id.as_str()),
+        ) {
+            return Err(format!(
+                "Provider tool target `{}` is unavailable for the current credential model catalog.",
+                target.target_id
+            ));
+        }
         if !provider_tool_template_target_is_enabled(
             configuration,
             provider.id.as_str(),
@@ -8689,6 +8716,25 @@ impl PublicAiRuntime {
             protocol_binding,
         })
     }
+}
+
+/// Reports whether one target's optional model-catalog gate is satisfied by the same credential.
+/// 判断一个目标的可选模型目录门控是否由同一凭据满足。
+fn provider_tool_target_availability_catalog_matches(
+    target: &ProviderToolTarget,
+    catalog: Option<&ConnectionModelCatalog>,
+) -> bool {
+    if target.availability_model_ids_any.is_empty() {
+        return true;
+    }
+    let Some(catalog) = catalog else {
+        return false;
+    };
+    catalog.models.iter().any(|model| {
+        target
+            .availability_model_ids_any
+            .contains(model.id.as_str())
+    })
 }
 
 /// Borrowed profile references effective for one exact model binding scope.
@@ -10747,6 +10793,9 @@ pub struct AvailableProviderToolTarget {
     /// User-visible credential name.
     /// 用户可见凭据名称。
     pub connection_display_name: String,
+    /// Frozen source layer that owns the selected target contract.
+    /// 持有所选目标契约的冻结来源层。
+    pub manifest_source_layer: crate::provider_manifest::ManifestSourceLayer,
     /// Exact model- or service-specific target contract.
     /// 精确的模型或服务专属目标契约。
     pub target: ProviderToolTarget,
@@ -14647,10 +14696,10 @@ mod tests {
         );
     }
 
-    /// Verifies that a bundled presentation manifest never replaces APIKEY.FUN's legacy route authority.
-    /// 验证内置展示清单绝不会取代 APIKEY.FUN 的旧版路由权威。
+    /// Verifies APIKEY.FUN rejects a discovered model outside the reviewed declaration whitelist.
+    /// 验证 APIKEY.FUN 会拒绝已发现但不在已审核声明白名单中的模型。
     #[test]
-    fn apikeyfun_keeps_legacy_binding_when_manifest_exists() {
+    fn apikeyfun_rejects_discovered_model_outside_declared_whitelist() {
         let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
         let mut configuration = PersistedAiConfiguration::default();
         let mut apikeyfun = connection("apikeyfun-account");
@@ -14685,27 +14734,19 @@ mod tests {
         configuration.set_model_enabled("apikeyfun", model_id, true);
         runtime
             .reapply_model_catalog_overlays(&configuration)
-            .expect("legacy provider catalog should publish");
+            .expect("reviewed provider catalog should publish");
 
-        let selection = runtime
+        let error = runtime
             .resolve_connection_model_selection(
                 &configuration,
                 "apikeyfun-account",
                 "apikeyfun",
                 model_id,
             )
-            .expect("legacy APIKEY.FUN model should resolve");
-        assert_eq!(
-            selection.route.protocol_route.protocol_profile_id,
-            OPENAI_CHAT_PROFILE_ID
-        );
+            .expect_err("undeclared APIKEY.FUN model must not resolve");
         assert!(
-            selection
-                .protocol_binding
-                .as_ref()
-                .is_none_or(|binding| binding.source
-                    != crate::provider_manifest::ModelProtocolBindingSource::SystemManifest),
-            "APIKEY.FUN must not receive a system-manifest model binding before an authoritative mapping exists"
+            error.contains("not present in the effective catalog"),
+            "rejection must identify the exact effective-catalog boundary: {error}"
         );
     }
 

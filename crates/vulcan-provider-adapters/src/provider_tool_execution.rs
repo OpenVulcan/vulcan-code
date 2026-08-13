@@ -254,6 +254,68 @@ pub(crate) async fn execute_provider_tool(
                 )
             })
         }
+        ProviderToolExecutionKind::HttpJsonSse
+            if matches!(
+                target.contract.output.kind,
+                ProviderToolOutputKind::Text | ProviderToolOutputKind::Resources
+            ) =>
+        {
+            let canonical_arguments = arguments;
+            let projected_arguments = crate::execution::project_json_request_profiles(
+                request_profiles,
+                target.upstream_target_id.as_str(),
+                canonical_arguments.clone(),
+            )?;
+            execute_generic_json_sse_request(
+                http,
+                entry,
+                target,
+                secret,
+                &projected_arguments,
+            )
+            .await
+            .and_then(|value| {
+                let body = serde_json::to_string(&value).map_err(|error| {
+                    format!("Provider structured SSE terminal event could not be serialized: {error}")
+                })?;
+                decode_and_project_generic_json_response(
+                    &target.contract.output,
+                    response_profiles,
+                    body.as_str(),
+                    target.contract.tool_id.as_str(),
+                    Some(&canonical_arguments),
+                )
+            })
+        }
+        ProviderToolExecutionKind::HttpMultipartSse
+            if matches!(
+                target.contract.output.kind,
+                ProviderToolOutputKind::Text | ProviderToolOutputKind::Resources
+            ) =>
+        {
+            let canonical_arguments = arguments;
+            let projected_arguments = crate::execution::project_json_request_profiles(
+                request_profiles,
+                target.upstream_target_id.as_str(),
+                canonical_arguments.clone(),
+            )?;
+            execute_generic_multipart_sse_request(http, entry, target, secret, &projected_arguments)
+                .await
+                .and_then(|value| {
+                    let body = serde_json::to_string(&value).map_err(|error| {
+                        format!(
+                            "Provider multipart SSE terminal event could not be serialized: {error}"
+                        )
+                    })?;
+                    decode_and_project_generic_json_response(
+                        &target.contract.output,
+                        response_profiles,
+                        body.as_str(),
+                        target.contract.tool_id.as_str(),
+                        Some(&canonical_arguments),
+                    )
+                })
+        }
         ProviderToolExecutionKind::McpHttpCall
             if matches!(
                 target.contract.output.kind,
@@ -371,6 +433,276 @@ async fn execute_generic_openai_chat_sse_request(
         ));
     }
     decode_generic_openai_chat_sse(response).await
+}
+
+/// Executes one generic JSON request and decodes its declared structured SSE terminal event.
+/// 执行一个通用 JSON 请求并解码其声明的结构化 SSE 终止事件。
+async fn execute_generic_json_sse_request(
+    http: &reqwest::Client,
+    entry: &ServiceEntry,
+    target: &ProviderToolTarget,
+    secret: &CredentialExecutionSecret,
+    body: &Value,
+) -> Result<Value, String> {
+    let url = provider_tool_url(entry, target);
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        reqwest::header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    headers.insert(
+        reqwest::header::ACCEPT,
+        HeaderValue::from_static("text/event-stream"),
+    );
+    insert_declared_tool_headers(&mut headers, target)?;
+    insert_authentication_header(
+        &mut headers,
+        target.execution.authentication,
+        secret.expose_value(),
+    )?;
+    let response = http
+        .post(url.as_str())
+        .headers(headers)
+        .json(body)
+        .send()
+        .await
+        .map_err(|error| format_provider_tool_transport_error("Provider structured SSE", error))?;
+    decode_successful_structured_sse_response(response, target).await
+}
+
+/// Executes one closed multipart request and decodes its declared structured SSE terminal event.
+/// 执行一项封闭 Multipart 请求并解码其声明的结构化 SSE 终止事件。
+async fn execute_generic_multipart_sse_request(
+    http: &reqwest::Client,
+    entry: &ServiceEntry,
+    target: &ProviderToolTarget,
+    secret: &CredentialExecutionSecret,
+    arguments: &Value,
+) -> Result<Value, String> {
+    let contract = target.execution.multipart_request.as_ref().ok_or_else(|| {
+        format!(
+            "Provider multipart SSE target `{}` omitted multipart_request.",
+            target.target_id
+        )
+    })?;
+    let mut form = reqwest::multipart::Form::new();
+    for field in &contract.fields {
+        let value = arguments.pointer(field.argument_path.as_str());
+        if value.is_none() || value.is_some_and(Value::is_null) {
+            if field.required {
+                return Err(format!(
+                    "Provider multipart SSE target `{}` requires argument `{}`.",
+                    target.target_id, field.argument_path
+                ));
+            }
+            continue;
+        }
+        let value = value.expect("checked multipart argument presence");
+        if field.file {
+            let data_url = value.as_str().ok_or_else(|| {
+                format!(
+                    "Provider multipart file argument `{}` must be a Data URL string.",
+                    field.argument_path
+                )
+            })?;
+            let (mime_type, bytes) = decode_bounded_multipart_data_url(data_url)?;
+            let part = reqwest::multipart::Part::bytes(bytes)
+                .file_name(format!("{}.bin", field.field_name))
+                .mime_str(mime_type.as_str())
+                .map_err(|error| {
+                    format!(
+                        "Provider multipart field `{}` has invalid MIME type: {error}",
+                        field.field_name
+                    )
+                })?;
+            form = form.part(field.field_name.clone(), part);
+        } else {
+            let text = match value {
+                Value::String(text) => text.clone(),
+                Value::Bool(value) => value.to_string(),
+                Value::Number(value) => value.to_string(),
+                _ => {
+                    return Err(format!(
+                        "Provider multipart scalar argument `{}` has an unsupported JSON type.",
+                        field.argument_path
+                    ));
+                }
+            };
+            form = form.text(field.field_name.clone(), text);
+        }
+    }
+    let url = provider_tool_url(entry, target);
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        reqwest::header::ACCEPT,
+        HeaderValue::from_static("text/event-stream"),
+    );
+    insert_declared_tool_headers(&mut headers, target)?;
+    insert_authentication_header(
+        &mut headers,
+        target.execution.authentication,
+        secret.expose_value(),
+    )?;
+    let response = http
+        .post(url.as_str())
+        .headers(headers)
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|error| format_provider_tool_transport_error("Provider multipart SSE", error))?;
+    decode_successful_structured_sse_response(response, target).await
+}
+
+/// Decodes one successful response according to a frozen structured SSE declaration.
+/// 根据冻结的结构化 SSE 声明解码一份成功响应。
+async fn decode_successful_structured_sse_response(
+    response: reqwest::Response,
+    target: &ProviderToolTarget,
+) -> Result<Value, String> {
+    let status = response.status();
+    if !status.is_success() {
+        let text = read_bounded_provider_response(response, "Provider structured SSE").await?;
+        return Err(format_http_error(
+            "Provider structured SSE",
+            status.as_u16(),
+            text.as_str(),
+        ));
+    }
+    decode_generic_structured_sse(response, target).await
+}
+
+/// Decodes one bounded declared SSE stream and returns exactly one terminal event object.
+/// 解码一条有界声明式 SSE 流并返回唯一终止事件对象。
+async fn decode_generic_structured_sse(
+    response: reqwest::Response,
+    target: &ProviderToolTarget,
+) -> Result<Value, String> {
+    let contract = target.execution.sse_events.as_ref().ok_or_else(|| {
+        format!(
+            "Provider structured SSE target `{}` omitted sse_events.",
+            target.target_id
+        )
+    })?;
+    let mut stream = response.bytes_stream();
+    let mut pending = Vec::new();
+    let mut terminal = None;
+    let mut received_bytes = 0usize;
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|error| {
+            format!(
+                "Provider structured SSE could not be read: {}",
+                error.without_url()
+            )
+        })?;
+        received_bytes = received_bytes.saturating_add(chunk.len());
+        if received_bytes > PROVIDER_TOOL_RESPONSE_BYTE_LIMIT {
+            return Err(format!(
+                "Provider structured SSE exceeds the {PROVIDER_TOOL_RESPONSE_BYTE_LIMIT} byte limit."
+            ));
+        }
+        pending.extend_from_slice(chunk.as_ref());
+        while let Some(frame_end) = find_sse_frame_end(&pending) {
+            let frame = pending.drain(..frame_end).collect::<Vec<_>>();
+            while pending
+                .first()
+                .is_some_and(|byte| matches!(byte, b'\r' | b'\n'))
+            {
+                pending.remove(0);
+            }
+            let data = sse_frame_data(frame.as_slice())?;
+            let Some(data) = data else {
+                continue;
+            };
+            if data == "[DONE]" {
+                if !contract.allow_done_record || terminal.is_none() {
+                    return Err(String::from(
+                        "Provider structured SSE emitted an unexpected [DONE] record.",
+                    ));
+                }
+                continue;
+            }
+            let value = parse_bounded_provider_json(data.as_str(), "Provider structured SSE")?;
+            let event_type = value
+                .pointer(contract.event_type_path.as_str())
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    format!(
+                        "Provider structured SSE event omitted string discriminator `{}`.",
+                        contract.event_type_path
+                    )
+                })?;
+            if contract.terminal_event_types.contains(event_type) {
+                if terminal.replace(value).is_some() {
+                    return Err(String::from(
+                        "Provider structured SSE emitted multiple terminal events.",
+                    ));
+                }
+            } else if !contract.nonterminal_event_types.contains(event_type) {
+                return Err(format!(
+                    "Provider structured SSE emitted undeclared event type `{event_type}`."
+                ));
+            }
+        }
+    }
+    if !pending.iter().all(u8::is_ascii_whitespace) {
+        return Err(String::from(
+            "Provider structured SSE ended with an incomplete frame.",
+        ));
+    }
+    terminal.ok_or_else(|| String::from("Provider structured SSE returned no terminal event."))
+}
+
+/// Finds the byte index immediately before one CRLF or LF separated SSE frame boundary.
+/// 查找一个由 CRLF 或 LF 分隔的 SSE 帧边界之前的字节索引。
+fn find_sse_frame_end(bytes: &[u8]) -> Option<usize> {
+    bytes
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .or_else(|| bytes.windows(2).position(|window| window == b"\n\n"))
+}
+
+/// Joins all data lines from one SSE frame into one JSON payload.
+/// 把一个 SSE 帧的全部 data 行拼接为一份 JSON 载荷。
+fn sse_frame_data(frame: &[u8]) -> Result<Option<String>, String> {
+    let frame = std::str::from_utf8(frame)
+        .map_err(|_| String::from("Provider structured SSE frame is not UTF-8."))?;
+    let lines = frame
+        .lines()
+        .filter_map(|line| line.strip_prefix("data:"))
+        .map(str::trim)
+        .collect::<Vec<_>>();
+    if lines.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(lines.join("\n")))
+}
+
+/// Decodes one bounded base64 Data URL for a multipart file part.
+/// 解码一个用于 Multipart 文件部分的有界 Base64 Data URL。
+fn decode_bounded_multipart_data_url(data_url: &str) -> Result<(String, Vec<u8>), String> {
+    let payload = data_url
+        .strip_prefix("data:")
+        .ok_or_else(|| String::from("Provider multipart file must use a Data URL."))?;
+    let (metadata, encoded) = payload.split_once(',').ok_or_else(|| {
+        String::from("Provider multipart Data URL omitted its payload separator.")
+    })?;
+    let mime_type = metadata
+        .strip_suffix(";base64")
+        .ok_or_else(|| String::from("Provider multipart Data URL must use base64 encoding."))?;
+    if mime_type.is_empty() {
+        return Err(String::from(
+            "Provider multipart Data URL omitted its MIME type.",
+        ));
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .map_err(|error| format!("Provider multipart Data URL is invalid base64: {error}"))?;
+    if bytes.is_empty() || bytes.len() as u64 > GENERIC_RESOURCE_BYTE_LIMIT {
+        return Err(format!(
+            "Provider multipart file must contain 1 to {GENERIC_RESOURCE_BYTE_LIMIT} decoded bytes."
+        ));
+    }
+    Ok((mime_type.to_string(), bytes))
 }
 
 /// Decodes one bounded OpenAI-compatible Chat SSE response.
@@ -1288,25 +1620,50 @@ async fn poll_generic_json_async_task(
             ));
         }
         let response = if let Some(follow_up) = lifecycle.success_follow_up.as_ref() {
-            let identifier = response
-                .pointer(follow_up.identifier_pointer.as_str())
-                .and_then(Value::as_str)
-                .filter(|value| !value.trim().is_empty())
-                .ok_or_else(|| {
-                    format!(
-                        "Provider task successful response is missing non-empty follow-up identifier at `{}`.",
-                        follow_up.identifier_pointer
-                    )
-                })?;
+            let identifier = match follow_up.identifier_source {
+                crate::provider_manifest::GenericJsonAsyncFollowUpIdentifierSource::ResponsePointer => {
+                    let pointer = follow_up.identifier_pointer.as_deref().ok_or_else(|| {
+                        String::from(
+                            "Provider task success follow-up response pointer is missing.",
+                        )
+                    })?;
+                    response
+                        .pointer(pointer)
+                        .and_then(Value::as_str)
+                        .filter(|value| !value.trim().is_empty())
+                        .ok_or_else(|| {
+                            format!(
+                                "Provider task successful response is missing non-empty follow-up identifier at `{pointer}`."
+                            )
+                        })?
+                }
+                crate::provider_manifest::GenericJsonAsyncFollowUpIdentifierSource::ProviderTaskId => {
+                    provider_task_id
+                }
+            };
             let url = generic_json_async_url(
                 context.entry,
                 context.target,
                 follow_up.endpoint_path.as_str(),
-                Some(follow_up.identifier_query_parameter.as_str()),
-                false,
-                None,
+                follow_up.identifier_query_parameter.as_deref(),
+                follow_up.identifier_in_path,
+                follow_up.identifier_path_suffix.as_deref(),
                 identifier,
             )?;
+            if follow_up.response_body
+                == crate::provider_manifest::GenericJsonAsyncFollowUpResponseBody::BinaryResource
+            {
+                let result = execute_generic_json_async_binary_follow_up(
+                    context.http,
+                    context.target,
+                    context.secret,
+                    follow_up.method,
+                    url,
+                    provider_task_id,
+                )
+                .await?;
+                return Ok(ProviderAsyncTaskPoll::Completed(result));
+            }
             let text = execute_generic_json_async_request(
                 context.http,
                 context.target,
@@ -1682,6 +2039,140 @@ async fn execute_generic_json_async_request(
         return Err(format_http_error(operation, status.as_u16(), text.as_str()));
     }
     Ok(text)
+}
+
+/// Downloads one bounded binary resource from a declared asynchronous success follow-up.
+/// 从已声明的异步成功后续请求下载一项有界二进制资源。
+///
+/// # Parameters
+/// 参数
+/// `http`, `target`, and `secret` are the frozen execution authority; `method` and `url` are
+/// compiled from the bundled manifest; `provider_task_id` scopes the stable output identity.
+/// `http`、`target` 与 `secret` 是冻结的执行权限；`method` 与 `url` 由内置清单编译；
+/// `provider_task_id` 限定稳定输出标识。
+///
+/// # Returns
+/// 返回值
+/// One normalized private resource or a controlled contract, transport, status, MIME, or size
+/// failure.
+/// 返回一项归一化私有资源，或受控的契约、传输、状态、MIME 或大小失败。
+async fn execute_generic_json_async_binary_follow_up(
+    http: &reqwest::Client,
+    target: &ProviderToolTarget,
+    secret: &CredentialExecutionSecret,
+    method: crate::provider_manifest::GenericJsonAsyncRequestMethod,
+    url: reqwest::Url,
+    provider_task_id: &str,
+) -> Result<ProviderToolExecutionResult, String> {
+    let [decoder] = target.contract.output.resource_decoders.as_slice() else {
+        return Err(String::from(
+            "Binary provider task follow-up requires exactly one resource decoder.",
+        ));
+    };
+    if target.contract.output.kind != ProviderToolOutputKind::Resources
+        || decoder.encoding != crate::ProviderToolResourceEncoding::BinaryBody
+        || !decoder.download_host_suffixes.is_empty()
+        || decoder.mime_type_request_path.is_some()
+        || !decoder.mime_types_by_request_value.is_empty()
+        || decoder.optional
+    {
+        return Err(String::from(
+            "Binary provider task follow-up requires one mandatory closed binary-body resource decoder.",
+        ));
+    }
+    let mime_type = decoder
+        .mime_type
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| {
+            String::from("Binary provider task follow-up requires one exact resource MIME type.")
+        })?;
+    let max_bytes = decoder
+        .max_bytes
+        .filter(|value| (1..=GENERIC_RESOURCE_BYTE_LIMIT).contains(value))
+        .ok_or_else(|| {
+            String::from("Binary provider task follow-up has no valid resource byte limit.")
+        })?;
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        reqwest::header::ACCEPT,
+        HeaderValue::from_str(mime_type)
+            .map_err(|_| String::from("Binary provider task follow-up MIME type is invalid."))?,
+    );
+    insert_declared_tool_headers(&mut headers, target)?;
+    insert_authentication_header(
+        &mut headers,
+        target.execution.authentication,
+        secret.expose_value(),
+    )?;
+    let request = match method {
+        crate::provider_manifest::GenericJsonAsyncRequestMethod::Get => http.get(url.clone()),
+        crate::provider_manifest::GenericJsonAsyncRequestMethod::Post => http.post(url.clone()),
+        crate::provider_manifest::GenericJsonAsyncRequestMethod::Delete => http.delete(url.clone()),
+    };
+    let response = request.headers(headers).send().await.map_err(|error| {
+        format_provider_tool_transport_error("Provider task binary follow-up", error)
+    })?;
+    let status = response.status();
+    let response_mime = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .map(str::trim)
+        .map(str::to_ascii_lowercase);
+    if response
+        .content_length()
+        .is_some_and(|length| length > max_bytes)
+    {
+        return Err(format!(
+            "Provider task binary follow-up exceeds the declared {max_bytes} byte limit."
+        ));
+    }
+    let mut bytes = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|error| {
+            format_provider_tool_transport_error("Provider task binary follow-up", error)
+        })?;
+        if (bytes.len() as u64).saturating_add(chunk.len() as u64) > max_bytes {
+            return Err(format!(
+                "Provider task binary follow-up exceeds the declared {max_bytes} byte limit."
+            ));
+        }
+        bytes.extend_from_slice(chunk.as_ref());
+    }
+    if !status.is_success() {
+        let diagnostic = String::from_utf8_lossy(&bytes);
+        return Err(format_http_error(
+            "Provider task binary follow-up",
+            status.as_u16(),
+            diagnostic.as_ref(),
+        ));
+    }
+    if response_mime.as_deref() != Some(mime_type) {
+        return Err(format!(
+            "Provider task binary follow-up returned MIME `{}` instead of declared `{mime_type}`.",
+            response_mime.as_deref().unwrap_or("missing")
+        ));
+    }
+    if bytes.is_empty() {
+        return Err(String::from(
+            "Provider task binary follow-up returned an empty resource body.",
+        ));
+    }
+    let output_prefix = decoder.output_id_prefix.as_deref().unwrap_or("resource");
+    Ok(ProviderToolExecutionResult {
+        upstream_response_id: Some(provider_task_id.to_string()),
+        output: ProviderToolNormalizedOutput::Resources(vec![ProviderToolGeneratedResource {
+            output_id: format!("{output_prefix}-1"),
+            kind: decoder.resource_kind.clone(),
+            mime_type: mime_type.to_string(),
+            bytes: Some(bytes),
+            download_url: None,
+            download_policy: None,
+        }]),
+    })
 }
 
 /// Stable host identity sent during every generic MCP initialization handshake.
@@ -2655,6 +3146,11 @@ fn decode_declared_generic_resource(
             bytes = Some(decoded);
             None
         }
+        crate::ProviderToolResourceEncoding::BinaryBody => {
+            return Err(String::from(
+                "Binary-body resources are valid only for a declared asynchronous success follow-up.",
+            ));
+        }
     };
     // MIME resolution is closed to the Data URL, one literal, or one exact request mapping.
     // MIME 解析封闭为 Data URL、一个字面量或一个精确请求映射。
@@ -3306,6 +3802,51 @@ mod tests {
             .unwrap_or_default()
     }
 
+    /// Verifies APIKEY.FUN video completion resolves the authenticated binary content route.
+    /// 验证 APIKEY.FUN 视频完成流程解析到带鉴权的二进制内容路由。
+    #[test]
+    fn apikeyfun_video_follow_up_builds_exact_content_url() {
+        // catalog is the same bundled authority used by production startup.
+        // catalog 是生产启动流程使用的同一份内置权威目录。
+        let catalog = crate::provider_manifest::load_bundled_resolved_catalog();
+        // manifest owns both the public service origin and video target contract.
+        // manifest 同时持有公共服务源地址与视频目标契约。
+        let manifest = catalog
+            .manifest("apikeyfun")
+            .expect("bundled APIKEY.FUN manifest");
+        // entry is the exact credential-bearing public API service.
+        // entry 是携带凭据的精确公共 API 服务入口。
+        let entry = manifest
+            .descriptor
+            .service_entries
+            .iter()
+            .find(|entry| entry.id == "public-api")
+            .expect("APIKEY.FUN public service entry");
+        // target is the verified asynchronous Grok video generator.
+        // target 是已验证的异步 Grok 视频生成目标。
+        let target = manifest
+            .tool_targets
+            .iter()
+            .find(|target| target.target_id == "grok-imagine-video.generate")
+            .expect("APIKEY.FUN Grok video target");
+        // url must match GET /v1/videos/{request_id}/content without query fallback.
+        // url 必须精确匹配 GET /v1/videos/{request_id}/content，且不使用查询参数兜底。
+        let url = generic_json_async_url(
+            entry,
+            target,
+            "/videos",
+            None,
+            true,
+            Some("content"),
+            "request-123",
+        )
+        .expect("video content URL should resolve");
+        assert_eq!(
+            url.as_str(),
+            "https://api.apikey.fun/v1/videos/request-123/content"
+        );
+    }
+
     /// Verifies a bundled generic target enforces its host-only numeric product range.
     /// 验证内置通用目标会执行其仅宿主可见的数值乘积区间。
     #[test]
@@ -3815,6 +4356,8 @@ mod tests {
                     matches!(
                         target.execution.execution_kind,
                         ProviderToolExecutionKind::HttpJsonSync
+                            | ProviderToolExecutionKind::HttpJsonSse
+                            | ProviderToolExecutionKind::HttpMultipartSse
                             | ProviderToolExecutionKind::HttpBinarySync
                             | ProviderToolExecutionKind::ConversationMediaAnalyze
                             | ProviderToolExecutionKind::HttpJsonAsyncPoll

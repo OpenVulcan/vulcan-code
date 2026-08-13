@@ -21,13 +21,10 @@ interface ConversationMeasuredCollapseContextValue {
   // Updates the expansion state for one collapse id.
   // 更新单个折叠标识的展开状态。
   setExpanded: (collapseId: string, expanded: boolean) => void;
-  // Updates stable metrics for one collapse id.
-  // 更新单个折叠标识的稳定测量数据。
-  setMetrics: (collapseId: string, metrics: Partial<ConversationMeasuredCollapseMemory>) => void;
 }
 
-// ConversationMeasuredCollapseContext stores per-surface measured collapse state.
-// ConversationMeasuredCollapseContext 保存单界面的折叠测量状态。
+// ConversationMeasuredCollapseContext stores per-surface collapse expansion memory.
+// ConversationMeasuredCollapseContext 保存单界面的折叠展开记忆。
 const ConversationMeasuredCollapseContext = React.createContext<ConversationMeasuredCollapseContextValue | null>(null);
 
 // ConversationMeasuredCollapseProviderProps configures one transcript collapse-memory scope.
@@ -47,8 +44,8 @@ export interface ConversationMeasuredCollapseProviderProps {
   children: React.ReactNode;
 }
 
-// ConversationMeasuredCollapseProvider owns measured collapse state for one transcript surface.
-// ConversationMeasuredCollapseProvider 持有单个转录界面的折叠测量状态。
+// ConversationMeasuredCollapseProvider owns collapse expansion memory for one transcript surface.
+// ConversationMeasuredCollapseProvider 持有单个转录界面的折叠展开记忆。
 export function ConversationMeasuredCollapseProvider(props: ConversationMeasuredCollapseProviderProps) {
   const { children, initialMemory, onMemoryChange, scopeId } = props;
   const [memory, setMemory] = React.useState<ConversationMeasuredCollapseMap>(() => ({ ...initialMemory }));
@@ -85,40 +82,20 @@ export function ConversationMeasuredCollapseProvider(props: ConversationMeasured
   const getMemory = React.useCallback((collapseId: string) => memory[collapseId] ?? null, [memory]);
   const setExpanded = React.useCallback((collapseId: string, expanded: boolean) => {
     updateMemory((current) => {
-      const previous = current[collapseId] ?? {};
-      if (previous.expanded === expanded) {
+      const previous = current[collapseId];
+      if (previous?.expanded === expanded) {
         return current;
       }
       return {
         ...current,
-        [collapseId]: {
-          ...previous,
-          expanded,
-        },
-      };
-    });
-  }, [updateMemory]);
-  const setMetrics = React.useCallback((collapseId: string, metrics: Partial<ConversationMeasuredCollapseMemory>) => {
-    updateMemory((current) => {
-      const previous = current[collapseId] ?? {};
-      const nextMemory = {
-        ...previous,
-        ...metrics,
-      };
-      if (conversationMeasuredCollapseMemoryEqual(previous, nextMemory)) {
-        return current;
-      }
-      return {
-        ...current,
-        [collapseId]: nextMemory,
+        [collapseId]: { expanded },
       };
     });
   }, [updateMemory]);
   const value = React.useMemo<ConversationMeasuredCollapseContextValue>(() => ({
     getMemory,
     setExpanded,
-    setMetrics,
-  }), [getMemory, setExpanded, setMetrics]);
+  }), [getMemory, setExpanded]);
 
   return (
     <ConversationMeasuredCollapseContext.Provider value={value}>
@@ -157,11 +134,11 @@ export function useConversationMeasuredExpansion(
   return [localExpanded, setExpanded];
 }
 
-// ConversationMeasuredCollapseProps describes one virtual-scroll-aware collapse shell.
-// ConversationMeasuredCollapseProps 描述单个可被虚拟滚动感知的折叠外壳。
+// ConversationMeasuredCollapseProps describes one native-flow animated collapse shell.
+// ConversationMeasuredCollapseProps 描述单个原生流动画折叠外壳。
 export interface ConversationMeasuredCollapseProps {
-  // Stable collapse id used for expansion and height memory.
-  // 用于展开状态与高度记忆的稳定折叠标识。
+  // Stable collapse id used for remount-safe expansion memory.
+  // 用于可安全重新挂载展开记忆的稳定折叠标识。
   collapseId: string;
   // Whether the content should be visible after the current transition.
   // 当前过渡结束后内容是否应该可见。
@@ -177,11 +154,9 @@ export interface ConversationMeasuredCollapseProps {
   children: React.ReactNode;
 }
 
-// ConversationMeasuredCollapse animates fold boxes while exposing stable target heights for virtualization.
-// ConversationMeasuredCollapse 为折叠框提供动画，并向虚拟滚动暴露稳定目标高度。
+// ConversationMeasuredCollapse animates fold boxes from current committed DOM measurements.
+// ConversationMeasuredCollapse 使用当前已提交 DOM 测量为折叠框提供动画。
 export function ConversationMeasuredCollapse(props: ConversationMeasuredCollapseProps) {
-  const context = React.useContext(ConversationMeasuredCollapseContext);
-  const contextSetMetrics = context?.setMetrics;
   const prefersReducedMotion = usePrefersReducedMotion();
   const collapsedHeight = Math.max(0, props.collapsedHeight ?? 0);
   const [rendered, setRendered] = React.useState(props.expanded || collapsedHeight > 0);
@@ -227,35 +202,20 @@ export function ConversationMeasuredCollapse(props: ConversationMeasuredCollapse
     return innerRef.current?.scrollHeight ?? 0;
   }, []);
 
-  const rememberMetrics = React.useCallback((metrics: Partial<ConversationMeasuredCollapseMemory>) => {
-    contextSetMetrics?.(props.collapseId, metrics);
-  }, [contextSetMetrics, props.collapseId]);
-
   const finishTransition = React.useCallback(() => {
     fallbackTimerRef.current = null;
     collapsingRef.current = false;
     if (expandedRef.current) {
-      const expandedHeight = measureExpandedHeight();
-      rememberMetrics({
-        expanded: true,
-        expandedHeight,
-        stableHeight: expandedHeight,
-      });
       setTargetHeight(null);
       setVisualOpen(true);
       setHeight("auto");
       return;
     }
-    rememberMetrics({
-      collapsedHeight,
-      expanded: false,
-      stableHeight: collapsedHeight,
-    });
     setTargetHeight(collapsedHeight);
     setVisualOpen(false);
     setHeight(`${collapsedHeight}px`);
     setRendered(collapsedHeight > 0);
-  }, [collapsedHeight, measureExpandedHeight, rememberMetrics]);
+  }, [collapsedHeight]);
 
   const scheduleTransitionFinish = React.useCallback(() => {
     if (fallbackTimerRef.current !== null) {
@@ -279,13 +239,6 @@ export function ConversationMeasuredCollapse(props: ConversationMeasuredCollapse
 
     if (prefersReducedMotion) {
       collapsingRef.current = false;
-      const stableHeight = props.expanded ? measureExpandedHeight() : collapsedHeight;
-      rememberMetrics({
-        collapsedHeight: props.expanded ? undefined : collapsedHeight,
-        expanded: props.expanded,
-        expandedHeight: props.expanded ? stableHeight : undefined,
-        stableHeight,
-      });
       setRendered(props.expanded || collapsedHeight > 0);
       setVisualOpen(props.expanded);
       setTargetHeight(props.expanded ? null : collapsedHeight);
@@ -303,11 +256,6 @@ export function ConversationMeasuredCollapse(props: ConversationMeasuredCollapse
         frameRef.current = null;
         const nextHeight = measureExpandedHeight();
         setTargetHeight(nextHeight);
-        rememberMetrics({
-          expanded: true,
-          expandedHeight: nextHeight,
-          stableHeight: nextHeight,
-        });
         setVisualOpen(true);
         setHeight(`${nextHeight}px`);
         scheduleTransitionFinish();
@@ -322,11 +270,6 @@ export function ConversationMeasuredCollapse(props: ConversationMeasuredCollapse
     const currentHeight = measureExpandedHeight();
     collapsingRef.current = true;
     setTargetHeight(collapsedHeight);
-    rememberMetrics({
-      collapsedHeight,
-      expanded: false,
-      stableHeight: collapsedHeight,
-    });
     setVisualOpen(true);
     setHeight(`${currentHeight}px`);
     frameRef.current = window.requestAnimationFrame(() => {
@@ -335,7 +278,7 @@ export function ConversationMeasuredCollapse(props: ConversationMeasuredCollapse
       setHeight(`${collapsedHeight}px`);
       scheduleTransitionFinish();
     });
-  }, [clearScheduledWork, collapsedHeight, measureExpandedHeight, prefersReducedMotion, props.expanded, rendered, rememberMetrics, scheduleTransitionFinish]);
+  }, [clearScheduledWork, collapsedHeight, measureExpandedHeight, prefersReducedMotion, props.expanded, rendered, scheduleTransitionFinish]);
 
   React.useLayoutEffect(() => {
     // The primary transition effect owns the closing phase; this effect only synchronizes a stable collapsed height.
@@ -343,15 +286,10 @@ export function ConversationMeasuredCollapse(props: ConversationMeasuredCollapse
     if (props.expanded || collapsingRef.current) {
       return;
     }
-    rememberMetrics({
-      collapsedHeight,
-      expanded: false,
-      stableHeight: collapsedHeight,
-    });
     setTargetHeight(collapsedHeight);
     setHeight(`${collapsedHeight}px`);
     setRendered(collapsedHeight > 0);
-  }, [collapsedHeight, props.expanded, rememberMetrics]);
+  }, [collapsedHeight, props.expanded]);
 
   React.useLayoutEffect(() => {
     if (!rendered || typeof ResizeObserver === "undefined") {
@@ -364,11 +302,6 @@ export function ConversationMeasuredCollapse(props: ConversationMeasuredCollapse
     const observer = new ResizeObserver(() => {
       if (expandedRef.current) {
         const nextHeight = element.scrollHeight;
-        rememberMetrics({
-          expanded: true,
-          expandedHeight: nextHeight,
-          stableHeight: nextHeight,
-        });
         if (heightRef.current !== "auto") {
           setTargetHeight(nextHeight);
           setHeight(`${nextHeight}px`);
@@ -377,7 +310,7 @@ export function ConversationMeasuredCollapse(props: ConversationMeasuredCollapse
     });
     observer.observe(element);
     return () => observer.disconnect();
-  }, [rememberMetrics, rendered]);
+  }, [rendered]);
 
   React.useEffect(() => clearScheduledWork, [clearScheduledWork]);
 
@@ -438,7 +371,13 @@ export function conversationMeasuredCollapseMapEqual(
   if (leftKeys.length !== rightKeys.length) {
     return false;
   }
-  return leftKeys.every((key) => conversationMeasuredCollapseMemoryEqual(left[key] ?? {}, right[key] ?? {}));
+  return leftKeys.every((key) => {
+    // leftMemory and rightMemory must both exist because missing keys represent different authoritative state.
+    // leftMemory 与 rightMemory 必须同时存在，因为缺失键表示不同的权威状态。
+    const leftMemory = left[key];
+    const rightMemory = right[key];
+    return Boolean(leftMemory && rightMemory && conversationMeasuredCollapseMemoryEqual(leftMemory, rightMemory));
+  });
 }
 
 // conversationMeasuredCollapseMemoryEqual compares the persisted fields for one collapse node.
@@ -447,8 +386,5 @@ function conversationMeasuredCollapseMemoryEqual(
   left: ConversationMeasuredCollapseMemory,
   right: ConversationMeasuredCollapseMemory,
 ): boolean {
-  return left.collapsedHeight === right.collapsedHeight
-    && left.expanded === right.expanded
-    && left.expandedHeight === right.expandedHeight
-    && left.stableHeight === right.stableHeight;
+  return left.expanded === right.expanded;
 }

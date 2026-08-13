@@ -18,6 +18,11 @@ export interface ComposerProviderToolSettingsSnapshot {
   selections: Partial<
     Record<PublicAiProviderToolCapabilityKind, PublicAiProviderToolTargetSelection>
   >;
+  // Native model-extension targets retained for every generative capability.
+  // 每项生成类能力保留的原生模型扩展目标集合。
+  extensionTargetSets: Partial<
+    Record<PublicAiProviderToolCapabilityKind, PublicAiProviderToolTargetSelection[]>
+  >;
 }
 
 // ComposerModelSelectionSnapshot freezes the exact provider, model, and credential used by one submission.

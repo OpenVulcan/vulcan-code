@@ -23,7 +23,7 @@ use vulcan_context::{ContextCompactionPolicy, ContextWindowPolicyOverrides};
 
 /// Identifies the current persisted AI configuration schema.
 /// 标识当前持久化 AI 配置 Schema。
-pub const PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION: u32 = 13;
+pub const PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION: u32 = 14;
 
 /// Stores only user-declared differences from immutable model capability sources.
 /// 仅保存用户相对于不可变模型能力来源声明的差异。
@@ -1045,6 +1045,11 @@ pub struct PersistedAiConfiguration {
     /// 为新会话默认启用的语义供应商工具能力。
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub provider_tool_enabled_capabilities: BTreeSet<ProviderToolCapabilityKind>,
+    /// Explicit native model-extension targets selected per extension capability.
+    /// 按扩展能力显式选择的原生模型扩展目标。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub provider_extension_target_sets:
+        BTreeMap<ProviderToolCapabilityKind, BTreeSet<ProviderToolTargetSelection>>,
     /// Legacy target-scoped disabled state read only during schema migration.
     /// 仅在 Schema 迁移期间读取的旧逐目标禁用状态。
     #[serde(default, skip_serializing)]
@@ -1159,6 +1164,7 @@ impl Default for PersistedAiConfiguration {
             secondary_routes: BTreeMap::new(),
             provider_tool_selections: BTreeMap::new(),
             provider_tool_enabled_capabilities: BTreeSet::new(),
+            provider_extension_target_sets: BTreeMap::new(),
             provider_tool_disabled_targets: BTreeMap::new(),
         }
     }
@@ -1280,6 +1286,14 @@ impl PersistedAiConfiguration {
         projection.provider_tool_selections.retain(|_, selection| {
             !removed_connection_ids.contains(selection.connection_id.as_str())
         });
+        projection
+            .provider_extension_target_sets
+            .retain(|_, selections| {
+                selections.retain(|selection| {
+                    !removed_connection_ids.contains(selection.connection_id.as_str())
+                });
+                !selections.is_empty()
+            });
         for connection_id in &removed_connection_ids {
             let connection_model_prefix = format!("{}:{connection_id}:", connection_id.len());
             projection
@@ -1300,6 +1314,7 @@ impl PersistedAiConfiguration {
     /// Whether the configuration changed, or an explicit unsupported-version error.
     /// 返回配置是否变化，或明确的不支持版本错误。
     pub fn migrate_to_current_schema(&mut self) -> Result<bool, String> {
+        let source_schema_version = self.schema_version;
         let changed = match self.schema_version {
             PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION => {
                 // normalized records whether a current-version file still carried ignored legacy output fields.
@@ -1316,7 +1331,7 @@ impl PersistedAiConfiguration {
                 };
                 Ok(normalized || inserted_vmm)
             }
-            10..=12 => {
+            10..=13 => {
                 self.normalize_direct_provider_model_settings();
                 self.inference_profiles
                     .entry(String::from("vmm"))
@@ -1403,6 +1418,17 @@ impl PersistedAiConfiguration {
                 "Unsupported persisted AI configuration schema version {unsupported}; supported version is {PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION}."
             )),
         }?;
+        if source_schema_version != PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION {
+            // Provider-tool selection semantics changed incompatibly in schema 14. Old scalar and
+            // mixed-media selections are intentionally discarded instead of being guessed into
+            // the new direct-selection and model-extension stores.
+            // Provider Tool 选择语义在 Schema 14 中发生不兼容变化。旧标量与混合媒体选择会被
+            // 有意丢弃，而不是猜测转换到新的指定直连与模型扩展存储。
+            self.provider_tool_selections.clear();
+            self.provider_tool_enabled_capabilities.clear();
+            self.provider_extension_target_sets.clear();
+            self.provider_tool_disabled_targets.clear();
+        }
         self.billing.validate()?;
         self.validate_context_window_policy_layers()?;
         Ok(changed)
@@ -3364,6 +3390,50 @@ mod tests {
         assert!(historical.billing.catalog_deleted_model_ids.is_empty());
     }
 
+    /// Verifies schema thirteen provider-tool state is discarded without compatibility mapping.
+    /// 验证 Schema 十三的 Provider Tool 状态会在不做兼容映射的情况下被丢弃。
+    #[test]
+    fn schema_thirteen_discards_pre_extension_provider_tool_state() {
+        // historical carries every old scalar selection store plus a forged extension entry.
+        // historical 携带全部旧标量选择存储以及一条伪造扩展记录。
+        let mut historical = PersistedAiConfiguration::default();
+        historical.schema_version = 13;
+        historical.provider_tool_selections.insert(
+            ProviderToolCapabilityKind::MediaAnalyze,
+            ProviderToolTargetSelection {
+                connection_id: String::from("old-connection"),
+                target_id: String::from("old-mixed-media"),
+            },
+        );
+        historical
+            .provider_tool_enabled_capabilities
+            .insert(ProviderToolCapabilityKind::MediaAnalyze);
+        historical.provider_extension_target_sets.insert(
+            ProviderToolCapabilityKind::ImageGenerate,
+            BTreeSet::from([ProviderToolTargetSelection {
+                connection_id: String::from("old-connection"),
+                target_id: String::from("old-image-generator"),
+            }]),
+        );
+        historical.provider_tool_disabled_targets.insert(
+            ProviderToolCapabilityKind::ImageGenerate,
+            BTreeSet::from([ProviderToolTargetSelection {
+                connection_id: String::from("old-connection"),
+                target_id: String::from("old-disabled-generator"),
+            }]),
+        );
+
+        assert!(historical.migrate_to_current_schema().expect("migration"));
+        assert_eq!(
+            historical.schema_version,
+            PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION
+        );
+        assert!(historical.provider_tool_selections.is_empty());
+        assert!(historical.provider_tool_enabled_capabilities.is_empty());
+        assert!(historical.provider_extension_target_sets.is_empty());
+        assert!(historical.provider_tool_disabled_targets.is_empty());
+    }
+
     /// Builds one minimal exact billing price fixture.
     /// 构建一条最小精确计费价格夹具。
     fn billing_price(input_cost_per_million: &str) -> BillingPriceOverride {
@@ -4670,21 +4740,21 @@ mod tests {
         );
     }
 
-    /// Verifies the sole historical schema migration removes only retired inference tool choices.
-    /// 验证唯一历史 Schema 迁移只删除已退役的推理工具选择。
+    /// Verifies historical schemas discard every incompatible provider-tool selection.
+    /// 验证历史 Schema 会丢弃全部不兼容的 Provider Tool 选择。
     #[test]
-    fn historical_configuration_migration_is_exact() {
+    fn historical_configuration_migration_discards_incompatible_provider_tool_state() {
         let mut configuration = PersistedAiConfiguration {
             schema_version: 0,
             ..PersistedAiConfiguration::default()
         };
-        let search_target = ProviderToolTargetSelection {
-            connection_id: String::from("search-connection"),
-            target_id: String::from("search-target"),
-        };
-        configuration
-            .provider_tool_selections
-            .insert(ProviderToolCapabilityKind::WebSearch, search_target.clone());
+        configuration.provider_tool_selections.insert(
+            ProviderToolCapabilityKind::WebSearch,
+            ProviderToolTargetSelection {
+                connection_id: String::from("search-connection"),
+                target_id: String::from("search-target"),
+            },
+        );
         configuration.provider_tool_selections.insert(
             ProviderToolCapabilityKind::EmbeddingCreate,
             ProviderToolTargetSelection {
@@ -4709,30 +4779,17 @@ mod tests {
             configuration.schema_version,
             PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION
         );
-        assert_eq!(
-            configuration
-                .provider_tool_selections
-                .get(&ProviderToolCapabilityKind::WebSearch),
-            Some(&search_target)
-        );
-        assert!(
-            configuration
-                .provider_tool_enabled_capabilities
-                .contains(&ProviderToolCapabilityKind::WebSearch)
-        );
-        assert!(
-            !configuration
-                .provider_tool_selections
-                .contains_key(&ProviderToolCapabilityKind::EmbeddingCreate)
-        );
+        assert!(configuration.provider_tool_selections.is_empty());
+        assert!(configuration.provider_tool_enabled_capabilities.is_empty());
         assert!(configuration.provider_tool_disabled_targets.is_empty());
+        assert!(configuration.provider_extension_target_sets.is_empty());
         assert!(configuration.inference_profiles.contains_key("vmm"));
     }
 
-    /// Verifies schema one converts only effective selected targets into capability switches.
-    /// 验证 Schema 一只把实际生效的已选目标转换为能力开关。
+    /// Verifies schema one discards every incompatible provider-tool activation field.
+    /// 验证 Schema 一会丢弃全部不兼容的 Provider Tool 启用字段。
     #[test]
-    fn schema_one_migrates_target_activation_to_capability_activation() {
+    fn schema_one_discards_incompatible_provider_tool_activation() {
         let enabled_target = ProviderToolTargetSelection {
             connection_id: String::from("enabled-account"),
             target_id: String::from("enabled-target"),
@@ -4763,17 +4820,10 @@ mod tests {
                 .expect("schema one migration")
         );
 
-        assert!(
-            configuration
-                .provider_tool_enabled_capabilities
-                .contains(&ProviderToolCapabilityKind::WebSearch)
-        );
-        assert!(
-            !configuration
-                .provider_tool_enabled_capabilities
-                .contains(&ProviderToolCapabilityKind::WebExtract)
-        );
+        assert!(configuration.provider_tool_selections.is_empty());
+        assert!(configuration.provider_tool_enabled_capabilities.is_empty());
         assert!(configuration.provider_tool_disabled_targets.is_empty());
+        assert!(configuration.provider_extension_target_sets.is_empty());
     }
 
     /// Verifies schema one migration preserves every configured VMM inference route.

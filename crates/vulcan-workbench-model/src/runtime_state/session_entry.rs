@@ -179,6 +179,11 @@ pub struct SessionRuntimeStateEntry {
     /// 仅为当前会话启用的供应商工具能力。
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub provider_tool_enabled_capabilities: BTreeSet<String>,
+    /// Session-selected native model-extension target sets keyed by extension capability.
+    /// 按扩展能力索引的会话级原生模型扩展目标集合。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub provider_extension_target_sets:
+        BTreeMap<String, BTreeSet<SessionProviderToolTargetSelection>>,
     /// Whether provider tool defaults have been materialized into this session.
     /// 供应商工具默认值是否已经物化到当前会话。
     #[serde(default, skip_serializing_if = "is_false")]
@@ -347,7 +352,7 @@ impl SessionRuntimeStateEntry {
 
 /// Identifies one exact provider tool target selected for a session.
 /// 标识会话选中的一个精确供应商工具目标。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct SessionProviderToolTargetSelection {
     /// Credential connection that exposes the target.
     /// 暴露该目标的凭据连接。

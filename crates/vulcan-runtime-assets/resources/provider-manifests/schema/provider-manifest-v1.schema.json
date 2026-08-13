@@ -1010,6 +1010,9 @@
         "web_search",
         "web_extract",
         "media_analyze",
+        "image_understand",
+        "video_understand",
+        "audio_understand",
         "image_generate",
         "image_edit",
         "video_generate",
@@ -1018,11 +1021,13 @@
         "speech_synthesize",
         "speech_transcribe",
         "music_generate",
-        "music_cover"
+        "music_cover",
+        "embedding_create",
+        "rerank_documents"
       ]
     },
     "provider_tool_resource_encoding": {
-      "enum": ["https_url", "public_http_url", "data_url", "base64", "hex"]
+      "enum": ["https_url", "public_http_url", "data_url", "base64", "hex", "binary_body"]
     },
     "provider_tool_resource_decoder": {
       "type": "object",
@@ -1046,6 +1051,99 @@
         "optional": {"type": "boolean"},
         "max_bytes": {"type": "integer", "minimum": 1},
         "output_id_prefix": {"type": "string"}
+      }
+    },
+    "provider_tool_resolution_preset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value"],
+      "properties": {
+        "value": {"type": "string"},
+        "width": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+        "height": {"type": "integer", "minimum": 0, "maximum": 4294967295}
+      }
+    },
+    "provider_tool_resolution_bounds": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "minimum_width",
+        "maximum_width",
+        "minimum_height",
+        "maximum_height",
+        "step"
+      ],
+      "properties": {
+        "minimum_width": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+        "maximum_width": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+        "minimum_height": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+        "maximum_height": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+        "step": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+        "minimum_pixels": {"type": "integer", "minimum": 0},
+        "maximum_pixels": {"type": "integer", "minimum": 0}
+      }
+    },
+    "provider_tool_resolution_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode"],
+      "properties": {
+        "mode": {"enum": ["fixed_presets", "bounded_custom", "provider_managed"]},
+        "presets": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/provider_tool_resolution_preset"}
+        },
+        "aspect_ratios": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "custom_bounds": {"$ref": "#/$defs/provider_tool_resolution_bounds"}
+      }
+    },
+    "provider_tool_duration_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["minimum_seconds", "maximum_seconds"],
+      "properties": {
+        "minimum_seconds": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+        "maximum_seconds": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+        "default_seconds": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+        "presets_seconds": {
+          "type": "array",
+          "items": {"type": "integer", "minimum": 0, "maximum": 4294967295}
+        }
+      }
+    },
+    "provider_tool_format_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "input_formats": {"type": "array", "items": {"type": "string"}},
+        "output_formats": {"type": "array", "items": {"type": "string"}},
+        "sample_rates_hz": {
+          "type": "array",
+          "items": {"type": "integer", "minimum": 0, "maximum": 4294967295}
+        },
+        "channel_counts": {
+          "type": "array",
+          "items": {"type": "integer", "minimum": 0, "maximum": 255}
+        }
+      }
+    },
+    "provider_tool_extension_profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["summary"],
+      "properties": {
+        "summary": {"type": "string"},
+        "characteristics": {"type": "array", "items": {"type": "string"}},
+        "input_modes": {"type": "array", "items": {"type": "string"}},
+        "resolution_policy": {"$ref": "#/$defs/provider_tool_resolution_policy"},
+        "duration_policy": {"$ref": "#/$defs/provider_tool_duration_policy"},
+        "format_policy": {"$ref": "#/$defs/provider_tool_format_policy"},
+        "constraints": {"type": "array", "items": {"type": "string"}},
+        "limitations": {"type": "array", "items": {"type": "string"}},
+        "evidence_refs": {"type": "array", "items": {"type": "string"}}
       }
     },
     "provider_tool_output": {
@@ -1124,6 +1222,39 @@
         "max_items": {"type": "integer", "minimum": 1, "maximum": 65535}
       }
     },
+    "provider_tool_multipart_field": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["argument_path", "field_name"],
+      "properties": {
+        "argument_path": {"type": "string"},
+        "field_name": {"type": "string"},
+        "file": {"type": "boolean"},
+        "required": {"type": "boolean"}
+      }
+    },
+    "provider_tool_multipart_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fields"],
+      "properties": {
+        "fields": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/provider_tool_multipart_field"}
+        }
+      }
+    },
+    "provider_tool_sse_events": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event_type_path", "terminal_event_types"],
+      "properties": {
+        "event_type_path": {"type": "string"},
+        "nonterminal_event_types": {"type": "array", "items": {"type": "string"}},
+        "terminal_event_types": {"type": "array", "items": {"type": "string"}},
+        "allow_done_record": {"type": "boolean"}
+      }
+    },
     "provider_tool_execution": {
       "type": "object",
       "additionalProperties": false,
@@ -1136,6 +1267,8 @@
         "execution_kind": {
           "enum": [
             "http_json_sync",
+            "http_json_sse",
+            "http_multipart_sse",
             "http_binary_sync",
             "conversation_media_analyze",
             "http_json_async_poll",
@@ -1154,6 +1287,8 @@
           "type": "array",
           "items": {"$ref": "#/$defs/provider_tool_conditional_header"}
         },
+        "multipart_request": {"$ref": "#/$defs/provider_tool_multipart_request"},
+        "sse_events": {"$ref": "#/$defs/provider_tool_sse_events"},
         "mcp_http_call": {"$ref": "#/$defs/provider_tool_mcp_http_call"}
       }
     },
@@ -1179,6 +1314,10 @@
           "items": {"type": "string"}
         },
         "upstream_target_id": {"type": "string"},
+        "availability_model_ids_any": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
         "display_name": {"type": "string"},
         "tool_id": {"type": "string"},
         "capability": {"$ref": "#/$defs/provider_tool_capability"},
@@ -1187,6 +1326,7 @@
           "type": "array",
           "items": {"$ref": "#/$defs/provider_tool_numeric_product_range"}
         },
+        "extension_profile": {"$ref": "#/$defs/provider_tool_extension_profile"},
         "output": {"$ref": "#/$defs/provider_tool_output"},
         "execution": {"$ref": "#/$defs/provider_tool_execution"}
       }
@@ -1223,6 +1363,7 @@
           "type": "array",
           "items": {"$ref": "#/$defs/provider_tool_numeric_product_range"}
         },
+        "extension_profile": {"$ref": "#/$defs/provider_tool_extension_profile"},
         "output": {"$ref": "#/$defs/provider_tool_output"},
         "execution": {"$ref": "#/$defs/provider_tool_execution"}
       }
@@ -1259,12 +1400,16 @@
     "generic_json_async_success_follow_up": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["endpoint_path", "method", "identifier_pointer", "identifier_query_parameter"],
+      "required": ["endpoint_path", "method"],
       "properties": {
         "endpoint_path": {"type": "string"},
         "method": {"enum": ["get", "post", "delete"]},
+        "identifier_source": {"enum": ["response_pointer", "provider_task_id"]},
         "identifier_pointer": {"type": "string"},
-        "identifier_query_parameter": {"type": "string"}
+        "identifier_query_parameter": {"type": "string"},
+        "identifier_in_path": {"type": "boolean"},
+        "identifier_path_suffix": {"type": "string"},
+        "response_body": {"enum": ["json", "binary_resource"]}
       }
     },
     "generic_json_async_batch_follow_up": {

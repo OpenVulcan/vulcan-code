@@ -60,6 +60,7 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_save_public_ai_inference_route",
     "service_test_public_ai_inference_route",
     "service_save_public_ai_provider_tool_selection",
+    "service_save_public_ai_provider_extension_target_set",
     "service_test_public_ai_provider_tool",
     "service_save_public_ai_provider_tool_capability_enabled",
     "service_public_ai_session_provider_tool_selections",
@@ -427,6 +428,14 @@ pub(super) async fn dispatch(
         ),
         "service_save_public_ai_provider_tool_selection" => rpc_json_result(
             service_save_public_ai_provider_tool_selection(
+                app,
+                state,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
+        ),
+        "service_save_public_ai_provider_extension_target_set" => rpc_json_result(
+            service_save_public_ai_provider_extension_target_set(
                 app,
                 state,
                 rpc_required_param(params, "request")?,

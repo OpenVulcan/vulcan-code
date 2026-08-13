@@ -1840,8 +1840,12 @@ export type TranslationKey =
   | "settings.aiUnderstandVideo.description"
   | "settings.aiUnderstandAudio.description"
   | "settings.aiImageGeneration.description"
+  | "settings.aiImageEdit.description"
   | "settings.aiVideoGeneration.description"
+  | "settings.aiVideoEdit.description"
+  | "settings.aiVideoExtend.description"
   | "settings.aiSpeechSynthesis.description"
+  | "settings.aiSpeechTranscribe.description"
   | "settings.aiMusicGeneration.description"
   | "settings.aiMusicCover.description"
   | "settings.mcpServers.description"
@@ -4472,8 +4476,12 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.aiUnderstandVideo.description": "视频理解能力入口与接入状态。",
     "settings.aiUnderstandAudio.description": "音频理解能力入口与接入状态。",
     "settings.aiImageGeneration.description": "图片生成能力的启用状态与可用目标。",
+    "settings.aiImageEdit.description": "图片编辑能力的可选原生模型、账号与约束说明。",
     "settings.aiVideoGeneration.description": "视频生成能力的启用状态与可用目标。",
+    "settings.aiVideoEdit.description": "视频编辑能力的可选原生模型、账号与约束说明。",
+    "settings.aiVideoExtend.description": "视频延长能力的可选原生模型、账号与时长约束。",
     "settings.aiSpeechSynthesis.description": "语音合成能力的启用状态与可用目标。",
+    "settings.aiSpeechTranscribe.description": "语音转录能力的可选原生模型、账号与输入约束。",
     "settings.aiMusicGeneration.description": "音乐生成能力的启用状态与可用目标。",
     "settings.aiMusicCover.description": "音乐翻唱能力的启用状态与可用目标。",
     "settings.mcpServers.description": "MCP Runtime、服务连接、工具、提示词与资源状态。",
@@ -4968,7 +4976,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.providerTools.disabled": "不启用",
     "settings.providerTools.unavailable": "已选目标不可用",
     "settings.providerTools.imageGenerate": "图片生成",
-    "settings.providerTools.imageEdit": "图片编辑工具",
+    "settings.providerTools.imageEdit": "图片编辑",
     "settings.providerTools.mediaAnalyze": "图片理解工具",
     "settings.providerTools.musicGenerate": "音乐生成",
     "settings.providerTools.musicCover": "音乐翻唱",
@@ -7101,8 +7109,12 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.aiUnderstandVideo.description": "Video-understanding capability entry and connection status.",
     "settings.aiUnderstandAudio.description": "Audio-understanding capability entry and connection status.",
     "settings.aiImageGeneration.description": "Image-generation capability state and available targets.",
+    "settings.aiImageEdit.description": "Native image-editing models, accounts, and reviewed constraints.",
     "settings.aiVideoGeneration.description": "Video-generation capability state and available targets.",
+    "settings.aiVideoEdit.description": "Native video-editing models, accounts, and reviewed constraints.",
+    "settings.aiVideoExtend.description": "Native video-extension models, accounts, and duration constraints.",
     "settings.aiSpeechSynthesis.description": "Speech-synthesis capability state and available targets.",
+    "settings.aiSpeechTranscribe.description": "Native transcription models, accounts, and input constraints.",
     "settings.aiMusicGeneration.description": "Music-generation capability state and available targets.",
     "settings.aiMusicCover.description": "Music-cover capability state and available targets.",
     "settings.mcpServers.description": "MCP runtime, server connections, tools, prompts, and resources.",
@@ -7597,7 +7609,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.providerTools.disabled": "Disabled",
     "settings.providerTools.unavailable": "Selected target unavailable",
     "settings.providerTools.imageGenerate": "Image generation",
-    "settings.providerTools.imageEdit": "Image editing tool",
+    "settings.providerTools.imageEdit": "Image editing",
     "settings.providerTools.mediaAnalyze": "Image understanding tool",
     "settings.providerTools.musicGenerate": "Music generation",
     "settings.providerTools.musicCover": "Music cover",

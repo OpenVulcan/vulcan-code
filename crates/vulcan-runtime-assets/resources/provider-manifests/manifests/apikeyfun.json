@@ -1,16 +1,24 @@
 {
   "schema_version": "vulcan.provider-manifest.v1",
   "provider_id": "apikeyfun",
-  "revision": 1,
-  "published_at": "2026-08-06T00:00:00Z",
+  "revision": 2,
+  "published_at": "2026-08-14T00:00:00Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
-      "openai-chat-completions.v1"
+      "openai-responses.v1",
+      "anthropic-messages.v1",
+      "anthropic-messages-video.v1",
+      "google.gemini.generate_content"
     ],
-    "required_execution_primitives": [],
-    "required_upload_primitives": [],
-    "required_transformers": []
+    "required_execution_primitives": [
+      "http_json_sync",
+      "http_json_sse",
+      "http_multipart_sse",
+      "http_json_async_poll"
+    ],
+    "required_upload_primitives": ["inline_data_url"],
+    "required_transformers": ["set_literal", "enum_map"]
   },
   "display": {
     "name": "APIKEY.FUN",
@@ -27,7 +35,7 @@
   "services": [
     {
       "service_entry_id": "public-api",
-      "display_name": "Default API",
+      "display_name": "APIKEY.FUN Public API",
       "kind": "conversation",
       "base_url": "https://api.apikey.fun/v1",
       "credential_profiles": [
@@ -45,52 +53,41 @@
         }
       ],
       "default_authentication": "bearer_authorization",
-      "request_projector": "direct",
+      "request_projector": "compatible",
       "model_catalog": {
-        "source_policy": "manifest_and_discovery",
+        "source_policy": "discovery_only",
         "discovery_kind": "open_ai"
       },
       "protocol_routes": [
         {
-          "protocol_profile_id": "openai-chat-completions.v1",
-          "endpoint_path": "/chat/completions",
+          "protocol_profile_id": "openai-responses.v1",
+          "endpoint_path": "/responses",
           "usage_profile_refs": [],
           "request_profile_refs": [],
           "response_profile_refs": [],
           "provider_request_id_headers": [],
           "verified": true
-        }
-      ]
-    },
-    {
-      "service_entry_id": "slb-api",
-      "display_name": "SLB API (Image Generation Disabled)",
-      "kind": "conversation",
-      "base_url": "https://slb.apikey.fun/v1",
-      "credential_profiles": [
+        },
         {
-          "credential_profile_id": "api-key",
-          "display_name": "API Key",
-          "credential_mode": "token",
-          "billing_kind": "provider_managed",
-          "account_usage_query": "unsupported",
-          "allowed_usage_scopes": [
-            "interactive_agent",
-            "internal_background",
-            "external_service"
-          ]
-        }
-      ],
-      "default_authentication": "bearer_authorization",
-      "request_projector": "direct",
-      "model_catalog": {
-        "source_policy": "manifest_and_discovery",
-        "discovery_kind": "open_ai"
-      },
-      "protocol_routes": [
+          "protocol_profile_id": "anthropic-messages.v1",
+          "endpoint_path": "/messages",
+          "usage_profile_refs": [],
+          "request_profile_refs": [],
+          "response_profile_refs": [],
+          "provider_request_id_headers": [],
+          "verified": true
+        },
         {
-          "protocol_profile_id": "openai-chat-completions.v1",
-          "endpoint_path": "/chat/completions",
+          "protocol_profile_id": "anthropic-messages-video.v1",
+          "endpoint_path": "/messages",
+          "usage_profile_refs": [],
+          "request_profile_refs": [],
+          "response_profile_refs": [],
+          "provider_request_id_headers": [],
+          "verified": true
+        },
+        {
+          "protocol_profile_id": "google.gemini.generate_content",
           "usage_profile_refs": [],
           "request_profile_refs": [],
           "response_profile_refs": [],
@@ -102,26 +99,833 @@
   ],
   "model_defaults": {
     "default_enabled": true,
-    "catalog_membership_policy": "declared_and_discovery",
+    "catalog_membership_policy": "declared_only",
     "unknown_model_policy": "declared_rule_required",
     "supported_protocols": [
-      "openai-chat-completions.v1"
+      "openai-responses.v1",
+      "anthropic-messages.v1",
+      "anthropic-messages-video.v1",
+      "google.gemini.generate_content"
     ],
-    "selected_protocol": "openai-chat-completions.v1",
+    "selected_protocol": "openai-responses.v1",
+    "capabilities": {
+      "operations": ["conversation_respond"],
+      "input_resources": [],
+      "output_resources": [],
+      "reasoning": "unknown",
+      "provider_native_tools": [],
+      "reasoning_control": "unknown",
+      "reasoning_efforts": [],
+      "prompt_cache": {
+        "provider_default_behavior": "APIKEY.FUN relay caching follows the selected upstream group.",
+        "supports_managed_explicit": false
+      },
+      "evidence_revision": "apikeyfun.verified-groups.2026-08-14"
+    },
     "default_usage_profile_refs": [],
     "default_request_profile_refs": [],
     "default_response_profile_refs": [],
     "default_operation_refs": []
   },
-  "model_rules": [],
+  "model_rules": [
+    {
+      "rule_id": "gpt-5-6-sol",
+      "display_name": "GPT-5.6 Sol",
+      "matcher": {"kind": "exact", "value": "gpt-5.6-sol"},
+      "supported_protocols": ["openai-responses.v1"],
+      "selected_protocol": "openai-responses.v1",
+      "capabilities": {
+        "operations": ["conversation_respond"], "input_resources": ["image"], "output_resources": [],
+        "reasoning": "native", "provider_native_tools": [], "reasoning_control": "toggle",
+        "reasoning_efforts": ["none", "low", "medium", "high", "xhigh", "max"],
+        "context_limit": 1050000, "output_limit": 128000,
+        "evidence_revision": "openai.gpt-5.6.2026-08-13"
+      }
+    },
+    {
+      "rule_id": "gpt-5-6-terra",
+      "display_name": "GPT-5.6 Terra",
+      "matcher": {"kind": "exact", "value": "gpt-5.6-terra"},
+      "supported_protocols": ["openai-responses.v1"], "selected_protocol": "openai-responses.v1",
+      "capabilities": {
+        "operations": ["conversation_respond"], "input_resources": ["image"], "output_resources": [],
+        "reasoning": "native", "provider_native_tools": [], "reasoning_control": "toggle",
+        "reasoning_efforts": ["none", "low", "medium", "high", "xhigh", "max"],
+        "context_limit": 1050000, "output_limit": 128000,
+        "evidence_revision": "openai.gpt-5.6.2026-08-13"
+      }
+    },
+    {
+      "rule_id": "gpt-5-6-luna",
+      "display_name": "GPT-5.6 Luna",
+      "matcher": {"kind": "exact", "value": "gpt-5.6-luna"},
+      "supported_protocols": ["openai-responses.v1"], "selected_protocol": "openai-responses.v1",
+      "capabilities": {
+        "operations": ["conversation_respond"], "input_resources": ["image"], "output_resources": [],
+        "reasoning": "native", "provider_native_tools": [], "reasoning_control": "toggle",
+        "reasoning_efforts": ["none", "low", "medium", "high", "xhigh", "max"],
+        "context_limit": 1050000, "output_limit": 128000,
+        "evidence_revision": "openai.gpt-5.6.2026-08-13"
+      }
+    },
+    {
+      "rule_id": "gpt-5-5",
+      "display_name": "GPT-5.5",
+      "matcher": {"kind": "exact", "value": "gpt-5.5"},
+      "supported_protocols": ["openai-responses.v1"], "selected_protocol": "openai-responses.v1",
+      "capabilities": {
+        "operations": ["conversation_respond"], "input_resources": ["image"], "output_resources": [],
+        "reasoning": "native", "provider_native_tools": [], "reasoning_control": "toggle",
+        "reasoning_efforts": ["none", "low", "medium", "high", "xhigh"],
+        "context_limit": 1050000, "output_limit": 128000,
+        "evidence_revision": "openai.gpt-5.5.2026-08-13"
+      }
+    },
+    {
+      "rule_id": "gpt-5-4",
+      "display_name": "GPT-5.4",
+      "matcher": {"kind": "exact", "value": "gpt-5.4"},
+      "supported_protocols": ["openai-responses.v1"], "selected_protocol": "openai-responses.v1",
+      "capabilities": {
+        "operations": ["conversation_respond"], "input_resources": ["image"], "output_resources": [],
+        "reasoning": "native", "provider_native_tools": [], "reasoning_control": "toggle",
+        "reasoning_efforts": ["none", "low", "medium", "high", "xhigh"],
+        "context_limit": 1050000, "output_limit": 128000,
+        "evidence_revision": "openai.gpt-5.4.2026-08-13"
+      }
+    },
+    {
+      "rule_id": "gpt-5-3-codex-spark",
+      "display_name": "GPT-5.3 Codex Spark",
+      "matcher": {"kind": "exact", "value": "gpt-5.3-codex-spark"},
+      "supported_protocols": ["openai-responses.v1"], "selected_protocol": "openai-responses.v1",
+      "capabilities": {
+        "operations": ["conversation_respond"], "input_resources": [], "output_resources": [],
+        "reasoning": "unknown", "provider_native_tools": [], "reasoning_control": "unknown",
+        "reasoning_efforts": [], "context_limit": 128000,
+        "evidence_revision": "openai.gpt-5.3-codex-spark.2026-08-13"
+      }
+    },
+    {
+      "rule_id": "claude-opus-5",
+      "display_name": "Claude Opus 5",
+      "matcher": {"kind": "exact", "value": "claude-opus-5"},
+      "supported_protocols": ["anthropic-messages.v1"], "selected_protocol": "anthropic-messages.v1",
+      "capabilities": {
+        "operations": ["conversation_respond"], "input_resources": ["image", "file"], "output_resources": [],
+        "reasoning": "native", "provider_native_tools": [], "reasoning_control": "toggle",
+        "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
+        "context_limit": 1000000, "output_limit": 128000,
+        "evidence_revision": "anthropic.claude-5.2026-08-13"
+      }
+    },
+    {
+      "rule_id": "claude-fable-5",
+      "display_name": "Claude Fable 5",
+      "matcher": {"kind": "exact", "value": "claude-fable-5"},
+      "supported_protocols": ["anthropic-messages.v1"], "selected_protocol": "anthropic-messages.v1",
+      "capabilities": {
+        "operations": ["conversation_respond"], "input_resources": ["image", "file"], "output_resources": [],
+        "reasoning": "native", "provider_native_tools": [], "reasoning_control": "fixed_on",
+        "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
+        "context_limit": 1000000, "output_limit": 128000,
+        "evidence_revision": "anthropic.claude-5.2026-08-13"
+      }
+    },
+    {
+      "rule_id": "claude-opus-4-8",
+      "display_name": "Claude Opus 4.8",
+      "matcher": {"kind": "exact", "value": "claude-opus-4-8"},
+      "supported_protocols": ["anthropic-messages.v1"], "selected_protocol": "anthropic-messages.v1",
+      "capabilities": {
+        "operations": ["conversation_respond"], "input_resources": ["image", "file"], "output_resources": [],
+        "reasoning": "native", "provider_native_tools": [], "reasoning_control": "toggle",
+        "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
+        "context_limit": 1000000, "output_limit": 128000,
+        "evidence_revision": "anthropic.claude-opus-4.8.2026-08-13"
+      }
+    },
+    {
+      "rule_id": "claude-opus-4-7",
+      "display_name": "Claude Opus 4.7",
+      "matcher": {"kind": "exact", "value": "claude-opus-4-7"},
+      "supported_protocols": ["anthropic-messages.v1"], "selected_protocol": "anthropic-messages.v1",
+      "capabilities": {
+        "operations": ["conversation_respond"], "input_resources": ["image", "file"], "output_resources": [],
+        "reasoning": "native", "provider_native_tools": [], "reasoning_control": "toggle",
+        "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
+        "context_limit": 1000000, "output_limit": 128000,
+        "evidence_revision": "anthropic.claude-opus-4.7.2026-08-13"
+      }
+    },
+    {
+      "rule_id": "claude-opus-4-6",
+      "display_name": "Claude Opus 4.6",
+      "matcher": {"kind": "exact", "value": "claude-opus-4-6"},
+      "supported_protocols": ["anthropic-messages.v1"], "selected_protocol": "anthropic-messages.v1",
+      "capabilities": {
+        "operations": ["conversation_respond"], "input_resources": ["image", "file"], "output_resources": [],
+        "reasoning": "native", "provider_native_tools": [], "reasoning_control": "toggle",
+        "reasoning_efforts": ["low", "medium", "high", "max"],
+        "context_limit": 1000000, "output_limit": 128000,
+        "evidence_revision": "anthropic.claude-opus-4.6.2026-08-13"
+      }
+    },
+    {
+      "rule_id": "claude-sonnet-5",
+      "display_name": "Claude Sonnet 5",
+      "matcher": {"kind": "exact", "value": "claude-sonnet-5"},
+      "supported_protocols": ["anthropic-messages.v1"], "selected_protocol": "anthropic-messages.v1",
+      "capabilities": {
+        "operations": ["conversation_respond"], "input_resources": ["image", "file"], "output_resources": [],
+        "reasoning": "native", "provider_native_tools": [], "reasoning_control": "toggle",
+        "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
+        "context_limit": 1000000, "output_limit": 128000,
+        "evidence_revision": "anthropic.claude-5.2026-08-13"
+      }
+    },
+    {
+      "rule_id": "claude-sonnet-4-6",
+      "display_name": "Claude Sonnet 4.6",
+      "matcher": {"kind": "exact", "value": "claude-sonnet-4-6"},
+      "supported_protocols": ["anthropic-messages.v1"], "selected_protocol": "anthropic-messages.v1",
+      "capabilities": {
+        "operations": ["conversation_respond"], "input_resources": ["image", "file"], "output_resources": [],
+        "reasoning": "native", "provider_native_tools": [], "reasoning_control": "toggle",
+        "reasoning_efforts": ["low", "medium", "high", "max"],
+        "context_limit": 1000000, "output_limit": 128000,
+        "evidence_revision": "anthropic.claude-sonnet-4.6.2026-08-13"
+      }
+    },
+    {
+      "rule_id": "claude-opus-4-5-20251101",
+      "display_name": "Claude Opus 4.5",
+      "matcher": {"kind": "exact", "value": "claude-opus-4-5-20251101"},
+      "supported_protocols": ["anthropic-messages.v1"], "selected_protocol": "anthropic-messages.v1",
+      "capabilities": {
+        "operations": ["conversation_respond"], "input_resources": ["image", "file"], "output_resources": [],
+        "reasoning": "native", "provider_native_tools": [], "reasoning_control": "toggle",
+        "reasoning_efforts": ["low", "medium", "high"],
+        "context_limit": 200000, "output_limit": 64000,
+        "evidence_revision": "anthropic.claude-opus-4.5.2026-08-13"
+      }
+    },
+    {
+      "rule_id": "claude-haiku-4-5",
+      "display_name": "Claude Haiku 4.5",
+      "matcher": {"kind": "exact", "value": "claude-haiku-4-5"},
+      "supported_protocols": ["anthropic-messages.v1"], "selected_protocol": "anthropic-messages.v1",
+      "capabilities": {
+        "operations": ["conversation_respond"], "input_resources": ["image", "file"], "output_resources": [],
+        "reasoning": "native", "provider_native_tools": [], "reasoning_control": "toggle",
+        "reasoning_efforts": [], "context_limit": 200000, "output_limit": 64000,
+        "evidence_revision": "anthropic.claude-haiku-4.5.2026-08-13"
+      }
+    },
+    {
+      "rule_id": "grok-4-5",
+      "display_name": "Grok 4.5",
+      "matcher": {"kind": "exact", "value": "grok-4.5"},
+      "supported_protocols": ["openai-responses.v1"], "selected_protocol": "openai-responses.v1",
+      "capabilities": {
+        "operations": ["conversation_respond"], "input_resources": ["image"], "output_resources": [],
+        "reasoning": "native", "provider_native_tools": [], "reasoning_control": "fixed_on",
+        "reasoning_efforts": ["low", "medium", "high"], "context_limit": 500000,
+        "evidence_revision": "xai.grok-4.5.2026-08-13"
+      }
+    },
+    {
+      "rule_id": "grok-4-6",
+      "display_name": "Grok 4.6",
+      "matcher": {"kind": "exact", "value": "grok-4.6"},
+      "supported_protocols": ["openai-responses.v1"], "selected_protocol": "openai-responses.v1",
+      "capabilities": {
+        "operations": ["conversation_respond"], "input_resources": ["image"], "output_resources": [],
+        "reasoning": "native", "provider_native_tools": [], "reasoning_control": "fixed_on",
+        "reasoning_efforts": ["low", "medium", "high", "xhigh"], "context_limit": 500000,
+        "evidence_revision": "apikeyfun.grok-4.6.user-confirmed.2026-08-13"
+      }
+    },
+    {
+      "rule_id": "grok-imagine-image",
+      "display_name": "Grok Imagine Image",
+      "matcher": {"kind": "exact", "value": "grok-imagine-image"},
+      "supported_protocols": ["openai-responses.v1"], "selected_protocol": "openai-responses.v1",
+      "default_enabled": false,
+      "capabilities": {
+        "operations": ["image_generate"], "input_resources": [], "output_resources": ["image"],
+        "reasoning": "unsupported", "provider_native_tools": [], "reasoning_control": "fixed_off",
+        "reasoning_efforts": [],
+        "evidence_revision": "apikeyfun.grok-imagine-image.2026-08-13"
+      }
+    },
+    {
+      "rule_id": "grok-imagine-image-quality",
+      "display_name": "Grok Imagine Image Quality",
+      "matcher": {"kind": "exact", "value": "grok-imagine-image-quality"},
+      "supported_protocols": ["openai-responses.v1"], "selected_protocol": "openai-responses.v1",
+      "default_enabled": false,
+      "capabilities": {
+        "operations": ["image_generate"], "input_resources": [], "output_resources": ["image"],
+        "reasoning": "unsupported", "provider_native_tools": [], "reasoning_control": "fixed_off",
+        "reasoning_efforts": [],
+        "evidence_revision": "apikeyfun.grok-imagine-image-quality.2026-08-13"
+      }
+    },
+    {
+      "rule_id": "grok-imagine-video",
+      "display_name": "Grok Imagine Video",
+      "matcher": {"kind": "exact", "value": "grok-imagine-video"},
+      "supported_protocols": ["openai-responses.v1"], "selected_protocol": "openai-responses.v1",
+      "default_enabled": false,
+      "capabilities": {
+        "operations": ["video_generate"], "input_resources": ["image"], "output_resources": ["video"],
+        "reasoning": "unsupported", "provider_native_tools": [], "reasoning_control": "fixed_off",
+        "reasoning_efforts": [],
+        "evidence_revision": "apikeyfun.grok-imagine-video.2026-08-13"
+      }
+    },
+    {
+      "rule_id": "gemini-3-6-flash",
+      "display_name": "Gemini 3.6 Flash",
+      "matcher": {"kind": "exact", "value": "gemini-3.6-flash"},
+      "supported_protocols": ["google.gemini.generate_content"], "selected_protocol": "google.gemini.generate_content",
+      "request_profile_refs": ["apikeyfun.gemini.max-output.v1"],
+      "capabilities": {
+        "operations": ["conversation_respond"], "input_resources": ["image", "audio", "video", "file"], "output_resources": [],
+        "reasoning": "native", "provider_native_tools": [], "reasoning_control": "fixed_on",
+        "reasoning_efforts": ["minimal", "low", "medium", "high"],
+        "context_limit": 1048576, "output_limit": 65536,
+        "evidence_revision": "google.gemini-3.6-flash.2026-08-13"
+      }
+    },
+    {
+      "rule_id": "gemini-3-5-flash",
+      "display_name": "Gemini 3.5 Flash",
+      "matcher": {"kind": "exact", "value": "gemini-3.5-flash"},
+      "supported_protocols": ["google.gemini.generate_content"], "selected_protocol": "google.gemini.generate_content",
+      "request_profile_refs": ["apikeyfun.gemini.max-output.v1"],
+      "capabilities": {
+        "operations": ["conversation_respond"], "input_resources": ["image", "audio", "video", "file"], "output_resources": [],
+        "reasoning": "native", "provider_native_tools": [], "reasoning_control": "fixed_on",
+        "reasoning_efforts": ["minimal", "low", "medium", "high"],
+        "context_limit": 1048576, "output_limit": 65536,
+        "evidence_revision": "google.gemini-3.5-flash.2026-08-13"
+      }
+    },
+    {
+      "rule_id": "gemini-3-1-pro",
+      "display_name": "Gemini 3.1 Pro",
+      "matcher": {"kind": "exact", "value": "gemini-3.1-pro"},
+      "supported_protocols": ["google.gemini.generate_content"], "selected_protocol": "google.gemini.generate_content",
+      "request_profile_refs": ["apikeyfun.gemini.max-output.v1"],
+      "capabilities": {
+        "operations": ["conversation_respond"], "input_resources": ["image", "audio", "video", "file"], "output_resources": [],
+        "reasoning": "native", "provider_native_tools": [], "reasoning_control": "fixed_on",
+        "reasoning_efforts": ["low", "medium", "high"],
+        "context_limit": 1048576, "output_limit": 65536,
+        "evidence_revision": "google.gemini-3.1-pro-alias.2026-08-13"
+      }
+    },
+    {
+      "rule_id": "gemini-3-1-flash-lite",
+      "display_name": "Gemini 3.1 Flash-Lite",
+      "matcher": {"kind": "exact", "value": "gemini-3.1-flash-lite"},
+      "supported_protocols": ["google.gemini.generate_content"], "selected_protocol": "google.gemini.generate_content",
+      "request_profile_refs": ["apikeyfun.gemini.max-output.v1"],
+      "capabilities": {
+        "operations": ["conversation_respond"], "input_resources": ["image", "audio", "video", "file"], "output_resources": [],
+        "reasoning": "native", "provider_native_tools": [], "reasoning_control": "fixed_on",
+        "reasoning_efforts": ["minimal", "low", "medium", "high"],
+        "context_limit": 1048576, "output_limit": 65536,
+        "evidence_revision": "google.gemini-3.1-flash-lite.2026-08-13"
+      }
+    },
+    {
+      "rule_id": "gemini-3-flash",
+      "display_name": "Gemini 3 Flash",
+      "matcher": {"kind": "exact", "value": "gemini-3-flash"},
+      "supported_protocols": ["google.gemini.generate_content"], "selected_protocol": "google.gemini.generate_content",
+      "request_profile_refs": ["apikeyfun.gemini.max-output.v1"],
+      "capabilities": {
+        "operations": ["conversation_respond"], "input_resources": ["image", "audio", "video", "file"], "output_resources": [],
+        "reasoning": "native", "provider_native_tools": [], "reasoning_control": "fixed_on",
+        "reasoning_efforts": ["minimal", "low", "medium", "high"],
+        "context_limit": 1048576, "output_limit": 65536,
+        "evidence_revision": "google.gemini-3-flash-alias.2026-08-13"
+      }
+    },
+    {
+      "rule_id": "glm-5-2",
+      "display_name": "GLM-5.2",
+      "matcher": {"kind": "exact", "value": "glm-5.2"},
+      "supported_protocols": ["openai-responses.v1"], "selected_protocol": "openai-responses.v1",
+      "capabilities": {
+        "operations": ["conversation_respond"], "input_resources": [], "output_resources": [],
+        "reasoning": "native", "provider_native_tools": [], "reasoning_control": "fixed_on",
+        "reasoning_efforts": ["high", "max"], "context_limit": 1000000, "output_limit": 128000,
+        "evidence_revision": "zhipu.glm-5.2.apikeyfun-responses.2026-08-13"
+      }
+    },
+    {
+      "rule_id": "glm-5-1",
+      "display_name": "GLM-5.1",
+      "matcher": {"kind": "exact", "value": "glm-5.1"},
+      "supported_protocols": ["openai-responses.v1"], "selected_protocol": "openai-responses.v1",
+      "capabilities": {
+        "operations": ["conversation_respond"], "input_resources": [], "output_resources": [],
+        "reasoning": "native", "provider_native_tools": [], "reasoning_control": "fixed_on",
+        "reasoning_efforts": [], "context_limit": 200000, "output_limit": 128000,
+        "evidence_revision": "zhipu.glm-5.1.apikeyfun-responses.2026-08-13"
+      }
+    },
+    {
+      "rule_id": "kimi-k3",
+      "display_name": "Kimi K3",
+      "matcher": {"kind": "exact", "value": "kimi-k3"},
+      "supported_protocols": ["anthropic-messages-video.v1"], "selected_protocol": "anthropic-messages-video.v1",
+      "request_profile_refs": ["apikeyfun.kimi.default-output.v1"],
+      "capabilities": {
+        "operations": ["conversation_respond"], "input_resources": ["image", "video"], "output_resources": [],
+        "reasoning": "native", "provider_native_tools": [], "reasoning_control": "fixed_on",
+        "reasoning_efforts": ["low", "high", "max"], "context_limit": 1048576, "output_limit": 1048576,
+        "evidence_revision": "kimi.k3.2026-08-13"
+      }
+    },
+    {
+      "rule_id": "kimi-k2-7-code",
+      "display_name": "Kimi K2.7 Code",
+      "matcher": {"kind": "exact", "value": "kimi-k2.7-code"},
+      "supported_protocols": ["anthropic-messages-video.v1"], "selected_protocol": "anthropic-messages-video.v1",
+      "request_profile_refs": ["apikeyfun.kimi.default-output.v1"],
+      "capabilities": {
+        "operations": ["conversation_respond"], "input_resources": ["image", "video"], "output_resources": [],
+        "reasoning": "native", "provider_native_tools": [], "reasoning_control": "fixed_on",
+        "reasoning_efforts": [], "context_limit": 262144,
+        "evidence_revision": "kimi.k2.7-code.2026-08-13"
+      }
+    },
+    {
+      "rule_id": "kimi-k2-6",
+      "display_name": "Kimi K2.6",
+      "matcher": {"kind": "exact", "value": "kimi-k2.6"},
+      "supported_protocols": ["anthropic-messages-video.v1"], "selected_protocol": "anthropic-messages-video.v1",
+      "request_profile_refs": ["apikeyfun.kimi.default-output.v1"],
+      "capabilities": {
+        "operations": ["conversation_respond"], "input_resources": ["image", "video"], "output_resources": [],
+        "reasoning": "native", "provider_native_tools": [], "reasoning_control": "toggle",
+        "reasoning_efforts": [], "context_limit": 262144,
+        "evidence_revision": "kimi.k2.6.2026-08-13"
+      }
+    },
+    {
+      "rule_id": "deepseek-v4-pro",
+      "display_name": "DeepSeek V4 Pro",
+      "matcher": {"kind": "exact", "value": "deepseek-v4-pro"},
+      "supported_protocols": ["openai-responses.v1"], "selected_protocol": "openai-responses.v1",
+      "capabilities": {
+        "operations": ["conversation_respond"], "input_resources": [], "output_resources": [],
+        "reasoning": "native", "provider_native_tools": [], "reasoning_control": "toggle",
+        "reasoning_efforts": ["none", "high", "max"], "context_limit": 1048576,
+        "evidence_revision": "deepseek.v4.2026-08-13"
+      }
+    },
+    {
+      "rule_id": "deepseek-v4-flash",
+      "display_name": "DeepSeek V4 Flash",
+      "matcher": {"kind": "exact", "value": "deepseek-v4-flash"},
+      "supported_protocols": ["openai-responses.v1"], "selected_protocol": "openai-responses.v1",
+      "capabilities": {
+        "operations": ["conversation_respond"], "input_resources": [], "output_resources": [],
+        "reasoning": "native", "provider_native_tools": [], "reasoning_control": "toggle",
+        "reasoning_efforts": ["none", "high", "max"], "context_limit": 1048576,
+        "evidence_revision": "deepseek.v4.2026-08-13"
+      }
+    }
+  ],
   "usage_profiles": [],
-  "request_profiles": [],
+  "request_profiles": [
+    {
+      "profile_id": "apikeyfun.gemini.max-output.v1",
+      "description": "Always request the verified 65,536-token Gemini output budget instead of the relay default of 8,192.",
+      "payload": {
+        "profile_id": "apikeyfun.gemini.max-output.v1",
+        "revision": 1,
+        "steps": [
+          {"op": "set_literal", "path": "/generationConfig/maxOutputTokens", "value": 65536}
+        ]
+      }
+    },
+    {
+      "profile_id": "apikeyfun.kimi.default-output.v1",
+      "description": "Use the user-confirmed conservative 32,768-token request budget for APIKEY.FUN Kimi models.",
+      "payload": {
+        "profile_id": "apikeyfun.kimi.default-output.v1",
+        "revision": 1,
+        "steps": [
+          {
+            "op": "enum_map",
+            "path": "/max_tokens",
+            "source": "request_field",
+            "source_path": "@output_token_limit",
+            "mapping": {"32000": 32768},
+            "unmatched": "keep_literal"
+          }
+        ]
+      }
+    }
+  ],
   "response_profiles": [],
-  "upload_channels": [],
-  "operations": [],
-  "tool_targets": [],
+  "upload_channels": [
+    {
+      "upload_channel_id": "inline.image-data-url",
+      "description": "Materialize one reviewed local image as an inline Data URL.",
+      "primitive": "inline_data_url",
+      "accepted_mime_types": ["image/jpeg", "image/png", "image/webp"],
+      "max_bytes": 20971520,
+      "max_count": 8,
+      "progress_supported": false,
+      "cancellation_supported": false,
+      "reference_encoding": "response_url"
+    },
+    {
+      "upload_channel_id": "inline.mask-data-url",
+      "description": "Materialize one local PNG edit mask as an inline Data URL.",
+      "primitive": "inline_data_url",
+      "accepted_mime_types": ["image/png"],
+      "max_bytes": 20971520,
+      "max_count": 1,
+      "progress_supported": false,
+      "cancellation_supported": false,
+      "reference_encoding": "response_url"
+    }
+  ],
+  "operations": [
+    {
+      "operation_id": "apikeyfun.gpt-image-2.generate",
+      "operation": "image_generate",
+      "carrier": "provider_tool",
+      "input_resources": [],
+      "output_resources": ["image"],
+      "tool_target_refs": ["gpt-image-2.generate"],
+      "request_profile_refs": [], "response_profile_refs": [],
+      "upload_channel_refs": [], "upload_bindings": [],
+      "timeout_ms": 900000, "idempotent": false
+    },
+    {
+      "operation_id": "apikeyfun.gpt-image-2.edit",
+      "operation": "image_edit",
+      "carrier": "provider_tool",
+      "input_resources": ["image"],
+      "output_resources": ["image"],
+      "tool_target_refs": ["gpt-image-2.edit"],
+      "request_profile_refs": [], "response_profile_refs": [],
+      "upload_channel_refs": ["inline.image-data-url", "inline.mask-data-url"],
+      "upload_bindings": [
+        {
+          "source_path": "/image_path", "target_path": "/image",
+          "upload_channel_refs": ["inline.image-data-url"],
+          "mime_types_by_extension": {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp"},
+          "required": true, "remove_source": true
+        },
+        {
+          "source_path": "/mask_path", "target_path": "/mask",
+          "upload_channel_refs": ["inline.mask-data-url"],
+          "mime_type": "image/png", "required": true, "remove_source": true
+        }
+      ],
+      "timeout_ms": 900000, "idempotent": false
+    },
+    {
+      "operation_id": "apikeyfun.grok-imagine-image.generate",
+      "operation": "image_generate",
+      "carrier": "provider_tool",
+      "input_resources": [], "output_resources": ["image"],
+      "tool_target_refs": ["grok-imagine-image.generate", "grok-imagine-image-quality.generate"],
+      "request_profile_refs": [], "response_profile_refs": [],
+      "upload_channel_refs": [], "upload_bindings": [],
+      "timeout_ms": 300000, "idempotent": false
+    },
+    {
+      "operation_id": "apikeyfun.grok-imagine-video.generate",
+      "operation": "video_generate",
+      "carrier": "provider_tool",
+      "input_resources": ["image"], "output_resources": ["video"],
+      "tool_target_refs": ["grok-imagine-video.generate"],
+      "request_profile_refs": [], "response_profile_refs": [],
+      "upload_channel_refs": ["inline.image-data-url"],
+      "upload_bindings": [
+        {
+          "source_path": "/image/path", "target_path": "/image/url",
+          "upload_channel_refs": ["inline.image-data-url"],
+          "mime_types_by_extension": {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp"},
+          "required": false, "remove_source": true
+        },
+        {
+          "source_path": "/reference_images", "target_path": "/reference_images",
+          "item_source_path": "/path", "item_target_path": "/url",
+          "upload_channel_refs": ["inline.image-data-url"],
+          "mime_types_by_extension": {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp"},
+          "required": false, "remove_source": true
+        }
+      ],
+      "timeout_ms": 900000, "idempotent": false,
+      "async_execution": {
+        "poll_interval_ms": 5000,
+        "max_backoff_ms": 15000,
+        "timeout_ms": 900000,
+        "cancellation_supported": false,
+        "generic_json": {
+          "poll_endpoint_path": "/videos",
+          "poll_method": "get",
+          "task_id_pointer": "/request_id",
+          "task_id_in_path": true,
+          "status_pointer": "/status",
+          "queued_statuses": ["pending"],
+          "running_statuses": [],
+          "success_statuses": ["done", "completed", "succeeded"],
+          "failure_statuses": ["failed", "error"],
+          "cancelled_statuses": ["cancelled"],
+          "success_follow_up": {
+            "endpoint_path": "/videos",
+            "method": "get",
+            "identifier_source": "provider_task_id",
+            "identifier_in_path": true,
+            "identifier_path_suffix": "content",
+            "response_body": "binary_resource"
+          }
+        }
+      }
+    }
+  ],
+  "tool_targets": [
+    {
+      "target_id": "gpt-image-2.generate",
+      "description": "Generate one image with GPT Image 2 through the verified APIKEY.FUN SSE endpoint.",
+      "service_entry_id": "public-api",
+      "credential_profile_ids": ["api-key"],
+      "upstream_target_id": "gpt-image-2",
+      "availability_model_ids_any": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
+      "display_name": "GPT Image 2 Generation",
+      "tool_id": "image_generate",
+      "capability": "image_generate",
+      "input_schema": {
+        "type": "object", "additionalProperties": false,
+        "properties": {
+          "model": {"type": "string", "const": "gpt-image-2", "default": "gpt-image-2"},
+          "prompt": {"type": "string", "minLength": 1, "description": "Complete image generation instruction."},
+          "n": {"type": "integer", "const": 1, "default": 1},
+          "size": {"type": "string", "pattern": "^[1-9][0-9]{1,4}x[1-9][0-9]{1,4}$", "default": "1024x1024", "description": "Requested aspect-ratio carrier; actual output dimensions are provider-managed."},
+          "quality": {"type": "string", "enum": ["auto", "low", "medium", "high"], "default": "auto"},
+          "stream": {"type": "boolean", "const": true, "default": true},
+          "response_format": {"type": "string", "const": "b64_json", "default": "b64_json"}
+        },
+        "required": ["prompt"]
+      },
+      "extension_profile": {
+        "summary": "Generate a new image with GPT Image 2; this target is available only when the current API key exposes at least one GPT-5.6 model.",
+        "characteristics": ["Strong complex-UI composition and comparatively accurate Chinese text in verified samples.", "Supports ordinary text-to-image generation."],
+        "input_modes": ["text_to_image"],
+        "resolution_policy": {"mode": "provider_managed", "aspect_ratios": ["custom_size_ratio"]},
+        "format_policy": {"input_formats": ["text"], "output_formats": ["image/png"]},
+        "constraints": ["Exactly one image is generated.", "Reference-image generation is not exposed because the APIKEY.FUN request shape has not been verified."],
+        "limitations": ["Requested size is not a pixel guarantee; verified outputs normalize to about 1.57 million pixels.", "2048x1152 and 3840x2160 both produced 1672x941; high quality did not produce native 4K."],
+        "evidence_refs": ["docs/plan/20260813-04-APIKEYFUN_VERIFIED_PROVIDER_FACTS.md#四codex-分组隐式图片能力"]
+      },
+      "output": {
+        "kind": "resources", "source_path": "/", "normalized_result_path": "resources", "resource_kind": "image", "mime_types": ["image/png"],
+        "resource_decoders": [
+          {"source_path": "/b64_json", "encoding": "base64", "resource_kind": "image", "mime_type": "image/png", "optional": true, "max_bytes": 104857600, "output_id_prefix": "image"},
+          {"source_path": "/data/0/b64_json", "encoding": "base64", "resource_kind": "image", "mime_type": "image/png", "optional": true, "max_bytes": 104857600, "output_id_prefix": "data-image"},
+          {"source_path": "/item/result", "encoding": "base64", "resource_kind": "image", "mime_type": "image/png", "optional": true, "max_bytes": 104857600, "output_id_prefix": "item-image"}
+        ]
+      },
+      "execution": {
+        "endpoint_path": "/images/generations", "authentication": "bearer_authorization", "adapter": "generic_json", "execution_kind": "http_json_sse",
+        "sse_events": {"event_type_path": "/type", "nonterminal_event_types": ["image_generation.partial_image"], "terminal_event_types": ["image_generation.completed"], "allow_done_record": true}
+      }
+    },
+    {
+      "target_id": "gpt-image-2.edit",
+      "description": "Edit a masked region of one source image with GPT Image 2 through the verified APIKEY.FUN multipart SSE endpoint.",
+      "service_entry_id": "public-api", "credential_profile_ids": ["api-key"],
+      "upstream_target_id": "gpt-image-2",
+      "availability_model_ids_any": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
+      "display_name": "GPT Image 2 Masked Edit", "tool_id": "image_edit", "capability": "image_edit",
+      "input_schema": {
+        "type": "object", "additionalProperties": false,
+        "properties": {
+          "image_path": {"type": "string", "minLength": 1, "description": "Local JPEG, PNG, or WebP source image path."},
+          "mask_path": {"type": "string", "minLength": 1, "description": "Local PNG mask path that defines the edit region."},
+          "prompt": {"type": "string", "minLength": 1, "description": "Exact masked edit instruction."},
+          "model": {"type": "string", "const": "gpt-image-2", "default": "gpt-image-2"},
+          "n": {"type": "integer", "const": 1, "default": 1},
+          "quality": {"type": "string", "enum": ["auto", "low", "medium", "high"], "default": "auto"},
+          "size": {"type": "string", "pattern": "^[1-9][0-9]{1,4}x[1-9][0-9]{1,4}$", "default": "1024x1024"},
+          "stream": {"type": "boolean", "const": true, "default": true},
+          "response_format": {"type": "string", "const": "b64_json", "default": "b64_json"}
+        },
+        "required": ["image_path", "mask_path", "prompt"]
+      },
+      "extension_profile": {
+        "summary": "Edit an explicitly masked region of one source image with GPT Image 2.",
+        "characteristics": ["Independent masked-edit capability; it is never selected merely because image generation has a reference image."],
+        "input_modes": ["masked_image_edit"],
+        "resolution_policy": {"mode": "provider_managed", "aspect_ratios": ["custom_size_ratio"]},
+        "format_policy": {"input_formats": ["image/jpeg", "image/png", "image/webp", "mask:image/png"], "output_formats": ["image/png"]},
+        "constraints": ["A source image, PNG mask, and prompt are mandatory in the product contract.", "Exactly one output image is requested."],
+        "limitations": ["Mask transparency and dimension rules still require provider-side acceptance testing.", "Requested size remains provider-managed rather than guaranteed."],
+        "evidence_refs": ["docs/plan/20260813-04-APIKEYFUN_VERIFIED_PROVIDER_FACTS.md#43-图片编辑-ai-扩展"]
+      },
+      "output": {
+        "kind": "resources", "source_path": "/", "normalized_result_path": "resources", "resource_kind": "image", "mime_types": ["image/png"],
+        "resource_decoders": [
+          {"source_path": "/b64_json", "encoding": "base64", "resource_kind": "image", "mime_type": "image/png", "optional": true, "max_bytes": 104857600, "output_id_prefix": "image"},
+          {"source_path": "/data/0/b64_json", "encoding": "base64", "resource_kind": "image", "mime_type": "image/png", "optional": true, "max_bytes": 104857600, "output_id_prefix": "data-image"},
+          {"source_path": "/item/result", "encoding": "base64", "resource_kind": "image", "mime_type": "image/png", "optional": true, "max_bytes": 104857600, "output_id_prefix": "item-image"}
+        ]
+      },
+      "execution": {
+        "endpoint_path": "/images/edits", "authentication": "bearer_authorization", "adapter": "generic_json", "execution_kind": "http_multipart_sse",
+        "multipart_request": {"fields": [
+          {"argument_path": "/image", "field_name": "image", "file": true, "required": true},
+          {"argument_path": "/mask", "field_name": "mask", "file": true, "required": true},
+          {"argument_path": "/prompt", "field_name": "prompt", "required": true},
+          {"argument_path": "/model", "field_name": "model", "required": true},
+          {"argument_path": "/n", "field_name": "n", "required": true},
+          {"argument_path": "/quality", "field_name": "quality", "required": true},
+          {"argument_path": "/size", "field_name": "size", "required": true},
+          {"argument_path": "/stream", "field_name": "stream", "required": true},
+          {"argument_path": "/response_format", "field_name": "response_format", "required": true}
+        ]},
+        "sse_events": {"event_type_path": "/type", "nonterminal_event_types": ["image_generation.partial_image"], "terminal_event_types": ["image_generation.completed"], "allow_done_record": true}
+      }
+    },
+    {
+      "target_id": "grok-imagine-image.generate",
+      "description": "Generate one image with the standard Grok Imagine image model through the verified synchronous APIKEY.FUN endpoint.",
+      "service_entry_id": "public-api", "credential_profile_ids": ["api-key"],
+      "upstream_target_id": "grok-imagine-image", "availability_model_ids_any": ["grok-imagine-image"],
+      "display_name": "Grok Imagine Image", "tool_id": "image_generate", "capability": "image_generate",
+      "input_schema": {
+        "type": "object", "additionalProperties": false,
+        "properties": {
+          "model": {"type": "string", "const": "grok-imagine-image", "default": "grok-imagine-image"},
+          "prompt": {"type": "string", "minLength": 1},
+          "n": {"type": "integer", "const": 1, "default": 1},
+          "aspect_ratio": {"type": "string", "enum": ["auto", "1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"], "default": "auto"},
+          "resolution": {"type": "string", "const": "1k", "default": "1k"},
+          "response_format": {"type": "string", "const": "b64_json", "default": "b64_json"}
+        }, "required": ["prompt"]
+      },
+      "extension_profile": {
+        "summary": "Generate one standard-cost Grok Imagine image with a reviewed aspect ratio.",
+        "characteristics": ["Fast standard image route.", "Verified 16:9 output was 1280x720 JPEG."],
+        "input_modes": ["text_to_image"],
+        "resolution_policy": {"mode": "fixed_presets", "presets": [{"value": "1k"}], "aspect_ratios": ["auto", "1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"]},
+        "format_policy": {"input_formats": ["text"], "output_formats": ["image/jpeg"]},
+        "constraints": ["Exactly one image and resolution 1k are sent."],
+        "limitations": ["UI text accuracy varied in the single verified sample.", "The route does not expose the unavailable grok-imagine-edit model."],
+        "evidence_refs": ["docs/plan/20260813-04-APIKEYFUN_VERIFIED_PROVIDER_FACTS.md#6411-apikeyfun-真实调用结果"]
+      },
+      "output": {
+        "kind": "resources", "source_path": "/data", "normalized_result_path": "resources", "resource_kind": "image", "mime_types": ["image/jpeg"],
+        "resource_decoders": [{"source_path": "/data/0/b64_json", "encoding": "base64", "resource_kind": "image", "mime_type": "image/jpeg", "max_bytes": 104857600, "output_id_prefix": "image"}]
+      },
+      "execution": {"endpoint_path": "/images/generations", "authentication": "bearer_authorization", "adapter": "generic_json", "execution_kind": "http_json_sync"}
+    },
+    {
+      "target_id": "grok-imagine-image-quality.generate",
+      "description": "Generate one image with the independent high-quality Grok Imagine model through the verified synchronous APIKEY.FUN endpoint.",
+      "service_entry_id": "public-api", "credential_profile_ids": ["api-key"],
+      "upstream_target_id": "grok-imagine-image-quality", "availability_model_ids_any": ["grok-imagine-image-quality"],
+      "display_name": "Grok Imagine Image Quality", "tool_id": "image_generate", "capability": "image_generate",
+      "input_schema": {
+        "type": "object", "additionalProperties": false,
+        "properties": {
+          "model": {"type": "string", "const": "grok-imagine-image-quality", "default": "grok-imagine-image-quality"},
+          "prompt": {"type": "string", "minLength": 1},
+          "n": {"type": "integer", "const": 1, "default": 1},
+          "aspect_ratio": {"type": "string", "enum": ["auto", "1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"], "default": "auto"},
+          "resolution": {"type": "string", "const": "1k", "default": "1k"},
+          "response_format": {"type": "string", "const": "b64_json", "default": "b64_json"}
+        }, "required": ["prompt"]
+      },
+      "extension_profile": {
+        "summary": "Generate one image with the independently billed Grok Imagine quality model.",
+        "characteristics": ["Verified sample had stronger Chinese UI organization than the standard model.", "Independent model ID rather than a quality flag on the standard model."],
+        "input_modes": ["text_to_image"],
+        "resolution_policy": {"mode": "fixed_presets", "presets": [{"value": "1k"}], "aspect_ratios": ["auto", "1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"]},
+        "format_policy": {"input_formats": ["text"], "output_formats": ["image/jpeg"]},
+        "constraints": ["Exactly one image and resolution 1k are sent."],
+        "limitations": ["One sample is not a permanent quality guarantee.", "Verified raw cost ticks were 2.5 times the standard image model."],
+        "evidence_refs": ["docs/plan/20260813-04-APIKEYFUN_VERIFIED_PROVIDER_FACTS.md#6411-apikeyfun-真实调用结果"]
+      },
+      "output": {
+        "kind": "resources", "source_path": "/data", "normalized_result_path": "resources", "resource_kind": "image", "mime_types": ["image/jpeg"],
+        "resource_decoders": [{"source_path": "/data/0/b64_json", "encoding": "base64", "resource_kind": "image", "mime_type": "image/jpeg", "max_bytes": 104857600, "output_id_prefix": "image"}]
+      },
+      "execution": {"endpoint_path": "/images/generations", "authentication": "bearer_authorization", "adapter": "generic_json", "execution_kind": "http_json_sync"}
+    },
+    {
+      "target_id": "grok-imagine-video.generate",
+      "description": "Generate a Grok Imagine video through the verified APIKEY.FUN asynchronous start, poll, and authenticated content route.",
+      "service_entry_id": "public-api", "credential_profile_ids": ["api-key"],
+      "upstream_target_id": "grok-imagine-video", "availability_model_ids_any": ["grok-imagine-video"],
+      "display_name": "Grok Imagine Video", "tool_id": "video_generate", "capability": "video_generate",
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object", "additionalProperties": false,
+        "properties": {
+          "model": {"type": "string", "const": "grok-imagine-video", "default": "grok-imagine-video"},
+          "prompt": {"type": "string", "minLength": 1},
+          "image": {"type": "object", "additionalProperties": false, "properties": {"path": {"type": "string", "minLength": 1}}, "required": ["path"]},
+          "reference_images": {"type": "array", "minItems": 1, "maxItems": 7, "items": {"type": "object", "additionalProperties": false, "properties": {"path": {"type": "string", "minLength": 1}}, "required": ["path"]}},
+          "reference_audios": {"type": "array", "minItems": 1, "maxItems": 3, "items": {"type": "object", "additionalProperties": false, "properties": {"voice_id": {"type": "string", "minLength": 1}}, "required": ["voice_id"]}},
+          "aspect_ratio": {"type": "string", "enum": ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"]},
+          "duration": {"type": "integer", "minimum": 1, "maximum": 15, "default": 8},
+          "resolution": {"type": "string", "enum": ["480p", "720p"], "default": "480p"}
+        },
+        "anyOf": [
+          {"required": ["prompt"]},
+          {"required": ["image"]},
+          {"required": ["reference_images"]},
+          {"required": ["reference_audios"]}
+        ],
+        "allOf": [
+          {"not": {"required": ["image", "reference_images"]}},
+          {"not": {"required": ["image", "reference_audios"]}},
+          {"if": {"anyOf": [{"required": ["reference_images"]}, {"required": ["reference_audios"]}]}, "then": {"required": ["prompt", "aspect_ratio"]}},
+          {"if": {"required": ["image"]}, "then": {"not": {"required": ["aspect_ratio"]}}}
+        ]
+      },
+      "extension_profile": {
+        "summary": "Generate text-to-video, single-image-to-video, or reviewed multi-reference video with Grok Imagine Video.",
+        "characteristics": ["Asynchronous generation with authenticated binary content download.", "Single-image mode preserves the input image aspect ratio."],
+        "input_modes": ["text_to_video", "image_to_video", "multi_reference_video"],
+        "resolution_policy": {"mode": "fixed_presets", "presets": [{"value": "480p"}, {"value": "720p"}], "aspect_ratios": ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"]},
+        "duration_policy": {"minimum_seconds": 1, "maximum_seconds": 15, "default_seconds": 8},
+        "format_policy": {"input_formats": ["text", "image/jpeg", "image/png", "image/webp", "reference_voice_id"], "output_formats": ["video/mp4", "video:h264", "audio:aac"]},
+        "constraints": ["Single-image mode must omit aspect_ratio.", "Multi-reference mode accepts at most seven images and three voice IDs and requires prompt plus aspect_ratio.", "Video editing and extension endpoints are not exposed."],
+        "limitations": ["The ordinary 15-second ceiling must not be interpreted as a verified 15-second multi-reference guarantee.", "480p is supported by configuration evidence; the completed live samples used 720p and two seconds."],
+        "evidence_refs": ["docs/plan/20260813-04-APIKEYFUN_VERIFIED_PROVIDER_FACTS.md#6431-apikeyfun-权威参数与真实调用结果"]
+      },
+      "output": {
+        "kind": "resources", "source_path": "/", "normalized_result_path": "resources", "resource_kind": "video", "mime_types": ["video/mp4"],
+        "resource_decoders": [{"source_path": "/", "encoding": "binary_body", "resource_kind": "video", "mime_type": "video/mp4", "max_bytes": 104857600, "output_id_prefix": "video"}]
+      },
+      "execution": {"endpoint_path": "/videos/generations", "authentication": "bearer_authorization", "adapter": "generic_json", "execution_kind": "http_json_async_poll"}
+    }
+  ],
   "provenance": {
-    "status": "migrated",
-    "sources": []
+    "status": "verified",
+    "sources": [
+      {"url": "https://api.apikey.fun/v1/models", "note": "Credential-scoped model discovery endpoint; runtime activation is the intersection with exact local rules."},
+      {"url": "https://api.apikey.fun/v1/responses", "note": "Verified Responses route for Codex, Grok LLM, GLM, and DeepSeek groups."},
+      {"url": "https://api.apikey.fun/v1/messages", "note": "Verified Anthropic Messages route for the Claude group and configured Kimi group."},
+      {"url": "https://api.apikey.fun/v1/images/generations", "note": "Verified GPT SSE and Grok synchronous image generation route."},
+      {"url": "https://api.apikey.fun/v1/images/edits", "note": "Verified GPT multipart SSE image-edit route."},
+      {"url": "https://api.apikey.fun/v1/videos/generations", "note": "Verified Grok video task creation route."}
+    ]
   }
 }

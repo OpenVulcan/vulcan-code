@@ -82,8 +82,8 @@ export function ToolPresentationCard(props: {
   // Optional request stream state rendered by the resolved original card.
   // 由已解析原始卡片渲染的可选请求流状态。
   requestProgress: ToolRequestCardProgress | null;
-  // Expansion id set shared with the virtualized transcript surface.
-  // 与虚拟滚动转录界面共享的展开标识集合。
+  // Expansion id set shared with the native-flow transcript surface.
+  // 与原生流转录界面共享的展开标识集合。
   expandedToolPresentationIds: Set<string>;
   // Updates the surface-level expansion state.
   // 更新界面级展开状态。
@@ -531,20 +531,20 @@ function ToolRequestInlineProgress(props: {
   );
 }
 
-// commandPresentationDetailCache avoids refetching hidden details after virtualized remounts.
-// commandPresentationDetailCache 避免虚拟滚动重挂后重复请求隐藏详情。
+// commandPresentationDetailCache avoids refetching hidden details after ordinary remounts.
+// commandPresentationDetailCache 避免普通重新挂载后重复请求隐藏详情。
 const commandPresentationDetailCache = new Map<string, CommandExecutionPresentation>();
 
-// askQuestionPresentationDetailCache avoids refetching completed ask answers after virtualized remounts.
-// askQuestionPresentationDetailCache 避免虚拟滚动重挂后重复请求已完成 ask 答案。
+// askQuestionPresentationDetailCache avoids refetching completed ask answers after ordinary remounts.
+// askQuestionPresentationDetailCache 避免普通重新挂载后重复请求已完成 ask 答案。
 const askQuestionPresentationDetailCache = new Map<string, AskQuestionPresentation>();
 
 // markdownToolPresentationDetailCache avoids refetching full Markdown-output detail after remounts.
 // markdownToolPresentationDetailCache 避免重挂后重复请求完整 Markdown 输出详情。
 const markdownToolPresentationDetailCache = new Map<string, MarkdownToolPresentation>();
 
-// luaExecutionPresentationDetailCache avoids refetching full RunLua results after virtualized remounts.
-// luaExecutionPresentationDetailCache 避免虚拟滚动重挂后重复请求完整 RunLua 结果。
+// luaExecutionPresentationDetailCache avoids refetching full RunLua results after ordinary remounts.
+// luaExecutionPresentationDetailCache 避免普通重新挂载后重复请求完整 RunLua 结果。
 const luaExecutionPresentationDetailCache = new Map<string, LuaExecutionPresentation>();
 
 // subagentOrchestrationPresentationDetailCache avoids refetching hidden subagent status details.

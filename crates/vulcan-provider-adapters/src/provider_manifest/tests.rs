@@ -17,7 +17,9 @@ fn current_execution_registry_contains_only_runtime_backed_primitives() {
         BTreeSet::from([
             String::from("conversation_media_analyze"),
             String::from("http_json_async_poll"),
+            String::from("http_json_sse"),
             String::from("http_json_sync"),
+            String::from("http_multipart_sse"),
             String::from("mcp_http_call"),
         ])
     );
@@ -457,8 +459,13 @@ fn manifest_parser_matches_schema_unknown_field_closure() {
             serde_json::from_str(&manifest_text).expect("bundled manifest must be valid JSON");
         assert!(
             validator.is_valid(&manifest),
-            "unchanged bundled manifest must satisfy the committed schema: {}",
-            manifest_path.display()
+            "unchanged bundled manifest must satisfy the committed schema: {}\n{}",
+            manifest_path.display(),
+            validator
+                .iter_errors(&manifest)
+                .map(|error| error.to_string())
+                .collect::<Vec<_>>()
+                .join("\n")
         );
         let mut pointers = Vec::new();
         collect_json_object_pointers(&manifest, "", &mut pointers);

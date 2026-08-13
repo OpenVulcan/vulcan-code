@@ -312,6 +312,14 @@ pub struct ExecutionPreparationRequest {
             vulcan_workbench_model::SessionProviderToolTargetSelection,
         >,
     >,
+    /// Optional session-selected native model-extension target sets keyed by extension capability.
+    /// 按扩展能力索引的可选会话级原生模型扩展目标集合。
+    pub provider_extension_target_sets_override: Option<
+        std::collections::BTreeMap<
+            String,
+            std::collections::BTreeSet<vulcan_workbench_model::SessionProviderToolTargetSelection>,
+        >,
+    >,
     /// Optional child-agent prompt context routed through the shared prompt composer.
     /// 通过共享提示词组合器路由的可选子智能体提示词上下文。
     pub subagent_prompt_context: Option<ExecutionSubagentPromptContext>,

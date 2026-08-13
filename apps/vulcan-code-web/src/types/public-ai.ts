@@ -656,12 +656,14 @@ export interface PublicAiModelCapabilityOverrideRecord {
   overrides: PublicAiModelCapabilityOverrides;
 }
 
-// PublicAiProviderToolCapabilityKind identifies one single-select semantic provider tool.
-// PublicAiProviderToolCapabilityKind 标识一种单选语义供应商工具。
+// PublicAiProviderToolCapabilityKind identifies one direct or model-extension provider capability.
+// PublicAiProviderToolCapabilityKind 标识一种直连或模型扩展供应商能力。
 export type PublicAiProviderToolCapabilityKind =
   | "web_search"
   | "web_extract"
-  | "media_analyze"
+  | "image_understand"
+  | "video_understand"
+  | "audio_understand"
   | "image_generate"
   | "image_edit"
   | "video_generate"
@@ -671,6 +673,43 @@ export type PublicAiProviderToolCapabilityKind =
   | "speech_transcribe"
   | "music_generate"
   | "music_cover";
+
+// PublicAiProviderToolExtensionProfile describes one reviewed native extension model.
+// PublicAiProviderToolExtensionProfile 描述一个经过审核的原生扩展模型。
+export interface PublicAiProviderToolExtensionProfile {
+  summary: string;
+  characteristics?: string[];
+  input_modes?: string[];
+  resolution_policy?: {
+    mode: "fixed_presets" | "bounded_custom" | "provider_managed";
+    presets?: Array<{ value: string; width?: number; height?: number }>;
+    aspect_ratios?: string[];
+    custom_bounds?: {
+      minimum_width: number;
+      maximum_width: number;
+      minimum_height: number;
+      maximum_height: number;
+      step: number;
+      minimum_pixels?: number;
+      maximum_pixels?: number;
+    };
+  };
+  duration_policy?: {
+    minimum_seconds: number;
+    maximum_seconds: number;
+    default_seconds?: number;
+    presets_seconds?: number[];
+  };
+  format_policy?: {
+    input_formats?: string[];
+    output_formats?: string[];
+    sample_rates_hz?: number[];
+    channel_counts?: number[];
+  };
+  constraints?: string[];
+  limitations?: string[];
+  evidence_refs?: string[];
+}
 
 // PublicAiOperation identifies one provider-neutral AI operation.
 // PublicAiOperation 标识一项供应商无关 AI 操作。
@@ -756,6 +795,7 @@ export interface PublicAiProviderToolContract {
   description: string;
   capability: PublicAiProviderToolCapabilityKind;
   input_schema: Record<string, unknown>;
+  extension_profile?: PublicAiProviderToolExtensionProfile;
   output: {
     kind: "text" | "resources" | "embedding" | "rerank" | "search" | "extract" | "composite";
     source_path: string;
@@ -773,6 +813,7 @@ export interface PublicAiProviderToolTarget {
   service_entry_id: string;
   credential_profile_ids: string[];
   upstream_target_id: string;
+  availability_model_ids_any?: string[];
   display_name: string;
   contract: PublicAiProviderToolContract;
 }
@@ -782,6 +823,7 @@ export interface PublicAiProviderToolTarget {
 export interface PublicAiProviderToolTargetSnapshot {
   connectionId: string;
   connectionDisplayName: string;
+  manifestSourceLayer: "bundled" | "active" | "custom" | "previous";
   target: PublicAiProviderToolTarget;
 }
 
@@ -816,7 +858,11 @@ export interface PublicAiProviderToolTargetSelection {
 // PublicAiSessionProviderToolConflict 描述一项需要确认的已保留选择。
 export interface PublicAiSessionProviderToolConflict {
   capability: PublicAiProviderToolCapabilityKind;
-  kind: "missing_selection" | "target_unavailable";
+  kind:
+    | "missing_selection"
+    | "target_unavailable"
+    | "invalid_direct_capability"
+    | "invalid_extension_target_set";
   message: string;
 }
 
@@ -826,6 +872,9 @@ export interface PublicAiSessionProviderToolSettings {
   enabledCapabilities: PublicAiProviderToolCapabilityKind[];
   selections: Partial<
     Record<PublicAiProviderToolCapabilityKind, PublicAiProviderToolTargetSelection>
+  >;
+  extensionTargetSets: Partial<
+    Record<PublicAiProviderToolCapabilityKind, PublicAiProviderToolTargetSelection[]>
   >;
   conflicts: PublicAiSessionProviderToolConflict[];
 }
@@ -1074,6 +1123,9 @@ export interface PublicAiSettingsSnapshot {
     Record<PublicAiProviderToolCapabilityKind, PublicAiProviderToolTargetSelection>
   >;
   providerToolEnabledCapabilities: PublicAiProviderToolCapabilityKind[];
+  providerExtensionTargetSets: Partial<
+    Record<PublicAiProviderToolCapabilityKind, PublicAiProviderToolTargetSelection[]>
+  >;
   internalInferenceCandidates: PublicAiInternalInferenceCandidate[];
   inferenceProfiles: Record<string, PublicAiInferenceProfile>;
   inferenceRouteDiagnostics: PublicAiInferenceRouteDiagnostic[];

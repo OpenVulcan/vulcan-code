@@ -38,6 +38,10 @@ import type {
 import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
 import {
+  isDirectProviderToolCapability,
+  isModelExtensionCapability,
+} from "@/lib/provider-tool-capabilities";
+import {
   loadPublicAiSessionProviderToolSelections,
   loadPublicAiSettings,
   savePublicAiSessionProviderToolSelections,
@@ -253,6 +257,7 @@ export function ComposerAiCapabilityControl(props: {
   const [draft, setDraft] = React.useState<ComposerProviderToolSettingsSnapshot>({
     enabledCapabilities: [],
     selections: {},
+    extensionTargetSets: {},
   });
   const [baselineSignature, setBaselineSignature] = React.useState("{}");
   const [saving, setSaving] = React.useState(false);
@@ -274,10 +279,12 @@ export function ComposerAiCapabilityControl(props: {
           ? {
               enabledCapabilities: sessionSettings.enabledCapabilities,
               selections: sessionSettings.selections,
+              extensionTargetSets: sessionSettings.extensionTargetSets,
             }
           : props.draftSettings ?? {
               enabledCapabilities: nextSnapshot.providerToolEnabledCapabilities,
               selections: nextSnapshot.providerToolSelections,
+              extensionTargetSets: nextSnapshot.providerExtensionTargetSets,
             };
         const capabilities = orderedProviderToolCapabilities(nextSnapshot);
         setSnapshot(nextSnapshot);
@@ -303,9 +310,14 @@ export function ComposerAiCapabilityControl(props: {
 
   const capabilities = snapshot ? orderedProviderToolCapabilities(snapshot) : [];
   const capabilityTargets = snapshot?.providerToolTargets.filter(
-    (target) => target.target.contract.capability === selectedCapability,
+    (target) => target.target.contract.capability === selectedCapability
+      && (!isModelExtensionCapability(selectedCapability)
+        || target.manifestSourceLayer !== "custom"),
   ) ?? [];
   const selectedModels = uniqueProviderToolModels(capabilityTargets);
+  // selectedExtensionTargets is the complete native model set for the selected capability.
+  // selectedExtensionTargets 是当前选中能力的完整原生模型集合。
+  const selectedExtensionTargets = draft.extensionTargetSets[selectedCapability] ?? [];
   const selectedSelection = draft.selections[selectedCapability];
   const selectedModel = selectedModels.find(
     (target) => target.target.target_id === selectedSelection?.target_id,
@@ -318,7 +330,10 @@ export function ComposerAiCapabilityControl(props: {
   ) ?? null;
   const localConflicts = snapshot ? providerToolSettingsConflicts(snapshot, draft) : [];
   const conflicts = localConflicts;
-  const enabledCount = draft.enabledCapabilities.length;
+  // enabledCount combines direct enabled capabilities and non-empty extension sets.
+  // enabledCount 合并直连已启用能力与非空扩展集合。
+  const enabledCount = draft.enabledCapabilities.length + Object.values(draft.extensionTargetSets)
+    .filter((selections) => selections && selections.length > 0).length;
   const hasUnsavedChanges =
     providerToolSettingsSignature(draft) !== baselineSignature;
   React.useEffect(() => {
@@ -337,10 +352,12 @@ export function ComposerAiCapabilityControl(props: {
         conversationId: props.conversationId,
         enabledCapabilities: draft.enabledCapabilities,
         selections: draft.selections,
+        extensionTargetSets: draft.extensionTargetSets,
       });
       const nextDraft = {
         enabledCapabilities: next.enabledCapabilities,
         selections: next.selections,
+        extensionTargetSets: next.extensionTargetSets,
       };
       setDraft(nextDraft);
       setBaselineSignature(providerToolSettingsSignature(nextDraft));
@@ -376,7 +393,7 @@ export function ComposerAiCapabilityControl(props: {
                     <span
                       className={cn(
                         "composer-capability-colored-icon",
-                        draft.enabledCapabilities.includes(capability) ? "enabled" : "disabled",
+                        composerCapabilityIsEnabled(draft, capability) ? "enabled" : "disabled",
                       )}
                       key={capability}
                       style={{
@@ -415,9 +432,21 @@ export function ComposerAiCapabilityControl(props: {
         <div className="composer-capability-dialog-grid">
           <aside className="composer-capability-dialog-left">
             {capabilities.map((capability) => {
-              const enabled = draft.enabledCapabilities.includes(capability);
+              // directMode controls whether the capability uses one selected route and a switch.
+              // directMode 控制当前能力是否使用单路由与开关。
+              const directMode = isDirectProviderToolCapability(capability);
+              // extensionSelectionCount reports selected native models for one extension family.
+              // extensionSelectionCount 报告一个扩展能力族已选原生模型数量。
+              const extensionSelectionCount = draft.extensionTargetSets[capability]?.length ?? 0;
+              // enabled represents direct activation or a non-empty native extension set.
+              // enabled 表示直连启用或非空原生扩展集合。
+              const enabled = directMode
+                ? draft.enabledCapabilities.includes(capability)
+                : extensionSelectionCount > 0;
               const targets = snapshot?.providerToolTargets.filter(
-                (target) => target.target.contract.capability === capability,
+                (target) => target.target.contract.capability === capability
+                  && (!isModelExtensionCapability(capability)
+                    || target.manifestSourceLayer !== "custom"),
               ) ?? [];
               const targetCount = uniqueProviderToolModels(targets).length;
               const conflict = conflicts.find((item) => item.capability === capability);
@@ -432,35 +461,42 @@ export function ComposerAiCapabilityControl(props: {
                   role="button"
                   tabIndex={0}
                 >
-                  <input
-                    checked={enabled}
-                    disabled={saving || targetCount === 0}
-                    onChange={(event) => {
-                      event.stopPropagation();
-                      const checked = event.currentTarget.checked;
-                      setDraft((current) => {
-                        const enabledCapabilities = new Set(current.enabledCapabilities);
-                        if (!checked) {
-                          enabledCapabilities.delete(capability);
+                  {directMode ? (
+                    <input
+                      checked={enabled}
+                      disabled={saving || targetCount === 0}
+                      onChange={(event) => {
+                        event.stopPropagation();
+                        const checked = event.currentTarget.checked;
+                        setDraft((current) => {
+                          const enabledCapabilities = new Set(current.enabledCapabilities);
+                          if (!checked) {
+                            enabledCapabilities.delete(capability);
+                            return { ...current, enabledCapabilities: Array.from(enabledCapabilities).sort() };
+                          }
+                          enabledCapabilities.add(capability);
+                          const first = targets[0];
+                          if (first) {
+                            return {
+                              ...current,
+                              enabledCapabilities: Array.from(enabledCapabilities).sort(),
+                              selections: current.selections[capability] ? current.selections : {
+                                ...current.selections,
+                                [capability]: selectionForTarget(first),
+                              },
+                            };
+                          }
                           return { ...current, enabledCapabilities: Array.from(enabledCapabilities).sort() };
-                        }
-                        enabledCapabilities.add(capability);
-                        const first = targets[0];
-                        if (first) {
-                          return {
-                            enabledCapabilities: Array.from(enabledCapabilities).sort(),
-                            selections: current.selections[capability] ? current.selections : {
-                              ...current.selections,
-                              [capability]: selectionForTarget(first),
-                            },
-                          };
-                        }
-                        return { ...current, enabledCapabilities: Array.from(enabledCapabilities).sort() };
-                      });
-                    }}
-                    onClick={(event) => event.stopPropagation()}
-                    type="checkbox"
-                  />
+                        });
+                      }}
+                      onClick={(event) => event.stopPropagation()}
+                      type="checkbox"
+                    />
+                  ) : (
+                    <span className="composer-capability-extension-count">
+                      {extensionSelectionCount}
+                    </span>
+                  )}
                   <span className="composer-capability-kind-select">
                     <span className={cn(
                       "composer-capability-colored-icon",
@@ -487,7 +523,102 @@ export function ComposerAiCapabilityControl(props: {
             })}
           </aside>
           <section className="composer-capability-dialog-right">
-            {selectedModels.length ? (
+            {selectedModels.length && isModelExtensionCapability(selectedCapability) ? (
+              <div className="composer-capability-extension-list">
+                <p className="settings-muted-line">
+                  选择可供 AI 通过模型扩展参数查询后按需调用的模型。切换此集合不会改变已注册工具名。
+                </p>
+                {selectedModels.map((model) => {
+                  // modelTargets contains every configured account for one extension model.
+                  // modelTargets 包含一个扩展模型的全部已配置账号。
+                  const modelTargets = capabilityTargets.filter((target) => (
+                    target.target.provider_id === model.target.provider_id
+                    && target.target.upstream_target_id === model.target.upstream_target_id
+                  ));
+                  // selectedExtension resolves the saved target for this model.
+                  // selectedExtension 解析当前模型已保存的目标。
+                  const selectedExtension = selectedExtensionTargets.find((selection) => (
+                    modelTargets.some((target) => (
+                      target.connectionId === selection.connection_id
+                      && target.target.target_id === selection.target_id
+                    ))
+                  ));
+                  // selectedExtensionTarget resolves the active account or the first candidate.
+                  // selectedExtensionTarget 解析活动账号或第一个候选账号。
+                  const selectedExtensionTarget = modelTargets.find((target) => (
+                    target.connectionId === selectedExtension?.connection_id
+                    && target.target.target_id === selectedExtension.target_id
+                  )) ?? modelTargets[0];
+                  // profile contains reviewed model behavior and constraints.
+                  // profile 包含已审核的模型行为与约束。
+                  const profile = model.target.contract.extension_profile;
+                  return (
+                    <article className="composer-capability-extension-row" key={`${model.target.provider_id}/${model.target.upstream_target_id}`}>
+                      <input
+                        checked={Boolean(selectedExtension)}
+                        disabled={saving || !profile}
+                        onChange={(event) => {
+                          const retained = selectedExtensionTargets.filter((selection) => !modelTargets.some((target) => (
+                            target.connectionId === selection.connection_id
+                            && target.target.target_id === selection.target_id
+                          )));
+                          if (event.currentTarget.checked && selectedExtensionTarget) {
+                            retained.push(selectionForTarget(selectedExtensionTarget));
+                          }
+                          setDraft((current) => ({
+                            ...current,
+                            extensionTargetSets: {
+                              ...current.extensionTargetSets,
+                              [selectedCapability]: retained,
+                            },
+                          }));
+                        }}
+                        type="checkbox"
+                      />
+                      <span className="composer-capability-extension-copy">
+                        <strong>{model.target.display_name}</strong>
+                        <small>{profile?.summary ?? "缺少已审核模型扩展说明，当前不可选择。"}</small>
+                        {profile?.constraints?.length ? (
+                          <small>约束：{profile.constraints.join("；")}</small>
+                        ) : null}
+                        {profile?.limitations?.length ? (
+                          <small>限制：{profile.limitations.join("；")}</small>
+                        ) : null}
+                      </span>
+                      <Select
+                        disabled={saving || !selectedExtension}
+                        onValueChange={(connectionId) => {
+                          const replacement = modelTargets.find((target) => target.connectionId === connectionId);
+                          if (!replacement) return;
+                          const retained = selectedExtensionTargets.filter((selection) => !modelTargets.some((target) => (
+                            target.connectionId === selection.connection_id
+                            && target.target.target_id === selection.target_id
+                          )));
+                          retained.push(selectionForTarget(replacement));
+                          setDraft((current) => ({
+                            ...current,
+                            extensionTargetSets: {
+                              ...current.extensionTargetSets,
+                              [selectedCapability]: retained,
+                            },
+                          }));
+                        }}
+                        value={selectedExtensionTarget?.connectionId ?? ""}
+                      >
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          {modelTargets.map((target) => (
+                            <SelectItem key={target.connectionId} value={target.connectionId}>
+                              {target.connectionDisplayName}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </article>
+                  );
+                })}
+              </div>
+            ) : selectedModels.length ? (
               <div className="composer-capability-route-selectors">
                 <label>
                   <span>{t("settings.providerTools.model")}</span>
@@ -597,6 +728,14 @@ function providerToolSettingsSignature(
         selection?.connection_id ?? "",
         selection?.target_id ?? "",
       ]),
+      Object.entries(settings.extensionTargetSets)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([capability, selections]) => [
+          capability,
+          ...(selections ?? [])
+            .map((selection) => `${selection.connection_id.length}:${selection.connection_id}:${selection.target_id.length}:${selection.target_id}`)
+            .sort(),
+        ]),
     ],
   );
 }
@@ -627,6 +766,17 @@ function orderedProviderToolCapabilities(
   return orderProviderToolCapabilities(
     snapshot.providerToolTargets.map((target) => target.target.contract.capability),
   );
+}
+
+// composerCapabilityIsEnabled resolves direct switches and extension selections without mixing stores.
+// composerCapabilityIsEnabled 在不混用存储的前提下解析直连开关与扩展选择状态。
+export function composerCapabilityIsEnabled(
+  settings: ComposerProviderToolSettingsSnapshot,
+  capability: PublicAiProviderToolCapabilityKind,
+): boolean {
+  return isDirectProviderToolCapability(capability)
+    ? settings.enabledCapabilities.includes(capability)
+    : (settings.extensionTargetSets[capability]?.length ?? 0) > 0;
 }
 
 // providerToolSettingsConflicts reports stale choices without silently replacing them.
@@ -661,6 +811,31 @@ export function providerToolSettingsConflicts(
       });
     }
   }
+  for (const [capability, selections] of Object.entries(settings.extensionTargetSets)) {
+    if (!isModelExtensionCapability(capability as PublicAiProviderToolCapabilityKind)) {
+      conflicts.push({
+        capability: capability as PublicAiProviderToolCapabilityKind,
+        kind: "invalid_extension_target_set",
+        message: `Capability ${capability} cannot use extension targets.`,
+      });
+      continue;
+    }
+    for (const selection of selections ?? []) {
+      const key = `${selection.connection_id.length}:${selection.connection_id}:${selection.target_id.length}:${selection.target_id}`;
+      const target = snapshot.providerToolTargets.find((candidate) => (
+        candidate.connectionId === selection.connection_id
+        && candidate.target.target_id === selection.target_id
+      ));
+      if (current.get(key) !== capability || target?.manifestSourceLayer === "custom") {
+        conflicts.push({
+          capability: capability as PublicAiProviderToolCapabilityKind,
+          kind: "invalid_extension_target_set",
+          message: `The saved native extension model or account for ${capability} is unavailable.`,
+        });
+        break;
+      }
+    }
+  }
   return conflicts;
 }
 
@@ -671,7 +846,10 @@ function uniqueProviderToolModels(
 ): PublicAiProviderToolTargetSnapshot[] {
   const models = new Map<string, PublicAiProviderToolTargetSnapshot>();
   for (const target of targets) {
-    if (!models.has(target.target.target_id)) models.set(target.target.target_id, target);
+    // modelKey prevents collisions across providers while grouping account-expanded targets.
+    // modelKey 在折叠账号展开目标时防止不同供应商之间发生冲突。
+    const modelKey = `${target.target.provider_id}/${target.target.upstream_target_id}`;
+    if (!models.has(modelKey)) models.set(modelKey, target);
   }
   return Array.from(models.values()).sort((left, right) => (
     left.target.display_name.localeCompare(right.target.display_name)
@@ -696,7 +874,11 @@ function providerToolCapabilityColor(capability: PublicAiProviderToolCapabilityK
   if (capability === "web_search" || capability === "web_extract") {
     return "#0ea5e9";
   }
-  if (capability === "media_analyze") {
+  if (
+    capability === "image_understand"
+    || capability === "video_understand"
+    || capability === "audio_understand"
+  ) {
     return "#6366f1";
   }
   if (capability === "image_generate" || capability === "image_edit") {
@@ -726,11 +908,17 @@ function providerToolCapabilityIcon(
   if (capability === "web_extract") {
     return <FileSearch size={size} />;
   }
-  if (capability === "media_analyze" || capability === "image_generate" || capability === "image_edit") {
+  if (capability === "image_understand" || capability === "image_generate" || capability === "image_edit") {
     return <Image size={size} />;
   }
   if (capability === "video_generate" || capability === "video_edit" || capability === "video_extend") {
     return <Video size={size} />;
+  }
+  if (capability === "video_understand") {
+    return <Video size={size} />;
+  }
+  if (capability === "audio_understand") {
+    return <Volume2 size={size} />;
   }
   if (capability === "speech_synthesize" || capability === "speech_transcribe") {
     return <Volume2 size={size} />;
@@ -750,7 +938,9 @@ function providerToolCapabilityLabel(
   >> = {
     web_search: "settings.providerTools.webSearch",
     web_extract: "settings.providerTools.webExtract",
-    media_analyze: "settings.aiUnderstandImage",
+    image_understand: "settings.aiUnderstandImage",
+    video_understand: "settings.aiUnderstandVideo",
+    audio_understand: "settings.aiUnderstandAudio",
     image_generate: "settings.providerTools.imageGenerate",
     image_edit: "settings.providerTools.imageEdit",
     video_generate: "settings.providerTools.videoGenerate",

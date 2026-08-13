@@ -439,6 +439,12 @@ struct SubmissionProviderToolSettings {
         vulcan_provider_adapters::ProviderToolCapabilityKind,
         vulcan_provider_adapters::ProviderToolTargetSelection,
     >,
+    /// Native model-extension target sets selected per generative capability.
+    /// 按生成类能力选择的原生模型扩展目标集合。
+    extension_target_sets: BTreeMap<
+        vulcan_provider_adapters::ProviderToolCapabilityKind,
+        std::collections::BTreeSet<vulcan_provider_adapters::ProviderToolTargetSelection>,
+    >,
 }
 
 /// Freezes every draft-only session setting required by the first provider turn.
@@ -571,11 +577,15 @@ async fn apply_submission_session_settings(
         let provider_tool_selections = provider_tool_settings
             .map(|settings| &settings.selections)
             .unwrap_or(&configuration.provider_tool_selections);
+        let provider_extension_target_sets = provider_tool_settings
+            .map(|settings| &settings.extension_target_sets)
+            .unwrap_or(&configuration.provider_extension_target_sets);
         crate::public_ai_settings::validate_provider_tool_session_settings(
             runtime,
             &configuration,
             enabled_capabilities,
             provider_tool_selections,
+            provider_extension_target_sets,
         )?;
     }
     let knowledge_selection = if let Some(selection) =
@@ -644,6 +654,9 @@ async fn apply_submission_session_settings(
         let provider_tool_selections = provider_tool_settings
             .map(|settings| &settings.selections)
             .unwrap_or(&configuration.provider_tool_selections);
+        let provider_extension_target_sets = provider_tool_settings
+            .map(|settings| &settings.extension_target_sets)
+            .unwrap_or(&configuration.provider_extension_target_sets);
         runtime_state.provider_tool_selections = provider_tool_selections
             .iter()
             .map(|(capability, selection)| {
@@ -659,6 +672,21 @@ async fn apply_submission_session_settings(
         runtime_state.provider_tool_enabled_capabilities = enabled_capabilities
             .iter()
             .map(|capability| provider_tool_capability_key(*capability))
+            .collect();
+        runtime_state.provider_extension_target_sets = provider_extension_target_sets
+            .iter()
+            .map(|(capability, selections)| {
+                (
+                    provider_tool_capability_key(*capability),
+                    selections
+                        .iter()
+                        .map(|selection| SessionProviderToolTargetSelection {
+                            connection_id: selection.connection_id.clone(),
+                            target_id: selection.target_id.clone(),
+                        })
+                        .collect(),
+                )
+            })
             .collect();
         runtime_state.provider_tool_settings_initialized = true;
         runtime_state.provider_tool_selections_overridden = has_explicit_provider_tool_settings;

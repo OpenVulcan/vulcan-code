@@ -27,7 +27,7 @@ use vulcan_provider_adapters::{
     CustomProviderDefinition, CustomProviderManifestFailure, CustomProviderModelDefaults,
     CustomProviderModelDiscoveryMode, CustomProviderProtocol, DeclaredProviderToolTemplateModel,
     InferenceProfile, InferenceRouteBinding, InferenceRouteConfiguration, InternalModelOverrides,
-    ModelCapabilityOverrides, ModelDiscoveryKind, ModelExecutionOverrides,
+    ManifestSourceLayer, ModelCapabilityOverrides, ModelDiscoveryKind, ModelExecutionOverrides,
     OAuthAuthorizationChallenge, OAuthClientConfiguration, OAuthTransactionPhase,
     OAuthTransactionSnapshot, PersistedAiConfiguration, ProviderDescriptor, ProviderKind,
     ProviderRegistry, ProviderToolCapabilityKind, ProviderToolExecutionResult, ProviderToolTarget,
@@ -165,6 +165,10 @@ pub(super) struct PublicAiSettingsSnapshot {
     /// Provider tool capabilities enabled by default for newly materialized sessions.
     /// 为新物化会话默认启用的供应商工具能力。
     provider_tool_enabled_capabilities: BTreeSet<ProviderToolCapabilityKind>,
+    /// Native model-extension targets selected per generative capability.
+    /// 按生成类能力选择的原生模型扩展目标集合。
+    provider_extension_target_sets:
+        BTreeMap<ProviderToolCapabilityKind, BTreeSet<ProviderToolTargetSelection>>,
     /// Exact internal inference routes available through current memory catalogs.
     /// 当前内存目录可用的精确内部推理路由。
     internal_inference_candidates: Vec<PublicAiInternalInferenceCandidate>,
@@ -335,6 +339,9 @@ pub(super) struct PublicAiProviderToolTargetSnapshot {
     /// User-visible credential name.
     /// 用户可见凭据名称。
     connection_display_name: String,
+    /// Frozen manifest source used to enforce native-only model extensions.
+    /// 用于强制模型扩展仅限原生清单的冻结清单来源。
+    manifest_source_layer: ManifestSourceLayer,
     /// Exact model- or service-native target contract.
     /// 精确的模型或服务原生目标契约。
     target: ProviderToolTarget,
@@ -367,6 +374,10 @@ pub(super) struct PublicAiSessionProviderToolSettingsSnapshot {
     /// Exact model and account selected for every retained capability.
     /// 每项保留能力选择的精确模型与账号。
     selections: BTreeMap<ProviderToolCapabilityKind, ProviderToolTargetSelection>,
+    /// Exact native model-extension target sets selected for this session.
+    /// 当前会话选择的精确原生模型扩展目标集合。
+    extension_target_sets:
+        BTreeMap<ProviderToolCapabilityKind, BTreeSet<ProviderToolTargetSelection>>,
     /// Invalid retained choices that require explicit user confirmation.
     /// 需要用户显式确认的无效保留选择。
     conflicts: Vec<PublicAiSessionProviderToolConflict>,
@@ -878,6 +889,19 @@ pub(super) struct PublicAiProviderToolSelectionSaveRequest {
     selection: Option<ProviderToolTargetSelection>,
 }
 
+/// Replaces the complete native target set for one model-extension capability.
+/// 替换一项模型扩展能力的完整原生目标集合。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct PublicAiProviderExtensionTargetSetSaveRequest {
+    /// Exact generative model-extension capability.
+    /// 精确生成类模型扩展能力。
+    capability: ProviderToolCapabilityKind,
+    /// Complete replacement set of exact native targets.
+    /// 精确原生目标的完整替换集合。
+    selections: BTreeSet<ProviderToolTargetSelection>,
+}
+
 /// Executes one exact search or extraction target for settings diagnostics.
 /// 为设置诊断执行一个精确的搜索或网页抓取目标。
 #[derive(Debug, Clone, Deserialize)]
@@ -921,6 +945,10 @@ pub(super) struct PublicAiSessionProviderToolSelectionsSaveRequest {
     /// Exact target retained independently from capability activation.
     /// 与能力启用状态独立保留的精确目标。
     selections: BTreeMap<ProviderToolCapabilityKind, ProviderToolTargetSelection>,
+    /// Complete native model-extension target sets retained by this session.
+    /// 当前会话保留的完整原生模型扩展目标集合。
+    extension_target_sets:
+        BTreeMap<ProviderToolCapabilityKind, BTreeSet<ProviderToolTargetSelection>>,
 }
 
 /// Changes the explicit default connection for one provider.
@@ -8433,6 +8461,12 @@ pub(super) async fn service_save_public_ai_provider_tool_selection(
     state: SharedServiceBridgeState,
     request: PublicAiProviderToolSelectionSaveRequest,
 ) -> Result<PublicAiSettingsSnapshot, String> {
+    if !request.capability.is_direct_selection() {
+        return Err(format!(
+            "Provider tool capability `{:?}` must be configured through its model-extension target set.",
+            request.capability
+        ));
+    }
     // transaction serializes target validation through Workbench publication.
     // transaction 把目标校验串行化到工作台发布完成。
     let transaction = begin_public_ai_configuration_transaction().await;
@@ -8466,6 +8500,47 @@ pub(super) async fn service_save_public_ai_provider_tool_selection(
                 configuration
                     .provider_tool_selections
                     .remove(&request.capability);
+            }
+            Ok(())
+        },
+        |configuration| build_public_ai_settings_snapshot(runtime.as_ref(), configuration),
+    )?;
+    drop(transaction);
+    Ok(snapshot)
+}
+
+/// Saves the complete native target set for one model-extension capability.
+/// 保存一项模型扩展能力的完整原生目标集合。
+pub(super) async fn service_save_public_ai_provider_extension_target_set(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    request: PublicAiProviderExtensionTargetSetSaveRequest,
+) -> Result<PublicAiSettingsSnapshot, String> {
+    // transaction serializes native-target validation through Workbench publication.
+    // transaction 把原生目标校验串行化到工作台发布完成。
+    let transaction = begin_public_ai_configuration_transaction().await;
+    let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
+    let replacement = BTreeMap::from([(request.capability, request.selections.clone())]);
+    validate_provider_extension_target_sets(
+        runtime.as_ref(),
+        &current_configuration,
+        &replacement,
+    )?;
+    let (_configuration, snapshot) = mutate_public_ai_configuration_and_publish_in_transaction(
+        &app,
+        &state,
+        runtime.as_ref(),
+        &current_configuration,
+        "保存公共 AI 模型扩展目标集合失败",
+        |configuration| {
+            if request.selections.is_empty() {
+                configuration
+                    .provider_extension_target_sets
+                    .remove(&request.capability);
+            } else {
+                configuration
+                    .provider_extension_target_sets
+                    .insert(request.capability, request.selections.clone());
             }
             Ok(())
         },
@@ -8519,6 +8594,12 @@ pub(super) async fn service_save_public_ai_provider_tool_capability_enabled(
     state: SharedServiceBridgeState,
     request: PublicAiProviderToolCapabilityEnabledSaveRequest,
 ) -> Result<PublicAiSettingsSnapshot, String> {
+    if !request.capability.is_direct_selection() {
+        return Err(format!(
+            "Provider tool capability `{:?}` is enabled by selecting its model-extension targets.",
+            request.capability
+        ));
+    }
     // transaction serializes capability validation through Workbench publication.
     // transaction 把能力校验串行化到工作台发布完成。
     let transaction = begin_public_ai_configuration_transaction().await;
@@ -8588,18 +8669,20 @@ pub(super) async fn service_public_ai_session_provider_tool_selections(
                 .get(&session_id)
                 .cloned()
                 .ok_or_else(|| format!("Conversation `{session_id}` has no runtime state."))?;
-        let (enabled_capabilities, selections, state_changed) =
+        let (enabled_capabilities, selections, extension_target_sets, state_changed) =
             reconcile_session_provider_tool_settings(&mut planned_runtime_state, &configuration)?;
         let conflicts = provider_tool_session_conflicts(
             runtime.as_ref(),
             &configuration,
             &enabled_capabilities,
             &selections,
+            &extension_target_sets,
         )?;
         (
             PublicAiSessionProviderToolSettingsSnapshot {
                 enabled_capabilities,
                 selections,
+                extension_target_sets,
                 conflicts,
             },
             state_changed,
@@ -8622,17 +8705,19 @@ pub(super) async fn service_public_ai_session_provider_tool_selections(
                 .session_runtime_state
                 .get_mut(&session_id)
                 .ok_or_else(|| format!("Conversation `{session_id}` has no runtime state."))?;
-            let (enabled_capabilities, selections, state_changed) =
+            let (enabled_capabilities, selections, extension_target_sets, state_changed) =
                 reconcile_session_provider_tool_settings(runtime_state, &configuration)?;
             let conflicts = provider_tool_session_conflicts(
                 runtime.as_ref(),
                 &configuration,
                 &enabled_capabilities,
                 &selections,
+                &extension_target_sets,
             )?;
             committed_snapshot.replace(Some(PublicAiSessionProviderToolSettingsSnapshot {
                 enabled_capabilities,
                 selections,
+                extension_target_sets,
                 conflicts,
             }));
             Ok(PublicAiWorkspaceReconciliation::workspace_only(
@@ -8659,8 +8744,8 @@ pub(super) async fn service_public_ai_session_provider_tool_selections(
 ///
 /// # Returns
 /// 返回值
-/// The normalized enabled capabilities, target selections, and whether persisted fields changed.
-/// 返回规范化的已启用能力、目标选择，以及持久字段是否发生变化。
+/// The normalized direct capabilities, direct selections, extension target sets, and whether persisted fields changed.
+/// 返回规范化的直连能力、直连选择、扩展目标集合，以及持久字段是否发生变化。
 fn reconcile_session_provider_tool_settings(
     runtime_state: &mut vulcan_workbench_model::SessionRuntimeStateEntry,
     configuration: &PersistedAiConfiguration,
@@ -8668,6 +8753,7 @@ fn reconcile_session_provider_tool_settings(
     (
         BTreeSet<ProviderToolCapabilityKind>,
         BTreeMap<ProviderToolCapabilityKind, ProviderToolTargetSelection>,
+        BTreeMap<ProviderToolCapabilityKind, BTreeSet<ProviderToolTargetSelection>>,
         bool,
     ),
     String,
@@ -8699,46 +8785,65 @@ fn reconcile_session_provider_tool_settings(
                 .iter()
                 .map(|capability| provider_tool_capability_key(*capability))
                 .collect();
+            // nextExtensionTargetSets mirrors the exact current global extension defaults.
+            // nextExtensionTargetSets 镜像精确的当前全局扩展目标默认集合。
+            let next_extension_target_sets = configuration
+                .provider_extension_target_sets
+                .iter()
+                .map(|(capability, selections)| {
+                    (
+                        provider_tool_capability_key(*capability),
+                        selections
+                            .iter()
+                            .map(session_provider_tool_selection_from_contract)
+                            .collect(),
+                    )
+                })
+                .collect();
             if runtime_state.provider_tool_selections != next_selections
                 || runtime_state.provider_tool_enabled_capabilities != next_enabled_capabilities
+                || runtime_state.provider_extension_target_sets != next_extension_target_sets
             {
                 runtime_state.provider_tool_selections = next_selections;
                 runtime_state.provider_tool_enabled_capabilities = next_enabled_capabilities;
+                runtime_state.provider_extension_target_sets = next_extension_target_sets;
                 state_changed = true;
             }
         }
     } else {
-        if runtime_state.provider_tool_selections_overridden {
-            // nextEnabledCapabilities migrates the legacy implicit enabled-set representation.
-            // nextEnabledCapabilities 迁移旧版隐式启用集合表示。
-            let next_enabled_capabilities = runtime_state
-                .provider_tool_selections
-                .keys()
-                .cloned()
-                .collect();
-            if runtime_state.provider_tool_enabled_capabilities != next_enabled_capabilities {
-                runtime_state.provider_tool_enabled_capabilities = next_enabled_capabilities;
-            }
-        } else {
-            runtime_state.provider_tool_selections = configuration
-                .provider_tool_selections
-                .iter()
-                .map(|(capability, selection)| {
-                    (
-                        provider_tool_capability_key(*capability),
-                        vulcan_workbench_model::SessionProviderToolTargetSelection {
-                            connection_id: selection.connection_id.clone(),
-                            target_id: selection.target_id.clone(),
-                        },
-                    )
-                })
-                .collect();
-            runtime_state.provider_tool_enabled_capabilities = configuration
-                .provider_tool_enabled_capabilities
-                .iter()
-                .map(|capability| provider_tool_capability_key(*capability))
-                .collect();
-        }
+        // Schema 4 intentionally discards pre-extension Provider Tool state and rematerializes
+        // the current defaults instead of guessing an old-to-new semantic conversion.
+        // Schema 4 有意丢弃模型扩展前的 Provider Tool 状态，并重新物化当前默认值，
+        // 而不是猜测旧语义到新语义的转换。
+        runtime_state.provider_tool_selections = configuration
+            .provider_tool_selections
+            .iter()
+            .map(|(capability, selection)| {
+                (
+                    provider_tool_capability_key(*capability),
+                    session_provider_tool_selection_from_contract(selection),
+                )
+            })
+            .collect();
+        runtime_state.provider_tool_enabled_capabilities = configuration
+            .provider_tool_enabled_capabilities
+            .iter()
+            .map(|capability| provider_tool_capability_key(*capability))
+            .collect();
+        runtime_state.provider_extension_target_sets = configuration
+            .provider_extension_target_sets
+            .iter()
+            .map(|(capability, selections)| {
+                (
+                    provider_tool_capability_key(*capability),
+                    selections
+                        .iter()
+                        .map(session_provider_tool_selection_from_contract)
+                        .collect(),
+                )
+            })
+            .collect();
+        runtime_state.provider_tool_selections_overridden = false;
         runtime_state.provider_tool_settings_initialized = true;
         state_changed = true;
     }
@@ -8748,7 +8853,13 @@ fn reconcile_session_provider_tool_settings(
     let enabled_capabilities =
         session_provider_tool_enabled_capabilities_from_runtime(runtime_state)?;
     let selections = session_provider_tool_selections_from_runtime(runtime_state)?;
-    Ok((enabled_capabilities, selections, state_changed))
+    let extension_target_sets = session_provider_extension_target_sets_from_runtime(runtime_state)?;
+    Ok((
+        enabled_capabilities,
+        selections,
+        extension_target_sets,
+        state_changed,
+    ))
 }
 
 /// Saves the complete single-select provider tool configuration for one session.
@@ -8776,12 +8887,14 @@ pub(super) async fn service_save_public_ai_session_provider_tool_selections(
         &configuration,
         &request.enabled_capabilities,
         &request.selections,
+        &request.extension_target_sets,
     )?;
     // snapshot is complete before any browser-visible or authoritative workspace assignment.
     // snapshot 在任何浏览器可见或权威工作区赋值前保持完整。
     let snapshot = PublicAiSessionProviderToolSettingsSnapshot {
         enabled_capabilities: request.enabled_capabilities,
         selections: request.selections,
+        extension_target_sets: request.extension_target_sets,
         conflicts: Vec::new(),
     };
     publish_public_ai_workbench_with_workspace_reconciliation_and_commit(
@@ -8812,6 +8925,19 @@ pub(super) async fn service_save_public_ai_session_provider_tool_selections(
                 .iter()
                 .map(|capability| provider_tool_capability_key(*capability))
                 .collect();
+            runtime_state.provider_extension_target_sets = snapshot
+                .extension_target_sets
+                .iter()
+                .map(|(capability, selections)| {
+                    (
+                        provider_tool_capability_key(*capability),
+                        selections
+                            .iter()
+                            .map(session_provider_tool_selection_from_contract)
+                            .collect(),
+                    )
+                })
+                .collect();
             runtime_state.provider_tool_settings_initialized = true;
             runtime_state.provider_tool_selections_overridden = true;
             runtime_state.updated_at = crate::current_unix_millis_text();
@@ -8833,9 +8959,18 @@ pub(crate) fn validate_provider_tool_session_settings(
     configuration: &PersistedAiConfiguration,
     enabled_capabilities: &BTreeSet<ProviderToolCapabilityKind>,
     selections: &BTreeMap<ProviderToolCapabilityKind, ProviderToolTargetSelection>,
+    extension_target_sets: &BTreeMap<
+        ProviderToolCapabilityKind,
+        BTreeSet<ProviderToolTargetSelection>,
+    >,
 ) -> Result<(), String> {
-    let conflicts =
-        provider_tool_session_conflicts(runtime, configuration, enabled_capabilities, selections)?;
+    let conflicts = provider_tool_session_conflicts(
+        runtime,
+        configuration,
+        enabled_capabilities,
+        selections,
+        extension_target_sets,
+    )?;
     if conflicts.is_empty() {
         return Ok(());
     }
@@ -8856,11 +8991,26 @@ fn provider_tool_session_conflicts(
     configuration: &PersistedAiConfiguration,
     enabled_capabilities: &BTreeSet<ProviderToolCapabilityKind>,
     selections: &BTreeMap<ProviderToolCapabilityKind, ProviderToolTargetSelection>,
+    extension_target_sets: &BTreeMap<
+        ProviderToolCapabilityKind,
+        BTreeSet<ProviderToolTargetSelection>,
+    >,
 ) -> Result<Vec<PublicAiSessionProviderToolConflict>, String> {
     let available = runtime.available_provider_tool_targets(configuration)?;
     let capabilities = enabled_capabilities.clone();
     let mut conflicts = Vec::new();
     for capability in capabilities {
+        if !capability.is_direct_selection() {
+            conflicts.push(PublicAiSessionProviderToolConflict {
+                capability,
+                kind: String::from("invalid_direct_capability"),
+                message: format!(
+                    "Capability `{:?}` must be configured as a model-extension target set.",
+                    capability
+                ),
+            });
+            continue;
+        }
         let Some(selection) = selections.get(&capability) else {
             conflicts.push(PublicAiSessionProviderToolConflict {
                 capability,
@@ -8886,6 +9036,19 @@ fn provider_tool_session_conflicts(
                 ),
             });
         }
+    }
+    if let Err(error) =
+        validate_provider_extension_target_sets(runtime, configuration, extension_target_sets)
+    {
+        conflicts.push(PublicAiSessionProviderToolConflict {
+            capability: extension_target_sets
+                .keys()
+                .next()
+                .copied()
+                .unwrap_or(ProviderToolCapabilityKind::ImageGenerate),
+            kind: String::from("invalid_extension_target_set"),
+            message: error,
+        });
     }
     Ok(conflicts)
 }
@@ -8921,6 +9084,74 @@ fn filter_current_provider_tool_selections(
         .collect()
 }
 
+/// Validates complete native model-extension target sets against one frozen runtime inventory.
+/// 针对一份冻结运行时目录校验完整原生模型扩展目标集合。
+fn validate_provider_extension_target_sets(
+    runtime: &PublicAiRuntime,
+    configuration: &PersistedAiConfiguration,
+    target_sets: &BTreeMap<ProviderToolCapabilityKind, BTreeSet<ProviderToolTargetSelection>>,
+) -> Result<(), String> {
+    let available = runtime.available_provider_tool_targets(configuration)?;
+    for (capability, selections) in target_sets {
+        if !capability.is_model_extension() {
+            return Err(format!(
+                "Provider tool capability `{:?}` must use direct single-target selection.",
+                capability
+            ));
+        }
+        let mut public_model_ids = BTreeSet::new();
+        for selection in selections {
+            let candidate = available
+                .iter()
+                .find(|candidate| {
+                    candidate.connection_id == selection.connection_id
+                        && candidate.target.target_id == selection.target_id
+                        && candidate.target.contract.capability == *capability
+                })
+                .ok_or_else(|| {
+                    format!(
+                        "Model-extension target `{}` is not available through connection `{}` for capability `{:?}`.",
+                        selection.target_id, selection.connection_id, capability
+                    )
+                })?;
+            if candidate.manifest_source_layer == ManifestSourceLayer::Custom {
+                return Err(format!(
+                    "Custom provider target `{}` cannot be selected as a model extension.",
+                    selection.target_id
+                ));
+            }
+            if candidate.target.contract.extension_profile.is_none() {
+                return Err(format!(
+                    "Native model-extension target `{}` has no reviewed extension profile.",
+                    selection.target_id
+                ));
+            }
+            let public_model_id = format!(
+                "{}/{}",
+                candidate.target.provider_id, candidate.target.upstream_target_id
+            );
+            if !public_model_ids.insert(public_model_id.clone()) {
+                return Err(format!(
+                    "Model-extension capability `{:?}` exposes duplicate public model id `{public_model_id}`.",
+                    capability
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Converts one provider-contract selection into the session persistence contract.
+/// 把一个供应商契约选择转换为会话持久化契约。
+fn session_provider_tool_selection_from_contract(
+    selection: &ProviderToolTargetSelection,
+) -> vulcan_workbench_model::SessionProviderToolTargetSelection {
+    vulcan_workbench_model::SessionProviderToolTargetSelection {
+        connection_id: selection.connection_id.clone(),
+        target_id: selection.target_id.clone(),
+    }
+}
+
 /// Converts one runtime-state selection map into the provider contract.
 /// 将运行状态选择映射转换为供应商契约。
 fn session_provider_tool_selections_from_runtime(
@@ -8943,6 +9174,31 @@ fn session_provider_tool_selections_from_runtime(
                     target_id: selection.target_id.clone(),
                 },
             ))
+        })
+        .collect()
+}
+
+/// Converts session model-extension target sets into the provider contract.
+/// 把会话模型扩展目标集合转换为供应商契约。
+fn session_provider_extension_target_sets_from_runtime(
+    runtime_state: &vulcan_workbench_model::SessionRuntimeStateEntry,
+) -> Result<BTreeMap<ProviderToolCapabilityKind, BTreeSet<ProviderToolTargetSelection>>, String> {
+    runtime_state
+        .provider_extension_target_sets
+        .iter()
+        .map(|(capability, selections)| {
+            let capability = serde_json::from_value(serde_json::Value::String(capability.clone()))
+                .map_err(|error| {
+                    format!("Session model-extension capability `{capability}` is invalid: {error}")
+                })?;
+            let selections = selections
+                .iter()
+                .map(|selection| ProviderToolTargetSelection {
+                    connection_id: selection.connection_id.clone(),
+                    target_id: selection.target_id.clone(),
+                })
+                .collect();
+            Ok((capability, selections))
         })
         .collect()
 }
@@ -9000,19 +9256,19 @@ pub(crate) fn public_ai_session_has_image_understanding_bridge(
         let enabled = session_provider_tool_enabled_capabilities_from_runtime(runtime_state)?;
         let selections = session_provider_tool_selections_from_runtime(runtime_state)?;
         (
-            enabled.contains(&ProviderToolCapabilityKind::MediaAnalyze),
+            enabled.contains(&ProviderToolCapabilityKind::ImageUnderstand),
             selections
-                .get(&ProviderToolCapabilityKind::MediaAnalyze)
+                .get(&ProviderToolCapabilityKind::ImageUnderstand)
                 .cloned(),
         )
     } else {
         (
             configuration
                 .provider_tool_enabled_capabilities
-                .contains(&ProviderToolCapabilityKind::MediaAnalyze),
+                .contains(&ProviderToolCapabilityKind::ImageUnderstand),
             configuration
                 .provider_tool_selections
-                .get(&ProviderToolCapabilityKind::MediaAnalyze)
+                .get(&ProviderToolCapabilityKind::ImageUnderstand)
                 .cloned(),
         )
     };
@@ -9026,7 +9282,7 @@ pub(crate) fn public_ai_session_has_image_understanding_bridge(
     Ok(available.iter().any(|candidate| {
         candidate.connection_id == selection.connection_id
             && candidate.target.target_id == selection.target_id
-            && candidate.target.contract.capability == ProviderToolCapabilityKind::MediaAnalyze
+            && candidate.target.contract.capability == ProviderToolCapabilityKind::ImageUnderstand
     }))
 }
 
@@ -10193,6 +10449,7 @@ fn build_public_ai_settings_snapshot(
             .map(|available| PublicAiProviderToolTargetSnapshot {
                 connection_id: available.connection_id,
                 connection_display_name: available.connection_display_name,
+                manifest_source_layer: available.manifest_source_layer,
                 target: available.target,
             })
             .collect(),
@@ -10200,6 +10457,7 @@ fn build_public_ai_settings_snapshot(
         provider_tool_enabled_capabilities: configuration
             .provider_tool_enabled_capabilities
             .clone(),
+        provider_extension_target_sets: configuration.provider_extension_target_sets.clone(),
         internal_inference_candidates,
         inference_profiles: configuration.inference_profiles.clone(),
         inference_route_diagnostics,
@@ -12652,6 +12910,7 @@ mod inference_settings_route_tests {
             &configuration,
             &BTreeSet::from([ProviderToolCapabilityKind::WebSearch]),
             &BTreeMap::new(),
+            &BTreeMap::new(),
         )
         .expect("conflict analysis");
 
@@ -12663,8 +12922,8 @@ mod inference_settings_route_tests {
         );
     }
 
-    /// Verifies lazy session provider-tool migration is deterministic and idempotent.
-    /// 验证惰性会话供应商工具迁移具备确定性与幂等性。
+    /// Verifies lazy session provider-tool initialization is deterministic and idempotent.
+    /// 验证惰性会话供应商工具初始化具备确定性与幂等性。
     #[test]
     fn session_provider_tool_settings_reconciliation_is_idempotent() {
         // configuration owns one exact global capability and model-account default.
@@ -12680,14 +12939,24 @@ mod inference_settings_route_tests {
                 target_id: String::from("search-model"),
             },
         );
-        // runtimeState starts in the legacy uninitialized representation.
-        // runtimeState 从旧版未初始化表示开始。
+        // extensionDefault owns one multi-select generation target inherited by a new session.
+        // extensionDefault 持有一项由新会话继承的多选生成目标。
+        let extension_default = ProviderToolTargetSelection {
+            connection_id: String::from("image-connection"),
+            target_id: String::from("image-model"),
+        };
+        configuration.provider_extension_target_sets.insert(
+            ProviderToolCapabilityKind::ImageGenerate,
+            BTreeSet::from([extension_default.clone()]),
+        );
+        // runtimeState starts in the current uninitialized representation.
+        // runtimeState 从当前未初始化表示开始。
         let mut runtime_state = vulcan_workbench_model::SessionRuntimeStateEntry::default();
         // firstReconciliation must materialize the global defaults exactly once.
         // firstReconciliation 必须且仅须一次物化全局默认值。
-        let (enabled_capabilities, selections, first_changed) =
+        let (enabled_capabilities, selections, extension_target_sets, first_changed) =
             reconcile_session_provider_tool_settings(&mut runtime_state, &configuration)
-                .expect("legacy session settings should reconcile");
+                .expect("uninitialized session settings should reconcile");
         assert!(first_changed);
         assert_eq!(
             enabled_capabilities,
@@ -12699,9 +12968,13 @@ mod inference_settings_route_tests {
                 .map(|selection| selection.connection_id.as_str()),
             Some("search-connection")
         );
+        assert_eq!(
+            extension_target_sets.get(&ProviderToolCapabilityKind::ImageGenerate),
+            Some(&BTreeSet::from([extension_default]))
+        );
         // secondChanged proves an identical generation performs no authoritative state write.
         // secondChanged 证明相同代际不会再次执行权威状态写入。
-        let (_enabled_capabilities, _selections, second_changed) =
+        let (_enabled_capabilities, _selections, _extension_target_sets, second_changed) =
             reconcile_session_provider_tool_settings(&mut runtime_state, &configuration)
                 .expect("initialized session settings should remain readable");
         assert!(!second_changed);

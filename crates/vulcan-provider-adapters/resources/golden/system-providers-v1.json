@@ -3883,6 +3883,233 @@
       }
     ]
   },
+  "opencode-go": {
+    "id": "opencode-go",
+    "display_name": "OpenCode Go",
+    "kind": "system",
+    "category": "official",
+    "credential_directory_visibility": "configured_only",
+    "credential_registration": "direct",
+    "service_entries": [
+      {
+        "id": "go-api",
+        "display_name": "OpenCode Go API",
+        "kind": "conversation",
+        "base_url": "https://opencode.ai/zen/go/v1",
+        "credential_profiles": [
+          {
+            "id": "api-key",
+            "display_name": "API Key",
+            "credential_mode": "token",
+            "billing_kind": "token_plan",
+            "account_usage_query": "unsupported",
+            "key_prefix": "sk-",
+            "allowed_usage_scopes": [
+              "interactive_agent"
+            ]
+          }
+        ],
+        "authentication": "bearer_authorization",
+        "model_discovery": "manifest_static",
+        "request_projector": "compatible",
+        "protocol_routes": [
+          {
+            "protocol_profile_id": "openai-chat-completions.v1",
+            "endpoint_path": "/chat/completions",
+            "usage_extraction_profiles": [
+              {
+                "profile_id": "opencode-go.chat.body.v1",
+                "revision": 1,
+                "record_kind": "json_body",
+                "update_kind": "final",
+                "required_pointer": "/usage",
+                "bindings": [
+                  {
+                    "field": "input_tokens",
+                    "pointers": [
+                      "/usage/prompt_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "cache_read_tokens",
+                    "pointers": [
+                      "/usage/prompt_tokens_details/cached_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "output_tokens",
+                    "pointers": [
+                      "/usage/completion_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "reasoning_tokens",
+                    "pointers": [
+                      "/usage/completion_tokens_details/reasoning_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "total_tokens",
+                    "pointers": [
+                      "/usage/total_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "response_model",
+                    "pointers": [
+                      "/model"
+                    ],
+                    "encoding": "string"
+                  },
+                  {
+                    "field": "response_id",
+                    "pointers": [
+                      "/id"
+                    ],
+                    "encoding": "string"
+                  }
+                ],
+                "derivations": []
+              },
+              {
+                "profile_id": "opencode-go.chat.sse.usage.v1",
+                "revision": 1,
+                "record_kind": "sse_event",
+                "update_kind": "final",
+                "required_pointer": "/usage",
+                "bindings": [
+                  {
+                    "field": "input_tokens",
+                    "pointers": [
+                      "/usage/prompt_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "cache_read_tokens",
+                    "pointers": [
+                      "/usage/prompt_tokens_details/cached_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "output_tokens",
+                    "pointers": [
+                      "/usage/completion_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "reasoning_tokens",
+                    "pointers": [
+                      "/usage/completion_tokens_details/reasoning_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "total_tokens",
+                    "pointers": [
+                      "/usage/total_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "response_model",
+                    "pointers": [
+                      "/model"
+                    ],
+                    "encoding": "string"
+                  },
+                  {
+                    "field": "response_id",
+                    "pointers": [
+                      "/id"
+                    ],
+                    "encoding": "string"
+                  }
+                ],
+                "derivations": []
+              }
+            ],
+            "verified": true
+          },
+          {
+            "protocol_profile_id": "anthropic-messages.v1",
+            "endpoint_path": "/messages",
+            "request_headers": {
+              "anthropic-version": "2023-06-01"
+            },
+            "authentication": "x_api_key",
+            "request_projection_profiles": [
+              {
+                "profile_id": "opencode-go.anthropic.reasoning.v1",
+                "revision": 1,
+                "steps": [
+                  {
+                    "op": "enum_map",
+                    "path": "/thinking",
+                    "source": "request_field",
+                    "source_path": "@reasoning_effort",
+                    "mapping": {
+                      "high": {
+                        "type": "enabled"
+                      },
+                      "low": {
+                        "type": "enabled"
+                      },
+                      "max": {
+                        "type": "enabled"
+                      },
+                      "medium": {
+                        "type": "enabled"
+                      },
+                      "none": {
+                        "type": "disabled"
+                      },
+                      "xhigh": {
+                        "type": "enabled"
+                      }
+                    },
+                    "unmatched": "error"
+                  },
+                  {
+                    "op": "copy_request_field",
+                    "path": "/output_config/effort",
+                    "field": "reasoning_effort"
+                  },
+                  {
+                    "op": "delete_if_equals",
+                    "path": "/output_config/effort",
+                    "source": "request_field",
+                    "source_path": "@reasoning_effort",
+                    "equals": "none"
+                  },
+                  {
+                    "op": "remove_if_empty",
+                    "path": "/output_config"
+                  }
+                ]
+              }
+            ],
+            "verified": true
+          },
+          {
+            "protocol_profile_id": "openai-responses.v1",
+            "endpoint_path": "/responses",
+            "verified": true
+          }
+        ],
+        "allowed_usage_scopes": [
+          "interactive_agent"
+        ]
+      }
+    ]
+  },
   "openrouter": {
     "id": "openrouter",
     "display_name": "OpenRouter",

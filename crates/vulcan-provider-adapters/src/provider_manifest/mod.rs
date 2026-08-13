@@ -292,6 +292,8 @@ impl EnginePrimitiveRegistry {
         // 响应、界限与 fixture 契约完整实现前，必须在引擎契约校验阶段失败关闭。
         for primitive in [
             "http_json_sync",
+            "http_json_sse",
+            "http_multipart_sse",
             "http_json_async_poll",
             "conversation_media_analyze",
             "mcp_http_call",

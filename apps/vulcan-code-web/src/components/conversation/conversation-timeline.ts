@@ -33,7 +33,6 @@ interface ProjectedTurnState {
 export function projectConversationTimelineItems(
   renderItems: ConversationRenderItem[],
   conversation: ConversationSummary | undefined,
-  nowMs: number,
   conversationRunning: boolean,
 ): ConversationTimelineItem[] {
   const timeline: ConversationTimelineItem[] = [];
@@ -65,9 +64,6 @@ export function projectConversationTimelineItems(
     const projectedDurationMs = startedAtMs && terminalMessageMs
       ? Math.max(0, terminalMessageMs - startedAtMs)
       : null;
-    const runningDurationMs = running
-      ? (startedAtMs ? Math.max(0, nowMs - startedAtMs) : null)
-      : null;
     if (processItems.length > 0 || running || stopped || currentTurn.guidanceItems.length > 0) {
       timeline.push({
         kind: "process",
@@ -81,7 +77,7 @@ export function projectConversationTimelineItems(
           running,
           stopped,
           startedAtMs,
-          durationMs: statsDurationMs ?? runningDurationMs ?? (terminal ? null : projectedDurationMs),
+          durationMs: statsDurationMs ?? (terminal ? null : projectedDurationMs),
         },
       });
     }
@@ -143,6 +139,25 @@ export function projectConversationTimelineItems(
 
   flushTurn(conversationRunning || Boolean(conversation && conversation.status.trim().toLowerCase() === "running"));
   return insertForkSourceTimelineItem(timeline, conversation);
+}
+
+// conversationTimelineItemKey returns the stable business key for one projected timeline entry.
+// conversationTimelineItemKey 返回单条投影时间线记录的稳定业务键。
+// Parameters: item is the projected timeline entry whose identity must survive content-only updates.
+// 参数：item 是身份必须跨纯内容更新保持稳定的投影时间线记录。
+// Returns: a deterministic key scoped to the entry kind and authoritative render identity.
+// 返回值：由记录类型与权威渲染身份共同限定的确定性键。
+export function conversationTimelineItemKey(item: ConversationTimelineItem): string {
+  if (item.kind === "fork-source") {
+    return "fork-source";
+  }
+  if (item.kind === "item") {
+    return item.item.renderKey ?? `item:${item.item.id}`;
+  }
+  if (item.kind === "final-assistant-meta") {
+    return `final-assistant-meta:${item.item.renderKey ?? item.item.id}`;
+  }
+  return item.process.renderKey ?? `process:${item.process.id}`;
 }
 
 // newProjectedTurn creates the mutable grouping state for one projected turn.

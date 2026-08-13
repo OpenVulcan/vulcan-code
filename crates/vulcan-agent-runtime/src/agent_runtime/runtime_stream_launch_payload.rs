@@ -386,6 +386,7 @@ mod tests {
             connection_id_override: None,
             provider_route_lease_identity: None,
             provider_tool_selections_override: Default::default(),
+            provider_extension_target_sets_override: None,
             subagent_prompt_context: None,
             task_session_store_root: None,
             session_title: String::from("测试会话"),

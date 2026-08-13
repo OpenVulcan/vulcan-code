@@ -125,3 +125,59 @@ fn session_addon_roundtrips_output_style_boundary_state() {
     addon.apply_to_runtime_state(&mut restored);
     assert_eq!(restored.output_style, runtime_state.output_style);
 }
+
+/// Verifies pre-extension provider-tool state is discarded instead of semantically migrated.
+/// 验证模型扩展前的 Provider Tool 状态会被丢弃而不是执行语义迁移。
+#[test]
+fn session_addon_discards_pre_extension_provider_tool_state() {
+    // sessionId identifies the durable addon document under test.
+    // sessionId 标识当前测试的持久附属文档。
+    let session_id = SessionId::new_v4();
+    // raw carries schema-3 scalar and mixed-media selections that must not survive schema 4.
+    // raw 携带不得进入 Schema 4 的 Schema 3 标量与混合媒体选择。
+    let raw = serde_json::json!({
+        "schemaVersion": 3,
+        "sessionId": session_id,
+        "revision": 4,
+        "namespaces": {
+            "runtime_controls": {
+                "revision": 2,
+                "hash": "stale-provider-tool-hash",
+                "updatedAt": "1000",
+                "value": {
+                    "providerToolSelections": {
+                        "media_analyze": {"connectionId": "old", "targetId": "mixed"}
+                    },
+                    "providerToolEnabledCapabilities": ["media_analyze"],
+                    "providerExtensionTargetSets": {
+                        "image_generate": [{"connectionId": "old", "targetId": "scalar"}]
+                    },
+                    "providerToolSettingsInitialized": true,
+                    "providerToolSelectionsOverridden": true
+                }
+            }
+        }
+    });
+    // state performs the only supported schema transition while deserializing.
+    // state 在反序列化时执行唯一受支持的结构转换。
+    let state: SessionAddonState =
+        serde_json::from_value(raw).expect("schema-3 addon should load without old tool state");
+    // controls is the normalized current runtime-control payload.
+    // controls 是规范化后的当前运行时控制载荷。
+    let controls = state
+        .runtime_controls()
+        .expect("runtime controls namespace should remain");
+    assert_eq!(state.schema_version, SESSION_ADDON_SCHEMA_VERSION);
+    assert!(controls.provider_tool_selections.is_empty());
+    assert!(controls.provider_tool_enabled_capabilities.is_empty());
+    assert!(controls.provider_extension_target_sets.is_empty());
+    assert!(!controls.provider_tool_settings_initialized);
+    assert!(!controls.provider_tool_selections_overridden);
+    assert_ne!(
+        state
+            .namespace(SessionAddonNamespace::RuntimeControls)
+            .expect("runtime controls namespace")
+            .hash,
+        "stale-provider-tool-hash"
+    );
+}
