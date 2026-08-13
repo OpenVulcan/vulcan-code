@@ -78,6 +78,35 @@ const OPENROUTER_FEATURED_MODELS: &[&str] = &[
     "openai/whisper-large-v3-turbo",
 ];
 
+/// Every source-derived OpenCode Go model with a complete models.dev contract.
+/// 具备完整 models.dev 契约的全部源码派生 OpenCode Go 模型。
+const OPENCODE_GO_MODELS: &[&str] = &[
+    "deepseek-v4-flash",
+    "deepseek-v4-pro",
+    "glm-5",
+    "glm-5.1",
+    "glm-5.2",
+    "gpt-5.6-luna",
+    "grok-4.5",
+    "hy3",
+    "kimi-k2.5",
+    "kimi-k2.6",
+    "kimi-k2.7-code",
+    "kimi-k3",
+    "mimo-v2-omni",
+    "mimo-v2-pro",
+    "mimo-v2.5",
+    "mimo-v2.5-pro",
+    "minimax-m2.5",
+    "minimax-m2.7",
+    "minimax-m3",
+    "qwen3.5-plus",
+    "qwen3.6-plus",
+    "qwen3.7-max",
+    "qwen3.7-plus",
+    "qwen3.8-max",
+];
+
 /// Verifies the packaged integrity index binds the complete bundled manifest generation.
 /// 验证打包完整性 Index 绑定完整的内置 Manifest 代际。
 #[test]
@@ -88,7 +117,7 @@ fn bundled_integrity_index_binds_the_complete_manifest_generation() {
     // 源资源代际后才会返回。
     let provider_count = vulcan_provider_adapters::verify_source_bundled_manifest_integrity_index()
         .expect("source bundled integrity generation should verify");
-    assert_eq!(provider_count, 14);
+    assert_eq!(provider_count, 15);
 }
 
 /// Verifies model-access defaults are fully owned by every bundled manifest.
@@ -320,6 +349,238 @@ fn deepseek_manifest_declares_only_current_official_models_and_protocols() {
             .provider_native_tools
             .is_empty(),
         "Pro Chat must not declare provider-native web search"
+    );
+}
+
+/// Verifies OpenCode Go freezes the source-derived inventory, endpoints, protocols, and model controls.
+/// 验证 OpenCode Go 固化源码派生的模型清单、端点、协议与模型控制项。
+///
+/// # Returns
+/// 返回值
+/// This assertion-only regression test returns no value.
+/// 此纯断言回归测试不返回值。
+#[test]
+fn opencode_go_manifest_matches_source_derived_model_contracts() {
+    // path identifies the single authoritative OpenCode Go bundled manifest.
+    // path 标识唯一权威的 OpenCode Go 内置清单。
+    let path = bundled_manifests_directory().join("opencode-go.json");
+    // text preserves the exact packaged document consumed by the production loader.
+    // text 保留生产加载器消费的精确打包文档。
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|_| panic!("read bundled manifest {}", path.display()));
+    // document exposes route paths and authentication exactly as declared on the wire.
+    // document 以声明的 Wire 形态公开精确路由路径与认证方式。
+    let document: Value = serde_json::from_str(&text).expect("parse OpenCode Go manifest JSON");
+    // routes is the only OpenCode Go conversation service route collection.
+    // routes 是唯一的 OpenCode Go 会话服务路由集合。
+    let routes = document
+        .pointer("/services/0/protocol_routes")
+        .and_then(Value::as_array)
+        .expect("OpenCode Go protocol routes must exist");
+    // route finds one exact protocol route without accepting aliases or fallback candidates.
+    // route 精确查找一条协议路由，不接受别名或回退候选。
+    let route = |protocol_id: &str| {
+        routes
+            .iter()
+            .find(|candidate| candidate["protocol_profile_id"] == protocol_id)
+            .unwrap_or_else(|| panic!("missing OpenCode Go route `{protocol_id}`"))
+    };
+    assert_eq!(
+        route("openai-chat-completions.v1")["endpoint_path"],
+        "/chat/completions"
+    );
+    assert_eq!(route("anthropic-messages.v1")["endpoint_path"], "/messages");
+    assert_eq!(
+        route("anthropic-messages.v1")["authentication"],
+        "x_api_key"
+    );
+    assert_eq!(route("openai-responses.v1")["endpoint_path"], "/responses");
+
+    // compiled is the same resolved authority used by discovery and execution.
+    // compiled 是发现与执行共同使用的同一份解析权威。
+    let compiled =
+        vulcan_provider_adapters::compile_manifest_text(&text, ManifestOwnership::System)
+            .expect("bundled OpenCode Go manifest must compile");
+    assert_eq!(
+        compiled
+            .model_source_policy("go-api")
+            .expect("OpenCode Go must declare a model source policy"),
+        vulcan_provider_adapters::ModelSourcePolicy::ManifestOnly
+    );
+    // declaredModelIds normalizes ordering for exact current-inventory comparison.
+    // declaredModelIds 规范化顺序以便精确比较当前模型清单。
+    let declared_model_ids = compiled
+        .catalog_models
+        .get("go-api")
+        .expect("OpenCode Go must declare its complete inventory")
+        .iter()
+        .map(|model| model.model_id.as_str())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        declared_model_ids,
+        OPENCODE_GO_MODELS.iter().copied().collect::<BTreeSet<_>>()
+    );
+    assert!(
+        compiled
+            .rule_for_model("go-api", None, "hy3-preview")
+            .is_none(),
+        "an endpoint-only preview without a complete source contract must stay undeclared"
+    );
+
+    // flash is the user-verified three-protocol DeepSeek Flash route.
+    // flash 是用户已验证的 DeepSeek Flash 三协议路由。
+    let flash = compiled
+        .rule_for_model("go-api", None, "deepseek-v4-flash")
+        .expect("OpenCode Go DeepSeek V4 Flash rule must exist");
+    assert_eq!(
+        flash
+            .supported_protocols
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            "anthropic-messages.v1",
+            "openai-chat-completions.v1",
+            "openai-responses.v1",
+        ])
+    );
+    assert_eq!(
+        flash.selected_protocol.as_deref(),
+        Some("openai-responses.v1")
+    );
+    assert_eq!(
+        flash
+            .protocol_capabilities
+            .get("anthropic-messages.v1")
+            .expect("Flash Anthropic capabilities must exist")
+            .provider_native_tools,
+        vec![vulcan_ai_contract::NativeToolKind::WebSearch]
+    );
+    assert_eq!(
+        flash
+            .protocol_capabilities
+            .get("openai-responses.v1")
+            .expect("Flash Responses capabilities must exist")
+            .provider_native_tools,
+        vec![vulcan_ai_contract::NativeToolKind::WebSearch]
+    );
+
+    // Pro supports Responses, Anthropic, and Chat, and binds to the highest-priority Responses route.
+    // Pro 支持 Responses、Anthropic 与 Chat，并绑定到优先级最高的 Responses 路由。
+    let pro = compiled
+        .rule_for_model("go-api", None, "deepseek-v4-pro")
+        .expect("OpenCode Go DeepSeek V4 Pro rule must exist");
+    assert_eq!(
+        pro.supported_protocols
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            "anthropic-messages.v1",
+            "openai-chat-completions.v1",
+            "openai-responses.v1"
+        ])
+    );
+    assert_eq!(
+        pro.selected_protocol.as_deref(),
+        Some("openai-responses.v1")
+    );
+    assert_eq!(
+        pro.protocol_capabilities
+            .get("openai-responses.v1")
+            .expect("Pro Responses capabilities must exist")
+            .provider_native_tools,
+        vec![vulcan_ai_contract::NativeToolKind::WebSearch]
+    );
+
+    // glm is the OpenAI-compatible source mapping with explicit high/max effort choices.
+    // glm 是带显式 high/max 思维档位的 OpenAI 兼容源码映射。
+    let glm = compiled
+        .rule_for_model("go-api", None, "glm-5.2")
+        .expect("OpenCode Go GLM-5.2 rule must exist");
+    assert_eq!(
+        glm.selected_protocol.as_deref(),
+        Some("openai-chat-completions.v1")
+    );
+    assert_eq!(
+        glm.capabilities
+            .as_ref()
+            .expect("GLM-5.2 capabilities must exist")
+            .reasoning_efforts,
+        vec![
+            vulcan_ai_contract::ReasoningEffort::High,
+            vulcan_ai_contract::ReasoningEffort::Max,
+        ]
+    );
+
+    // qwen is the Anthropic source mapping with budget-derived high/max choices.
+    // qwen 是带预算派生 high/max 档位的 Anthropic 源码映射。
+    let qwen = compiled
+        .rule_for_model("go-api", None, "qwen3.8-max")
+        .expect("OpenCode Go Qwen3.8 Max rule must exist");
+    assert_eq!(
+        qwen.selected_protocol.as_deref(),
+        Some("anthropic-messages.v1")
+    );
+    assert_eq!(
+        qwen.capabilities
+            .as_ref()
+            .expect("Qwen3.8 Max capabilities must exist")
+            .reasoning_efforts,
+        vec![
+            vulcan_ai_contract::ReasoningEffort::High,
+            vulcan_ai_contract::ReasoningEffort::Max,
+        ]
+    );
+
+    // luna is the Responses source mapping with the complete OpenCode effort set and file inputs.
+    // luna 是带完整 OpenCode 思维档位及文件输入的 Responses 源码映射。
+    let luna = compiled
+        .rule_for_model("go-api", None, "gpt-5.6-luna")
+        .expect("OpenCode Go GPT-5.6 Luna rule must exist");
+    // lunaCapabilities freezes exact modality and token-limit evidence from models.dev.
+    // lunaCapabilities 固化 models.dev 中精确的模态与 Token 上限证据。
+    let luna_capabilities = luna
+        .capabilities
+        .as_ref()
+        .expect("GPT-5.6 Luna capabilities must exist");
+    assert_eq!(
+        luna.selected_protocol.as_deref(),
+        Some("openai-responses.v1")
+    );
+    assert_eq!(
+        luna_capabilities.input_resources,
+        vec![
+            vulcan_ai_contract::ResourceKind::Image,
+            vulcan_ai_contract::ResourceKind::File,
+        ]
+    );
+    assert_eq!(luna_capabilities.context_limit, Some(1_050_000));
+    assert_eq!(luna_capabilities.output_limit, Some(128_000));
+    assert_eq!(
+        luna_capabilities.reasoning_efforts,
+        vec![
+            vulcan_ai_contract::ReasoningEffort::None,
+            vulcan_ai_contract::ReasoningEffort::Low,
+            vulcan_ai_contract::ReasoningEffort::Medium,
+            vulcan_ai_contract::ReasoningEffort::High,
+            vulcan_ai_contract::ReasoningEffort::XHigh,
+            vulcan_ai_contract::ReasoningEffort::Max,
+        ]
+    );
+
+    // grokTemperature proves Responses-only temperature support remains model-scoped.
+    // grokTemperature 证明仅 Responses 的温度支持仍严格限定在模型作用域内。
+    let grok_temperature = compiled
+        .rule_for_model("go-api", None, "grok-4.5")
+        .expect("OpenCode Go Grok 4.5 rule must exist")
+        .model_parameters
+        .iter()
+        .find(|parameter| parameter.id == "sampling.temperature")
+        .expect("Grok 4.5 must expose Responses temperature");
+    assert_eq!(
+        grok_temperature.protocol_ids,
+        vec![String::from("openai-responses.v1")]
     );
 }
 

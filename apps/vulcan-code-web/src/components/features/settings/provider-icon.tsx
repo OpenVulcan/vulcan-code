@@ -16,6 +16,7 @@ import kimiLightIcon from "@/assets/provider-icons/provider-kimi-light.svg"
 import miniMaxIcon from "@/assets/provider-icons/provider-minimax.svg"
 import openAICompatibilityDarkIcon from "@/assets/provider-icons/provider-openai-compat-dark.svg"
 import openAICompatibilityLightIcon from "@/assets/provider-icons/provider-openai-compat-light.svg"
+import openCodeGoIcon from "@/assets/provider-icons/provider-opencode-go.svg"
 import openRouterIcon from "@/assets/provider-icons/provider-openrouter.svg"
 import qiniuIcon from "@/assets/provider-icons/provider-qiniu.svg"
 import qwenIcon from "@/assets/provider-icons/provider-qwen.svg"
@@ -41,6 +42,7 @@ export type ProviderIconKey =
   | "grok"
   | "kimi"
   | "minimax"
+  | "opencode-go"
   | "openrouter"
   | "qwen"
   | "qiniu"
@@ -63,6 +65,9 @@ interface ProviderIconAsset {
   // Whether the standard muted tile must be removed.
   // 是否移除标准弱化底板。
   transparent?: boolean
+  // Whether dark theme must invert one externally loaded monochrome SVG.
+  // 暗色主题是否需要反转一个通过外部资源加载的单色 SVG。
+  monochrome?: boolean
 }
 
 // providerIconLibrary is the immutable frontend artwork library.
@@ -90,6 +95,7 @@ const providerIconLibrary: Readonly<Record<ProviderIconKey, ProviderIconAsset>> 
     transparent: true,
   },
   minimax: { light: miniMaxIcon },
+  "opencode-go": { light: openCodeGoIcon, monochrome: true, transparent: true },
   openrouter: { light: openRouterIcon, transparent: true },
   qwen: { light: qwenIcon },
   qiniu: { light: qiniuIcon, transparent: true },
@@ -113,6 +119,7 @@ const providerIconMap: Readonly<Record<string, ProviderIconKey>> = {
   kimi: "kimi",
   minimax: "minimax",
   openai: "compatibility",
+  "opencode-go": "opencode-go",
   openrouter: "openrouter",
   qwen: "qwen",
   qiniu: "qiniu",
@@ -202,7 +209,11 @@ export function ProviderIcon({
     >
       <img
         alt=""
-        className={cn("size-full object-contain", asset.dark ? "dark:hidden" : "")}
+        className={cn(
+          "size-full object-contain",
+          asset.dark ? "dark:hidden" : "",
+          asset.monochrome ? "dark:invert" : "",
+        )}
         draggable={false}
         src={asset.light}
       />

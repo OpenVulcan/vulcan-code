@@ -19,6 +19,7 @@ describe("provider icon library", () => {
     expect(resolveProviderIconKey({ providerId: "qiniu" })).toBe("qiniu")
     expect(resolveProviderIconKey({ providerId: "fennoai" })).toBe("fennoai")
     expect(resolveProviderIconKey({ providerId: "code0" })).toBe("code0")
+    expect(resolveProviderIconKey({ providerId: "opencode-go" })).toBe("opencode-go")
   })
 
   // Product artwork overrides its provider-family default.
@@ -34,6 +35,17 @@ describe("provider icon library", () => {
   // 未知自定义供应商使用已审核的兼容图标。
   it("falls back to compatibility artwork", () => {
     expect(resolveProviderIconKey({ providerId: "custom:example" })).toBe("compatibility")
+  })
+
+  // OpenCode Go keeps its supplied monochrome artwork visible in dark theme.
+  // OpenCode Go 在暗色主题中保持用户提供的单色图标可见。
+  it("renders OpenCode Go with dark-theme monochrome inversion", () => {
+    // markup is the exact server-rendered provider icon element.
+    // markup 是精确的服务端渲染供应商图标元素。
+    const markup = renderToStaticMarkup(<ProviderIcon providerId="opencode-go" />)
+
+    expect(markup).toContain('data-provider-icon="opencode-go"')
+    expect(markup).toContain("dark:invert")
   })
 
   // Relay artwork owns one visible and accessible marker independent of the provider name.
