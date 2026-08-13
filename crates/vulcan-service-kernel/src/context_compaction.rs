@@ -15,23 +15,29 @@ use vulcan_agent_runtime::{
         context_injection_runtime::core_provider_context_injection_from_state_for_turn,
         prompt_compaction::{
             PromptCompactionExecution, PromptCompactionJobRequest, PromptCompactionLaunchContext,
-            PromptCompactionProgressEvent, PromptCompactionStreamEvent,
-            resolve_prompt_compaction_model_target, stream_prompt_compaction_job,
+            PromptCompactionModelTarget, PromptCompactionProgressEvent,
+            PromptCompactionStreamEvent, resolve_prompt_compaction_model_target,
+            stream_prompt_compaction_job,
         },
     },
     conversation_protocol::{
-        SessionConversationState, compact_conversation_records_after_summary,
-        compact_conversation_with_summary_until, conversation_state_to_compaction_source_messages,
+        SessionConversationState, compact_conversation_records_after_summary_with_retained_ids,
+        conversation_state_to_compaction_source_messages,
     },
     provider_config::ReasoningEffortLevel,
     session_event_runtime::SessionStreamingRecordIds,
 };
 #[cfg(test)]
 use vulcan_context::SessionConversationMessage;
-use vulcan_context::{ContextBudgetSnapshot, SessionConversationPayload, append_record_body_delta};
+use vulcan_context::{
+    ContextBudgetSnapshot, ContextCompactionPolicy, SessionConversationPayload,
+    append_record_body_delta,
+};
 use vulcan_context_compaction::{
     CompactionInputBudget, CompactionInputPruneMode, CompactionInputPruneReport, CompactionPlan,
-    CompactionPlanInput, append_remote_responses_compaction_context, plan_context_compaction,
+    CompactionPlanInput, CompactionTailSelectionReport, ConversationRecordCompactionReport,
+    append_remote_responses_compaction_context, compact_conversation_with_compaction_result,
+    plan_context_compaction,
 };
 use vulcan_context_injection::InjectionPruneReport;
 use vulcan_service_api::{
@@ -43,7 +49,7 @@ use vulcan_workbench_model::SessionSummary;
 use vulcan_workbench_model::{
     SessionId, SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind, SessionRunPhase,
     SessionRuntimeStateEntry, SessionState, SessionTurnStatsKind, SessionTurnStatsStatus,
-    SessionTurnUsageSegment, SessionTurnUsageSegmentKind, build_session_record_message_id,
+    SessionTurnUsageSegment, SessionTurnUsageSegmentKind,
 };
 use vulcan_workspace_store::{
     data_plane::ControllerRuntimeHandle, workspace_store::WorkspaceSnapshot,

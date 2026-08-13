@@ -335,6 +335,7 @@ fn build_compaction_result_from_summary_text(
         compaction_id: plan.compaction_id.clone(),
         created_at: plan.created_at.clone(),
         policy: plan.policy,
+        tail_selection: plan.tail_selection.clone(),
         provider_context_items: Vec::new(),
         provider_context_route: None,
         provider_context_usage: None,

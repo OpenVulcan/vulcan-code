@@ -933,8 +933,12 @@ pub(crate) fn append_webui_session_message_entry_to_state(
 ) -> Result<String, String> {
     let created_at = current_unix_millis_text();
     let conversation_record_count = runtime_state.conversation_state.records.len();
-    let message_id =
-        build_session_record_message_id(session_id, &created_at, conversation_record_count);
+    let message_id = next_available_session_record_message_id(
+        &runtime_state.conversation_state,
+        session_id,
+        &created_at,
+        conversation_record_count,
+    )?;
     let materialized_entry = entry.with_runtime_metadata(message_id.clone(), created_at);
     append_record(
         &mut runtime_state.conversation_state,
@@ -952,6 +956,48 @@ pub(crate) fn append_webui_session_message_entry_to_state(
     .map_err(|error| format!("Invalid WebUI session record identity: {error}"))?;
     runtime_state.updated_at = materialized_entry.created_at;
     Ok(message_id)
+}
+
+/// Builds the first session-record identifier not owned by canonical messages or records.
+/// 构建首个未被规范消息或记录占用的会话记录标识。
+///
+/// # Parameters
+/// 参数
+/// `conversation_state` is the authoritative identity set, `session_id` and `created_at` form the stable prefix,
+/// and `initial_ordinal` is the preferred first ordinal.
+/// `conversation_state` 是权威身份集合，`session_id` 与 `created_at` 组成稳定前缀，
+/// `initial_ordinal` 是优先尝试的首个序号。
+///
+/// # Returns
+/// 返回值
+/// Returns one unused identifier, or an explicit error if the ordinal space is exhausted.
+/// 返回一个未使用标识；序号空间耗尽时返回显式错误。
+pub(crate) fn next_available_session_record_message_id(
+    conversation_state: &vulcan_context::SessionConversationState,
+    session_id: SessionId,
+    created_at: &str,
+    initial_ordinal: usize,
+) -> Result<String, String> {
+    // ordinal probing is required because exact record compaction can create holes below surviving historical IDs.
+    // 必须探测 ordinal，因为精确记录压缩会在仍存历史 ID 之前产生序号空洞。
+    let mut ordinal = initial_ordinal;
+    loop {
+        let candidate = build_session_record_message_id(session_id, created_at, ordinal);
+        let identity_is_owned = conversation_state
+            .messages
+            .iter()
+            .any(|message| message.id == candidate)
+            || conversation_state
+                .records
+                .iter()
+                .any(|record| record.id == candidate);
+        if !identity_is_owned {
+            return Ok(candidate);
+        }
+        ordinal = ordinal
+            .checked_add(1)
+            .ok_or_else(|| String::from("Session record identity ordinal space is exhausted."))?;
+    }
 }
 
 /// Appends one canonical WebUI turn-statistics record using the shared WebUI turn stats builder.

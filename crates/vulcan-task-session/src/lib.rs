@@ -75,7 +75,8 @@ mod tests {
         SessionConversationState, SessionMessageKind, SessionMessageRecordKind,
     };
     use vulcan_context_compaction::{
-        CompactionResult, CompactionSummaryRecord, ProviderContextRoute,
+        CompactionResult, CompactionSummaryRecord, CompactionTailSelectionReport,
+        ProviderContextRoute,
     };
     use vulcan_session_core::{
         ExecutionRuntimePolicyRequest, ParentSessionRef, ProviderModelSnapshot,
@@ -645,6 +646,7 @@ mod tests {
             compaction_id: "task-compaction-1".to_string(),
             created_at: "456".to_string(),
             policy: ContextCompactionPolicy::default(),
+            tail_selection: task_tail_selection("message-3"),
             provider_context_items: Vec::new(),
             provider_context_route: None,
             provider_context_usage: None,
@@ -723,6 +725,7 @@ mod tests {
             compaction_id: String::from("remote-task-compaction"),
             created_at: String::from("789"),
             policy: ContextCompactionPolicy::default(),
+            tail_selection: task_tail_selection("message-2"),
             provider_context_items: vec![json!({
                 "type": "compaction_summary",
                 "encrypted_content": "opaque-task-checkpoint"
@@ -782,6 +785,34 @@ mod tests {
                 text: text.to_string(),
                 attachments: Vec::new(),
             },
+        }
+    }
+
+    /// Builds one frozen single-message tail report for TaskSession apply tests.
+    /// 为 TaskSession 应用测试构建一份冻结单消息尾部报告。
+    ///
+    /// # Parameters
+    /// # 参数
+    /// `retained_message_id` is the exact canonical suffix identity retained by the fixture.
+    /// `retained_message_id` 是夹具保留的精确规范后缀身份。
+    ///
+    /// # Returns
+    /// # 返回值
+    /// A structurally consistent one-segment selection report.
+    /// 返回结构一致的单执行段选择报告。
+    fn task_tail_selection(retained_message_id: &str) -> CompactionTailSelectionReport {
+        CompactionTailSelectionReport {
+            context_limit: None,
+            policy_source:
+                vulcan_context::ContextCompactionTailPolicySource::MissingContextLimitMinimum,
+            nominal_token_budget: 5_000,
+            segment_limit: 5,
+            retained_segment_count: 1,
+            retained_message_ids: vec![retained_message_id.to_string()],
+            retained_token_estimate: 16,
+            previewed_tool_output_count: 0,
+            omitted_tool_output_token_estimate: 0,
+            newest_segment_exceeds_nominal_budget: false,
         }
     }
 }

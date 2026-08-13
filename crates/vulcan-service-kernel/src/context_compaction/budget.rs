@@ -130,6 +130,24 @@ pub(crate) struct WebuiContextCompactionBaseline {
     /// Explicit output-style override active when the draft was built.
     /// 构建候选状态时生效的显式输出风格覆盖。
     output_style_override_id: Option<String>,
+    /// Live context-budget fingerprint active when the draft was built.
+    /// 构建候选状态时生效的实时上下文预算指纹。
+    live_context_budget_fingerprint: Option<String>,
+    /// Live layered-context assembly fingerprint active when the draft was built.
+    /// 构建候选状态时生效的实时分层上下文装配指纹。
+    live_context_assembly_fingerprint: Option<String>,
+    /// Immutable provider-route lease active when the draft was built.
+    /// 构建候选状态时生效的不可变 Provider 路由租约。
+    provider_route_lease: Option<vulcan_workbench_model::SessionProviderRouteLeaseIdentity>,
+    /// Active provider identifier used by manual target resolution.
+    /// 手动目标解析使用的活动 Provider 标识。
+    active_provider_id: Option<String>,
+    /// Active credential connection identifier used by manual target resolution.
+    /// 手动目标解析使用的活动凭据连接标识。
+    active_connection_id: Option<String>,
+    /// Active model identifier used by manual target resolution.
+    /// 手动目标解析使用的活动模型标识。
+    active_model_id: Option<String>,
 }
 
 impl WebuiContextCompactionBaseline {
@@ -161,6 +179,14 @@ impl WebuiContextCompactionBaseline {
                 .map(|record| record.id.clone()),
             context_start_message_id: runtime_state.context_start_message_id.clone(),
             output_style_override_id: runtime_state.output_style.override_style_id.clone(),
+            live_context_budget_fingerprint: runtime_state.live_context_budget_fingerprint.clone(),
+            live_context_assembly_fingerprint: runtime_state
+                .live_context_assembly_fingerprint
+                .clone(),
+            provider_route_lease: runtime_state.provider_route_lease.clone(),
+            active_provider_id: runtime_state.active_provider_id.clone(),
+            active_connection_id: runtime_state.active_connection_id.clone(),
+            active_model_id: runtime_state.active_model_id.clone(),
         }
     }
 

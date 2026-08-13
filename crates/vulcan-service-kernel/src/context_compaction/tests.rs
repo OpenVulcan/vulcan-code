@@ -8,6 +8,39 @@ use vulcan_agent_runtime::provider_config::PersistedPromptOutputStyleSelection;
 use vulcan_context_injection::{InjectionInsert, InjectionKind};
 use vulcan_workbench_model::SessionTurnStats;
 
+/// Builds one frozen tail report aligned with a test policy and canonical suffix.
+/// 构建与测试策略及规范后缀对齐的冻结尾部报告。
+///
+/// # Parameters
+/// 参数
+/// `policy` is the exact policy carried by the plan and `retained_message_ids` are the ordered suffix IDs.
+/// `policy` 是计划携带的精确策略，`retained_message_ids` 是有序后缀 ID。
+///
+/// # Returns
+/// 返回值
+/// Returns a structurally consistent single-segment fixture for draft-transaction tests.
+/// 返回供候选事务测试使用的结构一致单执行段夹具。
+fn test_tail_selection(
+    policy: vulcan_context::ContextCompactionPolicy,
+    retained_message_ids: &[&str],
+) -> vulcan_context_compaction::CompactionTailSelectionReport {
+    vulcan_context_compaction::CompactionTailSelectionReport {
+        context_limit: policy.tail_context_limit,
+        policy_source: policy.tail_policy_source,
+        nominal_token_budget: policy.preserve_recent_tokens,
+        segment_limit: policy.tail_turns,
+        retained_segment_count: usize::from(!retained_message_ids.is_empty()),
+        retained_message_ids: retained_message_ids
+            .iter()
+            .map(|message_id| (*message_id).to_string())
+            .collect(),
+        retained_token_estimate: 0,
+        previewed_tool_output_count: 0,
+        omitted_tool_output_token_estimate: 0,
+        newest_segment_exceeds_nominal_budget: false,
+    }
+}
+
 /// Creates strict controller-owned VMM state for one compaction test session.
 /// 为一个压缩测试会话创建严格归属于控制器的 VMM 状态。
 fn test_vmm_session_memory(session_id: SessionId) -> vulcan_vmm::VmmSessionMemoryState {
@@ -121,6 +154,29 @@ fn compaction_baseline_rejects_concurrent_output_style_override_change() {
     assert!(!baseline.matches(&runtime_state));
 }
 
+/// Verifies route or budget changes invalidate an in-flight compaction draft without new messages.
+/// 验证路由或预算在没有新消息时发生变化也会使进行中的压缩候选失效。
+#[test]
+fn compaction_baseline_rejects_concurrent_route_and_budget_change() {
+    let mut runtime_state = SessionRuntimeStateEntry {
+        live_context_budget_fingerprint: Some(String::from("budget-a")),
+        live_context_assembly_fingerprint: Some(String::from("assembly-a")),
+        active_provider_id: Some(String::from("provider-a")),
+        active_connection_id: Some(String::from("connection-a")),
+        active_model_id: Some(String::from("model-a")),
+        ..SessionRuntimeStateEntry::default()
+    };
+    let budget_baseline = WebuiContextCompactionBaseline::capture(&runtime_state);
+
+    runtime_state.live_context_budget_fingerprint = Some(String::from("budget-b"));
+    assert!(!budget_baseline.matches(&runtime_state));
+
+    runtime_state.live_context_budget_fingerprint = Some(String::from("budget-a"));
+    let route_baseline = WebuiContextCompactionBaseline::capture(&runtime_state);
+    runtime_state.active_model_id = Some(String::from("model-b"));
+    assert!(!route_baseline.matches(&runtime_state));
+}
+
 /// Removes the variable last-user payload from an automatic compaction continuation prompt.
 /// 从自动压缩续接提示中移除可变的最后用户消息载荷。
 fn auto_compaction_continuation_shell(prompt: &str) -> String {
@@ -169,6 +225,7 @@ fn webui_context_compaction_draft_prunes_expired_transient_injections_transactio
         .expect("expired transient injection item should exist");
     expired_item.remaining_turns = Some(0);
     record_context_compaction_provider_call(&mut active_runtime_state, "test-compaction-execution");
+    let policy = vulcan_context::ContextCompactionPolicy::default();
     let plan = CompactionPlan {
         source_messages: vec![messages[0].clone()],
         source_until_message_id: Some(String::from("user-1")),
@@ -176,7 +233,8 @@ fn webui_context_compaction_draft_prunes_expired_transient_injections_transactio
         retained_tail_start_turn_index: Some(1),
         compaction_id: String::from("test-compaction"),
         created_at: String::from("1780000000100"),
-        policy: vulcan_context::ContextCompactionPolicy::default(),
+        policy,
+        tail_selection: test_tail_selection(policy, &["assistant-1"]),
     };
     let execution = PromptCompactionExecution {
         compaction_result: vulcan_context_compaction::CompactionResult::from_model_summary(
@@ -274,6 +332,7 @@ fn webui_context_compaction_draft_keeps_status_markers_unanchored() {
         &mut active_runtime_state,
         "test-compaction-unanchored-execution",
     );
+    let policy = vulcan_context::ContextCompactionPolicy::default();
     let plan = CompactionPlan {
         source_messages: vec![messages[0].clone()],
         source_until_message_id: Some(String::from("user-before")),
@@ -281,7 +340,8 @@ fn webui_context_compaction_draft_keeps_status_markers_unanchored() {
         retained_tail_start_turn_index: Some(1),
         compaction_id: String::from("test-compaction-unanchored"),
         created_at: String::from("1780000000100"),
-        policy: vulcan_context::ContextCompactionPolicy::default(),
+        policy,
+        tail_selection: test_tail_selection(policy, &["assistant-before", "user-after"]),
     };
     let execution = PromptCompactionExecution {
         compaction_result: vulcan_context_compaction::CompactionResult::from_model_summary(
@@ -333,6 +393,15 @@ fn webui_context_compaction_draft_keeps_status_markers_unanchored() {
         section_records.len() >= 2,
         "completed compaction should keep visible section rows"
     );
+    assert!(section_records.iter().any(|record| {
+        record
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("context_compaction_role"))
+            .and_then(Value::as_str)
+            == Some("body")
+            && record.body.contains("保留上下文压缩升级目标")
+    }));
     assert!(section_records.iter().all(|record| {
         record
             .metadata
@@ -398,6 +467,7 @@ fn webui_context_compaction_draft_separates_manual_stats_and_auto_continuation()
         .conversation_state
         .continuation
         .last_local_message_id = Some(String::from("assistant-before-compaction"));
+    let policy = vulcan_context::ContextCompactionPolicy::default();
     let plan = CompactionPlan {
         source_messages: vec![messages[0].clone()],
         source_until_message_id: Some(String::from("user-old")),
@@ -405,7 +475,8 @@ fn webui_context_compaction_draft_separates_manual_stats_and_auto_continuation()
         retained_tail_start_turn_index: Some(1),
         compaction_id: String::from("test-auto-continuation"),
         created_at: String::from("1780000000100"),
-        policy: vulcan_context::ContextCompactionPolicy::default(),
+        policy,
+        tail_selection: test_tail_selection(policy, &["assistant-old", "user-latest"]),
     };
     let manual_execution = PromptCompactionExecution {
         compaction_result: vulcan_context_compaction::CompactionResult::from_model_summary(
@@ -721,6 +792,20 @@ fn append_webui_context_compaction_end_message_preserves_input_prune_report() {
         truncated_source_message_count: 5,
         still_exceeds_budget: false,
     };
+    // tailSelection supplies persisted adaptive-policy diagnostics for the completed attempt.
+    // tailSelection 为已完成尝试提供持久化自适应策略诊断。
+    let policy = vulcan_context::ContextCompactionPolicy::default();
+    let tail_selection = test_tail_selection(policy, &["assistant-retained"]);
+    // recordReport supplies exact record-retention counts for the same candidate transaction.
+    // recordReport 为同一候选事务提供精确记录保留计数。
+    let record_report = ConversationRecordCompactionReport {
+        original_record_count: 12,
+        full_record_count: 4,
+        compacted_historical_record_count: 3,
+        deleted_record_count: 5,
+        final_record_count: 7,
+        unmatched_retained_tool_identity_count: 0,
+    };
 
     let record_id = append_webui_context_compaction_end_message_to_state(
         &mut runtime_state,
@@ -730,6 +815,8 @@ fn append_webui_context_compaction_end_message_preserves_input_prune_report() {
         AUTO_CONTEXT_COMPACTION_TRIGGER,
         7,
         Some(&prune_report),
+        &tail_selection,
+        &record_report,
     )
     .expect("valid compaction terminal record identity");
 
@@ -768,6 +855,24 @@ fn append_webui_context_compaction_end_message_preserves_input_prune_report() {
             .get("context_compaction_trigger")
             .and_then(Value::as_str),
         Some(AUTO_CONTEXT_COMPACTION_TRIGGER)
+    );
+    assert_eq!(
+        metadata
+            .pointer("/context_compaction_tail_selection/policy_source")
+            .and_then(Value::as_str),
+        Some("missing_context_limit_minimum")
+    );
+    assert_eq!(
+        metadata
+            .pointer("/context_compaction_tail_selection/retained_message_count")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        metadata
+            .pointer("/context_compaction_record_retention/deleted_record_count")
+            .and_then(Value::as_u64),
+        Some(5)
     );
 }
 

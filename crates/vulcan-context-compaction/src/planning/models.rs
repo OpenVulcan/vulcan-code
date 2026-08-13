@@ -1,6 +1,7 @@
 use serde_json::Value;
 use vulcan_context::{
-    ContextCompactionPolicy, SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind,
+    ContextCompactionPolicy, ContextCompactionTailPolicySource, SessionMessageEntry,
+    SessionMessageKind, SessionMessageRecordKind,
 };
 
 /// Stateless summary record returned by one compaction result before the WebUI turns it into its own hidden-node shape.
@@ -81,6 +82,45 @@ pub struct CompactionPlan {
     /// Policy used when the compaction window was planned.
     /// 规划该压缩窗口时使用的策略。
     pub policy: ContextCompactionPolicy,
+    /// Frozen retained-tail selection consumed by rewrite without recomputing boundaries.
+    /// 由 rewrite 消费且不重新计算边界的冻结尾部选择。
+    pub tail_selection: CompactionTailSelectionReport,
+}
+
+/// Frozen retained-tail selection and diagnostics produced by the planner.
+/// 由规划器产出的冻结尾部选择与诊断。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompactionTailSelectionReport {
+    /// Raw model-declared total context window used by the formula.
+    /// 公式使用的模型原始声明总上下文窗口。
+    pub context_limit: Option<usize>,
+    /// Provenance of the adaptive tail policy.
+    /// 自适应尾部策略的来源。
+    pub policy_source: ContextCompactionTailPolicySource,
+    /// Nominal retained-tail token budget.
+    /// 名义尾部保留 Token 预算。
+    pub nominal_token_budget: usize,
+    /// Maximum retained assistant/provider execution segments.
+    /// 最大保留 Assistant/Provider 执行段数量。
+    pub segment_limit: usize,
+    /// Actual retained execution-segment count.
+    /// 实际保留执行段数量。
+    pub retained_segment_count: usize,
+    /// Ordered canonical message identifiers in the retained contiguous suffix.
+    /// 保留连续后缀中的有序规范消息标识。
+    pub retained_message_ids: Vec<String>,
+    /// Estimated tokens after historical tool-output previews are projected.
+    /// 投影历史工具输出预览后的估算 Token 数。
+    pub retained_token_estimate: usize,
+    /// Number of historical tool outputs previewed in the retained suffix.
+    /// 保留后缀中被预览的历史工具输出数量。
+    pub previewed_tool_output_count: usize,
+    /// Estimated original tool-output tokens omitted from the projection.
+    /// 从投影中省略的原始工具输出估算 Token 数。
+    pub omitted_tool_output_token_estimate: usize,
+    /// Whether the newest complete segment alone exceeds the nominal budget.
+    /// 最新完整执行段是否单独超过名义预算。
+    pub newest_segment_exceeds_nominal_budget: bool,
 }
 
 /// Input budget used to decide whether a compaction request must prune its cloned source messages.
@@ -222,6 +262,9 @@ pub struct CompactionResult {
     /// Policy that must be used when applying this compaction result to the canonical conversation.
     /// 将该压缩结果应用到规范会话时必须使用的策略。
     pub policy: ContextCompactionPolicy,
+    /// Frozen retained-tail selection that rewrite must apply exactly.
+    /// rewrite 必须精确应用的冻结尾部选择。
+    pub tail_selection: CompactionTailSelectionReport,
     /// Ordered opaque Responses compaction items that must be replayed on the exact route.
     /// 必须在精确路由上重放的有序不透明 Responses 压缩项。
     pub provider_context_items: Vec<Value>,

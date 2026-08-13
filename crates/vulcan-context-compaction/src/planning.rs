@@ -23,7 +23,8 @@ pub use budget::{estimate_compaction_source_tokens, prepare_compaction_source_fo
 pub use models::{
     CompactionContinuationPromptOptions, CompactionInputBudget, CompactionInputPruneMode,
     CompactionInputPruneReport, CompactionPlan, CompactionPlanInput, CompactionResult,
-    CompactionSummaryRecord, PreparedCompactionSource, ProviderContextRoute,
+    CompactionSummaryRecord, CompactionTailSelectionReport, PreparedCompactionSource,
+    ProviderContextRoute,
 };
 pub use plan::plan_context_compaction;
 pub use summary::{

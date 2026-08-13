@@ -300,11 +300,12 @@ pub(crate) fn append_auto_context_compaction_continuation_message(
         return Ok(None);
     };
     let last_user_message = truncate_auto_compaction_last_user_message(&last_user_message);
-    let message_id = build_session_record_message_id(
+    let message_id = crate::runtime_workspace_helpers::next_available_session_record_message_id(
+        &draft_runtime_state.conversation_state,
         session_id,
         created_at,
         draft_runtime_state.conversation_state.messages.len(),
-    );
+    )?;
     let text = format!(
         "{AUTO_COMPACTION_CONTINUATION_PREFIX}\n\nThis is a synthetic continuation prompt for the resumed provider request, not a new user request. Continue the interrupted work from the retained context immediately. Do not greet, recap the compaction, or ask the user to restate the task. The last real user message before compaction was:\n<last_user_message>\n{last_user_message}\n</last_user_message>"
     );
@@ -469,19 +470,12 @@ pub(crate) fn build_webui_context_compaction_draft(
         None
     };
 
-    compact_conversation_with_summary_until(
+    compact_conversation_with_compaction_result(
         &mut draft_runtime_state.conversation_state,
         summary_message_id.clone(),
-        execution.compaction_result.summary_record.kind,
-        summary_body.to_string(),
-        checkpoint.created_at.clone(),
-        execution
-            .compaction_result
-            .source_until_message_id
-            .as_deref(),
-        execution.compaction_result.policy,
+        &execution.compaction_result,
     )
-    .map_err(|error| format!("Invalid compacted conversation message identity: {error}"))?;
+    .map_err(|error| format!("Invalid frozen context-compaction rewrite: {error}"))?;
     append_remote_responses_compaction_context(
         &mut draft_runtime_state.conversation_state,
         &summary_message_id,
@@ -502,10 +496,73 @@ pub(crate) fn build_webui_context_compaction_draft(
         continuation_message_id.as_deref(),
         &now,
     )?;
-    compact_conversation_records_after_summary(
+    // retainedTransactionRecordIds protects every exact status/body/progress record in this section.
+    // retainedTransactionRecordIds 保护当前分段内每条精确的状态、正文与进度记录。
+    let mut retained_transaction_record_ids = draft_runtime_state
+        .conversation_state
+        .records
+        .iter()
+        .filter(|record| {
+            record
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("context_compaction_section_id"))
+                .and_then(Value::as_str)
+                == Some(section_id)
+        })
+        .map(|record| record.id.clone())
+        .collect::<std::collections::BTreeSet<_>>();
+    retained_transaction_record_ids.insert(section_id.to_string());
+    if let Some(continuation_message_id) = continuation_message_id {
+        retained_transaction_record_ids.insert(continuation_message_id);
+    }
+    // retainedTransactionRecordIdsVec preserves deterministic record-order-independent input for exact retention.
+    // retainedTransactionRecordIdsVec 为精确保留提供不依赖记录顺序的确定性输入。
+    let retained_transaction_record_ids = retained_transaction_record_ids
+        .into_iter()
+        .collect::<Vec<_>>();
+    let record_compaction_report = compact_conversation_records_after_summary_with_retained_ids(
         &mut draft_runtime_state.conversation_state,
         &summary_message_id,
+        &retained_transaction_record_ids,
         execution.compaction_result.policy,
+    );
+    webui_trace(
+        "context_compaction_record_retention",
+        format!(
+            "session={session_id} original={} full={} compacted={} deleted={} final={} unmatched_tool_identities={} tail_segments={} tail_messages={} tail_tokens={} previewed_tools={} omitted_tool_tokens={} newest_segment_over_budget={}",
+            record_compaction_report.original_record_count,
+            record_compaction_report.full_record_count,
+            record_compaction_report.compacted_historical_record_count,
+            record_compaction_report.deleted_record_count,
+            record_compaction_report.final_record_count,
+            record_compaction_report.unmatched_retained_tool_identity_count,
+            execution
+                .compaction_result
+                .tail_selection
+                .retained_segment_count,
+            execution
+                .compaction_result
+                .tail_selection
+                .retained_message_ids
+                .len(),
+            execution
+                .compaction_result
+                .tail_selection
+                .retained_token_estimate,
+            execution
+                .compaction_result
+                .tail_selection
+                .previewed_tool_output_count,
+            execution
+                .compaction_result
+                .tail_selection
+                .omitted_tool_output_token_estimate,
+            execution
+                .compaction_result
+                .tail_selection
+                .newest_segment_exceeds_nominal_budget,
+        ),
     );
     // A committed compaction starts a new context generation and invalidates the previous request anchor.
     // 已提交压缩开启新的上下文代际，并使旧请求锚点失效。
@@ -536,6 +593,8 @@ pub(crate) fn build_webui_context_compaction_draft(
         trigger,
         provider_request_count,
         execution.input_prune_report.as_ref(),
+        &execution.compaction_result.tail_selection,
+        &record_compaction_report,
     )?;
     // The compaction terminal record closes every physical attempt in the compaction execution.
     // 压缩终态记录会闭合本次压缩执行中的所有物理 attempt。

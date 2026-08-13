@@ -37,7 +37,7 @@ use vulcan_ai_contract::{
     NativeToolKind, ReasoningOutputPolicy, ToolDefinition,
 };
 use vulcan_ai_protocols::normalize_openai_usage;
-use vulcan_context::SessionConversationState;
+use vulcan_context::{ContextCompactionPolicy, SessionConversationState};
 use vulcan_context_compaction::{
     CompactionInputBudget, CompactionInputPruneMode, CompactionInputPruneReport, CompactionPlan,
     CompactionResult, ContextCompactionRequestPromptMode, ProviderContextRoute,
@@ -79,6 +79,12 @@ pub struct PromptCompactionModelTarget {
     /// Whether the non-secret exact route explicitly enables standalone remote compaction.
     /// 不含密钥的精确路由是否显式启用独立远端压缩。
     pub remote_compaction_enabled: bool,
+    /// Raw model-declared total context window used by the retained-tail formula.
+    /// 尾部保留公式使用的模型原始声明总上下文窗口。
+    pub context_limit: Option<usize>,
+    /// Complete context-compaction policy frozen with this exact route.
+    /// 随该精确路由一同冻结的完整上下文压缩策略。
+    pub context_compaction_policy: ContextCompactionPolicy,
 }
 
 impl PromptCompactionModelTarget {
@@ -222,6 +228,8 @@ impl PromptCompactionLaunchContext {
 /// `runtime` owns the authoritative catalog and connection graph; the optional overrides identify
 /// the session-selected provider, credential connection, and model.
 /// `runtime` 持有权威目录与连接图；可选覆盖标识会话选择的供应商、凭据连接与模型。
+/// `context_compaction_policy_seed` carries behavior-only task settings resolved with the exact model window.
+/// `context_compaction_policy_seed` 携带需要结合精确模型窗口解析的仅行为任务设置。
 ///
 /// # Returns
 /// 返回值
@@ -235,11 +243,13 @@ pub fn resolve_prompt_compaction_model_target(
     provider_id_override: Option<&str>,
     connection_id_override: Option<&str>,
     model_id_override: Option<&str>,
+    context_compaction_policy_seed: Option<ContextCompactionPolicy>,
 ) -> Result<Option<PromptCompactionModelTarget>, String> {
+    let configuration = runtime.configuration_snapshot()?;
     if provider_id_override.is_none()
         && model_id_override.is_none()
         && connection_id_override.is_none()
-        && runtime.configuration_snapshot()?.active.is_none()
+        && configuration.active.is_none()
     {
         return Ok(None);
     }
@@ -271,12 +281,22 @@ pub fn resolve_prompt_compaction_model_target(
         .ok_or_else(|| {
             String::from("Context compaction model target has no route lease identity.")
         })?;
+    let context_limit =
+        crate::context_budget::model_declared_context_limit(&blueprint.public_capabilities);
+    let context_compaction_policy = configuration.resolve_context_compaction_policy(
+        selection.route.provider.id.as_str(),
+        selection.model.id.as_str(),
+        context_limit,
+        context_compaction_policy_seed,
+    );
     Ok(Some(PromptCompactionModelTarget {
         provider_id: selection.route.provider.id.clone(),
         connection_id: selection.route.connection.id.clone(),
         model_id: selection.model.id.clone(),
         provider_route_lease_identity,
         remote_compaction_enabled,
+        context_limit,
+        context_compaction_policy,
     }))
 }
 
@@ -1397,7 +1417,7 @@ fn build_prompt_compaction_launch_request(
         provider_visible_agent_messages: Vec::new(),
         turn_start_mode: None,
         conversation_state,
-        context_compaction_policy: None,
+        context_compaction_policy: model_target.map(|target| target.context_compaction_policy),
         context_budget_override: None,
         context_window_prefill_input_tokens: None,
         execution_mode: launch_context.execution_mode.clone(),

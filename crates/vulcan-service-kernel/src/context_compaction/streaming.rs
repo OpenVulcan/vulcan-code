@@ -128,6 +128,8 @@ pub(crate) async fn stream_webui_context_compaction_execution(
 
 /// Spawns the selected-session context-compaction stream and mirrors it into WebUI state.
 /// 启动当前会话的上下文压缩流，并将流式事件镜像到 WebUI 状态。
+/// `model_target` is the exact route and adaptive tail policy frozen before planning.
+/// `model_target` 是规划前冻结的精确路由与自适应尾部策略。
 pub(crate) fn spawn_webui_context_compaction_task(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
@@ -140,6 +142,7 @@ pub(crate) fn spawn_webui_context_compaction_task(
     trigger: String,
     plan: CompactionPlan,
     full_context_state: SessionConversationState,
+    model_target: PromptCompactionModelTarget,
 ) -> Result<(), String> {
     let request = build_webui_context_compaction_job_request(
         &state,
@@ -148,6 +151,7 @@ pub(crate) fn spawn_webui_context_compaction_task(
         plan.clone(),
         full_context_state,
         None,
+        model_target,
     );
     let task_state = state.clone();
     let task_app = app.clone();

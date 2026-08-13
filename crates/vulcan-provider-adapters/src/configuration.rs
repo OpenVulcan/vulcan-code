@@ -1892,6 +1892,8 @@ impl PersistedAiConfiguration {
     /// 参数
     /// `provider_id` and `model_id` identify the immutable route selected for the turn.
     /// `provider_id` 与 `model_id` 标识本回合选定的不可变路由。
+    /// `context_limit` is the raw model-declared total context window.
+    /// `context_limit` 是模型原始声明的总上下文窗口。
     /// `session_policy` is either a fully frozen session snapshot or a behavior-only child-task override.
     /// `session_policy` 可以是完整冻结的会话快照，也可以是仅覆盖子任务行为的策略。
     ///
@@ -1903,21 +1905,37 @@ impl PersistedAiConfiguration {
         &self,
         provider_id: &str,
         model_id: &str,
+        context_limit: Option<usize>,
         session_policy: Option<ContextCompactionPolicy>,
     ) -> ContextCompactionPolicy {
         let sparse = self.context_window_policy_sparse_for_route(provider_id, model_id);
         let resolved_window = sparse.resolve();
+        let resolved_tail = vulcan_context::resolve_context_compaction_tail_policy(context_limit);
         if let Some(session_policy) = session_policy {
             if session_policy.window_policy_is_explicit {
-                return session_policy;
+                return ContextCompactionPolicy {
+                    tail_turns: resolved_tail.tail_segments,
+                    preserve_recent_tokens: resolved_tail.preserve_recent_tokens,
+                    tail_context_limit: resolved_tail.context_limit,
+                    tail_policy_source: resolved_tail.source,
+                    ..session_policy
+                };
             }
             return ContextCompactionPolicy {
+                tail_turns: resolved_tail.tail_segments,
+                preserve_recent_tokens: resolved_tail.preserve_recent_tokens,
+                tail_context_limit: resolved_tail.context_limit,
+                tail_policy_source: resolved_tail.source,
                 window: resolved_window,
                 window_policy_is_explicit: true,
                 ..session_policy
             };
         }
         ContextCompactionPolicy {
+            tail_turns: resolved_tail.tail_segments,
+            preserve_recent_tokens: resolved_tail.preserve_recent_tokens,
+            tail_context_limit: resolved_tail.context_limit,
+            tail_policy_source: resolved_tail.source,
             window: resolved_window,
             window_policy_is_explicit: true,
             ..ContextCompactionPolicy::default()
@@ -4848,12 +4866,20 @@ mod tests {
             },
         );
 
-        let policy = configuration.resolve_context_compaction_policy(provider_id, model_id, None);
+        let policy = configuration.resolve_context_compaction_policy(
+            provider_id,
+            model_id,
+            Some(500_000),
+            None,
+        );
         assert_eq!(policy.window.effective_context_window_percent, 95);
         assert_eq!(policy.window.auto_compact_percent, 88);
         assert_eq!(policy.window.auto_compact_token_limit, Some(123_456));
         assert_eq!(policy.window.fallback_buffer_tokens, 0);
         assert!(policy.window_policy_is_explicit);
+        assert_eq!(policy.tail_context_limit, Some(500_000));
+        assert_eq!(policy.tail_turns, 10);
+        assert_eq!(policy.preserve_recent_tokens, 25_000);
     }
 
     /// Verifies a child-task behavior override keeps the selected route window policy.
@@ -4880,12 +4906,16 @@ mod tests {
         let policy = configuration.resolve_context_compaction_policy(
             provider_id,
             model_id,
+            Some(300_000),
             Some(behavior_only),
         );
 
         assert!(!policy.auto);
         assert_eq!(policy.window.effective_context_window_percent, 92);
         assert!(policy.window_policy_is_explicit);
+        assert_eq!(policy.tail_context_limit, Some(300_000));
+        assert_eq!(policy.tail_turns, 6);
+        assert_eq!(policy.preserve_recent_tokens, 15_000);
     }
 
     /// Verifies inherited hard and compaction percentages are validated after layer merging.

@@ -8,6 +8,7 @@ use super::{
     CompactionInputBudget, CompactionInputPruneMode, CompactionInputPruneReport,
     PreparedCompactionSource,
 };
+use crate::preview::preview_tool_output;
 /// Estimates the model-facing size of a compaction source with the same lightweight transcript heuristic used by the planner.
 /// 使用规划器相同的轻量转录启发式估算压缩源的模型可见大小。
 ///
@@ -321,57 +322,7 @@ fn metadata_contains_string(value: &serde_json::Value, needle: &str) -> bool {
 /// 返回一条带有有界预览正文且不带元数据的克隆行。
 fn compact_tool_output_for_compaction_input(message: &SessionMessageEntry) -> SessionMessageEntry {
     let mut compacted = message.clone();
-    let tool_title = canonical_tool_summary_title(message, "Tool Output");
-    let preview = tool_output_compaction_preview(&message.body);
-    compacted.body = format!(
-        "[Tool result compacted for context-compaction input only]\n\
-Tool: {tool_title}\n\
-Result ID: {}\n\
-Reason: older successful tool output exceeded target compaction input budget\n\
-Original size: {} chars\n\
-Preserved preview:\n{}",
-        message.id,
-        message.body.chars().count(),
-        preview
-    );
+    compacted.body = preview_tool_output(&message.body).text;
     compacted.metadata = None;
     compacted
-}
-
-/// Builds a bounded preview from the head and tail of one old tool output.
-/// 从旧工具输出的头尾构建有界预览。
-///
-/// # Parameters
-/// # 参数
-/// `text` is the original tool-output text.
-/// `text` 是原始工具输出文本。
-///
-/// # Returns
-/// # 返回值
-/// Returns a bounded preview that preserves the beginning and ending lines.
-/// 返回保留开头与结尾行的有界预览。
-fn tool_output_compaction_preview(text: &str) -> String {
-    let lines = text.lines().collect::<Vec<_>>();
-    if lines.is_empty() {
-        return String::from("<empty tool output>");
-    }
-    let head = lines.iter().take(8).copied().collect::<Vec<_>>();
-    let tail = lines
-        .iter()
-        .rev()
-        .take(8)
-        .copied()
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect::<Vec<_>>();
-    if lines.len() <= 18 {
-        return lines.join("\n");
-    }
-    format!(
-        "{}\n...\n[{} middle lines omitted]\n...\n{}",
-        head.join("\n"),
-        lines.len().saturating_sub(head.len() + tail.len()),
-        tail.join("\n")
-    )
 }

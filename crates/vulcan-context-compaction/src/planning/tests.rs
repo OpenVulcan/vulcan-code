@@ -59,10 +59,38 @@ fn test_tool_result_message(id: &str, body: &str) -> SessionMessageEntry {
     }
 }
 
+/// Builds an empty frozen tail report aligned with one test policy.
+/// 构建与测试策略对齐的空冻结尾部报告。
+///
+/// # Parameters
+/// # 参数
+/// `policy` is the exact policy copied into the test report.
+/// `policy` 是复制到测试报告中的精确策略。
+///
+/// # Returns
+/// # 返回值
+/// A structurally valid zero-message selection report.
+/// 返回结构有效的零消息选择报告。
+fn test_tail_selection(policy: ContextCompactionPolicy) -> CompactionTailSelectionReport {
+    CompactionTailSelectionReport {
+        context_limit: policy.tail_context_limit,
+        policy_source: policy.tail_policy_source,
+        nominal_token_budget: policy.preserve_recent_tokens,
+        segment_limit: policy.tail_turns,
+        retained_segment_count: 0,
+        retained_message_ids: Vec::new(),
+        retained_token_estimate: 0,
+        previewed_tool_output_count: 0,
+        omitted_tool_output_token_estimate: 0,
+        newest_segment_exceeds_nominal_budget: false,
+    }
+}
+
 /// Verifies prompt-shaped compaction results keep a compact preview separate from the injected continuation body.
 /// 验证提示词形态压缩结果会把紧凑预览与注入的续写正文分开保留。
 #[test]
 fn compaction_result_carries_compact_preview() {
+    let policy = ContextCompactionPolicy::default();
     let plan = CompactionPlan {
         source_messages: Vec::new(),
         source_until_message_id: Some(String::from("m-1")),
@@ -70,7 +98,8 @@ fn compaction_result_carries_compact_preview() {
         retained_tail_start_turn_index: Some(2),
         compaction_id: String::from("cp-1"),
         created_at: String::from("20"),
-        policy: ContextCompactionPolicy::default(),
+        policy,
+        tail_selection: test_tail_selection(policy),
     };
 
     let result = CompactionResult::from_model_summary(
@@ -78,6 +107,7 @@ fn compaction_result_carries_compact_preview() {
         "保留目标、约束和未完成工作，同时不要重复工具说明。",
     );
 
+    assert_eq!(result.tail_selection, plan.tail_selection);
     assert_eq!(
         result.summary_record.preview,
         "保留目标、约束和未完成工作，同时不要重复工具说明。"
@@ -100,6 +130,7 @@ fn compaction_result_carries_compact_preview() {
 /// 验证远端压缩会在单一路由下保留不透明输出与诊断元数据。
 #[test]
 fn remote_compaction_result_preserves_checkpoint_metadata() {
+    let policy = ContextCompactionPolicy::default();
     let plan = CompactionPlan {
         source_messages: Vec::new(),
         source_until_message_id: Some(String::from("m-1")),
@@ -107,7 +138,8 @@ fn remote_compaction_result_preserves_checkpoint_metadata() {
         retained_tail_start_turn_index: None,
         compaction_id: String::from("cp-remote"),
         created_at: String::from("30"),
-        policy: ContextCompactionPolicy::default(),
+        policy,
+        tail_selection: test_tail_selection(policy),
     };
     let result = CompactionResult::from_remote_responses_with_metadata(
         &plan,
@@ -134,6 +166,7 @@ fn remote_compaction_result_preserves_checkpoint_metadata() {
     )
     .expect("valid remote compaction should build a checkpoint");
 
+    assert_eq!(result.tail_selection, plan.tail_selection);
     assert_eq!(result.provider_context_items.len(), 2);
     assert_eq!(result.provider_context_items[0]["type"], "compaction");
     assert_eq!(result.summary_record.kind, SessionMessageKind::Assistant);
@@ -209,6 +242,7 @@ fn continuation_prompt_tail_note_requires_explicit_option() {
 /// 验证压缩结果在没有尾部保留时不会写入尾部保留提示。
 #[test]
 fn compaction_result_omits_tail_note_without_retained_tail() {
+    let policy = ContextCompactionPolicy::default();
     let plan = CompactionPlan {
         source_messages: Vec::new(),
         source_until_message_id: Some(String::from("m-1")),
@@ -216,7 +250,8 @@ fn compaction_result_omits_tail_note_without_retained_tail() {
         retained_tail_start_turn_index: None,
         compaction_id: String::from("cp-1"),
         created_at: String::from("20"),
-        policy: ContextCompactionPolicy::default(),
+        policy,
+        tail_selection: test_tail_selection(policy),
     };
 
     let result = CompactionResult::from_model_summary(&plan, "摘要");
@@ -233,6 +268,7 @@ fn compaction_result_omits_tail_note_without_retained_tail() {
 /// 验证历史摘要会以供后续压缩复用的带标签缓存稳定格式持久化。
 #[test]
 fn compaction_result_persists_previous_summary_block() {
+    let policy = ContextCompactionPolicy::default();
     let plan = CompactionPlan {
         source_messages: Vec::new(),
         source_until_message_id: Some(String::from("m-1")),
@@ -240,7 +276,8 @@ fn compaction_result_persists_previous_summary_block() {
         retained_tail_start_turn_index: Some(2),
         compaction_id: String::from("cp-1"),
         created_at: String::from("20"),
-        policy: ContextCompactionPolicy::default(),
+        policy,
+        tail_selection: test_tail_selection(policy),
     };
 
     let result = CompactionResult::from_model_summary(
@@ -402,20 +439,62 @@ fn plan_context_compaction_respects_explicit_source_until_message_id() {
         messages: &messages,
         all_messages: &messages,
         context_start_message_id: None,
-        source_until_message_id: Some("assistant-0"),
+        source_until_message_id: Some("user-1"),
         policy: ContextCompactionPolicy::default(),
     })
     .expect("explicit source boundary should produce a compaction plan");
 
-    assert_eq!(plan.source_until_message_id.as_deref(), Some("assistant-0"));
+    assert_eq!(plan.source_until_message_id.as_deref(), Some("user-1"));
     assert_eq!(
         plan.source_messages
             .iter()
             .map(|message| message.id.as_str())
             .collect::<Vec<_>>(),
-        vec!["user-0", "assistant-0"]
+        vec!["user-0", "assistant-0", "user-1"]
     );
     assert_eq!(plan.retained_tail_start_turn_index, Some(1));
+    assert_eq!(
+        plan.tail_selection.retained_message_ids,
+        vec!["assistant-1"]
+    );
+}
+
+/// Verifies an explicit source boundary cannot split one assistant/provider execution segment.
+/// 验证明示来源边界不能切开同一 Assistant/Provider 执行段。
+#[test]
+fn plan_context_compaction_rejects_explicit_boundary_inside_segment() {
+    let messages = vec![
+        test_context_message(
+            "user-0",
+            SessionMessageKind::User,
+            SessionMessageRecordKind::Transcript,
+            "older request",
+        ),
+        test_context_message(
+            "assistant-0",
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::AssistantOutput,
+            "assistant output",
+        ),
+        test_tool_result_message("tool-0", "tool output in the same segment"),
+        test_context_message(
+            "assistant-1",
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::AssistantOutput,
+            "new segment",
+        ),
+    ];
+
+    let plan = plan_context_compaction(CompactionPlanInput {
+        session_label: "unsafe-explicit-boundary",
+        messages: &messages,
+        all_messages: &messages,
+        context_start_message_id: None,
+        source_until_message_id: Some("assistant-0"),
+        policy: ContextCompactionPolicy::default(),
+    });
+
+    assert!(plan.is_none());
 }
 
 /// Verifies assistant entries with the same provider message id count as one retained API round.
@@ -462,20 +541,428 @@ fn plan_context_compaction_groups_provider_message_id_as_one_api_round() {
         context_start_message_id: None,
         source_until_message_id: None,
         policy: ContextCompactionPolicy {
-            tail_turns: 2,
+            tail_turns: 1,
             preserve_recent_tokens: 10_000,
             ..ContextCompactionPolicy::default()
         },
     })
     .expect("provider-grouped API rounds should produce a compaction plan");
 
-    assert_eq!(plan.source_until_message_id.as_deref(), Some("user-0"));
+    assert_eq!(plan.source_until_message_id.as_deref(), Some("assistant-b"));
     assert_eq!(
         plan.source_messages
             .iter()
             .map(|message| message.id.as_str())
             .collect::<Vec<_>>(),
-        vec!["user-0"]
+        vec!["user-0", "assistant-a", "assistant-b"]
+    );
+}
+
+/// Verifies history before the first Assistant is counted inside that first execution segment.
+/// 验证首条 Assistant 之前的历史会计入第一个执行段，而不是独立成段。
+#[test]
+fn plan_context_compaction_assigns_leading_history_to_first_segment() {
+    let messages = vec![
+        test_context_message(
+            "user-leading",
+            SessionMessageKind::User,
+            SessionMessageRecordKind::Transcript,
+            "leading request",
+        ),
+        test_context_message(
+            "assistant-first",
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::AssistantOutput,
+            "first provider segment",
+        ),
+        test_context_message(
+            "user-trailing-first",
+            SessionMessageKind::User,
+            SessionMessageRecordKind::Transcript,
+            "input consumed before the next provider output",
+        ),
+        test_context_message(
+            "assistant-newest",
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::AssistantOutput,
+            "newest provider segment",
+        ),
+    ];
+
+    let plan = plan_context_compaction(CompactionPlanInput {
+        session_label: "leading-history",
+        messages: &messages,
+        all_messages: &messages,
+        context_start_message_id: None,
+        source_until_message_id: None,
+        policy: ContextCompactionPolicy {
+            tail_turns: 1,
+            preserve_recent_tokens: 5_000,
+            ..ContextCompactionPolicy::default()
+        },
+    })
+    .expect("the complete first execution segment should be compacted");
+
+    assert_eq!(
+        plan.source_messages
+            .iter()
+            .map(|message| message.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["user-leading", "assistant-first", "user-trailing-first"]
+    );
+    assert_eq!(
+        plan.tail_selection.retained_message_ids,
+        vec!["assistant-newest"]
+    );
+    assert_eq!(plan.tail_selection.retained_segment_count, 1);
+}
+
+/// Verifies long tasks without new user messages retain assistant/provider segments and preview closed tool output.
+/// 验证没有新 User 消息的长任务仍按 Assistant/Provider 执行段保留，并预览已闭合工具输出。
+#[test]
+fn plan_context_compaction_selects_segments_without_user_turns() {
+    let mut oldest = test_context_message(
+        "assistant-oldest",
+        SessionMessageKind::Assistant,
+        SessionMessageRecordKind::AssistantOutput,
+        "oldest provider segment",
+    );
+    oldest.metadata = Some(serde_json::json!({ "provider_message_id": "provider-0" }));
+    let mut historical = test_context_message(
+        "assistant-historical",
+        SessionMessageKind::Assistant,
+        SessionMessageRecordKind::ToolCallOutput,
+        "historical tool call",
+    );
+    historical.metadata = Some(serde_json::json!({ "provider_message_id": "provider-1" }));
+    let historical_tool = test_tool_result_message("tool-historical", &"中".repeat(3_500));
+    let mut newest = test_context_message(
+        "assistant-newest",
+        SessionMessageKind::Assistant,
+        SessionMessageRecordKind::AssistantOutput,
+        "newest provider segment",
+    );
+    newest.metadata = Some(serde_json::json!({ "provider_message_id": "provider-2" }));
+    let messages = vec![oldest, historical, historical_tool, newest];
+    let policy = ContextCompactionPolicy {
+        tail_turns: 2,
+        preserve_recent_tokens: 5_000,
+        ..ContextCompactionPolicy::default()
+    };
+
+    let plan = plan_context_compaction(CompactionPlanInput {
+        session_label: "long-task",
+        messages: &messages,
+        all_messages: &messages,
+        context_start_message_id: None,
+        source_until_message_id: None,
+        policy,
+    })
+    .expect("the oldest provider segment should be compacted");
+
+    assert_eq!(
+        plan.source_until_message_id.as_deref(),
+        Some("assistant-oldest")
+    );
+    assert_eq!(
+        plan.tail_selection.retained_message_ids,
+        vec![
+            "assistant-historical",
+            "tool-historical",
+            "assistant-newest"
+        ]
+    );
+    assert_eq!(plan.tail_selection.retained_segment_count, 2);
+    assert_eq!(plan.tail_selection.previewed_tool_output_count, 1);
+    assert!(plan.tail_selection.omitted_tool_output_token_estimate > 0);
+}
+
+/// Verifies hundreds of no-user provider segments retain exactly twenty complete parallel-tool groups at 1M.
+/// 验证数百个无 User 的 Provider 执行段在 1M 窗口下精确保留二十个完整并行工具组。
+#[test]
+fn plan_context_compaction_scales_to_hundreds_of_parallel_tool_segments() {
+    // messages models 300 uninterrupted provider rounds, each with two parallel calls and two results.
+    // messages 模拟 300 个无间断 Provider 执行轮次，每轮包含两个并行调用与两个结果。
+    let mut messages = Vec::new();
+    for segment_index in 0..300usize {
+        // providerMessageId groups both parallel tool-call rows into one execution segment.
+        // providerMessageId 把两条并行工具调用行归入同一执行段。
+        let provider_message_id = format!("provider-{segment_index}");
+        for call_index in 0..2usize {
+            // toolCall is one Assistant-owned parallel call row within the current provider round.
+            // toolCall 是当前 Provider 轮次中一条归属 Assistant 的并行调用行。
+            let mut tool_call = test_context_message(
+                &format!("assistant-{call_index}-{segment_index}"),
+                SessionMessageKind::Assistant,
+                SessionMessageRecordKind::ToolCallOutput,
+                &format!("parallel call {call_index} for segment {segment_index}"),
+            );
+            tool_call.metadata = Some(serde_json::json!({
+                "provider_message_id": provider_message_id.clone(),
+                "tool_name": "shell_command",
+                "tool_call_id": format!("call-{call_index}-{segment_index}"),
+            }));
+            messages.push(tool_call);
+        }
+        messages.push(test_tool_result_message(
+            &format!("tool-a-{segment_index}"),
+            "parallel result a",
+        ));
+        messages.push(test_tool_result_message(
+            &format!("tool-b-{segment_index}"),
+            "parallel result b",
+        ));
+    }
+    // resolution is the single shared 1M formula result used to construct the exact test policy.
+    // resolution 是用于构造精确测试策略的唯一共享 1M 公式结果。
+    let resolution = vulcan_context::resolve_context_compaction_tail_policy(Some(1_000_000));
+    // policy carries the formula result into the production planner shared by all three entry paths.
+    // policy 把公式结果带入三条入口共享的生产规划器。
+    let policy = ContextCompactionPolicy {
+        tail_turns: resolution.tail_segments,
+        preserve_recent_tokens: resolution.preserve_recent_tokens,
+        tail_context_limit: resolution.context_limit,
+        tail_policy_source: resolution.source,
+        ..ContextCompactionPolicy::default()
+    };
+
+    // plan must retain the maximum complete suffix without splitting any four-row parallel group.
+    // plan 必须保留最大完整后缀，且不能拆分任何四行并行工具组。
+    let plan = plan_context_compaction(CompactionPlanInput {
+        session_label: "hundreds-of-parallel-segments",
+        messages: &messages,
+        all_messages: &messages,
+        context_start_message_id: None,
+        source_until_message_id: None,
+        policy,
+    })
+    .expect("the first 280 complete provider segments should be summarized");
+
+    assert_eq!(plan.tail_selection.segment_limit, 20);
+    assert_eq!(plan.tail_selection.nominal_token_budget, 50_000);
+    assert_eq!(plan.tail_selection.retained_segment_count, 20);
+    assert_eq!(plan.tail_selection.retained_message_ids.len(), 80);
+    assert_eq!(
+        plan.tail_selection
+            .retained_message_ids
+            .first()
+            .map(String::as_str),
+        Some("assistant-0-280")
+    );
+    assert_eq!(
+        plan.tail_selection
+            .retained_message_ids
+            .last()
+            .map(String::as_str),
+        Some("tool-b-299")
+    );
+    assert_eq!(plan.source_until_message_id.as_deref(), Some("tool-b-279"));
+}
+
+/// Verifies an oversized newest execution segment remains complete and excludes every older segment.
+/// 验证超预算最新执行段保持完整，并排除所有更旧执行段。
+#[test]
+fn plan_context_compaction_keeps_oversized_newest_segment_alone() {
+    let mut old = test_context_message(
+        "assistant-old",
+        SessionMessageKind::Assistant,
+        SessionMessageRecordKind::AssistantOutput,
+        "old segment",
+    );
+    old.metadata = Some(serde_json::json!({ "provider_message_id": "provider-old" }));
+    let mut newest = test_context_message(
+        "assistant-newest",
+        SessionMessageKind::Assistant,
+        SessionMessageRecordKind::ToolCallOutput,
+        "newest tool call",
+    );
+    newest.metadata = Some(serde_json::json!({ "provider_message_id": "provider-new" }));
+    let newest_tool = test_tool_result_message("tool-newest", &"新".repeat(7_000));
+    let messages = vec![old, newest, newest_tool];
+    let policy = ContextCompactionPolicy {
+        tail_turns: 5,
+        preserve_recent_tokens: 5_000,
+        ..ContextCompactionPolicy::default()
+    };
+
+    let plan = plan_context_compaction(CompactionPlanInput {
+        session_label: "oversized-newest",
+        messages: &messages,
+        all_messages: &messages,
+        context_start_message_id: None,
+        source_until_message_id: None,
+        policy,
+    })
+    .expect("the older segment should be compacted");
+
+    assert_eq!(
+        plan.tail_selection.retained_message_ids,
+        vec!["assistant-newest", "tool-newest"]
+    );
+    assert_eq!(plan.tail_selection.retained_segment_count, 1);
+    assert_eq!(plan.tail_selection.previewed_tool_output_count, 0);
+    assert!(plan.tail_selection.newest_segment_exceeds_nominal_budget);
+}
+
+/// Verifies a conversation without any Assistant message is one protected newest segment.
+/// 验证完全没有 Assistant 消息的会话会作为一个受保护最新执行段。
+#[test]
+fn plan_context_compaction_protects_all_messages_without_assistant() {
+    let messages = vec![
+        test_context_message(
+            "user-0",
+            SessionMessageKind::User,
+            SessionMessageRecordKind::Transcript,
+            "first user message",
+        ),
+        test_context_message(
+            "user-1",
+            SessionMessageKind::User,
+            SessionMessageRecordKind::Transcript,
+            "second user message",
+        ),
+    ];
+
+    let plan = plan_context_compaction(CompactionPlanInput {
+        session_label: "no-assistant",
+        messages: &messages,
+        all_messages: &messages,
+        context_start_message_id: None,
+        source_until_message_id: None,
+        policy: ContextCompactionPolicy::default(),
+    });
+
+    assert!(plan.is_none());
+}
+
+/// Verifies a trailing user message remains inside the newest Assistant/provider segment.
+/// 验证尾随 User 消息会保留在最新 Assistant/Provider 执行段中。
+#[test]
+fn plan_context_compaction_keeps_trailing_user_in_newest_segment() {
+    let messages = vec![
+        test_context_message(
+            "assistant-old",
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::AssistantOutput,
+            "old segment",
+        ),
+        test_context_message(
+            "assistant-newest",
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::AssistantOutput,
+            "newest provider output",
+        ),
+        test_context_message(
+            "user-trailing",
+            SessionMessageKind::User,
+            SessionMessageRecordKind::Transcript,
+            "user input not consumed by another assistant output",
+        ),
+    ];
+
+    let plan = plan_context_compaction(CompactionPlanInput {
+        session_label: "trailing-user",
+        messages: &messages,
+        all_messages: &messages,
+        context_start_message_id: None,
+        source_until_message_id: None,
+        policy: ContextCompactionPolicy {
+            tail_turns: 1,
+            preserve_recent_tokens: 5_000,
+            ..ContextCompactionPolicy::default()
+        },
+    })
+    .expect("the old assistant segment should be compacted");
+
+    assert_eq!(
+        plan.tail_selection.retained_message_ids,
+        vec!["assistant-newest", "user-trailing"]
+    );
+    assert_eq!(plan.tail_selection.retained_segment_count, 1);
+}
+
+/// Verifies the segment limit stops at the newest contiguous suffix.
+/// 验证执行段数量上限会在最新连续后缀处停止。
+#[test]
+fn plan_context_compaction_stops_at_segment_limit() {
+    let messages = (0..4)
+        .map(|index| {
+            test_context_message(
+                &format!("assistant-{index}"),
+                SessionMessageKind::Assistant,
+                SessionMessageRecordKind::AssistantOutput,
+                &format!("segment {index}"),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    let plan = plan_context_compaction(CompactionPlanInput {
+        session_label: "segment-limit",
+        messages: &messages,
+        all_messages: &messages,
+        context_start_message_id: None,
+        source_until_message_id: None,
+        policy: ContextCompactionPolicy {
+            tail_turns: 2,
+            preserve_recent_tokens: 5_000,
+            ..ContextCompactionPolicy::default()
+        },
+    })
+    .expect("two oldest segments should be compacted");
+
+    assert_eq!(
+        plan.tail_selection.retained_message_ids,
+        vec!["assistant-2", "assistant-3"]
+    );
+    assert_eq!(plan.tail_selection.retained_segment_count, 2);
+}
+
+/// Verifies a too-large nearer segment blocks every older segment instead of allowing a gap.
+/// 验证过大的较近执行段会阻止全部更旧执行段，不能跳过它形成时间空洞。
+#[test]
+fn plan_context_compaction_does_not_skip_large_nearer_segment() {
+    let messages = vec![
+        test_context_message(
+            "assistant-old-small",
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::AssistantOutput,
+            "old small segment",
+        ),
+        test_context_message(
+            "assistant-near-large",
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::AssistantOutput,
+            &"大".repeat(6_000),
+        ),
+        test_context_message(
+            "assistant-newest-small",
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::AssistantOutput,
+            "newest small segment",
+        ),
+    ];
+
+    let plan = plan_context_compaction(CompactionPlanInput {
+        session_label: "no-gap",
+        messages: &messages,
+        all_messages: &messages,
+        context_start_message_id: None,
+        source_until_message_id: None,
+        policy: ContextCompactionPolicy {
+            tail_turns: 5,
+            preserve_recent_tokens: 5_000,
+            ..ContextCompactionPolicy::default()
+        },
+    })
+    .expect("the nearer large segment should stop backward expansion");
+
+    assert_eq!(
+        plan.tail_selection.retained_message_ids,
+        vec!["assistant-newest-small"]
+    );
+    assert_eq!(
+        plan.source_until_message_id.as_deref(),
+        Some("assistant-near-large")
     );
 }
 
@@ -512,7 +999,7 @@ fn prepare_compaction_source_keeps_full_input_when_budget_fits() {
 /// 验证窗口降级剪枝只会改写克隆出来的旧工具输出。
 #[test]
 fn prepare_compaction_source_prunes_old_tool_output_clone_only() {
-    let long_output = (0..300)
+    let long_output = (0..400)
         .map(|index| format!("line {index}: successful search hit"))
         .collect::<Vec<_>>()
         .join("\n");
@@ -549,7 +1036,7 @@ fn prepare_compaction_source_prunes_old_tool_output_clone_only() {
     let prepared = prepare_compaction_source_for_target_budget(
         &messages,
         CompactionInputBudget {
-            target_input_budget_tokens: 1_000,
+            target_input_budget_tokens: 1_500,
             safety_reserve_tokens: 30_000,
         },
         ContextCompactionPolicy {
@@ -564,7 +1051,7 @@ fn prepare_compaction_source_prunes_old_tool_output_clone_only() {
     assert!(
         prepared.source_messages[2]
             .body
-            .contains("[Tool result compacted for context-compaction input only]")
+            .contains("[上下文压缩省略：")
     );
     assert_eq!(prepared.source_messages[5].body, "recent output must stay");
     assert_eq!(prepared.prune_report.pruned_tool_output_count, 2);
@@ -683,7 +1170,7 @@ fn prepare_compaction_source_splits_oversized_tail_when_needed() {
 /// 验证启用仅克隆剪枝时仍会完整保留错误类工具输出。
 #[test]
 fn prepare_compaction_source_preserves_error_tool_output() {
-    let long_output = (0..300)
+    let long_output = (0..400)
         .map(|index| format!("line {index}: successful output"))
         .collect::<Vec<_>>()
         .join("\n");
@@ -722,7 +1209,7 @@ fn prepare_compaction_source_preserves_error_tool_output() {
     let prepared = prepare_compaction_source_for_target_budget(
         &messages,
         CompactionInputBudget {
-            target_input_budget_tokens: 1_000,
+            target_input_budget_tokens: 1_500,
             safety_reserve_tokens: 30_000,
         },
         ContextCompactionPolicy {

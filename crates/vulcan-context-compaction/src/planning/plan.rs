@@ -1,6 +1,6 @@
 use vulcan_context::{SessionMessageEntry, SessionMessageKind};
 
-use super::tail::recent_tail_start_index;
+use super::tail::{select_compaction_tail, tail_selection_for_explicit_start};
 use super::time::current_unix_millis_text;
 use super::{CompactionPlan, CompactionPlanInput};
 /// Plans the compaction step and returns the source slice plus checkpoint metadata when compaction is needed.
@@ -21,13 +21,21 @@ pub fn plan_context_compaction(input: CompactionPlanInput<'_>) -> Option<Compact
         .cloned()
         .collect::<Vec<_>>();
 
-    let retained_tail_start = match input.source_until_message_id {
-        Some(source_until_message_id) => context_candidates
-            .iter()
-            .position(|message| message.id == source_until_message_id)
-            .map(|index| index.saturating_add(1))?,
-        None => recent_tail_start_index(&context_candidates, input.policy),
+    let tail_selection = match input.source_until_message_id {
+        Some(source_until_message_id) => {
+            let retained_tail_start = context_candidates
+                .iter()
+                .position(|message| message.id == source_until_message_id)
+                .map(|index| index.saturating_add(1))?;
+            tail_selection_for_explicit_start(
+                &context_candidates,
+                retained_tail_start,
+                input.policy,
+            )?
+        }
+        None => select_compaction_tail(&context_candidates, input.policy),
     };
+    let retained_tail_start = tail_selection.start_index;
     if retained_tail_start == 0 {
         return None;
     }
@@ -50,6 +58,7 @@ pub fn plan_context_compaction(input: CompactionPlanInput<'_>) -> Option<Compact
         compaction_id: format!("session-{}-compaction-{created_at}", input.session_label),
         created_at,
         policy: input.policy,
+        tail_selection: tail_selection.report,
     })
 }
 

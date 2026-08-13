@@ -707,3 +707,51 @@ WebUI 自动压缩已经持有精确 `ContextBudgetSnapshot`，可直接将 `con
 - Provider retry、overflow 分类和协议降级规则调整。
 
 第一批可先记录低收益或高频压缩遥测，但不依据尚未采集的数据改变 anti-thrashing 行为。完成本批并观察真实压缩质量后，再决定 Keep Policy 与事务一致性两个后续批次的优先级。
+
+## 16. 第一批实际落地结果（2026-08-13）
+
+本节记录第 15 节建议在当前 `vulcan-code` 工作区中的真实实施结果。它以源码、测试和静态检查为依据，不把尚未执行的真实 Provider/WebUI 验收写成已完成。
+
+### 16.1 已完成的实现闭环
+
+- `vulcan-context` 已成为自适应尾部公式的唯一归属：每 50K 原始声明窗口增加 2.5K 名义尾部预算和 1 个执行段，分别限制在 5K—50K 与 5—20；窗口缺失时显式使用 5K/5，并记录 `missing_context_limit_minimum`，不按模型名猜测。
+- Provider 配置和 Agent Runtime 从精确模型能力读取原始 `context_limit`；WebUI 自动、WebUI 手动和 TaskSession 都在规划前冻结同一类 `PromptCompactionModelTarget`，计划与任务构建复用该对象，不进行协议探测或跨协议降级。
+- planning 使用单一 assistant/provider 执行段选择器。第一条 Assistant 之前的历史归入第一执行段；不存在 Assistant 时全部消息视为一个最新段；最新段始终全文保护，历史段才允许工具正文预览；段数与 Token 双上限都按连续后缀执行，不跳过较近大段去保留更早小段。
+- `CompactionTailSelectionReport` 从 plan 传递到 result 和 rewrite，包含解析窗口、来源、名义预算、段数上限、实际保留 ID、估算 Token、预览数量、省略量及最新段超预算状态。rewrite 在修改状态前校验该冻结报告仍对应当前连续后缀，失效时整体拒绝。
+- 单工具文本结果严格超过 2,500 估算 Token 时，已闭合历史段使用约 500 Token 头部、明确中文省略标记和约 500 Token 尾部。切分采用 Unicode 安全的线性扫描，与共享混合语言估算语义一致，并具备幂等检测；最新开放段不应用该预览。
+- ToolResult 正文投影只处理原始文本；`tool_call_id` 和 `is_error` 保持结构化身份。retained-tail 中被预览工具结果的原始可见 record 与 `detail_ref.record_id` 指向的详情 record 仍全文保留。
+- record 回收已删除 `tail_turns * 12` 启发式，改用 retained canonical ID、本地工具 ID、Provider tool-call ID、显式详情 ID 和当前压缩事务 record ID。当前 `context_compaction_section_id` 下的状态、正文与进度记录全部受保护；回收后新增记录 ID 通过已占用身份探测生成，避免长度式编号复用。
+- 本地摘要提示词已加入 `Active Task`、`Pending User Asks`、`Completed—Do Not Repeat`，并明确“长任务没有新 user 消息不代表任务完成”。WebUI 元数据、TaskSession 标记和预算指纹统一记录稳定策略来源及尾部/record 统计。
+- WebUI 提交基线除消息、记录和锚点外，还覆盖实时 context-budget/assembly fingerprint、Provider route lease 及活动 provider/connection/model，阻止无消息变化但模型或预算已经漂移的候选提交。
+
+### 16.2 实施中发现并修正的问题
+
+- 首版分段把第一条 Assistant 之前的历史误算为独立段；现已归并到第一 Assistant 执行段，并在 planning 与 canonical rewrite 两侧保持同构。
+- 首版 Unicode 预览切分反复估算前缀，复杂度为 O(n²)；现已改为 O(n) 增量扫描，并增加百万字符测试。
+- WebUI 自动路径重新校验精确路由时一度没有传入 preparation 的行为策略种子；现已传入冻结种子，动态尾部字段仍由精确窗口覆盖。
+- 首版事务 record 保留只覆盖 section 起点，可能误回收同一次压缩的正文和进度；现已按 section ID 精确保留整段事务记录。
+- 首版 WebUI baseline 未包含实时 route/model 与预算指纹；现已补齐并增加并发变化拒绝测试。
+- WebUI 与 TaskSession 曾分别维护策略来源标签；现由共享枚举提供稳定标签，避免诊断和指纹命名漂移。
+- 静态审核发现若干新增或改签名函数缺少项目要求的参数/返回值双语说明；现已统一补齐。
+- 完成审计时发现数百执行段、并行工具组、最新失败工具结果、来源边界删除/改变和头尾不重叠只有间接覆盖；现已补直接压力/原子性测试，并断言本地与远端结果携带同一冻结 tail report。
+
+### 16.3 当前验证证据与边界
+
+- `vulcan-context` 与 `vulcan-context-compaction` 合计 125 项测试通过；覆盖窗口公式边界、300 个无 user 执行段、并行工具组、无 Assistant、尾随 user、同 Provider ID、连续后缀、最新成功/失败工具全文保护、Unicode/中文/emoji/CRLF、三次幂等与百万字符工具输出。
+- Agent Runtime prompt-compaction 定向测试 17 项、WebUI 并发 baseline 测试 2 项、record-compaction 测试 3 项、WebUI draft 测试 3 项与 TaskSession checkpoint 测试 1 项通过。
+- 受影响 6 crate 最终合计 1,689 项测试通过；`cargo check --workspace`、context 两 crate all-targets Clippy、受影响 7 crate `cargo clippy --lib -- -D warnings`、`cargo fmt --all -- --check` 与 `git diff --check` 已通过。
+- `vulcan-provider-adapters` 全量测试仍有一个实施前已存在的 golden snapshot 漂移：`system_provider_registry_matches_golden_snapshot`。本批没有为消除该无关失败而重生成快照。
+- 工作区 `--all-targets` Clippy 仍会命中实施前已存在的测试文件未使用导入 `strip_simple_ansi_sequences`；本批不修改无关文件。受影响生产库与本批新增 context 测试的严格 Clippy 已通过。
+- 尚未在真实 Provider、长时间 WebUI 桌面会话和跨重启 TaskSession 上执行运行时验收，因此静态与单元/集成测试不能替代真实 10 小时以上任务的最终观察。
+
+### 16.4 后续项按“调整难度上升、预期边际收益下降”排序
+
+1. 补真实 Provider/WebUI 长任务验收与压缩遥测看板：改动小，能最快验证本批质量并暴露高频压缩、超预算最新段和省略量分布。
+2. 将现有文本关键字保护升级为结构化 Keep Policy：可减少误保护和误裁剪，但需要统一工具、附件、change set、ask 与错误证据的类型契约。
+3. 增加稳定 `compaction_strategy_hash` 并纳入检查点：有利于策略升级后的失效判定，但当前预算指纹已经覆盖本批动态字段，边际收益低于前两项。
+4. 基于真实遥测调整 anti-thrashing：实现不宜先于数据，否则容易把正常长任务误判为压缩抖动。
+5. 增加手动压缩 `focus`：使用体验有提升，但需要定义与 Active Task、Pending User Asks 和 Provider 原生压缩之间的确定优先级。
+6. 引入 immutable sidecar projection：能进一步隔离模型投影与 canonical 历史，但会扩大持久化、恢复和工具详情链路的改造面。
+7. 收敛完整 Compaction Transaction/CAS：一致性上限最高，但涉及 WebUI、TaskSession、VMM/record 副作用和跨存储提交，是当前最难调整且相对本批新增收益最低的架构级工作。
+
+在没有真实遥测证明当前事务边界或 Keep Policy 成为主要质量瓶颈前，不建议越级实施第 6—7 项。

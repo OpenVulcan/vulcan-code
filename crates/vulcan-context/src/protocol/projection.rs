@@ -651,14 +651,12 @@ fn conversation_message_to_compaction_source_message(
             tool_call_id,
             is_error,
             text,
-        } => {
-            let text = if *is_error {
-                format!("[Tool execution failed]\n{text}")
-            } else {
-                text.clone()
-            };
-            compaction_tool_result_message(message.id.clone(), tool_call_id.as_deref(), &text)
-        }
+        } => compaction_tool_result_message(
+            message.id.clone(),
+            tool_call_id.as_deref(),
+            *is_error,
+            text,
+        ),
         SessionConversationPayload::AgentMessage {
             message_type,
             task_name,
@@ -752,24 +750,30 @@ fn compaction_provider_message_metadata(provider_message_id: Option<&str>) -> Op
 fn compaction_tool_result_message(
     id: String,
     tool_call_id: Option<&str>,
+    is_error: bool,
     text: &str,
 ) -> SessionMessageEntry {
-    let mut parts = Vec::new();
+    // metadata preserves protocol identity separately so the planner and rewrite preview the exact same raw text.
+    // metadata 单独保留协议身份，使 planning 与 rewrite 对完全相同的原始正文生成预览。
+    let mut metadata = serde_json::Map::new();
     if let Some(tool_call_id) = tool_call_id
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        parts.push(format!("tool_call_id: {tool_call_id}"));
+        metadata.insert(
+            String::from("tool_call_id"),
+            Value::String(tool_call_id.to_string()),
+        );
     }
-    push_non_empty_text_part(&mut parts, text);
+    metadata.insert(String::from("is_error"), Value::Bool(is_error));
     SessionMessageEntry {
         id,
         kind: SessionMessageKind::Assistant,
         record_kind: SessionMessageRecordKind::ToolResultOutput,
         visible: true,
         title: String::from("TOOL RESULT"),
-        body: parts.join("\n\n"),
-        metadata: None,
+        body: text.to_string(),
+        metadata: Some(Value::Object(metadata)),
         created_at: String::new(),
     }
 }

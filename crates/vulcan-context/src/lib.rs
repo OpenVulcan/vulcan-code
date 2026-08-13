@@ -278,12 +278,18 @@ pub struct ContextCompactionPolicy {
     /// Whether old tool outputs should be pruned into compact placeholders during compaction.
     /// 压缩期间是否应将旧工具输出剪枝为紧凑占位内容。
     pub prune: bool,
-    /// Number of recent API rounds retained verbatim after compaction.
-    /// 压缩后按原样保留的最近 API 执行轮次数。
+    /// Maximum recent assistant/provider execution segments retained after compaction.
+    /// 压缩后保留的最近 Assistant/Provider 执行段数量上限。
     pub tail_turns: usize,
     /// Maximum approximate token budget retained for the recent tail.
     /// 为最近尾部保留的近似 Token 上限。
     pub preserve_recent_tokens: usize,
+    /// Raw model-declared context window used to resolve the retained-tail policy.
+    /// 用于解析尾部保留策略的模型原始声明上下文窗口。
+    pub tail_context_limit: Option<usize>,
+    /// Provenance describing how the retained-tail policy was resolved.
+    /// 描述尾部保留策略解析方式的来源。
+    pub tail_policy_source: ContextCompactionTailPolicySource,
     /// Legacy input reserve retained for decoding old settings; it no longer shrinks the model window.
     /// 保留用于读取旧设置的输入缓冲字段；它不再缩小模型窗口。
     pub reserved: usize,
@@ -296,18 +302,130 @@ pub struct ContextCompactionPolicy {
 }
 
 impl Default for ContextCompactionPolicy {
-    /// Builds the default compaction policy used until project-level settings expose overrides.
-    /// 构建默认压缩策略，直到项目级设置暴露覆盖项。
+    /// Builds the minimum retained-tail fallback used only when the model context window is missing.
+    /// 构建仅在模型上下文窗口缺失时使用的最小尾部保底策略。
     fn default() -> Self {
         Self {
             auto: true,
             prune: true,
-            tail_turns: 3,
-            preserve_recent_tokens: 10_000,
+            tail_turns: CONTEXT_COMPACTION_MIN_TAIL_SEGMENTS,
+            preserve_recent_tokens: CONTEXT_COMPACTION_MIN_TAIL_TOKENS,
+            tail_context_limit: None,
+            tail_policy_source: ContextCompactionTailPolicySource::MissingContextLimitMinimum,
             reserved: 0,
             window: ContextWindowPolicy::default(),
             window_policy_is_explicit: false,
         }
+    }
+}
+
+/// Raw context-window interval that adds one retained segment and 2.5K retained tokens.
+/// 每增加一个尾部执行段和 2.5K 尾部 Token 所对应的原始上下文窗口区间。
+pub const CONTEXT_COMPACTION_TAIL_WINDOW_STEP: usize = 50_000;
+
+/// Retained-token increment applied for every complete context-window interval.
+/// 每个完整上下文窗口区间增加的尾部 Token 数。
+pub const CONTEXT_COMPACTION_TAIL_TOKEN_STEP: usize = 2_500;
+
+/// Minimum retained-tail token budget used for small or undeclared windows.
+/// 小窗口或未声明窗口使用的最小尾部 Token 预算。
+pub const CONTEXT_COMPACTION_MIN_TAIL_TOKENS: usize = 5_000;
+
+/// Maximum retained-tail token budget used for one million tokens and larger windows.
+/// 一百万 Token 及以上窗口使用的最大尾部 Token 预算。
+pub const CONTEXT_COMPACTION_MAX_TAIL_TOKENS: usize = 50_000;
+
+/// Minimum retained assistant/provider execution-segment limit.
+/// 最小 Assistant/Provider 执行段保留上限。
+pub const CONTEXT_COMPACTION_MIN_TAIL_SEGMENTS: usize = 5;
+
+/// Maximum retained assistant/provider execution-segment limit.
+/// 最大 Assistant/Provider 执行段保留上限。
+pub const CONTEXT_COMPACTION_MAX_TAIL_SEGMENTS: usize = 20;
+
+/// Provenance of one resolved adaptive retained-tail policy.
+/// 一份已解析自适应尾部保留策略的来源。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContextCompactionTailPolicySource {
+    /// The policy was calculated from the raw model-declared context limit.
+    /// 策略由模型原始声明的上下文上限计算得到。
+    DeclaredContextLimit,
+    /// The model omitted its context limit, so the minimum fallback was used.
+    /// 模型未声明上下文上限，因此使用最小保底值。
+    MissingContextLimitMinimum,
+}
+
+impl ContextCompactionTailPolicySource {
+    /// Returns the stable persisted diagnostic label for this policy source.
+    /// 返回该策略来源用于持久化诊断的稳定标签。
+    ///
+    /// # Returns
+    /// # 返回值
+    /// A stable snake-case label shared by fingerprints, WebUI metadata, and task markers.
+    /// 返回由指纹、WebUI 元数据和任务标记共享的稳定蛇形命名标签。
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::DeclaredContextLimit => "declared_context_limit",
+            Self::MissingContextLimitMinimum => "missing_context_limit_minimum",
+        }
+    }
+}
+
+/// Complete adaptive retained-tail policy resolved from one model context window.
+/// 由单个模型上下文窗口解析出的完整自适应尾部保留策略。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ContextCompactionTailPolicyResolution {
+    /// Raw model-declared context limit used by the formula.
+    /// 公式使用的模型原始声明上下文上限。
+    pub context_limit: Option<usize>,
+    /// Nominal retained-tail token budget.
+    /// 名义尾部保留 Token 预算。
+    pub preserve_recent_tokens: usize,
+    /// Maximum number of retained assistant/provider execution segments.
+    /// 最大 Assistant/Provider 执行段保留数量。
+    pub tail_segments: usize,
+    /// Provenance of the resolved values.
+    /// 已解析值的来源。
+    pub source: ContextCompactionTailPolicySource,
+}
+
+/// Resolves the unique adaptive retained-tail policy from a raw model context limit.
+/// 根据模型原始上下文上限解析唯一的自适应尾部保留策略。
+///
+/// # Parameters
+/// # 参数
+/// `context_limit` is the model-declared total context window without effective-window reductions.
+/// `context_limit` 是未扣除有效窗口比例的模型声明总上下文窗口。
+///
+/// # Returns
+/// # 返回值
+/// A deterministic policy resolution using the minimum fallback when the declaration is absent.
+/// 返回确定性策略解析结果；声明缺失时使用最小保底值。
+pub fn resolve_context_compaction_tail_policy(
+    context_limit: Option<usize>,
+) -> ContextCompactionTailPolicyResolution {
+    let Some(context_limit) = context_limit else {
+        return ContextCompactionTailPolicyResolution {
+            context_limit: None,
+            preserve_recent_tokens: CONTEXT_COMPACTION_MIN_TAIL_TOKENS,
+            tail_segments: CONTEXT_COMPACTION_MIN_TAIL_SEGMENTS,
+            source: ContextCompactionTailPolicySource::MissingContextLimitMinimum,
+        };
+    };
+    let window_bucket = context_limit / CONTEXT_COMPACTION_TAIL_WINDOW_STEP;
+    ContextCompactionTailPolicyResolution {
+        context_limit: Some(context_limit),
+        preserve_recent_tokens: window_bucket
+            .saturating_mul(CONTEXT_COMPACTION_TAIL_TOKEN_STEP)
+            .clamp(
+                CONTEXT_COMPACTION_MIN_TAIL_TOKENS,
+                CONTEXT_COMPACTION_MAX_TAIL_TOKENS,
+            ),
+        tail_segments: window_bucket.clamp(
+            CONTEXT_COMPACTION_MIN_TAIL_SEGMENTS,
+            CONTEXT_COMPACTION_MAX_TAIL_SEGMENTS,
+        ),
+        source: ContextCompactionTailPolicySource::DeclaredContextLimit,
     }
 }
 
@@ -736,5 +854,67 @@ mod tests {
             .validate()
             .expect_err("resolved policy must reject an impossible inherited ordering");
         assert!(error.contains("cannot exceed"));
+    }
+
+    /// Verifies every adaptive retained-tail formula boundary and cap.
+    /// 验证自适应尾部保留公式的全部边界与上限。
+    #[test]
+    fn adaptive_tail_policy_resolves_declared_context_window_boundaries() {
+        let cases = [
+            (0usize, 5_000usize, 5usize),
+            (32_000usize, 5_000usize, 5usize),
+            (49_999, 5_000, 5),
+            (50_000, 5_000, 5),
+            (99_999, 5_000, 5),
+            (100_000, 5_000, 5),
+            (199_999, 7_500, 5),
+            (200_000, 10_000, 5),
+            (249_999, 10_000, 5),
+            (250_000, 12_500, 5),
+            (299_999, 12_500, 5),
+            (300_000, 15_000, 6),
+            (499_999, 22_500, 9),
+            (500_000, 25_000, 10),
+            (999_999, 47_500, 19),
+            (1_000_000, 50_000, 20),
+            (1_050_000, 50_000, 20),
+            (2_000_000, 50_000, 20),
+            (usize::MAX, 50_000, 20),
+        ];
+
+        for (context_limit, expected_tokens, expected_segments) in cases {
+            let resolution = resolve_context_compaction_tail_policy(Some(context_limit));
+            assert_eq!(resolution.context_limit, Some(context_limit));
+            assert_eq!(resolution.preserve_recent_tokens, expected_tokens);
+            assert_eq!(resolution.tail_segments, expected_segments);
+            assert_eq!(
+                resolution.source,
+                ContextCompactionTailPolicySource::DeclaredContextLimit
+            );
+        }
+    }
+
+    /// Verifies a missing context declaration uses the explicit 5K and five-segment fallback.
+    /// 验证上下文声明缺失时使用明确的 5K 与五段保底。
+    #[test]
+    fn adaptive_tail_policy_uses_minimum_for_missing_context_window() {
+        let resolution = resolve_context_compaction_tail_policy(None);
+        assert_eq!(resolution.context_limit, None);
+        assert_eq!(resolution.preserve_recent_tokens, 5_000);
+        assert_eq!(resolution.tail_segments, 5);
+        assert_eq!(
+            resolution.source,
+            ContextCompactionTailPolicySource::MissingContextLimitMinimum
+        );
+        assert_eq!(resolution.source.label(), "missing_context_limit_minimum");
+        assert_eq!(
+            ContextCompactionTailPolicySource::DeclaredContextLimit.label(),
+            "declared_context_limit"
+        );
+        assert_eq!(ContextCompactionPolicy::default().tail_turns, 5);
+        assert_eq!(
+            ContextCompactionPolicy::default().preserve_recent_tokens,
+            5_000
+        );
     }
 }

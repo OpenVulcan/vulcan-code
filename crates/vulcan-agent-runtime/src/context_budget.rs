@@ -156,9 +156,7 @@ fn map_reasoning_effort(reasoning_effort: ReasoningEffortLevel) -> ContextReason
 /// Maps one runtime capability snapshot into the shared budget-computation capability shape.
 /// 将一份运行时能力快照映射为共享预算计算能力形态。
 fn map_capabilities(capabilities: &ModelCapabilities) -> ContextBudgetCapabilities {
-    let context_limit = capabilities
-        .context_limit
-        .and_then(|value| usize::try_from(value).ok());
+    let context_limit = model_declared_context_limit(capabilities);
     let output_limit = capabilities
         .output_limit
         .and_then(|value| usize::try_from(value).ok());
@@ -175,6 +173,24 @@ fn map_capabilities(capabilities: &ModelCapabilities) -> ContextBudgetCapabiliti
         output_modalities: resource_modalities(&capabilities.output_resources),
         ai_tools: Vec::new(),
     }
+}
+
+/// Converts the raw model-declared context limit into the host token-count type.
+/// 将模型原始声明的上下文上限转换为宿主 Token 计数类型。
+///
+/// # Parameters
+/// # 参数
+/// `capabilities` is the exact provider/model capability snapshot selected for the request.
+/// `capabilities` 是为请求选定的精确 Provider/Model 能力快照。
+///
+/// # Returns
+/// # 返回值
+/// The declared limit when it fits `usize`, otherwise `None` without guessing from other fields.
+/// 声明值可装入 `usize` 时返回该上限，否则返回 `None`，且不从其他字段猜测。
+pub fn model_declared_context_limit(capabilities: &ModelCapabilities) -> Option<usize> {
+    capabilities
+        .context_limit
+        .and_then(|value| usize::try_from(value).ok())
 }
 
 /// Converts public resource kinds into stable context-budget modality labels.

@@ -2,6 +2,7 @@
 //! 会话运行服务处理器。
 
 use super::*;
+use crate::context_compaction::resolve_webui_context_compaction_model_target;
 
 /// Requested stop behavior for a WebUI conversation run.
 /// WebUI 会话运行请求的停止行为。
@@ -102,10 +103,19 @@ pub(crate) async fn service_compact_selected_conversation_context(
         .get(&selected_session_id)
         .cloned()
         .unwrap_or_default();
+    // modelTarget freezes the exact session route and adaptive tail policy before manual planning.
+    // modelTarget 在手动规划前冻结精确会话路由与自适应尾部策略。
+    let model_target = resolve_webui_context_compaction_model_target(
+        &state,
+        &agent_runtime,
+        selected_session_id,
+        None,
+    )?;
     let plan = webui_context_compaction_plan_from_conversation_state(
         selected_session_id,
         &runtime_state_snapshot.conversation_state,
         runtime_state_snapshot.context_start_message_id.as_deref(),
+        model_target.context_compaction_policy,
         "当前会话暂时没有可压缩的历史上下文。",
     )?;
 
@@ -197,6 +207,7 @@ pub(crate) async fn service_compact_selected_conversation_context(
         MANUAL_CONTEXT_COMPACTION_TRIGGER.to_string(),
         plan,
         runtime_state_snapshot.conversation_state.clone(),
+        model_target,
     )?;
     Ok(workbench)
 }

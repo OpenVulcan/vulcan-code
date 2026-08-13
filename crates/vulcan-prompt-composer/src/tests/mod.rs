@@ -108,6 +108,11 @@ fn context_compaction_prompt_helpers_share_one_source() {
     assert!(request_prompt.contains("Example output structure:"));
     assert!(request_prompt.contains("<example>"));
     assert!(request_prompt.contains("## Goal"));
+    assert!(request_prompt.contains("## Active Task"));
+    assert!(request_prompt.contains("## Pending User Asks"));
+    assert!(request_prompt.contains("## Completed—Do Not Repeat"));
+    assert!(request_prompt.contains("long-running task remains active"));
+    assert!(request_prompt.contains("no newer user message exists"));
     assert!(request_prompt.contains("## Constraints & Preferences"));
     assert!(request_prompt.contains("## Progress"));
     assert!(request_prompt.contains("### Done"));

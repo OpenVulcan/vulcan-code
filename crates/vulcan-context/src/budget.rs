@@ -408,11 +408,13 @@ pub fn build_context_budget_fingerprint(
     let compaction_policy_label = compaction_policy
         .map(|policy| {
             format!(
-                "auto={}|prune={}|tail={}|preserve={}|reserved={}|window_effective={}|window_compact={}|window_limit={:?}|window_scope={:?}|window_buffer={}",
+                "auto={}|prune={}|tail={}|preserve={}|tail_context={:?}|tail_source={}|reserved={}|window_effective={}|window_compact={}|window_limit={:?}|window_scope={:?}|window_buffer={}",
                 policy.auto,
                 policy.prune,
                 policy.tail_turns,
                 policy.preserve_recent_tokens,
+                policy.tail_context_limit,
+                policy.tail_policy_source.label(),
                 policy.reserved,
                 policy.window.effective_context_window_percent,
                 policy.window.auto_compact_percent,
@@ -885,5 +887,44 @@ mod tests {
             validated.baseline_mismatch_reason.as_deref(),
             Some("预算指纹变化 · 上下文层指纹变化")
         );
+    }
+
+    /// Verifies retained-tail provenance and raw context windows participate in budget fingerprints.
+    /// 验证尾部策略来源与原始上下文窗口会参与预算指纹。
+    #[test]
+    fn budget_fingerprint_changes_with_adaptive_tail_resolution() {
+        let capabilities = ContextBudgetCapabilities::default();
+        let missing_policy = ContextCompactionPolicy::default();
+        let declared_tail = crate::resolve_context_compaction_tail_policy(Some(300_000));
+        let declared_policy = ContextCompactionPolicy {
+            tail_turns: declared_tail.tail_segments,
+            preserve_recent_tokens: declared_tail.preserve_recent_tokens,
+            tail_context_limit: declared_tail.context_limit,
+            tail_policy_source: declared_tail.source,
+            ..missing_policy
+        };
+
+        let missing_fingerprint = build_context_budget_fingerprint(
+            "provider",
+            "model",
+            "protocol",
+            &capabilities,
+            ContextReasoningEffort::None,
+            0,
+            Some(missing_policy),
+        );
+        let declared_fingerprint = build_context_budget_fingerprint(
+            "provider",
+            "model",
+            "protocol",
+            &capabilities,
+            ContextReasoningEffort::None,
+            0,
+            Some(declared_policy),
+        );
+
+        assert_ne!(missing_fingerprint, declared_fingerprint);
+        assert!(declared_fingerprint.contains("tail_context=Some(300000)"));
+        assert!(declared_fingerprint.contains("tail_source=declared_context_limit"));
     }
 }

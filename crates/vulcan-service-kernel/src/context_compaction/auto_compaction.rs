@@ -216,10 +216,34 @@ async fn maybe_auto_compact_webui_session_with_mode(
         return Err(error);
     }
 
+    // modelTarget freezes the exact route, declared window, and tail policy before planning.
+    // modelTarget 在规划前冻结精确路由、声明窗口与尾部策略。
+    let model_target = resolve_webui_context_compaction_model_target(
+        state,
+        agent_runtime,
+        session_id,
+        Some((request, preparation)),
+    )?;
+    // preparedPolicy must match the independently lease-validated target without default fallback.
+    // preparedPolicy 必须与经租约独立校验的目标一致，不允许回退默认值。
+    let prepared_policy = preparation.context_compaction_policy.ok_or_else(|| {
+        String::from("Automatic context compaction has no frozen compaction policy.")
+    })?;
+    if prepared_policy != model_target.context_compaction_policy {
+        return Err(String::from(
+            "Automatic context compaction target policy drifted after execution preparation.",
+        ));
+    }
+    if context_budget.context_limit != model_target.context_limit {
+        return Err(String::from(
+            "Automatic context compaction context window does not match the frozen model target.",
+        ));
+    }
     let plan = match webui_context_compaction_plan_from_conversation_state(
         session_id,
         &full_context_state,
         context_start_message_id.as_deref(),
+        prepared_policy,
         "自动上下文压缩未找到可压缩的历史上下文，已停止本次请求以避免预算溢出。",
     ) {
         Ok(plan) => plan,
@@ -246,6 +270,7 @@ async fn maybe_auto_compact_webui_session_with_mode(
         plan,
         full_context_state,
         Some((request, preparation)),
+        model_target,
     ) {
         Ok(request) => request,
         Err(error) => {
@@ -404,10 +429,24 @@ pub(crate) fn webui_auto_context_compaction_failure_count(
 
 /// Builds a compaction plan from a specific pre-status conversation snapshot.
 /// 从指定的状态节点插入前会话快照构建压缩计划。
+///
+/// # Parameters
+/// # 参数
+/// `session_id` supplies the stable plan label, `conversation_state` is the exact pre-status snapshot,
+/// `context_start_message_id` optionally bounds the active context, `policy` is already frozen,
+/// and `empty_error` is returned when the snapshot has no model-facing messages.
+/// `session_id` 提供稳定规划标签，`conversation_state` 是精确的状态节点插入前快照，
+/// `context_start_message_id` 可选限制活动上下文，`policy` 已冻结，`empty_error` 用于空模型侧消息快照。
+///
+/// # Returns
+/// # 返回值
+/// The exact frozen plan, or an explicit empty/not-needed planning error.
+/// 返回精确冻结计划；为空或无需规划时返回显式错误。
 pub(crate) fn webui_context_compaction_plan_from_conversation_state(
     session_id: SessionId,
     conversation_state: &SessionConversationState,
     context_start_message_id: Option<&str>,
+    policy: ContextCompactionPolicy,
     empty_error: &str,
 ) -> Result<CompactionPlan, String> {
     let full_session_messages =
@@ -421,9 +460,74 @@ pub(crate) fn webui_context_compaction_plan_from_conversation_state(
         all_messages: &full_session_messages,
         context_start_message_id,
         source_until_message_id: None,
-        policy: Default::default(),
+        policy,
     })
     .ok_or_else(|| empty_error.to_string())
+}
+
+/// Resolves one exact WebUI compaction target before planning or job construction.
+/// 在规划或构建任务之前解析一份精确 WebUI 压缩目标。
+///
+/// # Parameters
+/// # 参数
+/// `state` owns persisted session selections, `agent_runtime` owns the public provider runtime,
+/// `session_id` selects the session, and `source_execution` optionally supplies an already frozen ordinary turn.
+/// `state` 持有持久化会话选择，`agent_runtime` 持有公共 Provider 运行时，`session_id` 选择会话，
+/// `source_execution` 可选提供已冻结的普通回合。
+///
+/// # Returns
+/// # 返回值
+/// The exact immutable target, or an explicit error when no dispatchable target exists.
+/// 返回精确不可变目标；不存在可分派目标时返回显式错误。
+pub(crate) fn resolve_webui_context_compaction_model_target(
+    state: &SharedServiceBridgeState,
+    agent_runtime: &AgentRuntimeBridge,
+    session_id: SessionId,
+    source_execution: Option<(&ExecutionPreparationRequest, &ExecutionPreparation)>,
+) -> Result<PromptCompactionModelTarget, String> {
+    let workspace_snapshot = current_workspace_snapshot_from_shared_state(state)
+        .ok()
+        .flatten();
+    let session_runtime_state = workspace_snapshot
+        .as_ref()
+        .and_then(|workspace| workspace.session_runtime_state.get(&session_id));
+    let route_lease_identity = source_execution
+        .and_then(|(_, preparation)| {
+            preparation
+                .model_blueprint
+                .session_provider_route_lease_identity()
+        })
+        .or_else(|| {
+            session_runtime_state
+                .and_then(|runtime_state| runtime_state.provider_route_lease.clone())
+        });
+    let compaction_session_id = session_id.to_string();
+    let target = match source_execution {
+        Some((_, preparation)) => resolve_prompt_compaction_model_target(
+            agent_runtime.public_ai_runtime.as_ref(),
+            compaction_session_id.as_str(),
+            route_lease_identity.as_ref(),
+            Some(preparation.model_blueprint.provider_id.as_str()),
+            Some(preparation.model_blueprint.connection_id.as_str()),
+            Some(preparation.model_blueprint.model_id.as_str()),
+            preparation.context_compaction_policy,
+        )?,
+        None => resolve_prompt_compaction_model_target(
+            agent_runtime.public_ai_runtime.as_ref(),
+            compaction_session_id.as_str(),
+            route_lease_identity.as_ref(),
+            session_runtime_state
+                .and_then(|runtime_state| runtime_state.active_provider_id.as_deref()),
+            session_runtime_state
+                .and_then(|runtime_state| runtime_state.active_connection_id.as_deref()),
+            session_runtime_state
+                .and_then(|runtime_state| runtime_state.active_model_id.as_deref()),
+            None,
+        )?,
+    };
+    target.ok_or_else(|| {
+        String::from("Context compaction requires an exact provider, connection, and model target.")
+    })
 }
 
 /// Rebuilds an execution request after a successful compaction commit.
@@ -505,6 +609,22 @@ pub(crate) fn persist_failed_webui_context_compaction(
     Ok(())
 }
 
+/// Builds one WebUI compaction job from an already frozen plan and exact model target.
+/// 根据已冻结规划与精确模型目标构建一项 WebUI 压缩任务。
+///
+/// # Parameters
+/// # 参数
+/// `state` and `agent_runtime` provide current runtime services, `session_id` owns the job,
+/// `plan` and `full_context_state` freeze the source, `source_execution` optionally reuses the ordinary-turn lease,
+/// and `model_target` is the single exact provider/model/policy resolution used for dispatch.
+/// `state` 与 `agent_runtime` 提供当前运行时服务，`session_id` 拥有该任务，
+/// `plan` 与 `full_context_state` 冻结来源，`source_execution` 可选复用普通回合租约，
+/// `model_target` 是用于分派的唯一精确 Provider/Model/策略解析结果。
+///
+/// # Returns
+/// # 返回值
+/// A validated immutable launch request, or an explicit mismatch/routing error.
+/// 返回校验后的不可变启动请求；策略不匹配或路由失败时返回显式错误。
 pub(crate) fn build_webui_context_compaction_job_request(
     state: &SharedServiceBridgeState,
     agent_runtime: &AgentRuntimeBridge,
@@ -512,7 +632,13 @@ pub(crate) fn build_webui_context_compaction_job_request(
     plan: CompactionPlan,
     full_context_state: SessionConversationState,
     source_execution: Option<(&ExecutionPreparationRequest, &ExecutionPreparation)>,
+    model_target: PromptCompactionModelTarget,
 ) -> Result<PromptCompactionJobRequest, String> {
+    if plan.policy != model_target.context_compaction_policy {
+        return Err(String::from(
+            "Context compaction plan policy does not match the frozen model target.",
+        ));
+    }
     // workspaceSnapshot owns the authoritative session-scoped provider, connection, model, and reasoning selections.
     // workspaceSnapshot 持有权威会话级供应商、连接、模型与推理档位选择。
     let workspace_snapshot = current_workspace_snapshot_from_shared_state(state)
@@ -523,47 +649,9 @@ pub(crate) fn build_webui_context_compaction_job_request(
     let session_runtime_state = workspace_snapshot
         .as_ref()
         .and_then(|workspace| workspace.session_runtime_state.get(&session_id));
-    // compactionSessionId scopes compaction to the same immutable route lease as the owning session.
-    // compactionSessionId 将压缩限定到所属会话的同一不可变路由租约。
-    let compaction_session_id = session_id.to_string();
-    // routeLeaseIdentity prefers the already prepared source turn and otherwise uses persisted session state.
-    // routeLeaseIdentity 优先采用已准备来源回合，否则采用持久化会话状态。
-    let route_lease_identity = source_execution
-        .and_then(|(_, preparation)| {
-            preparation
-                .model_blueprint
-                .session_provider_route_lease_identity()
-        })
-        .or_else(|| {
-            session_runtime_state
-                .and_then(|runtime_state| runtime_state.provider_route_lease.clone())
-        });
-    // modelTarget preserves the exact session account and rejects stale routes without switching credentials.
-    // modelTarget 保留精确会话账号，并在路由失效时拒绝执行而不切换凭据。
-    let model_target = match source_execution {
-        Some((_, preparation)) => resolve_prompt_compaction_model_target(
-            agent_runtime.public_ai_runtime.as_ref(),
-            compaction_session_id.as_str(),
-            route_lease_identity.as_ref(),
-            Some(preparation.model_blueprint.provider_id.as_str()),
-            Some(preparation.model_blueprint.connection_id.as_str()),
-            Some(preparation.model_blueprint.model_id.as_str()),
-        )?,
-        None => resolve_prompt_compaction_model_target(
-            agent_runtime.public_ai_runtime.as_ref(),
-            compaction_session_id.as_str(),
-            route_lease_identity.as_ref(),
-            session_runtime_state
-                .and_then(|runtime_state| runtime_state.active_provider_id.as_deref()),
-            session_runtime_state
-                .and_then(|runtime_state| runtime_state.active_connection_id.as_deref()),
-            session_runtime_state
-                .and_then(|runtime_state| runtime_state.active_model_id.as_deref()),
-        )?,
-    };
     // modelLabel retains the resolved provider/model selector for terminal diagnostics.
     // modelLabel 为终态诊断保留解析后的供应商/模型选择器。
-    let model_label = model_target.as_ref().map(|target| target.label());
+    let model_label = Some(model_target.label());
     // reasoningEffort follows the session selection before falling back to the runtime default.
     // reasoningEffort 优先采用会话选择，其次回退到运行时默认值。
     let reasoning_effort = source_execution
@@ -642,7 +730,7 @@ pub(crate) fn build_webui_context_compaction_job_request(
             budget_snapshot.as_ref(),
         ),
         provider_configuration: agent_runtime.provider_configuration.clone(),
-        model_target,
+        model_target: Some(model_target),
         execution_agent_id: source_execution
             .map(|(_, preparation)| preparation.agent_id.clone())
             .or_else(|| {
@@ -763,6 +851,8 @@ mod tests {
                         route_revision: String::from("route-test"),
                     },
                 remote_compaction_enabled: false,
+                context_limit: None,
+                context_compaction_policy: vulcan_context::ContextCompactionPolicy::default(),
             };
 
         assert_eq!(

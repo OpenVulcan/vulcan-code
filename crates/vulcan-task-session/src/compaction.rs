@@ -14,6 +14,9 @@ pub struct TaskSessionCompactionApplication {
     /// Persisted checkpoint describing the applied compaction boundary.
     /// 描述已应用压缩边界的持久检查点。
     pub checkpoint: SessionCompactionCheckpoint,
+    /// Exact record-retention report produced while applying the rewrite.
+    /// 应用改写时产出的精确记录保留报告。
+    pub record_compaction_report: vulcan_context_compaction::ConversationRecordCompactionReport,
 }
 
 /// Task-session compaction job stored outside the UI layer.
@@ -74,14 +77,10 @@ pub fn apply_task_session_compaction_result(
     let mut conversation_state: vulcan_context::SessionConversationState =
         serde_json::from_value(context.conversation_state.clone()).map_err(to_store_error)?;
 
-    vulcan_context_compaction::compact_conversation_with_summary_until(
+    vulcan_context_compaction::compact_conversation_with_compaction_result(
         &mut conversation_state,
         summary_message_id.clone(),
-        compaction_result.summary_record.kind,
-        compaction_result.summary_record.body.clone(),
-        compaction_result.created_at.clone(),
-        compaction_result.source_until_message_id.as_deref(),
-        compaction_result.policy,
+        compaction_result,
     )
     .map_err(to_store_error)?;
     vulcan_context_compaction::append_remote_responses_compaction_context(
@@ -90,12 +89,13 @@ pub fn apply_task_session_compaction_result(
         compaction_result,
     )
     .map_err(to_store_error)?;
-    vulcan_context_compaction::compact_conversation_records_after_summary(
-        &mut conversation_state,
-        &summary_message_id,
-        compaction_result.policy,
-        keep_change_set_host_result,
-    );
+    let record_compaction_report =
+        vulcan_context_compaction::compact_conversation_records_after_summary(
+            &mut conversation_state,
+            &summary_message_id,
+            compaction_result.policy,
+            keep_change_set_host_result,
+        );
 
     context.conversation_state =
         serde_json::to_value(conversation_state).map_err(to_store_error)?;
@@ -111,6 +111,7 @@ pub fn apply_task_session_compaction_result(
     Ok(TaskSessionCompactionApplication {
         context,
         checkpoint,
+        record_compaction_report,
     })
 }
 

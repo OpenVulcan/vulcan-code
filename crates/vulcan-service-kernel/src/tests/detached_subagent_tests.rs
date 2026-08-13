@@ -15,6 +15,39 @@ use vulcan_context::ContextCompactionPolicy;
 use vulcan_context_compaction::{CompactionPlan, CompactionResult};
 use vulcan_workbench_model::SessionTurnUsageGroupKind;
 
+/// Builds one frozen tail report aligned with a test policy and canonical suffix.
+/// 构建与测试策略及规范后缀对齐的冻结尾部报告。
+///
+/// # Parameters
+/// 参数
+/// `policy` is the exact plan policy and `retained_message_ids` are ordered canonical suffix IDs.
+/// `policy` 是精确计划策略，`retained_message_ids` 是有序规范后缀 ID。
+///
+/// # Returns
+/// 返回值
+/// Returns a structurally consistent single-segment fixture for commit-boundary tests.
+/// 返回供提交边界测试使用的结构一致单执行段夹具。
+fn context_compaction_test_tail_selection(
+    policy: ContextCompactionPolicy,
+    retained_message_ids: &[&str],
+) -> vulcan_context_compaction::CompactionTailSelectionReport {
+    vulcan_context_compaction::CompactionTailSelectionReport {
+        context_limit: policy.tail_context_limit,
+        policy_source: policy.tail_policy_source,
+        nominal_token_budget: policy.preserve_recent_tokens,
+        segment_limit: policy.tail_turns,
+        retained_segment_count: usize::from(!retained_message_ids.is_empty()),
+        retained_message_ids: retained_message_ids
+            .iter()
+            .map(|message_id| (*message_id).to_string())
+            .collect(),
+        retained_token_estimate: 0,
+        previewed_tool_output_count: 0,
+        omitted_tool_output_token_estimate: 0,
+        newest_segment_exceeds_nominal_budget: false,
+    }
+}
+
 /// Registers one pending active-stream owner for context-compaction commit tests.
 /// 为上下文压缩提交测试注册一个保持 pending 的活动流所有者。
 ///
@@ -491,6 +524,7 @@ async fn context_compaction_fallback_returns_rejected_terminal_outcome() {
     };
     // plan supplies a structurally valid result even though fallback prevents candidate use.
     // plan 提供结构有效的结果，即使回退分支不会使用该候选。
+    let policy = ContextCompactionPolicy::default();
     let plan = CompactionPlan {
         source_messages: Vec::new(),
         source_until_message_id: None,
@@ -498,7 +532,8 @@ async fn context_compaction_fallback_returns_rejected_terminal_outcome() {
         retained_tail_start_turn_index: None,
         compaction_id: String::from("fallback-compaction"),
         created_at: String::from("1780000000100"),
-        policy: ContextCompactionPolicy::default(),
+        policy,
+        tail_selection: context_compaction_test_tail_selection(policy, &[]),
     };
     // execution models the Provider returning no usable compaction result.
     // execution 模拟 Provider 未返回可用压缩结果。
@@ -653,6 +688,7 @@ async fn context_compaction_hook_lock_failure_preserves_committed_outcome() {
     };
     // plan identifies the exact source boundary present in canonical conversation state.
     // plan 标识规范会话状态中真实存在的源边界。
+    let policy = ContextCompactionPolicy::default();
     let plan = CompactionPlan {
         source_messages: vec![messages[0].clone()],
         source_until_message_id: Some(String::from("user-1")),
@@ -660,7 +696,8 @@ async fn context_compaction_hook_lock_failure_preserves_committed_outcome() {
         retained_tail_start_turn_index: Some(1),
         compaction_id: String::from("committed-compaction"),
         created_at: String::from("1780000000100"),
-        policy: ContextCompactionPolicy::default(),
+        policy,
+        tail_selection: context_compaction_test_tail_selection(policy, &["assistant-1"]),
     };
     // execution contains the usable Provider summary that must be committed.
     // execution 包含必须提交的可用 Provider 摘要。
@@ -724,10 +761,11 @@ async fn context_compaction_hook_lock_failure_preserves_committed_outcome() {
     )
     .expect("notification failure must not reject committed compaction");
 
-    assert!(matches!(
-        &outcome,
-        ContextCompactionFinishOutcome::Committed { .. }
-    ));
+    assert!(
+        matches!(&outcome, ContextCompactionFinishOutcome::Committed { .. }),
+        "unexpected compaction outcome: {:?}",
+        outcome.rejection_error()
+    );
     assert!(outcome.rejection_error().is_none());
     // snapshot proves the authoritative checkpoint was committed exactly once.
     // snapshot 证明权威检查点仅提交一次。

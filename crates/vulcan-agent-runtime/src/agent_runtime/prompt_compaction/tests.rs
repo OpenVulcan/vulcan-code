@@ -24,6 +24,9 @@ fn test_message(id: &str, body: &str) -> vulcan_context::SessionMessageEntry {
 /// Builds one minimal compaction plan from selected source messages.
 /// 从选定源消息构建一个最小压缩计划。
 fn test_plan(source_messages: Vec<vulcan_context::SessionMessageEntry>) -> CompactionPlan {
+    // policy and tailSelection model a source-only request with no retained canonical suffix.
+    // policy 与 tailSelection 模拟不含规范保留后缀的纯来源请求。
+    let policy = vulcan_context::ContextCompactionPolicy::default();
     CompactionPlan {
         source_messages,
         source_until_message_id: None,
@@ -31,7 +34,19 @@ fn test_plan(source_messages: Vec<vulcan_context::SessionMessageEntry>) -> Compa
         retained_tail_start_turn_index: None,
         compaction_id: String::from("compaction-test"),
         created_at: String::from("t1"),
-        policy: Default::default(),
+        policy,
+        tail_selection: vulcan_context_compaction::CompactionTailSelectionReport {
+            context_limit: policy.tail_context_limit,
+            policy_source: policy.tail_policy_source,
+            nominal_token_budget: policy.preserve_recent_tokens,
+            segment_limit: policy.tail_turns,
+            retained_segment_count: 0,
+            retained_message_ids: Vec::new(),
+            retained_token_estimate: 0,
+            previewed_tool_output_count: 0,
+            omitted_tool_output_token_estimate: 0,
+            newest_segment_exceeds_nominal_budget: false,
+        },
     }
 }
 
@@ -75,6 +90,7 @@ fn compaction_target_rejects_stale_exact_connection() {
         Some("custom:test"),
         Some("removed-connection"),
         Some("gpt-test"),
+        None,
     );
     let Err(error) = result else {
         panic!("stale exact compaction connection must be rejected");
@@ -140,6 +156,15 @@ fn compaction_launch_request_preserves_session_model_target() {
             route_revision: String::from("route-test"),
         },
         remote_compaction_enabled: true,
+        context_limit: Some(300_000),
+        context_compaction_policy: vulcan_context::ContextCompactionPolicy {
+            tail_turns: 6,
+            preserve_recent_tokens: 15_000,
+            tail_context_limit: Some(300_000),
+            tail_policy_source:
+                vulcan_context::ContextCompactionTailPolicySource::DeclaredContextLimit,
+            ..vulcan_context::ContextCompactionPolicy::default()
+        },
     };
 
     // request must project all three target fields into execution preparation.
@@ -157,6 +182,10 @@ fn compaction_launch_request_preserves_session_model_target() {
     );
 
     assert_eq!(request.provider_id_override.as_deref(), Some("custom:test"));
+    assert_eq!(
+        request.context_compaction_policy,
+        Some(model_target.context_compaction_policy)
+    );
     assert_eq!(
         request.connection_id_override.as_deref(),
         Some("connection-test")
@@ -398,23 +427,43 @@ fn full_fidelity_result_boundary_preserves_planned_tail() {
 /// 验证应用规划边界后会保留最近尾部消息。
 #[test]
 fn full_fidelity_boundary_rewrite_keeps_planned_tail() {
-    let old_message = test_message("old-user", "old context");
-    let tail_message = test_message("tail-user", "recent tail");
+    let old_message = vulcan_context::SessionMessageEntry::new(
+        vulcan_context::SessionMessageKind::Assistant,
+        "",
+        "old completed provider segment",
+    )
+    .with_runtime_metadata("old-assistant", "t1");
+    let tail_message = vulcan_context::SessionMessageEntry::new(
+        vulcan_context::SessionMessageKind::Assistant,
+        "",
+        "recent provider segment",
+    )
+    .with_runtime_metadata("tail-assistant", "t2");
     let mut state =
         conversation_state_from_session_messages(&[old_message.clone(), tail_message.clone()])
             .expect("valid replayed conversation identities");
-    let mut plan = test_plan(vec![old_message.clone()]);
-    plan.source_until_message_id = Some(old_message.id.clone());
+    let source_messages = vulcan_context::conversation_state_to_compaction_source_messages(&state);
+    let plan = vulcan_context_compaction::plan_context_compaction(
+        vulcan_context_compaction::CompactionPlanInput {
+            session_label: "full-fidelity-boundary",
+            messages: &source_messages,
+            all_messages: &source_messages,
+            context_start_message_id: None,
+            source_until_message_id: None,
+            policy: vulcan_context::ContextCompactionPolicy {
+                tail_turns: 1,
+                preserve_recent_tokens: 5_000,
+                ..vulcan_context::ContextCompactionPolicy::default()
+            },
+        },
+    )
+    .expect("two assistant segments should produce a safe frozen plan");
     let result = CompactionResult::from_model_summary(&plan, "summary");
 
-    vulcan_context_compaction::compact_conversation_with_summary_until(
+    vulcan_context_compaction::compact_conversation_with_compaction_result(
         &mut state,
         "summary-message",
-        vulcan_context::SessionMessageKind::User,
-        "summary",
-        "t2",
-        result.source_until_message_id.as_deref(),
-        result.policy,
+        &result,
     )
     .expect("valid compacted message identities");
 

@@ -486,6 +486,45 @@ fn compaction_source_projects_runtime_messages() {
     );
 }
 
+/// Verifies compaction planning receives exact tool text while protocol identity stays structured.
+/// 验证压缩规划取得精确工具正文，同时协议身份保持结构化。
+#[test]
+fn compaction_source_keeps_raw_tool_result_and_structured_identity() {
+    let state = SessionConversationState {
+        messages: vec![SessionConversationMessage {
+            id: String::from("tool-result-runtime-1"),
+            payload: SessionConversationPayload::ToolResult {
+                tool_call_id: Some(String::from("provider-call-1")),
+                is_error: true,
+                text: String::from("stderr line one\r\nerror conclusion"),
+            },
+        }],
+        records: Vec::new(),
+        continuation: SessionProviderContinuationState::default(),
+    };
+
+    let messages = conversation_state_to_compaction_source_messages(&state);
+
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].body, "stderr line one\r\nerror conclusion");
+    assert_eq!(
+        messages[0]
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("tool_call_id"))
+            .and_then(Value::as_str),
+        Some("provider-call-1")
+    );
+    assert_eq!(
+        messages[0]
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("is_error"))
+            .and_then(Value::as_bool),
+        Some(true)
+    );
+}
+
 /// Verifies agent mailbox messages keep their provider-facing user role during compaction.
 /// 验证代理 mailbox 消息在压缩来源中保持面向 Provider 的用户角色。
 #[test]

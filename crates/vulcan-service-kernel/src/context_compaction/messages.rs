@@ -108,6 +108,10 @@ pub(crate) fn append_webui_context_compaction_failed_message_to_state(
 /// `provider_request_count` 是成功与失败尝试累计的 Provider 请求次数。
 /// `input_prune_report` is the optional clone-only pruning report for the successful attempt.
 /// `input_prune_report` 是成功尝试对应的可选仅克隆剪枝报告。
+/// `tail_selection` is the frozen adaptive tail report applied by rewrite.
+/// `tail_selection` 是 rewrite 已应用的冻结自适应尾部报告。
+/// `record_compaction_report` is the exact record-retention audit result.
+/// `record_compaction_report` 是精确记录保留审计结果。
 ///
 /// # Returns
 /// # 返回值
@@ -121,6 +125,8 @@ pub(crate) fn append_webui_context_compaction_end_message_to_state(
     trigger: &str,
     provider_request_count: usize,
     input_prune_report: Option<&CompactionInputPruneReport>,
+    tail_selection: &CompactionTailSelectionReport,
+    record_compaction_report: &ConversationRecordCompactionReport,
 ) -> Result<String, String> {
     let mut metadata = json!({
         "context_compaction_status": true,
@@ -130,6 +136,26 @@ pub(crate) fn append_webui_context_compaction_end_message_to_state(
         "context_compaction_trigger": trigger,
         "context_compaction_budget_note": budget_note,
         "context_compaction_provider_request_count": provider_request_count,
+        "context_compaction_tail_selection": {
+            "context_limit": tail_selection.context_limit,
+            "policy_source": tail_selection.policy_source.label(),
+            "nominal_token_budget": tail_selection.nominal_token_budget,
+            "segment_limit": tail_selection.segment_limit,
+            "retained_segment_count": tail_selection.retained_segment_count,
+            "retained_message_count": tail_selection.retained_message_ids.len(),
+            "retained_token_estimate": tail_selection.retained_token_estimate,
+            "previewed_tool_output_count": tail_selection.previewed_tool_output_count,
+            "omitted_tool_output_token_estimate": tail_selection.omitted_tool_output_token_estimate,
+            "newest_segment_exceeds_nominal_budget": tail_selection.newest_segment_exceeds_nominal_budget,
+        },
+        "context_compaction_record_retention": {
+            "original_record_count": record_compaction_report.original_record_count,
+            "full_record_count": record_compaction_report.full_record_count,
+            "compacted_historical_record_count": record_compaction_report.compacted_historical_record_count,
+            "deleted_record_count": record_compaction_report.deleted_record_count,
+            "final_record_count": record_compaction_report.final_record_count,
+            "unmatched_retained_tool_identity_count": record_compaction_report.unmatched_retained_tool_identity_count,
+        },
     });
     if let (Some(report), Some(object)) = (input_prune_report, metadata.as_object_mut()) {
         object.insert(

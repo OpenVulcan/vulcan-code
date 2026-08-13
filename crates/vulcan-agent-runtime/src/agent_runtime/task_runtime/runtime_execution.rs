@@ -1205,18 +1205,6 @@ pub(crate) async fn run_task_session_context_compaction(
     if messages.is_empty() {
         return Ok(None);
     }
-    let Some(plan) = plan_context_compaction(CompactionPlanInput {
-        session_label: &request.public_task_id,
-        messages: &messages,
-        all_messages: &messages,
-        context_start_message_id: context_document.compaction_anchor.as_deref(),
-        source_until_message_id: None,
-        policy: task_context_compaction_policy_from_snapshot(
-            &resolved_config.effective_config.context_compaction,
-        ),
-    }) else {
-        return Ok(None);
-    };
     let event_sequence = store
         .load_events(task_node_id)
         .map(|events| events.len() as u64)
@@ -1230,26 +1218,47 @@ pub(crate) async fn run_task_session_context_compaction(
     let compaction_session_id = compaction_preparation_request.session_id.to_string();
     // modelTarget freezes the same public route for remote and local task compaction when available.
     // modelTarget 在公共运行时可用时为远端与本地任务压缩冻结同一路由。
-    let model_target = match context.foundation.public_ai_runtime() {
-        Some(runtime) => resolve_prompt_compaction_model_target(
-            runtime.as_ref(),
-            compaction_session_id.as_str(),
-            compaction_preparation_request
-                .provider_route_lease_identity
-                .as_ref(),
-            compaction_preparation_request
-                .provider_id_override
-                .as_deref(),
-            compaction_preparation_request
-                .connection_id_override
-                .as_deref(),
-            compaction_preparation_request.model_id_override.as_deref(),
-        )?,
-        None => None,
+    // publicAiRuntime is required because TaskSession planning must bind to one exact model window.
+    // publicAiRuntime 是必需项，因为 TaskSession 规划必须绑定一个精确模型窗口。
+    let public_ai_runtime = context.foundation.public_ai_runtime().ok_or_else(|| {
+        String::from("TaskSession context compaction requires the public AI runtime.")
+    })?;
+    // behaviorSeed carries only task-owned behavior switches into exact route resolution.
+    // behaviorSeed 仅把任务自有行为开关带入精确路由解析。
+    let behavior_seed = task_context_compaction_policy_from_snapshot(
+        &resolved_config.effective_config.context_compaction,
+    );
+    let model_target = resolve_prompt_compaction_model_target(
+        public_ai_runtime.as_ref(),
+        compaction_session_id.as_str(),
+        compaction_preparation_request
+            .provider_route_lease_identity
+            .as_ref(),
+        compaction_preparation_request
+            .provider_id_override
+            .as_deref(),
+        compaction_preparation_request
+            .connection_id_override
+            .as_deref(),
+        compaction_preparation_request.model_id_override.as_deref(),
+        Some(behavior_seed),
+    )?
+    .ok_or_else(|| {
+        String::from("TaskSession context compaction requires an exact model target.")
+    })?;
+    let Some(plan) = plan_context_compaction(CompactionPlanInput {
+        session_label: &request.public_task_id,
+        messages: &messages,
+        all_messages: &messages,
+        context_start_message_id: context_document.compaction_anchor.as_deref(),
+        source_until_message_id: None,
+        policy: model_target.context_compaction_policy,
+    }) else {
+        return Ok(None);
     };
     // modelLabel retains the resolved provider/model identity for terminal diagnostics.
     // modelLabel 为终态诊断保留解析后的供应商/模型身份。
-    let model_label = model_target.as_ref().map(|target| target.label());
+    let model_label = Some(model_target.label());
     // launchContext freezes the task's exact agent prompt, tool policy, mode, and prompt-skill controls.
     // launchContext 冻结子任务的精确代理提示词、工具策略、模式与提示词技能控制。
     let launch_context =
@@ -1264,7 +1273,7 @@ pub(crate) async fn run_task_session_context_compaction(
         observed_input_tokens: None,
         estimated_input_tokens: None,
         provider_configuration,
-        model_target,
+        model_target: Some(model_target),
         execution_agent_id: compaction_preparation_request.execution_agent_id.clone(),
         launch_context,
         model_label,
@@ -1294,6 +1303,9 @@ pub(crate) async fn run_task_session_context_compaction(
         let checkpoint_id = application.checkpoint.checkpoint_id.clone();
         let timestamp_ms = application.checkpoint.timestamp_ms;
         let summary = application.checkpoint.summary.clone();
+        // recordCompactionReport is copied before the compacted context is moved into optimistic persistence.
+        // recordCompactionReport 在压缩上下文移入乐观持久化之前完成复制。
+        let record_compaction_report = application.record_compaction_report;
         if !store
             .save_compacted_context_if_current(&source_context_document, application.context)
             .map_err(|error| error.message)?
@@ -1323,6 +1335,22 @@ pub(crate) async fn run_task_session_context_compaction(
                     "summary": summary,
                     "fallback_used": execution.fallback_used,
                     "provider_request_count": execution.provider_request_count,
+                    "tail_context_limit": execution.compaction_result.tail_selection.context_limit,
+                    "tail_policy_source": execution.compaction_result.tail_selection.policy_source.label(),
+                    "tail_nominal_token_budget": execution.compaction_result.tail_selection.nominal_token_budget,
+                    "tail_segment_limit": execution.compaction_result.tail_selection.segment_limit,
+                    "tail_retained_segment_count": execution.compaction_result.tail_selection.retained_segment_count,
+                    "tail_retained_message_count": execution.compaction_result.tail_selection.retained_message_ids.len(),
+                    "tail_retained_token_estimate": execution.compaction_result.tail_selection.retained_token_estimate,
+                    "tail_previewed_tool_output_count": execution.compaction_result.tail_selection.previewed_tool_output_count,
+                    "tail_omitted_tool_output_token_estimate": execution.compaction_result.tail_selection.omitted_tool_output_token_estimate,
+                    "tail_newest_segment_exceeds_nominal_budget": execution.compaction_result.tail_selection.newest_segment_exceeds_nominal_budget,
+                    "record_original_count": record_compaction_report.original_record_count,
+                    "record_full_count": record_compaction_report.full_record_count,
+                    "record_compacted_historical_count": record_compaction_report.compacted_historical_record_count,
+                    "record_deleted_count": record_compaction_report.deleted_record_count,
+                    "record_final_count": record_compaction_report.final_record_count,
+                    "record_unmatched_retained_tool_identity_count": record_compaction_report.unmatched_retained_tool_identity_count,
                 }),
             ))
             .map_err(|error| error.message)?;

@@ -82,6 +82,8 @@ Analysis checklist:\n\
 - Identify key decisions, constraints, accepted tradeoffs, still-active preferences, and architectural concepts.\n\
 - Identify concrete file paths, symbols, commands, errors, fixes, tests, and verification results that still matter.\n\
 - Identify solved problems, ongoing troubleshooting, completed work, pending tasks, current work, and the exact next step needed to continue.\n\
+- Separate the active task from still-unsatisfied user asks and from completed actions that must not be repeated.\n\
+- A long-running task remains active even when many assistant/provider execution segments occur without a new user message.\n\
 - Preserve the user's own non-tool messages, especially corrections or changes in direction.\n\
 - Distinguish durable memory from obsolete or duplicated context.\n\
 \n\
@@ -89,7 +91,7 @@ Summary requirements:\n\
 - If the input contains a <previous-summary> block, earlier compacted summary, or continuation prompt, treat it as durable memory rather than ordinary dialogue.\n\
 - Preserve still-relevant details from earlier summaries by carrying them forward with minimal rewriting; only remove details that are clearly obsolete, contradicted, or duplicated by newer context.\n\
 - Focus new summarization effort on context added after the previous summary, then merge it into the carried-forward memory.\n\
-- Structure <summary> with these Markdown sections and subsections: Goal; Constraints & Preferences; Progress / Done; Progress / In Progress; Progress / Blocked; Key Decisions; Technical Context; Relevant Files and Symbols; Errors and Fixes; User Messages and Corrections; Next Steps.\n\
+- Structure <summary> with these Markdown sections and subsections: Goal; Active Task; Pending User Asks; Completed—Do Not Repeat; Constraints & Preferences; Progress / Done; Progress / In Progress; Progress / Blocked; Key Decisions; Technical Context; Relevant Files and Symbols; Errors and Fixes; User Messages and Corrections; Next Steps.\n\
 - Keep every listed summary section; if a section has no durable content, write \"(none)\".\n\
 - Mention exact file paths, function/type names, commands, and verification outcomes when they are needed to continue safely.\n\
 - Preserve user corrections and preferences, especially any instruction that changed how work should proceed.\n\
@@ -108,6 +110,17 @@ Check the conversation chronologically, identify durable user intent, merge any 
 <summary>\n\
 ## Goal\n\
 - [Concise but complete description of the user's active request and why it matters.]\n\
+\n\
+## Active Task\n\
+- [The single current task or goal that remains active, including its exact execution state.]\n\
+- [Do not mark it complete merely because no newer user message exists.]\n\
+\n\
+## Pending User Asks\n\
+- [Only explicit user requirements that have not yet been fully satisfied, or \"(none)\".]\n\
+\n\
+## Completed—Do Not Repeat\n\
+- [Completed action, evidence of completion, and any side effect that must not be executed again.]\n\
+- [Write \"(none)\" when no completed action carries repetition risk.]\n\
 \n\
 ## Constraints & Preferences\n\
 - [Still-active user instruction, preference, boundary, or acceptance rule.]\n\

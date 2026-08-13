@@ -10,6 +10,7 @@ use crate::agent_runtime::runtime::RuntimeFoundation;
 use crate::agent_runtime::runtime_stream_bootstrap_core::{
     after_precheck_trace, after_precheck_unix_millis,
 };
+use crate::context_budget::model_declared_context_limit;
 use crate::conversation_protocol::collect_host_visible_attachments;
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
 use crate::provider_config::ProviderConfigurationFile;
@@ -143,6 +144,7 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         .resolve_context_compaction_policy(
             model_blueprint.provider_id.as_str(),
             model_blueprint.model_id.as_str(),
+            model_declared_context_limit(&model_blueprint.public_capabilities),
             request.context_compaction_policy,
         );
     after_precheck_trace(
@@ -150,6 +152,16 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         format!("session={}", request.session_id),
     );
     let mut warnings = Vec::new();
+    if resolved_context_compaction_policy.tail_policy_source
+        == vulcan_context::ContextCompactionTailPolicySource::MissingContextLimitMinimum
+    {
+        warnings.push(format!(
+            "Model context_limit is not declared; context compaction retained-tail policy uses the minimum 5000 tokens / 5 assistant-provider segments (provider={}, connection={}, model={}).",
+            model_blueprint.provider_id,
+            model_blueprint.connection_id,
+            model_blueprint.model_id
+        ));
+    }
     let workspace_path = normalize_workspace_path_text(&request.workspace_path);
     let conversation_attachments = collect_host_visible_attachments(&request.conversation_state);
     let prompt_skills_global_config =

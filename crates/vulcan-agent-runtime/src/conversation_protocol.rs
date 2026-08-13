@@ -23,7 +23,7 @@ pub fn compact_conversation_with_summary(
     summary_body: impl Into<String>,
     updated_at: impl Into<String>,
     policy: ContextCompactionPolicy,
-) -> Result<(), vulcan_context::protocol::SessionConversationMessageIdentityError> {
+) -> Result<(), String> {
     vulcan_context_compaction::compact_conversation_with_summary(
         state,
         summary_message_id,
@@ -61,7 +61,7 @@ pub fn compact_conversation_with_summary_until(
     updated_at: impl Into<String>,
     source_until_message_id: Option<&str>,
     policy: ContextCompactionPolicy,
-) -> Result<(), vulcan_context::protocol::SessionConversationMessageIdentityError> {
+) -> Result<(), String> {
     vulcan_context_compaction::compact_conversation_with_summary_until(
         state,
         summary_message_id,
@@ -86,4 +86,33 @@ pub fn compact_conversation_records_after_summary(
         policy,
         compact_change_set_host_result,
     );
+}
+
+/// Compacts canonical records using exact rewritten-message identities plus transaction record IDs.
+/// 使用改写后消息精确身份与事务记录 ID 压缩规范记录。
+///
+/// # Parameters
+/// # 参数
+/// `state` owns rewritten canonical state, `summary_record_id` identifies the summary anchor,
+/// `additional_retained_record_ids` identifies status or continuation records, and `policy` controls historical pruning.
+/// `state` 持有改写后的规范状态，`summary_record_id` 标识摘要锚点，
+/// `additional_retained_record_ids` 标识状态或 continuation 记录，`policy` 控制历史剪枝。
+///
+/// # Returns
+/// # 返回值
+/// The exact record compaction audit report.
+/// 返回精确记录压缩审计报告。
+pub fn compact_conversation_records_after_summary_with_retained_ids(
+    state: &mut SessionConversationState,
+    summary_record_id: &str,
+    additional_retained_record_ids: &[String],
+    policy: ContextCompactionPolicy,
+) -> vulcan_context_compaction::ConversationRecordCompactionReport {
+    vulcan_context_compaction::compact_conversation_records_after_summary_with_retained_ids(
+        state,
+        summary_record_id,
+        additional_retained_record_ids,
+        policy,
+        compact_change_set_host_result,
+    )
 }
