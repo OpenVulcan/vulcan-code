@@ -31,7 +31,6 @@ use vulcan_ai_contract::{
     ToolDefinition, ToolResult, UsageValue, canonicalize_codex_responses_replay_items,
     is_replayable_codex_responses_item,
 };
-use vulcan_ai_protocols::EncodedWireRequest;
 use vulcan_context::{SessionConversationState, SessionMessageEntry};
 use vulcan_core::provider::{
     VulcanProviderAdapter, VulcanProviderDeltaSink, VulcanStreamingProviderAdapter,
@@ -47,7 +46,8 @@ use vulcan_core::types::{
 };
 use vulcan_provider_adapters::{
     CredentialExecutionSecret, InputResourceConstraint, ProviderExecutionClient,
-    ProviderExecutionRoute, ResolvedPublicAiExecution, ResourceReferencePolicy,
+    ProviderExecutionRoute, ProviderWireRequestCapture, ResolvedPublicAiExecution,
+    ResourceReferencePolicy,
 };
 use vulcan_tools_manager::{
     VulcanToolSchemaProjectionContext, project_tool_parameters_schema,
@@ -480,8 +480,8 @@ impl VulcanPublicContractAdapter {
     /// `public` 是分派使用的不可变供应商无关请求。
     /// `execution_id` is the physical call identity shared with the real execution client.
     /// `execution_id` 是与真实执行客户端共享的物理调用标识。
-    /// `encoded` is captured from the transport object immediately before HTTP or WebSocket dispatch.
-    /// `encoded` 是在 HTTP 或 WebSocket 分派前从传输对象直接捕获的编码请求。
+    /// `captured` is the exact secret-safe request projected immediately before HTTP or WebSocket dispatch.
+    /// `captured` 是在 HTTP 或 WebSocket 分派前立即投影的精确无秘密请求。
     ///
     /// # Returns
     /// 返回值
@@ -492,7 +492,7 @@ impl VulcanPublicContractAdapter {
         controller_request: Value,
         public: &AiExecutionRequest,
         execution_id: &str,
-        encoded: EncodedWireRequest,
+        captured: ProviderWireRequestCapture,
     ) -> Result<(), VulcanCoreError> {
         let captured_at_unix_ms = provider_request_trace_timestamp_ms()
             .map_err(|error| provider_failure(self.provider_id(), &error))?;
@@ -518,14 +518,13 @@ impl VulcanPublicContractAdapter {
             .map_err(|error| provider_failure(self.provider_id(), &error))?;
         let public_sha256 = provider_request_trace_sha256(&public_request)
             .map_err(|error| provider_failure(self.provider_id(), &error))?;
-        let wire_body_sha256 = provider_request_trace_sha256(&encoded.body)
+        let wire_body_sha256 = provider_request_trace_sha256(&captured.body)
             .map_err(|error| provider_failure(self.provider_id(), &error))?;
         let public_field_sha256 = provider_request_trace_top_level_digests(&public_request)
             .map_err(|error| provider_failure(self.provider_id(), &error))?;
-        let wire_field_sha256 = provider_request_trace_top_level_digests(&encoded.body)
+        let wire_field_sha256 = provider_request_trace_top_level_digests(&captured.body)
             .map_err(|error| provider_failure(self.provider_id(), &error))?;
-        let resolved_request_url = self.route.request_url(encoded.path.as_str());
-        let headers = provider_request_trace_headers(&encoded.headers);
+        let headers = provider_request_trace_headers(&captured.headers);
         let trace = json!({
             "schema_version": PROVIDER_REQUEST_TRACE_SCHEMA_VERSION,
             "captured_at_unix_ms": captured_at_unix_ms,
@@ -561,12 +560,13 @@ impl VulcanPublicContractAdapter {
             },
             "api_request": {
                 "capture_point": "transport_dispatch",
-                "method": "POST",
-                "path": encoded.path,
-                "resolved_url": resolved_request_url,
+                "transport": captured.transport,
+                "method": captured.method,
+                "path": captured.path,
+                "resolved_url": captured.resolved_url,
                 "headers": headers,
-                "authentication_headers_included": false,
-                "body": encoded.body,
+                "credential_values_redacted": true,
+                "body": captured.body,
             },
         });
         let file_stem = format!("{captured_at_unix_ms}-{sequence:06}-{execution_id}");
@@ -1032,7 +1032,7 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
                 // task persists the captured API request without blocking transport progress.
                 // task 在不阻塞传输进度的情况下持久化捕获的 API 请求。
                 let task = tokio::spawn(async move {
-                    let Ok(encoded) = capture_receiver.await else {
+                    let Ok(captured) = capture_receiver.await else {
                         // A closed capture channel means encoding failed before an API request existed.
                         // 捕获通道关闭表示编码在 API 请求形成前失败，因此没有请求可保存。
                         return Ok(());
@@ -1042,7 +1042,7 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
                             controller_request,
                             &trace_public,
                             trace_execution_id.as_str(),
-                            encoded,
+                            captured,
                         )
                         .await
                 });

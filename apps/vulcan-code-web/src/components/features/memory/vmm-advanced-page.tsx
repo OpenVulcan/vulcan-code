@@ -251,6 +251,50 @@ function VmmAdvancedPage({
             />
           </AccordionContent>
         </AccordionItem>
+        <AccordionItem value="postaction-reliability">
+          <AccordionTrigger>{t("memory.advanced.postactionReliability")}</AccordionTrigger>
+          <AccordionContent className="space-y-4 pb-4">
+            {draft.managedInstallEnabled ? (
+              <div className="grid gap-4 sm:grid-cols-3">
+                <AdvancedTextField
+                  label={t("memory.advanced.postactionTimeout")}
+                  onChange={(postactionAnalysisTimeout) => onChange({
+                    managedRuntimeSettings: {
+                      ...draft.managedRuntimeSettings,
+                      postactionAnalysisTimeout,
+                    },
+                  })}
+                  value={draft.managedRuntimeSettings.postactionAnalysisTimeout}
+                />
+                <AdvancedNumberField
+                  label={t("memory.advanced.failurePassThreshold")}
+                  onChange={(postactionFailurePassThreshold) => onChange({
+                    managedRuntimeSettings: {
+                      ...draft.managedRuntimeSettings,
+                      postactionFailurePassThreshold,
+                    },
+                  })}
+                  value={draft.managedRuntimeSettings.postactionFailurePassThreshold}
+                />
+                <AdvancedNumberField
+                  label={t("memory.advanced.maxConnectionsPerHost")}
+                  onChange={(inferenceMaxConnectionsPerHost) => onChange({
+                    managedRuntimeSettings: {
+                      ...draft.managedRuntimeSettings,
+                      inferenceMaxConnectionsPerHost,
+                    },
+                  })}
+                  value={draft.managedRuntimeSettings.inferenceMaxConnectionsPerHost}
+                />
+              </div>
+            ) : (
+              <Alert>
+                <AlertTitle>{t("memory.advanced.externalReliability")}</AlertTitle>
+                <AlertDescription>{t("memory.advanced.externalReliabilityDescription")}</AlertDescription>
+              </Alert>
+            )}
+          </AccordionContent>
+        </AccordionItem>
         <AccordionItem value="diagnostics">
           <AccordionTrigger>
             <span className="flex items-center gap-2">
@@ -302,6 +346,8 @@ function AdvancedNumberField({
   onChange: (value: string) => void
   value: string
 }) {
+  // inputId binds the generated label and direct runtime-value input accessibly.
+  // inputId 用于以无障碍方式绑定生成的标签与直接运行时值输入框。
   const inputId = React.useId()
   return (
     <div className="space-y-2">
@@ -310,6 +356,32 @@ function AdvancedNumberField({
         id={inputId}
         inputMode="numeric"
         onChange={(event) => onChange(event.target.value.replace(/\D+/g, ""))}
+        value={value}
+      />
+    </div>
+  )
+}
+
+// AdvancedTextField renders one direct managed-runtime text setting such as a Go duration.
+// AdvancedTextField 渲染一个直接的托管运行时文本设置，例如 Go duration。
+function AdvancedTextField({
+  label,
+  onChange,
+  value,
+}: {
+  label: string
+  onChange: (value: string) => void
+  value: string
+}) {
+  // inputId binds the generated label and direct runtime-value input accessibly.
+  // inputId 用于以无障碍方式绑定生成的标签与直接运行时值输入框。
+  const inputId = React.useId()
+  return (
+    <div className="space-y-2">
+      <Label htmlFor={inputId}>{label}</Label>
+      <Input
+        id={inputId}
+        onChange={(event) => onChange(event.target.value)}
         value={value}
       />
     </div>

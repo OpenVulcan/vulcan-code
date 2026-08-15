@@ -94,6 +94,57 @@ pub trait VulcanPluginStorageService: Send + Sync {
     fn execute(&self, request: VulcanPluginStorageRequest) -> Result<Value, String>;
 }
 
+/// One host-owned VLDB operation authorized by a plugin manifest capability.
+/// 由插件清单能力授权的一项宿主持有 VLDB 操作。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VulcanPluginVldbOperation {
+    /// Query one registered SQLite binding and return JSON rows.
+    /// 查询一个已注册 SQLite 绑定并返回 JSON 行。
+    SqliteQuery,
+    /// Execute one parameterized SQLite write statement.
+    /// 执行一条参数化 SQLite 写语句。
+    SqliteExecute,
+    /// Execute one parameterized SQLite batch atomically.
+    /// 原子执行一组参数化 SQLite 批次。
+    SqliteExecuteBatch,
+    /// Checkpoint the WAL for one registered SQLite binding.
+    /// 为一个已注册 SQLite 绑定执行 WAL 检查点。
+    SqliteFlush,
+}
+
+/// One authenticated host VLDB request with host-controlled plugin identity.
+/// 一条携带宿主控制插件身份的已认证宿主 VLDB 请求。
+#[derive(Debug, Clone)]
+pub struct VulcanPluginVldbRequest {
+    /// Exact plugin identity injected by the fixed bridge lease.
+    /// 由固定桥接租约注入的精确插件身份。
+    pub plugin_id: String,
+    /// Exact authorized VLDB operation.
+    /// 精确的已授权 VLDB 操作。
+    pub operation: VulcanPluginVldbOperation,
+    /// Plugin-owned JSON payload containing a logical binding and operation arguments.
+    /// 包含逻辑绑定与操作参数的插件自有 JSON 载荷。
+    pub payload: Value,
+}
+
+/// Host VLDB boundary implemented outside the plugin runtime crate.
+/// 在插件运行时 crate 外部实现的宿主 VLDB 边界。
+pub trait VulcanPluginVldbService: Send + Sync {
+    /// Executes one authenticated operation against a registered logical binding.
+    /// 针对一个已注册逻辑绑定执行一项已认证操作。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `request` contains the host-injected plugin identity, operation, and plugin payload.
+    /// `request` 包含宿主注入的插件身份、操作与插件载荷。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns the JSON-safe VLDB result or an explicit host diagnostic.
+    /// 返回 JSON 安全的 VLDB 结果或明确的宿主诊断。
+    fn execute(&self, request: VulcanPluginVldbRequest) -> Result<Value, String>;
+}
+
 /// One plugin-scoped UI invalidation event published after durable data changes.
 /// 在数据持久变更后发布的一条插件作用域界面失效事件。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -134,6 +185,9 @@ pub struct VulcanPluginHostServices {
     /// Optional isolated plugin storage service.
     /// 可选的隔离插件存储服务。
     pub storage: Option<Arc<dyn VulcanPluginStorageService>>,
+    /// Optional host VLDB service backed by registered logical bindings.
+    /// 由已注册逻辑绑定承载的可选宿主 VLDB 服务。
+    pub vldb: Option<Arc<dyn VulcanPluginVldbService>>,
     /// Optional plugin UI invalidation publisher.
     /// 可选的插件界面失效发布器。
     pub ui_events: Option<Arc<dyn VulcanPluginUiEventPublisher>>,
@@ -156,6 +210,7 @@ impl fmt::Debug for VulcanPluginHostServices {
         formatter
             .debug_struct("VulcanPluginHostServices")
             .field("storage_available", &self.storage.is_some())
+            .field("vldb_available", &self.vldb.is_some())
             .field("ui_events_available", &self.ui_events.is_some())
             .finish()
     }

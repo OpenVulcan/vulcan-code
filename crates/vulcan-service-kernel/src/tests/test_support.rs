@@ -551,6 +551,10 @@ impl TestControllerRuntimeRoot {
             self.data_root.clone(),
             self.data_root.join("sqlite").join("offline-test.sqlite3"),
             format!("offline-test-{}", Uuid::new_v4()),
+            self.data_root
+                .join("statistics")
+                .join("offline-test-statistics.sqlite3"),
+            format!("offline-test-statistics-{}", Uuid::new_v4()),
         )
     }
 

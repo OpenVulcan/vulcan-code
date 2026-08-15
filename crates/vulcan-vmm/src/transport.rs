@@ -57,9 +57,18 @@ pub struct VmmTransportConfig {
     /// Connection handshake timeout.
     /// 连接握手超时时间。
     pub handshake_timeout: Duration,
-    /// Per-request timeout.
-    /// 单次请求超时时间。
-    pub request_timeout: Duration,
+    /// Workspace and management RPC timeout.
+    /// 工作区与管理类 RPC 超时时间。
+    pub workspace_timeout: Duration,
+    /// Precheck RPC timeout.
+    /// Precheck RPC 超时时间。
+    pub precheck_timeout: Duration,
+    /// PostAction intake RPC timeout.
+    /// PostAction 接收 RPC 超时时间。
+    pub post_action_timeout: Duration,
+    /// Background profile and compaction RPC timeout.
+    /// 后台画像与压缩 RPC 超时时间。
+    pub background_timeout: Duration,
     /// Optional max receive message bytes.
     /// 可选最大接收消息字节数。
     pub max_receive_message_bytes: Option<usize>,
@@ -78,11 +87,15 @@ impl VmmTransportConfig {
     /// Builds transport options from an effective VMM config.
     /// 从最终 VMM 配置构建传输选项。
     pub fn from_effective(config: &VmmEffectiveConfig) -> Self {
+        let configured_timeout = Duration::from_millis(config.receive_timeout_ms);
         Self {
             grpc_target: config.grpc_target.clone(),
             grpc_api_key: config.grpc_api_key.clone(),
             handshake_timeout: Duration::from_millis(config.handshake_timeout_ms),
-            request_timeout: Duration::from_millis(config.receive_timeout_ms),
+            workspace_timeout: configured_timeout,
+            precheck_timeout: configured_timeout.min(Duration::from_secs(30)),
+            post_action_timeout: configured_timeout,
+            background_timeout: configured_timeout.max(Duration::from_secs(120)),
             max_receive_message_bytes: config.max_receive_message_bytes,
             keepalive_time: Duration::from_millis(config.grpc_keepalive_time_ms),
             keepalive_timeout: Duration::from_millis(config.grpc_keepalive_timeout_ms),
@@ -111,7 +124,6 @@ impl TonicVmmClient {
         let channel = Endpoint::from_shared(endpoint)
             .map_err(|error| VmmClientError::new("invalid_endpoint", error.to_string()))?
             .connect_timeout(config.handshake_timeout)
-            .timeout(config.request_timeout)
             .http2_keep_alive_interval(config.keepalive_time)
             .keep_alive_timeout(config.keepalive_timeout)
             .keep_alive_while_idle(config.keepalive_while_idle)
@@ -125,11 +137,27 @@ impl TonicVmmClient {
         Ok(Self { config, client })
     }
 
-    /// Builds a request with timeout and trace metadata.
-    /// 构建带超时和 trace metadata 的请求。
-    fn request<T>(&self, payload: T, trace_method: &str) -> Result<Request<T>, VmmClientError> {
+    /// Builds a request with the supplied stage timeout and trace metadata.
+    /// 使用给定阶段超时构建带 trace metadata 的请求。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `payload` is the exact RPC body, `trace_method` identifies the operation, and `timeout`
+    /// is the already-selected stage budget.
+    /// `payload` 是精确 RPC 正文，`trace_method` 标识操作，`timeout` 是已选定的阶段预算。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A Tonic request carrying timeout, trace, and optional authorization metadata.
+    /// 返回携带超时、追踪与可选授权元数据的 Tonic 请求。
+    fn request_with_timeout<T>(
+        &self,
+        payload: T,
+        trace_method: &str,
+        timeout: Duration,
+    ) -> Result<Request<T>, VmmClientError> {
         let mut request = Request::new(payload);
-        request.set_timeout(self.config.request_timeout);
+        request.set_timeout(timeout);
         let trace_id = format!("vulcan-code-{trace_method}");
         let trace_value = MetadataValue::try_from(trace_id.as_str())
             .map_err(|error| VmmClientError::new("invalid_trace_id", error.to_string()))?;
@@ -146,6 +174,82 @@ impl TonicVmmClient {
             request.metadata_mut().insert("authorization", value);
         }
         Ok(request)
+    }
+
+    /// Builds a workspace or management request.
+    /// 构建工作区或管理类请求。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `payload` is the exact RPC body and `trace_method` identifies the management operation.
+    /// `payload` 是精确 RPC 正文，`trace_method` 标识管理操作。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A request governed by the configured workspace timeout.
+    /// 返回受已配置工作区超时约束的请求。
+    fn request<T>(&self, payload: T, trace_method: &str) -> Result<Request<T>, VmmClientError> {
+        self.request_with_timeout(payload, trace_method, self.config.workspace_timeout)
+    }
+
+    /// Builds a precheck request protected by the short interactive budget.
+    /// 使用短交互预算构建 Precheck 请求。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `payload` is the exact RPC body and `trace_method` identifies the Precheck operation.
+    /// `payload` 是精确 RPC 正文，`trace_method` 标识 Precheck 操作。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A request governed by the short interactive Precheck timeout.
+    /// 返回受短交互 Precheck 超时约束的请求。
+    fn precheck_request<T>(
+        &self,
+        payload: T,
+        trace_method: &str,
+    ) -> Result<Request<T>, VmmClientError> {
+        self.request_with_timeout(payload, trace_method, self.config.precheck_timeout)
+    }
+
+    /// Builds a PostAction intake request without extending background analysis semantics.
+    /// 构建 PostAction 接收请求，不混淆后台分析超时语义。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `payload` is the exact RPC body and `trace_method` identifies the PostAction intake.
+    /// `payload` 是精确 RPC 正文，`trace_method` 标识 PostAction 接收操作。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A request governed only by the PostAction intake timeout.
+    /// 返回仅受 PostAction 接收超时约束的请求。
+    fn post_action_request<T>(
+        &self,
+        payload: T,
+        trace_method: &str,
+    ) -> Result<Request<T>, VmmClientError> {
+        self.request_with_timeout(payload, trace_method, self.config.post_action_timeout)
+    }
+
+    /// Builds a background profile or compaction request with the long budget.
+    /// 使用长预算构建后台画像或压缩请求。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `payload` is the exact RPC body and `trace_method` identifies the background operation.
+    /// `payload` 是精确 RPC 正文，`trace_method` 标识后台操作。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A request governed by the long-running background timeout.
+    /// 返回受长时后台超时约束的请求。
+    fn background_request<T>(
+        &self,
+        payload: T,
+        trace_method: &str,
+    ) -> Result<Request<T>, VmmClientError> {
+        self.request_with_timeout(payload, trace_method, self.config.background_timeout)
     }
 }
 
@@ -280,7 +384,7 @@ impl VmmClient for TonicVmmClient {
         let mut client = self.client.clone();
         let response = client
             .get_profile_nodes(
-                self.request(grpc_get_profile_nodes_request(request), "profilenodes")?,
+                self.background_request(grpc_get_profile_nodes_request(request), "profilenodes")?,
             )
             .await
             .map_err(status_error)?;
@@ -296,7 +400,7 @@ impl VmmClient for TonicVmmClient {
         let mut client = self.client.clone();
         let response = client
             .get_profile_bundle(
-                self.request(grpc_get_profile_bundle_request(request), "profilebundle")?,
+                self.background_request(grpc_get_profile_bundle_request(request), "profilebundle")?,
             )
             .await
             .map_err(status_error)?;
@@ -311,7 +415,7 @@ impl VmmClient for TonicVmmClient {
     ) -> Result<ApplyProfileInstructionResponse, VmmClientError> {
         let mut client = self.client.clone();
         let response = client
-            .apply_profile_instruction(self.request(
+            .apply_profile_instruction(self.background_request(
                 grpc_apply_profile_instruction_request(request),
                 "profileinstruction",
             )?)
@@ -330,7 +434,7 @@ impl VmmClient for TonicVmmClient {
     ) -> Result<PreCheckResponse, VmmClientError> {
         let mut client = self.client.clone();
         let response = client
-            .pre_check(self.request(grpc_precheck_request(request), "precheck")?)
+            .pre_check(self.precheck_request(grpc_precheck_request(request), "precheck")?)
             .await
             .map_err(status_error)?;
         protocol_precheck_response(response.into_inner())
@@ -344,7 +448,7 @@ impl VmmClient for TonicVmmClient {
     ) -> Result<PostActionResponse, VmmClientError> {
         let mut client = self.client.clone();
         let response = client
-            .post_action(self.request(grpc_post_action_request(request), "postaction")?)
+            .post_action(self.post_action_request(grpc_post_action_request(request), "postaction")?)
             .await
             .map_err(status_error)?;
         let response = response.into_inner();
@@ -363,7 +467,9 @@ impl VmmClient for TonicVmmClient {
     ) -> Result<ChatCompactResponse, VmmClientError> {
         let mut client = self.client.clone();
         let response = client
-            .chat_compact(self.request(grpc_chat_compact_request(request), "chatcompact")?)
+            .chat_compact(
+                self.background_request(grpc_chat_compact_request(request), "chatcompact")?,
+            )
             .await
             .map_err(status_error)?;
         let response = response.into_inner();
@@ -750,6 +856,23 @@ mod tests {
             normalize_endpoint("127.0.0.1:50051").expect("endpoint"),
             "http://127.0.0.1:50051"
         );
+    }
+
+    /// Verifies interactive, intake, and background RPC budgets are derived independently instead of inheriting one global endpoint timeout.
+    /// 验证交互、接收与后台 RPC 预算会独立派生，而不是继承同一个 Endpoint 全局超时。
+    #[test]
+    fn transport_config_derives_stage_specific_rpc_timeouts() {
+        let config = VmmEffectiveConfig {
+            receive_timeout_ms: 45_000,
+            ..VmmEffectiveConfig::default()
+        };
+
+        let transport = VmmTransportConfig::from_effective(&config);
+
+        assert_eq!(transport.workspace_timeout, Duration::from_secs(45));
+        assert_eq!(transport.precheck_timeout, Duration::from_secs(30));
+        assert_eq!(transport.post_action_timeout, Duration::from_secs(45));
+        assert_eq!(transport.background_timeout, Duration::from_secs(120));
     }
 
     #[test]

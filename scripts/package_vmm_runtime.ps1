@@ -204,8 +204,8 @@ function New-StagedManifest {
     $localVersion = Read-VersionJSON $localPath "vmm-local"
     $migrateVersion = Read-VersionJSON $migratePath "vmm-migrate"
     foreach ($version in @($localVersion, $migrateVersion)) {
-        if ($version.build_id -ne "vmm-runtime-v1" -or $version.managed_contract_version -ne 1 -or $version.inference_protocol_version -ne 1) {
-            throw "VMM version identity is not contract v1/build vmm-runtime-v1."
+        if ($version.build_id -ne "vmm-runtime-v1" -or $version.managed_contract_version -ne 2 -or $version.inference_protocol_version -ne 1) {
+            throw "VMM version identity is not contract v2/build vmm-runtime-v1."
         }
         if ([string]::IsNullOrWhiteSpace($version.source_revision) -or $version.source_revision -eq "unknown" -or [string]::IsNullOrWhiteSpace($version.source_state_digest) -or $version.source_state_digest -eq "unknown") {
             throw "VMM version identity is missing injected source revision or source-state digest."

@@ -605,9 +605,18 @@ pub struct VmmManagedRuntimeSettingsDraft {
     /// PostAction maximum input tokens text.
     /// PostAction 最大输入 Token 文本。
     pub postaction_max_input_tokens: String,
+    /// PostAction background analysis deadline.
+    /// PostAction 后台分析截止时间。
+    pub postaction_analysis_timeout: String,
+    /// Consecutive failure count that moves one PostAction turn into Pass.
+    /// 将单条 PostAction turn 转入 Pass 的连续失败次数阈值。
+    pub postaction_failure_pass_threshold: String,
     /// PostAction queue worker count text.
     /// PostAction 队列工作数文本。
     pub postaction_max_queue_workers: String,
+    /// Maximum inference HTTP connections per upstream host.
+    /// 每个上游主机允许的最大推理 HTTP 连接数。
+    pub inference_max_connections_per_host: String,
     /// Maximum recall keyword count text.
     /// 最大召回关键词数量文本。
     pub pipeline_max_search_keywords: String,
@@ -703,7 +712,10 @@ impl Default for VmmManagedRuntimeSettingsDraft {
             postaction_idle_timeout: String::from("15m"),
             postaction_history_turns: String::from("3"),
             postaction_max_input_tokens: String::from("6000"),
+            postaction_analysis_timeout: String::from("180s"),
+            postaction_failure_pass_threshold: String::from("5"),
             postaction_max_queue_workers: String::from("4"),
+            inference_max_connections_per_host: String::from("8"),
             pipeline_max_search_keywords: String::from("5"),
             pipeline_min_similarity_score: String::from("0.75"),
             pipeline_replace_min_similarity_score: String::from("0.8"),

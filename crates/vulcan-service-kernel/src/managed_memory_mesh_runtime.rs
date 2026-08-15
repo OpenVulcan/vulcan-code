@@ -1458,7 +1458,8 @@ fn default_managed_manifest(
     let max_receive_message_bytes =
         u32::try_from(vmm_config.max_receive_message_bytes.unwrap_or(1 << 20))
             .map_err(|_| String::from("VMM 最大接收字节数超过托管协议支持的 u32 范围。"))?;
-    let request_timeout = milliseconds_as_duration(vmm_config.receive_timeout_ms.unwrap_or(30_000));
+    let request_timeout_ms = vmm_config.receive_timeout_ms.unwrap_or(30_000);
+    let request_timeout = milliseconds_as_duration(request_timeout_ms);
     Ok(ManagedConfig {
         contract_version: MANAGED_CONTRACT_VERSION,
         runtime_build_id: String::from(MANAGED_RUNTIME_BUILD_ID),
@@ -1484,7 +1485,7 @@ fn default_managed_manifest(
                 max_receive_message_bytes,
                 request_timeout: ManagedGrpcRequestTimeout {
                     workspace: request_timeout.clone(),
-                    pre_check: request_timeout.clone(),
+                    pre_check: milliseconds_as_duration(request_timeout_ms.min(30_000)),
                     post_action: request_timeout,
                 },
                 shutdown_timeout: String::from("10s"),
@@ -1546,6 +1547,7 @@ fn default_managed_manifest(
                 expected_caller_id: String::from("vmm-local"),
                 consumer_profile_id: String::from("vmm"),
                 startup_timeout: String::from("30s"),
+                max_connections_per_host: runtime_settings.inference_max_connections_per_host,
                 embedding_dimension,
             },
             logging: ManagedLoggingConfig {
@@ -1587,6 +1589,8 @@ fn default_managed_manifest(
                 session_analysis_idle_timeout: runtime_settings.postaction_idle_timeout.clone(),
                 session_analysis_history_turns: runtime_settings.postaction_history_turns,
                 session_analysis_max_input_tokens: runtime_settings.postaction_max_input_tokens,
+                session_analysis_timeout: runtime_settings.postaction_analysis_timeout.clone(),
+                failure_pass_threshold: runtime_settings.postaction_failure_pass_threshold,
                 max_queue_workers: runtime_settings.postaction_max_queue_workers,
             },
             memory_pipeline: ManagedMemoryPipelineConfig {
@@ -1827,7 +1831,14 @@ fn managed_transport_config(
         grpc_target: grpc_target.to_string(),
         grpc_api_key: Some(format!("Bearer {access_token}")),
         handshake_timeout: Duration::from_millis(vmm_config.handshake_timeout_ms.unwrap_or(5_000)),
-        request_timeout: Duration::from_millis(vmm_config.receive_timeout_ms.unwrap_or(30_000)),
+        workspace_timeout: Duration::from_millis(vmm_config.receive_timeout_ms.unwrap_or(30_000)),
+        precheck_timeout: Duration::from_millis(
+            vmm_config.receive_timeout_ms.unwrap_or(30_000).min(30_000),
+        ),
+        post_action_timeout: Duration::from_millis(vmm_config.receive_timeout_ms.unwrap_or(30_000)),
+        background_timeout: Duration::from_millis(
+            vmm_config.receive_timeout_ms.unwrap_or(30_000).max(120_000),
+        ),
         max_receive_message_bytes: vmm_config.max_receive_message_bytes,
         keepalive_time: Duration::from_millis(vmm_config.grpc_keepalive_time_ms.unwrap_or(30_000)),
         keepalive_timeout: Duration::from_millis(

@@ -317,6 +317,13 @@ fn vmm_config_layer_from_draft_validates_managed_behavior_boundaries() {
     draft.managed_runtime_settings.precheck_top_k = String::from("9");
     draft.managed_runtime_settings.precheck_intent_timeout = String::from("7s");
     draft.managed_runtime_settings.retention_session_idle_after = String::from("360h");
+    draft.managed_runtime_settings.postaction_analysis_timeout = String::from("2m");
+    draft
+        .managed_runtime_settings
+        .postaction_failure_pass_threshold = String::from("3");
+    draft
+        .managed_runtime_settings
+        .inference_max_connections_per_host = String::from("16");
 
     let layer = vmm_config_layer_from_draft(&draft, true).expect("managed behavior should convert");
     let settings = layer
@@ -326,6 +333,9 @@ fn vmm_config_layer_from_draft_validates_managed_behavior_boundaries() {
     assert_eq!(settings.precheck_top_k, 9);
     assert_eq!(settings.precheck_intent_timeout, "7s");
     assert_eq!(settings.retention_session_idle_after, "360h");
+    assert_eq!(settings.postaction_analysis_timeout, "2m");
+    assert_eq!(settings.postaction_failure_pass_threshold, 3);
+    assert_eq!(settings.inference_max_connections_per_host, 16);
 
     draft.receive_timeout_ms = String::from("7000");
     let timeout_error = vmm_config_layer_from_draft(&draft, true)
@@ -343,6 +353,30 @@ fn vmm_config_layer_from_draft_validates_managed_behavior_boundaries() {
     let retention_error = vmm_config_layer_from_draft(&draft, true)
         .expect_err("retention idle duration below the safety floor must be rejected");
     assert!(retention_error.contains("必须大于或等于 360h"));
+
+    draft.managed_runtime_settings.retention_session_idle_after = String::from("360h");
+    draft.managed_runtime_settings.postaction_analysis_timeout = String::from("119s");
+    let postaction_timeout_error = vmm_config_layer_from_draft(&draft, true)
+        .expect_err("PostAction background timeout below two minutes must be rejected");
+    assert!(postaction_timeout_error.contains("必须大于或等于 2m"));
+
+    draft.managed_runtime_settings.postaction_analysis_timeout = String::from("2m");
+    draft
+        .managed_runtime_settings
+        .postaction_failure_pass_threshold = String::from("0");
+    let failure_threshold_error = vmm_config_layer_from_draft(&draft, true)
+        .expect_err("zero failure Pass threshold must be rejected");
+    assert!(failure_threshold_error.contains("必须位于 1 到 4294967295 之间"));
+
+    draft
+        .managed_runtime_settings
+        .postaction_failure_pass_threshold = String::from("3");
+    draft
+        .managed_runtime_settings
+        .inference_max_connections_per_host = String::from("65");
+    let connection_limit_error = vmm_config_layer_from_draft(&draft, true)
+        .expect_err("inference connection ceiling above 64 must be rejected");
+    assert!(connection_limit_error.contains("必须位于 1 到 64 之间"));
 }
 
 /// Verifies project-layer conversion strips transport-only fields.

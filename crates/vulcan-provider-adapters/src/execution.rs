@@ -22,7 +22,7 @@ use std::time::{Duration, Instant, SystemTime};
 use vulcan_ai_contract::{
     AiErrorCategory, AiExecutionError, AiExecutionRequest, AiStreamEvent, AiStreamStateMachine,
     AiTransportKind, ContentItem, DispatchOutcome, ModelParameterValue, PromptCachePolicy,
-    ResourceKind, RetryAfterHint, RetryAfterSource, StructuredOutputPolicy,
+    ReasoningEffort, ResourceKind, RetryAfterHint, RetryAfterSource, StructuredOutputPolicy,
     canonicalize_codex_responses_replay_items, is_replayable_codex_responses_item,
 };
 use vulcan_ai_protocols::{
@@ -379,6 +379,30 @@ pub struct ResponsesCompactResult {
     /// 可选的上游响应标识。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response_id: Option<String>,
+}
+
+/// Carries the secret-safe transport request captured immediately before dispatch.
+/// 承载在分派前立即捕获且不含秘密值的传输请求。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderWireRequestCapture {
+    /// Exact transport selected for this physical request.
+    /// 当前真实请求选中的精确传输类型。
+    pub transport: String,
+    /// Exact transport operation used to submit the payload.
+    /// 提交载荷所使用的精确传输操作。
+    pub method: String,
+    /// Protocol-relative endpoint path selected by the encoder.
+    /// 编码器选中的协议相对端点路径。
+    pub path: String,
+    /// Fully resolved endpoint used by the selected transport.
+    /// 所选传输实际使用的完整解析端点。
+    pub resolved_url: String,
+    /// Complete final header projection with every credential-shaped value redacted.
+    /// 完整的最终请求头投影，其中所有凭据形态的值均已脱敏。
+    pub headers: BTreeMap<String, String>,
+    /// Exact JSON payload handed to the selected transport.
+    /// 交给所选传输的精确 JSON 载荷。
+    pub body: Value,
 }
 
 /// Stream of normalized public execution events.
@@ -1482,6 +1506,38 @@ impl ProviderExecutionClient {
         project_provider_request(route, request, encoded)
     }
 
+    /// Proves that one exact encoded request preserves the caller-required no-reasoning contract.
+    /// 证明一份精确编码请求保留了调用方要求的无思考契约。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `route` and `request` are the frozen execution inputs; `model_is_fixed_off` is the exact
+    /// selected-model capability fact rather than a model-name inference.
+    /// `route` 与 `request` 是冻结的执行输入；`model_is_fixed_off` 是所选模型的精确能力事实，
+    /// 而不是根据模型名称推断的结果。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The encoded request when it cannot enable reasoning and either carries an explicit
+    /// protocol-level disable projection or targets a model declared permanently reasoning-off.
+    /// 当编码请求不会开启思考，且携带协议级显式关闭投影或目标模型被声明为永久关闭思考时，
+    /// 返回该编码请求。
+    pub fn encode_required_disabled_reasoning_request(
+        &self,
+        route: &ProviderExecutionRoute,
+        request: &AiExecutionRequest,
+        model_is_fixed_off: bool,
+    ) -> Result<EncodedWireRequest, ProviderExecutionFailure> {
+        if request.reasoning_effort != Some(ReasoningEffort::None) {
+            return Err(pre_dispatch_failure(
+                "Required disabled-reasoning validation received a request without reasoning effort none.",
+            ));
+        }
+        let encoded = self.encode_request(route, request)?;
+        validate_required_disabled_reasoning_wire(route, &encoded, model_is_fixed_off)?;
+        Ok(encoded)
+    }
+
     /// Encodes one immutable request with credential-bound non-secret identity projection.
     /// 编码一个不可变请求，并投影凭据绑定的非秘密身份信息。
     ///
@@ -1875,7 +1931,7 @@ impl ProviderExecutionClient {
         request: AiExecutionRequest,
         secret: CredentialExecutionSecret,
         execution_id: String,
-        wire_request_capture: oneshot::Sender<EncodedWireRequest>,
+        wire_request_capture: oneshot::Sender<ProviderWireRequestCapture>,
     ) -> ProviderExecutionStream {
         self.execute_with_optional_wire_request_capture(
             route,
@@ -1906,7 +1962,7 @@ impl ProviderExecutionClient {
         request: AiExecutionRequest,
         secret: CredentialExecutionSecret,
         execution_id: String,
-        wire_request_capture: Option<oneshot::Sender<EncodedWireRequest>>,
+        wire_request_capture: Option<oneshot::Sender<ProviderWireRequestCapture>>,
     ) -> ProviderExecutionStream {
         // diagnostic_secret remains available only to the final stream error boundary after the
         // transport receives its own frozen credential clone.
@@ -1949,7 +2005,7 @@ impl ProviderExecutionClient {
         secret: CredentialExecutionSecret,
         execution_id: String,
         websocket_key: String,
-        wire_request_capture: Option<oneshot::Sender<EncodedWireRequest>>,
+        wire_request_capture: Option<oneshot::Sender<ProviderWireRequestCapture>>,
     ) -> ProviderExecutionStream {
         let client = self.clone();
         Box::pin(try_stream! {
@@ -1986,7 +2042,7 @@ impl ProviderExecutionClient {
                 HeaderValue::from_static(CODEX_RESPONSES_WEBSOCKET_BETA),
             );
             let config = ResponsesWebsocketConfig {
-                url,
+                url: url.clone(),
                 headers: websocket_headers(&headers)?,
                 connect_timeout: Duration::from_millis(transport.response_headers_timeout_ms),
                 idle_timeout: Duration::from_millis(transport.stream_idle_timeout_ms),
@@ -2039,10 +2095,16 @@ impl ProviderExecutionClient {
                 session.previous_response_id(),
             );
             let encoded = client.encode_request_with_credential(&route, &wire_request, &secret)?;
-            // The capture clones the exact object whose body is handed to the active socket next.
-            // 捕获通道克隆下一步交给活动 Socket 的同一个精确请求对象。
+            // The capture contains the exact frame payload plus the final secret-safe handshake headers.
+            // 捕获内容包含精确帧载荷以及最终且不含秘密值的握手请求头。
             if let Some(capture) = wire_request_capture.take() {
-                let _ = capture.send(encoded.clone());
+                let _ = capture.send(provider_wire_request_capture(
+                    "responses_websocket",
+                    "WEBSOCKET_FRAME",
+                    url.as_str(),
+                    &encoded,
+                    &headers,
+                ));
             }
             if let Err(error) = session.begin_response(encoded.body, None).await {
                 client.disable_responses_websocket(websocket_key.as_str());
@@ -2412,7 +2474,7 @@ impl ProviderExecutionClient {
         request: AiExecutionRequest,
         secret: CredentialExecutionSecret,
         execution_id: String,
-        wire_request_capture: Option<oneshot::Sender<EncodedWireRequest>>,
+        wire_request_capture: Option<oneshot::Sender<ProviderWireRequestCapture>>,
     ) -> ProviderExecutionStream {
         let client = self.clone();
         Box::pin(try_stream! {
@@ -2435,10 +2497,16 @@ impl ProviderExecutionClient {
                 .map_err(llm_core_protocol_failure)?;
             let url = route.request_url(encoded.path.as_str());
             let headers = execution_headers(&route, &encoded.headers, &secret)?;
-            // The capture clones the exact object whose body is serialized by reqwest next.
-            // 捕获通道克隆下一步由 reqwest 序列化的同一个精确请求对象。
+            // The capture contains the exact body and the final headers after transport projection.
+            // 捕获内容包含精确正文以及完成传输投影后的最终请求头。
             if let Some(capture) = wire_request_capture.take() {
-                let _ = capture.send(encoded.clone());
+                let _ = capture.send(provider_wire_request_capture(
+                    "http_sse",
+                    "POST",
+                    url.as_str(),
+                    &encoded,
+                    &headers,
+                ));
             }
             emit_provider_transport_trace(
                 execution_id.as_str(),
@@ -3849,6 +3917,268 @@ fn project_provider_request(
     }
     validate_structured_output_projection(route, request, &encoded)?;
     Ok(encoded)
+}
+
+/// Validates the final provider body against the closed no-reasoning wire vocabulary.
+/// 根据封闭的无思考线路词汇校验最终供应商请求体。
+///
+/// # Parameters
+/// 参数
+/// `route` identifies the exact protocol for diagnostics; `encoded` is the final body after every
+/// manifest and custom projection; `model_is_fixed_off` comes from the frozen model capability.
+/// `route` 为诊断提供精确协议；`encoded` 是全部 Manifest 与自定义投影完成后的最终请求体；
+/// `model_is_fixed_off` 来自冻结模型能力。
+///
+/// # Returns
+/// 返回值
+/// Success only when no enabled-reasoning control survives and a switchable model retains one
+/// recognized explicit disable projection.
+/// 仅当请求中没有残留开启思考的控制项，且可切换模型保留一个已识别的显式关闭投影时返回成功。
+fn validate_required_disabled_reasoning_wire(
+    route: &ProviderExecutionRoute,
+    encoded: &EncodedWireRequest,
+    model_is_fixed_off: bool,
+) -> Result<(), ProviderExecutionFailure> {
+    if wire_body_explicitly_enables_reasoning(&encoded.body) {
+        return Err(pre_dispatch_failure(format!(
+            "Protocol `{}` produced a final request that enables reasoning for a disabled-reasoning execution.",
+            route.protocol_route.protocol_profile_id
+        )));
+    }
+    if model_is_fixed_off || wire_body_explicitly_disables_reasoning(route, &encoded.body) {
+        return Ok(());
+    }
+    Err(pre_dispatch_failure(format!(
+        "Protocol `{}` does not preserve an explicit disabled-reasoning projection in the final request.",
+        route.protocol_route.protocol_profile_id
+    )))
+}
+
+/// Reports whether a final JSON body contains the explicit no-reasoning control registered for its exact protocol.
+/// 判断最终 JSON 请求体是否包含其精确协议已注册的显式无思考控制项。
+///
+/// # Parameters
+/// 参数
+/// `route` owns the immutable protocol identity and `body` is the exact post-projection provider request body.
+/// `route` 持有不可变协议身份，`body` 是完成投影后的精确供应商请求体。
+///
+/// # Returns
+/// 返回值
+/// `true` only when the field belongs to the selected protocol family; an irrelevant dialect can never satisfy the proof.
+/// 仅当字段属于所选协议族时返回 `true`；无关协议方言绝不能满足该证明。
+fn wire_body_explicitly_disables_reasoning(route: &ProviderExecutionRoute, body: &Value) -> bool {
+    match upstream_protocol_for_route(route) {
+        Some(UpstreamProtocol::OpenAiResponses) => {
+            json_pointer_is_disabled_label(body, "/reasoning/effort")
+        }
+        Some(UpstreamProtocol::OpenAiChatCompletions) => {
+            chat_body_explicitly_disables_reasoning(route, body)
+        }
+        Some(UpstreamProtocol::AnthropicMessages) => {
+            json_pointer_is_disabled_label(body, "/thinking/type")
+        }
+        Some(UpstreamProtocol::GeminiGenerateContent) => {
+            json_pointer_is_numeric_zero(body, "/generationConfig/thinkingConfig/thinkingBudget")
+        }
+        Some(UpstreamProtocol::GoogleCodeAssist) => json_pointer_is_numeric_zero(
+            body,
+            "/request/generationConfig/thinkingConfig/thinkingBudget",
+        ),
+        // The registered Interactions encoder exposes only positive thinking levels. Until the
+        // protocol owns an explicit off value, switchable models must fail closed.
+        // 已注册的 Interactions 编码器只暴露正向思考档位；在协议持有显式关闭值前，
+        // 可切换模型必须采用失败关闭策略。
+        Some(UpstreamProtocol::GeminiInteractions) | None => false,
+    }
+}
+
+/// Reports whether one Chat-compatible final body preserves its frozen route's declared disabled-reasoning projection.
+/// 判断一个 Chat 兼容最终请求体是否保留其冻结路由声明的关闭思考投影。
+///
+/// # Parameters
+/// 参数
+/// `route` owns the exact ordered Manifest projection chain and `body` is its final output.
+/// `route` 持有精确的有序 Manifest 投影链，`body` 是该链的最终输出。
+///
+/// # Returns
+/// 返回值
+/// `true` only when a value derived from `reasoning_effort=none` survives at the exact path
+/// declared by the active profile chain; unrelated vendor dialects cannot satisfy the proof.
+/// 仅当由 `reasoning_effort=none` 派生的值保留在当前 Profile 链声明的精确路径时
+/// 返回 `true`；无关供应商方言无法满足该证明。
+fn chat_body_explicitly_disables_reasoning(route: &ProviderExecutionRoute, body: &Value) -> bool {
+    use crate::provider_manifest::{MappingStep, MappingStepSource};
+
+    let mut declared_projection = false;
+    for step in route
+        .request_projection_profiles
+        .iter()
+        .flat_map(|profile| profile.steps.iter())
+    {
+        let expected = match step {
+            MappingStep::CopyRequestField { path, field } if field == "reasoning_effort" => {
+                Some((path.as_str(), Value::String(String::from("none"))))
+            }
+            MappingStep::EnumMap {
+                path,
+                source: MappingStepSource::RequestField,
+                source_path,
+                mapping,
+                ..
+            } if source_path == "@reasoning_effort" => mapping
+                .get("none")
+                .filter(|value| !value.is_null())
+                .cloned()
+                .map(|value| (path.as_str(), value)),
+            MappingStep::ConditionalSet {
+                path,
+                source: MappingStepSource::RequestField,
+                source_path,
+                equals,
+                then,
+                otherwise,
+            } if source_path == "@reasoning_effort" => {
+                let value = if equals == "none" { then } else { otherwise };
+                (!value.is_null()).then(|| (path.as_str(), value.clone()))
+            }
+            _ => None,
+        };
+        let Some((path, expected)) = expected else {
+            continue;
+        };
+        declared_projection = true;
+        if body.pointer(path) == Some(&expected) {
+            return true;
+        }
+    }
+
+    !declared_projection && json_pointer_is_disabled_label(body, "/reasoning_effort")
+}
+
+/// Reports whether a final JSON body contains a contradictory enabled-reasoning control.
+/// 判断最终 JSON 请求体是否包含相互矛盾的开启思考控制项。
+///
+/// # Parameters
+/// 参数
+/// `body` is the exact post-projection provider request body.
+/// `body` 是完成投影后的精确供应商请求体。
+///
+/// # Returns
+/// 返回值
+/// `true` when a registered reasoning field explicitly enables work or carries any non-zero budget.
+/// 已注册思考字段显式开启工作或携带任意非零预算时返回 `true`。
+fn wire_body_explicitly_enables_reasoning(body: &Value) -> bool {
+    ["/reasoning/effort", "/reasoning_effort"]
+        .into_iter()
+        .filter_map(|path| body.pointer(path).and_then(Value::as_str))
+        .any(|value| !disabled_reasoning_label(value))
+        || body.pointer("/reasoning/enabled").and_then(Value::as_bool) == Some(true)
+        || body
+            .pointer("/thinking/type")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !disabled_reasoning_label(value))
+        || body.pointer("/enable_thinking").and_then(Value::as_bool) == Some(true)
+        || [
+            "/generationConfig/thinkingConfig/thinkingBudget",
+            "/generation_config/thinking_budget",
+            "/thinkingConfig/thinkingBudget",
+        ]
+        .into_iter()
+        .filter_map(|path| body.pointer(path).and_then(Value::as_i64))
+        .any(|value| value != 0)
+        || [
+            "/reasoning/max_tokens",
+            "/reasoning/budget_tokens",
+            "/thinking/budget_tokens",
+            "/reasoning_budget",
+            "/thinking_budget",
+        ]
+        .into_iter()
+        .any(|path| json_pointer_is_numeric_nonzero(body, path))
+        || [
+            "/generationConfig/thinkingConfig/thinkingLevel",
+            "/generation_config/thinking_level",
+        ]
+        .into_iter()
+        .filter_map(|path| body.pointer(path).and_then(Value::as_str))
+        .any(|value| !disabled_reasoning_label(value))
+}
+
+/// Reports whether one JSON pointer resolves to a registered disabled-reasoning label.
+/// 判断一个 JSON 指针是否解析为已注册的关闭思考标签。
+///
+/// # Parameters
+/// 参数
+/// `body` is the final provider body and `path` is one code-owned JSON pointer.
+/// `body` 是最终供应商请求体，`path` 是代码持有的 JSON 指针。
+///
+/// # Returns
+/// 返回值
+/// `true` when the pointed string is `none`, `off`, or `disabled`, case-insensitively.
+/// 指向的字符串不区分大小写等于 `none`、`off` 或 `disabled` 时返回 `true`。
+fn json_pointer_is_disabled_label(body: &Value, path: &str) -> bool {
+    body.pointer(path)
+        .and_then(Value::as_str)
+        .is_some_and(disabled_reasoning_label)
+}
+
+/// Reports whether one reasoning label belongs to the closed disabled vocabulary.
+/// 判断一个思考标签是否属于封闭的关闭词汇。
+///
+/// # Parameters
+/// 参数
+/// `value` is one provider wire string.
+/// `value` 是一个供应商线路字符串。
+///
+/// # Returns
+/// 返回值
+/// `true` only for `none`, `off`, or `disabled` after ASCII case folding.
+/// 仅在 ASCII 大小写折叠后为 `none`、`off` 或 `disabled` 时返回 `true`。
+fn disabled_reasoning_label(value: &str) -> bool {
+    matches!(
+        value.to_ascii_lowercase().as_str(),
+        "none" | "off" | "disabled"
+    )
+}
+
+/// Reports whether one JSON pointer resolves to an exact numeric zero.
+/// 判断一个 JSON 指针是否解析为精确数值零。
+///
+/// # Parameters
+/// 参数
+/// `body` is the final provider body and `path` is one code-owned JSON pointer.
+/// `body` 是最终供应商请求体，`path` 是代码持有的 JSON 指针。
+///
+/// # Returns
+/// 返回值
+/// `true` for integer or floating-point zero and `false` for missing or non-numeric values.
+/// 整数或浮点数零返回 `true`；缺失或非数值返回 `false`。
+fn json_pointer_is_numeric_zero(body: &Value, path: &str) -> bool {
+    body.pointer(path).is_some_and(|value| {
+        value.as_i64() == Some(0)
+            || value.as_u64() == Some(0)
+            || value.as_f64().is_some_and(|number| number == 0.0)
+    })
+}
+
+/// Reports whether one JSON pointer resolves to any non-zero numeric reasoning budget.
+/// 判断一个 JSON 指针是否解析为任意非零数值思考预算。
+///
+/// # Parameters
+/// 参数
+/// `body` is the final provider body and `path` is one code-owned JSON pointer.
+/// `body` 是最终供应商请求体，`path` 是一个代码持有的 JSON 指针。
+///
+/// # Returns
+/// 返回值
+/// `true` for positive or negative non-zero integers and floats; missing or zero values are false.
+/// 正数或负数的非零整数与浮点数返回 `true`；缺失或零值返回 `false`。
+fn json_pointer_is_numeric_nonzero(body: &Value, path: &str) -> bool {
+    body.pointer(path).is_some_and(|value| {
+        value.as_i64().is_some_and(|number| number != 0)
+            || value.as_u64().is_some_and(|number| number != 0)
+            || value.as_f64().is_some_and(|number| number != 0.0)
+    })
 }
 
 /// Projects an explicitly frozen secondary endpoint through the registered order primitive.
@@ -5680,6 +6010,77 @@ fn project_credential_request(
         Value::String(project_id.to_string()),
     );
     Ok(encoded)
+}
+
+/// Builds one complete transport request capture without retaining credential values.
+/// 构建一份完整的传输请求捕获，同时不保留任何凭据值。
+///
+/// # Parameters
+/// 参数
+/// `transport`, `method`, and `resolved_url` identify the selected physical operation;
+/// `encoded` supplies the exact endpoint path and body; `headers` are the final transport headers.
+/// `transport`、`method` 与 `resolved_url` 标识选中的真实操作；`encoded` 提供精确端点路径
+/// 与正文；`headers` 是最终传输请求头。
+///
+/// # Returns
+/// 返回值
+/// A capture whose body is exact and whose credential-shaped header values are redacted.
+/// 返回正文精确且凭据形态请求头值均已脱敏的捕获结果。
+fn provider_wire_request_capture(
+    transport: &str,
+    method: &str,
+    resolved_url: &str,
+    encoded: &EncodedWireRequest,
+    headers: &HeaderMap,
+) -> ProviderWireRequestCapture {
+    ProviderWireRequestCapture {
+        transport: transport.to_string(),
+        method: method.to_string(),
+        path: encoded.path.clone(),
+        resolved_url: resolved_url.to_string(),
+        headers: provider_wire_request_capture_headers(headers),
+        body: encoded.body.clone(),
+    }
+}
+
+/// Projects final transport headers into a deterministic secret-safe diagnostic map.
+/// 将最终传输请求头投影为确定性的无秘密诊断映射。
+///
+/// # Parameters
+/// 参数
+/// `headers` contains the exact header values about to be sent by the transport.
+/// `headers` 包含传输层即将发送的精确请求头值。
+///
+/// # Returns
+/// 返回值
+/// A lexical header map that preserves every name while redacting sensitive values.
+/// 返回保留全部字段名并脱敏敏感值的字典序请求头映射。
+fn provider_wire_request_capture_headers(headers: &HeaderMap) -> BTreeMap<String, String> {
+    headers
+        .iter()
+        .map(|(name, value)| {
+            let normalized = name.as_str().trim().to_ascii_lowercase();
+            let sensitive = matches!(
+                normalized.as_str(),
+                "authorization"
+                    | "proxy-authorization"
+                    | "x-api-key"
+                    | "api-key"
+                    | "x-goog-api-key"
+                    | "anthropic-api-key"
+                    | "cookie"
+                    | "set-cookie"
+            ) || normalized.contains("token")
+                || normalized.contains("secret")
+                || normalized.ends_with("-key");
+            let projected = if sensitive {
+                String::from("<redacted>")
+            } else {
+                String::from_utf8_lossy(value.as_bytes()).into_owned()
+            };
+            (name.as_str().to_string(), projected)
+        })
+        .collect()
 }
 
 /// Builds provider authentication and public application headers.
@@ -8736,6 +9137,25 @@ mod tests {
         assert!(completed);
         assert_eq!(captured.body, dispatched);
         assert_eq!(captured.body["reasoning"]["effort"], "none");
+        assert_eq!(captured.transport, "http_sse");
+        assert_eq!(captured.method, "POST");
+        assert_eq!(captured.path, "/responses");
+        assert_eq!(
+            captured.headers.get("authorization").map(String::as_str),
+            Some("<redacted>")
+        );
+        assert_eq!(
+            captured.headers.get("user-agent").map(String::as_str),
+            Some(VULCAN_CODE_USER_AGENT)
+        );
+        assert_eq!(
+            captured
+                .headers
+                .get("x-openrouter-categories")
+                .map(String::as_str),
+            Some("programming-app")
+        );
+        assert!(!captured.headers.values().any(|value| value == "secret"));
     }
 
     /// Verifies store=false HTTP never emits a cursor and WS requires exact socket ownership.
@@ -10341,6 +10761,205 @@ mod tests {
 
         assert_eq!(encoded.body["thinking"]["type"], "enabled");
         assert!(encoded.body.get("reasoning_effort").is_none());
+    }
+
+    /// Verifies required no-reasoning validation inspects the final body and fails closed.
+    /// 验证必需无思考校验检查最终请求体并采用失败关闭策略。
+    #[test]
+    fn required_disabled_reasoning_validation_rejects_dropped_or_contradictory_projection() {
+        // client owns the same encoder and projection chain used by production dispatch.
+        // client 持有与生产分派相同的编码器与投影链。
+        let client = ProviderExecutionClient::new(
+            reqwest::Client::new(),
+            Arc::new(ProtocolRegistry::first_batch().expect("profiles should register")),
+        );
+        // request is the exact VMM semantic: reasoning effort must be none.
+        // request 是精确 VMM 语义：思考档位必须为 none。
+        let mut request = minimal_request();
+        request.reasoning_effort = Some(ReasoningEffort::None);
+
+        // explicitRoute proves the OpenRouter profile retains reasoning.effort=none.
+        // explicitRoute 证明 OpenRouter Profile 保留 reasoning.effort=none。
+        let explicit_route = pinned_openrouter_route(OPENAI_CHAT_PROFILE_ID);
+        let explicit = client
+            .encode_required_disabled_reasoning_request(&explicit_route, &request, false)
+            .expect("explicit OpenRouter disabled projection should pass");
+        assert_eq!(explicit.body["reasoning"]["effort"], "none");
+
+        // droppedRoute removes the only Chat provider profile; canonical Chat conversion omits
+        // effort none, so a switchable model must be rejected rather than using provider default.
+        // droppedRoute 移除唯一的 Chat 供应商 Profile；规范 Chat 转换会省略 none 档位，
+        // 因此可切换模型必须被拒绝，而不能使用供应商默认值。
+        let mut dropped_route = explicit_route.clone();
+        dropped_route.request_projection_profiles.clear();
+        let dropped = client
+            .encode_required_disabled_reasoning_request(&dropped_route, &request, false)
+            .expect_err("a dropped disabled projection must fail closed");
+        assert!(dropped.error.message.contains("does not preserve"));
+
+        // fixedOff accepts an absent toggle only because the frozen model capability says the
+        // model can never reason; no name-based inference is involved.
+        // fixedOff 仅因冻结模型能力声明模型永远不会思考，才接受缺失开关；不涉及模型名推断。
+        client
+            .encode_required_disabled_reasoning_request(&dropped_route, &request, true)
+            .expect("fixed-off models do not require a redundant wire toggle");
+
+        // contradictoryRoute simulates a late custom projection that re-enables thinking after
+        // the provider profile emitted none; this must fail even for a fixed-off declaration.
+        // contradictoryRoute 模拟供应商 Profile 输出 none 后，后置自定义投影重新开启思考；
+        // 即使声明为固定关闭也必须失败。
+        let mut contradictory_route = explicit_route;
+        contradictory_route.custom_model_projection = Some(CustomModelRequestProjection {
+            reasoning: BTreeMap::from([(
+                ReasoningEffort::None,
+                crate::CustomRequestMutation {
+                    set: BTreeMap::from([(
+                        String::from("thinking.type"),
+                        Value::String(String::from("enabled")),
+                    )]),
+                    delete: Vec::new(),
+                },
+            )]),
+            ..Default::default()
+        });
+        let contradictory = client
+            .encode_required_disabled_reasoning_request(&contradictory_route, &request, true)
+            .expect_err("a contradictory enabled control must fail closed");
+        assert!(contradictory.error.message.contains("enables reasoning"));
+
+        // budgetRoute proves a disabled type cannot hide a positive reasoning budget left by a
+        // later custom projection.
+        // budgetRoute 证明关闭类型不能掩盖后置自定义投影残留的正数思考预算。
+        let mut budget_route = pinned_openrouter_route(OPENAI_CHAT_PROFILE_ID);
+        budget_route.custom_model_projection = Some(CustomModelRequestProjection {
+            reasoning: BTreeMap::from([(
+                ReasoningEffort::None,
+                crate::CustomRequestMutation {
+                    set: BTreeMap::from([
+                        (
+                            String::from("thinking.type"),
+                            Value::String(String::from("disabled")),
+                        ),
+                        (
+                            String::from("thinking.budget_tokens"),
+                            Value::Number(4096.into()),
+                        ),
+                    ]),
+                    delete: Vec::new(),
+                },
+            )]),
+            ..Default::default()
+        });
+        let budget_conflict = client
+            .encode_required_disabled_reasoning_request(&budget_route, &request, true)
+            .expect_err("a non-zero reasoning budget must fail closed");
+        assert!(budget_conflict.error.message.contains("enables reasoning"));
+
+        // unknownTypeRoute rejects every non-disabled thinking type instead of recognizing only
+        // the historical enabled/adaptive labels.
+        // unknownTypeRoute 拒绝所有非关闭 thinking 类型，而不是只识别历史 enabled/adaptive 标签。
+        let mut unknown_type_route = pinned_openrouter_route(OPENAI_CHAT_PROFILE_ID);
+        unknown_type_route.custom_model_projection = Some(CustomModelRequestProjection {
+            reasoning: BTreeMap::from([(
+                ReasoningEffort::None,
+                crate::CustomRequestMutation {
+                    set: BTreeMap::from([(
+                        String::from("thinking.type"),
+                        Value::String(String::from("high")),
+                    )]),
+                    delete: Vec::new(),
+                },
+            )]),
+            ..Default::default()
+        });
+        let unknown_type = client
+            .encode_required_disabled_reasoning_request(&unknown_type_route, &request, true)
+            .expect_err("an unknown non-disabled thinking type must fail closed");
+        assert!(unknown_type.error.message.contains("enables reasoning"));
+
+        // crossDialectResponses removes the authoritative Responses effort and leaves an
+        // Anthropic-shaped disabled marker; protocol-specific validation must reject the decoy.
+        // crossDialectResponses 移除权威 Responses effort 并留下 Anthropic 形态的关闭标记；
+        // 协议专属校验必须拒绝该诱饵字段。
+        let mut cross_dialect_responses = deepseek_route(OPENAI_RESPONSES_PROFILE_ID);
+        cross_dialect_responses.custom_model_projection = Some(CustomModelRequestProjection {
+            reasoning: BTreeMap::from([(
+                ReasoningEffort::None,
+                crate::CustomRequestMutation {
+                    set: BTreeMap::from([(
+                        String::from("thinking.type"),
+                        Value::String(String::from("disabled")),
+                    )]),
+                    delete: vec![String::from("reasoning.effort")],
+                },
+            )]),
+            ..Default::default()
+        });
+        let cross_dialect_responses_failure = client
+            .encode_required_disabled_reasoning_request(&cross_dialect_responses, &request, false)
+            .expect_err("Responses must not accept an Anthropic-shaped disabled marker");
+        assert!(
+            cross_dialect_responses_failure
+                .error
+                .message
+                .contains("does not preserve")
+        );
+
+        // crossDialectAnthropic removes the authoritative Anthropic thinking type and leaves a
+        // Responses-shaped effort; the wrong protocol vocabulary must not satisfy VMM admission.
+        // crossDialectAnthropic 移除权威 Anthropic thinking type 并留下 Responses 形态 effort；
+        // 错误协议词汇不得满足 VMM 准入条件。
+        let mut cross_dialect_anthropic = deepseek_route(ANTHROPIC_MESSAGES_PROFILE_ID);
+        cross_dialect_anthropic.custom_model_projection = Some(CustomModelRequestProjection {
+            reasoning: BTreeMap::from([(
+                ReasoningEffort::None,
+                crate::CustomRequestMutation {
+                    set: BTreeMap::from([(
+                        String::from("reasoning.effort"),
+                        Value::String(String::from("none")),
+                    )]),
+                    delete: vec![String::from("thinking.type")],
+                },
+            )]),
+            ..Default::default()
+        });
+        let cross_dialect_anthropic_failure = client
+            .encode_required_disabled_reasoning_request(&cross_dialect_anthropic, &request, false)
+            .expect_err("Anthropic must not accept a Responses-shaped disabled marker");
+        assert!(
+            cross_dialect_anthropic_failure
+                .error
+                .message
+                .contains("does not preserve")
+        );
+
+        // crossDialectChat removes the DeepSeek Chat profile's authoritative thinking object
+        // and leaves a Responses-shaped effort; only the profile-declared path may prove none.
+        // crossDialectChat 移除 DeepSeek Chat Profile 的权威 thinking 对象并留下
+        // Responses 形态的 effort；只有 Profile 声明的路径才能证明 none。
+        let mut cross_dialect_chat = deepseek_route(OPENAI_CHAT_PROFILE_ID);
+        cross_dialect_chat.custom_model_projection = Some(CustomModelRequestProjection {
+            reasoning: BTreeMap::from([(
+                ReasoningEffort::None,
+                crate::CustomRequestMutation {
+                    set: BTreeMap::from([(
+                        String::from("reasoning.effort"),
+                        Value::String(String::from("none")),
+                    )]),
+                    delete: vec![String::from("thinking.type")],
+                },
+            )]),
+            ..Default::default()
+        });
+        let cross_dialect_chat_failure = client
+            .encode_required_disabled_reasoning_request(&cross_dialect_chat, &request, false)
+            .expect_err("DeepSeek Chat must not accept a Responses-shaped disabled marker");
+        assert!(
+            cross_dialect_chat_failure
+                .error
+                .message
+                .contains("does not preserve")
+        );
     }
 
     /// Verifies a terminal Responses failure never touches the Chat or Anthropic endpoints:

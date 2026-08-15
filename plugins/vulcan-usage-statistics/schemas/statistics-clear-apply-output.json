@@ -2,52 +2,10 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
-    "revision": { "type": "integer", "minimum": 0 },
-    "modelRef": { "type": ["integer", "null"], "minimum": 1 },
-    "fromDate": { "type": ["string", "null"], "format": "date" },
-    "toDate": { "type": ["string", "null"], "format": "date" },
-    "deletedRequests": { "type": "integer", "minimum": 0 },
-    "before": {
-      "type": "object",
-      "properties": {
-        "requests": { "type": "integer", "minimum": 0 },
-        "successes": { "type": "integer", "minimum": 0 },
-        "failures": { "type": "integer", "minimum": 0 },
-        "cancelled": { "type": "integer", "minimum": 0 },
-        "inputTokens": { "type": "integer", "minimum": 0 },
-        "outputTokens": { "type": "integer", "minimum": 0 },
-        "reasoningTokens": { "type": "integer", "minimum": 0 },
-        "providerTotalTokens": { "type": "integer", "minimum": 0 },
-        "totalTokens": { "type": "integer", "minimum": 0 },
-        "cachedInputTokens": { "type": "integer", "minimum": 0 },
-        "cacheCreationInputTokens": { "type": "integer", "minimum": 0 },
-        "unknownTokenRequests": { "type": "integer", "minimum": 0 },
-        "inconsistentTokenRequests": { "type": "integer", "minimum": 0 }
-      },
-      "required": ["requests", "successes", "failures", "cancelled", "inputTokens", "outputTokens", "reasoningTokens", "providerTotalTokens", "totalTokens", "cachedInputTokens", "cacheCreationInputTokens", "unknownTokenRequests", "inconsistentTokenRequests"],
-      "additionalProperties": false
-    },
-    "remaining": {
-      "type": "object",
-      "properties": {
-        "requests": { "type": "integer", "minimum": 0 },
-        "successes": { "type": "integer", "minimum": 0 },
-        "failures": { "type": "integer", "minimum": 0 },
-        "cancelled": { "type": "integer", "minimum": 0 },
-        "inputTokens": { "type": "integer", "minimum": 0 },
-        "outputTokens": { "type": "integer", "minimum": 0 },
-        "reasoningTokens": { "type": "integer", "minimum": 0 },
-        "providerTotalTokens": { "type": "integer", "minimum": 0 },
-        "totalTokens": { "type": "integer", "minimum": 0 },
-        "cachedInputTokens": { "type": "integer", "minimum": 0 },
-        "cacheCreationInputTokens": { "type": "integer", "minimum": 0 },
-        "unknownTokenRequests": { "type": "integer", "minimum": 0 },
-        "inconsistentTokenRequests": { "type": "integer", "minimum": 0 }
-      },
-      "required": ["requests", "successes", "failures", "cancelled", "inputTokens", "outputTokens", "reasoningTokens", "providerTotalTokens", "totalTokens", "cachedInputTokens", "cacheCreationInputTokens", "unknownTokenRequests", "inconsistentTokenRequests"],
-      "additionalProperties": false
-    }
+    "clearedAttemptCount": { "type": "integer", "minimum": 0 },
+    "clearedTokenCount": { "type": "integer", "minimum": 0 },
+    "aggregateRevision": { "type": "integer", "minimum": 0 }
   },
-  "required": ["revision", "modelRef", "fromDate", "toDate", "deletedRequests", "before", "remaining"],
+  "required": ["clearedAttemptCount", "clearedTokenCount", "aggregateRevision"],
   "additionalProperties": false
 }

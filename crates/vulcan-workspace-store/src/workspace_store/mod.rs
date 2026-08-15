@@ -83,6 +83,7 @@ pub use provider_billing::{
     ProviderUsageAttemptRecord, ProviderUsageAttemptSummary, ProviderUsageDailySummary,
     ProviderUsageDashboard, ensure_provider_usage_schema, load_provider_usage_dashboard,
     load_provider_usage_migration_completed, load_provider_usage_migration_cursor,
+    lock_provider_usage_writes, migrate_application_provider_usage,
     persist_provider_account_usage_snapshot, persist_provider_pricing_profile,
     persist_provider_rate_limit_snapshot, persist_provider_usage_attempt,
     persist_provider_usage_attempt_and_rebuild_daily,
@@ -119,6 +120,10 @@ const HISTORICAL_VMM_PROFILE_CONTEXT_INJECTION_TAG: &str = "vmm_profile";
 /// Session-local directory that owns complete opt-in provider request traces.
 /// 保存显式启用的完整 Provider 请求追踪文件的会话本地目录。
 const PROVIDER_REQUEST_TRACE_DIRECTORY: &str = "provider-request-trace";
+/// Application-level directory that owns configured-inference request traces without a conversation session.
+/// 保存无对话会话归属的已配置推理请求追踪的应用级目录。
+const CONFIGURED_INFERENCE_PROVIDER_REQUEST_TRACE_DIRECTORY: &str =
+    "configured-inference-provider-request-trace";
 
 /// Loads the strict Core-owned VMM state for one persisted session.
 /// 加载单个持久化会话中由 Core 所有的严格 VMM 状态。
@@ -237,6 +242,62 @@ pub fn persist_provider_request_trace(
         .join(PROVIDER_REQUEST_TRACE_DIRECTORY)
         .join(format!("{file_stem}.json"));
     write_file_bytes_atomic(&trace_path, &encoded, "provider request trace")?;
+    Ok(trace_path)
+}
+
+/// Atomically persists one configured-inference provider trace below the application diagnostics root.
+/// 在应用诊断根目录下原子持久化一份已配置推理 Provider 追踪。
+///
+/// # Parameters
+/// 参数
+/// `data_root` is the controller-managed Vulcan data root; `consumer_profile_id` is the exact
+/// authenticated internal consumer; `file_stem` is an internally generated safe identity; and
+/// `trace` is the complete secret-free diagnostic document.
+/// `data_root` 是控制器管理的 Vulcan 数据根目录；`consumer_profile_id` 是精确的
+/// 已认证内部消费者；`file_stem` 是内部生成的安全标识；`trace` 是完整的
+/// 不含秘密诊断文档。
+///
+/// # Returns
+/// 返回值
+/// The final trace path after atomic publication, or an explicit validation and storage error.
+/// 原子发布完成后返回最终追踪路径，或返回明确的校验与存储错误。
+pub fn persist_configured_inference_provider_request_trace(
+    data_root: &Path,
+    consumer_profile_id: &str,
+    file_stem: &str,
+    trace: &Value,
+) -> Result<PathBuf, String> {
+    let safe_component = |value: &str| {
+        !value.is_empty()
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    };
+    if !safe_component(consumer_profile_id) {
+        return Err(String::from(
+            "Configured-inference trace consumer profile must contain only ASCII letters, digits, hyphens, or underscores.",
+        ));
+    }
+    if !safe_component(file_stem) {
+        return Err(String::from(
+            "Configured-inference trace file stem must contain only ASCII letters, digits, hyphens, or underscores.",
+        ));
+    }
+    // encoded is complete before publication so a serialization failure cannot leave a partial diagnostic.
+    // encoded 在发布前已完整生成，因此序列化失败不会留下局部诊断文件。
+    let encoded = serde_json::to_vec_pretty(trace).map_err(|error| {
+        format!("Configured-inference provider request trace JSON serialization failed: {error}")
+    })?;
+    let trace_path = data_root
+        .join("diagnostics")
+        .join(CONFIGURED_INFERENCE_PROVIDER_REQUEST_TRACE_DIRECTORY)
+        .join(consumer_profile_id)
+        .join(format!("{file_stem}.json"));
+    write_file_bytes_atomic(
+        &trace_path,
+        &encoded,
+        "configured-inference provider request trace",
+    )?;
     Ok(trace_path)
 }
 

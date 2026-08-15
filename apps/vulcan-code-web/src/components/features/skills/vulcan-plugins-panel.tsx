@@ -454,6 +454,13 @@ export function VulcanPluginsPanel(props: {
                 }).join("；") || "—"}</dd>
               </div>
             </dl>
+            {permissionPreview.permissions.includes("system_vldb_access") ? (
+              <div className="skill-empty-state warning">
+                {locale.startsWith("zh")
+                  ? "高信任权限：此插件可以直接读取、修改和删除宿主注册的系统 VLDB 数据。请只授权已审查且可信的插件包。"
+                  : "High-trust permission: this plugin can directly read, modify, and delete data in host-registered system VLDB bindings. Authorize only reviewed, trusted packages."}
+              </div>
+            ) : null}
             <label className="vulcan-plugin-permission-consent">
               <Checkbox
                 checked={authorizationConfirmed}

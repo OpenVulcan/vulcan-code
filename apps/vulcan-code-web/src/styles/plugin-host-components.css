@@ -329,63 +329,10 @@
   font-size: 12px;
 }
 
-.plugin-statistics-settings-list {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  flex-wrap: wrap;
-  padding-bottom: 8px;
-  border-bottom: 1px solid color-mix(in oklch, var(--border) 65%, transparent);
-  font-size: 12px;
-}
-
-.plugin-statistics-settings-option {
-  display: flex;
-  width: max-content;
-  min-height: 28px;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 8px;
-  padding: 0;
-}
-
-.plugin-statistics-retention-select {
-  width: 112px;
-  height: 28px;
-  min-height: 28px;
-  font-size: 12px;
-}
-
 .plugin-statistics-toolbar-select {
   width: 138px;
   height: 28px;
   min-height: 28px;
-  font-size: 12px;
-}
-
-.plugin-statistics-range-control {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  margin-left: auto;
-  white-space: nowrap;
-}
-
-.plugin-statistics-range-tabs {
-  display: inline-flex;
-  width: max-content;
-  padding: 2px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: color-mix(in oklch, var(--background) 88%, var(--muted));
-}
-
-.plugin-statistics-range-tabs [role="tab"] {
-  min-width: 62px;
-  height: 24px;
-  min-height: 24px;
-  padding: 0 9px;
   font-size: 12px;
 }
 
@@ -394,67 +341,6 @@
   grid-template-columns: repeat(4, minmax(0, 1fr));
   grid-auto-rows: 96px;
   gap: 8px;
-}
-
-.plugin-statistics-summary-section {
-  min-width: 0;
-}
-
-.plugin-statistics-summary-extra {
-  display: grid;
-  grid-template-rows: 0fr;
-  margin-top: 0;
-  opacity: 0;
-  visibility: hidden;
-  transition:
-    grid-template-rows 240ms cubic-bezier(0.4, 0, 0.2, 1),
-    margin-top 240ms cubic-bezier(0.4, 0, 0.2, 1),
-    opacity 150ms ease,
-    visibility 0s linear 240ms;
-}
-
-.plugin-statistics-summary-extra.is-expanded {
-  grid-template-rows: 1fr;
-  margin-top: 8px;
-  opacity: 1;
-  visibility: visible;
-  transition:
-    grid-template-rows 240ms cubic-bezier(0.4, 0, 0.2, 1),
-    margin-top 240ms cubic-bezier(0.4, 0, 0.2, 1),
-    opacity 180ms ease 40ms,
-    visibility 0s linear;
-}
-
-.plugin-statistics-summary-extra-clip {
-  min-height: 0;
-  overflow: hidden;
-}
-
-.plugin-statistics-summary-actions {
-  display: flex;
-  justify-content: center;
-  margin-top: 4px;
-}
-
-.plugin-statistics-summary-toggle {
-  width: 48px;
-  height: 22px;
-  min-height: 22px;
-  padding: 0;
-  border-color: color-mix(in oklch, var(--border) 72%, transparent);
-  border-radius: 7px;
-  color: var(--muted-foreground);
-  background: color-mix(in oklch, var(--background) 94%, var(--muted));
-}
-
-.plugin-statistics-summary-toggle:hover {
-  color: var(--foreground);
-  background: color-mix(in oklch, var(--background) 86%, var(--muted));
-}
-
-.plugin-statistics-summary-toggle-icon {
-  width: 15px;
-  height: 15px;
 }
 
 .plugin-statistics-refresh-button {
@@ -482,11 +368,6 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .plugin-statistics-summary-extra,
-  .plugin-statistics-summary-extra.is-expanded {
-    transition: none;
-  }
-
   .plugin-statistics-refresh-icon.is-loading {
     animation-duration: 1600ms;
   }
@@ -498,37 +379,6 @@
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--card);
-}
-
-.plugin-statistics-chart-wrap {
-  margin-top: 10px;
-}
-
-.plugin-statistics-model-list {
-  display: grid;
-  gap: 8px;
-  margin-top: 10px;
-}
-
-.plugin-statistics-model-row {
-  display: grid;
-  grid-template-columns: minmax(130px, 1fr) minmax(90px, auto) 100px;
-  gap: 12px;
-  align-items: center;
-  padding: 7px 0;
-  border-bottom: 1px solid var(--border);
-  font-size: 12px;
-}
-
-.plugin-statistics-model-row:last-child {
-  border-bottom: 0;
-}
-
-.plugin-statistics-model-name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .plugin-statistics-table-wrap {
@@ -583,24 +433,8 @@
     flex-wrap: wrap;
   }
 
-  .plugin-statistics-range-control {
-    margin-left: 0;
-  }
-
-  .plugin-statistics-range-tabs {
-    max-width: 100%;
-  }
-
   .plugin-statistics-summary-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .plugin-statistics-model-row {
-    grid-template-columns: minmax(120px, 1fr) auto;
-  }
-
-  .plugin-statistics-model-row > :last-child {
-    display: none;
   }
 }
 

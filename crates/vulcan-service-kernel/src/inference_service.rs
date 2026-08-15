@@ -4,6 +4,7 @@
 use crate::{
     configured_inference::{
         ConfiguredInferenceError, ConfiguredInferenceErrorCategory, ConfiguredInferenceService,
+        VMM_CONSUMER_PROFILE_ID,
     },
     inference_access::InferenceAccessRegistry,
     state::SharedServiceBridgeState,
@@ -25,6 +26,10 @@ use vulcan_service_host::{
     InferenceServiceCancellationGuard, InferenceServiceEventSubscriber,
     InferenceServiceEventSubscription, InferenceServiceRpcDispatcher,
 };
+
+/// Names the authenticated VMM-only client metadata field used for cross-process request correlation.
+/// 命名仅限已认证 VMM 使用的客户端元数据字段，用于跨进程请求关联。
+const VMM_REQUEST_ID_METADATA_KEY: &str = "vmm_request_id";
 
 /// Builds the transport-independent inference request dispatcher.
 /// 构建传输无关的推理请求分发器。
@@ -323,11 +328,12 @@ fn prepare_standard_response_request(
             "Caller-selected service tiers are not registered by the selected model capability contract.",
         ));
     }
-    // Codex transport metadata is intentionally terminated at this authenticated host boundary;
-    // upstream tracing and client metadata are host-owned and cannot be caller-injected.
-    // Codex 传输元数据刻意终止于这一已认证宿主边界；上游追踪与客户端元数据由宿主持有，
-    // 不允许调用方注入。
-    let _validated_client_metadata = request.client_metadata.as_ref();
+    // Client metadata terminates at this authenticated host boundary. The VMM request id is
+    // retained only as host-owned correlation identity and is never forwarded upstream.
+    // 客户端元数据终止于这一已认证宿主边界。VMM 请求标识只保留为宿主持有的关联身份，
+    // 绝不会向上游转发。
+    let request_id =
+        standard_response_request_id(consumer_profile_id, request.client_metadata.as_ref())?;
     let inspection_caller = authorize_request(
         access_registry,
         access_token,
@@ -416,7 +422,7 @@ fn prepare_standard_response_request(
         caller,
         ResponsesExecutionRequest {
             contract_version: vulcan_ai_contract::INFERENCE_CONTRACT_VERSION,
-            request_id: uuid::Uuid::new_v4().to_string(),
+            request_id,
             idempotency_key: None,
             consumer_profile_id: consumer_profile_id.to_string(),
             purpose_id,
@@ -440,6 +446,51 @@ fn prepare_standard_response_request(
             output_token_limit: request.max_output_tokens,
         },
     ))
+}
+
+/// Resolves one trusted local request id while rejecting malformed VMM correlation metadata.
+/// 解析一个可信本地请求标识，并拒绝格式错误的 VMM 关联元数据。
+///
+/// # Parameters
+/// 参数
+/// `consumer_profile_id` identifies the authenticated profile and `client_metadata` is the validated standard Responses metadata map.
+/// `consumer_profile_id` 标识已认证配置档，`client_metadata` 是已校验的标准 Responses 元数据映射。
+///
+/// # Returns
+/// 返回值
+/// The VMM-supplied bounded identifier or a fresh host UUID for every other request.
+/// 返回 VMM 提供的有界标识；其他请求返回新的宿主 UUID。
+fn standard_response_request_id(
+    consumer_profile_id: &str,
+    client_metadata: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> Result<String, InferenceServiceHttpError> {
+    if consumer_profile_id != VMM_CONSUMER_PROFILE_ID {
+        return Ok(uuid::Uuid::new_v4().to_string());
+    }
+    let Some(value) =
+        client_metadata.and_then(|metadata| metadata.get(VMM_REQUEST_ID_METADATA_KEY))
+    else {
+        return Ok(uuid::Uuid::new_v4().to_string());
+    };
+    let Some(request_id) = value.as_str() else {
+        return Err(responses_parameter_error(
+            "client_metadata.vmm_request_id",
+            "VMM request correlation id must be a string.",
+        ));
+    };
+    let request_id = request_id.trim();
+    if request_id.is_empty()
+        || request_id.len() > 128
+        || !request_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err(responses_parameter_error(
+            "client_metadata.vmm_request_id",
+            "VMM request correlation id must be 1-128 ASCII letters, digits, hyphens, or underscores.",
+        ));
+    }
+    Ok(request_id.to_string())
 }
 
 /// Converts standard Responses string/message input into the restricted transitional message shape.
@@ -2019,6 +2070,37 @@ mod tests {
         assert_eq!(value["input_tokens"], 8);
         assert_eq!(value["output_tokens"], 2);
         assert_eq!(value["total_tokens"], 10);
+    }
+
+    /// Verifies authenticated VMM metadata preserves one bounded request identity for cross-process correlation.
+    /// 验证已认证 VMM 元数据会保留一个有界请求身份用于跨进程关联。
+    #[test]
+    fn standard_response_request_id_preserves_valid_vmm_correlation() {
+        let metadata = serde_json::Map::from_iter([(
+            String::from(VMM_REQUEST_ID_METADATA_KEY),
+            serde_json::Value::String(String::from("vmm-llm-0123456789abcdef")),
+        )]);
+
+        let request_id = standard_response_request_id(VMM_CONSUMER_PROFILE_ID, Some(&metadata))
+            .expect("valid VMM correlation id should be accepted");
+
+        assert_eq!(request_id, "vmm-llm-0123456789abcdef");
+    }
+
+    /// Verifies malformed VMM correlation metadata is rejected instead of contaminating host telemetry identity.
+    /// 验证格式错误的 VMM 关联元数据会被拒绝，而不会污染宿主遥测身份。
+    #[test]
+    fn standard_response_request_id_rejects_invalid_vmm_correlation() {
+        let metadata = serde_json::Map::from_iter([(
+            String::from(VMM_REQUEST_ID_METADATA_KEY),
+            serde_json::Value::String(String::from("invalid request/id")),
+        )]);
+
+        let error = standard_response_request_id(VMM_CONSUMER_PROFILE_ID, Some(&metadata))
+            .expect_err("invalid VMM correlation id must fail");
+
+        assert_eq!(error.status, 400);
+        assert!(error.message.contains("1-128 ASCII"));
     }
 
     /// Verifies the loopback API cannot be used to submit a local resource path.

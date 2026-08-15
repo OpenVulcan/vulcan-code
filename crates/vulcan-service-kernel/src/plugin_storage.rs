@@ -885,7 +885,7 @@ struct SqliteQueryPayload {
 /// SQLite 标量值的一种显式 JSON 表示。
 #[derive(Debug, Deserialize)]
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
-enum SqliteValuePayload {
+pub(crate) enum SqliteValuePayload {
     /// Signed 64-bit integer value.
     /// 有符号 64 位整数值。
     Int64(i64),
@@ -1019,7 +1019,7 @@ struct LanceDbDropTablePayload {
 /// 返回值
 /// Returns typed SQLite values or an explicit Base64 diagnostic.
 /// 返回类型化 SQLite 值或明确的 Base64 诊断。
-fn decode_sqlite_params(
+pub(crate) fn decode_sqlite_params(
     params: Vec<SqliteValuePayload>,
 ) -> Result<Vec<ControllerSqliteValue>, String> {
     params

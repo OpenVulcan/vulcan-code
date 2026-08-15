@@ -1,123 +1,63 @@
 name: Vulcan Usage Statistics
-capability: Provider API usage, latency, reliability, and token statistics
+capability: Query, display, and clear Provider usage and billing facts through the registered system VLDB binding
 messages:
   navigationLabel: Usage Statistics
-  title: API Usage Statistics
-  subtitle: Measures physical Provider requests by model and owner without storing prompts, outputs, headers, or credentials.
-  status.ready: Statistics available
-  status.loading: Loading statistics
-  status.error: Statistics failed to load
-  refresh: Refresh
-  refreshing: Refreshing
-  settings.title: Capture settings
-  settings.enabled: Enable statistics
-  settings.enabledSuccess: Statistics enabled
-  settings.disabledSuccess: Statistics disabled
-  settings.retention: Log retention
-  settings.retentionDays: "{{days}} days"
-  settings.retentionPermanent: Permanent
-  settings.retentionSuccess: Log retention updated
-  settings.range: Default time range
-  settings.metric: Default trend metric
-  settings.save: Save settings
-  settings.saving: Saving
-  settings.saved: Saved
-  clear.title: Clear statistics
-  clear.previewOnly: Preview first
-  clear.description: Use the selected model and an optional inclusive local date range. Clearing cannot be undone.
-  clear.from: From date
-  clear.to: To date
-  clear.allModels: All models
-  clear.preview: Preview cleanup
-  clear.previewing: Preparing preview
-  clear.apply: Confirm cleanup
-  clear.applying: Clearing
-  clear.previewSummary: "Preview: {{requests}} requests · {{tokens}} tokens"
-  clear.success: "Cleared {{count}} requests"
-  range.7: Last 7 days
-  range.30: Last 30 days
-  range.90: Last 90 days
-  range.365: Last 365 days
-  range.0: All time
-  range.label: Time range
-  model.label: Model
-  model.all: All models
-  owner.label: Request owner
-  owner.all: All owners
-  owner.main_agent: Main agent
-  owner.subagent: Subagent
-  owner.context_compaction: Context compaction
-  owner.git_commit_summary: Git commit summary
-  owner.internal_llm: Internal LLM
-  owner.internal_embedding: Internal embedding
-  owner.internal_rerank: Internal rerank
-  owner.internal_multimodal: Internal multimodal
-  metric.total_tokens: Token usage
-  metric.input_tokens: Input tokens
-  metric.output_tokens: Output tokens
-  metric.requests: Requests
-  metric.duration_ms: Average duration
-  metric.time_to_first_token_ms: Average first token
-  metric.label: Trend metric
-  summary.tokens: Token usage
-  summary.inputTokens: Uncached input tokens
-  summary.outputTokens: Output tokens
-  summary.cachedTokens: Cached input tokens
-  summary.unknownTokens: Unknown token requests
-  summary.inconsistentTokens: Inconsistent token requests
-  summary.requests: Requests
-  summary.retries: "{{count}} retries"
-  summary.successRate: Success rate
-  summary.firstToken: Average first token
-  summary.averageDuration: Average duration
-  summary.activeDays: Active days
-  summary.streak: Current streak
-  summary.longestStreak: Longest streak {{days}} days
-  summary.cacheRate: Cache hit rate
-  summary.peakTokens: Peak daily tokens
-  summary.peakRequest: "{{count}} per request"
-  summary.longestRequest: Longest request
-  summary.mainAgentTokens: Main agent tokens
-  summary.subagentTokens: Subagent tokens
-  summary.internalTokens: Internal task tokens
-  summary.topModel: Most used model
-  summary.expand: Show more
-  summary.collapse: Show less
-  heatmap.title: Activity heatmap
-  heatmap.aria: Token activity heatmap for the last 365 days
-  heatmap.empty: No token activity yet
-  heatmap.tooltip: "{{date}}: {{value}} tokens · {{requests}} requests · {{successRate}} success · {{model}}"
-  heatmap.noModel: No model
-  heatmap.less: Less
-  heatmap.more: More
-  trend.title: Daily trend
-  trend.aria: Daily statistics line chart grouped by model
-  trend.empty: No trend data in this range
-  models.title: Model usage
-  models.top: "Top {{count}}"
-  models.tokens: "{{count}} tokens"
-  models.requests: "{{count}} requests"
-  models.empty: No model usage in this range
-  errors.title: Failure categories
-  errors.count: failures
-  errors.empty: No failures in this range
-  recent.title: Recent requests
-  recent.empty: No raw request records yet
-  recent.model: Model
-  recent.owner: Owner
-  recent.status: Status
-  recent.tokens: Tokens
-  recent.tokenBreakdown: Details (input/output/cached)
-  recent.speed: Output speed
-  recent.inputTokens: Input
-  recent.cachedTokens: Cached
-  recent.outputTokens: Output
-  recent.firstToken: First token
-  recent.duration: Duration
-  recent.time: Time
+  title: System Usage Statistics
+  subtitle: Uses the host-registered system statistics VLDB directly without copying Provider requests into private plugin storage.
+  status.ready: System statistics available
+  status.loading: Loading system statistics
+  status.error: System statistics failed to load
   status.succeeded: Succeeded
   status.failed: Failed
   status.cancelled: Cancelled
-  other: Other
-  unit.days: days
-  privacy: Raw requests retain statistics fields only. Model dimensions and daily aggregates persist even after a model is removed from configuration.
+  refresh: Refresh
+  refreshing: Refreshing
+  source.host: System VLDB
+  revision: Revision
+  consumer.label: Consumer
+  consumer.all: All consumers
+  error.title: Unable to read system statistics
+  loading.description: Querying the authoritative system statistics database.
+  summary.requests: Physical attempts
+  summary.requestsDetail: Includes retries and failures
+  summary.successRate: Success rate
+  summary.successes: successful attempts
+  summary.tokens: Known tokens
+  summary.tokensDetail: Unknown usage remains absent
+  summary.usageCoverage: Usage coverage
+  summary.usageCoverageDetail: Directly Provider-reported
+  daily.title: Daily model usage
+  daily.empty: No daily usage facts
+  daily.date: Date
+  daily.provider: Provider / model
+  daily.consumer: Consumer
+  daily.operation: Operation
+  daily.attempts: Attempts
+  daily.tokens: Tokens
+  daily.cost: Cost
+  recent.title: Recent physical attempts
+  recent.empty: No physical attempt records
+  recent.time: Time
+  recent.model: Provider / model
+  recent.consumer: Consumer
+  recent.status: Status
+  recent.tokens: Tokens
+  recent.cost: Cost
+  recent.error: Error
+  accounts.title: Account usage snapshots
+  accounts.empty: No account usage snapshots
+  accounts.time: Observed
+  accounts.provider: Provider
+  accounts.connection: Connection
+  accounts.kind: Snapshot kind
+  clear.title: Clear historical statistics
+  clear.preview: Preview cleanup
+  clear.previewing: Preparing preview
+  clear.previewSummary: This operation will permanently remove
+  clear.attempts: physical attempts
+  clear.tokens: known tokens
+  clear.cancel: Cancel
+  clear.apply: Confirm cleanup
+  clear.applying: Clearing
+  clear.success: Cleared historical statistics
+  privacy: Vulcan core collects complete statistics in a dedicated system database. This trusted bundled plugin has direct read and write access to the logical binding so it can query and clear history.

@@ -88,6 +88,53 @@ fn provider_request_trace_is_persisted_in_owning_session_temp_directory() {
     std::fs::remove_dir_all(&root).expect("remove provider trace test root");
 }
 
+/// Verifies configured-inference traces are atomically isolated by their authenticated consumer profile.
+/// 验证已配置推理追踪会按已认证消费者配置档原子隔离。
+#[test]
+fn configured_inference_provider_request_trace_is_consumer_scoped() {
+    let root = std::env::temp_dir().join(format!(
+        "vulcan-configured-inference-trace-test-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let trace = serde_json::json!({
+        "schema_version": "vulcan.configured-inference-provider-request-trace.v1",
+        "api_request": {"body": {"reasoning": {"effort": "none"}}},
+    });
+
+    let trace_path = persist_configured_inference_provider_request_trace(
+        &root,
+        "vmm",
+        "100-000001-00000000-0000-0000-0000-000000000001",
+        &trace,
+    )
+    .expect("persist configured-inference provider request trace");
+
+    assert_eq!(
+        trace_path,
+        root.join("diagnostics")
+            .join(CONFIGURED_INFERENCE_PROVIDER_REQUEST_TRACE_DIRECTORY)
+            .join("vmm")
+            .join("100-000001-00000000-0000-0000-0000-000000000001.json")
+    );
+    let restored = serde_json::from_slice::<serde_json::Value>(
+        &std::fs::read(&trace_path).expect("read configured-inference trace"),
+    )
+    .expect("decode configured-inference trace");
+    assert_eq!(restored, trace);
+    assert!(
+        persist_configured_inference_provider_request_trace(
+            &root,
+            "../escape",
+            "valid-stem",
+            &trace,
+        )
+        .is_err(),
+        "path-like consumer profiles must be rejected"
+    );
+
+    std::fs::remove_dir_all(&root).expect("remove configured-inference trace test root");
+}
+
 /// Verifies freshly loaded runtime state drops stale process-scoped precheck latches.
 /// 验证刚加载的运行态会丢弃陈旧的进程级预检查闩锁。
 #[test]

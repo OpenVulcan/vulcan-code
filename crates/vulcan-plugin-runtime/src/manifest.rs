@@ -223,6 +223,9 @@ pub enum VulcanPluginPermission {
     /// Read the host model catalog for future workflow binding.
     /// 读取宿主模型目录以供后续工作流绑定。
     ModelCatalogRead,
+    /// Read, modify, and delete data through host-registered system VLDB bindings.
+    /// 通过宿主注册的系统 VLDB 绑定读取、修改和删除数据。
+    SystemVldbAccess,
     /// Invoke one user-authorized model binding.
     /// 调用一个经用户授权的模型绑定。
     ModelInvoke,

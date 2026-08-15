@@ -15,8 +15,8 @@ use crate::{
     ProviderExecutionFailure, ProviderExecutionRoute, ProviderExecutionStream, ProviderKind,
     ProviderMetadataClient, ProviderRegistry, ProviderToolCapabilityKind,
     ProviderToolExecutionResult, ProviderToolTarget, ProviderToolTargetSelection,
-    ResolvedBillingProfile, ResolvedProviderManifest, RuntimeConnectionCatalogs,
-    SecondaryRouteOption, SecondaryRouteSelection,
+    ProviderWireRequestCapture, ResolvedBillingProfile, ResolvedProviderManifest,
+    RuntimeConnectionCatalogs, SecondaryRouteOption, SecondaryRouteSelection,
     native_inference::validate_native_action_binding,
 };
 use async_trait::async_trait;
@@ -36,9 +36,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex as AsyncMutex;
 use uuid::Uuid;
 use vulcan_ai_contract::{
-    AccountUsageSnapshot, AiExecutionRequest, AiOperation, CapabilitySupport, EmbeddingRequest,
-    EmbeddingResponse, InferenceUsageScope, ModelCapabilities, PromptCachePolicy,
-    ReasoningControlMode, RerankRequest, RerankResponse,
+    AccountUsageSnapshot, AiExecutionRequest, AiMessage, AiOperation, CapabilitySupport,
+    ContentItem, EmbeddingRequest, EmbeddingResponse, InferenceUsageScope, MessageRole,
+    ModelCapabilities, PromptCachePolicy, ReasoningControlMode, ReasoningEffort, RerankRequest,
+    RerankResponse,
 };
 use vulcan_llm_core::LlmProtocolRuntime;
 use vulcan_llm_core::ModelPricing;
@@ -7940,6 +7941,98 @@ impl PublicAiRuntime {
         Ok(selection)
     }
 
+    /// Validates one selected model and protocol with an executable disabled-reasoning probe.
+    /// 使用可执行的关闭思考探针校验一个已选模型与协议。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `selection` is the immutable route, model capability, and protocol snapshot resolved for
+    /// one configured inference purpose.
+    /// `selection` 是为一个已配置推理用途解析出的不可变路由、模型能力与协议快照。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success only when exact request encoding preserves the required no-reasoning contract.
+    /// 仅当精确请求编码保留必需的无思考契约时返回成功。
+    pub fn validate_disabled_reasoning_route_projection(
+        &self,
+        selection: &ResolvedPublicAiSelection,
+    ) -> Result<(), String> {
+        // modelParameters mirrors the VMM host policy by removing only conflicts declared by the
+        // frozen manifest before the disabled effort is encoded.
+        // modelParameters 通过仅移除冻结 Manifest 声明的冲突项来复现 VMM 宿主策略，然后再编码关闭档位。
+        let mut model_parameters = selection.overrides.model_parameters.clone();
+        for parameter_id in selection
+            .route
+            .model_parameters_conflicting_with_request_field("reasoning_effort")
+        {
+            model_parameters.remove(parameter_id.as_str());
+        }
+        // probe uses one bounded user message so every registered conversation protocol executes
+        // its ordinary production encoder rather than a special configuration-only shortcut.
+        // probe 使用一条有界用户消息，使每个已注册对话协议执行普通生产编码器，而不是配置专用捷径。
+        let probe = AiExecutionRequest {
+            operation: AiOperation::ConversationRespond,
+            model_id: selection.model.id.clone(),
+            cache_scope_id: None,
+            continuation: None,
+            messages: vec![AiMessage {
+                role: MessageRole::User,
+                content: vec![ContentItem::Text {
+                    text: String::from("VMM disabled-reasoning route validation probe."),
+                }],
+                provider_context_items: Vec::new(),
+            }],
+            tools: Vec::new(),
+            native_tools: Vec::new(),
+            tool_choice: Default::default(),
+            parallel_tool_calls: Default::default(),
+            structured_output: Default::default(),
+            stop_sequences: Vec::new(),
+            prompt_cache: PromptCachePolicy::ProviderDefault,
+            reasoning_effort: Some(ReasoningEffort::None),
+            reasoning_output: Default::default(),
+            model_parameters,
+            resources: Vec::new(),
+            output_token_limit: selection
+                .model
+                .capabilities
+                .output_limit
+                .map(|limit| limit.min(128))
+                .or(Some(128)),
+        };
+        self.validate_disabled_reasoning_request_projection(selection, &probe)
+    }
+
+    /// Validates the final encoded body for one exact required no-reasoning request.
+    /// 校验一项精确必需无思考请求的最终编码请求体。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `selection` is the frozen model route and `request` is the exact provider-neutral request
+    /// that will be executed without protocol reselection.
+    /// `selection` 是冻结模型路由，`request` 是将不经协议重选直接执行的精确供应商无关请求。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success only when the final post-projection body cannot enable reasoning and switchable
+    /// models retain an explicit disable field.
+    /// 仅当最终投影请求体不会开启思考，且可切换模型保留显式关闭字段时返回成功。
+    pub fn validate_disabled_reasoning_request_projection(
+        &self,
+        selection: &ResolvedPublicAiSelection,
+        request: &AiExecutionRequest,
+    ) -> Result<(), String> {
+        self.execution_client
+            .encode_required_disabled_reasoning_request(
+                &selection.route,
+                request,
+                selection.model.capabilities.reasoning_control == ReasoningControlMode::FixedOff,
+            )
+            .map(|_| ())
+            .map_err(|failure| failure.error.message)
+    }
+
     /// Executes one resolved internal embedding selection with fresh credential material.
     /// 使用新鲜凭据材料执行一项已解析内部向量选择。
     ///
@@ -8039,6 +8132,31 @@ impl PublicAiRuntime {
         request: AiExecutionRequest,
         execution_id: String,
     ) -> Result<ProviderExecutionStream, ProviderExecutionFailure> {
+        self.execute_internal_llm_with_wire_request_capture(selection, request, execution_id, None)
+            .await
+    }
+
+    /// Executes one resolved internal LLM request while optionally capturing the exact secret-safe transport object.
+    /// 执行一项已解析内部 LLM 请求，并可选捕获精确且不含秘密的传输对象。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `selection`, `request`, and `execution_id` freeze the authorized physical execution;
+    /// `wire_request_capture` receives the one object handed to the selected HTTP or WebSocket transport.
+    /// `selection`、`request` 与 `execution_id` 冻结已授权的真实执行；
+    /// `wire_request_capture` 接收交给所选 HTTP 或 WebSocket 传输的唯一对象。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A normalized event stream whose first poll performs the exact dispatch, or a structured pre-dispatch failure.
+    /// 返回在首次轮询时执行精确分派的规范化事件流，或结构化分派前失败。
+    pub async fn execute_internal_llm_with_wire_request_capture(
+        &self,
+        selection: &ResolvedPublicAiSelection,
+        request: AiExecutionRequest,
+        execution_id: String,
+        wire_request_capture: Option<tokio::sync::oneshot::Sender<ProviderWireRequestCapture>>,
+    ) -> Result<ProviderExecutionStream, ProviderExecutionFailure> {
         if request.operation != AiOperation::ConversationRespond || request.continuation.is_some() {
             return Err(crate::execution::pre_dispatch_failure(
                 "Responses execution requires a conversation operation and does not accept host-private continuation metadata.",
@@ -8057,9 +8175,18 @@ impl PublicAiRuntime {
             )
             .await
             .map_err(crate::execution::pre_dispatch_failure)?;
-        Ok(self
-            .execution_client
-            .execute(selection.route.clone(), request, secret, execution_id))
+        Ok(if let Some(capture) = wire_request_capture {
+            self.execution_client.execute_with_wire_request_capture(
+                selection.route.clone(),
+                request,
+                secret,
+                execution_id,
+                capture,
+            )
+        } else {
+            self.execution_client
+                .execute(selection.route.clone(), request, secret, execution_id)
+        })
     }
 
     /// Executes remote Responses compaction only when the exact session route explicitly enables it.

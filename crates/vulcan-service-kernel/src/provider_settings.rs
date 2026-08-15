@@ -157,6 +157,13 @@ pub(super) async fn service_save_provider_request_trace_settings(
             Ok(())
         },
         |guard, configuration| {
+            if let Some(runtime) = guard.agent_runtime.as_ref() {
+                runtime
+                    .configured_inference_service
+                    .update_provider_request_trace_enabled(
+                        configuration.provider_request_trace_enabled,
+                    );
+            }
             refresh_settings_projection_locked(guard, configuration);
             guard.workbench.clone()
         },

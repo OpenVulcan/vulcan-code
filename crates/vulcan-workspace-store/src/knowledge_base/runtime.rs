@@ -9690,6 +9690,8 @@ mod tests {
             endpoint,
             executable.display().to_string(),
             data_root,
+            app_path.clone(),
+            app_binding_id.clone(),
             app_path,
             app_binding_id,
         ));

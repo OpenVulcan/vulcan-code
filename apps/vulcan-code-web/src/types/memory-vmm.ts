@@ -376,7 +376,10 @@ export interface VmmManagedRuntimeSettingsDraft {
   postactionIdleTimeout: string;
   postactionHistoryTurns: string;
   postactionMaxInputTokens: string;
+  postactionAnalysisTimeout: string;
+  postactionFailurePassThreshold: string;
   postactionMaxQueueWorkers: string;
+  inferenceMaxConnectionsPerHost: string;
   pipelineMaxSearchKeywords: string;
   pipelineMinSimilarityScore: string;
   pipelineReplaceMinSimilarityScore: string;

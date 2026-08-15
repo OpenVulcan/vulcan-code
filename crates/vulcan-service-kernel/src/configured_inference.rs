@@ -7,7 +7,10 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     future::Future,
-    sync::{Arc, Mutex, Weak},
+    sync::{
+        Arc, Mutex, Weak,
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+    },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use time::OffsetDateTime;
@@ -38,7 +41,8 @@ use vulcan_hooks::{HookContext, HookScope};
 use vulcan_plugin_runtime::VulcanPluginRuntimeManager;
 use vulcan_provider_adapters::{
     InferenceRouteConfiguration, InternalModelOverrides, PersistedAiConfiguration,
-    ProviderExecutionFailure, PublicAiRuntime, ResolvedPublicAiSelection,
+    ProviderExecutionFailure, ProviderWireRequestCapture, PublicAiRuntime,
+    ResolvedPublicAiSelection,
 };
 use vulcan_provider_config::config::PersistedProviderRetryConfiguration;
 use vulcan_workspace_store::data_plane::ControllerRuntimeHandle;
@@ -51,6 +55,13 @@ const LLM_EVENT_BUFFER_CAPACITY: usize = 128;
 /// Bounds retained normalized event payloads, including image previews, per execution.
 /// 限制每项执行保留的归一化事件载荷（包括图片预览）总量。
 const LLM_EVENT_BUFFER_MAX_BYTES: usize = 64 * 1024 * 1024;
+/// Versioned disk contract for VMM configured-inference transport request traces.
+/// VMM 已配置推理传输请求追踪的版本化磁盘契约。
+const CONFIGURED_INFERENCE_PROVIDER_REQUEST_TRACE_SCHEMA_VERSION: &str =
+    "vulcan.configured-inference-provider-request-trace.v1";
+/// Process-local tie breaker for configured-inference traces captured in one millisecond.
+/// 同一毫秒内捕获的已配置推理追踪使用的进程内消歧序号。
+static CONFIGURED_INFERENCE_PROVIDER_REQUEST_TRACE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// Identifies the VMM internal-inference consumer profile.
 /// 标识 VMM 内部推理消费者配置档。
@@ -302,12 +313,61 @@ struct ConfiguredLlmExecutionState {
     /// Cooperative cancellation sender.
     /// 协作式取消发送器。
     cancellation_sender: watch::Sender<bool>,
+    /// Number of active non-streaming waiters that still own the provider execution.
+    /// 仍持有供应商执行的活动非流式等待者数量。
+    waiter_count: AtomicUsize,
     /// Terminal-state notification.
     /// 终态通知。
     terminal_notify: Notify,
     /// Monotonic terminal timestamp used for bounded process-local retention.
     /// 用于限制进程内保留时间的单调终态时间戳。
     terminal_at: Mutex<Option<Instant>>,
+}
+
+/// Cancels one running restricted LLM execution when its last non-streaming waiter is dropped.
+/// 当最后一个非流式等待者被丢弃时取消一项仍在运行的受限 LLM 执行。
+struct ConfiguredLlmWaiterGuard {
+    /// Shared execution state whose waiter ownership is tracked.
+    /// 跟踪等待者所有权的共享执行状态。
+    state: Arc<ConfiguredLlmExecutionState>,
+}
+
+impl ConfiguredLlmWaiterGuard {
+    /// Registers one active non-streaming waiter.
+    /// 注册一个活动非流式等待者。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `state` is the exact retained execution returned to the authenticated caller.
+    /// `state` 是返回给已认证调用方的精确保留执行。
+    ///
+    /// # Returns
+    /// 返回值
+    /// An RAII guard that releases ownership on normal return or Future cancellation.
+    /// 返回一个会在正常返回或 Future 取消时释放所有权的 RAII 守卫。
+    fn new(state: Arc<ConfiguredLlmExecutionState>) -> Self {
+        state.waiter_count.fetch_add(1, Ordering::AcqRel);
+        Self { state }
+    }
+}
+
+impl Drop for ConfiguredLlmWaiterGuard {
+    /// Releases one waiter and signals cooperative cancellation when no running owner remains.
+    /// 释放一个等待者，并在没有运行中所有者时发送协作取消信号。
+    fn drop(&mut self) {
+        if self.state.waiter_count.fetch_sub(1, Ordering::AcqRel) != 1 {
+            return;
+        }
+        let running = self
+            .state
+            .snapshot
+            .lock()
+            .map(|snapshot| snapshot.phase == ConfiguredLlmExecutionPhase::Running)
+            .unwrap_or(true);
+        if running {
+            let _ = self.state.cancellation_sender.send(true);
+        }
+    }
 }
 
 /// Shares one non-streaming in-flight result across exact concurrent duplicates.
@@ -1228,6 +1288,9 @@ pub struct ConfiguredInferenceService {
     /// Live host retry policy shared with the ordinary provider settings page.
     /// 与普通供应商设置页共享的实时宿主重试策略。
     provider_retry_policy: std::sync::RwLock<ProviderRetryPolicy>,
+    /// Live opt-in switch for complete secret-safe configured-inference request traces.
+    /// 完整且不含秘密的已配置推理请求追踪实时显式开关。
+    provider_request_trace_enabled: AtomicBool,
     /// Retained LLM execution states keyed by execution identifier.
     /// 按执行标识索引的保留 LLM 执行状态。
     llm_executions: Mutex<BTreeMap<String, Arc<ConfiguredLlmExecutionState>>>,
@@ -1263,6 +1326,7 @@ impl ConfiguredInferenceService {
             provider_retry_policy: std::sync::RwLock::new(ProviderRetryPolicy::from_config(
                 &PersistedProviderRetryConfiguration::default(),
             )),
+            provider_request_trace_enabled: AtomicBool::new(false),
             llm_executions: Mutex::new(BTreeMap::new()),
             in_flight_llm_requests: Mutex::new(BTreeMap::new()),
         }
@@ -1313,6 +1377,24 @@ impl ConfiguredInferenceService {
         self
     }
 
+    /// Applies the startup configured-inference request-trace switch before the service is shared.
+    /// 在服务共享前应用启动期已配置推理请求追踪开关。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `enabled` is the exact persisted Provider diagnostic setting.
+    /// `enabled` 是持久化 Provider 诊断设置中的精确值。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The same service ready to be wrapped in its shared `Arc`.
+    /// 返回可被共享 `Arc` 包装的同一服务。
+    pub fn with_provider_request_trace_enabled(self, enabled: bool) -> Self {
+        self.provider_request_trace_enabled
+            .store(enabled, Ordering::Release);
+        self
+    }
+
     /// Atomically replaces the live retry policy after a settings save.
     /// 在设置保存后原子替换实时重试策略。
     ///
@@ -1333,6 +1415,23 @@ impl ConfiguredInferenceService {
             poisoned.into_inner()
         });
         *policy = ProviderRetryPolicy::from_config(configuration);
+    }
+
+    /// Atomically replaces the live configured-inference request-trace decision after settings save.
+    /// 在设置保存后原子替换实时已配置推理请求追踪决定。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `enabled` is the newly committed complete Provider request-trace switch.
+    /// `enabled` 是新提交的完整 Provider 请求追踪开关。
+    ///
+    /// # Returns
+    /// 返回值
+    /// This method returns no value after the atomic publication.
+    /// 原子发布完成后本方法不返回值。
+    pub fn update_provider_request_trace_enabled(&self, enabled: bool) {
+        self.provider_request_trace_enabled
+            .store(enabled, Ordering::Release);
     }
 
     /// Executes one exact settings-owned model validation with native attempt accounting.
@@ -2435,6 +2534,18 @@ impl ConfiguredInferenceService {
             .map_err(configuration_error)?;
         let provider_request =
             responses_provider_request(&configuration, &selection, &request, &caller)?;
+        if request.consumer_profile_id == VMM_CONSUMER_PROFILE_ID {
+            self.runtime
+                .validate_disabled_reasoning_request_projection(&selection, &provider_request)
+                .map_err(|message| {
+                    ConfiguredInferenceError::new(
+                        ConfiguredInferenceErrorCategory::Contract,
+                        format!(
+                            "VMM request failed final disabled-reasoning projection validation: {message}"
+                        ),
+                    )
+                })?;
+        }
         let execution_id = Uuid::new_v4().to_string();
         let route_snapshot = llm_route_snapshot(&selection, caller.usage_scope);
         let (event_sender, _) = broadcast::channel(LLM_EVENT_BUFFER_CAPACITY);
@@ -2455,6 +2566,7 @@ impl ConfiguredInferenceService {
             event_history_bytes: Mutex::new(0),
             event_history_truncated: Mutex::new(false),
             cancellation_sender,
+            waiter_count: AtomicUsize::new(0),
             terminal_notify: Notify::new(),
             terminal_at: Mutex::new(None),
         });
@@ -2529,8 +2641,9 @@ impl ConfiguredInferenceService {
         caller_id: &str,
         execution_id: &str,
     ) -> Result<ResponsesExecutionResult, ConfiguredInferenceError> {
+        let state = self.owned_llm_execution(caller_id, execution_id)?;
+        let _waiter_guard = ConfiguredLlmWaiterGuard::new(Arc::clone(&state));
         loop {
-            let state = self.owned_llm_execution(caller_id, execution_id)?;
             // Register the notification future before reading the phase so a terminal
             // transition between the read and the await cannot be missed.
             // 在读取阶段前注册通知 Future，避免终态转换发生在读取与等待之间而丢失唤醒。
@@ -2892,6 +3005,117 @@ impl ConfiguredInferenceService {
         Ok(state)
     }
 
+    /// Starts one detached writer for the exact VMM transport request captured at dispatch.
+    /// 为分派时捕获的精确 VMM 传输请求启动一个独立写入任务。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `request` owns the authenticated consumer, purpose, and correlation identities; `route`
+    /// is the immutable physical route; `execution_id` identifies the logical execution; and
+    /// `attempt_index` distinguishes native retries without changing their shared execution id.
+    /// `request` 持有已认证消费者、用途与关联身份；`route` 是不可变真实路由；
+    /// `execution_id` 标识逻辑执行；`attempt_index` 用于区分共享同一执行标识的原生重试。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A one-shot sender only for opted-in authenticated VMM requests; all other calls return `None`.
+    /// 仅对已显式启用的已认证 VMM 请求返回一次性发送器；其余调用返回 `None`。
+    fn start_configured_inference_provider_request_trace(
+        &self,
+        request: &ResponsesExecutionRequest,
+        route: &ExecutionRouteSnapshot,
+        execution_id: &str,
+        attempt_index: u32,
+    ) -> Option<tokio::sync::oneshot::Sender<ProviderWireRequestCapture>> {
+        if request.consumer_profile_id != VMM_CONSUMER_PROFILE_ID
+            || !self.provider_request_trace_enabled.load(Ordering::Acquire)
+        {
+            return None;
+        }
+        let (capture_sender, capture_receiver) =
+            tokio::sync::oneshot::channel::<ProviderWireRequestCapture>();
+        // requestIdentity and routeIdentity freeze non-secret facts before the background task starts.
+        // requestIdentity 与 routeIdentity 在后台任务启动前冻结不含秘密的事实。
+        let request_identity = json!({
+            "consumer_profile_id": request.consumer_profile_id,
+            "purpose_id": request.purpose_id,
+            "request_id": request.request_id,
+            "execution_id": execution_id,
+            "attempt_index": attempt_index,
+        });
+        let route_identity = json!({
+            "provider_id": route.provider_id,
+            "service_entry_id": route.service_entry_id,
+            "connection_id": route.connection_id,
+            "model_id": route.model_id,
+            "protocol_binding_id": route.protocol_binding_id,
+            "action_binding_id": route.action_binding_id,
+            "secondary_route_id": route.secondary_route_id,
+            "capability_revision": route.capability_revision,
+            "catalog_revision": route.catalog_revision,
+            "route_revision": route.route_revision,
+        });
+        let consumer_profile_id = request.consumer_profile_id.clone();
+        let execution_id = execution_id.to_string();
+        tokio::spawn(async move {
+            let Ok(captured) = capture_receiver.await else {
+                // A closed channel proves provider encoding or cancellation ended before a transport request existed.
+                // 通道关闭证明 Provider 编码或取消在传输请求形成前已结束。
+                return;
+            };
+            let captured_at_unix_ms = current_unix_millis();
+            let sequence = CONFIGURED_INFERENCE_PROVIDER_REQUEST_TRACE_SEQUENCE
+                .fetch_add(1, Ordering::Relaxed)
+                .saturating_add(1);
+            let trace = json!({
+                "schema_version": CONFIGURED_INFERENCE_PROVIDER_REQUEST_TRACE_SCHEMA_VERSION,
+                "captured_at_unix_ms": captured_at_unix_ms,
+                "process_sequence": sequence,
+                "request": request_identity,
+                "route": route_identity,
+                "api_request": {
+                    "capture_point": "transport_dispatch",
+                    "transport": captured.transport,
+                    "method": captured.method,
+                    "path": captured.path,
+                    "resolved_url": captured.resolved_url,
+                    "headers": captured.headers,
+                    "credential_values_redacted": true,
+                    "body": captured.body,
+                },
+            });
+            let file_stem =
+                format!("{captured_at_unix_ms}-{sequence:06}-{execution_id}-{attempt_index}");
+            let data_root = vulcan_workspace_store::data_plane::application_data_root();
+            let persisted = tokio::task::spawn_blocking(move || {
+                vulcan_workspace_store::workspace_store::persist_configured_inference_provider_request_trace(
+                    &data_root,
+                    consumer_profile_id.as_str(),
+                    file_stem.as_str(),
+                    &trace,
+                )
+            })
+            .await;
+            match persisted {
+                Ok(Ok(path)) => eprintln!(
+                    "[configured-inference-provider-request-trace] execution={} attempt={} path={}",
+                    execution_id,
+                    attempt_index,
+                    path.display()
+                ),
+                Ok(Err(error)) => eprintln!(
+                    "[configured-inference-provider-request-trace] execution={} attempt={} persist_failed={}",
+                    execution_id, attempt_index, error
+                ),
+                Err(error) => eprintln!(
+                    "[configured-inference-provider-request-trace] execution={} attempt={} writer_failed={}",
+                    execution_id, attempt_index, error
+                ),
+            }
+        });
+        Some(capture_sender)
+    }
+
     /// Drives one provider stream into the shared restricted execution record.
     /// 将一条供应商流驱动进共享受限执行记录。
     ///
@@ -2944,6 +3168,12 @@ impl ConfiguredInferenceService {
             attempt_first_response_at_unix_ms = None;
             attempt_terminal_emitted = false;
             self.emit_internal_inference_started(&active_attempt_facts);
+            let wire_request_capture = self.start_configured_inference_provider_request_trace(
+                &request,
+                &route,
+                execution_id.as_str(),
+                completed_retries,
+            );
             let deadline_wait = wait_until_deadline(deadline_unix_ms);
             tokio::pin!(deadline_wait);
             // Provider startup is part of the retained execution lifecycle. This keeps
@@ -2970,10 +3200,11 @@ impl ConfiguredInferenceService {
                         "Restricted LLM execution exceeded its caller deadline.",
                     ));
                 }
-                stream = self.runtime.execute_internal_llm(
+                stream = self.runtime.execute_internal_llm_with_wire_request_capture(
                     &selection,
                     provider_request.clone(),
                     execution_id.clone(),
+                    wire_request_capture,
                 ) => {
                     match stream {
                         Ok(stream) => stream,
@@ -3643,6 +3874,13 @@ pub(crate) fn validate_vmm_required_inference_routes(
                 "VMM 基础 LLM 用途 `{purpose_id}` 的模型不支持关闭思考。"
             ));
         }
+        runtime
+            .validate_disabled_reasoning_route_projection(&selection)
+            .map_err(|error| {
+                format!(
+                    "VMM 基础 LLM 用途 `{purpose_id}` 的当前模型与协议无法证明关闭思考：{error}"
+                )
+            })?;
     }
     Ok(())
 }
@@ -3709,6 +3947,9 @@ fn validate_vmm_optional_profile_instruction_route(
     if !model_supports_disabled_reasoning(&selection.model.capabilities) {
         return Err(String::from("VMM 手工画像指令模型不支持关闭思考。"));
     }
+    runtime
+        .validate_disabled_reasoning_route_projection(&selection)
+        .map_err(|error| format!("VMM 手工画像指令的当前模型与协议无法证明关闭思考：{error}"))?;
     Ok(())
 }
 
@@ -5795,10 +6036,7 @@ fn lock_error<T>(_: std::sync::PoisonError<T>) -> ConfiguredInferenceError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{
-        collections::{BTreeMap, BTreeSet},
-        sync::atomic::{AtomicUsize, Ordering},
-    };
+    use std::collections::{BTreeMap, BTreeSet};
     use vulcan_ai_contract::{
         INFERENCE_CONTRACT_VERSION, InferenceCallerBudget, InferenceUsageScope,
         ParallelToolCallPolicy,
@@ -5873,6 +6111,153 @@ mod tests {
             resources: Vec::new(),
             output_token_limit: None,
         }
+    }
+
+    /// Builds one retained execution state for deterministic waiter-cancellation tests.
+    /// 构建一项用于确定性等待者取消测试的保留执行状态。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `phase` selects whether dropping the last waiter should cancel provider work.
+    /// `phase` 用于选择丢弃最后一个等待者时是否应取消供应商工作。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The shared state and a receiver observing its cooperative cancellation signal.
+    /// 返回共享状态以及观察其协作取消信号的接收器。
+    fn test_llm_execution_state(
+        phase: ConfiguredLlmExecutionPhase,
+    ) -> (Arc<ConfiguredLlmExecutionState>, watch::Receiver<bool>) {
+        let (event_sender, _) = broadcast::channel(4);
+        let (cancellation_sender, cancellation_receiver) = watch::channel(false);
+        let state = Arc::new(ConfiguredLlmExecutionState {
+            owner_caller_id: String::from("caller"),
+            request_fingerprint: String::from("fingerprint"),
+            in_flight_key: String::from("caller:request"),
+            snapshot: Mutex::new(ConfiguredLlmExecutionSnapshot {
+                execution_id: String::from("execution"),
+                phase,
+                route: ExecutionRouteSnapshot {
+                    provider_id: String::from("provider"),
+                    service_entry_id: String::from("service"),
+                    connection_id: String::from("connection"),
+                    model_id: String::from("model"),
+                    protocol_binding_id: Some(String::from("openai.responses")),
+                    action_binding_id: None,
+                    secondary_route_id: None,
+                    secondary_provider_name: None,
+                    secondary_endpoint_name: None,
+                    capability_revision: String::from("capability"),
+                    catalog_revision: String::from("catalog"),
+                    route_revision: String::from("route"),
+                    usage_scope: InferenceUsageScope::ExternalService,
+                },
+                response: None,
+                error: None,
+            }),
+            event_sender,
+            event_history: Mutex::new(Vec::new()),
+            event_history_bytes: Mutex::new(0),
+            event_history_truncated: Mutex::new(false),
+            cancellation_sender,
+            waiter_count: AtomicUsize::new(0),
+            terminal_notify: Notify::new(),
+            terminal_at: Mutex::new(None),
+        });
+        (state, cancellation_receiver)
+    }
+
+    /// Verifies a running provider request is cancelled only after its final non-streaming HTTP waiter disappears.
+    /// 验证运行中的供应商请求只会在最后一个非流式 HTTP 等待者离开后被取消。
+    #[test]
+    fn last_non_streaming_waiter_drop_cancels_running_execution() {
+        let (state, cancellation) = test_llm_execution_state(ConfiguredLlmExecutionPhase::Running);
+        let first = ConfiguredLlmWaiterGuard::new(Arc::clone(&state));
+        let second = ConfiguredLlmWaiterGuard::new(Arc::clone(&state));
+
+        drop(first);
+        assert!(!*cancellation.borrow());
+        assert_eq!(state.waiter_count.load(Ordering::Acquire), 1);
+
+        drop(second);
+        assert!(*cancellation.borrow());
+        assert_eq!(state.waiter_count.load(Ordering::Acquire), 0);
+    }
+
+    /// Verifies returning one completed response releases waiter ownership without emitting a late cancellation.
+    /// 验证返回已完成响应时会释放等待者所有权且不会发送迟到的取消信号。
+    #[test]
+    fn completed_waiter_drop_does_not_emit_cancellation() {
+        let (state, cancellation) =
+            test_llm_execution_state(ConfiguredLlmExecutionPhase::Completed);
+        let waiter = ConfiguredLlmWaiterGuard::new(Arc::clone(&state));
+
+        drop(waiter);
+
+        assert!(!*cancellation.borrow());
+        assert_eq!(state.waiter_count.load(Ordering::Acquire), 0);
+    }
+
+    /// Verifies complete transport tracing is both opt-in and restricted to the authenticated VMM consumer.
+    /// 验证完整传输追踪既需显式启用，又仅限已认证 VMM 消费者。
+    #[tokio::test]
+    async fn configured_inference_request_trace_is_opt_in_and_vmm_scoped() {
+        let runtime = Arc::new(PublicAiRuntime::unavailable().expect("test public AI runtime"));
+        let mut request = test_responses_request();
+        let route = ExecutionRouteSnapshot {
+            provider_id: String::from("provider"),
+            service_entry_id: String::from("service"),
+            connection_id: String::from("connection"),
+            protocol_binding_id: Some(String::from("openai.responses.v1")),
+            action_binding_id: None,
+            secondary_route_id: None,
+            secondary_provider_name: None,
+            secondary_endpoint_name: None,
+            model_id: String::from("model"),
+            capability_revision: String::from("capability"),
+            catalog_revision: String::from("catalog"),
+            route_revision: String::from("sha256:route"),
+            usage_scope: InferenceUsageScope::InternalBackground,
+        };
+        let service = ConfiguredInferenceService::new(Arc::clone(&runtime));
+        assert!(
+            service
+                .start_configured_inference_provider_request_trace(
+                    &request,
+                    &route,
+                    "00000000-0000-0000-0000-000000000001",
+                    0,
+                )
+                .is_none(),
+            "disabled tracing must not allocate a capture channel"
+        );
+
+        let service =
+            ConfiguredInferenceService::new(runtime).with_provider_request_trace_enabled(true);
+        request.consumer_profile_id = String::from("plugin");
+        assert!(
+            service
+                .start_configured_inference_provider_request_trace(
+                    &request,
+                    &route,
+                    "00000000-0000-0000-0000-000000000002",
+                    0,
+                )
+                .is_none(),
+            "non-VMM consumers must not receive complete request tracing"
+        );
+
+        request.consumer_profile_id = String::from(VMM_CONSUMER_PROFILE_ID);
+        let capture = service
+            .start_configured_inference_provider_request_trace(
+                &request,
+                &route,
+                "00000000-0000-0000-0000-000000000003",
+                0,
+            )
+            .expect("opted-in VMM execution should allocate one capture channel");
+        drop(capture);
+        tokio::task::yield_now().await;
     }
 
     /// Verifies cache identities are caller-isolated, bounded, and never contain untrusted key text.

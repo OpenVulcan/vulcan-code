@@ -3,7 +3,6 @@ import { LoaderCircle } from "lucide-react"
 
 import { ContextWindowPolicyEditor } from "@/components/features/settings/public-ai-model-capability-dialog"
 import { ProviderRetrySettingsArea } from "@/components/features/settings/provider-retry-settings"
-import { ProviderUsageSettingsArea } from "@/components/features/settings/provider-usage-settings"
 import type { SettingsActionProps } from "@/components/features/settings/settings-action-types"
 import { Button } from "@/components/ui/button"
 import { useI18n } from "@/i18n"
@@ -68,8 +67,8 @@ function SystemContextWindowPolicyCard(props: {
   )
 }
 
-// ContextBasicsSettingsArea groups context, retry, and usage settings under the model settings node.
-// ContextBasicsSettingsArea 将上下文、重试和用量设置统一放入模型设置基础节点。
+// ContextBasicsSettingsArea groups only model-context and retry policies under the model settings node.
+// ContextBasicsSettingsArea 仅在模型设置基础节点中组织模型上下文与重试策略。
 export function ContextBasicsSettingsArea(props: {
   // Service-backed settings actions used by request retry settings.
   // 请求重试设置使用的服务端设置操作。
@@ -113,7 +112,6 @@ export function ContextBasicsSettingsArea(props: {
         <p className="settings-muted-line">{t("settings.contextBasics.loading")}</p>
       )}
       <ProviderRetrySettingsArea actions={props.actions} embedded settings={props.retrySettings} />
-      <ProviderUsageSettingsArea />
     </div>
   )
 }

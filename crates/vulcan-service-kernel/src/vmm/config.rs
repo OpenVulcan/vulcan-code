@@ -358,6 +358,15 @@ fn vmm_managed_runtime_settings_from_draft(
         vmm_positive_go_duration(&draft.precheck_intent_timeout, "PreCheck 意图超时")?;
     let postaction_idle_timeout =
         vmm_positive_go_duration(&draft.postaction_idle_timeout, "PostAction 空闲超时")?;
+    let (postaction_analysis_timeout, postaction_analysis_timeout_nanos) =
+        vmm_positive_go_duration_value(
+            &draft.postaction_analysis_timeout,
+            "PostAction 后台分析超时",
+        )?;
+    const TWO_MINUTES_NANOS: f64 = 2.0 * 60.0 * 1_000_000_000.0;
+    if postaction_analysis_timeout_nanos < TWO_MINUTES_NANOS {
+        return Err(String::from("PostAction 后台分析超时必须大于或等于 2m。"));
+    }
     let retention_scan_interval =
         vmm_positive_go_duration(&draft.retention_scan_interval, "保留扫描间隔")?;
     let (retention_session_idle_after, retention_session_idle_nanos) =
@@ -416,9 +425,22 @@ fn vmm_managed_runtime_settings_from_draft(
             1,
             u32::MAX,
         )?,
+        postaction_analysis_timeout,
+        postaction_failure_pass_threshold: vmm_required_u32(
+            &draft.postaction_failure_pass_threshold,
+            "PostAction 连续失败 Pass 阈值",
+            1,
+            u32::MAX,
+        )?,
         postaction_max_queue_workers: vmm_required_u32(
             &draft.postaction_max_queue_workers,
             "PostAction 队列工作数",
+            1,
+            64,
+        )?,
+        inference_max_connections_per_host: vmm_required_u32(
+            &draft.inference_max_connections_per_host,
+            "推理主机最大连接数",
             1,
             64,
         )?,

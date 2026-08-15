@@ -833,7 +833,10 @@ fn vmm_managed_runtime_settings_draft(
         postaction_idle_timeout: settings.postaction_idle_timeout.clone(),
         postaction_history_turns: settings.postaction_history_turns.to_string(),
         postaction_max_input_tokens: settings.postaction_max_input_tokens.to_string(),
+        postaction_analysis_timeout: settings.postaction_analysis_timeout.clone(),
+        postaction_failure_pass_threshold: settings.postaction_failure_pass_threshold.to_string(),
         postaction_max_queue_workers: settings.postaction_max_queue_workers.to_string(),
+        inference_max_connections_per_host: settings.inference_max_connections_per_host.to_string(),
         pipeline_max_search_keywords: settings.pipeline_max_search_keywords.to_string(),
         pipeline_min_similarity_score: settings.pipeline_min_similarity_score.to_string(),
         pipeline_replace_min_similarity_score: settings

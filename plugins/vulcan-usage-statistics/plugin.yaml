@@ -1,22 +1,19 @@
 schema_version: 1
 id: vulcan-usage-statistics
-version: 0.1.0
+version: 0.3.0
 default_enabled: true
 display:
   name: Vulcan Usage Statistics
-  capability: Provider API usage, latency, reliability, and token statistics
+  capability: Display and maintain Provider usage facts through the host-registered system VLDB binding
 permissions:
-  - config
-  - storage_sqlite
+  - system_vldb_access
   - ui_host_context
 required_files:
   - LICENSE
-  - config/schema.json
-  - config/defaults.json
-  - schemas/hooks/provider-request-started.json
-  - schemas/hooks/provider-response-first-token.json
-  - schemas/hooks/provider-request-completed.json
-  - schemas/hooks/provider-request-retrying.json
+  - schemas/dashboard-output.json
+  - schemas/statistics-clear-preview-output.json
+  - schemas/statistics-clear-apply-input.json
+  - schemas/statistics-clear-apply-output.json
   - ui/index.mjs
   - locales/en.yaml
   - locales/zh-CN.yaml
@@ -28,58 +25,17 @@ lua_runtime:
   bundle: runtime/plugin.bundle.lua
   invoke_function: dispatch
   shutdown_function: shutdown
-  hook_shutdown_function: shutdown_hooks
   max_active_sessions: 8
   session_idle_timeout_sec: 300
-  lifecycle:
-    install: on_install
-    enable: on_enable
-    disable: on_disable
-    uninstall: on_uninstall
   actions:
-    - id: settings-get
-      function: settings_get
-      output_schema_file: schemas/settings-output.json
-      timeout_ms: 5000
-      callers:
-        - plugin_ui
-    - id: settings-update
-      function: settings_update
-      input_schema_file: config/schema.json
-      output_schema_file: schemas/settings-output.json
-      timeout_ms: 5000
-      callers:
-        - plugin_ui
     - id: dashboard-get
       function: dashboard_get
-      input_schema_file: schemas/dashboard-input.json
       output_schema_file: schemas/dashboard-output.json
       timeout_ms: 12000
       callers:
         - plugin_ui
-    - id: revision-get
-      function: revision_get
-      output_schema_file: schemas/revision-output.json
-      timeout_ms: 3000
-      callers:
-        - plugin_ui
-    - id: recent-get
-      function: recent_get
-      input_schema_file: schemas/recent-input.json
-      output_schema_file: schemas/recent-output.json
-      timeout_ms: 8000
-      callers:
-        - plugin_ui
-    - id: errors-get
-      function: errors_get
-      input_schema_file: schemas/dashboard-input.json
-      output_schema_file: schemas/errors-output.json
-      timeout_ms: 8000
-      callers:
-        - plugin_ui
     - id: statistics-clear-preview
       function: statistics_clear_preview
-      input_schema_file: schemas/statistics-clear-input.json
       output_schema_file: schemas/statistics-clear-preview-output.json
       timeout_ms: 8000
       callers:
@@ -91,50 +47,6 @@ lua_runtime:
       timeout_ms: 12000
       callers:
         - plugin_ui
-  hooks:
-    - id: provider-request-started
-      point: provider.request.started
-      mode: effect
-      scope: session
-      function: provider_request_started
-      priority: 100
-      timeout_ms: 3000
-      failure_policy: continue
-      display_name: Provider request started statistics
-      progress_label: Tracking Provider request
-    - id: provider-response-first-token
-      point: provider.response.first_token
-      mode: effect
-      scope: session
-      function: provider_response_first_token
-      priority: 100
-      timeout_ms: 3000
-      failure_policy: continue
-      display_name: Provider first token statistics
-      progress_label: Tracking Provider first token
-    - id: provider-request-completed
-      point: provider.request.completed
-      mode: effect
-      scope: session
-      function: provider_request_completed
-      priority: 100
-      timeout_ms: 12000
-      failure_policy: continue
-      display_name: Provider request completed statistics
-      progress_label: Saving Provider request statistics
-    - id: provider-request-retrying
-      point: provider.request.retrying
-      mode: effect
-      scope: session
-      function: provider_request_retrying
-      priority: 100
-      timeout_ms: 3000
-      failure_policy: continue
-      display_name: Provider retry statistics
-      progress_label: Tracking Provider retry
-config:
-  schema_file: config/schema.json
-  defaults_file: config/defaults.json
 ui:
   mounts:
     - id: usage-statistics

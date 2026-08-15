@@ -770,6 +770,7 @@ fn run_service_bootstrap(
             &public_ai_runtime,
         ))
         .with_retry_configuration(&provider_configuration.retry)
+        .with_provider_request_trace_enabled(provider_configuration.provider_request_trace_enabled)
         .with_native_usage_controller(controller_runtime.clone())
         .with_plugin_telemetry(vulcan_plugin_runtime.clone()),
     );
@@ -1795,9 +1796,16 @@ fn prepare_vulcan_plugin_runtime(
     let ui_event_publisher = Arc::new(crate::plugin_ui_events::ServicePluginUiEventPublisher::new(
         event_emitter,
     ));
+    // vldbService exposes only host-registered logical bindings and never physical database paths.
+    // vldbService 仅暴露宿主注册的逻辑绑定，绝不暴露物理数据库路径。
+    let vldb_service = Arc::new(crate::plugin_vldb::ControllerPluginVldbService::new(
+        controller_runtime.clone(),
+        service_runtime,
+    ));
     vulcan_plugin_runtime
         .install_host_services(vulcan_plugin_runtime::VulcanPluginHostServices {
             storage: Some(storage_service),
+            vldb: Some(vldb_service),
             ui_events: Some(ui_event_publisher),
         })
         .map_err(|error| {

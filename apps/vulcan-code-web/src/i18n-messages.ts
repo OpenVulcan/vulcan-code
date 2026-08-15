@@ -1445,6 +1445,12 @@ export type TranslationKey =
   | "memory.advanced.autoStart"
   | "memory.advanced.manualStart"
   | "memory.advanced.transport"
+  | "memory.advanced.postactionReliability"
+  | "memory.advanced.postactionTimeout"
+  | "memory.advanced.failurePassThreshold"
+  | "memory.advanced.maxConnectionsPerHost"
+  | "memory.advanced.externalReliability"
+  | "memory.advanced.externalReliabilityDescription"
   | "memory.advanced.diagnostics"
   | "memory.advanced.diagnosticRuntime"
   | "memory.advanced.diagnosticGrpc"
@@ -4070,6 +4076,12 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.advanced.autoStart": "随 Vulcan Code 自动启动",
     "memory.advanced.manualStart": "仅手动启动",
     "memory.advanced.transport": "连接高级参数",
+    "memory.advanced.postactionReliability": "PostAction 可靠性",
+    "memory.advanced.postactionTimeout": "后台分析超时（例如 180s）",
+    "memory.advanced.failurePassThreshold": "连续失败 Pass 阈值",
+    "memory.advanced.maxConnectionsPerHost": "每主机最大推理连接数",
+    "memory.advanced.externalReliability": "由外部 VMM 管理",
+    "memory.advanced.externalReliabilityDescription": "外部模式下，后台分析超时与连续失败 Pass 阈值必须在外部 VMM 配置或环境变量中设置；连接上限由外部 VMM 自身的有界传输控制。Vulcan Code 不会伪装成可远程修改这些参数。",
     "memory.advanced.diagnostics": "技术诊断",
     "memory.advanced.diagnosticRuntime": "运行状态",
     "memory.advanced.diagnosticGrpc": "服务地址",
@@ -6692,6 +6704,12 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.advanced.autoStart": "Start with Vulcan Code",
     "memory.advanced.manualStart": "Manual start only",
     "memory.advanced.transport": "Advanced transport",
+    "memory.advanced.postactionReliability": "PostAction reliability",
+    "memory.advanced.postactionTimeout": "Background analysis timeout (for example, 180s)",
+    "memory.advanced.failurePassThreshold": "Consecutive-failure Pass threshold",
+    "memory.advanced.maxConnectionsPerHost": "Maximum inference connections per host",
+    "memory.advanced.externalReliability": "Managed by the external VMM",
+    "memory.advanced.externalReliabilityDescription": "In external mode, configure the background analysis timeout and consecutive-failure Pass threshold in the external VMM configuration or environment; the external VMM owns its bounded transport connection limit. Vulcan Code does not pretend to modify those settings remotely.",
     "memory.advanced.diagnostics": "Technical diagnostics",
     "memory.advanced.diagnosticRuntime": "Runtime state",
     "memory.advanced.diagnosticGrpc": "Service endpoint",

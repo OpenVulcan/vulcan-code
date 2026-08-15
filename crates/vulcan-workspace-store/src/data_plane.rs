@@ -23,9 +23,21 @@ pub const APP_SPACE_ID: &str = "app-workspace";
 /// 稳定的应用级 SQLite 绑定标签。
 pub const APP_SQLITE_BINDING_TAG: &str = "app-state";
 
+/// Stable controller space identifier for host-owned system statistics.
+/// 宿主持有的系统统计稳定控制器空间标识符。
+pub const SYSTEM_STATISTICS_SPACE_ID: &str = "system-statistics";
+
+/// Stable SQLite binding tag for host-owned system statistics.
+/// 宿主持有的系统统计稳定 SQLite 绑定标签。
+pub const SYSTEM_STATISTICS_SQLITE_BINDING_TAG: &str = "provider-usage";
+
 /// Process-local sequence that guarantees each bootstrap gets one distinct SQLite binding suffix.
 /// 进程内序号，确保每次引导都能拿到不同的 SQLite 绑定后缀。
 static APP_SQLITE_BINDING_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+
+/// Process-local sequence that gives every system-statistics bootstrap a distinct binding suffix.
+/// 进程内序号，为每次系统统计引导提供不同的绑定后缀。
+static SYSTEM_STATISTICS_SQLITE_BINDING_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 /// Shared schema version stored in the application metadata table.
 /// 存储在应用元数据表中的共享结构版本号。
@@ -53,6 +65,12 @@ pub struct ControllerRuntimeHandle {
     /// Bootstrap-scoped SQLite binding identifier used by the current controller runtime handle.
     /// 当前控制器运行时句柄使用的单次引导作用域 SQLite 绑定标识符。
     pub sqlite_binding_id: String,
+    /// SQLite file path used by the independent system-statistics binding.
+    /// 独立系统统计绑定使用的 SQLite 文件路径。
+    pub system_statistics_sqlite_path: PathBuf,
+    /// Bootstrap-scoped SQLite binding identifier for the system-statistics database.
+    /// 系统统计数据库使用的单次引导作用域 SQLite 绑定标识符。
+    pub system_statistics_sqlite_binding_id: String,
     /// Process-local knowledge state shared by every runtime reconstructed from this handle.
     /// 由基于当前句柄重建的所有运行时共享的进程内知识库状态。
     pub(crate) knowledge_runtime_state: Arc<KnowledgeBaseRuntimeSharedState>,
@@ -69,6 +87,14 @@ impl fmt::Debug for ControllerRuntimeHandle {
             .field("data_root", &self.data_root)
             .field("sqlite_path", &self.sqlite_path)
             .field("sqlite_binding_id", &self.sqlite_binding_id)
+            .field(
+                "system_statistics_sqlite_path",
+                &self.system_statistics_sqlite_path,
+            )
+            .field(
+                "system_statistics_sqlite_binding_id",
+                &self.system_statistics_sqlite_binding_id,
+            )
             .finish()
     }
 }
@@ -79,12 +105,14 @@ impl ControllerRuntimeHandle {
     ///
     /// `client` is the connected controller proxy, `endpoint` is its normalized URL,
     /// `executable` identifies the controller process, `data_root` owns application data,
-    /// `sqlite_path` points to the application database, and `sqlite_binding_id` identifies
-    /// the bootstrap-scoped application binding. The returned handle shares one knowledge
+    /// `sqlite_path` points to the application database, `sqlite_binding_id` identifies
+    /// the bootstrap-scoped application binding, and the system-statistics arguments identify
+    /// the independent Provider usage database. The returned handle shares one knowledge
     /// activation and mutation state across every clone.
     /// `client` 是已连接的控制器代理，`endpoint` 是其标准化 URL，`executable` 标识控制器进程，
     /// `data_root` 保存应用数据，`sqlite_path` 指向应用数据库，`sqlite_binding_id` 标识单次引导作用域的
-    /// 应用绑定。返回的句柄会在所有克隆之间共享同一份知识库激活与变更状态。
+    /// 应用绑定，系统统计参数标识独立的 Provider 用量数据库。返回的句柄会在所有克隆之间共享同一份
+    /// 知识库激活与变更状态。
     pub fn new(
         client: ControllerClient,
         endpoint: String,
@@ -92,6 +120,8 @@ impl ControllerRuntimeHandle {
         data_root: PathBuf,
         sqlite_path: PathBuf,
         sqlite_binding_id: String,
+        system_statistics_sqlite_path: PathBuf,
+        system_statistics_sqlite_binding_id: String,
     ) -> Self {
         Self {
             client,
@@ -100,6 +130,8 @@ impl ControllerRuntimeHandle {
             data_root,
             sqlite_path,
             sqlite_binding_id,
+            system_statistics_sqlite_path,
+            system_statistics_sqlite_binding_id,
             knowledge_runtime_state: Arc::new(KnowledgeBaseRuntimeSharedState::default()),
         }
     }
@@ -151,9 +183,12 @@ pub async fn bootstrap_application_data_plane(
     let executable = config.spawn_executable().to_string();
     let data_root = application_data_root();
     let sqlite_path = data_root.join("sqlite").join("app-workspace.sqlite3");
+    let system_statistics_root = data_root.join("statistics");
+    let system_statistics_sqlite_path = system_statistics_root.join("provider-usage.sqlite3");
     let started_at_ms = current_unix_epoch_millis();
 
     ensure_parent_directory(&sqlite_path)?;
+    ensure_parent_directory(&system_statistics_sqlite_path)?;
 
     let registration = ClientRegistration {
         client_name: format!("vulcan-code-{}-{}", std::process::id(), started_at_ms),
@@ -171,6 +206,7 @@ pub async fn bootstrap_application_data_plane(
             .map_err(|error| format!("连接或唤起 vldb-controller 失败：{error}"))?;
 
         let sqlite_binding_id = build_application_sqlite_binding_id();
+        let system_statistics_sqlite_binding_id = build_system_statistics_sqlite_binding_id();
 
         client
             .attach_space(SpaceRegistration {
@@ -193,6 +229,30 @@ pub async fn bootstrap_application_data_plane(
             .map_err(|error| format!("启用应用 SQLite 数据库失败：{error}"))?;
 
         client
+            .attach_space(SpaceRegistration {
+                space_id: String::from(SYSTEM_STATISTICS_SPACE_ID),
+                space_label: String::from("SYSTEM STATISTICS"),
+                space_kind: SpaceKind::User,
+                space_root: runtime_assets::native_host_path_text_from_path(
+                    &system_statistics_root,
+                ),
+            })
+            .await
+            .map_err(|error| format!("附着系统统计数据空间失败：{error}"))?;
+
+        client
+            .enable_sqlite(ControllerSqliteEnableRequest {
+                space_id: String::from(SYSTEM_STATISTICS_SPACE_ID),
+                binding_id: system_statistics_sqlite_binding_id.clone(),
+                db_path: runtime_assets::native_host_path_text_from_path(
+                    &system_statistics_sqlite_path,
+                ),
+                ..ControllerSqliteEnableRequest::default()
+            })
+            .await
+            .map_err(|error| format!("启用系统统计 SQLite 数据库失败：{error}"))?;
+
+        client
             .execute_sqlite_script_typed(
                 APP_SPACE_ID,
                 sqlite_binding_id.as_str(),
@@ -204,22 +264,25 @@ pub async fn bootstrap_application_data_plane(
 
         ensure_application_schema_migrations(&client, &sqlite_binding_id).await?;
 
-        Ok::<_, String>((client.get_status().await.ok(), sqlite_binding_id))
+        let runtime_handle = ControllerRuntimeHandle::new(
+            client.clone(),
+            endpoint.clone(),
+            executable.clone(),
+            data_root.clone(),
+            sqlite_path.clone(),
+            sqlite_binding_id,
+            system_statistics_sqlite_path.clone(),
+            system_statistics_sqlite_binding_id,
+        );
+        crate::workspace_store::ensure_provider_usage_schema(&runtime_handle).await?;
+        crate::workspace_store::migrate_application_provider_usage(&runtime_handle).await?;
+
+        Ok::<_, String>((client.get_status().await.ok(), runtime_handle))
     }
     .await;
 
     match bootstrap_result {
-        Ok((status, sqlite_binding_id)) => Ok(ControllerBootstrapReport {
-            handle: ControllerRuntimeHandle::new(
-                client,
-                endpoint,
-                executable,
-                data_root,
-                sqlite_path,
-                sqlite_binding_id,
-            ),
-            status,
-        }),
+        Ok((status, handle)) => Ok(ControllerBootstrapReport { handle, status }),
         Err(error) => {
             cleanup_failed_controller_bootstrap(&client, &error).await?;
             Err(error)
@@ -603,6 +666,26 @@ ON knowledge_import_jobs(library_id, created_at_ms DESC);
     Ok(())
 }
 
+/// Builds one process-scoped system-statistics SQLite binding identifier.
+/// 构建一个进程作用域的系统统计 SQLite 绑定标识符。
+///
+/// # Returns
+/// 返回值
+/// Returns a binding identifier unique to the current bootstrap.
+/// 返回当前引导过程唯一的绑定标识符。
+fn build_system_statistics_sqlite_binding_id() -> String {
+    let bootstrap_scope_ms = current_unix_epoch_millis();
+    let bootstrap_sequence =
+        SYSTEM_STATISTICS_SQLITE_BINDING_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    format!(
+        "{}@{}-{}-{}",
+        SYSTEM_STATISTICS_SQLITE_BINDING_TAG,
+        std::process::id(),
+        bootstrap_scope_ms,
+        bootstrap_sequence
+    )
+}
+
 /// Applies one idempotent project column migration and ignores duplicate-column failures.
 /// 执行一条幂等项目列迁移，并忽略重复列失败。
 async fn ensure_optional_project_column(
@@ -974,6 +1057,19 @@ mod tests {
         assert!(first.starts_with("app-state@"));
         assert!(second.starts_with("app-state@"));
         assert_ne!(first, second);
+    }
+
+    /// Verifies that system statistics use their own bootstrap-scoped binding namespace.
+    /// 验证系统统计使用自己的单次引导作用域绑定命名空间。
+    #[test]
+    fn system_statistics_sqlite_binding_id_is_bootstrap_scoped() {
+        let first = build_system_statistics_sqlite_binding_id();
+        let second = build_system_statistics_sqlite_binding_id();
+
+        assert!(first.starts_with("provider-usage@"));
+        assert!(second.starts_with("provider-usage@"));
+        assert_ne!(first, second);
+        assert!(!first.starts_with(APP_SQLITE_BINDING_TAG));
     }
 
     /// Verifies that LuaSkills package configuration uses one stable root below the application data plane.

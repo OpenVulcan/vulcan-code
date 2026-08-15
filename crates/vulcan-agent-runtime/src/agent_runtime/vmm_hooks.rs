@@ -40,9 +40,12 @@ const VMM_POST_ACTION_HOOK_ID: &str = "builtin.vmm.post_action";
 /// Stable id used by the built-in VMM chat-compaction hook.
 /// 内置 VMM 会话压缩 hook 使用的稳定标识。
 const VMM_CHAT_COMPACT_HOOK_ID: &str = "builtin.vmm.chat_compact";
-/// Host-side ceiling for built-in VMM hook calls; request timeout remains user-configurable.
-/// 内置 VMM hook 调用的宿主侧兜底上限；请求超时仍由用户配置控制。
-const VMM_HOOK_TIMEOUT_CEILING_MS: u64 = 120_000;
+/// Host-side ceiling for interactive VMM precheck calls.
+/// 交互式 VMM Precheck 调用的宿主侧兜底上限。
+const VMM_PRECHECK_HOOK_TIMEOUT_MS: u64 = 30_000;
+/// Host-side ceiling for VMM effects and background preparation calls.
+/// VMM 副作用与后台准备调用的宿主侧兜底上限。
+const VMM_BACKGROUND_HOOK_TIMEOUT_MS: u64 = 120_000;
 /// Stable system-prompt tag used for VMM profile injection.
 /// VMM 画像注入使用的稳定系统提示词标签。
 const VMM_PROFILE_SYSTEM_PROMPT_TAG: &str = "vmm_profile";
@@ -424,7 +427,7 @@ fn vmm_hook_registration(id: &str, point: &str, mode: HookMode) -> HookRegistrat
     let mut registration = HookRegistration::new(id, point, mode);
     registration.scope = HookScope::Session;
     registration.priority = -100;
-    registration.timeout_ms = Some(VMM_HOOK_TIMEOUT_CEILING_MS);
+    registration.timeout_ms = Some(vmm_hook_timeout_ms(id));
     registration.failure_policy = HookFailurePolicy::Continue;
     registration
         .requested_capabilities
@@ -442,6 +445,26 @@ fn vmm_hook_registration(id: &str, point: &str, mode: HookMode) -> HookRegistrat
         registration.progress_label = Some(String::from("正在进行记忆召回"));
     }
     registration
+}
+
+/// Selects the host-side timeout ceiling for one built-in VMM hook.
+/// 为一个内置 VMM Hook 选择宿主侧超时上限。
+///
+/// # Parameters
+/// 参数
+/// `id` is the immutable built-in hook identifier registered by the host.
+/// `id` 是宿主注册的不可变内置 Hook 标识。
+///
+/// # Returns
+/// 返回值
+/// The stage-specific host timeout ceiling in milliseconds.
+/// 返回以毫秒表示的阶段专属宿主超时上限。
+fn vmm_hook_timeout_ms(id: &str) -> u64 {
+    if id == VMM_PRECHECK_HOOK_ID {
+        VMM_PRECHECK_HOOK_TIMEOUT_MS
+    } else {
+        VMM_BACKGROUND_HOOK_TIMEOUT_MS
+    }
 }
 
 /// Returns whether one effective VMM configuration should run automatic precheck now.
@@ -1258,6 +1281,23 @@ fn invocation_session_id(invocation: &HookInvocation) -> Option<String> {
 mod tests {
     use super::*;
     use vulcan_hooks::{HookContext, HookPayload};
+
+    /// Verifies precheck keeps its short UI protection while effect and preparation hooks receive the long host budget.
+    /// 验证 Precheck 保持短前端保护，而副作用与准备 Hook 使用较长宿主预算。
+    #[test]
+    fn built_in_vmm_hooks_use_stage_specific_host_timeouts() {
+        assert_eq!(
+            vmm_hook_timeout_ms(VMM_PRECHECK_HOOK_ID),
+            VMM_PRECHECK_HOOK_TIMEOUT_MS
+        );
+        for hook_id in [
+            VMM_PROFILE_PREPARE_HOOK_ID,
+            VMM_POST_ACTION_HOOK_ID,
+            VMM_CHAT_COMPACT_HOOK_ID,
+        ] {
+            assert_eq!(vmm_hook_timeout_ms(hook_id), VMM_BACKGROUND_HOOK_TIMEOUT_MS);
+        }
+    }
 
     /// Verifies snapshot replacement preserves runtime profile state inside one authoritative lock.
     /// 验证快照替换会在单一权威锁内保留运行时画像状态。

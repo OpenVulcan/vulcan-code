@@ -1316,6 +1316,8 @@ fn task_runtime_preparation_request_preserves_enabled_knowledge_access() {
         std::env::temp_dir(),
         std::env::temp_dir().join("unused.sqlite3"),
         String::from("knowledge-child-test-binding"),
+        std::env::temp_dir().join("unused-statistics.sqlite3"),
+        String::from("knowledge-child-test-statistics-binding"),
     ));
     parent_request.knowledge_access = Some(ExecutionKnowledgeAccessContext {
         project_id: String::from("project-a"),

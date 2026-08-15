@@ -1,12 +1,13 @@
 //! Controller-backed provider attempt, usage, pricing, quota, and rate-limit facts.
 //! 由控制器承载的供应商 attempt、用量、价格、额度与限流事实。
 
-use super::{app_sqlite_binding_id, decode_query_rows};
-use crate::data_plane::{APP_SPACE_ID, ControllerRuntimeHandle};
+use super::decode_query_rows;
+use crate::data_plane::{APP_SPACE_ID, ControllerRuntimeHandle, SYSTEM_STATISTICS_SPACE_ID};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     str::FromStr,
     sync::OnceLock,
     time::{SystemTime, UNIX_EPOCH},
@@ -21,6 +22,54 @@ pub const PROVIDER_USAGE_SCHEMA_REVISION: i64 = 6;
 /// Process-local serialization lock for attempt insertion followed by daily rebuild.
 /// attempt 插入后每日重建使用的进程内串行锁。
 static PROVIDER_USAGE_WRITE_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+
+/// Acquires the process-local integrity gate shared by core and trusted plugin statistics writes.
+/// 获取由内核与受信插件统计写入共享的进程内一致性门禁。
+///
+/// # Returns
+/// 返回值
+/// Returns a guard that serializes multi-step attempt aggregation and plugin maintenance writes.
+/// 返回一个将多步调用聚合与插件维护写入串行化的守卫。
+pub async fn lock_provider_usage_writes() -> tokio::sync::MutexGuard<'static, ()> {
+    PROVIDER_USAGE_WRITE_LOCK
+        .get_or_init(|| tokio::sync::Mutex::new(()))
+        .lock()
+        .await
+}
+
+/// Metadata key proving that native usage facts were copied out of the application database.
+/// 证明原生用量事实已经从应用数据库迁出的元数据键。
+const APPLICATION_PROVIDER_USAGE_MIGRATION_KEY: &str = "application_database_migration_completed";
+
+/// Maximum rows copied from one legacy application table per Controller batch.
+/// 每个 Controller 批次从旧应用表复制的最大行数。
+const APPLICATION_PROVIDER_USAGE_MIGRATION_PAGE_SIZE: i64 = 500;
+
+/// Tables copied byte-for-value before daily aggregates are rebuilt in the independent database.
+/// 在独立数据库中重建每日聚合前按值复制的表。
+const APPLICATION_PROVIDER_USAGE_MIGRATION_TABLES: &[&str] = &[
+    "provider_usage_attempts_v2",
+    "provider_account_usage_snapshots_v1",
+    "provider_rate_limit_snapshots_v1",
+    "provider_pricing_profiles_v1",
+    "provider_usage_meta",
+];
+
+/// Returns the bootstrap-scoped binding for the independent system-statistics database.
+/// 返回独立系统统计数据库的单次引导作用域绑定。
+///
+/// # Parameters
+/// 参数
+/// `controller` is the active application Controller handle.
+/// `controller` 是当前活动的应用 Controller 句柄。
+///
+/// # Returns
+/// 返回值
+/// Returns the exact binding identifier enabled during data-plane bootstrap.
+/// 返回数据平面引导期间启用的精确绑定标识符。
+fn system_statistics_sqlite_binding_id(controller: &ControllerRuntimeHandle) -> &str {
+    controller.system_statistics_sqlite_binding_id.as_str()
+}
 
 /// Persists one physical provider attempt independently from a logical request.
 /// 独立于逻辑请求持久化一次物理供应商 attempt。
@@ -470,16 +519,42 @@ pub struct ProviderUsageDashboard {
     pub accounts: Vec<ProviderAccountUsageSummary>,
 }
 
-/// Ensures all six native provider usage tables exist in the application binding.
-/// 确保应用绑定中存在六张原生供应商用量表。
+/// Ensures all six native provider usage tables exist in the system-statistics binding.
+/// 确保系统统计绑定中存在六张原生供应商用量表。
 pub async fn ensure_provider_usage_schema(
     controller: &ControllerRuntimeHandle,
+) -> Result<(), String> {
+    ensure_provider_usage_schema_at(
+        controller,
+        SYSTEM_STATISTICS_SPACE_ID,
+        system_statistics_sqlite_binding_id(controller),
+    )
+    .await
+}
+
+/// Ensures the Provider usage schema at one exact host-owned Controller binding.
+/// 在一个精确的宿主持有 Controller 绑定上确保 Provider 用量 Schema。
+///
+/// # Parameters
+/// 参数
+/// `controller` supplies the connected Controller client, while `space_id` and `binding_id`
+/// identify the exact database initialized by the host.
+/// `controller` 提供已连接的 Controller 客户端，`space_id` 与 `binding_id` 标识宿主初始化的精确数据库。
+///
+/// # Returns
+/// 返回值
+/// Returns unit after schema creation and additive migrations complete.
+/// Schema 创建和增量迁移完成后返回空值。
+async fn ensure_provider_usage_schema_at(
+    controller: &ControllerRuntimeHandle,
+    space_id: &str,
+    binding_id: &str,
 ) -> Result<(), String> {
     controller
         .client
         .execute_sqlite_script_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(controller),
+            space_id,
+            binding_id,
             r#"
 CREATE TABLE IF NOT EXISTS provider_usage_attempts_v2 (
     attempt_id TEXT PRIMARY KEY,
@@ -626,12 +701,14 @@ INSERT OR IGNORE INTO provider_usage_meta(meta_key, meta_value, updated_at_ms)
 VALUES ('legacy_migration_completed', '0', 0);
 INSERT OR IGNORE INTO provider_usage_meta(meta_key, meta_value, updated_at_ms)
 VALUES ('health_status', 'ready', 0);
+INSERT OR IGNORE INTO provider_usage_meta(meta_key, meta_value, updated_at_ms)
+VALUES ('application_database_migration_completed', '0', 0);
 "#,
             Vec::new(),
         )
         .await
         .map_err(|error| format!("初始化原生供应商用量 Schema 失败：{error}"))?;
-    ensure_provider_usage_attempt_columns(controller).await?;
+    ensure_provider_usage_attempt_columns(controller, space_id, binding_id).await?;
     Ok(())
 }
 
@@ -639,12 +716,14 @@ VALUES ('health_status', 'ready', 0);
 /// 检查实时控制器绑定后应用 attempt 表的增量迁移。
 async fn ensure_provider_usage_attempt_columns(
     controller: &ControllerRuntimeHandle,
+    space_id: &str,
+    binding_id: &str,
 ) -> Result<(), String> {
     let result = controller
         .client
         .query_sqlite_json_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(controller),
+            space_id,
+            binding_id,
             "PRAGMA table_info(provider_usage_attempts_v2);",
             Vec::new(),
         )
@@ -658,8 +737,8 @@ async fn ensure_provider_usage_attempt_columns(
         controller
             .client
             .execute_sqlite_script_typed(
-                APP_SPACE_ID,
-                app_sqlite_binding_id(controller),
+                space_id,
+                binding_id,
                 "ALTER TABLE provider_usage_attempts_v2 ADD COLUMN provider_request_id TEXT;",
                 Vec::new(),
             )
@@ -673,8 +752,8 @@ async fn ensure_provider_usage_attempt_columns(
         controller
             .client
             .execute_sqlite_script_typed(
-                APP_SPACE_ID,
-                app_sqlite_binding_id(controller),
+                space_id,
+                binding_id,
                 "ALTER TABLE provider_usage_attempts_v2 ADD COLUMN dispatched_known INTEGER NOT NULL DEFAULT 1;",
                 Vec::new(),
             )
@@ -688,8 +767,8 @@ async fn ensure_provider_usage_attempt_columns(
         controller
             .client
             .execute_sqlite_script_typed(
-                APP_SPACE_ID,
-                app_sqlite_binding_id(controller),
+                space_id,
+                binding_id,
                 "ALTER TABLE provider_usage_attempts_v2 ADD COLUMN semantic_output_observed_known INTEGER NOT NULL DEFAULT 1;",
                 Vec::new(),
             )
@@ -703,8 +782,8 @@ async fn ensure_provider_usage_attempt_columns(
         controller
             .client
             .execute_sqlite_script_typed(
-                APP_SPACE_ID,
-                app_sqlite_binding_id(controller),
+                space_id,
+                binding_id,
                 "ALTER TABLE provider_usage_attempts_v2 ADD COLUMN provider_billing_details_json TEXT;",
                 Vec::new(),
             )
@@ -719,12 +798,7 @@ async fn ensure_provider_usage_attempt_columns(
     );
     controller
         .client
-        .execute_sqlite_script_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(controller),
-            revision_update.as_str(),
-            Vec::new(),
-        )
+        .execute_sqlite_script_typed(space_id, binding_id, revision_update.as_str(), Vec::new())
         .await
         .map_err(|error| format!("更新供应商用量 Schema 修订失败：{error}"))?;
     Ok(())
@@ -737,6 +811,294 @@ struct ProviderUsageColumnRow {
     /// Exact column name returned by SQLite.
     /// SQLite 返回的精确列名。
     name: String,
+}
+
+/// Migrates native Provider usage facts from the historical application database exactly once.
+/// 将原生 Provider 用量事实从历史应用数据库精确迁移一次。
+///
+/// # Parameters
+/// 参数
+/// `controller` owns both the historical application binding and the new system-statistics binding.
+/// `controller` 同时持有历史应用绑定和新的系统统计绑定。
+///
+/// # Returns
+/// 返回值
+/// Returns unit after all durable facts are copied, aggregates are rebuilt, and the cutover marker is saved.
+/// 所有持久事实复制、聚合重建并保存切换标记后返回空值。
+pub async fn migrate_application_provider_usage(
+    controller: &ControllerRuntimeHandle,
+) -> Result<(), String> {
+    ensure_provider_usage_schema(controller).await?;
+    if application_provider_usage_migration_completed(controller).await? {
+        return Ok(());
+    }
+    let source_exists = application_provider_usage_source_exists(controller).await?;
+    if source_exists {
+        // source_schema is upgraded in place before copying so every declared current column has deterministic semantics.
+        // source_schema 在复制前原地升级，使每个当前声明列都具有确定语义。
+        ensure_provider_usage_schema_at(
+            controller,
+            APP_SPACE_ID,
+            controller.sqlite_binding_id.as_str(),
+        )
+        .await?;
+        for table in APPLICATION_PROVIDER_USAGE_MIGRATION_TABLES {
+            migrate_application_provider_usage_table(controller, table).await?;
+        }
+        // schema_revision is host-owned and must not remain at an older source value after metadata copying.
+        // schema_revision 由宿主持有，复制元数据后不得停留在旧来源值。
+        ensure_provider_usage_schema(controller).await?;
+        rebuild_provider_usage_daily(controller, current_provider_billing_unix_millis()).await?;
+    }
+    persist_application_provider_usage_migration_completed(controller).await
+}
+
+/// Reads the durable cutover marker from the independent system-statistics database.
+/// 从独立系统统计数据库读取持久切换标记。
+async fn application_provider_usage_migration_completed(
+    controller: &ControllerRuntimeHandle,
+) -> Result<bool, String> {
+    let result = controller
+        .client
+        .query_sqlite_json_typed(
+            SYSTEM_STATISTICS_SPACE_ID,
+            system_statistics_sqlite_binding_id(controller),
+            "SELECT CAST(meta_value AS INTEGER) AS completed FROM provider_usage_meta WHERE meta_key = ?;",
+            vec![ControllerSqliteValue::String(String::from(
+                APPLICATION_PROVIDER_USAGE_MIGRATION_KEY,
+            ))],
+        )
+        .await
+        .map_err(|error| format!("读取应用统计数据库迁移状态失败：{error}"))?;
+    Ok(
+        decode_query_rows::<ProviderUsageMigrationCompletedRow>(&result.json_data)?
+            .into_iter()
+            .next()
+            .map(|row| row.completed == 1)
+            .unwrap_or(false),
+    )
+}
+
+/// Reports whether the historical application database contains native Provider usage tables.
+/// 报告历史应用数据库是否包含原生 Provider 用量表。
+async fn application_provider_usage_source_exists(
+    controller: &ControllerRuntimeHandle,
+) -> Result<bool, String> {
+    let result = controller
+        .client
+        .query_sqlite_json_typed(
+            APP_SPACE_ID,
+            controller.sqlite_binding_id.as_str(),
+            "SELECT COUNT(*) AS completed FROM sqlite_master WHERE type = 'table' AND name = 'provider_usage_attempts_v2';",
+            Vec::new(),
+        )
+        .await
+        .map_err(|error| format!("检查应用统计数据库迁移来源失败：{error}"))?;
+    Ok(
+        decode_query_rows::<ProviderUsageMigrationCompletedRow>(&result.json_data)?
+            .into_iter()
+            .next()
+            .map(|row| row.completed == 1)
+            .unwrap_or(false),
+    )
+}
+
+/// Copies one allowlisted Provider usage table by stable SQLite rowid pages.
+/// 按稳定 SQLite rowid 分页复制一张允许列表中的 Provider 用量表。
+async fn migrate_application_provider_usage_table(
+    controller: &ControllerRuntimeHandle,
+    table: &str,
+) -> Result<(), String> {
+    if !APPLICATION_PROVIDER_USAGE_MIGRATION_TABLES.contains(&table) {
+        return Err(format!("拒绝迁移未声明的 Provider 用量表 `{table}`。"));
+    }
+    let source_columns = load_provider_usage_table_columns(
+        controller,
+        APP_SPACE_ID,
+        controller.sqlite_binding_id.as_str(),
+        table,
+    )
+    .await?;
+    let target_columns = load_provider_usage_table_columns(
+        controller,
+        SYSTEM_STATISTICS_SPACE_ID,
+        system_statistics_sqlite_binding_id(controller),
+        table,
+    )
+    .await?;
+    let source_column_names = source_columns
+        .into_iter()
+        .map(|column| column.name)
+        .collect::<BTreeSet<_>>();
+    let columns = target_columns
+        .into_iter()
+        .map(|column| column.name)
+        .filter(|column| source_column_names.contains(column))
+        .collect::<Vec<_>>();
+    if columns.is_empty() {
+        return Err(format!("Provider 用量表 `{table}` 没有可迁移列。"));
+    }
+    let quoted_table = quote_sqlite_identifier(table)?;
+    let quoted_columns = columns
+        .iter()
+        .map(|column| quote_sqlite_identifier(column))
+        .collect::<Result<Vec<_>, _>>()?;
+    let select_sql = format!(
+        "SELECT rowid AS __source_rowid, {} FROM {} WHERE rowid > ? ORDER BY rowid LIMIT ?;",
+        quoted_columns.join(", "),
+        quoted_table
+    );
+    let placeholders = std::iter::repeat_n("?", columns.len())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let insert_sql = if table == "provider_usage_meta" {
+        format!(
+            "INSERT INTO {} ({}) VALUES ({}) ON CONFLICT(meta_key) DO UPDATE SET meta_value = excluded.meta_value, updated_at_ms = excluded.updated_at_ms;",
+            quoted_table,
+            quoted_columns.join(", "),
+            placeholders
+        )
+    } else {
+        format!(
+            "INSERT OR IGNORE INTO {} ({}) VALUES ({});",
+            quoted_table,
+            quoted_columns.join(", "),
+            placeholders
+        )
+    };
+    let mut source_rowid = 0_i64;
+    loop {
+        let result = controller
+            .client
+            .query_sqlite_json_typed(
+                APP_SPACE_ID,
+                controller.sqlite_binding_id.as_str(),
+                select_sql.as_str(),
+                vec![
+                    ControllerSqliteValue::Int64(source_rowid),
+                    ControllerSqliteValue::Int64(APPLICATION_PROVIDER_USAGE_MIGRATION_PAGE_SIZE),
+                ],
+            )
+            .await
+            .map_err(|error| format!("读取应用 Provider 用量表 `{table}` 失败：{error}"))?;
+        let rows = serde_json::from_str::<Vec<Map<String, Value>>>(&result.json_data)
+            .map_err(|error| format!("解析应用 Provider 用量表 `{table}` 分页失败：{error}"))?;
+        if rows.is_empty() {
+            break;
+        }
+        let mut parameter_sets = Vec::with_capacity(rows.len());
+        for row in &rows {
+            let rowid = row
+                .get("__source_rowid")
+                .and_then(Value::as_i64)
+                .ok_or_else(|| format!("应用 Provider 用量表 `{table}` 缺少有效 rowid。"))?;
+            source_rowid = rowid;
+            parameter_sets.push(
+                columns
+                    .iter()
+                    .map(|column| {
+                        row.get(column).ok_or_else(|| {
+                            format!("应用 Provider 用量表 `{table}` 缺少列 `{column}`。")
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?
+                    .into_iter()
+                    .map(json_value_to_controller_sqlite_value)
+                    .collect::<Result<Vec<_>, _>>()?,
+            );
+        }
+        controller
+            .client
+            .execute_sqlite_batch_typed(
+                SYSTEM_STATISTICS_SPACE_ID,
+                system_statistics_sqlite_binding_id(controller),
+                insert_sql.as_str(),
+                parameter_sets,
+            )
+            .await
+            .map_err(|error| format!("写入独立 Provider 用量表 `{table}` 失败：{error}"))?;
+    }
+    Ok(())
+}
+
+/// Loads ordered column metadata for one allowlisted migration table.
+/// 加载一张允许列表迁移表的有序列元数据。
+async fn load_provider_usage_table_columns(
+    controller: &ControllerRuntimeHandle,
+    space_id: &str,
+    binding_id: &str,
+    table: &str,
+) -> Result<Vec<ProviderUsageColumnRow>, String> {
+    let quoted_table = quote_sqlite_identifier(table)?;
+    let result = controller
+        .client
+        .query_sqlite_json_typed(
+            space_id,
+            binding_id,
+            format!("PRAGMA table_info({quoted_table});"),
+            Vec::new(),
+        )
+        .await
+        .map_err(|error| format!("读取 Provider 用量表 `{table}` 列失败：{error}"))?;
+    decode_query_rows::<ProviderUsageColumnRow>(&result.json_data)
+}
+
+/// Persists the completed native application-database migration boundary.
+/// 持久化原生应用数据库迁移完成边界。
+async fn persist_application_provider_usage_migration_completed(
+    controller: &ControllerRuntimeHandle,
+) -> Result<(), String> {
+    controller
+        .client
+        .execute_sqlite_script_typed(
+            SYSTEM_STATISTICS_SPACE_ID,
+            system_statistics_sqlite_binding_id(controller),
+            "UPDATE provider_usage_meta SET meta_value = '1', updated_at_ms = ? WHERE meta_key = ?;",
+            vec![
+                ControllerSqliteValue::Int64(current_provider_billing_unix_millis()),
+                ControllerSqliteValue::String(String::from(
+                    APPLICATION_PROVIDER_USAGE_MIGRATION_KEY,
+                )),
+            ],
+        )
+        .await
+        .map_err(|error| format!("保存应用统计数据库迁移状态失败：{error}"))?;
+    Ok(())
+}
+
+/// Converts one Controller JSON row scalar back into the typed SQLite parameter protocol.
+/// 将一个 Controller JSON 行标量转换回类型化 SQLite 参数协议。
+fn json_value_to_controller_sqlite_value(value: &Value) -> Result<ControllerSqliteValue, String> {
+    match value {
+        Value::Null => Ok(ControllerSqliteValue::Null),
+        Value::Bool(value) => Ok(ControllerSqliteValue::Bool(*value)),
+        Value::Number(value) => {
+            if let Some(value) = value.as_i64() {
+                Ok(ControllerSqliteValue::Int64(value))
+            } else if let Some(value) = value.as_f64() {
+                Ok(ControllerSqliteValue::Float64(value))
+            } else {
+                Err(String::from("SQLite JSON 数值超出受支持范围。"))
+            }
+        }
+        Value::String(value) => Ok(ControllerSqliteValue::String(value.clone())),
+        Value::Array(_) | Value::Object(_) => {
+            Err(String::from("SQLite 行包含不受支持的复合 JSON 值。"))
+        }
+    }
+}
+
+/// Quotes one verified portable SQLite identifier.
+/// 引用一个经过验证的可移植 SQLite 标识符。
+fn quote_sqlite_identifier(identifier: &str) -> Result<String, String> {
+    if identifier.is_empty()
+        || !identifier
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+    {
+        return Err(format!("SQLite 标识符 `{identifier}` 无效。"));
+    }
+    Ok(format!("\"{identifier}\""))
 }
 
 /// One persisted native provider-usage migration cursor row.
@@ -757,13 +1119,13 @@ struct ProviderUsageMigrationCompletedRow {
     completed: i64,
 }
 
-/// Loads the legacy usage-plugin migration cursor from the application binding.
-/// 从应用绑定加载旧用量插件迁移游标。
+/// Loads the legacy usage-plugin migration cursor from the system-statistics binding.
+/// 从系统统计绑定加载旧用量插件迁移游标。
 ///
 /// # Parameters
 /// 参数
-/// `controller` owns the existing application SQLite binding.
-/// `controller` 持有既有应用 SQLite 绑定。
+/// `controller` owns the existing system-statistics SQLite binding.
+/// `controller` 持有既有系统统计 SQLite 绑定。
 ///
 /// # Returns
 /// 返回值
@@ -776,8 +1138,8 @@ pub async fn load_provider_usage_migration_cursor(
     let result = controller
         .client
         .query_sqlite_json_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(controller),
+            SYSTEM_STATISTICS_SPACE_ID,
+            system_statistics_sqlite_binding_id(controller),
             "SELECT meta_value FROM provider_usage_meta WHERE meta_key = 'migration_cursor';",
             Vec::new(),
         )
@@ -801,8 +1163,8 @@ pub async fn load_provider_usage_migration_completed(
     let result = controller
         .client
         .query_sqlite_json_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(controller),
+            SYSTEM_STATISTICS_SPACE_ID,
+            system_statistics_sqlite_binding_id(controller),
             "SELECT CAST(meta_value AS INTEGER) AS completed FROM provider_usage_meta WHERE meta_key = 'legacy_migration_completed';",
             Vec::new(),
         )
@@ -825,8 +1187,8 @@ pub async fn load_provider_usage_migration_completed(
 ///
 /// # Parameters
 /// 参数
-/// `controller` owns the application binding, `cursor` is source-owned, and `updated_at_ms` is the durable write time.
-/// `controller` 持有应用绑定，`cursor` 由来源持有，`updated_at_ms` 是持久化写入时间。
+/// `controller` owns the system-statistics binding, `cursor` is source-owned, and `updated_at_ms` is the durable write time.
+/// `controller` 持有系统统计绑定，`cursor` 由来源持有，`updated_at_ms` 是持久化写入时间。
 ///
 /// # Returns
 /// 返回值
@@ -841,8 +1203,8 @@ pub async fn persist_provider_usage_migration_cursor(
     controller
         .client
         .execute_sqlite_batch_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(controller),
+            SYSTEM_STATISTICS_SPACE_ID,
+            system_statistics_sqlite_binding_id(controller),
             r#"
 INSERT INTO provider_usage_meta(meta_key, meta_value, updated_at_ms)
 VALUES ('migration_cursor', ?1, ?2)
@@ -867,8 +1229,8 @@ pub async fn persist_provider_usage_migration_completed(
     controller
         .client
         .execute_sqlite_batch_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(controller),
+            SYSTEM_STATISTICS_SPACE_ID,
+            system_statistics_sqlite_binding_id(controller),
             r#"
 INSERT INTO provider_usage_meta(meta_key, meta_value, updated_at_ms)
 VALUES ('legacy_migration_completed', '1', ?1)
@@ -888,8 +1250,8 @@ ON CONFLICT(meta_key) DO UPDATE SET
 ///
 /// # Parameters
 /// 参数
-/// `controller` owns the sole application SQLite writer and `updated_at_ms` timestamps the rebuilt aggregate.
-/// `controller` 持有唯一应用 SQLite 写入器，`updated_at_ms` 标记重建聚合时间。
+/// `controller` owns the sole system-statistics SQLite writer and `updated_at_ms` timestamps the rebuilt aggregate.
+/// `controller` 持有唯一系统统计 SQLite 写入器，`updated_at_ms` 标记重建聚合时间。
 ///
 /// # Returns
 /// 返回值
@@ -899,14 +1261,13 @@ pub async fn remove_duplicate_legacy_provider_usage_attempts_and_rebuild_daily(
     controller: &ControllerRuntimeHandle,
     updated_at_ms: i64,
 ) -> Result<(), String> {
-    let writer = PROVIDER_USAGE_WRITE_LOCK.get_or_init(|| tokio::sync::Mutex::new(()));
-    let _guard = writer.lock().await;
+    let _guard = lock_provider_usage_writes().await;
     ensure_provider_usage_schema(controller).await?;
     controller
         .client
         .execute_sqlite_script_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(controller),
+            SYSTEM_STATISTICS_SPACE_ID,
+            system_statistics_sqlite_binding_id(controller),
             r#"
 BEGIN IMMEDIATE;
 DELETE FROM provider_usage_attempts_v2 AS legacy
@@ -937,8 +1298,8 @@ pub async fn load_provider_usage_dashboard(
     let daily_result = controller
         .client
         .query_sqlite_json_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(controller),
+            SYSTEM_STATISTICS_SPACE_ID,
+            system_statistics_sqlite_binding_id(controller),
             r#"
 SELECT calendar_date AS calendarDate, provider_id AS providerId,
        service_entry_id AS serviceEntryId, consumer_id AS consumerId, operation,
@@ -962,8 +1323,8 @@ LIMIT 500;
     let recent_attempts_result = controller
         .client
         .query_sqlite_json_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(controller),
+            SYSTEM_STATISTICS_SPACE_ID,
+            system_statistics_sqlite_binding_id(controller),
             r#"
 SELECT attempts.attempt_id, attempts.consumer_id, attempts.operation,
        attempts.provider_id, attempts.service_entry_id,
@@ -994,8 +1355,8 @@ LIMIT 200;
     let meta_result = controller
         .client
         .query_sqlite_json_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(controller),
+            SYSTEM_STATISTICS_SPACE_ID,
+            system_statistics_sqlite_binding_id(controller),
             r#"
 SELECT
     COALESCE(MAX(CASE WHEN meta_key = 'aggregate_revision' THEN CAST(meta_value AS INTEGER) END), 0) AS aggregate_revision,
@@ -1016,8 +1377,8 @@ FROM provider_usage_meta;
     let accounts_result = controller
         .client
         .query_sqlite_json_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(controller),
+            SYSTEM_STATISTICS_SPACE_ID,
+            system_statistics_sqlite_binding_id(controller),
             r#"
 SELECT provider_id, connection_id, snapshot_kind, endpoint_profile_revision,
        payload_json, observed_at_ms
@@ -1217,8 +1578,8 @@ pub async fn persist_provider_usage_attempt(
 ///
 /// # Parameters
 /// 参数
-/// `controller` owns the application binding, `records` are immutable attempt facts, and `updated_at_ms` timestamps the aggregate revision.
-/// `controller` 持有应用绑定，`records` 是不可变 attempt 事实，`updated_at_ms` 标记聚合修订时间。
+/// `controller` owns the system-statistics binding, `records` are immutable attempt facts, and `updated_at_ms` timestamps the aggregate revision.
+/// `controller` 持有系统统计绑定，`records` 是不可变 attempt 事实，`updated_at_ms` 标记聚合修订时间。
 ///
 /// # Returns
 /// 返回值
@@ -1235,8 +1596,7 @@ pub async fn persist_provider_usage_attempt_batch_and_rebuild_daily(
     for record in records {
         validate_attempt(record)?;
     }
-    let writer = PROVIDER_USAGE_WRITE_LOCK.get_or_init(|| tokio::sync::Mutex::new(()));
-    let _guard = writer.lock().await;
+    let _guard = lock_provider_usage_writes().await;
     ensure_provider_usage_schema(controller).await?;
     persist_provider_usage_attempt_rows(controller, records).await?;
     rebuild_provider_usage_daily(controller, updated_at_ms).await
@@ -1247,8 +1607,8 @@ pub async fn persist_provider_usage_attempt_batch_and_rebuild_daily(
 ///
 /// # Parameters
 /// 参数
-/// `controller` owns the application binding and `records` contains validated immutable rows.
-/// `controller` 持有应用绑定，`records` 包含已校验的不可变行。
+/// `controller` owns the system-statistics binding and `records` contains validated immutable rows.
+/// `controller` 持有系统统计绑定，`records` 包含已校验的不可变行。
 ///
 /// # Returns
 /// 返回值
@@ -1261,8 +1621,8 @@ async fn persist_provider_usage_attempt_rows(
     controller
         .client
         .execute_sqlite_batch_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(controller),
+            SYSTEM_STATISTICS_SPACE_ID,
+            system_statistics_sqlite_binding_id(controller),
             r#"
 INSERT OR IGNORE INTO provider_usage_attempts_v2 (
     attempt_id, logical_request_id, attempt_index, failover_index, consumer_id,
@@ -1356,8 +1716,8 @@ WHERE NOT EXISTS (
 ///
 /// # Parameters
 /// 参数
-/// `controller` owns the existing application SQLite binding, `record` is the immutable attempt, and `updated_at_ms` timestamps the aggregate revision.
-/// `controller` 持有既有应用 SQLite 绑定，`record` 是不可变 attempt，`updated_at_ms` 标记聚合修订时间。
+/// `controller` owns the existing system-statistics SQLite binding, `record` is the immutable attempt, and `updated_at_ms` timestamps the aggregate revision.
+/// `controller` 持有既有系统统计 SQLite 绑定，`record` 是不可变 attempt，`updated_at_ms` 标记聚合修订时间。
 ///
 /// # Returns
 /// 返回值
@@ -1368,8 +1728,7 @@ pub async fn persist_provider_usage_attempt_and_rebuild_daily(
     record: &ProviderUsageAttemptRecord,
     updated_at_ms: i64,
 ) -> Result<(), String> {
-    let writer = PROVIDER_USAGE_WRITE_LOCK.get_or_init(|| tokio::sync::Mutex::new(()));
-    let _guard = writer.lock().await;
+    let _guard = lock_provider_usage_writes().await;
     persist_provider_usage_attempt(controller, record).await?;
     rebuild_provider_usage_daily(controller, updated_at_ms).await
 }
@@ -1393,8 +1752,8 @@ pub async fn persist_provider_pricing_profile(
     controller
         .client
         .execute_sqlite_batch_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(controller),
+            SYSTEM_STATISTICS_SPACE_ID,
+            system_statistics_sqlite_binding_id(controller),
             r#"
 INSERT OR IGNORE INTO provider_pricing_profiles_v1 (
     pricing_revision, provider_id, service_entry_id, model_id, currency,
@@ -1444,8 +1803,8 @@ pub async fn persist_provider_account_usage_snapshot(
     controller
         .client
         .execute_sqlite_batch_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(controller),
+            SYSTEM_STATISTICS_SPACE_ID,
+            system_statistics_sqlite_binding_id(controller),
             r#"
 INSERT OR IGNORE INTO provider_account_usage_snapshots_v1 (
     snapshot_id, provider_id, connection_id, snapshot_kind,
@@ -1496,8 +1855,8 @@ pub async fn persist_provider_rate_limit_snapshot(
     controller
         .client
         .execute_sqlite_batch_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(controller),
+            SYSTEM_STATISTICS_SPACE_ID,
+            system_statistics_sqlite_binding_id(controller),
             r#"
 INSERT OR IGNORE INTO provider_rate_limit_snapshots_v1 (
     snapshot_id, attempt_id, headers_json, retry_after_ms, observed_at_ms
@@ -1854,8 +2213,8 @@ pub async fn rebuild_provider_usage_daily(
     let result = controller
         .client
         .query_sqlite_json_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(controller),
+            SYSTEM_STATISTICS_SPACE_ID,
+            system_statistics_sqlite_binding_id(controller),
             r#"
 SELECT
     calendar_date, provider_id, service_entry_id, consumer_id, operation,
@@ -1892,8 +2251,8 @@ COMMIT;
     controller
         .client
         .execute_sqlite_script_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(controller),
+            SYSTEM_STATISTICS_SPACE_ID,
+            system_statistics_sqlite_binding_id(controller),
             script.as_str(),
             Vec::new(),
         )

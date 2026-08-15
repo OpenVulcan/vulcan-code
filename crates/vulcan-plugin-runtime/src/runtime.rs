@@ -8,8 +8,8 @@ use crate::{
     VulcanPluginManifest, VulcanPluginMcpStdioLauncherManifest, VulcanPluginMcpTransportManifest,
     VulcanPluginPackageOrigin, VulcanPluginPermission, VulcanPluginRuntimeState,
     VulcanPluginStorageOperation, VulcanPluginStorageRequest, VulcanPluginToolDescriptor,
-    VulcanPluginToolExecutionKind, VulcanPluginUiInvalidation, inspect_user_plugin_package,
-    load_vulcan_plugin_catalog,
+    VulcanPluginToolExecutionKind, VulcanPluginUiInvalidation, VulcanPluginVldbOperation,
+    VulcanPluginVldbRequest, inspect_user_plugin_package, load_vulcan_plugin_catalog,
 };
 use luaskills::{
     LuaEngine, ManagedRuntimeKind, PackageDependencyManifest, RuntimeHostToolAction,
@@ -102,6 +102,22 @@ const VULCAN_PLUGIN_STORAGE_LANCEDB_DROP_TABLE_TOOL: &str =
 /// Fixed host-tool name used to invalidate current plugin UI data.
 /// 用于使当前插件界面数据失效的固定宿主工具名称。
 const VULCAN_PLUGIN_UI_INVALIDATE_TOOL: &str = "vulcan.plugin.ui.invalidate";
+
+/// Fixed host-tool name used to query one registered host SQLite binding.
+/// 用于查询一个已注册宿主 SQLite 绑定的固定宿主工具名称。
+const VULCAN_VLDB_SQLITE_QUERY_V1_TOOL: &str = "vulcan.vldb.sqlite.query.v1";
+
+/// Fixed host-tool name used to execute one write against a registered host SQLite binding.
+/// 用于对一个已注册宿主 SQLite 绑定执行写入的固定宿主工具名称。
+const VULCAN_VLDB_SQLITE_EXECUTE_V1_TOOL: &str = "vulcan.vldb.sqlite.execute.v1";
+
+/// Fixed host-tool name used to execute one atomic batch against a registered host SQLite binding.
+/// 用于对一个已注册宿主 SQLite 绑定执行原子批次的固定宿主工具名称。
+const VULCAN_VLDB_SQLITE_EXECUTE_BATCH_V1_TOOL: &str = "vulcan.vldb.sqlite.execute_batch.v1";
+
+/// Fixed host-tool name used to checkpoint one registered host SQLite binding.
+/// 用于检查点化一个已注册宿主 SQLite 绑定的固定宿主工具名称。
+const VULCAN_VLDB_SQLITE_FLUSH_V1_TOOL: &str = "vulcan.vldb.sqlite.flush.v1";
 
 /// Windows creation flag that prevents a console window for a child process.
 /// 防止子进程创建控制台窗口的 Windows 创建标志。
@@ -4814,6 +4830,10 @@ fn dispatch_plugin_host_tool_request(
             VULCAN_PLUGIN_STORAGE_LANCEDB_SEARCH_TOOL,
             VULCAN_PLUGIN_STORAGE_LANCEDB_DELETE_TOOL,
             VULCAN_PLUGIN_STORAGE_LANCEDB_DROP_TABLE_TOOL,
+            VULCAN_VLDB_SQLITE_QUERY_V1_TOOL,
+            VULCAN_VLDB_SQLITE_EXECUTE_V1_TOOL,
+            VULCAN_VLDB_SQLITE_EXECUTE_BATCH_V1_TOOL,
+            VULCAN_VLDB_SQLITE_FLUSH_V1_TOOL,
             VULCAN_PLUGIN_UI_INVALIDATE_TOOL,
         ])),
         RuntimeHostToolAction::Has => Ok(json!(matches!(
@@ -4831,6 +4851,10 @@ fn dispatch_plugin_host_tool_request(
                 | Some(VULCAN_PLUGIN_STORAGE_LANCEDB_SEARCH_TOOL)
                 | Some(VULCAN_PLUGIN_STORAGE_LANCEDB_DELETE_TOOL)
                 | Some(VULCAN_PLUGIN_STORAGE_LANCEDB_DROP_TABLE_TOOL)
+                | Some(VULCAN_VLDB_SQLITE_QUERY_V1_TOOL)
+                | Some(VULCAN_VLDB_SQLITE_EXECUTE_V1_TOOL)
+                | Some(VULCAN_VLDB_SQLITE_EXECUTE_BATCH_V1_TOOL)
+                | Some(VULCAN_VLDB_SQLITE_FLUSH_V1_TOOL)
                 | Some(VULCAN_PLUGIN_UI_INVALIDATE_TOOL)
         ))),
         RuntimeHostToolAction::Call => {
@@ -4874,6 +4898,9 @@ fn dispatch_plugin_host_tool_request(
                 }
                 Some(tool_name) if plugin_storage_operation(tool_name).is_some() => {
                     dispatch_plugin_storage_request(&state, tool_name, &request.args)
+                }
+                Some(tool_name) if plugin_vldb_operation(tool_name).is_some() => {
+                    dispatch_plugin_vldb_request(&state, tool_name, &request.args)
                 }
                 Some(VULCAN_PLUGIN_UI_INVALIDATE_TOOL) => {
                     dispatch_plugin_ui_invalidation(&state, &request.args)
@@ -4935,6 +4962,30 @@ fn plugin_storage_operation(tool_name: &str) -> Option<VulcanPluginStorageOperat
     }
 }
 
+/// Resolves one registered host VLDB tool name into its fixed operation.
+/// 将一个已注册宿主 VLDB 工具名称解析为固定操作。
+///
+/// # Parameters
+/// 参数
+/// `tool_name` is the exact name received from the LuaSkills host callback.
+/// `tool_name` 是从 LuaSkills 宿主回调收到的精确名称。
+///
+/// # Returns
+/// 返回值
+/// Returns the matching operation, or `None` when the name is not a VLDB tool.
+/// 返回匹配操作；名称不是 VLDB 工具时返回 `None`。
+fn plugin_vldb_operation(tool_name: &str) -> Option<VulcanPluginVldbOperation> {
+    match tool_name {
+        VULCAN_VLDB_SQLITE_QUERY_V1_TOOL => Some(VulcanPluginVldbOperation::SqliteQuery),
+        VULCAN_VLDB_SQLITE_EXECUTE_V1_TOOL => Some(VulcanPluginVldbOperation::SqliteExecute),
+        VULCAN_VLDB_SQLITE_EXECUTE_BATCH_V1_TOOL => {
+            Some(VulcanPluginVldbOperation::SqliteExecuteBatch)
+        }
+        VULCAN_VLDB_SQLITE_FLUSH_V1_TOOL => Some(VulcanPluginVldbOperation::SqliteFlush),
+        _ => None,
+    }
+}
+
 /// Dispatches one capability-checked storage request without exposing host binding metadata.
 /// 分发一条经过能力校验且不暴露宿主绑定元数据的存储请求。
 ///
@@ -4982,6 +5033,55 @@ fn dispatch_plugin_storage_request(
     storage_service.execute(VulcanPluginStorageRequest {
         plugin_id: plugin_identity.to_string(),
         operation: storage_operation,
+        payload: Value::Object(payload.clone()),
+    })
+}
+
+/// Dispatches one capability-checked request to a host-registered VLDB binding.
+/// 向宿主注册的 VLDB 绑定分发一条经过能力校验的请求。
+///
+/// # Parameters
+/// 参数
+/// `state` owns host services, `tool_name` fixes the operation, and `request_args` carries bridge identity.
+/// `state` 持有宿主服务，`tool_name` 固定操作，`request_args` 携带桥接身份。
+///
+/// # Returns
+/// 返回值
+/// Returns the JSON-safe host VLDB result.
+/// 返回 JSON 安全的宿主 VLDB 结果。
+fn dispatch_plugin_vldb_request(
+    state: &Arc<VulcanPluginManagerState>,
+    tool_name: &str,
+    request_args: &Value,
+) -> Result<Value, String> {
+    // operation is fixed by the registered host-tool name and cannot be supplied by plugin payload.
+    // operation 由已注册宿主工具名称固定，插件载荷不能自行提供。
+    let operation = plugin_vldb_operation(tool_name)
+        .ok_or_else(|| format!("Unsupported Vulcan plugin VLDB tool `{tool_name}`."))?;
+    // pluginIdentity and payload are extracted only from the trusted bridge envelope.
+    // pluginIdentity 与 payload 仅从可信桥接信封中提取。
+    let (plugin_identity, payload) = bridge_request_identity_and_payload(request_args)?;
+    // leaseScope binds capability checks to the exact runtime lifecycle state.
+    // leaseScope 将能力校验绑定到精确运行时生命周期状态。
+    let lease_scope = bridge_request_lease_scope(request_args)?;
+    ensure_plugin_capability(
+        state,
+        plugin_identity,
+        VulcanPluginPermission::SystemVldbAccess,
+        lease_scope,
+    )?;
+    // vldbService is cloned before invocation so no runtime service lock crosses the call boundary.
+    // vldbService 在调用前克隆，避免运行时服务锁跨越调用边界。
+    let vldb_service = state
+        .host_services
+        .read()
+        .map_err(|_| "Vulcan plugin host services lock is poisoned.".to_string())?
+        .vldb
+        .clone()
+        .ok_or_else(|| "Vulcan plugin VLDB service is unavailable.".to_string())?;
+    vldb_service.execute(VulcanPluginVldbRequest {
+        plugin_id: plugin_identity.to_string(),
+        operation,
         payload: Value::Object(payload.clone()),
     })
 }
@@ -6995,6 +7095,7 @@ pub fn plugin_permission_key(capability: VulcanPluginPermission) -> &'static str
         VulcanPluginPermission::SecretsRead => "secrets_read",
         VulcanPluginPermission::UiHostContext => "ui_host_context",
         VulcanPluginPermission::ModelCatalogRead => "model_catalog_read",
+        VulcanPluginPermission::SystemVldbAccess => "system_vldb_access",
         VulcanPluginPermission::ModelInvoke => "model_invoke",
         VulcanPluginPermission::DependencyRegistryNetwork => "dependency_registry_network",
         VulcanPluginPermission::StorageSqlite => "storage_sqlite",
@@ -7463,7 +7564,7 @@ fn current_unix_millis_u64() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{VulcanPluginStorageService, VulcanPluginUiEventPublisher};
+    use crate::VulcanPluginVldbService;
     use luaskills::{LuaEngineOptions, LuaRuntimeHostOptions, LuaVmPoolConfig};
     use std::fs;
     use vulcan_hooks::{
@@ -7498,239 +7599,151 @@ mod tests {
         );
     }
 
-    /// RecordingStorageService simulates the host database boundary for real plugin Lua tests.
-    /// RecordingStorageService 为真实插件 Lua 测试模拟宿主数据库边界。
-    #[derive(Default)]
-    struct RecordingStorageService {
-        /// Ordered authenticated storage calls received from the fixed bridge.
-        /// 从固定桥接层收到的有序已认证存储调用。
-        calls: Mutex<Vec<VulcanPluginStorageRequest>>,
+    /// Verifies every public VLDB host name selects one immutable operation and rejects aliases.
+    /// 验证每个公开 VLDB 宿主名称都选择唯一不可变操作，并拒绝别名。
+    #[test]
+    fn vldb_host_tool_names_map_to_exact_operations() {
+        assert_eq!(
+            plugin_vldb_operation(VULCAN_VLDB_SQLITE_QUERY_V1_TOOL),
+            Some(VulcanPluginVldbOperation::SqliteQuery)
+        );
+        assert_eq!(
+            plugin_vldb_operation(VULCAN_VLDB_SQLITE_EXECUTE_V1_TOOL),
+            Some(VulcanPluginVldbOperation::SqliteExecute)
+        );
+        assert_eq!(
+            plugin_vldb_operation(VULCAN_VLDB_SQLITE_EXECUTE_BATCH_V1_TOOL),
+            Some(VulcanPluginVldbOperation::SqliteExecuteBatch)
+        );
+        assert_eq!(
+            plugin_vldb_operation(VULCAN_VLDB_SQLITE_FLUSH_V1_TOOL),
+            Some(VulcanPluginVldbOperation::SqliteFlush)
+        );
+        assert_eq!(plugin_vldb_operation("vulcan.vldb.sqlite.query"), None);
+        assert_eq!(
+            plugin_permission_key(VulcanPluginPermission::SystemVldbAccess),
+            "system_vldb_access"
+        );
     }
 
-    impl VulcanPluginStorageService for RecordingStorageService {
-        /// Records one request and returns deterministic rows required by the statistics Hook.
-        /// 记录一条请求，并返回统计 Hook 所需的确定性数据行。
+    /// RecordingVldbService supplies typed rows for the registered system-statistics binding.
+    /// RecordingVldbService 为已注册的系统统计绑定提供类型化行。
+    #[derive(Default)]
+    struct RecordingVldbService {
+        /// Ordered authenticated VLDB requests received from the fixed bridge.
+        /// 从固定桥接层收到的有序已认证 VLDB 请求。
+        calls: Mutex<Vec<VulcanPluginVldbRequest>>,
+    }
+
+    impl VulcanPluginVldbService for RecordingVldbService {
+        /// Records one request and returns rows selected by the exact production query.
+        /// 记录一条请求，并按精确生产查询返回行。
         ///
         /// # Parameters
         /// 参数
-        /// `request` is the authenticated fixed-bridge storage operation.
-        /// `request` 是经过认证的固定桥接存储操作。
+        /// `request` is the authenticated fixed-bridge VLDB operation.
+        /// `request` 是经过认证的固定桥接 VLDB 操作。
         ///
         /// # Returns
         /// 返回值
-        /// Returns deterministic migration, write, and query envelopes.
-        /// 返回确定性的迁移、写入与查询信封。
-        fn execute(&self, request: VulcanPluginStorageRequest) -> Result<Value, String> {
-            // sql is captured before the request moves into the ordered assertion log.
-            // sql 在请求移入有序断言日志前被提取。
+        /// Returns one deterministic typed query result.
+        /// 返回一份确定性的类型化查询结果。
+        fn execute(&self, request: VulcanPluginVldbRequest) -> Result<Value, String> {
             let sql = request
                 .payload
                 .get("sql")
                 .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string();
-            // operation selects the exact production response shape expected by bridge.lua.
-            // operation 选择 bridge.lua 期望的精确生产响应形状。
-            let operation = request.operation;
+                .ok_or_else(|| String::from("Recording VLDB fixture requires SQL."))?;
+            if request.operation == VulcanPluginVldbOperation::SqliteExecute {
+                if !sql.contains("BEGIN IMMEDIATE;")
+                    || !sql.contains("DELETE FROM provider_usage_attempts_v2")
+                {
+                    return Err(String::from(
+                        "Recording VLDB fixture received an unexpected write.",
+                    ));
+                }
+                self.calls
+                    .lock()
+                    .expect("lock recording VLDB calls")
+                    .push(request);
+                return Ok(json!({ "rows_changed": 5 }));
+            }
+            if request.operation != VulcanPluginVldbOperation::SqliteQuery {
+                return Err(String::from(
+                    "Recording VLDB fixture accepts query and execute operations only.",
+                ));
+            }
+            let rows = if sql.contains("FROM provider_usage_daily_v2") {
+                json!([{
+                    "calendarDate": "2026-08-15",
+                    "providerId": "provider-1",
+                    "serviceEntryId": "entry-1",
+                    "consumerId": "webui",
+                    "operation": "response_create",
+                    "modelId": "model-1",
+                    "currency": "USD",
+                    "attemptCount": 1,
+                    "successfulAttemptCount": 1,
+                    "reportedUsageAttemptCount": 1,
+                    "inputTokens": 10,
+                    "uncachedInputTokens": 8,
+                    "cacheReadTokens": 2,
+                    "cacheWriteTokens": 0,
+                    "outputTokens": 20,
+                    "reasoningTokens": 5,
+                    "totalTokens": 35,
+                    "reportedCost": null,
+                    "estimatedCost": "0.0004",
+                    "aggregateRevision": 7
+                }])
+            } else if sql.contains("FROM provider_usage_attempts_v2 AS attempts") {
+                json!([{
+                    "attemptId": "attempt-1",
+                    "consumerId": "webui",
+                    "operation": "response_create",
+                    "providerId": "provider-1",
+                    "serviceEntryId": "entry-1",
+                    "modelId": "model-1",
+                    "transport": "http_sse",
+                    "httpStatus": 200,
+                    "websocketCloseCode": null,
+                    "errorCategory": null,
+                    "errorCode": null,
+                    "status": "succeeded",
+                    "usageAvailability": "final",
+                    "totalTokens": 35,
+                    "billingDetailsJson": "[]",
+                    "reportedCost": null,
+                    "estimatedCost": "0.0004",
+                    "currency": "USD",
+                    "pricingRevision": "pricing-1",
+                    "pricingSourceKind": "system",
+                    "pricingSourceId": "catalog-1",
+                    "terminalAtMs": 1_500
+                }])
+            } else if sql.contains("FROM provider_account_usage_snapshots_v1") {
+                json!([])
+            } else if sql.contains("COUNT(*) AS attemptCount") {
+                json!([{
+                    "attemptCount": 1,
+                    "totalTokens": 35,
+                    "aggregateRevision": 7
+                }])
+            } else if sql.contains("FROM provider_usage_meta") {
+                json!([{
+                    "generatedAtMs": 1_500,
+                    "schemaRevision": 1,
+                    "aggregateRevision": 7,
+                    "healthStatus": "ready"
+                }])
+            } else {
+                return Err(format!("Unexpected recording VLDB query: {sql}"));
+            };
             self.calls
                 .lock()
-                .expect("lock recording storage calls")
+                .expect("lock recording VLDB calls")
                 .push(request);
-            match operation {
-                VulcanPluginStorageOperation::SqliteMigrate => {
-                    Ok(json!({"applied": true, "version": 1}))
-                }
-                VulcanPluginStorageOperation::SqliteExecute => Ok(json!({"affected_rows": 1})),
-                VulcanPluginStorageOperation::SqliteQuery
-                    if sql.contains("SELECT model_ref FROM models") =>
-                {
-                    Ok(json!({"rows": [{"model_ref": 1}], "row_count": 1}))
-                }
-                VulcanPluginStorageOperation::SqliteQuery
-                    if sql.contains(
-                        "SELECT model_ref AS modelRef FROM models WHERE model_ref = ?1",
-                    ) =>
-                {
-                    Ok(json!({"rows": [{"modelRef": 1}], "row_count": 1}))
-                }
-                VulcanPluginStorageOperation::SqliteQuery
-                    if sql.contains("SELECT date(?1) AS normalized_date") =>
-                {
-                    Ok(json!({"rows": [{"normalized_date": "2026-07-14"}], "row_count": 1}))
-                }
-                VulcanPluginStorageOperation::SqliteQuery
-                    if sql.contains("SELECT COUNT(*) AS count") =>
-                {
-                    // expiredCount forces the automatic-retention branch without requiring a real SQLite fixture.
-                    // expiredCount 强制进入自动保留期分支，无需依赖真实 SQLite 测试夹具。
-                    Ok(json!({"rows": [{"count": 1}], "row_count": 1}))
-                }
-                VulcanPluginStorageOperation::SqliteQuery
-                    if sql.contains("FROM statistics_meta") =>
-                {
-                    Ok(json!({"rows": [{"revision": 1}], "row_count": 1}))
-                }
-                VulcanPluginStorageOperation::SqliteQuery
-                    if sql.contains("SELECT COUNT(*) AS requests") =>
-                {
-                    Ok(json!({"rows": [{
-                        "requests": 1,
-                        "successes": 1,
-                        "failures": 0,
-                        "cancelled": 0,
-                        "inputTokens": 10,
-                        "outputTokens": 20,
-                        "reasoningTokens": 5,
-                        "providerTotalTokens": 35,
-                        "totalTokens": 35,
-                        "cachedInputTokens": 14,
-                        "cacheCreationInputTokens": 2,
-                        "unknownTokenRequests": 0,
-                        "inconsistentTokenRequests": 0
-                    }], "row_count": 1}))
-                }
-                VulcanPluginStorageOperation::SqliteQuery
-                    if sql.contains("COALESCE(SUM(request_count)") =>
-                {
-                    Ok(json!({"rows": [{
-                        "requests": 1,
-                        "successes": 1,
-                        "failures": 0,
-                        "cancelled": 0,
-                        "retries": 0,
-                        "inputTokens": 10,
-                        "outputTokens": 20,
-                        "reasoningTokens": 5,
-                        "totalTokens": 35,
-                        "providerTotalTokens": 35,
-                        "unknownTokenRequests": 0,
-                        "inconsistentTokenRequests": 0,
-                        "cachedInputTokens": 14,
-                        "cacheCreationInputTokens": 2,
-                        "durationMs": 500,
-                        "averageDurationMs": 500,
-                        "mainAgentTokens": 35,
-                        "subagentTokens": 0,
-                        "internalTokens": 0,
-                        "longestRequestMs": 500,
-                        "peakRequestTokens": 35,
-                        "averageFirstTokenMs": 120,
-                        "activeDays": 1
-                    }], "row_count": 1}))
-                }
-                VulcanPluginStorageOperation::SqliteQuery if sql.contains("WITH active AS") => {
-                    Ok(json!({"rows": [{
-                        "longestStreakDays": 1,
-                        "currentStreakDays": 1
-                    }], "row_count": 1}))
-                }
-                VulcanPluginStorageOperation::SqliteQuery if sql.contains("WITH filtered AS") => {
-                    Ok(json!({"rows": [{
-                        "date": "2026-07-14",
-                        "value": 35,
-                        "requests": 1,
-                        "successes": 1,
-                        "topProviderName": "Provider One",
-                        "topModelName": "Model One"
-                    }], "row_count": 1}))
-                }
-                VulcanPluginStorageOperation::SqliteQuery if sql.contains("MAX(daily_tokens)") => {
-                    Ok(json!({"rows": [{"peakDailyTokens": 35}], "row_count": 1}))
-                }
-                VulcanPluginStorageOperation::SqliteQuery if sql.contains("WITH ranked AS") => {
-                    Ok(json!({"rows": [{
-                        "date": "2026-07-14",
-                        "seriesRef": 1,
-                        "seriesKey": "provider-1/model-1",
-                        "label": "Model One",
-                        "value": 10
-                    }], "row_count": 1}))
-                }
-                VulcanPluginStorageOperation::SqliteQuery
-                    if sql.contains("JOIN models m ON m.model_ref = d.model_ref") =>
-                {
-                    Ok(json!({"rows": [{
-                        "modelRef": 1,
-                        "providerKey": "provider-1",
-                        "providerName": "Provider One",
-                        "modelKey": "model-1",
-                        "modelName": "Model One",
-                        "totalTokens": 35,
-                        "requests": 1,
-                        "sharePercent": 100
-                    }], "row_count": 1}))
-                }
-                VulcanPluginStorageOperation::SqliteQuery
-                    if sql.contains("SELECT model_ref AS modelRef") =>
-                {
-                    Ok(json!({"rows": [{
-                        "modelRef": 1,
-                        "providerName": "Provider One",
-                        "modelName": "Model One"
-                    }], "row_count": 1}))
-                }
-                VulcanPluginStorageOperation::SqliteQuery
-                    if sql.contains("SELECT e.request_id AS requestId") =>
-                {
-                    Ok(json!({"rows": [{
-                        "requestId": "request-1",
-                        "completedAtMs": 1_500,
-                        "providerName": "Provider One",
-                        "modelName": "Model One",
-                        "ownerKind": "main_agent",
-                        "ownerName": "Main Agent",
-                        "status": "succeeded",
-                        "inputTokens": 10,
-                        "outputTokens": 20,
-                        "totalTokens": 35,
-                        "providerTotalTokens": 35,
-                        "totalTokenSource": "reported",
-                        "cachedInputTokens": 14,
-                        "timeToFirstTokenMs": 120,
-                        "durationMs": 500,
-                        "retryCount": 0,
-                        "errorCategory": null,
-                        "errorCode": null
-                    }], "row_count": 1}))
-                }
-                VulcanPluginStorageOperation::SqliteQuery
-                    if sql.contains("WHERE e.status = 'failed'") =>
-                {
-                    Ok(json!({"rows": [{
-                        "errorCategory": "provider_http",
-                        "errorCode": "429",
-                        "count": 1
-                    }], "row_count": 1}))
-                }
-                VulcanPluginStorageOperation::SqliteQuery => {
-                    Ok(json!({"rows": [], "row_count": 0}))
-                }
-                VulcanPluginStorageOperation::SqliteFlush => Ok(json!({"flushed": true})),
-                _ => Err(String::from(
-                    "Unexpected storage operation in SQLite Hook test.",
-                )),
-            }
-        }
-    }
-
-    /// RecordingUiEventPublisher captures plugin-scoped revision notifications.
-    /// RecordingUiEventPublisher 捕获插件作用域的修订通知。
-    #[derive(Default)]
-    struct RecordingUiEventPublisher {
-        /// Ordered invalidation events published after durable writes.
-        /// 持久写入后发布的有序失效事件。
-        events: Mutex<Vec<VulcanPluginUiInvalidation>>,
-    }
-
-    impl VulcanPluginUiEventPublisher for RecordingUiEventPublisher {
-        /// Records one validated plugin invalidation.
-        /// 记录一条已经校验的插件失效通知。
-        fn publish(&self, event: VulcanPluginUiInvalidation) -> Result<(), String> {
-            self.events
-                .lock()
-                .expect("lock recording UI events")
-                .push(event);
-            Ok(())
+            Ok(json!({ "rows": rows, "row_count": rows.as_array().map_or(0, Vec::len) }))
         }
     }
 
@@ -8263,10 +8276,10 @@ return M
         assert!(report.failures.is_empty());
     }
 
-    /// Verifies the repository usage-statistics plugin manifest, Lua bundle, and configuration action.
-    /// 验证仓库用量统计插件的清单、Lua Bundle 与配置 Action。
+    /// Verifies the repository usage-statistics plugin queries the registered system VLDB binding.
+    /// 验证仓库用量统计插件查询已注册的系统 VLDB 绑定。
     #[test]
-    fn bundled_usage_statistics_plugin_loads_through_fixed_bridge() {
+    fn bundled_usage_statistics_plugin_loads_through_system_vldb_bridge() {
         // temp owns the isolated LuaSkills bridge and plugin runtime state.
         // temp 持有隔离的 LuaSkills 桥接与插件运行时状态。
         let temp = tempfile::tempdir().expect("create usage statistics plugin test directory");
@@ -8283,16 +8296,14 @@ return M
         // manager loads the real repository package through the production catalog path.
         // manager 通过生产目录路径加载真实仓库插件包。
         let manager = test_manager(&runtime_root, repository_root.join("plugins"));
-        // storage records the exact SQL and parameter protocol emitted by the real Lua bundle.
-        // storage 记录真实 Lua Bundle 发出的精确 SQL 与参数协议。
-        let storage = Arc::new(RecordingStorageService::default());
-        // uiEvents records the revision-only notification emitted after the terminal fact.
-        // uiEvents 记录终态事实写入后发出的仅含修订号通知。
-        let ui_events = Arc::new(RecordingUiEventPublisher::default());
+        // vldb records every authoritative logical-binding query emitted by the real Lua bundle.
+        // vldb 记录真实 Lua Bundle 发出的每个权威逻辑绑定查询。
+        let vldb = Arc::new(RecordingVldbService::default());
         manager
             .install_host_services(VulcanPluginHostServices {
-                storage: Some(storage.clone()),
-                ui_events: Some(ui_events.clone()),
+                storage: None,
+                vldb: Some(vldb.clone()),
+                ui_events: None,
             })
             .expect("install recording usage statistics host services");
         // catalog proves the package passed manifest, schema, asset, and locale validation.
@@ -8300,10 +8311,45 @@ return M
         let catalog = manager
             .refresh_catalog(&BTreeSet::new(), &BTreeSet::new())
             .expect("load repository plugin catalog");
+        let descriptor = catalog
+            .plugins
+            .get("vulcan-usage-statistics")
+            .expect("resolve usage statistics plugin descriptor");
+        let manifest = descriptor
+            .manifest
+            .as_ref()
+            .expect("usage statistics plugin has executable manifest");
         assert!(
-            catalog.plugins.contains_key("vulcan-usage-statistics"),
-            "catalog diagnostics: {:?}",
-            catalog.diagnostics
+            descriptor.desired_enabled,
+            "usage statistics plugin must be enabled: {:?}; catalog diagnostics: {:?}",
+            descriptor.diagnostics, catalog.diagnostics
+        );
+        assert_eq!(
+            descriptor.runtime_state,
+            VulcanPluginRuntimeState::Enabled,
+            "usage statistics plugin runtime must be enabled: availability={:?}, execution_available={}, diagnostics={:?}",
+            descriptor.availability,
+            descriptor.runtime_execution_available,
+            descriptor.diagnostics
+        );
+        assert!(
+            manifest
+                .permissions
+                .contains(&VulcanPluginPermission::SystemVldbAccess)
+        );
+        assert!(
+            !manifest
+                .permissions
+                .contains(&VulcanPluginPermission::StorageSqlite)
+        );
+        assert!(
+            !manifest
+                .permissions
+                .contains(&VulcanPluginPermission::Config)
+        );
+        assert!(
+            descriptor.hooks.is_empty(),
+            "system-backed statistics plugin must not duplicate Provider telemetry hooks"
         );
         // runtime executes the real uncompressed Lua bundle deterministically.
         // runtime 确定性执行真实未压缩 Lua Bundle。
@@ -8314,638 +8360,103 @@ return M
         runtime
             .block_on(manager.prewarm_plugin_runtime("vulcan-usage-statistics"))
             .expect("prewarm usage statistics plugin runtime");
-        // settings is the exact host-validated default configuration.
-        // settings 是经宿主精确校验的默认配置。
-        let settings = runtime
+        // dashboard is assembled from capability-checked direct VLDB queries.
+        // dashboard 由经过能力校验的直接 VLDB 查询组装。
+        let dashboard = runtime
             .block_on(manager.invoke_action(VulcanPluginActionRequest {
                 plugin_id: String::from("vulcan-usage-statistics"),
-                action_id: String::from("settings-get"),
+                action_id: String::from("dashboard-get"),
                 arguments: json!({}),
                 caller: crate::VulcanPluginActionCaller::PluginUi,
                 workspace_root: repository_root.to_path_buf(),
                 reuse_enabled_runtime: true,
             }))
-            .expect("invoke usage statistics settings action");
-        assert_eq!(settings["enabled"], true);
-        assert_eq!(settings["retentionDays"], 180);
-        assert_eq!(settings["defaultRangeDays"], 30);
-        assert_eq!(settings["defaultMetric"], "total_tokens");
-        // permanentSettings validates the zero-day permanent-retention sentinel through the production config boundary.
-        // permanentSettings 通过生产配置边界验证零天永久保留哨兵。
-        let permanent_settings = runtime
-            .block_on(manager.invoke_action(VulcanPluginActionRequest {
-                plugin_id: String::from("vulcan-usage-statistics"),
-                action_id: String::from("settings-update"),
-                arguments: json!({
-                    "enabled": true,
-                    "retentionDays": 0,
-                    "defaultRangeDays": 30,
-                    "defaultMetric": "total_tokens"
-                }),
-                caller: crate::VulcanPluginActionCaller::PluginUi,
-                workspace_root: repository_root.to_path_buf(),
-                reuse_enabled_runtime: true,
-            }))
-            .expect("persist permanent usage statistics retention");
-        assert_eq!(permanent_settings["retentionDays"], 0);
-        // completedHook is the real repository Hook descriptor, including its payload schema.
-        // completedHook 是包含载荷 Schema 的真实仓库 Hook 描述符。
-        let completed_hook = catalog
-            .enabled_hooks
-            .get("vulcan-plugin/vulcan-usage-statistics/provider-request-completed")
-            .cloned()
-            .expect("resolve usage statistics completed Hook");
-        // completedPayload contains every host-owned field required by schema version one.
-        // completedPayload 包含 Schema 版本一要求的全部宿主持有字段。
-        let mut completed_payload = json!({
-            "schema_version": 1,
-            "request_id": "request-1",
-            "execution_id": "execution-1",
-            "session_id": "session-1",
-            "project_id": "project-1",
-            "workspace_id": repository_root.to_string_lossy(),
-            "owner_kind": "main_agent",
-            "owner_id": "main-agent",
-            "owner_name": "Main Agent",
-            "provider_key": "provider-1",
-            "provider_name": "Provider One",
-            "service_entry_id": "entry-1",
-            "connection_id": "connection-1",
-            "protocol_profile_id": "openai-chat",
-            "secondary_route_id": "route-1",
-            "secondary_provider_name": "Secondary Provider",
-            "secondary_endpoint_name": "Secondary Endpoint",
-            "model_key": "model-1",
-            "model_name": "Model One",
-            "attempt_index": 0,
-            "retry_count": 0,
-            "status": "succeeded",
-            "started_at_ms": 1_000,
-            "first_event_at_ms": 1_100,
-            "first_token_at_ms": 1_120,
-            "completed_at_ms": 1_500,
-            "time_to_first_event_ms": 100,
-            "time_to_first_token_ms": 120,
-            "duration_ms": 500,
-            "input_tokens": 10,
-            "uncached_input_tokens": 10,
-            "output_tokens": 20,
-            "reasoning_tokens": 5,
-            "total_tokens": 35,
-            "cached_input_tokens": 14,
-            "cache_creation_input_tokens": 2,
-            "finish_reason": "stop",
-            "error_category": null,
-            "error_code": null,
-            "calendar_date": "2026-07-14",
-            "timezone_offset_minutes": 480
-        });
-        let completed_object = completed_payload
-            .as_object_mut()
-            .expect("completed Provider telemetry payload must be an object");
-        completed_object.insert(
-            String::from("operation"),
-            Value::String(String::from("embedding_create")),
-        );
-        completed_object.insert(
-            String::from("capability_revision"),
-            Value::String(String::from("capability-1")),
-        );
-        completed_object.insert(
-            String::from("catalog_revision"),
-            Value::String(String::from("catalog-1")),
-        );
-        completed_object.insert(String::from("input_item_count"), Value::from(2));
-        completed_object.insert(String::from("output_item_count"), Value::from(2));
-        completed_object.insert(String::from("vector_dimensions"), Value::from(1024));
-        completed_object.insert(String::from("cost"), Value::String(String::from("0.0004")));
-        // completedInvocation uses the exact runtime context expected by a session-scoped effect Hook.
-        // completedInvocation 使用会话作用域 Effect Hook 期望的精确运行时上下文。
-        let completed_invocation = HookInvocation {
-            registration: HookRegistration::new(
-                completed_hook.registration_id.clone(),
-                "provider.request.completed",
-                HookMode::Effect,
-            ),
-            context: HookContext {
-                run_id: String::from("execution-1"),
-                point: String::from("provider.request.completed"),
-                scope: HookScope::Session,
-                actor: HookActor::new("runtime-test"),
-                workspace_id: Some(repository_root.to_string_lossy().into_owned()),
-                project_id: Some(String::from("project-1")),
-                session_id: Some(String::from("session-1")),
-                conversation_id: Some(String::from("session-1")),
-                user_id: None,
-                capabilities: HookCapabilitySet::default(),
-                metadata: BTreeMap::new(),
-            },
-            payload: HookPayload {
-                value: completed_payload,
-            },
-        };
-        runtime
-            .block_on(manager.invoke_hook(&completed_hook, completed_invocation.clone()))
-            .expect("persist one real usage statistics terminal Hook");
-        // recent validates that an omitted optional owner does not mutate shared Lua parameters.
-        // recent 验证省略可选归属时不会修改共享 Lua 参数。
-        let recent = runtime
-            .block_on(manager.invoke_action(VulcanPluginActionRequest {
-                plugin_id: String::from("vulcan-usage-statistics"),
-                action_id: String::from("recent-get"),
-                arguments: json!({ "limit": 20 }),
-                caller: crate::VulcanPluginActionCaller::PluginUi,
-                workspace_root: repository_root.to_path_buf(),
-                reuse_enabled_runtime: true,
-            }))
-            .expect("query recent usage statistics requests");
-        assert!(recent["requests"].is_array());
-        assert_eq!(recent["requests"][0]["requestId"], "request-1");
-        assert!(recent["requests"][0]["errorCategory"].is_null());
-        assert!(recent["requests"][0]["errorCode"].is_null());
-        // dashboard validates the real aggregate SQL path and strict action output schema.
-        // dashboard 验证真实聚合 SQL 路径与严格 Action 输出 Schema。
-        let dashboard = runtime
-            .block_on(manager.invoke_action(VulcanPluginActionRequest {
-                plugin_id: String::from("vulcan-usage-statistics"),
-                action_id: String::from("dashboard-get"),
-                arguments: json!({
-                    "rangeDays": 30,
-                    "metric": "input_tokens"
-                }),
-                caller: crate::VulcanPluginActionCaller::PluginUi,
-                workspace_root: repository_root.to_path_buf(),
-                reuse_enabled_runtime: true,
-            }))
-            .expect("query usage statistics dashboard");
-        assert_eq!(dashboard["summary"]["totalTokens"], 35);
-        // cacheHitRate proves cached input may exceed uncached input without violating the percentage schema.
-        // cacheHitRate 证明缓存输入可以高于未缓存输入，同时仍满足百分比 Schema。
-        let cache_hit_rate = dashboard["summary"]["cacheHitRate"]
-            .as_f64()
-            .expect("read usage statistics cache hit rate");
-        assert!((cache_hit_rate - (14.0 * 100.0 / 24.0)).abs() < 0.000_001);
-        assert_eq!(dashboard["heatmap"][0]["topModelName"], "Model One");
-        assert_eq!(dashboard["series"][0]["value"], 10);
-        assert_eq!(dashboard["availableModels"][0]["modelRef"], 1);
-        // groupedErrors validates the same omitted-owner contract after prior action reuse.
-        // groupedErrors 验证此前 Action 复用后的同一省略归属契约。
-        let grouped_errors = runtime
-            .block_on(manager.invoke_action(VulcanPluginActionRequest {
-                plugin_id: String::from("vulcan-usage-statistics"),
-                action_id: String::from("errors-get"),
-                arguments: json!({
-                    "rangeDays": 30,
-                    "metric": "input_tokens"
-                }),
-                caller: crate::VulcanPluginActionCaller::PluginUi,
-                workspace_root: repository_root.to_path_buf(),
-                reuse_enabled_runtime: true,
-            }))
-            .expect("query grouped usage statistics errors");
-        assert!(grouped_errors["errors"].is_array());
-        assert_eq!(
-            grouped_errors["errors"][0]["errorCategory"],
-            "provider_http"
-        );
-        assert_eq!(grouped_errors["errors"][0]["errorCode"], "429");
-        // filteredDashboard proves range, owner, and model filters share one ordered aggregate projection.
-        // filteredDashboard 证明范围、归属与模型筛选共享一个有序聚合投影。
-        let filtered_dashboard = runtime
-            .block_on(manager.invoke_action(VulcanPluginActionRequest {
-                plugin_id: String::from("vulcan-usage-statistics"),
-                action_id: String::from("dashboard-get"),
-                arguments: json!({
-                    "rangeDays": 30,
-                    "metric": "total_tokens",
-                    "ownerKind": "main_agent",
-                    "modelRef": 1
-                }),
-                caller: crate::VulcanPluginActionCaller::PluginUi,
-                workspace_root: repository_root.to_path_buf(),
-                reuse_enabled_runtime: true,
-            }))
-            .expect("query model-filtered usage statistics dashboard");
-        assert_eq!(filtered_dashboard["summary"]["totalTokens"], 35);
-        // filteredRecent proves raw request facts use the same exact owner and model identity.
-        // filteredRecent 证明原始请求事实使用相同的精确归属与模型身份。
-        let filtered_recent = runtime
-            .block_on(manager.invoke_action(VulcanPluginActionRequest {
-                plugin_id: String::from("vulcan-usage-statistics"),
-                action_id: String::from("recent-get"),
-                arguments: json!({
-                    "limit": 20,
-                    "ownerKind": "main_agent",
-                    "modelRef": 1
-                }),
-                caller: crate::VulcanPluginActionCaller::PluginUi,
-                workspace_root: repository_root.to_path_buf(),
-                reuse_enabled_runtime: true,
-            }))
-            .expect("query model-filtered recent usage statistics requests");
-        assert_eq!(filtered_recent["requests"][0]["requestId"], "request-1");
-        // filteredErrors proves grouped failure facts honor the identical model boundary.
-        // filteredErrors 证明分组失败事实遵守完全相同的模型边界。
-        let filtered_errors = runtime
-            .block_on(manager.invoke_action(VulcanPluginActionRequest {
-                plugin_id: String::from("vulcan-usage-statistics"),
-                action_id: String::from("errors-get"),
-                arguments: json!({
-                    "rangeDays": 30,
-                    "metric": "total_tokens",
-                    "ownerKind": "main_agent",
-                    "modelRef": 1
-                }),
-                caller: crate::VulcanPluginActionCaller::PluginUi,
-                workspace_root: repository_root.to_path_buf(),
-                reuse_enabled_runtime: true,
-            }))
-            .expect("query model-filtered grouped usage statistics errors");
-        assert_eq!(filtered_errors["errors"][0]["errorCode"], "429");
-        // allTime validates the zero-day sentinel without synthetic date parameters.
-        // allTime 验证零天累计哨兵，且不生成虚假的日期参数。
-        let all_time = runtime
-            .block_on(manager.invoke_action(VulcanPluginActionRequest {
-                plugin_id: String::from("vulcan-usage-statistics"),
-                action_id: String::from("dashboard-get"),
-                arguments: json!({
-                    "rangeDays": 0,
-                    "metric": "total_tokens"
-                }),
-                caller: crate::VulcanPluginActionCaller::PluginUi,
-                workspace_root: repository_root.to_path_buf(),
-                reuse_enabled_runtime: true,
-            }))
-            .expect("query all-time usage statistics dashboard");
-        assert_eq!(all_time["rangeDays"], 0);
-        // cleanupPreview and cleanupApply validate the explicit inclusive date scope and revision fence.
-        // cleanupPreview 与 cleanupApply 验证明确的本地日期闭区间和修订号围栏。
-        let cleanup_preview = runtime
+            .expect("invoke system-backed usage statistics dashboard action");
+        assert_eq!(dashboard["aggregateRevision"], 7);
+        assert_eq!(dashboard["daily"][0]["totalTokens"], 35);
+        assert_eq!(dashboard["recentAttempts"][0]["attemptId"], "attempt-1");
+        // clearPreview proves the real Lua bundle can query maintenance facts through the same binding.
+        // clearPreview 证明真实 Lua Bundle 可以通过同一绑定查询维护事实。
+        let clear_preview = runtime
             .block_on(manager.invoke_action(VulcanPluginActionRequest {
                 plugin_id: String::from("vulcan-usage-statistics"),
                 action_id: String::from("statistics-clear-preview"),
-                arguments: json!({
-                    "fromDate": "2026-07-14",
-                    "toDate": "2026-07-14"
-                }),
+                arguments: json!({}),
                 caller: crate::VulcanPluginActionCaller::PluginUi,
                 workspace_root: repository_root.to_path_buf(),
                 reuse_enabled_runtime: true,
             }))
-            .expect("preview usage statistics cleanup");
-        assert_eq!(cleanup_preview["summary"]["requests"], 1);
-        let cleanup_apply = runtime
+            .expect("preview system statistics cleanup");
+        assert_eq!(clear_preview["attemptCount"], 1);
+        assert_eq!(clear_preview["aggregateRevision"], 7);
+        // clearResult validates revision-bound direct VLDB deletion through the production Lua script.
+        // clearResult 验证生产 Lua 脚本通过直接 VLDB 删除执行修订绑定清理。
+        let clear_result = runtime
             .block_on(manager.invoke_action(VulcanPluginActionRequest {
                 plugin_id: String::from("vulcan-usage-statistics"),
                 action_id: String::from("statistics-clear-apply"),
-                arguments: json!({
-                    "fromDate": "2026-07-14",
-                    "toDate": "2026-07-14",
-                    "expectedRevision": cleanup_preview["revision"]
-                }),
+                arguments: json!({ "expectedAggregateRevision": 7 }),
                 caller: crate::VulcanPluginActionCaller::PluginUi,
                 workspace_root: repository_root.to_path_buf(),
                 reuse_enabled_runtime: true,
             }))
-            .expect("apply usage statistics cleanup");
-        assert!(cleanup_apply["deletedRequests"].is_number());
-        let calls = storage.calls.lock().expect("read recording storage calls");
-        // cleanupScript uses validated SQL literals because the host rejects parameters on multi-statement scripts.
-        // cleanupScript 使用已校验的 SQL 字面量，因为宿主拒绝为多语句脚本绑定参数。
-        let cleanup_script = calls
-            .iter()
-            .find(|request| {
-                request
-                    .payload
-                    .get("sql")
-                    .and_then(Value::as_str)
-                    .is_some_and(|sql| {
-                        sql.contains("CREATE TEMP TABLE IF NOT EXISTS statistics_clear_state")
-                    })
-            })
-            .expect("record statistics cleanup transaction script");
-        let cleanup_sql = cleanup_script.payload["sql"]
-            .as_str()
-            .expect("statistics cleanup SQL text");
-        // assertModelCleanupSql verifies orphan model deletion follows aggregate rebuilding in both cleanup paths.
-        // assertModelCleanupSql 验证孤立模型删除位于聚合重建之后，并覆盖两条清理路径。
-        let assert_model_cleanup_sql = |sql: &str| {
-            let aggregate_position = sql
-                .find("DELETE FROM usage_daily_model")
-                .expect("cleanup must rebuild daily aggregates");
-            let model_position = sql
-                .find("DELETE FROM models")
-                .expect("cleanup must delete orphan models");
-            let revision_position = sql
-                .find("UPDATE statistics_meta")
-                .expect("cleanup must update statistics revision");
-            assert!(aggregate_position < model_position);
-            assert!(model_position < revision_position);
-            assert_eq!(sql.matches("WHERE NOT EXISTS").count(), 1);
-            assert_eq!(sql.matches("AND NOT EXISTS").count(), 1);
-            assert!(sql.contains("api_request_events.model_ref = models.model_ref"));
-            assert!(sql.contains("usage_daily_model.model_ref = models.model_ref"));
-        };
-        assert_model_cleanup_sql(cleanup_sql);
-        assert!(cleanup_sql.contains("calendar_date >= '2026-07-14'"));
-        assert!(cleanup_sql.contains("calendar_date <= '2026-07-14'"));
-        assert!(!cleanup_sql.contains('?'));
-        assert_eq!(
-            cleanup_script.payload["params"]
-                .as_array()
-                .expect("statistics cleanup parameters")
-                .len(),
-            0
-        );
-        // calls proves multi-value statements use numbered placeholders accepted by Controller.
-        // calls 证明多值语句使用 Controller 接受的编号占位符。
-        assert!(
-            !calls.iter().any(|request| request
-                .payload
-                .get("sql")
-                .and_then(Value::as_str)
-                .is_some_and(|sql| {
-                    sql.contains("DELETE FROM api_request_events WHERE calendar_date < date")
-                })),
-            "permanent retention must not delete raw request facts"
-        );
-        let model_insert = calls
-            .iter()
-            .find(|request| {
-                request
-                    .payload
-                    .get("sql")
-                    .and_then(Value::as_str)
-                    .is_some_and(|sql| sql.contains("INSERT INTO models"))
-            })
-            .expect("record model dimension insert");
-        assert!(
-            model_insert.payload["sql"]
-                .as_str()
-                .expect("model insert SQL text")
-                .contains("?6")
-        );
-        assert_eq!(
-            model_insert.payload["params"]
-                .as_array()
-                .expect("model insert parameters")
-                .len(),
-            6
-        );
-        let fact_insert = calls
-            .iter()
-            .find(|request| {
-                request
-                    .payload
-                    .get("sql")
-                    .and_then(Value::as_str)
-                    .is_some_and(|sql| sql.contains("INSERT OR IGNORE INTO api_request_events"))
-            })
-            .expect("record request fact insert");
-        assert!(
-            fact_insert.payload["sql"]
-                .as_str()
-                .expect("request fact insert SQL text")
-                .contains("?46")
-        );
-        assert_eq!(
-            fact_insert.payload["params"]
-                .as_array()
-                .expect("request fact insert parameters")
-                .len(),
-            46
-        );
-        // summaryQuery must retain only the date-range parameter after recent-get appends its limit.
-        // summaryQuery 在 recent-get 追加 limit 后仍必须只保留日期范围参数。
-        let summary_query = calls
-            .iter()
-            .find(|request| {
-                request
-                    .payload
-                    .get("sql")
-                    .and_then(Value::as_str)
-                    .is_some_and(|sql| sql.contains("COALESCE(SUM(request_count)"))
-            })
-            .expect("record dashboard summary query");
-        assert_eq!(
-            summary_query.payload["params"]
-                .as_array()
-                .expect("finite dashboard summary parameters")
-                .len(),
-            1
-        );
-        // allTimeSummary is the final summary query and has no range or owner parameters.
-        // allTimeSummary 是最后一条汇总查询，不包含范围或归属参数。
-        let all_time_summary = calls
-            .iter()
-            .rev()
-            .find(|request| {
-                request
-                    .payload
-                    .get("sql")
-                    .and_then(Value::as_str)
-                    .is_some_and(|sql| sql.contains("COALESCE(SUM(request_count)"))
-            })
-            .expect("record all-time dashboard summary query");
-        assert_eq!(
-            all_time_summary.payload["params"]
-                .as_array()
-                .expect("all-time dashboard summary parameters")
-                .len(),
-            0
-        );
-        // errorsQuery also retains only its date-range parameter with no owner filter.
-        // errorsQuery 在无归属筛选时同样只保留日期范围参数。
-        let errors_query = calls
-            .iter()
-            .find(|request| {
-                request
-                    .payload
-                    .get("sql")
-                    .and_then(Value::as_str)
-                    .is_some_and(|sql| sql.contains("WHERE e.status = 'failed'"))
-            })
-            .expect("record grouped errors query");
-        assert_eq!(
-            errors_query.payload["params"]
-                .as_array()
-                .expect("grouped error query parameters")
-                .len(),
-            1
-        );
-        // filteredSummaryQuery binds range, owner, and model in one exact numbered sequence.
-        // filteredSummaryQuery 以一个精确编号序列绑定范围、归属与模型。
-        let filtered_summary_query = calls
-            .iter()
-            .find(|request| {
-                request
-                    .payload
-                    .get("sql")
-                    .and_then(Value::as_str)
-                    .is_some_and(|sql| {
-                        sql.contains("COALESCE(SUM(request_count)")
-                            && sql.contains("model_ref = ?3")
-                    })
-            })
-            .expect("record model-filtered dashboard summary query");
-        assert_eq!(
-            filtered_summary_query.payload["params"]
-                .as_array()
-                .expect("model-filtered dashboard summary parameters")
-                .len(),
-            3
-        );
-        // filteredRecentQuery binds owner, model, and row limit without reusing mutable parameter arrays.
-        // filteredRecentQuery 绑定归属、模型与行数限制，且不复用可变参数数组。
-        let filtered_recent_query = calls
-            .iter()
-            .find(|request| {
-                request
-                    .payload
-                    .get("sql")
-                    .and_then(Value::as_str)
-                    .is_some_and(|sql| {
-                        sql.contains("SELECT e.request_id AS requestId")
-                            && sql.contains("e.model_ref = ?2")
-                            && sql.contains("LIMIT ?3")
-                    })
-            })
-            .expect("record model-filtered recent request query");
-        assert_eq!(
-            filtered_recent_query.payload["params"]
-                .as_array()
-                .expect("model-filtered recent request parameters")
-                .len(),
-            3
-        );
-        // filteredErrorsQuery binds range, owner, and model before grouping redacted failures.
-        // filteredErrorsQuery 在聚合脱敏失败信息前绑定范围、归属与模型。
-        let filtered_errors_query = calls
-            .iter()
-            .find(|request| {
-                request
-                    .payload
-                    .get("sql")
-                    .and_then(Value::as_str)
-                    .is_some_and(|sql| {
-                        sql.contains("WHERE e.status = 'failed'")
-                            && sql.contains("e.model_ref = ?3")
-                    })
-            })
-            .expect("record model-filtered grouped errors query");
-        assert_eq!(
-            filtered_errors_query.payload["params"]
-                .as_array()
-                .expect("model-filtered grouped error parameters")
-                .len(),
-            3
-        );
+            .expect("clear system statistics through direct VLDB access");
+        assert_eq!(clear_result["clearedAttemptCount"], 1);
+        assert_eq!(clear_result["clearedTokenCount"], 35);
+        assert_eq!(clear_result["aggregateRevision"], 8);
+        let calls = vldb.calls.lock().expect("lock recorded VLDB calls");
+        assert_eq!(calls.len(), 7);
+        assert!(calls[..6].iter().all(|call| {
+            call.plugin_id == "vulcan-usage-statistics"
+                && call.operation == VulcanPluginVldbOperation::SqliteQuery
+                && call.payload["binding"] == "system.statistics"
+        }));
+        assert_eq!(calls[6].operation, VulcanPluginVldbOperation::SqliteExecute);
+        assert_eq!(calls[6].payload["binding"], "system.statistics");
         drop(calls);
-        assert_eq!(
-            ui_events
-                .events
-                .lock()
-                .expect("read recording UI events")
-                .as_slice(),
-            &[VulcanPluginUiInvalidation {
-                plugin_id: String::from("vulcan-usage-statistics"),
-                topic: String::from("statistics.changed"),
-                revision: 1,
-            }]
-        );
-        // automaticRetention proves the periodic cleanup script also obeys the host parameter contract.
-        // automaticRetention 证明周期性清理脚本同样遵守宿主参数契约。
-        runtime
+        // unauthorizedSnapshot removes only the VLDB capability while preserving the enabled runtime lease.
+        // unauthorizedSnapshot 仅移除 VLDB 能力，同时保留已启用的运行时租约。
+        let unauthorized_snapshot = {
+            let snapshot = manager
+                .state
+                .snapshot
+                .read()
+                .expect("read authorized statistics catalog");
+            let mut unauthorized = snapshot.as_ref().clone();
+            let plugin = unauthorized
+                .plugins
+                .get_mut("vulcan-usage-statistics")
+                .expect("resolve mutable statistics descriptor");
+            let mut manifest = plugin
+                .manifest
+                .as_ref()
+                .expect("resolve authorized statistics manifest")
+                .as_ref()
+                .clone();
+            manifest
+                .permissions
+                .retain(|permission| *permission != VulcanPluginPermission::SystemVldbAccess);
+            plugin.manifest = Some(Arc::new(manifest));
+            Arc::new(unauthorized)
+        };
+        *manager
+            .state
+            .snapshot
+            .write()
+            .expect("install unauthorized statistics catalog") = unauthorized_snapshot;
+        // capabilityError proves an enabled plugin cannot use the binding without manifest authorization.
+        // capabilityError 证明已启用插件在未经清单授权时不能使用该绑定。
+        let capability_error = runtime
             .block_on(manager.invoke_action(VulcanPluginActionRequest {
                 plugin_id: String::from("vulcan-usage-statistics"),
-                action_id: String::from("settings-update"),
-                arguments: json!({
-                    "enabled": true,
-                    "retentionDays": 30,
-                    "defaultRangeDays": 30,
-                    "defaultMetric": "total_tokens"
-                }),
+                action_id: String::from("dashboard-get"),
+                arguments: json!({}),
                 caller: crate::VulcanPluginActionCaller::PluginUi,
                 workspace_root: repository_root.to_path_buf(),
                 reuse_enabled_runtime: true,
             }))
-            .expect("enable finite usage statistics retention");
-        let mut retention_invocation = completed_invocation.clone();
-        retention_invocation.context.run_id = String::from("execution-retention");
-        let retention_payload = retention_invocation
-            .payload
-            .value
-            .as_object_mut()
-            .expect("retention Provider telemetry payload must be an object");
-        retention_payload.insert(
-            String::from("request_id"),
-            Value::String(String::from("request-retention")),
-        );
-        retention_payload.insert(
-            String::from("execution_id"),
-            Value::String(String::from("execution-retention")),
-        );
-        retention_payload.insert(String::from("completed_at_ms"), Value::from(2_500));
-        retention_payload.insert(String::from("started_at_ms"), Value::from(2_000));
-        runtime
-            .block_on(manager.invoke_hook(&completed_hook, retention_invocation))
-            .expect("persist automatic retention usage statistics terminal Hook");
-        let retention_calls = storage.calls.lock().expect("read retention storage calls");
-        let retention_cleanup_script = retention_calls
-            .iter()
-            .rev()
-            .find(|request| {
-                request
-                    .payload
-                    .get("sql")
-                    .and_then(Value::as_str)
-                    .is_some_and(|sql| {
-                        sql.contains("DELETE FROM api_request_events WHERE calendar_date < date('2026-07-14', '-30 days')")
-                    })
-            })
-            .expect("record automatic retention cleanup transaction script");
-        let retention_sql = retention_cleanup_script.payload["sql"]
-            .as_str()
-            .expect("automatic retention cleanup SQL text");
-        assert_model_cleanup_sql(retention_sql);
-        assert!(!retention_sql.contains('?'));
-        assert_eq!(
-            retention_cleanup_script.payload["params"]
-                .as_array()
-                .expect("automatic retention cleanup parameters")
-                .len(),
-            0
-        );
-        drop(retention_calls);
-        // disableReport proves the real plugin can drain its persistent lease before lifecycle cleanup.
-        // disableReport 证明真实插件可在生命周期清理前排空其持久租约。
-        manager
-            .begin_draining("vulcan-usage-statistics")
-            .expect("begin usage statistics plugin draining");
-        let disable_report = runtime
-            .block_on(manager.drain_plugin_sessions("vulcan-usage-statistics"))
-            .expect("drain usage statistics plugin sessions");
-        assert!(disable_report.failures.is_empty());
-        runtime
-            .block_on(manager.invoke_lifecycle(
-                "vulcan-usage-statistics",
-                VulcanPluginLifecycleEvent::Disable,
-            ))
-            .expect("invoke usage statistics disable lifecycle");
-        // flushRequest proves an argument-free host call remains an object across the Lua/JSON boundary.
-        // flushRequest 证明无参数宿主调用跨越 Lua/JSON 边界后仍保持对象语义。
-        let flush_request = storage
-            .calls
-            .lock()
-            .expect("read disable lifecycle storage calls")
-            .last()
-            .cloned()
-            .expect("record usage statistics disable flush");
-        assert_eq!(
-            flush_request.operation,
-            VulcanPluginStorageOperation::SqliteFlush
-        );
-        assert_eq!(flush_request.payload, json!({}));
+            .expect_err("reject statistics VLDB access without capability");
+        assert!(capability_error.message.contains("system_vldb_access"));
     }
 
     /// Verifies the repository Context7 bundle loads through the LuaSkills typed JSON surface.

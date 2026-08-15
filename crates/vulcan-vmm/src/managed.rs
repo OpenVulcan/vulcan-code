@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 /// Exact managed manifest version accepted by both processes.
 /// 两个进程共同接受的精确托管清单版本。
-pub const MANAGED_CONTRACT_VERSION: u32 = 1;
+pub const MANAGED_CONTRACT_VERSION: u32 = 2;
 
 /// Stable build identity shared by the packaged VMM binaries and the host manifest.
 /// 打包 VMM 二进制与宿主清单共享的稳定构建身份。
@@ -277,6 +277,9 @@ pub struct ManagedInferenceConfig {
     /// Embedding dimension used by the VMM vector space.
     /// VMM 向量空间使用的向量维度。
     pub embedding_dimension: u32,
+    /// Maximum outbound inference connections per upstream host.
+    /// 每个上游主机允许的最大推理出站连接数。
+    pub max_connections_per_host: u32,
 }
 
 /// Contains protected VMM logging settings.
@@ -408,6 +411,12 @@ pub struct ManagedPostActionConfig {
     /// Maximum extraction input tokens.
     /// 最大提炼输入 Token。
     pub session_analysis_max_input_tokens: u32,
+    /// Total deadline for one background turn analysis.
+    /// 单条后台 turn 分析的总截止时间。
+    pub session_analysis_timeout: String,
+    /// Consecutive failure count that moves one turn into Pass.
+    /// 将单条 turn 转入 Pass 的连续失败次数阈值。
+    pub failure_pass_threshold: u32,
     /// Maximum asynchronous queue workers.
     /// 最大异步队列工作数。
     pub max_queue_workers: u32,
