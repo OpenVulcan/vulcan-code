@@ -1,9 +1,9 @@
 name: Vulcan Usage Statistics
-capability: Query, display, and clear Provider usage and billing facts through the registered system VLDB binding
+capability: Query and clear Provider Token facts through system VLDB and compute reference estimates from a plugin-owned catalog
 messages:
   navigationLabel: Usage Statistics
   title: System Usage Statistics
-  subtitle: Uses the host-registered system statistics VLDB directly without copying Provider requests into private plugin storage.
+  subtitle: The core stores Token facts only; this plugin computes non-persisted reference estimates from its own catalog.
   status.ready: System statistics available
   status.loading: Loading system statistics
   status.error: System statistics failed to load
@@ -13,6 +13,26 @@ messages:
   refresh: Refresh
   refreshing: Refreshing
   source.host: System VLDB
+  pricing.catalog: Reference catalog
+  pricing.unmatched: Model not in reference catalog
+  pricing.incomplete: Incomplete Token facts
+  pricing.title: Model reference prices
+  pricing.description: Overrides belong only to this plugin configuration. Estimates are recomputed and never written to the system statistics database.
+  pricing.model: Model
+  pricing.override: Custom override
+  pricing.default: Catalog default
+  pricing.empty: No model identities available
+  pricing.input: Uncached input
+  pricing.output: Output
+  pricing.cacheRead: Cache read
+  pricing.cacheWrite: Cache write
+  pricing.perMillion: per 1M Token
+  pricing.save: Save override
+  pricing.saving: Saving
+  pricing.saved: Saved model price override
+  pricing.reset: Restore catalog default
+  pricing.resetDone: Restored catalog price
+  pricing.validation: Enter four non-negative decimal prices.
   revision: Revision
   consumer.label: Consumer
   consumer.all: All consumers
@@ -34,7 +54,7 @@ messages:
   daily.operation: Operation
   daily.attempts: Attempts
   daily.tokens: Tokens
-  daily.cost: Cost
+  daily.cost: Reference estimate
   recent.title: Recent physical attempts
   recent.empty: No physical attempt records
   recent.time: Time
@@ -42,7 +62,7 @@ messages:
   recent.consumer: Consumer
   recent.status: Status
   recent.tokens: Tokens
-  recent.cost: Cost
+  recent.cost: Reference estimate
   recent.error: Error
   accounts.title: Account usage snapshots
   accounts.empty: No account usage snapshots
@@ -60,4 +80,4 @@ messages:
   clear.apply: Confirm cleanup
   clear.applying: Clearing
   clear.success: Cleared historical statistics
-  privacy: Vulcan core collects complete statistics in a dedicated system database. This trusted bundled plugin has direct read and write access to the logical binding so it can query and clear history.
+  privacy: Vulcan stores Token facts only in the dedicated system database. This trusted bundled plugin queries and clears that database, then recomputes reference estimates from its own catalog for each request.

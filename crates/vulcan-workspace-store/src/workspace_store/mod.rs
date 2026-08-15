@@ -28,7 +28,7 @@ mod ai_credentials;
 mod git_preferences;
 mod goal_store;
 mod persistence;
-mod provider_billing;
+mod provider_usage;
 mod runtime_state_codec;
 mod segmented_session_store;
 mod session_addon_store;
@@ -77,16 +77,15 @@ pub use persistence::{
     remove_project_after_archiving_sessions, rename_project, rename_single_session,
     restore_project, rollback_persisted_session_before_user_prompt,
 };
-pub use provider_billing::{
+pub use provider_usage::{
     PROVIDER_USAGE_SCHEMA_REVISION, ProviderAccountUsageSnapshotRecord,
-    ProviderAccountUsageSummary, ProviderPricingProfileRecord, ProviderRateLimitSnapshotRecord,
-    ProviderUsageAttemptRecord, ProviderUsageAttemptSummary, ProviderUsageDailySummary,
-    ProviderUsageDashboard, ensure_provider_usage_schema, load_provider_usage_dashboard,
+    ProviderAccountUsageSummary, ProviderRateLimitSnapshotRecord, ProviderUsageAttemptRecord,
+    ProviderUsageAttemptSummary, ProviderUsageDailySummary, ProviderUsageDashboard,
+    ensure_provider_usage_schema, load_provider_usage_dashboard,
     load_provider_usage_migration_completed, load_provider_usage_migration_cursor,
     lock_provider_usage_writes, migrate_application_provider_usage,
-    persist_provider_account_usage_snapshot, persist_provider_pricing_profile,
-    persist_provider_rate_limit_snapshot, persist_provider_usage_attempt,
-    persist_provider_usage_attempt_and_rebuild_daily,
+    persist_provider_account_usage_snapshot, persist_provider_rate_limit_snapshot,
+    persist_provider_usage_attempt, persist_provider_usage_attempt_and_rebuild_daily,
     persist_provider_usage_attempt_batch_and_rebuild_daily,
     persist_provider_usage_migration_completed, persist_provider_usage_migration_cursor,
     rebuild_provider_usage_daily,

@@ -891,26 +891,6 @@ pub struct ProviderUsageSnapshot {
     /// 供应商返回的响应标识。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response_id: Option<String>,
-    /// Provider-reported decimal cost.
-    /// 供应商报告的十进制成本。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reported_cost: Option<String>,
-    /// Locally estimated decimal cost.
-    /// 本地估算的十进制成本。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub estimated_cost: Option<String>,
-    /// ISO currency for reported or estimated cost.
-    /// 报告或估算成本使用的 ISO 币种。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cost_currency: Option<String>,
-    /// Immutable pricing revision used by the local estimate.
-    /// 本地估算使用的不可变价格修订号。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pricing_revision: Option<String>,
-    /// Frozen effective pricing profile used by the local estimate.
-    /// 本地估算使用的冻结生效价格 Profile。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pricing_profile: Option<vulcan_ai_contract::PricingProfileSnapshot>,
     /// Provider billing partitions retained separately from normalized totals.
     /// 与规范化合计分开保留的供应商计费分区。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

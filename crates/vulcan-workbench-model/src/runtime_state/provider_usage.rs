@@ -2095,36 +2095,6 @@ fn merge_legacy_provider_usage_snapshot(
         evidence_name,
         "response_id",
     )?;
-    merge_legacy_optional_usage_field(
-        &mut merged.reported_cost,
-        &incoming.reported_cost,
-        evidence_name,
-        "reported_cost",
-    )?;
-    merge_legacy_optional_usage_field(
-        &mut merged.estimated_cost,
-        &incoming.estimated_cost,
-        evidence_name,
-        "estimated_cost",
-    )?;
-    merge_legacy_optional_usage_field(
-        &mut merged.cost_currency,
-        &incoming.cost_currency,
-        evidence_name,
-        "cost_currency",
-    )?;
-    merge_legacy_optional_usage_field(
-        &mut merged.pricing_revision,
-        &incoming.pricing_revision,
-        evidence_name,
-        "pricing_revision",
-    )?;
-    merge_legacy_optional_usage_field(
-        &mut merged.pricing_profile,
-        &incoming.pricing_profile,
-        evidence_name,
-        "pricing_profile",
-    )?;
     merge_legacy_usage_set(&mut merged.billing_details, &incoming.billing_details);
     Ok(Some(merged))
 }

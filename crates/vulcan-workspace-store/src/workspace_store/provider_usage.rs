@@ -1,14 +1,12 @@
-//! Controller-backed provider attempt, usage, pricing, quota, and rate-limit facts.
-//! 由控制器承载的供应商 attempt、用量、价格、额度与限流事实。
+//! Controller-backed provider attempt, token-usage, quota, and rate-limit facts.
+//! 由控制器承载的供应商 attempt、Token 用量、额度与限流事实。
 
 use super::decode_query_rows;
 use crate::data_plane::{APP_SPACE_ID, ControllerRuntimeHandle, SYSTEM_STATISTICS_SPACE_ID};
-use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    str::FromStr,
     sync::OnceLock,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -17,7 +15,7 @@ use vulcan_ai_contract::UsageBillingDetail;
 
 /// Current native provider-usage schema revision.
 /// 当前原生供应商用量 Schema 修订号。
-pub const PROVIDER_USAGE_SCHEMA_REVISION: i64 = 6;
+pub const PROVIDER_USAGE_SCHEMA_REVISION: i64 = 7;
 
 /// Process-local serialization lock for attempt insertion followed by daily rebuild.
 /// attempt 插入后每日重建使用的进程内串行锁。
@@ -48,10 +46,9 @@ const APPLICATION_PROVIDER_USAGE_MIGRATION_PAGE_SIZE: i64 = 500;
 /// Tables copied byte-for-value before daily aggregates are rebuilt in the independent database.
 /// 在独立数据库中重建每日聚合前按值复制的表。
 const APPLICATION_PROVIDER_USAGE_MIGRATION_TABLES: &[&str] = &[
-    "provider_usage_attempts_v2",
+    "provider_usage_attempts_v3",
     "provider_account_usage_snapshots_v1",
     "provider_rate_limit_snapshots_v1",
-    "provider_pricing_profiles_v1",
     "provider_usage_meta",
 ];
 
@@ -216,66 +213,9 @@ pub struct ProviderUsageAttemptRecord {
     /// JSON array containing typed provider billing partitions.
     /// 包含强类型供应商计费分区的 JSON 数组。
     pub provider_billing_details_json: Option<String>,
-    /// Provider-reported decimal cost.
-    /// 供应商报告的十进制成本。
-    pub reported_cost: Option<String>,
-    /// Locally estimated decimal cost.
-    /// 本地估算的十进制成本。
-    pub estimated_cost: Option<String>,
-    /// ISO currency used by reported or estimated cost.
-    /// 报告或估算成本使用的 ISO 货币。
-    pub currency: Option<String>,
-    /// Immutable pricing revision used for estimation.
-    /// 估算使用的不可变价格修订号。
-    pub pricing_revision: Option<String>,
     /// Calendar date used by daily aggregation.
     /// 每日聚合使用的日历日期。
     pub calendar_date: String,
-}
-
-/// Persists one immutable pricing profile revision.
-/// 持久化一个不可变价格 Profile 修订版。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ProviderPricingProfileRecord {
-    /// Stable immutable revision identity.
-    /// 稳定不可变修订标识。
-    pub pricing_revision: String,
-    /// Provider identity.
-    /// 供应商标识。
-    pub provider_id: String,
-    /// Optional service-entry identity.
-    /// 可选服务入口标识。
-    pub service_entry_id: Option<String>,
-    /// Exact model identity.
-    /// 精确模型标识。
-    pub model_id: String,
-    /// ISO currency.
-    /// ISO 货币。
-    pub currency: String,
-    /// Decimal price per million uncached-input tokens.
-    /// 每百万非缓存输入 Token 十进制价格。
-    pub input_per_million: Option<String>,
-    /// Decimal price per million output tokens.
-    /// 每百万输出 Token 十进制价格。
-    pub output_per_million: Option<String>,
-    /// Decimal price per million cache-read tokens.
-    /// 每百万缓存读取 Token 十进制价格。
-    pub cache_read_per_million: Option<String>,
-    /// Decimal price per million cache-write tokens.
-    /// 每百万缓存写入 Token 十进制价格。
-    pub cache_write_per_million: Option<String>,
-    /// Source category such as built_in, synced, or user_override.
-    /// 来源类别，例如 built_in、synced 或 user_override。
-    pub source_kind: String,
-    /// Source identity or URL without credentials.
-    /// 不含凭据的来源标识或 URL。
-    pub source_id: String,
-    /// Canonical content hash.
-    /// 规范内容哈希。
-    pub content_hash: String,
-    /// Creation timestamp in Unix milliseconds.
-    /// 创建 Unix 毫秒时间戳。
-    pub created_at_ms: i64,
 }
 
 /// Persists one provider account balance, quota, or subscription snapshot.
@@ -349,9 +289,6 @@ pub struct ProviderUsageDailySummary {
     /// Exact mapped model identity.
     /// 精确映射模型标识。
     pub model_id: String,
-    /// ISO currency or an empty string when cost is unavailable.
-    /// ISO 币种；成本不可用时为空字符串。
-    pub currency: String,
     /// Physical attempt count.
     /// 真实 attempt 数量。
     pub attempt_count: i64,
@@ -382,19 +319,13 @@ pub struct ProviderUsageDailySummary {
     /// Known complete token total.
     /// 已知完整 Token 合计。
     pub total_tokens: Option<i64>,
-    /// Exact decimal provider-reported and locally estimated costs.
-    /// 精确十进制供应商报告成本与本地估算成本。
-    pub reported_cost: Option<String>,
-    /// Exact decimal locally estimated cost.
-    /// 精确十进制本地估算成本。
-    pub estimated_cost: Option<String>,
     /// Monotonic native aggregate revision.
     /// 单调递增原生聚合修订号。
     pub aggregate_revision: i64,
 }
 
-/// Carries one recent physical attempt with exact usage and pricing provenance.
-/// 承载一条带有精确用量与价格来源的近期物理 attempt。
+/// Carries one recent physical attempt with exact token-usage provenance.
+/// 承载一条带有精确 Token 用量来源的近期物理 attempt。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderUsageAttemptSummary {
@@ -440,27 +371,33 @@ pub struct ProviderUsageAttemptSummary {
     /// Provider-reported complete token total when known.
     /// 已知时由供应商报告的完整 Token 合计。
     pub total_tokens: Option<i64>,
+    /// Total input tokens when known.
+    /// 已知时的输入 Token 总量。
+    pub input_tokens: Option<i64>,
+    /// Uncached input tokens when known.
+    /// 已知时的非缓存输入 Token。
+    pub uncached_input_tokens: Option<i64>,
+    /// Cache-read input tokens when known.
+    /// 已知时的缓存读取输入 Token。
+    pub cache_read_tokens: Option<i64>,
+    /// Cache-write input tokens when known.
+    /// 已知时的缓存写入输入 Token。
+    pub cache_write_tokens: Option<i64>,
+    /// Output tokens when known.
+    /// 已知时的输出 Token。
+    pub output_tokens: Option<i64>,
+    /// Reasoning output tokens when known.
+    /// 已知时的推理输出 Token。
+    pub reasoning_tokens: Option<i64>,
+    /// Audio input tokens when known.
+    /// 已知时的音频输入 Token。
+    pub audio_input_tokens: Option<i64>,
+    /// Audio output tokens when known.
+    /// 已知时的音频输出 Token。
+    pub audio_output_tokens: Option<i64>,
     /// Typed provider-specific billing partitions.
     /// 强类型供应商专属计费分区。
     pub billing_details: Vec<UsageBillingDetail>,
-    /// Provider-reported decimal cost.
-    /// 供应商报告的十进制成本。
-    pub reported_cost: Option<String>,
-    /// Locally estimated decimal cost.
-    /// 本地估算的十进制成本。
-    pub estimated_cost: Option<String>,
-    /// ISO currency used by the cost fact.
-    /// 成本事实使用的 ISO 币种。
-    pub currency: Option<String>,
-    /// Immutable pricing revision used for estimation.
-    /// 估算使用的不可变价格修订号。
-    pub pricing_revision: Option<String>,
-    /// Frozen pricing source scope kind.
-    /// 冻结价格来源作用域类型。
-    pub pricing_source_kind: Option<String>,
-    /// Frozen pricing source identity.
-    /// 冻结价格来源标识。
-    pub pricing_source_id: Option<String>,
     /// Terminal timestamp in Unix milliseconds.
     /// 终态 Unix 毫秒时间戳。
     pub terminal_at_ms: i64,
@@ -491,8 +428,8 @@ pub struct ProviderAccountUsageSummary {
     pub observed_at_ms: i64,
 }
 
-/// Carries native provider usage, cost, and account facts for user inspection.
-/// 承载供用户查看的原生供应商用量、成本与账户事实。
+/// Carries native provider token usage and account facts for user inspection.
+/// 承载供用户查看的原生供应商 Token 用量与账户事实。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderUsageDashboard {
@@ -511,16 +448,16 @@ pub struct ProviderUsageDashboard {
     /// Recent daily rows in reverse chronological order.
     /// 按时间倒序排列的近期每日行。
     pub daily: Vec<ProviderUsageDailySummary>,
-    /// Recent physical attempts with exact billing provenance.
-    /// 带有精确计费来源的近期物理 attempt。
+    /// Recent physical attempts with exact token partitions.
+    /// 带有精确 Token 分区的近期物理 attempt。
     pub recent_attempts: Vec<ProviderUsageAttemptSummary>,
     /// Latest account snapshot for each connection and category.
     /// 每个连接与类别的最新账户快照。
     pub accounts: Vec<ProviderAccountUsageSummary>,
 }
 
-/// Ensures all six native provider usage tables exist in the system-statistics binding.
-/// 确保系统统计绑定中存在六张原生供应商用量表。
+/// Ensures all native provider usage tables exist in the system-statistics binding.
+/// 确保系统统计绑定中存在全部原生供应商用量表。
 pub async fn ensure_provider_usage_schema(
     controller: &ControllerRuntimeHandle,
 ) -> Result<(), String> {
@@ -556,7 +493,7 @@ async fn ensure_provider_usage_schema_at(
             space_id,
             binding_id,
             r#"
-CREATE TABLE IF NOT EXISTS provider_usage_attempts_v2 (
+CREATE TABLE IF NOT EXISTS provider_usage_attempts_v3 (
     attempt_id TEXT PRIMARY KEY,
     logical_request_id TEXT NOT NULL,
     attempt_index INTEGER NOT NULL,
@@ -604,29 +541,24 @@ CREATE TABLE IF NOT EXISTS provider_usage_attempts_v2 (
     usage_source_paths_json TEXT,
     usage_validation_flags_json TEXT,
     provider_billing_details_json TEXT,
-    reported_cost TEXT,
-    estimated_cost TEXT,
-    currency TEXT,
-    pricing_revision TEXT,
     calendar_date TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_provider_usage_attempts_logical
-    ON provider_usage_attempts_v2(logical_request_id, attempt_index, failover_index);
-CREATE INDEX IF NOT EXISTS idx_provider_usage_attempts_date
-    ON provider_usage_attempts_v2(calendar_date, provider_id, consumer_id, operation);
-CREATE INDEX IF NOT EXISTS idx_provider_usage_attempts_connection
-    ON provider_usage_attempts_v2(connection_id, terminal_at_ms);
-CREATE INDEX IF NOT EXISTS idx_provider_usage_attempts_terminal
-    ON provider_usage_attempts_v2(terminal_at_ms DESC, attempt_id DESC);
+CREATE INDEX IF NOT EXISTS idx_provider_usage_attempts_v3_logical
+    ON provider_usage_attempts_v3(logical_request_id, attempt_index, failover_index);
+CREATE INDEX IF NOT EXISTS idx_provider_usage_attempts_v3_date
+    ON provider_usage_attempts_v3(calendar_date, provider_id, consumer_id, operation);
+CREATE INDEX IF NOT EXISTS idx_provider_usage_attempts_v3_connection
+    ON provider_usage_attempts_v3(connection_id, terminal_at_ms);
+CREATE INDEX IF NOT EXISTS idx_provider_usage_attempts_v3_terminal
+    ON provider_usage_attempts_v3(terminal_at_ms DESC, attempt_id DESC);
 
-CREATE TABLE IF NOT EXISTS provider_usage_daily_v2 (
+CREATE TABLE IF NOT EXISTS provider_usage_daily_v3 (
     calendar_date TEXT NOT NULL,
     provider_id TEXT NOT NULL,
     service_entry_id TEXT NOT NULL,
     consumer_id TEXT NOT NULL,
     operation TEXT NOT NULL,
     model_id TEXT NOT NULL,
-    currency TEXT NOT NULL,
     attempt_count INTEGER NOT NULL,
     successful_attempt_count INTEGER NOT NULL,
     reported_usage_attempt_count INTEGER NOT NULL,
@@ -637,12 +569,10 @@ CREATE TABLE IF NOT EXISTS provider_usage_daily_v2 (
     output_tokens INTEGER,
     reasoning_tokens INTEGER,
     total_tokens INTEGER,
-    reported_cost TEXT,
-    estimated_cost TEXT,
     aggregate_revision INTEGER NOT NULL,
     PRIMARY KEY (
         calendar_date, provider_id, service_entry_id, consumer_id,
-        operation, model_id, currency
+        operation, model_id
     )
 );
 
@@ -668,24 +598,6 @@ CREATE TABLE IF NOT EXISTS provider_rate_limit_snapshots_v1 (
 CREATE INDEX IF NOT EXISTS idx_provider_rate_limit_attempt
     ON provider_rate_limit_snapshots_v1(attempt_id, observed_at_ms);
 
-CREATE TABLE IF NOT EXISTS provider_pricing_profiles_v1 (
-    pricing_revision TEXT PRIMARY KEY,
-    provider_id TEXT NOT NULL,
-    service_entry_id TEXT,
-    model_id TEXT NOT NULL,
-    currency TEXT NOT NULL,
-    input_per_million TEXT,
-    output_per_million TEXT,
-    cache_read_per_million TEXT,
-    cache_write_per_million TEXT,
-    source_kind TEXT NOT NULL,
-    source_id TEXT NOT NULL,
-    content_hash TEXT NOT NULL,
-    created_at_ms INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_provider_pricing_lookup
-    ON provider_pricing_profiles_v1(provider_id, model_id, created_at_ms);
-
 CREATE TABLE IF NOT EXISTS provider_usage_meta (
     meta_key TEXT PRIMARY KEY,
     meta_value TEXT NOT NULL,
@@ -708,8 +620,159 @@ VALUES ('application_database_migration_completed', '0', 0);
         )
         .await
         .map_err(|error| format!("初始化原生供应商用量 Schema 失败：{error}"))?;
+    migrate_provider_usage_v2_to_v3(controller, space_id, binding_id).await?;
     ensure_provider_usage_attempt_columns(controller, space_id, binding_id).await?;
     Ok(())
+}
+
+/// Migrates legacy price-bearing usage tables into the token-only v3 schema and removes them.
+/// 将旧版含价格用量表迁移到仅含 Token 的 v3 Schema，并删除旧表。
+///
+/// # Parameters
+/// 参数
+/// `controller`, `space_id`, and `binding_id` identify one exact initialized SQLite binding.
+/// `controller`、`space_id` 与 `binding_id` 标识一个精确且已初始化的 SQLite Binding。
+///
+/// # Returns
+/// 返回值
+/// Returns after non-price facts are copied transactionally and every price-bearing table is gone.
+/// 在非价格事实完成事务复制且全部含价格表被删除后返回。
+async fn migrate_provider_usage_v2_to_v3(
+    controller: &ControllerRuntimeHandle,
+    space_id: &str,
+    binding_id: &str,
+) -> Result<(), String> {
+    let table_result = controller
+        .client
+        .query_sqlite_json_typed(
+            space_id,
+            binding_id,
+            "SELECT COUNT(*) AS table_count FROM sqlite_master WHERE type = 'table' AND name = 'provider_usage_attempts_v2';",
+            Vec::new(),
+        )
+        .await
+        .map_err(|error| format!("检查旧版供应商用量表失败：{error}"))?;
+    let source_exists = decode_query_rows::<ProviderUsageTableCountRow>(&table_result.json_data)?
+        .into_iter()
+        .next()
+        .is_some_and(|row| row.table_count == 1);
+    if !source_exists {
+        controller
+            .client
+            .execute_sqlite_script_typed(
+                space_id,
+                binding_id,
+                "DROP TABLE IF EXISTS provider_usage_daily_v2; DROP TABLE IF EXISTS provider_pricing_profiles_v1;",
+                Vec::new(),
+            )
+            .await
+            .map_err(|error| format!("清理旧版供应商价格表失败：{error}"))?;
+        return Ok(());
+    }
+
+    let column_result = controller
+        .client
+        .query_sqlite_json_typed(
+            space_id,
+            binding_id,
+            "PRAGMA table_info(provider_usage_attempts_v2);",
+            Vec::new(),
+        )
+        .await
+        .map_err(|error| format!("读取旧版供应商用量列失败：{error}"))?;
+    let columns = decode_query_rows::<ProviderUsageColumnRow>(&column_result.json_data)?
+        .into_iter()
+        .map(|column| column.name)
+        .collect::<BTreeSet<_>>();
+    let required_columns = [
+        "attempt_id",
+        "logical_request_id",
+        "attempt_index",
+        "consumer_id",
+        "operation",
+        "provider_id",
+        "service_entry_id",
+        "connection_id",
+        "protocol_profile_id",
+        "requested_model",
+        "mapped_model",
+        "terminal_at_ms",
+        "status",
+        "dispatched",
+        "semantic_output_observed",
+        "usage_availability",
+        "calendar_date",
+    ];
+    for required_column in required_columns {
+        if !columns.contains(required_column) {
+            return Err(format!(
+                "旧版供应商用量表缺少必需列 `{required_column}`，拒绝猜测迁移"
+            ));
+        }
+    }
+    let optional_column = |name: &str, fallback: &str| {
+        if columns.contains(name) {
+            name.to_string()
+        } else {
+            fallback.to_string()
+        }
+    };
+    let migration = format!(
+        r#"
+BEGIN IMMEDIATE;
+INSERT OR IGNORE INTO provider_usage_attempts_v3 (
+    attempt_id, logical_request_id, attempt_index, failover_index,
+    consumer_id, operation, provider_id, service_entry_id, connection_id,
+    route_id, protocol_profile_id, route_revision, transport,
+    requested_model, mapped_model, response_model, response_id, provider_request_id,
+    dispatched_at_ms, headers_at_ms, first_semantic_at_ms, terminal_at_ms,
+    status, dispatched, dispatched_known, semantic_output_observed,
+    semantic_output_observed_known, replay_safe, http_status, websocket_close_code,
+    error_category, error_code, usage_availability, input_tokens,
+    uncached_input_tokens, cache_read_tokens, cache_write_tokens, output_tokens,
+    reasoning_tokens, audio_input_tokens, audio_output_tokens, total_tokens,
+    usage_profile_id, usage_profile_revision, usage_source_paths_json,
+    usage_validation_flags_json, provider_billing_details_json, calendar_date
+)
+SELECT
+    attempt_id, logical_request_id, attempt_index, failover_index,
+    consumer_id, operation, provider_id, service_entry_id, connection_id,
+    route_id, protocol_profile_id, route_revision, transport,
+    requested_model, mapped_model, response_model, response_id, {provider_request_id},
+    dispatched_at_ms, headers_at_ms, first_semantic_at_ms, terminal_at_ms,
+    status, dispatched, {dispatched_known}, semantic_output_observed,
+    {semantic_output_observed_known}, replay_safe, http_status, websocket_close_code,
+    error_category, error_code, usage_availability, input_tokens,
+    uncached_input_tokens, cache_read_tokens, cache_write_tokens, output_tokens,
+    reasoning_tokens, audio_input_tokens, audio_output_tokens, total_tokens,
+    usage_profile_id, usage_profile_revision, usage_source_paths_json,
+    usage_validation_flags_json, {provider_billing_details_json}, calendar_date
+FROM provider_usage_attempts_v2;
+DROP TABLE provider_usage_attempts_v2;
+DROP TABLE IF EXISTS provider_usage_daily_v2;
+DROP TABLE IF EXISTS provider_pricing_profiles_v1;
+COMMIT;
+"#,
+        provider_request_id = optional_column("provider_request_id", "NULL"),
+        dispatched_known = optional_column("dispatched_known", "1"),
+        semantic_output_observed_known = optional_column("semantic_output_observed_known", "1"),
+        provider_billing_details_json = optional_column("provider_billing_details_json", "NULL"),
+    );
+    controller
+        .client
+        .execute_sqlite_script_typed(space_id, binding_id, migration.as_str(), Vec::new())
+        .await
+        .map_err(|error| format!("迁移 Token-only 供应商用量表失败：{error}"))?;
+    Ok(())
+}
+
+/// Decodes one SQLite table-existence count.
+/// 解码一个 SQLite 表存在性计数。
+#[derive(Debug, Deserialize)]
+struct ProviderUsageTableCountRow {
+    /// Number of tables matching the exact queried name.
+    /// 与精确查询名称匹配的表数量。
+    table_count: i64,
 }
 
 /// Applies additive attempt-table migrations after inspecting the live Controller binding.
@@ -724,7 +787,7 @@ async fn ensure_provider_usage_attempt_columns(
         .query_sqlite_json_typed(
             space_id,
             binding_id,
-            "PRAGMA table_info(provider_usage_attempts_v2);",
+            "PRAGMA table_info(provider_usage_attempts_v3);",
             Vec::new(),
         )
         .await
@@ -739,7 +802,7 @@ async fn ensure_provider_usage_attempt_columns(
             .execute_sqlite_script_typed(
                 space_id,
                 binding_id,
-                "ALTER TABLE provider_usage_attempts_v2 ADD COLUMN provider_request_id TEXT;",
+                "ALTER TABLE provider_usage_attempts_v3 ADD COLUMN provider_request_id TEXT;",
                 Vec::new(),
             )
             .await
@@ -754,7 +817,7 @@ async fn ensure_provider_usage_attempt_columns(
             .execute_sqlite_script_typed(
                 space_id,
                 binding_id,
-                "ALTER TABLE provider_usage_attempts_v2 ADD COLUMN dispatched_known INTEGER NOT NULL DEFAULT 1;",
+                "ALTER TABLE provider_usage_attempts_v3 ADD COLUMN dispatched_known INTEGER NOT NULL DEFAULT 1;",
                 Vec::new(),
             )
             .await
@@ -769,7 +832,7 @@ async fn ensure_provider_usage_attempt_columns(
             .execute_sqlite_script_typed(
                 space_id,
                 binding_id,
-                "ALTER TABLE provider_usage_attempts_v2 ADD COLUMN semantic_output_observed_known INTEGER NOT NULL DEFAULT 1;",
+                "ALTER TABLE provider_usage_attempts_v3 ADD COLUMN semantic_output_observed_known INTEGER NOT NULL DEFAULT 1;",
                 Vec::new(),
             )
             .await
@@ -784,7 +847,7 @@ async fn ensure_provider_usage_attempt_columns(
             .execute_sqlite_script_typed(
                 space_id,
                 binding_id,
-                "ALTER TABLE provider_usage_attempts_v2 ADD COLUMN provider_billing_details_json TEXT;",
+                "ALTER TABLE provider_usage_attempts_v3 ADD COLUMN provider_billing_details_json TEXT;",
                 Vec::new(),
             )
             .await
@@ -848,7 +911,7 @@ pub async fn migrate_application_provider_usage(
         // schema_revision is host-owned and must not remain at an older source value after metadata copying.
         // schema_revision 由宿主持有，复制元数据后不得停留在旧来源值。
         ensure_provider_usage_schema(controller).await?;
-        rebuild_provider_usage_daily(controller, current_provider_billing_unix_millis()).await?;
+        rebuild_provider_usage_daily(controller, current_provider_usage_unix_millis()).await?;
     }
     persist_application_provider_usage_migration_completed(controller).await
 }
@@ -889,7 +952,7 @@ async fn application_provider_usage_source_exists(
         .query_sqlite_json_typed(
             APP_SPACE_ID,
             controller.sqlite_binding_id.as_str(),
-            "SELECT COUNT(*) AS completed FROM sqlite_master WHERE type = 'table' AND name = 'provider_usage_attempts_v2';",
+            "SELECT COUNT(*) AS completed FROM sqlite_master WHERE type = 'table' AND name IN ('provider_usage_attempts_v2', 'provider_usage_attempts_v3');",
             Vec::new(),
         )
         .await
@@ -898,7 +961,7 @@ async fn application_provider_usage_source_exists(
         decode_query_rows::<ProviderUsageMigrationCompletedRow>(&result.json_data)?
             .into_iter()
             .next()
-            .map(|row| row.completed == 1)
+            .map(|row| row.completed > 0)
             .unwrap_or(false),
     )
 }
@@ -1055,7 +1118,7 @@ async fn persist_application_provider_usage_migration_completed(
             system_statistics_sqlite_binding_id(controller),
             "UPDATE provider_usage_meta SET meta_value = '1', updated_at_ms = ? WHERE meta_key = ?;",
             vec![
-                ControllerSqliteValue::Int64(current_provider_billing_unix_millis()),
+            ControllerSqliteValue::Int64(current_provider_usage_unix_millis()),
                 ControllerSqliteValue::String(String::from(
                     APPLICATION_PROVIDER_USAGE_MIGRATION_KEY,
                 )),
@@ -1270,11 +1333,11 @@ pub async fn remove_duplicate_legacy_provider_usage_attempts_and_rebuild_daily(
             system_statistics_sqlite_binding_id(controller),
             r#"
 BEGIN IMMEDIATE;
-DELETE FROM provider_usage_attempts_v2 AS legacy
+DELETE FROM provider_usage_attempts_v3 AS legacy
 WHERE legacy.attempt_id LIKE 'legacy-plugin:%'
   AND EXISTS (
       SELECT 1
-      FROM provider_usage_attempts_v2 AS native
+      FROM provider_usage_attempts_v3 AS native
       WHERE native.attempt_id NOT LIKE 'legacy-plugin:%'
         AND native.logical_request_id = legacy.logical_request_id
         AND native.attempt_index = legacy.attempt_index
@@ -1303,16 +1366,15 @@ pub async fn load_provider_usage_dashboard(
             r#"
 SELECT calendar_date AS calendarDate, provider_id AS providerId,
        service_entry_id AS serviceEntryId, consumer_id AS consumerId, operation,
-       model_id AS modelId, currency, attempt_count AS attemptCount,
+       model_id AS modelId, attempt_count AS attemptCount,
        successful_attempt_count AS successfulAttemptCount,
        reported_usage_attempt_count AS reportedUsageAttemptCount,
        input_tokens AS inputTokens, uncached_input_tokens AS uncachedInputTokens,
        cache_read_tokens AS cacheReadTokens, cache_write_tokens AS cacheWriteTokens,
        output_tokens AS outputTokens, reasoning_tokens AS reasoningTokens,
-       total_tokens AS totalTokens, reported_cost AS reportedCost,
-       estimated_cost AS estimatedCost, aggregate_revision AS aggregateRevision
-FROM provider_usage_daily_v2
-ORDER BY calendar_date DESC, provider_id, service_entry_id, consumer_id, operation, model_id, currency
+       total_tokens AS totalTokens, aggregate_revision AS aggregateRevision
+ FROM provider_usage_daily_v3
+ ORDER BY calendar_date DESC, provider_id, service_entry_id, consumer_id, operation, model_id
 LIMIT 500;
 "#,
             Vec::new(),
@@ -1331,14 +1393,13 @@ SELECT attempts.attempt_id, attempts.consumer_id, attempts.operation,
        attempts.mapped_model AS model_id, attempts.transport,
        attempts.http_status, attempts.websocket_close_code,
        attempts.error_category, attempts.error_code, attempts.status,
-       attempts.usage_availability, attempts.total_tokens,
-       attempts.provider_billing_details_json,
-       attempts.reported_cost, attempts.estimated_cost, attempts.currency,
-       attempts.pricing_revision, pricing.source_kind AS pricing_source_kind,
-       pricing.source_id AS pricing_source_id, attempts.terminal_at_ms
-FROM provider_usage_attempts_v2 AS attempts
-LEFT JOIN provider_pricing_profiles_v1 AS pricing
-  ON pricing.pricing_revision = attempts.pricing_revision
+       attempts.usage_availability, attempts.input_tokens,
+       attempts.uncached_input_tokens, attempts.cache_read_tokens,
+       attempts.cache_write_tokens, attempts.output_tokens,
+       attempts.reasoning_tokens, attempts.audio_input_tokens,
+       attempts.audio_output_tokens, attempts.total_tokens,
+       attempts.provider_billing_details_json, attempts.terminal_at_ms
+ FROM provider_usage_attempts_v3 AS attempts
 ORDER BY attempts.terminal_at_ms DESC, attempts.attempt_id DESC
 LIMIT 200;
 "#,
@@ -1406,7 +1467,7 @@ LIMIT 200;
         .map(ProviderAccountUsageDashboardRow::decode)
         .collect::<Result<Vec<_>, _>>()?;
     Ok(ProviderUsageDashboard {
-        generated_at_ms: current_provider_billing_unix_millis(),
+        generated_at_ms: current_provider_usage_unix_millis(),
         schema_revision: PROVIDER_USAGE_SCHEMA_REVISION,
         aggregate_revision: meta.aggregate_revision,
         health_status: meta.health_status,
@@ -1451,18 +1512,20 @@ struct ProviderUsageAttemptDashboardRow {
     /// 物理状态与用量完整性。
     status: String,
     usage_availability: String,
+    /// Optional normalized token partitions.
+    /// 可选的规范化 Token 分区。
+    input_tokens: Option<i64>,
+    uncached_input_tokens: Option<i64>,
+    cache_read_tokens: Option<i64>,
+    cache_write_tokens: Option<i64>,
+    output_tokens: Option<i64>,
+    reasoning_tokens: Option<i64>,
+    audio_input_tokens: Option<i64>,
+    audio_output_tokens: Option<i64>,
     total_tokens: Option<i64>,
     /// Optional serialized provider billing partitions.
     /// 可选序列化供应商计费分区。
     provider_billing_details_json: Option<String>,
-    /// Exact cost and frozen pricing provenance.
-    /// 精确成本与冻结价格来源。
-    reported_cost: Option<String>,
-    estimated_cost: Option<String>,
-    currency: Option<String>,
-    pricing_revision: Option<String>,
-    pricing_source_kind: Option<String>,
-    pricing_source_id: Option<String>,
     /// Terminal timestamp.
     /// 终态时间戳。
     terminal_at_ms: i64,
@@ -1491,14 +1554,16 @@ impl ProviderUsageAttemptDashboardRow {
             error_code: self.error_code,
             status: self.status,
             usage_availability: self.usage_availability,
+            input_tokens: self.input_tokens,
+            uncached_input_tokens: self.uncached_input_tokens,
+            cache_read_tokens: self.cache_read_tokens,
+            cache_write_tokens: self.cache_write_tokens,
+            output_tokens: self.output_tokens,
+            reasoning_tokens: self.reasoning_tokens,
+            audio_input_tokens: self.audio_input_tokens,
+            audio_output_tokens: self.audio_output_tokens,
             total_tokens: self.total_tokens,
             billing_details,
-            reported_cost: self.reported_cost,
-            estimated_cost: self.estimated_cost,
-            currency: self.currency,
-            pricing_revision: self.pricing_revision,
-            pricing_source_kind: self.pricing_source_kind,
-            pricing_source_id: self.pricing_source_id,
             terminal_at_ms: self.terminal_at_ms,
         })
     }
@@ -1555,7 +1620,7 @@ struct ProviderUsageDashboardMetaRow {
 
 /// Returns the current Unix timestamp in milliseconds for dashboard snapshots.
 /// 返回仪表盘快照使用的当前 Unix 毫秒时间戳。
-fn current_provider_billing_unix_millis() -> i64 {
+fn current_provider_usage_unix_millis() -> i64 {
     let duration = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
@@ -1624,7 +1689,7 @@ async fn persist_provider_usage_attempt_rows(
             SYSTEM_STATISTICS_SPACE_ID,
             system_statistics_sqlite_binding_id(controller),
             r#"
-INSERT OR IGNORE INTO provider_usage_attempts_v2 (
+INSERT OR IGNORE INTO provider_usage_attempts_v3 (
     attempt_id, logical_request_id, attempt_index, failover_index, consumer_id,
     operation, provider_id, service_entry_id, connection_id, route_id,
     protocol_profile_id, route_revision, transport, requested_model, mapped_model,
@@ -1635,17 +1700,15 @@ INSERT OR IGNORE INTO provider_usage_attempts_v2 (
     input_tokens, uncached_input_tokens, cache_read_tokens, cache_write_tokens,
     output_tokens, reasoning_tokens, audio_input_tokens, audio_output_tokens, total_tokens,
     usage_profile_id, usage_profile_revision, usage_source_paths_json,
-    usage_validation_flags_json, provider_billing_details_json,
-    reported_cost, estimated_cost, currency,
-    pricing_revision, calendar_date
+    usage_validation_flags_json, provider_billing_details_json, calendar_date
 ) SELECT
     ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16,
     ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30,
     ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44,
-    ?45, ?46, ?47, ?48, ?49, ?50, ?51, ?52
+    ?45, ?46, ?47, ?48
 WHERE NOT EXISTS (
     SELECT 1
-    FROM provider_usage_attempts_v2 AS existing
+    FROM provider_usage_attempts_v3 AS existing
     WHERE existing.logical_request_id = ?2
       AND existing.attempt_index = ?3
       AND COALESCE(existing.failover_index, -1) = COALESCE(?4, -1)
@@ -1699,10 +1762,6 @@ WHERE NOT EXISTS (
                 optional_text(record.usage_source_paths_json.clone()),
                 optional_text(record.usage_validation_flags_json.clone()),
                 optional_text(record.provider_billing_details_json.clone()),
-                optional_text(record.reported_cost.clone()),
-                optional_text(record.estimated_cost.clone()),
-                optional_text(record.currency.clone()),
-                optional_text(record.pricing_revision.clone()),
                 text(record.calendar_date.clone()),
             ]).collect(),
         )
@@ -1733,57 +1792,8 @@ pub async fn persist_provider_usage_attempt_and_rebuild_daily(
     rebuild_provider_usage_daily(controller, updated_at_ms).await
 }
 
-/// Persists one immutable pricing revision without changing historical attempts.
-/// 持久化一个不可变价格修订版，且不修改历史 attempt。
-pub async fn persist_provider_pricing_profile(
-    controller: &ControllerRuntimeHandle,
-    record: &ProviderPricingProfileRecord,
-) -> Result<(), String> {
-    validate_non_empty_fields(&[
-        ("pricing_revision", &record.pricing_revision),
-        ("provider_id", &record.provider_id),
-        ("model_id", &record.model_id),
-        ("currency", &record.currency),
-        ("source_kind", &record.source_kind),
-        ("source_id", &record.source_id),
-        ("content_hash", &record.content_hash),
-    ])?;
-    ensure_provider_usage_schema(controller).await?;
-    controller
-        .client
-        .execute_sqlite_batch_typed(
-            SYSTEM_STATISTICS_SPACE_ID,
-            system_statistics_sqlite_binding_id(controller),
-            r#"
-INSERT OR IGNORE INTO provider_pricing_profiles_v1 (
-    pricing_revision, provider_id, service_entry_id, model_id, currency,
-    input_per_million, output_per_million, cache_read_per_million,
-    cache_write_per_million, source_kind, source_id, content_hash, created_at_ms
-) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13);
-"#,
-            vec![vec![
-                text(record.pricing_revision.clone()),
-                text(record.provider_id.clone()),
-                optional_text(record.service_entry_id.clone()),
-                text(record.model_id.clone()),
-                text(record.currency.clone()),
-                optional_text(record.input_per_million.clone()),
-                optional_text(record.output_per_million.clone()),
-                optional_text(record.cache_read_per_million.clone()),
-                optional_text(record.cache_write_per_million.clone()),
-                text(record.source_kind.clone()),
-                text(record.source_id.clone()),
-                text(record.content_hash.clone()),
-                integer(record.created_at_ms),
-            ]],
-        )
-        .await
-        .map_err(|error| format!("写入供应商价格修订版失败：{error}"))?;
-    Ok(())
-}
-
-/// Persists one account usage snapshot independently from request cost.
-/// 独立于请求成本持久化一条账户用量快照。
+/// Persists one account usage snapshot independently from request token usage.
+/// 独立于请求 Token 用量持久化一条账户用量快照。
 pub async fn persist_provider_account_usage_snapshot(
     controller: &ControllerRuntimeHandle,
     record: &ProviderAccountUsageSnapshotRecord,
@@ -1897,9 +1907,6 @@ struct ProviderUsageAggregateInputRow {
     /// Effective model identity.
     /// 生效模型标识。
     mapped_model: String,
-    /// Exact currency or an empty unknown marker.
-    /// 精确币种或空未知标记。
-    currency: String,
     /// Physical terminal status.
     /// 物理终态。
     status: String,
@@ -1927,12 +1934,6 @@ struct ProviderUsageAggregateInputRow {
     /// Optional total tokens.
     /// 可选总 Token。
     total_tokens: Option<i64>,
-    /// Optional provider-reported decimal cost.
-    /// 可选供应商报告十进制成本。
-    reported_cost: Option<String>,
-    /// Optional locally estimated decimal cost.
-    /// 可选本地估算十进制成本。
-    estimated_cost: Option<String>,
 }
 
 /// Exact grouping key for one daily usage row.
@@ -1957,13 +1958,10 @@ struct ProviderUsageDailyKey {
     /// Effective model identity.
     /// 生效模型标识。
     model_id: String,
-    /// Exact currency or an empty unknown marker.
-    /// 精确币种或空未知标记。
-    currency: String,
 }
 
-/// Exact counters and decimal totals for one daily grouping key.
-/// 一个每日分组键对应的精确计数与十进制合计。
+/// Exact counters and token totals for one daily grouping key.
+/// 一个每日分组键对应的精确计数与 Token 合计。
 #[derive(Debug)]
 struct ProviderUsageDailyAggregate {
     /// Immutable grouping key.
@@ -1999,12 +1997,6 @@ struct ProviderUsageDailyAggregate {
     /// Optional exact total-token sum.
     /// 可选精确总 Token 合计。
     total_tokens: Option<i64>,
-    /// Optional exact reported-cost sum.
-    /// 可选精确报告成本合计。
-    reported_cost: Option<Decimal>,
-    /// Optional exact estimated-cost sum.
-    /// 可选精确估算成本合计。
-    estimated_cost: Option<Decimal>,
 }
 
 impl ProviderUsageDailyAggregate {
@@ -2023,13 +2015,11 @@ impl ProviderUsageDailyAggregate {
             output_tokens: None,
             reasoning_tokens: None,
             total_tokens: None,
-            reported_cost: None,
-            estimated_cost: None,
         }
     }
 
-    /// Applies one immutable attempt row using checked integer and decimal arithmetic.
-    /// 使用受检整数与十进制运算应用一条不可变 attempt 记录。
+    /// Applies one immutable attempt row using checked integer arithmetic.
+    /// 使用受检整数运算应用一条不可变 attempt 记录。
     fn apply(&mut self, row: ProviderUsageAggregateInputRow) -> Result<(), String> {
         self.attempt_count = self
             .attempt_count
@@ -2074,16 +2064,6 @@ impl ProviderUsageDailyAggregate {
             "reasoning_tokens",
         )?;
         checked_add_optional_i64(&mut self.total_tokens, row.total_tokens, "total_tokens")?;
-        checked_add_optional_decimal(
-            &mut self.reported_cost,
-            row.reported_cost.as_deref(),
-            "reported_cost",
-        )?;
-        checked_add_optional_decimal(
-            &mut self.estimated_cost,
-            row.estimated_cost.as_deref(),
-            "estimated_cost",
-        )?;
         Ok(())
     }
 
@@ -2091,14 +2071,13 @@ impl ProviderUsageDailyAggregate {
     /// 在重建事务中渲染一条已校验的无参数 INSERT。
     fn insert_sql(&self) -> Result<String, String> {
         Ok(format!(
-            "INSERT INTO provider_usage_daily_v2 (calendar_date, provider_id, service_entry_id, consumer_id, operation, model_id, currency, attempt_count, successful_attempt_count, reported_usage_attempt_count, input_tokens, uncached_input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, reasoning_tokens, total_tokens, reported_cost, estimated_cost, aggregate_revision) VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, 1);",
+            "INSERT INTO provider_usage_daily_v3 (calendar_date, provider_id, service_entry_id, consumer_id, operation, model_id, attempt_count, successful_attempt_count, reported_usage_attempt_count, input_tokens, uncached_input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, reasoning_tokens, total_tokens, aggregate_revision) VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, 1);",
             sql_text_literal(&self.key.calendar_date)?,
             sql_text_literal(&self.key.provider_id)?,
             sql_text_literal(&self.key.service_entry_id)?,
             sql_text_literal(&self.key.consumer_id)?,
             sql_text_literal(&self.key.operation)?,
             sql_text_literal(&self.key.model_id)?,
-            sql_text_literal(&self.key.currency)?,
             self.attempt_count,
             self.successful_attempt_count,
             self.reported_usage_attempt_count,
@@ -2109,14 +2088,12 @@ impl ProviderUsageDailyAggregate {
             sql_optional_i64(self.output_tokens),
             sql_optional_i64(self.reasoning_tokens),
             sql_optional_i64(self.total_tokens),
-            sql_optional_decimal(self.reported_cost.as_ref()),
-            sql_optional_decimal(self.estimated_cost.as_ref()),
         ))
     }
 }
 
-/// Aggregates immutable attempt rows without converting decimal costs through SQLite numeric affinity.
-/// 聚合不可变 attempt 记录且不让十进制成本经过 SQLite 数值亲和转换。
+/// Aggregates immutable attempt token facts with checked integer arithmetic.
+/// 使用受检整数运算聚合不可变 attempt Token 事实。
 fn aggregate_provider_usage_rows(
     rows: Vec<ProviderUsageAggregateInputRow>,
 ) -> Result<BTreeMap<ProviderUsageDailyKey, ProviderUsageDailyAggregate>, String> {
@@ -2129,7 +2106,6 @@ fn aggregate_provider_usage_rows(
             consumer_id: row.consumer_id.clone(),
             operation: row.operation.clone(),
             model_id: row.mapped_model.clone(),
-            currency: row.currency.clone(),
         };
         aggregates
             .entry(key.clone())
@@ -2157,26 +2133,6 @@ fn checked_add_optional_i64(
     Ok(())
 }
 
-/// Parses and adds one optional decimal string without binary floating-point conversion.
-/// 解析并累加一个可选十进制字符串且不转换为二进制浮点数。
-fn checked_add_optional_decimal(
-    target: &mut Option<Decimal>,
-    value: Option<&str>,
-    field: &str,
-) -> Result<(), String> {
-    if let Some(value) = value {
-        let value = Decimal::from_str(value)
-            .map_err(|error| format!("invalid provider {field} decimal `{value}`: {error}"))?;
-        *target = Some(match target.as_ref() {
-            Some(current) => current
-                .checked_add(value)
-                .ok_or_else(|| format!("provider daily {field} overflow"))?,
-            None => value,
-        });
-    }
-    Ok(())
-}
-
 /// Escapes one trusted database value as a SQLite text literal and rejects embedded NUL bytes.
 /// 将一个可信数据库值转义为 SQLite 文本字面量并拒绝内嵌 NUL 字节。
 fn sql_text_literal(value: &str) -> Result<String, String> {
@@ -2194,15 +2150,6 @@ fn sql_optional_i64(value: Option<i64>) -> String {
     value.map_or_else(|| String::from("NULL"), |value| value.to_string())
 }
 
-/// Renders one optional exact decimal as a quoted SQLite text literal.
-/// 将一个可选精确十进制数渲染为带引号的 SQLite 文本字面量。
-fn sql_optional_decimal(value: Option<&Decimal>) -> String {
-    value.map_or_else(
-        || String::from("NULL"),
-        |value| format!("'{}'", value.normalize()),
-    )
-}
-
 /// Rebuilds daily aggregates transactionally from immutable attempt facts.
 /// 从不可变 attempt 事实事务性重建每日聚合。
 pub async fn rebuild_provider_usage_daily(
@@ -2218,12 +2165,12 @@ pub async fn rebuild_provider_usage_daily(
             r#"
 SELECT
     calendar_date, provider_id, service_entry_id, consumer_id, operation,
-    mapped_model, COALESCE(currency, '') AS currency, status, usage_availability,
+    mapped_model, status, usage_availability,
     input_tokens, uncached_input_tokens, cache_read_tokens, cache_write_tokens,
-    output_tokens, reasoning_tokens, total_tokens, reported_cost, estimated_cost
-FROM provider_usage_attempts_v2
+    output_tokens, reasoning_tokens, total_tokens
+FROM provider_usage_attempts_v3
 ORDER BY calendar_date, provider_id, service_entry_id, consumer_id, operation,
-         mapped_model, COALESCE(currency, ''), attempt_id;
+         mapped_model, attempt_id;
 "#,
             Vec::new(),
         )
@@ -2231,7 +2178,7 @@ ORDER BY calendar_date, provider_id, service_entry_id, consumer_id, operation,
         .map_err(|error| format!("读取供应商 attempt 聚合事实失败：{error}"))?;
     let rows = decode_query_rows::<ProviderUsageAggregateInputRow>(&result.json_data)?;
     let aggregates = aggregate_provider_usage_rows(rows)?;
-    let mut script = String::from("BEGIN IMMEDIATE;\nDELETE FROM provider_usage_daily_v2;\n");
+    let mut script = String::from("BEGIN IMMEDIATE;\nDELETE FROM provider_usage_daily_v3;\n");
     for aggregate in aggregates.values() {
         script.push_str(aggregate.insert_sql()?.as_str());
         script.push('\n');
@@ -2395,10 +2342,6 @@ mod tests {
             usage_source_paths_json: None,
             usage_validation_flags_json: None,
             provider_billing_details_json: None,
-            reported_cost: None,
-            estimated_cost: None,
-            currency: None,
-            pricing_revision: None,
             calendar_date: String::from("2026-08-06"),
         }
     }
@@ -2419,10 +2362,10 @@ mod tests {
         assert!(error.contains("usage_availability"));
     }
 
-    /// Verifies dashboard rows retain typed provider billing and frozen pricing provenance.
-    /// 验证仪表盘行保留强类型供应商计费与冻结价格来源。
+    /// Verifies dashboard rows retain all token partitions and typed provider usage details.
+    /// 验证仪表盘行保留全部 Token 分区与强类型供应商用量明细。
     #[test]
-    fn attempt_dashboard_row_decodes_billing_provenance() {
+    fn attempt_dashboard_row_decodes_token_partitions() {
         let row = ProviderUsageAttemptDashboardRow {
             attempt_id: String::from("attempt-1"),
             consumer_id: String::from("vmm"),
@@ -2437,16 +2380,18 @@ mod tests {
             error_code: None,
             status: String::from("succeeded"),
             usage_availability: String::from("final"),
+            input_tokens: Some(10),
+            uncached_input_tokens: Some(7),
+            cache_read_tokens: Some(3),
+            cache_write_tokens: Some(1),
+            output_tokens: Some(20),
+            reasoning_tokens: Some(4),
+            audio_input_tokens: None,
+            audio_output_tokens: None,
             total_tokens: Some(30),
             provider_billing_details_json: Some(String::from(
                 r#"[{"billing_type":"response_api","input_tokens":10,"output_tokens":20,"total_tokens":30,"text_tokens":8,"image_tokens":2,"reasoning_tokens":4}]"#,
             )),
-            reported_cost: None,
-            estimated_cost: Some(String::from("0.001")),
-            currency: Some(String::from("USD")),
-            pricing_revision: Some(String::from("price-revision")),
-            pricing_source_kind: Some(String::from("catalog_model")),
-            pricing_source_id: Some(String::from("cc-switch:user:model-pricing.json")),
             terminal_at_ms: 10,
         };
 
@@ -2456,10 +2401,10 @@ mod tests {
         assert_eq!(summary.http_status, Some(200));
         assert_eq!(summary.billing_details[0].billing_type, "response_api");
         assert_eq!(summary.billing_details[0].image_tokens, Some(2));
-        assert_eq!(
-            summary.pricing_source_kind.as_deref(),
-            Some("catalog_model")
-        );
+        assert_eq!(summary.uncached_input_tokens, Some(7));
+        assert_eq!(summary.cache_read_tokens, Some(3));
+        assert_eq!(summary.cache_write_tokens, Some(1));
+        assert_eq!(summary.reasoning_tokens, Some(4));
     }
 
     /// Verifies corrupt persisted billing JSON is explicit instead of silently disappearing.
@@ -2480,14 +2425,16 @@ mod tests {
             error_code: None,
             status: String::from("succeeded"),
             usage_availability: String::from("final"),
+            input_tokens: Some(1),
+            uncached_input_tokens: Some(1),
+            cache_read_tokens: Some(0),
+            cache_write_tokens: Some(0),
+            output_tokens: Some(0),
+            reasoning_tokens: Some(0),
+            audio_input_tokens: None,
+            audio_output_tokens: None,
             total_tokens: Some(1),
             provider_billing_details_json: None,
-            reported_cost: None,
-            estimated_cost: None,
-            currency: None,
-            pricing_revision: None,
-            pricing_source_kind: None,
-            pricing_source_id: None,
             terminal_at_ms: 10,
         };
         row.provider_billing_details_json = Some(String::from("{}"));
@@ -2496,14 +2443,11 @@ mod tests {
         assert!(error.contains("计费明细 JSON 无效"));
     }
 
-    /// Verifies decimal aggregation remains exact beyond binary floating-point precision.
-    /// 验证十进制聚合在超出二进制浮点精度时仍保持精确。
+    /// Verifies daily aggregation sums token facts without any price dimension.
+    /// 验证每日聚合只汇总 Token 事实且不存在任何价格维度。
     #[test]
-    fn daily_aggregation_preserves_exact_decimal_costs() {
-        let rows = vec![
-            aggregate_input_row(Some("0.100000000000000001")),
-            aggregate_input_row(Some("0.200000000000000002")),
-        ];
+    fn daily_aggregation_preserves_exact_token_totals() {
+        let rows = vec![aggregate_input_row(), aggregate_input_row()];
 
         let aggregates = aggregate_provider_usage_rows(rows).expect("rows should aggregate");
         let aggregate = aggregates.values().next().expect("aggregate should exist");
@@ -2511,26 +2455,14 @@ mod tests {
         assert_eq!(aggregate.successful_attempt_count, 2);
         assert_eq!(aggregate.reported_usage_attempt_count, 2);
         assert_eq!(aggregate.input_tokens, Some(20));
-        assert_eq!(
-            aggregate
-                .reported_cost
-                .map(|value| value.normalize().to_string()),
-            Some(String::from("0.300000000000000003"))
-        );
-    }
-
-    /// Verifies malformed provider costs fail aggregation instead of being coerced to zero.
-    /// 验证格式错误的供应商成本会使聚合失败而非被强制转换为零。
-    #[test]
-    fn daily_aggregation_rejects_malformed_decimal_costs() {
-        let error = aggregate_provider_usage_rows(vec![aggregate_input_row(Some("not-a-cost"))])
-            .expect_err("malformed costs must fail");
-        assert!(error.contains("reported_cost"));
+        assert_eq!(aggregate.cache_read_tokens, Some(4));
+        assert_eq!(aggregate.output_tokens, Some(6));
+        assert_eq!(aggregate.total_tokens, Some(26));
     }
 
     /// Builds one exact daily-aggregation input fixture.
     /// 构建一条精确每日聚合输入夹具。
-    fn aggregate_input_row(reported_cost: Option<&str>) -> ProviderUsageAggregateInputRow {
+    fn aggregate_input_row() -> ProviderUsageAggregateInputRow {
         ProviderUsageAggregateInputRow {
             calendar_date: String::from("2026-08-06"),
             provider_id: String::from("openai"),
@@ -2538,7 +2470,6 @@ mod tests {
             consumer_id: String::from("main-agent"),
             operation: String::from("conversation"),
             mapped_model: String::from("gpt-5"),
-            currency: String::from("USD"),
             status: String::from("succeeded"),
             usage_availability: String::from("final"),
             input_tokens: Some(10),
@@ -2548,8 +2479,6 @@ mod tests {
             output_tokens: Some(3),
             reasoning_tokens: Some(1),
             total_tokens: Some(13),
-            reported_cost: reported_cost.map(str::to_string),
-            estimated_cost: None,
         }
     }
 }

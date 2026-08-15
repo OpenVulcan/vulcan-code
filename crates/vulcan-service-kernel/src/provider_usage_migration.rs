@@ -121,9 +121,6 @@ struct LegacyUsageEventRow {
     /// Exact secondary route identity when recorded.
     /// 记录时的精确次级路由标识。
     secondary_route_id: Option<String>,
-    /// Legacy provider cost without a persisted currency.
-    /// 未持久化币种的旧供应商成本。
-    provider_cost: Option<String>,
     /// Stable provider key joined from the legacy model table.
     /// 从旧模型表联接得到的稳定供应商键。
     provider_key: String,
@@ -292,7 +289,6 @@ SELECT
     e.connection_id,
     e.protocol_profile_id,
     e.secondary_route_id,
-    e.provider_cost,
     m.provider_key,
     m.model_key,
     e.error_category,
@@ -399,12 +395,6 @@ fn legacy_row_to_native_attempt(
             row.request_id
         ));
     }
-    if row.provider_cost.is_some() {
-        push_unique_flag(
-            &mut validation_flags,
-            "legacy_reported_cost_currency_missing",
-        );
-    }
     push_unique_flag(&mut validation_flags, "legacy_transport_unknown");
     push_unique_flag(&mut validation_flags, "legacy_input_total_unknown");
 
@@ -482,10 +472,6 @@ fn legacy_row_to_native_attempt(
                 .map_err(|error| format!("序列化旧用量校验标记失败：{error}"))?,
         ),
         provider_billing_details_json: None,
-        reported_cost: None,
-        estimated_cost: None,
-        currency: None,
-        pricing_revision: None,
         calendar_date: row.calendar_date.clone(),
     })
 }
@@ -724,7 +710,6 @@ mod tests {
             connection_id: None,
             protocol_profile_id: None,
             secondary_route_id: None,
-            provider_cost: None,
             provider_key: String::from("provider-1"),
             model_key: String::from("model-1"),
             error_category: None,

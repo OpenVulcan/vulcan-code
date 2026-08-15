@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "modelOverrides": {
+      "type": "object",
+      "maxProperties": 1000,
+      "propertyNames": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 256
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/modelPrice"
+      }
+    },
+    "catalogModels": {
+      "type": "array",
+      "maxItems": 1000,
+      "items": {
+        "type": "object",
+        "properties": {
+          "modelId": { "type": "string", "minLength": 1 },
+          "prices": { "$ref": "#/$defs/modelPrice" }
+        },
+        "required": ["modelId", "prices"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["modelOverrides", "catalogModels"],
+  "additionalProperties": false,
+  "$defs": {
+    "decimalPrice": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]+)?$"
+    },
+    "modelPrice": {
+      "type": "object",
+      "properties": {
+        "inputPerMillion": { "$ref": "#/$defs/decimalPrice" },
+        "outputPerMillion": { "$ref": "#/$defs/decimalPrice" },
+        "cacheReadPerMillion": { "$ref": "#/$defs/decimalPrice" },
+        "cacheWritePerMillion": { "$ref": "#/$defs/decimalPrice" }
+      },
+      "required": [
+        "inputPerMillion",
+        "outputPerMillion",
+        "cacheReadPerMillion",
+        "cacheWritePerMillion"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

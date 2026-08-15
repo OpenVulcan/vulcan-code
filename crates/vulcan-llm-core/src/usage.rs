@@ -1,11 +1,9 @@
-//! Profile-driven provider usage extraction and deterministic cost calculation.
-//! 由 Profile 驱动的供应商用量提取与确定性成本计算。
+//! Profile-driven provider usage extraction.
+//! 由 Profile 驱动的供应商用量提取。
 
-use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
-use std::str::FromStr;
 use vulcan_ai_contract::{
     RequestUsage, UsageBillingDetail, UsageUpdateKind, UsageValue, UsageValueSource,
     derive_uncached_input, derive_usage_sum,
@@ -82,12 +80,6 @@ pub enum UsageField {
     /// Provider-reported total tokens.
     /// 供应商报告的 Token 合计。
     TotalTokens,
-    /// Provider-reported decimal request cost.
-    /// 供应商报告的请求十进制成本。
-    ReportedCost,
-    /// Provider-reported decimal request cost denominated in United States dollars.
-    /// 供应商报告的以美元计价的请求十进制成本。
-    ReportedCostUsd,
     /// Provider-returned model identity.
     /// 供应商返回的模型标识。
     ResponseModel,
@@ -110,9 +102,6 @@ pub enum UsageValueEncoding {
     /// Requires a JSON string containing an unsigned integer.
     /// 要求包含无符号整数的 JSON 字符串。
     UnsignedIntegerString,
-    /// Accepts a JSON number or decimal string without converting through floating point.
-    /// 接受 JSON 数字或十进制字符串，且不经过浮点转换。
-    Decimal,
     /// Requires a JSON string.
     /// 要求 JSON 字符串。
     String,
@@ -248,9 +237,6 @@ fn usage_encoding_matches_field(field: UsageField, encoding: UsageValueEncoding)
             encoding,
             UsageValueEncoding::UnsignedInteger | UsageValueEncoding::UnsignedIntegerString
         ),
-        UsageField::ReportedCost | UsageField::ReportedCostUsd => {
-            encoding == UsageValueEncoding::Decimal
-        }
         UsageField::ResponseModel | UsageField::ResponseId => {
             encoding == UsageValueEncoding::String
         }
@@ -728,22 +714,15 @@ fn chat_usage_profiles() -> Vec<UsageExtractionProfile> {
     ]
 }
 
-/// Rebuilds the historical OpenRouter Chat profiles as a migration-test oracle.
-/// 作为迁移测试对照重建历史 OpenRouter Chat Profile。
+/// Rebuilds the historical OpenRouter Chat token profiles as a migration-test oracle.
+/// 作为迁移测试对照重建历史 OpenRouter Chat Token Profile。
 #[cfg(any(test, feature = "provider-migration-oracles"))]
 pub fn openrouter_chat_usage_profiles() -> Vec<UsageExtractionProfile> {
-    // profiles reuse only standard Chat token fields before adding the provider-owned cost extension.
-    // profiles 仅复用标准 Chat Token 字段，随后再加入供应商自有成本扩展。
     let mut profiles = chat_usage_profiles();
     for profile in &mut profiles {
         profile.profile_id = profile
             .profile_id
             .replacen("openai.chat.", "openrouter.chat.", 1);
-        profile.bindings.push(UsageFieldBinding {
-            field: UsageField::ReportedCostUsd,
-            pointers: vec![String::from("/usage/cost")],
-            encoding: UsageValueEncoding::Decimal,
-        });
     }
     profiles
 }
@@ -989,13 +968,6 @@ impl UsageObservation {
         raw: &Value,
     ) -> Result<(), LlmCoreError> {
         match binding.field {
-            UsageField::ReportedCost => {
-                self.usage.cost = Some(parse_decimal(raw, binding.encoding, pointer)?);
-            }
-            UsageField::ReportedCostUsd => {
-                self.usage.cost = Some(parse_decimal(raw, binding.encoding, pointer)?);
-                self.usage.cost_currency = Some(String::from("USD"));
-            }
             UsageField::ResponseModel => {
                 self.response_model = Some(parse_string(raw, binding.encoding, pointer)?);
             }
@@ -1241,92 +1213,6 @@ impl UsageAccumulator {
     }
 }
 
-/// Stores immutable per-million-token prices for one model revision.
-/// 保存一个模型修订版的不可变每百万 Token 价格。
-#[derive(Debug, Clone, PartialEq)]
-pub struct ModelPricing {
-    /// Price for uncached input tokens.
-    /// 非缓存输入 Token 价格。
-    pub input: Option<Decimal>,
-    /// Price for output tokens.
-    /// 输出 Token 价格。
-    pub output: Option<Decimal>,
-    /// Price for cache-read tokens.
-    /// 缓存读取 Token 价格。
-    pub cache_read: Option<Decimal>,
-    /// Price for cache-write tokens.
-    /// 缓存写入 Token 价格。
-    pub cache_write: Option<Decimal>,
-}
-
-impl ModelPricing {
-    /// Parses persisted decimal price strings without floating-point rounding.
-    /// 解析持久化十进制价格字符串，且不产生浮点舍入。
-    pub fn from_optional_strings(
-        input: Option<&str>,
-        output: Option<&str>,
-        cache_read: Option<&str>,
-        cache_write: Option<&str>,
-    ) -> Result<Self, LlmCoreError> {
-        Ok(Self {
-            input: parse_optional_price(input, "input")?,
-            output: parse_optional_price(output, "output")?,
-            cache_read: parse_optional_price(cache_read, "cache_read")?,
-            cache_write: parse_optional_price(cache_write, "cache_write")?,
-        })
-    }
-}
-
-/// Carries local estimated cost dimensions; missing usage or price stays unknown.
-/// 承载本地估算成本维度；缺失用量或价格保持未知。
-#[derive(Debug, Clone, PartialEq)]
-pub struct CostBreakdown {
-    /// Estimated uncached-input cost.
-    /// 估算的非缓存输入成本。
-    pub input: Option<Decimal>,
-    /// Estimated output cost.
-    /// 估算的输出成本。
-    pub output: Option<Decimal>,
-    /// Estimated cache-read cost.
-    /// 估算的缓存读取成本。
-    pub cache_read: Option<Decimal>,
-    /// Estimated cache-write cost.
-    /// 估算的缓存写入成本。
-    pub cache_write: Option<Decimal>,
-    /// Total cost only when every required component is known.
-    /// 仅当所有必要组成均已知时提供总成本。
-    pub total: Option<Decimal>,
-}
-
-/// Calculates deterministic local estimates from frozen usage and pricing revisions.
-/// 根据冻结的用量和价格修订版计算确定性本地估算。
-pub struct CostCalculator;
-
-impl CostCalculator {
-    /// Calculates a missing-aware local estimate with one explicit multiplier.
-    /// 使用一个显式倍率计算可表达缺失的本地估算。
-    pub fn calculate(
-        usage: &RequestUsage,
-        pricing: &ModelPricing,
-        multiplier: Decimal,
-    ) -> CostBreakdown {
-        let input = priced_usage(usage.uncached_input_tokens, pricing.input, multiplier);
-        let output = priced_usage(usage.output_tokens, pricing.output, multiplier);
-        let cache_read = priced_usage(usage.cache_read_tokens, pricing.cache_read, multiplier);
-        let cache_write = priced_usage(usage.cache_write_tokens, pricing.cache_write, multiplier);
-        let total = [input, output, cache_read, cache_write]
-            .into_iter()
-            .try_fold(Decimal::ZERO, |sum, value| value.map(|value| sum + value));
-        CostBreakdown {
-            input,
-            output,
-            cache_read,
-            cache_write,
-            total,
-        }
-    }
-}
-
 /// Resolves exactly one registered alias and rejects conflicting duplicate evidence.
 /// 精确解析一个已注册别名，并拒绝相互冲突的重复证据。
 fn resolve_registered_alias<'a>(
@@ -1370,33 +1256,6 @@ fn parse_unsigned(
             "Usage value at `{pointer}` does not match encoding `{encoding:?}`."
         ))
     })
-}
-
-/// Parses one exact decimal value without binary floating-point conversion.
-/// 在不进行二进制浮点转换的情况下解析一个精确十进制值。
-fn parse_decimal(
-    value: &Value,
-    encoding: UsageValueEncoding,
-    pointer: &str,
-) -> Result<String, LlmCoreError> {
-    let raw = match encoding {
-        UsageValueEncoding::Decimal => value
-            .as_str()
-            .map(str::to_string)
-            .or_else(|| value.as_number().map(ToString::to_string)),
-        _ => None,
-    }
-    .ok_or_else(|| {
-        LlmCoreError::new(format!(
-            "Usage decimal at `{pointer}` does not match encoding `{encoding:?}`."
-        ))
-    })?;
-    Decimal::from_str(&raw).map_err(|error| {
-        LlmCoreError::new(format!(
-            "Usage decimal at `{pointer}` is malformed: {error}"
-        ))
-    })?;
-    Ok(raw)
 }
 
 /// Parses one exact provider string field.
@@ -1558,11 +1417,7 @@ fn assign_usage_value(
         UsageField::AudioInputTokens => usage.audio_input_tokens = value,
         UsageField::AudioOutputTokens => usage.audio_output_tokens = value,
         UsageField::TotalTokens => usage.total_tokens = value,
-        UsageField::ReportedCost
-        | UsageField::ReportedCostUsd
-        | UsageField::ResponseModel
-        | UsageField::ResponseId
-        | UsageField::BillingDetails => {
+        UsageField::ResponseModel | UsageField::ResponseId | UsageField::BillingDetails => {
             return Err(LlmCoreError::new(format!(
                 "Usage field `{field:?}` is not a token dimension."
             )));
@@ -1586,7 +1441,6 @@ fn usage_field_name(field: UsageField) -> &'static str {
         UsageField::AudioInputTokens => "audio_input_tokens",
         UsageField::AudioOutputTokens => "audio_output_tokens",
         UsageField::TotalTokens => "total_tokens",
-        UsageField::ReportedCost | UsageField::ReportedCostUsd => "reported_cost",
         UsageField::ResponseModel => "response_model",
         UsageField::ResponseId => "response_id",
         UsageField::BillingDetails => "billing_details",
@@ -1627,30 +1481,6 @@ fn record_monotonic_regressions(
             ));
         }
     }
-}
-
-/// Parses one optional persisted price.
-/// 解析一个可选持久化价格。
-fn parse_optional_price(value: Option<&str>, label: &str) -> Result<Option<Decimal>, LlmCoreError> {
-    value
-        .map(|value| {
-            Decimal::from_str(value).map_err(|error| {
-                LlmCoreError::new(format!("Invalid {label} price `{value}`: {error}"))
-            })
-        })
-        .transpose()
-}
-
-/// Prices one usage dimension and resolves explicit zero rates without token evidence.
-/// 按每百万 Token 费率计算一个已知用量维度；明确零费率不依赖缺失用量。
-fn priced_usage(usage: UsageValue, price: Option<Decimal>, multiplier: Decimal) -> Option<Decimal> {
-    if price == Some(Decimal::ZERO) {
-        return Some(Decimal::ZERO);
-    }
-    let UsageValue::Known { value, .. } = usage else {
-        return None;
-    };
-    price.map(|price| Decimal::from(value) * price * multiplier / Decimal::from(1_000_000_u64))
 }
 
 #[cfg(test)]
@@ -2058,18 +1888,16 @@ mod tests {
         assert!(error.message.contains("must equal `response_api`"));
     }
 
-    /// Verifies OpenRouter Chat cost is retained as provider-reported USD evidence.
-    /// 验证 OpenRouter Chat 成本作为供应商上报的美元证据保留。
+    /// Verifies OpenRouter Chat ignores provider-reported cost and retains token facts only.
+    /// 验证 OpenRouter Chat 忽略供应商上报金额，仅保留 Token 事实。
     #[test]
-    fn openrouter_chat_profile_preserves_reported_usd_cost() {
+    fn openrouter_chat_profile_retains_token_facts_only() {
         // profile is the exact non-streaming OpenRouter Chat extraction contract.
         // profile 是精确的非流式 OpenRouter Chat 提取契约。
         let profile = openrouter_chat_usage_profiles()
             .into_iter()
             .find(|profile| profile.record_kind == UsageRecordKind::JsonBody)
             .expect("OpenRouter Chat JSON profile should exist");
-        // observation preserves both the raw cost path and its documented base currency.
-        // observation 同时保留原始成本路径及其文档化基础币种。
         let observation = profile
             .extract(
                 UsageRecordKind::JsonBody,
@@ -2086,55 +1914,24 @@ mod tests {
             )
             .expect("OpenRouter usage should parse")
             .expect("OpenRouter usage should match");
-        assert_eq!(observation.usage.cost.as_deref(), Some("0.00125"));
-        assert_eq!(observation.usage.cost_currency.as_deref(), Some("USD"));
-        assert_eq!(
-            observation.source_paths[&UsageField::ReportedCostUsd],
-            "/usage/cost"
+        assert!(matches!(
+            &observation.usage.input_tokens,
+            UsageValue::Known { value: 100, .. }
+        ));
+        assert!(matches!(
+            &observation.usage.output_tokens,
+            UsageValue::Known { value: 20, .. }
+        ));
+        assert!(matches!(
+            &observation.usage.total_tokens,
+            UsageValue::Known { value: 120, .. }
+        ));
+        assert!(
+            !observation
+                .source_paths
+                .values()
+                .any(|path| path == "/usage/cost")
         );
-    }
-
-    #[test]
-    fn cost_remains_unknown_when_usage_or_price_is_missing() {
-        let usage = RequestUsage {
-            output_tokens: UsageValue::Known {
-                value: 500,
-                source: UsageValueSource::Reported,
-            },
-            ..RequestUsage::default()
-        };
-        let pricing = ModelPricing::from_optional_strings(None, Some("2.5"), None, None)
-            .expect("prices should parse");
-        let cost = CostCalculator::calculate(&usage, &pricing, Decimal::ONE);
-        assert_eq!(cost.output, Some(Decimal::new(125, 5)));
-        assert_eq!(cost.input, None);
-        assert_eq!(cost.total, None);
-    }
-
-    /// Verifies an explicit zero price makes one missing token dimension cost exactly zero.
-    /// 验证明确定价为零时，缺失 Token 维度的成本仍可精确确定为零。
-    #[test]
-    fn explicit_zero_price_does_not_make_total_cost_unknown() {
-        let usage = RequestUsage {
-            uncached_input_tokens: UsageValue::Known {
-                value: 1_000_000,
-                source: UsageValueSource::Reported,
-            },
-            output_tokens: UsageValue::Known {
-                value: 500_000,
-                source: UsageValueSource::Reported,
-            },
-            ..RequestUsage::default()
-        };
-        let pricing =
-            ModelPricing::from_optional_strings(Some("1"), Some("2"), Some("0"), Some("0"))
-                .expect("prices should parse");
-        let cost = CostCalculator::calculate(&usage, &pricing, Decimal::ONE);
-        assert_eq!(cost.input, Some(Decimal::ONE));
-        assert_eq!(cost.output, Some(Decimal::ONE));
-        assert_eq!(cost.cache_read, Some(Decimal::ZERO));
-        assert_eq!(cost.cache_write, Some(Decimal::ZERO));
-        assert_eq!(cost.total, Some(Decimal::from(2)));
     }
 
     #[test]

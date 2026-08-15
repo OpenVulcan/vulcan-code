@@ -7,13 +7,8 @@ use crate::{
     ProviderToolCapabilityKind, ProviderToolTargetSelection, SecondaryRouteSelection,
     validate_custom_provider_reasoning_settings,
 };
-use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    str::FromStr,
-    sync::LazyLock,
-};
+use std::collections::{BTreeMap, BTreeSet};
 use vulcan_ai_contract::{
     AiOperation, CapabilitySupport, EmbeddingEncoding, EmbeddingOutputKind, EmbeddingTask,
     InferenceUsageScope, ModelCapabilities, ModelParameterValue, PromptCachePolicy,
@@ -23,7 +18,7 @@ use vulcan_context::{ContextCompactionPolicy, ContextWindowPolicyOverrides};
 
 /// Identifies the current persisted AI configuration schema.
 /// 标识当前持久化 AI 配置 Schema。
-pub const PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION: u32 = 15;
+pub const PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION: u32 = 16;
 
 /// Stores only user-declared differences from immutable model capability sources.
 /// 仅保存用户相对于不可变模型能力来源声明的差异。
@@ -426,460 +421,6 @@ fn default_connection_model_enabled() -> bool {
     true
 }
 
-/// Stores one explicit per-million-token billing override without using floating-point values.
-/// 保存一条显式的每百万 Token 计费覆盖，并且不使用浮点数。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub struct BillingPriceOverride {
-    /// Fresh input price per million tokens as a decimal string.
-    /// 新鲜输入每百万 Token 价格，使用十进制字符串保存。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub input_cost_per_million: Option<String>,
-    /// Output price per million tokens as a decimal string.
-    /// 输出每百万 Token 价格，使用十进制字符串保存。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub output_cost_per_million: Option<String>,
-    /// Cache-read price per million tokens as a decimal string.
-    /// 缓存读取每百万 Token 价格，使用十进制字符串保存。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cache_read_cost_per_million: Option<String>,
-    /// Cache-creation price per million tokens as a decimal string.
-    /// 缓存创建每百万 Token 价格，使用十进制字符串保存。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cache_creation_cost_per_million: Option<String>,
-    /// Optional provider-specific cost multiplier as a decimal string.
-    /// 可选的 Provider 专属成本倍率，使用十进制字符串保存。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cost_multiplier: Option<String>,
-    /// Human-readable price source or catalog revision.
-    /// 可读的价格来源或目录版本。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source: Option<String>,
-}
-
-impl BillingPriceOverride {
-    /// Reports whether no user-owned price field is present.
-    /// 判断该记录是否没有任何用户拥有的价格字段。
-    pub fn is_empty(&self) -> bool {
-        self.input_cost_per_million.is_none()
-            && self.output_cost_per_million.is_none()
-            && self.cache_read_cost_per_million.is_none()
-            && self.cache_creation_cost_per_million.is_none()
-            && self.cost_multiplier.is_none()
-            && self.source.is_none()
-    }
-
-    /// Validates decimal prices, multiplier, and source text without inventing defaults.
-    /// 校验十进制价格、倍率与来源文本且不虚构默认值。
-    pub fn validate(&self) -> Result<(), String> {
-        for (field, value) in [
-            (
-                "input_cost_per_million",
-                self.input_cost_per_million.as_deref(),
-            ),
-            (
-                "output_cost_per_million",
-                self.output_cost_per_million.as_deref(),
-            ),
-            (
-                "cache_read_cost_per_million",
-                self.cache_read_cost_per_million.as_deref(),
-            ),
-            (
-                "cache_creation_cost_per_million",
-                self.cache_creation_cost_per_million.as_deref(),
-            ),
-        ] {
-            if let Some(value) = value {
-                let parsed = parse_billing_decimal(field, value)?;
-                if parsed.is_sign_negative() {
-                    return Err(format!("Billing field `{field}` cannot be negative."));
-                }
-            }
-        }
-        if let Some(value) = self.cost_multiplier.as_deref() {
-            let parsed = parse_billing_decimal("cost_multiplier", value)?;
-            if parsed <= Decimal::ZERO {
-                return Err(String::from(
-                    "Billing cost_multiplier must be greater than zero.",
-                ));
-            }
-        }
-        if self.source.as_deref().is_some_and(|value| {
-            let trimmed = value.trim();
-            trimmed.is_empty() || trimmed.len() > 256
-        }) {
-            return Err(String::from(
-                "Billing price source must contain between 1 and 256 UTF-8 bytes.",
-            ));
-        }
-        Ok(())
-    }
-}
-
-/// Stores cc-switch-compatible provider/model/route billing overrides.
-/// 保存与 cc-switch 兼容的 Provider、模型和路由计费覆盖。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ProviderBillingConfiguration {
-    /// Enables cost calculation while usage facts remain recorded when disabled.
-    /// 启用成本计算；即使关闭，原始用量事实仍会记录。
-    #[serde(default = "default_billing_enabled")]
-    pub enabled: bool,
-    /// Currency label attached to persisted cost records.
-    /// 持久化成本记录使用的货币标签。
-    #[serde(default = "default_billing_currency")]
-    pub currency: String,
-    /// Imported provider-neutral model prices keyed by exact model identifier.
-    /// 按精确模型标识保存的导入型供应商无关模型价格。
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub catalog_model_prices: BTreeMap<String, BillingPriceOverride>,
-    /// User-imported model tombstones that suppress only the lower built-in catalog.
-    /// 用户导入的模型删除标记，仅屏蔽更低优先级的内置目录。
-    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
-    pub catalog_deleted_model_ids: BTreeSet<String>,
-    /// Provider-wide price overrides keyed by the exact provider identifier.
-    /// 按精确 Provider 标识保存的 Provider 级价格覆盖。
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub provider_prices: BTreeMap<String, BillingPriceOverride>,
-    /// Provider-model price overrides keyed by `provider_billing_model_key`.
-    /// 按 `provider_billing_model_key` 保存的 Provider-模型级价格覆盖。
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub model_prices: BTreeMap<String, BillingPriceOverride>,
-    /// Provider-model-route price overrides keyed by `provider_billing_route_key`.
-    /// 按 `provider_billing_route_key` 保存的 Provider-模型-路由级价格覆盖。
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub route_prices: BTreeMap<String, BillingPriceOverride>,
-}
-
-impl Default for ProviderBillingConfiguration {
-    /// Builds an enabled billing configuration with no guessed prices.
-    /// 构建启用计费但不猜测任何价格的默认配置。
-    fn default() -> Self {
-        Self {
-            enabled: default_billing_enabled(),
-            currency: default_billing_currency(),
-            catalog_model_prices: BTreeMap::new(),
-            catalog_deleted_model_ids: BTreeSet::new(),
-            provider_prices: BTreeMap::new(),
-            model_prices: BTreeMap::new(),
-            route_prices: BTreeMap::new(),
-        }
-    }
-}
-
-impl ProviderBillingConfiguration {
-    /// Reports whether this configuration has no non-default user-owned value.
-    /// 判断该配置是否没有任何非默认的用户拥有值。
-    pub fn is_empty(&self) -> bool {
-        self.enabled
-            && self.currency == default_billing_currency()
-            && self.catalog_model_prices.is_empty()
-            && self.catalog_deleted_model_ids.is_empty()
-            && self.provider_prices.is_empty()
-            && self.model_prices.is_empty()
-            && self.route_prices.is_empty()
-    }
-
-    /// Resolves one price by route, model, then provider precedence.
-    /// 按路由、模型、Provider 的优先级解析一条价格覆盖。
-    pub fn resolve_price(
-        &self,
-        provider_id: &str,
-        model_id: &str,
-        route_id: Option<&str>,
-    ) -> Option<&BillingPriceOverride> {
-        self.resolve_price_with_scope(provider_id, model_id, route_id)
-            .map(|(_, _, price)| price)
-    }
-
-    /// Resolves one price together with its exact precedence scope and persisted key.
-    /// 解析一条价格及其精确优先级作用域与持久化键。
-    pub fn resolve_price_with_scope(
-        &self,
-        provider_id: &str,
-        model_id: &str,
-        route_id: Option<&str>,
-    ) -> Option<(&'static str, String, &BillingPriceOverride)> {
-        if let Some(route_id) = route_id.filter(|value| !value.trim().is_empty()) {
-            let key = provider_billing_route_key(provider_id, model_id, route_id);
-            if let Some(price) = self.route_prices.get(&key) {
-                return Some(("route", key, price));
-            }
-        }
-        let model_key = provider_billing_model_key(provider_id, model_id);
-        if let Some(price) = self.model_prices.get(&model_key) {
-            return Some(("model", model_key, price));
-        }
-        if let Some(price) = self.provider_prices.get(provider_id) {
-            return Some(("provider", provider_id.to_string(), price));
-        }
-        if let Some(price) = self.catalog_model_prices.get(model_id) {
-            return Some(("catalog_model", model_id.to_string(), price));
-        }
-        if self.catalog_deleted_model_ids.contains(model_id) {
-            return None;
-        }
-        BUILTIN_CC_SWITCH_MODEL_PRICES
-            .get(model_id)
-            .map(|price| ("builtin_catalog_model", model_id.to_string(), price))
-    }
-
-    /// Validates currency, exact override keys, and every decimal price record.
-    /// 校验币种、精确覆盖键与每条十进制价格记录。
-    pub fn validate(&self) -> Result<(), String> {
-        if self.currency.len() != 3 || !self.currency.bytes().all(|byte| byte.is_ascii_uppercase())
-        {
-            return Err(String::from(
-                "Billing currency must be a three-letter uppercase ISO currency code.",
-            ));
-        }
-        for (model_id, price) in &self.catalog_model_prices {
-            validate_billing_identity("catalog model", model_id)?;
-            validate_billing_price("catalog model", model_id, price)?;
-        }
-        for model_id in &self.catalog_deleted_model_ids {
-            validate_billing_identity("deleted catalog model", model_id)?;
-            if self.catalog_model_prices.contains_key(model_id) {
-                return Err(format!(
-                    "Catalog model `{model_id}` cannot be both active and deleted."
-                ));
-            }
-        }
-        for (provider_id, price) in &self.provider_prices {
-            validate_billing_identity("provider", provider_id)?;
-            validate_billing_price("provider", provider_id, price)?;
-        }
-        for (key, price) in &self.model_prices {
-            let parts = billing_composite_key_parts(key, 2)
-                .ok_or_else(|| format!("Malformed provider-model billing key `{key}`."))?;
-            validate_billing_identity("provider", parts[0])?;
-            validate_billing_identity("model", parts[1])?;
-            validate_billing_price("provider-model", key, price)?;
-        }
-        for (key, price) in &self.route_prices {
-            let parts = billing_composite_key_parts(key, 3)
-                .ok_or_else(|| format!("Malformed provider-model-route billing key `{key}`."))?;
-            validate_billing_identity("provider", parts[0])?;
-            validate_billing_identity("model", parts[1])?;
-            validate_billing_identity("route", parts[2])?;
-            validate_billing_price("provider-model-route", key, price)?;
-        }
-        Ok(())
-    }
-
-    /// Imports the cc-switch `model-pricing.json` contract as the lowest-precedence model catalog.
-    /// 将 cc-switch 的 `model-pricing.json` 契约导入为最低优先级模型价格目录。
-    pub fn import_cc_switch_model_pricing_json(
-        &mut self,
-        source_id: &str,
-        json: &str,
-    ) -> Result<usize, String> {
-        if source_id.trim().is_empty() || source_id.len() > 256 {
-            return Err(String::from(
-                "cc-switch pricing source id must contain 1 to 256 bytes.",
-            ));
-        }
-        let (imported, deleted) = parse_cc_switch_model_pricing_json(source_id, json)?;
-        let imported_count = imported.len();
-        self.catalog_model_prices = imported;
-        self.catalog_deleted_model_ids = deleted;
-        Ok(imported_count)
-    }
-}
-
-/// Exact cc-switch model-pricing file fields consumed by the compatibility importer.
-/// 兼容导入器消费的精确 cc-switch 模型价格文件字段。
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct CcSwitchModelPricingFile {
-    /// Exact cc-switch file version.
-    /// 精确 cc-switch 文件版本。
-    #[serde(default = "default_cc_switch_pricing_version")]
-    version: u32,
-    /// Imported model entries.
-    /// 导入的模型条目。
-    #[serde(default)]
-    models: Vec<CcSwitchModelPricingEntry>,
-    /// Model identities explicitly deleted by the cc-switch user.
-    /// cc-switch 用户显式删除的模型标识。
-    #[serde(default)]
-    deleted_model_ids: Vec<String>,
-    /// cc-switch models.dev synchronization settings retained outside Vulcan runtime semantics.
-    /// 保留在 Vulcan 运行时语义之外的 cc-switch models.dev 同步设置。
-    #[serde(default, rename = "modelsDevSync")]
-    _models_dev_sync: Option<serde_json::Value>,
-    /// Frozen-source provenance accepted only for the embedded Vulcan snapshot.
-    /// 仅为 Vulcan 内嵌快照接受的冻结来源信息。
-    #[serde(default)]
-    _source: Option<serde_json::Value>,
-}
-
-/// Exact price fields for one cc-switch model-pricing entry.
-/// 单条 cc-switch 模型价格记录的精确价格字段。
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct CcSwitchModelPricingEntry {
-    /// Exact model identity.
-    /// 精确模型标识。
-    model_id: String,
-    /// Human-readable display name accepted but not used for routing.
-    /// 接受但不参与路由的可读显示名称。
-    #[serde(rename = "displayName")]
-    _display_name: String,
-    /// Input price per million tokens.
-    /// 输入每百万 Token 价格。
-    input_cost_per_million: String,
-    /// Output price per million tokens.
-    /// 输出每百万 Token 价格。
-    output_cost_per_million: String,
-    /// Cache-read price per million tokens.
-    /// 缓存读取每百万 Token 价格。
-    cache_read_cost_per_million: String,
-    /// Cache-write price per million tokens.
-    /// 缓存写入每百万 Token 价格。
-    cache_creation_cost_per_million: String,
-}
-
-/// Returns the sole cc-switch model-pricing file version supported by this importer.
-/// 返回当前导入器支持的唯一 cc-switch 模型价格文件版本。
-fn default_cc_switch_pricing_version() -> u32 {
-    1
-}
-
-/// Parses one exact cc-switch price file into model-keyed Vulcan overrides.
-/// 将一份精确的 cc-switch 价格文件解析为按模型键控的 Vulcan 覆盖。
-fn parse_cc_switch_model_pricing_json(
-    source_id: &str,
-    json: &str,
-) -> Result<(BTreeMap<String, BillingPriceOverride>, BTreeSet<String>), String> {
-    let file: CcSwitchModelPricingFile = serde_json::from_str(json)
-        .map_err(|error| format!("Invalid cc-switch model-pricing.json: {error}"))?;
-    if file.version != 1 {
-        return Err(format!(
-            "Unsupported cc-switch model-pricing.json version {}.",
-            file.version
-        ));
-    }
-    let deleted = file.deleted_model_ids.into_iter().collect::<BTreeSet<_>>();
-    for model_id in &deleted {
-        validate_billing_identity("deleted catalog model", model_id)?;
-    }
-    let mut imported = BTreeMap::new();
-    for model in file.models {
-        validate_billing_identity("catalog model", model.model_id.as_str())?;
-        if deleted.contains(model.model_id.as_str()) {
-            continue;
-        }
-        let price = BillingPriceOverride {
-            input_cost_per_million: Some(model.input_cost_per_million),
-            output_cost_per_million: Some(model.output_cost_per_million),
-            cache_read_cost_per_million: Some(model.cache_read_cost_per_million),
-            cache_creation_cost_per_million: Some(model.cache_creation_cost_per_million),
-            cost_multiplier: None,
-            source: Some(format!("cc-switch:{source_id}")),
-        };
-        validate_billing_price("catalog model", model.model_id.as_str(), &price)?;
-        if imported.insert(model.model_id.clone(), price).is_some() {
-            return Err(format!(
-                "cc-switch pricing contains duplicate model `{}`.",
-                model.model_id
-            ));
-        }
-    }
-    Ok((imported, deleted))
-}
-
-/// Frozen cc-switch seed prices used only after every user-owned override scope misses.
-/// 仅在所有用户覆盖作用域均未命中后使用的冻结 cc-switch 种子价格。
-static BUILTIN_CC_SWITCH_MODEL_PRICES: LazyLock<BTreeMap<String, BillingPriceOverride>> =
-    LazyLock::new(|| {
-        parse_cc_switch_model_pricing_json(
-            "builtin:0345fad6048eed65b3423bedc8ce5711320ddfc3",
-            include_str!("../resources/cc-switch-model-pricing.v1.json"),
-        )
-        .map(|(prices, _)| prices)
-        .expect("embedded cc-switch pricing snapshot must satisfy its validated contract")
-    });
-
-/// Parses one finite decimal billing value from its exact text representation.
-/// 从精确文本表示解析一个有限十进制计费值。
-fn parse_billing_decimal(field: &str, value: &str) -> Result<Decimal, String> {
-    if value.trim() != value || value.is_empty() {
-        return Err(format!(
-            "Billing field `{field}` must be a non-empty canonical decimal."
-        ));
-    }
-    Decimal::from_str(value)
-        .map_err(|error| format!("Billing field `{field}` is not a valid decimal: {error}"))
-}
-
-/// Validates one exact billing identity segment.
-/// 校验一个精确计费身份片段。
-fn validate_billing_identity(kind: &str, value: &str) -> Result<(), String> {
-    if value.trim().is_empty() {
-        return Err(format!("Billing {kind} identity cannot be empty."));
-    }
-    Ok(())
-}
-
-/// Validates one non-empty price record in its owning scope.
-/// 校验所属作用域中的一条非空价格记录。
-fn validate_billing_price(
-    scope: &str,
-    key: &str,
-    price: &BillingPriceOverride,
-) -> Result<(), String> {
-    if price.is_empty() {
-        return Err(format!("Billing {scope} override `{key}` cannot be empty."));
-    }
-    price.validate()
-}
-
-/// Returns the default state for billing cost calculation.
-/// 返回计费成本计算的默认状态。
-fn default_billing_enabled() -> bool {
-    true
-}
-
-/// Returns the default currency label for billing records.
-/// 返回计费记录的默认货币标签。
-fn default_billing_currency() -> String {
-    String::from("USD")
-}
-
-/// Builds the exact provider-model billing key using byte-length-prefixed segments.
-/// 使用字节长度前缀片段构建精确的 Provider-模型计费键。
-fn billing_composite_key(parts: &[&str]) -> String {
-    parts
-        .iter()
-        .map(|part| format!("{}:{}", part.len(), part))
-        .collect()
-}
-
-/// Parses one complete length-prefixed billing key into the required number of segments.
-/// 将一个完整长度前缀计费键解析为所需数量的片段。
-fn billing_composite_key_parts(value: &str, expected_parts: usize) -> Option<Vec<&str>> {
-    let mut remainder = value;
-    let mut parts = Vec::with_capacity(expected_parts);
-    for _ in 0..expected_parts {
-        let (part, next) = take_length_prefixed_segment(remainder)?;
-        parts.push(part);
-        remainder = next;
-    }
-    remainder.is_empty().then_some(parts)
-}
-
-/// Returns the exact key for a provider-model billing override.
-/// 返回 Provider-模型计费覆盖的精确键。
-pub fn provider_billing_model_key(provider_id: &str, model_id: &str) -> String {
-    billing_composite_key(&[provider_id, model_id])
-}
-
-/// Returns the exact key for a provider-model-route billing override.
-/// 返回 Provider-模型-路由计费覆盖的精确键。
-pub fn provider_billing_route_key(provider_id: &str, model_id: &str, route_id: &str) -> String {
-    billing_composite_key(&[provider_id, model_id, route_id])
-}
-
 /// Describes one bounded standalone custom-provider failure isolated during hydration.
 /// 描述一条在补水期间被隔离的有界独立自定义供应商失败。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -905,13 +446,6 @@ pub struct PersistedAiConfiguration {
     /// 后台账号用量刷新间隔秒数。
     #[serde(default = "default_usage_refresh_interval_seconds")]
     pub usage_refresh_interval_seconds: u64,
-    /// Provider-native usage billing and cc-switch price overrides.
-    /// Provider 原生用量计费与 cc-switch 价格覆盖。
-    #[serde(
-        default,
-        skip_serializing_if = "ProviderBillingConfiguration::is_empty"
-    )]
-    pub billing: ProviderBillingConfiguration,
     /// User-owned compatibility provider definitions without credential secrets or model catalogs.
     /// 不包含凭据秘密或模型目录的用户自有兼容供应商定义。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -1132,7 +666,6 @@ impl Default for PersistedAiConfiguration {
         Self {
             schema_version: PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION,
             usage_refresh_interval_seconds: default_usage_refresh_interval_seconds(),
-            billing: ProviderBillingConfiguration::default(),
             custom_providers: BTreeMap::new(),
             custom_provider_file_refs: BTreeSet::new(),
             custom_provider_manifests: BTreeMap::new(),
@@ -1331,7 +864,7 @@ impl PersistedAiConfiguration {
                 };
                 Ok(normalized || inserted_vmm)
             }
-            10..=14 => {
+            10..=15 => {
                 self.normalize_direct_provider_model_settings();
                 self.inference_profiles
                     .entry(String::from("vmm"))
@@ -1429,7 +962,7 @@ impl PersistedAiConfiguration {
             self.provider_extension_target_sets.clear();
             self.provider_tool_disabled_targets.clear();
         }
-        if source_schema_version < PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION {
+        if source_schema_version < 15 {
             // Schema 15 replaces operation-scoped truthy-only internal model keys with explicit
             // provider/model booleans. Historical keys are intentionally discarded because an
             // absent false state cannot be reconstructed without guessing user intent.
@@ -1437,7 +970,6 @@ impl PersistedAiConfiguration {
             // 旧结构无法还原缺失的 false 状态，因此有意丢弃，避免猜测用户意图。
             self.internal_model_enabled_overrides.clear();
         }
-        self.billing.validate()?;
         self.validate_context_window_policy_layers()?;
         Ok(changed)
     }
@@ -3206,222 +2738,6 @@ mod tests {
         assert!(!configuration.custom_provider_manifest_failures_truncated);
     }
 
-    /// Verifies billing overrides resolve by route, model, then provider precedence.
-    /// 验证计费覆盖按路由、模型、Provider 的优先级解析。
-    #[test]
-    fn billing_price_resolution_uses_exact_scope_precedence() {
-        let mut billing = ProviderBillingConfiguration::default();
-        billing
-            .catalog_model_prices
-            .insert(String::from("deepseek-chat"), billing_price("0.25"));
-        billing
-            .provider_prices
-            .insert(String::from("deepseek"), billing_price("1"));
-        billing.model_prices.insert(
-            provider_billing_model_key("deepseek", "deepseek-reasoner"),
-            billing_price("2"),
-        );
-        billing.route_prices.insert(
-            provider_billing_route_key("deepseek", "deepseek-reasoner", "anthropic"),
-            billing_price("3"),
-        );
-
-        billing
-            .validate()
-            .expect("billing configuration should be valid");
-        assert_eq!(
-            billing
-                .resolve_price("deepseek", "deepseek-reasoner", Some("anthropic"))
-                .and_then(|price| price.input_cost_per_million.as_deref()),
-            Some("3")
-        );
-        assert_eq!(
-            billing
-                .resolve_price("deepseek", "deepseek-reasoner", None)
-                .and_then(|price| price.input_cost_per_million.as_deref()),
-            Some("2")
-        );
-        assert_eq!(
-            billing
-                .resolve_price("deepseek", "deepseek-chat", None)
-                .and_then(|price| price.input_cost_per_million.as_deref()),
-            Some("1")
-        );
-        assert_eq!(
-            billing
-                .resolve_price("another-provider", "deepseek-chat", None)
-                .and_then(|price| price.input_cost_per_million.as_deref()),
-            Some("0.25")
-        );
-    }
-
-    /// Verifies cc-switch pricing imports exactly while user/provider overrides retain precedence.
-    /// 验证 cc-switch 价格被精确导入，且用户与 Provider 覆盖继续保持更高优先级。
-    #[test]
-    fn cc_switch_model_pricing_import_is_compatible_and_overridable() {
-        let mut billing = ProviderBillingConfiguration::default();
-        let imported = billing
-            .import_cc_switch_model_pricing_json(
-                "fixture-v1",
-                r#"{
-                    "version": 1,
-                    "modelsDevSync": {"autoSyncEnabled": false},
-                    "models": [{
-                        "modelId": "deepseek-chat",
-                        "displayName": "DeepSeek Chat",
-                        "inputCostPerMillion": "0.27",
-                        "outputCostPerMillion": "1.10",
-                        "cacheReadCostPerMillion": "0.07",
-                        "cacheCreationCostPerMillion": "0"
-                    }],
-                    "deletedModelIds": []
-                }"#,
-            )
-            .expect("cc-switch pricing should import");
-        assert_eq!(imported, 1);
-        assert_eq!(
-            billing
-                .resolve_price("deepseek", "deepseek-chat", None)
-                .and_then(|price| price.output_cost_per_million.as_deref()),
-            Some("1.10")
-        );
-
-        billing
-            .provider_prices
-            .insert(String::from("deepseek"), billing_price("0.50"));
-        assert_eq!(
-            billing
-                .resolve_price("deepseek", "deepseek-chat", None)
-                .and_then(|price| price.input_cost_per_million.as_deref()),
-            Some("0.50")
-        );
-    }
-
-    /// Verifies the frozen cc-switch seed is complete and remains below user-imported catalog data.
-    /// 验证冻结的 cc-switch 种子完整，并且优先级低于用户导入的目录数据。
-    #[test]
-    fn builtin_cc_switch_pricing_is_complete_and_lowest_precedence() {
-        assert_eq!(BUILTIN_CC_SWITCH_MODEL_PRICES.len(), 189);
-        let mut billing = ProviderBillingConfiguration::default();
-        let (scope, key, builtin) = billing
-            .resolve_price_with_scope("openai", "gpt-5-nano", None)
-            .expect("frozen cc-switch seed must contain gpt-5-nano");
-        assert_eq!(scope, "builtin_catalog_model");
-        assert_eq!(key, "gpt-5-nano");
-        assert_eq!(builtin.input_cost_per_million.as_deref(), Some("0.05"));
-        assert_eq!(
-            builtin.source.as_deref(),
-            Some("cc-switch:builtin:0345fad6048eed65b3423bedc8ce5711320ddfc3")
-        );
-
-        let imported = billing
-            .import_cc_switch_model_pricing_json(
-                "user-file",
-                r#"{
-                    "version": 1,
-                    "models": [{
-                        "modelId": "gpt-5-nano",
-                        "displayName": "GPT-5 Nano",
-                        "inputCostPerMillion": "0.06",
-                        "outputCostPerMillion": "0.41",
-                        "cacheReadCostPerMillion": "0.006",
-                        "cacheCreationCostPerMillion": "0"
-                    }],
-                    "deletedModelIds": []
-                }"#,
-            )
-            .expect("user cc-switch pricing should import");
-        assert_eq!(imported, 1);
-        let (scope, _, imported_price) = billing
-            .resolve_price_with_scope("openai", "gpt-5-nano", None)
-            .expect("user catalog must override the frozen seed");
-        assert_eq!(scope, "catalog_model");
-        assert_eq!(
-            imported_price.input_cost_per_million.as_deref(),
-            Some("0.06")
-        );
-
-        let imported = billing
-            .import_cc_switch_model_pricing_json(
-                "user-file-deleted",
-                r#"{
-                    "version": 1,
-                    "models": [],
-                    "deletedModelIds": ["gpt-5-nano"]
-                }"#,
-            )
-            .expect("user tombstone should import");
-        assert_eq!(imported, 0);
-        assert!(
-            billing
-                .resolve_price("openai", "gpt-5-nano", None)
-                .is_none(),
-            "user tombstone must suppress the lower built-in seed"
-        );
-
-        billing
-            .provider_prices
-            .insert(String::from("openai"), billing_price("0.07"));
-        assert_eq!(
-            billing
-                .resolve_price("openai", "gpt-5-nano", None)
-                .and_then(|price| price.input_cost_per_million.as_deref()),
-            Some("0.07"),
-            "provider override must remain above the catalog tombstone"
-        );
-        let encoded = serde_json::to_string(&billing).expect("billing should serialize");
-        let decoded: ProviderBillingConfiguration =
-            serde_json::from_str(encoded.as_str()).expect("billing should deserialize");
-        assert!(decoded.catalog_deleted_model_ids.contains("gpt-5-nano"));
-    }
-
-    /// Verifies malformed decimals and composite keys are rejected before persistence.
-    /// 验证格式错误的十进制值与组合键会在持久化前被拒绝。
-    #[test]
-    fn billing_validation_rejects_malformed_values_and_keys() {
-        let mut invalid_decimal = ProviderBillingConfiguration::default();
-        invalid_decimal
-            .provider_prices
-            .insert(String::from("deepseek"), billing_price("NaN"));
-        assert!(invalid_decimal.validate().is_err());
-
-        let mut invalid_key = ProviderBillingConfiguration::default();
-        invalid_key
-            .model_prices
-            .insert(String::from("deepseek/model"), billing_price("1"));
-        assert!(invalid_key.validate().is_err());
-    }
-
-    /// Verifies schema eleven configurations migrate to the versioned billing schema.
-    /// 验证 Schema 十一配置会迁移到版本化计费 Schema。
-    #[test]
-    fn schema_eleven_migrates_to_billing_configuration_schema() {
-        let mut historical: PersistedAiConfiguration =
-            serde_json::from_str(r#"{"schema_version":11}"#).expect("historical config");
-
-        assert!(historical.migrate_to_current_schema().expect("migration"));
-        assert_eq!(
-            historical.schema_version,
-            PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION
-        );
-        assert_eq!(historical.billing, ProviderBillingConfiguration::default());
-    }
-
-    /// Verifies schema twelve upgrades without inventing user-owned catalog tombstones.
-    /// 验证 Schema 十二升级时不会虚构用户拥有的目录删除标记。
-    #[test]
-    fn schema_twelve_migrates_to_catalog_tombstone_schema() {
-        let mut historical: PersistedAiConfiguration =
-            serde_json::from_str(r#"{"schema_version":12}"#).expect("historical config");
-
-        assert!(historical.migrate_to_current_schema().expect("migration"));
-        assert_eq!(
-            historical.schema_version,
-            PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION
-        );
-        assert!(historical.billing.catalog_deleted_model_ids.is_empty());
-    }
-
     /// Verifies schema thirteen provider-tool state is discarded without compatibility mapping.
     /// 验证 Schema 十三的 Provider Tool 状态会在不做兼容映射的情况下被丢弃。
     #[test]
@@ -3510,6 +2826,39 @@ mod tests {
         );
     }
 
+    /// Verifies schema fifteen price configuration is ignored and never serialized into schema sixteen.
+    /// 验证 Schema 十五价格配置会被忽略，且绝不会序列化到 Schema 十六。
+    #[test]
+    fn schema_fifteen_discards_legacy_billing_configuration() {
+        let mut historical = serde_json::to_value(PersistedAiConfiguration::default())
+            .expect("default configuration should serialize");
+        historical["schema_version"] = serde_json::json!(15);
+        historical["billing"] = serde_json::json!({
+            "catalog_path": "legacy-model-pricing.json",
+            "model_overrides": {
+                "gpt-5": {
+                    "input_per_million": "1.25",
+                    "output_per_million": "10"
+                }
+            }
+        });
+
+        let mut configuration: PersistedAiConfiguration = serde_json::from_value(historical)
+            .expect("legacy unknown billing field should be ignored");
+        assert!(
+            configuration
+                .migrate_to_current_schema()
+                .expect("migration")
+        );
+        assert_eq!(
+            configuration.schema_version,
+            PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION
+        );
+        let serialized =
+            serde_json::to_value(configuration).expect("migrated configuration should serialize");
+        assert!(serialized.get("billing").is_none());
+    }
+
     /// Verifies conversation publication and non-conversation internal use are independent states.
     /// 验证会话发布与非会话内部使用是相互独立的状态。
     #[test]
@@ -3532,15 +2881,6 @@ mod tests {
 
         configuration.restore_internal_model_enabled("opencode-go", "deepseek-v4-flash");
         assert!(configuration.internal_model_is_enabled("opencode-go", "deepseek-v4-flash", true,));
-    }
-
-    /// Builds one minimal exact billing price fixture.
-    /// 构建一条最小精确计费价格夹具。
-    fn billing_price(input_cost_per_million: &str) -> BillingPriceOverride {
-        BillingPriceOverride {
-            input_cost_per_million: Some(input_cost_per_million.to_string()),
-            ..BillingPriceOverride::default()
-        }
     }
 
     /// Verifies model overrides are independent from credential connection identifiers.

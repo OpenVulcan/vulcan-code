@@ -7656,7 +7656,7 @@ mod tests {
                 .ok_or_else(|| String::from("Recording VLDB fixture requires SQL."))?;
             if request.operation == VulcanPluginVldbOperation::SqliteExecute {
                 if !sql.contains("BEGIN IMMEDIATE;")
-                    || !sql.contains("DELETE FROM provider_usage_attempts_v2")
+                    || !sql.contains("DELETE FROM provider_usage_attempts_v3")
                 {
                     return Err(String::from(
                         "Recording VLDB fixture received an unexpected write.",
@@ -7673,37 +7673,74 @@ mod tests {
                     "Recording VLDB fixture accepts query and execute operations only.",
                 ));
             }
-            let rows = if sql.contains("FROM provider_usage_daily_v2") {
-                json!([{
-                    "calendarDate": "2026-08-15",
-                    "providerId": "provider-1",
-                    "serviceEntryId": "entry-1",
-                    "consumerId": "webui",
-                    "operation": "response_create",
-                    "modelId": "model-1",
-                    "currency": "USD",
-                    "attemptCount": 1,
-                    "successfulAttemptCount": 1,
-                    "reportedUsageAttemptCount": 1,
-                    "inputTokens": 10,
-                    "uncachedInputTokens": 8,
-                    "cacheReadTokens": 2,
-                    "cacheWriteTokens": 0,
-                    "outputTokens": 20,
-                    "reasoningTokens": 5,
-                    "totalTokens": 35,
-                    "reportedCost": null,
-                    "estimatedCost": "0.0004",
-                    "aggregateRevision": 7
-                }])
-            } else if sql.contains("FROM provider_usage_attempts_v2 AS attempts") {
+            let rows = if sql.contains("FROM provider_usage_daily_v3") {
+                json!([
+                    {
+                        "calendarDate": "2026-08-15",
+                        "providerId": "provider-1",
+                        "serviceEntryId": "entry-1",
+                        "consumerId": "webui",
+                        "operation": "response_create",
+                        "modelId": "gpt-5",
+                        "attemptCount": 1,
+                        "successfulAttemptCount": 1,
+                        "reportedUsageAttemptCount": 1,
+                        "inputTokens": 10,
+                        "uncachedInputTokens": 8,
+                        "cacheReadTokens": 2,
+                        "cacheWriteTokens": 0,
+                        "outputTokens": 20,
+                        "reasoningTokens": 5,
+                        "totalTokens": 35,
+                        "aggregateRevision": 7
+                    },
+                    {
+                        "calendarDate": "2026-08-15",
+                        "providerId": "provider-1",
+                        "serviceEntryId": "entry-1",
+                        "consumerId": "webui",
+                        "operation": "response_create",
+                        "modelId": "private-model",
+                        "attemptCount": 1,
+                        "successfulAttemptCount": 1,
+                        "reportedUsageAttemptCount": 1,
+                        "inputTokens": 1,
+                        "uncachedInputTokens": 1,
+                        "cacheReadTokens": 0,
+                        "cacheWriteTokens": 0,
+                        "outputTokens": 1,
+                        "reasoningTokens": 0,
+                        "totalTokens": 2,
+                        "aggregateRevision": 7
+                    },
+                    {
+                        "calendarDate": "2026-08-15",
+                        "providerId": "provider-1",
+                        "serviceEntryId": "entry-1",
+                        "consumerId": "webui",
+                        "operation": "response_create",
+                        "modelId": "gpt-5",
+                        "attemptCount": 1,
+                        "successfulAttemptCount": 1,
+                        "reportedUsageAttemptCount": 1,
+                        "inputTokens": 1,
+                        "uncachedInputTokens": 1,
+                        "cacheReadTokens": 0,
+                        "cacheWriteTokens": 0,
+                        "outputTokens": null,
+                        "reasoningTokens": null,
+                        "totalTokens": null,
+                        "aggregateRevision": 7
+                    }
+                ])
+            } else if sql.contains("FROM provider_usage_attempts_v3 AS attempts") {
                 json!([{
                     "attemptId": "attempt-1",
                     "consumerId": "webui",
                     "operation": "response_create",
                     "providerId": "provider-1",
                     "serviceEntryId": "entry-1",
-                    "modelId": "model-1",
+                    "modelId": "gpt-5",
                     "transport": "http_sse",
                     "httpStatus": 200,
                     "websocketCloseCode": null,
@@ -7711,14 +7748,16 @@ mod tests {
                     "errorCode": null,
                     "status": "succeeded",
                     "usageAvailability": "final",
+                    "inputTokens": 10,
+                    "uncachedInputTokens": 8,
+                    "cacheReadTokens": 2,
+                    "cacheWriteTokens": 0,
+                    "outputTokens": 20,
+                    "reasoningTokens": 5,
+                    "audioInputTokens": null,
+                    "audioOutputTokens": null,
                     "totalTokens": 35,
                     "billingDetailsJson": "[]",
-                    "reportedCost": null,
-                    "estimatedCost": "0.0004",
-                    "currency": "USD",
-                    "pricingRevision": "pricing-1",
-                    "pricingSourceKind": "system",
-                    "pricingSourceId": "catalog-1",
                     "terminalAtMs": 1_500
                 }])
             } else if sql.contains("FROM provider_account_usage_snapshots_v1") {
@@ -8343,7 +8382,7 @@ return M
                 .contains(&VulcanPluginPermission::StorageSqlite)
         );
         assert!(
-            !manifest
+            manifest
                 .permissions
                 .contains(&VulcanPluginPermission::Config)
         );
@@ -8374,7 +8413,85 @@ return M
             .expect("invoke system-backed usage statistics dashboard action");
         assert_eq!(dashboard["aggregateRevision"], 7);
         assert_eq!(dashboard["daily"][0]["totalTokens"], 35);
+        assert_eq!(dashboard["daily"][0]["estimatedCost"], "0.00021025");
+        assert_eq!(dashboard["daily"][0]["estimatedCurrency"], "USD");
+        assert_eq!(dashboard["daily"][0]["pricingMatchStatus"], "catalog_exact");
+        assert_eq!(dashboard["daily"][1]["pricingMatchStatus"], "unmatched");
+        assert!(dashboard["daily"][1]["estimatedCost"].is_null());
+        assert_eq!(
+            dashboard["daily"][2]["pricingMatchStatus"],
+            "incomplete_usage"
+        );
+        assert!(dashboard["daily"][2]["estimatedCost"].is_null());
+        assert_eq!(dashboard["pricingCatalog"]["entryCount"], 189);
         assert_eq!(dashboard["recentAttempts"][0]["attemptId"], "attempt-1");
+        assert_eq!(
+            dashboard["recentAttempts"][0]["estimatedCost"],
+            "0.00021025"
+        );
+        // settings proves prices persist only in the plugin-owned configuration domain.
+        // settings 证明价格只持久化于插件自有配置域。
+        let settings = runtime
+            .block_on(manager.invoke_action(VulcanPluginActionRequest {
+                plugin_id: String::from("vulcan-usage-statistics"),
+                action_id: String::from("settings-get"),
+                arguments: json!({}),
+                caller: crate::VulcanPluginActionCaller::PluginUi,
+                workspace_root: repository_root.to_path_buf(),
+                reuse_enabled_runtime: true,
+            }))
+            .expect("read plugin-owned pricing settings");
+        assert_eq!(
+            settings["catalogModels"].as_array().map(Vec::len),
+            Some(189)
+        );
+        assert_eq!(settings["modelOverrides"], json!({}));
+        let updated_settings = runtime
+            .block_on(manager.invoke_action(VulcanPluginActionRequest {
+                plugin_id: String::from("vulcan-usage-statistics"),
+                action_id: String::from("settings-update"),
+                arguments: json!({
+                    "modelOverrides": {
+                        "gpt-5": {
+                            "inputPerMillion": "2",
+                            "outputPerMillion": "20",
+                            "cacheReadPerMillion": "0.2",
+                            "cacheWritePerMillion": "0"
+                        }
+                    }
+                }),
+                caller: crate::VulcanPluginActionCaller::PluginUi,
+                workspace_root: repository_root.to_path_buf(),
+                reuse_enabled_runtime: true,
+            }))
+            .expect("persist one plugin-owned model price override");
+        assert_eq!(
+            updated_settings["modelOverrides"]["gpt-5"]["outputPerMillion"],
+            "20"
+        );
+        let overridden_dashboard = runtime
+            .block_on(manager.invoke_action(VulcanPluginActionRequest {
+                plugin_id: String::from("vulcan-usage-statistics"),
+                action_id: String::from("dashboard-get"),
+                arguments: json!({}),
+                caller: crate::VulcanPluginActionCaller::PluginUi,
+                workspace_root: repository_root.to_path_buf(),
+                reuse_enabled_runtime: true,
+            }))
+            .expect("recompute dashboard estimates from the plugin override");
+        assert_eq!(
+            overridden_dashboard["daily"][0]["pricingMatchStatus"],
+            "override_exact"
+        );
+        assert_eq!(
+            overridden_dashboard["daily"][0]["estimatedCost"],
+            "0.0004164"
+        );
+        assert_eq!(
+            overridden_dashboard["daily"][0]["pricingRevision"],
+            "plugin-config-v1:gpt-5:2:20:0.2:0"
+        );
+        assert_eq!(overridden_dashboard["pricingCatalog"]["overrideCount"], 1);
         // clearPreview proves the real Lua bundle can query maintenance facts through the same binding.
         // clearPreview 证明真实 Lua Bundle 可以通过同一绑定查询维护事实。
         let clear_preview = runtime
@@ -8405,14 +8522,17 @@ return M
         assert_eq!(clear_result["clearedTokenCount"], 35);
         assert_eq!(clear_result["aggregateRevision"], 8);
         let calls = vldb.calls.lock().expect("lock recorded VLDB calls");
-        assert_eq!(calls.len(), 7);
-        assert!(calls[..6].iter().all(|call| {
+        assert_eq!(calls.len(), 11);
+        assert!(calls[..10].iter().all(|call| {
             call.plugin_id == "vulcan-usage-statistics"
                 && call.operation == VulcanPluginVldbOperation::SqliteQuery
                 && call.payload["binding"] == "system.statistics"
         }));
-        assert_eq!(calls[6].operation, VulcanPluginVldbOperation::SqliteExecute);
-        assert_eq!(calls[6].payload["binding"], "system.statistics");
+        assert_eq!(
+            calls[10].operation,
+            VulcanPluginVldbOperation::SqliteExecute
+        );
+        assert_eq!(calls[10].payload["binding"], "system.statistics");
         drop(calls);
         // unauthorizedSnapshot removes only the VLDB capability while preserving the enabled runtime lease.
         // unauthorizedSnapshot 仅移除 VLDB 能力，同时保留已启用的运行时租约。

@@ -539,7 +539,6 @@ impl VulcanPublicContractAdapter {
                 "protocol_route": &self.route.protocol_route,
                 "secondary_route": &self.route.secondary_route,
                 "custom_model_projection": &self.route.custom_model_projection,
-                "billing_profile": self.route.billing_profile.as_ref().map(|profile| &profile.snapshot),
                 "request_projection_profiles": &self.route.request_projection_profiles,
                 "response_projection_profiles": &self.route.response_projection_profiles,
                 "upload_channels": &self.route.upload_channels,
@@ -2805,11 +2804,6 @@ pub(super) fn public_usage_to_core(usage: &RequestUsage) -> ProviderUsageSnapsho
         validation_flags: usage.validation_flags.clone(),
         response_model: usage.response_model.clone(),
         response_id: usage.response_id.clone(),
-        reported_cost: usage.cost.clone(),
-        estimated_cost: usage.estimated_cost.clone(),
-        cost_currency: usage.cost_currency.clone(),
-        pricing_revision: usage.pricing_revision.clone(),
-        pricing_profile: usage.pricing_profile.clone(),
         billing_details: usage.billing_details.clone(),
     }
 }

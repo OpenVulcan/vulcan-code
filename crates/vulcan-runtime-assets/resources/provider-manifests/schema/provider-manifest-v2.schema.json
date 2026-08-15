@@ -1640,8 +1640,6 @@
             "audio_input_tokens",
             "audio_output_tokens",
             "total_tokens",
-            "reported_cost",
-            "reported_cost_usd",
             "response_model",
             "response_id",
             "billing_details"
@@ -1655,7 +1653,6 @@
           "enum": [
             "unsigned_integer",
             "unsigned_integer_string",
-            "decimal",
             "string",
             "alibaba_responses_billing_details"
           ]

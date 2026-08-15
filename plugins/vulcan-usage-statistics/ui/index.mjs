@@ -10,8 +10,30 @@ const MAX_DAILY_ROWS = 100;
 // MAX_RECENT_ATTEMPTS 限制单次面板渲染的物理请求证据数量。
 const MAX_RECENT_ATTEMPTS = 50;
 
-// Create the read-only Provider usage statistics panel through the stable host UI SDK.
-// 通过稳定宿主 UI SDK 创建只读 Provider 用量统计面板。
+// DECIMAL_PRICE_PATTERN mirrors the host-validated plugin configuration contract.
+// DECIMAL_PRICE_PATTERN 镜像由宿主校验的插件配置契约。
+const DECIMAL_PRICE_PATTERN = /^(0|[1-9][0-9]*)(\.[0-9]+)?$/;
+
+// EMPTY_PRICE_DRAFT preserves unknown model rates as missing rather than zero.
+// EMPTY_PRICE_DRAFT 将未知模型费率保持为缺失而非零。
+const EMPTY_PRICE_DRAFT = Object.freeze({
+  inputPerMillion: "",
+  outputPerMillion: "",
+  cacheReadPerMillion: "",
+  cacheWritePerMillion: "",
+});
+
+// PRICE_FIELDS defines the complete editable per-million Token price dimensions.
+// PRICE_FIELDS 定义完整的可编辑每百万 Token 价格维度。
+const PRICE_FIELDS = Object.freeze([
+  { key: "inputPerMillion", messageKey: "pricing.input", fallback: "Uncached input" },
+  { key: "outputPerMillion", messageKey: "pricing.output", fallback: "Output" },
+  { key: "cacheReadPerMillion", messageKey: "pricing.cacheRead", fallback: "Cache read" },
+  { key: "cacheWritePerMillion", messageKey: "pricing.cacheWrite", fallback: "Cache write" },
+]);
+
+// Create the Provider usage statistics panel through the stable host UI SDK.
+// 通过稳定宿主 UI SDK 创建 Provider 用量统计面板。
 //
 // sdk supplies host React, design-system components, localization, and authenticated actions.
 // sdk 提供宿主 React、设计系统组件、本地化与已认证 Action。
@@ -88,22 +110,25 @@ export function createPluginPanel(sdk) {
     }).format(new Date(numeric(value)));
   }
 
-  // formatCost renders one exact decimal cost without recomputing the host accounting fact.
-  // formatCost 渲染一个精确十进制成本，不重新计算宿主计量事实。
+  // formatReferenceEstimate renders one plugin-computed reference estimate.
+  // formatReferenceEstimate 渲染一个由插件计算的参考估算值。
   //
-  // record contains reported or estimated decimal cost plus its currency.
-  // record 包含供应商报告或本地估算的十进制成本及币种。
-  // Returns the reported value first, an explicitly estimated value second, or an em dash.
-  // 优先返回报告值，其次返回带明确估算标记的值；均缺失时返回破折号。
-  function formatCost(record) {
-    // currency is an optional ISO currency suffix supplied by the host.
-    // currency 是宿主提供的可选 ISO 币种后缀。
-    const currency = record.currency ? ` ${record.currency}` : "";
-    if (record.reportedCost !== null && record.reportedCost !== undefined) {
-      return `${record.reportedCost}${currency}`;
-    }
+  // record contains ephemeral estimate fields attached by the plugin runtime.
+  // record 包含由插件运行时附加的临时估算字段。
+  // Returns an explicitly estimated value or the exact reason it is unavailable.
+  // 返回带明确估算标记的值，或返回其不可用的精确原因。
+  function formatReferenceEstimate(record) {
+    // currency is the plugin-catalog currency and is never persisted by the core.
+    // currency 是插件价目表币种，内核绝不会持久化它。
+    const currency = record.estimatedCurrency ? ` ${record.estimatedCurrency}` : "";
     if (record.estimatedCost !== null && record.estimatedCost !== undefined) {
       return `~${record.estimatedCost}${currency}`;
+    }
+    if (record.pricingMatchStatus === "unmatched") {
+      return text("pricing.unmatched", "Model not in reference catalog");
+    }
+    if (record.pricingMatchStatus === "incomplete_usage") {
+      return text("pricing.incomplete", "Incomplete Token facts");
     }
     return "—";
   }
@@ -138,12 +163,50 @@ export function createPluginPanel(sdk) {
     };
   }
 
-  // UsageStatisticsPanel renders only host-owned facts and keeps no plugin statistics database.
-  // UsageStatisticsPanel 仅渲染宿主持有的事实，不维护插件统计数据库。
+  // editablePrices resolves one model's override first and catalog defaults second.
+  // editablePrices 优先解析模型覆盖，其次解析目录默认值。
+  //
+  // settings is the schema-validated plugin settings projection and modelId is exact.
+  // settings 是通过 Schema 校验的插件设置投影，modelId 是精确模型标识。
+  // Returns an isolated editable price object or blank unknown fields.
+  // 返回隔离的可编辑价格对象，或返回空白未知字段。
+  function editablePrices(settings, modelId) {
+    const configured = settings?.modelOverrides?.[modelId];
+    const catalog = settings?.catalogModels?.find((entry) => entry.modelId === modelId)?.prices;
+    return { ...(configured ?? catalog ?? EMPTY_PRICE_DRAFT) };
+  }
+
+  // pricingDraftIsValid mirrors the exact non-negative decimal configuration rules.
+  // pricingDraftIsValid 镜像精确的非负十进制配置规则。
+  //
+  // draft contains all four per-million Token price strings.
+  // draft 包含四个每百万 Token 价格字符串。
+  // Returns true only when every required price is valid.
+  // 仅当全部必需价格均有效时返回 true。
+  function pricingDraftIsValid(draft) {
+    return Object.values(draft).every(
+      (value) => typeof value === "string" && value.length <= 64 && DECIMAL_PRICE_PATTERN.test(value),
+    );
+  }
+
+  // UsageStatisticsPanel combines host-owned Token facts with an in-memory plugin price catalog.
+  // UsageStatisticsPanel 将宿主持有的 Token 事实与插件内存价目表组合展示。
   function UsageStatisticsPanel() {
     // dashboard stores the latest schema-validated host statistics snapshot.
     // dashboard 保存最近一份通过 Schema 校验的宿主统计快照。
     const [dashboard, setDashboard] = React.useState(null);
+    // pricingSettings stores plugin-owned model overrides and the bundled catalog projection.
+    // pricingSettings 保存插件自有模型覆盖与内置目录投影。
+    const [pricingSettings, setPricingSettings] = React.useState(null);
+    // selectedPricingModel identifies the exact model edited by the pricing form.
+    // selectedPricingModel 标识价格表单当前编辑的精确模型。
+    const [selectedPricingModel, setSelectedPricingModel] = React.useState("");
+    // pricingDraft stores four exact decimal strings without numeric conversion.
+    // pricingDraft 保存四个不经过数值转换的精确十进制字符串。
+    const [pricingDraft, setPricingDraft] = React.useState({ ...EMPTY_PRICE_DRAFT });
+    // settingsBusy prevents overlapping model-price persistence operations.
+    // settingsBusy 防止模型价格持久化操作重叠。
+    const [settingsBusy, setSettingsBusy] = React.useState(false);
     // consumerFilter selects one exact server-bound consumer identity.
     // consumerFilter 选择一个精确的服务端消费者身份。
     const [consumerFilter, setConsumerFilter] = React.useState(ALL_CONSUMERS);
@@ -173,16 +236,73 @@ export function createPluginPanel(sdk) {
       setLoading(true);
       setError("");
       try {
-        // nextDashboard is validated against the version-one host dashboard schema before it reaches UI state.
-        // nextDashboard 在进入界面状态前会通过第一版宿主仪表盘 Schema 校验。
-        const nextDashboard = await sdk.invoke("dashboard-get", {});
-        if (mountedRef.current) setDashboard(nextDashboard);
+        const [nextDashboard, nextSettings] = await Promise.all([
+          sdk.invoke("dashboard-get", {}),
+          sdk.invoke("settings-get", {}),
+        ]);
+        if (mountedRef.current) {
+          setDashboard(nextDashboard);
+          setPricingSettings(nextSettings);
+          const nextModel = selectedPricingModel || nextSettings.catalogModels[0]?.modelId || "";
+          setSelectedPricingModel(nextModel);
+          setPricingDraft(editablePrices(nextSettings, nextModel));
+        }
       } catch (reason) {
         if (mountedRef.current) setError(reason instanceof Error ? reason.message : String(reason));
       } finally {
         if (mountedRef.current) setLoading(false);
       }
-    }, [loading]);
+    }, [loading, selectedPricingModel]);
+
+    // selectPricingModel loads one exact override or catalog default into the string-only editor.
+    // selectPricingModel 将一个精确覆盖或目录默认值加载到纯字符串编辑器。
+    const selectPricingModel = React.useCallback((modelId) => {
+      setSelectedPricingModel(modelId);
+      setPricingDraft(editablePrices(pricingSettings, modelId));
+      setNotice("");
+    }, [pricingSettings]);
+
+    // persistPricingOverrides saves one complete plugin-owned configuration and refreshes estimates.
+    // persistPricingOverrides 保存完整插件自有配置并刷新估算结果。
+    const persistPricingOverrides = React.useCallback(async (modelOverrides, successMessage) => {
+      if (settingsBusy) return;
+      setSettingsBusy(true);
+      setError("");
+      setNotice("");
+      try {
+        const nextSettings = await sdk.invoke("settings-update", { modelOverrides });
+        const nextDashboard = await sdk.invoke("dashboard-get", {});
+        if (mountedRef.current) {
+          setPricingSettings(nextSettings);
+          setDashboard(nextDashboard);
+          setPricingDraft(editablePrices(nextSettings, selectedPricingModel));
+          setNotice(successMessage);
+        }
+      } catch (reason) {
+        if (mountedRef.current) setError(reason instanceof Error ? reason.message : String(reason));
+      } finally {
+        if (mountedRef.current) setSettingsBusy(false);
+      }
+    }, [selectedPricingModel, settingsBusy]);
+
+    // savePricingOverride validates and persists all four exact prices for the selected model.
+    // savePricingOverride 校验并持久化所选模型的四项精确价格。
+    const savePricingOverride = React.useCallback(() => {
+      if (!pricingSettings || !selectedPricingModel || !pricingDraftIsValid(pricingDraft)) return;
+      void persistPricingOverrides({
+        ...pricingSettings.modelOverrides,
+        [selectedPricingModel]: { ...pricingDraft },
+      }, text("pricing.saved", "Saved model price override"));
+    }, [persistPricingOverrides, pricingDraft, pricingSettings, selectedPricingModel]);
+
+    // resetPricingOverride removes only the selected model override and restores catalog matching.
+    // resetPricingOverride 仅移除所选模型覆盖并恢复目录匹配。
+    const resetPricingOverride = React.useCallback(() => {
+      if (!pricingSettings || !selectedPricingModel) return;
+      const nextOverrides = { ...pricingSettings.modelOverrides };
+      delete nextOverrides[selectedPricingModel];
+      void persistPricingOverrides(nextOverrides, text("pricing.resetDone", "Restored catalog price"));
+    }, [persistPricingOverrides, pricingSettings, selectedPricingModel]);
 
     // previewClear reads the exact destructive scope without modifying system statistics.
     // previewClear 读取精确破坏范围，且不修改系统统计。
@@ -228,8 +348,17 @@ export function createPluginPanel(sdk) {
       mountedRef.current = true;
       // The initial read bypasses the overlap guard because loading starts true.
       // 初始读取绕过重叠保护，因为 loading 初始值为 true。
-      void sdk.invoke("dashboard-get", {}).then((nextDashboard) => {
-        if (mountedRef.current) setDashboard(nextDashboard);
+      void Promise.all([
+        sdk.invoke("dashboard-get", {}),
+        sdk.invoke("settings-get", {}),
+      ]).then(([nextDashboard, nextSettings]) => {
+        if (mountedRef.current) {
+          setDashboard(nextDashboard);
+          setPricingSettings(nextSettings);
+          const initialModel = nextSettings.catalogModels[0]?.modelId || "";
+          setSelectedPricingModel(initialModel);
+          setPricingDraft(editablePrices(nextSettings, initialModel));
+        }
       }).catch((reason) => {
         if (mountedRef.current) setError(reason instanceof Error ? reason.message : String(reason));
       }).finally(() => {
@@ -246,6 +375,22 @@ export function createPluginPanel(sdk) {
       ...(dashboard?.daily.map((row) => row.consumerId) ?? []),
       ...(dashboard?.recentAttempts.map((row) => row.consumerId) ?? []),
     ])).sort(), [dashboard]);
+    // pricingModelIds merges bundled, observed, and explicitly configured exact model identities.
+    // pricingModelIds 合并内置、已观测与显式配置的精确模型标识。
+    const pricingModelIds = React.useMemo(() => Array.from(new Set([
+      ...(pricingSettings?.catalogModels.map((entry) => entry.modelId) ?? []),
+      ...(dashboard?.daily.map((row) => row.modelId) ?? []),
+      ...(dashboard?.recentAttempts.map((row) => row.modelId) ?? []),
+      ...Object.keys(pricingSettings?.modelOverrides ?? {}),
+    ])).sort(), [dashboard, pricingSettings]);
+    // selectedModelHasOverride controls the exact restore-default operation.
+    // selectedModelHasOverride 控制精确的恢复默认操作。
+    const selectedModelHasOverride = Boolean(
+      selectedPricingModel && pricingSettings?.modelOverrides?.[selectedPricingModel],
+    );
+    // pricingDraftValid controls persistence without coercing decimal strings.
+    // pricingDraftValid 控制持久化，且不强制转换十进制字符串。
+    const pricingDraftValid = pricingDraftIsValid(pricingDraft);
 
     React.useEffect(() => {
       if (consumerFilter !== ALL_CONSUMERS && !consumerIds.includes(consumerFilter)) {
@@ -271,7 +416,7 @@ export function createPluginPanel(sdk) {
       h("div", { className: "plugin-statistics-header" },
         h("div", null,
           h("strong", null, text("title", "System Usage Statistics")),
-          h("p", null, text("subtitle", "Displays host-owned Provider usage and billing facts. The plugin does not copy requests into its own database.")),
+          h("p", null, text("subtitle", "The core stores Token facts only. This plugin computes non-persisted reference estimates from its own catalog.")),
         ),
         h(StatusPill, {
           status: error ? "warning" : "ready",
@@ -328,6 +473,9 @@ export function createPluginPanel(sdk) {
         ),
         dashboard ? h("div", { className: "plugin-statistics-toolbar" },
           h(Badge, { variant: "outline" }, text("source.host", "Host data")),
+          h(Badge, { variant: "outline" },
+            `${text("pricing.catalog", "Reference catalog")} · ${dashboard.pricingCatalog.currency} · ${formatInteger(dashboard.pricingCatalog.entryCount)} + ${formatInteger(dashboard.pricingCatalog.overrideCount)}`,
+          ),
           h("span", { className: "plugin-statistics-privacy" },
             `${text("revision", "Revision")} ${formatInteger(dashboard.aggregateRevision)} · ${formatTimestamp(dashboard.generatedAtMs)}`,
           ),
@@ -397,6 +545,71 @@ export function createPluginPanel(sdk) {
         ),
         h("article", { className: "plugin-statistics-card" },
           h("div", { className: "plugin-statistics-section-header" },
+            h("div", null,
+              h("strong", null, text("pricing.title", "Model reference prices")),
+              h("p", { className: "plugin-statistics-privacy" },
+                text("pricing.description", "Overrides belong to this plugin configuration. Estimates are recomputed and never written to the statistics database."),
+              ),
+            ),
+            h(Badge, { variant: "outline" }, selectedModelHasOverride
+              ? text("pricing.override", "Custom override")
+              : text("pricing.default", "Catalog default")),
+          ),
+          pricingModelIds.length === 0 ? h(EmptyState, {
+            title: text("pricing.empty", "No model identities available"),
+          }) : h(React.Fragment, null,
+            h(SelectControl, {
+              ariaLabel: text("pricing.model", "Model"),
+              className: "plugin-statistics-pricing-model",
+              value: selectedPricingModel,
+              options: pricingModelIds.map((modelId) => ({ value: modelId, label: modelId })),
+              onValueChange: selectPricingModel,
+            }),
+            h("div", { className: "plugin-statistics-price-grid" },
+              ...PRICE_FIELDS.map((field) => h("label", {
+                className: "plugin-statistics-price-field",
+                key: field.key,
+              },
+                h("span", null, `${text(field.messageKey, field.fallback)} · ${text("pricing.perMillion", "per 1M Token")}`),
+                h("input", {
+                  "aria-label": text(field.messageKey, field.fallback),
+                  className: "plugin-statistics-price-input",
+                  disabled: settingsBusy,
+                  inputMode: "decimal",
+                  maxLength: 64,
+                  onChange: (event) => setPricingDraft((current) => ({
+                    ...current,
+                    [field.key]: event.currentTarget.value.trim(),
+                  })),
+                  spellCheck: false,
+                  type: "text",
+                  value: pricingDraft[field.key],
+                }),
+              )),
+            ),
+            h("div", { className: "plugin-statistics-toolbar" },
+              h(Button, {
+                "aria-busy": settingsBusy,
+                disabled: settingsBusy || !selectedPricingModel || !pricingDraftValid,
+                onClick: savePricingOverride,
+                size: "sm",
+                type: "button",
+              }, settingsBusy ? text("pricing.saving", "Saving") : text("pricing.save", "Save override")),
+              h(Button, {
+                disabled: settingsBusy || !selectedModelHasOverride,
+                onClick: resetPricingOverride,
+                size: "sm",
+                type: "button",
+                variant: "outline",
+              }, text("pricing.reset", "Restore catalog default")),
+              !pricingDraftValid ? h("span", { className: "plugin-statistics-privacy" },
+                text("pricing.validation", "Enter four non-negative decimal prices."),
+              ) : null,
+            ),
+          ),
+        ),
+        h("article", { className: "plugin-statistics-card" },
+          h("div", { className: "plugin-statistics-section-header" },
             h("strong", null, text("daily.title", "Daily model usage")),
             h(Badge, { variant: "outline" }, `${Math.min(filteredDaily.length, MAX_DAILY_ROWS)} / ${filteredDaily.length}`),
           ),
@@ -411,10 +624,10 @@ export function createPluginPanel(sdk) {
                 h("th", null, text("daily.operation", "Operation")),
                 h("th", null, text("daily.attempts", "Attempts")),
                 h("th", null, text("daily.tokens", "Tokens")),
-                h("th", null, text("daily.cost", "Cost")),
+                h("th", null, text("daily.cost", "Reference estimate")),
               )),
               h("tbody", null, ...filteredDaily.slice(0, MAX_DAILY_ROWS).map((row) => h("tr", {
-                key: `${row.calendarDate}/${row.providerId}/${row.serviceEntryId}/${row.consumerId}/${row.operation}/${row.modelId}/${row.currency}`,
+                key: `${row.calendarDate}/${row.providerId}/${row.serviceEntryId}/${row.consumerId}/${row.operation}/${row.modelId}`,
               },
                 h("td", null, row.calendarDate),
                 h("td", null, `${row.providerId} / ${row.modelId}`),
@@ -422,7 +635,7 @@ export function createPluginPanel(sdk) {
                 h("td", null, row.operation),
                 h("td", null, `${formatInteger(row.successfulAttemptCount)} / ${formatInteger(row.attemptCount)}`),
                 h("td", null, row.totalTokens === null ? "—" : formatInteger(row.totalTokens)),
-                h("td", null, formatCost(row)),
+                h("td", null, formatReferenceEstimate(row)),
               ))),
             ),
           ),
@@ -442,7 +655,7 @@ export function createPluginPanel(sdk) {
                 h("th", null, text("recent.consumer", "Consumer")),
                 h("th", null, text("recent.status", "Status")),
                 h("th", null, text("recent.tokens", "Tokens")),
-                h("th", null, text("recent.cost", "Cost")),
+                h("th", null, text("recent.cost", "Reference estimate")),
                 h("th", null, text("recent.error", "Error")),
               )),
               h("tbody", null, ...filteredAttempts.slice(0, MAX_RECENT_ATTEMPTS).map((attempt) => h("tr", { key: attempt.attemptId },
@@ -454,7 +667,7 @@ export function createPluginPanel(sdk) {
                   "data-status": attempt.status,
                 }, text(`status.${attempt.status}`, attempt.status)),
                 h("td", null, attempt.totalTokens === null ? "—" : formatInteger(attempt.totalTokens)),
-                h("td", null, formatCost(attempt)),
+                h("td", null, formatReferenceEstimate(attempt)),
                 h("td", null, attempt.errorCategory
                   ? `${attempt.errorCategory}${attempt.errorCode ? ` / ${attempt.errorCode}` : ""}`
                   : "—"),
@@ -489,7 +702,7 @@ export function createPluginPanel(sdk) {
           ),
         ),
         h("p", { className: "plugin-statistics-privacy" },
-          text("privacy", "Statistics are collected and persisted by Vulcan. This plugin only displays the authorized read-only projection and stores no duplicate request facts."),
+          text("privacy", "Vulcan persists Token facts only. Reference prices and estimates remain plugin-owned and are recomputed for each dashboard query."),
         ),
       ) : null,
     );

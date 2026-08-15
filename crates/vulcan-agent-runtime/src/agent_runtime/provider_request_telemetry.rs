@@ -438,21 +438,6 @@ pub struct ProviderRequestCompletedUsage {
     /// Provider-returned response identity.
     /// 供应商返回的响应标识。
     pub response_id: Option<String>,
-    /// Provider-reported decimal cost.
-    /// 供应商报告的十进制成本。
-    pub reported_cost: Option<String>,
-    /// Locally estimated decimal cost.
-    /// 本地估算的十进制成本。
-    pub estimated_cost: Option<String>,
-    /// ISO currency for reported or estimated cost.
-    /// 报告或估算成本使用的 ISO 币种。
-    pub cost_currency: Option<String>,
-    /// Immutable pricing revision used by the local estimate.
-    /// 本地估算使用的不可变价格修订号。
-    pub pricing_revision: Option<String>,
-    /// Frozen effective pricing profile used by the local estimate.
-    /// 本地估算使用的冻结生效价格 Profile。
-    pub pricing_profile: Option<vulcan_ai_contract::PricingProfileSnapshot>,
     /// Provider billing partitions retained separately from normalized totals.
     /// 与规范化合计分开保留的供应商计费分区。
     pub billing_details: Vec<vulcan_ai_contract::UsageBillingDetail>,
@@ -1327,11 +1312,6 @@ fn build_completed_event(
         validation_flags: normalized_usage.validation_flags.clone(),
         response_model: normalized_usage.response_model.clone(),
         response_id: normalized_usage.response_id.clone(),
-        reported_cost: normalized_usage.reported_cost.clone(),
-        estimated_cost: normalized_usage.estimated_cost.clone(),
-        cost_currency: normalized_usage.cost_currency.clone(),
-        pricing_revision: normalized_usage.pricing_revision.clone(),
-        pricing_profile: normalized_usage.pricing_profile.clone(),
         billing_details: normalized_usage.billing_details.clone(),
     });
     ProviderRequestTelemetryEvent {

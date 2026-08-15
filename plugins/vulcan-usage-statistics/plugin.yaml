@@ -1,22 +1,30 @@
 schema_version: 1
 id: vulcan-usage-statistics
-version: 0.3.0
+version: 0.4.0
 default_enabled: true
 display:
   name: Vulcan Usage Statistics
-  capability: Display and maintain Provider usage facts through the host-registered system VLDB binding
+  capability: Maintain Provider Token facts and compute plugin-owned reference estimates
 permissions:
   - system_vldb_access
+  - config
   - ui_host_context
 required_files:
   - LICENSE
+  - config/schema.json
+  - config/defaults.json
   - schemas/dashboard-output.json
+  - schemas/settings-output.json
   - schemas/statistics-clear-preview-output.json
   - schemas/statistics-clear-apply-input.json
   - schemas/statistics-clear-apply-output.json
   - ui/index.mjs
   - locales/en.yaml
   - locales/zh-CN.yaml
+  - pricing/THIRD_PARTY_NOTICES.md
+  - pricing/licenses/CC-SWITCH-MIT.txt
+  - pricing/upstream/cc-switch-v3.19.2-model-pricing.v1.json
+  - pricing/catalog/vulcan-model-pricing.v1.json
 execution:
   dependencies:
     manifest: dependencies.yaml
@@ -28,6 +36,19 @@ lua_runtime:
   max_active_sessions: 8
   session_idle_timeout_sec: 300
   actions:
+    - id: settings-get
+      function: settings_get
+      output_schema_file: schemas/settings-output.json
+      timeout_ms: 5000
+      callers:
+        - plugin_ui
+    - id: settings-update
+      function: settings_update
+      input_schema_file: config/schema.json
+      output_schema_file: schemas/settings-output.json
+      timeout_ms: 5000
+      callers:
+        - plugin_ui
     - id: dashboard-get
       function: dashboard_get
       output_schema_file: schemas/dashboard-output.json
@@ -47,6 +68,9 @@ lua_runtime:
       timeout_ms: 12000
       callers:
         - plugin_ui
+config:
+  schema_file: config/schema.json
+  defaults_file: config/defaults.json
 ui:
   mounts:
     - id: usage-statistics

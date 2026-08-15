@@ -5735,7 +5735,6 @@ fn internal_inference_terminal_payload(
             String::from("cache_creation_input_tokens"),
             json!(usage_value_or_null(&facts.usage.cache_write_tokens)),
         ),
-        (String::from("cost"), json!(facts.usage.cost)),
         (String::from("finish_reason"), serde_json::Value::Null),
         (String::from("error_category"), json!(facts.error_category)),
         (String::from("error_code"), serde_json::Value::Null),
@@ -5860,11 +5859,6 @@ fn internal_inference_native_usage_event(
             validation_flags: facts.usage.validation_flags.clone(),
             response_model: facts.usage.response_model.clone(),
             response_id: facts.usage.response_id.clone(),
-            reported_cost: facts.usage.cost.clone(),
-            estimated_cost: facts.usage.estimated_cost.clone(),
-            cost_currency: facts.usage.cost_currency.clone(),
-            pricing_revision: facts.usage.pricing_revision.clone(),
-            pricing_profile: facts.usage.pricing_profile.clone(),
             billing_details: facts.usage.billing_details.clone(),
         }),
     ))
@@ -6694,7 +6688,6 @@ mod tests {
                 cache_read_tokens: known(70),
                 cache_write_tokens: known(8),
                 total_tokens: known(125),
-                cost: Some(String::from("0.00125")),
                 ..RequestUsage::default()
             },
             input_item_count: Some(2),
@@ -6715,7 +6708,6 @@ mod tests {
         assert_eq!(payload["output_tokens"], 20);
         assert_eq!(payload["reasoning_tokens"], 5);
         assert_eq!(payload["total_tokens"], 125);
-        assert_eq!(payload["cost"], "0.00125");
         assert_eq!(payload["time_to_first_token_ms"], 125);
         assert_eq!(payload["retry_count"], 1);
         assert_eq!(payload["transport"], "http");

@@ -1,9 +1,9 @@
 name: Vulcan 用量统计
-capability: 通过已注册的系统 VLDB 绑定查询、展示和清理 Provider 用量与计费事实
+capability: 通过系统 VLDB 查询和清理 Provider Token 事实，并使用插件自有价目表即时估算参考费用
 messages:
   navigationLabel: 使用统计
   title: 系统用量统计
-  subtitle: 直接使用宿主注册的系统统计 VLDB，不再复制 Provider 请求到插件私有数据库。
+  subtitle: 内核只保存 Token 事实；本插件使用自有价目表即时计算且不持久化参考费用。
   status.ready: 系统统计可用
   status.loading: 正在读取系统统计
   status.error: 系统统计加载失败
@@ -13,6 +13,26 @@ messages:
   refresh: 刷新
   refreshing: 刷新中
   source.host: 系统 VLDB
+  pricing.catalog: 参考价目表
+  pricing.unmatched: 模型未匹配参考价目表
+  pricing.incomplete: Token 事实不完整
+  pricing.title: 模型参考价格
+  pricing.description: 覆盖价格仅属于本插件配置；估算会即时重算，绝不写入系统统计数据库。
+  pricing.model: 模型
+  pricing.override: 自定义覆盖
+  pricing.default: 目录默认值
+  pricing.empty: 暂无可选模型标识
+  pricing.input: 非缓存输入
+  pricing.output: 输出
+  pricing.cacheRead: 缓存读取
+  pricing.cacheWrite: 缓存写入
+  pricing.perMillion: 每百万 Token
+  pricing.save: 保存覆盖
+  pricing.saving: 正在保存
+  pricing.saved: 已保存模型价格覆盖
+  pricing.reset: 恢复目录默认值
+  pricing.resetDone: 已恢复目录默认价格
+  pricing.validation: 请填写四个非负十进制价格。
   revision: 修订
   consumer.label: 消费者
   consumer.all: 全部消费者
@@ -34,7 +54,7 @@ messages:
   daily.operation: 操作
   daily.attempts: 调用
   daily.tokens: Token
-  daily.cost: 费用
+  daily.cost: 参考估算
   recent.title: 最近真实调用
   recent.empty: 暂无真实调用记录
   recent.time: 时间
@@ -42,7 +62,7 @@ messages:
   recent.consumer: 消费者
   recent.status: 状态
   recent.tokens: Token
-  recent.cost: 费用
+  recent.cost: 参考估算
   recent.error: 错误
   accounts.title: 账户用量快照
   accounts.empty: 暂无账户用量快照
@@ -60,4 +80,4 @@ messages:
   clear.apply: 确认清理
   clear.applying: 正在清理
   clear.success: 已清理历史统计
-  privacy: 统计由 Vulcan 内核完整采集并写入独立系统数据库。本原生插件拥有该逻辑绑定的直接读写权限，可查询与清理历史数据。
+  privacy: Vulcan 只将 Token 事实写入独立系统数据库。本原生插件直接查询和清理该数据库，并在每次查询时基于插件自有价目表重新计算参考费用。

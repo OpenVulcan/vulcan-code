@@ -58,53 +58,6 @@ pub enum UsageValue {
     },
 }
 
-/// Carries one immutable effective pricing revision without floating-point values.
-/// 承载一份不使用浮点数的不可变生效价格修订。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PricingProfileSnapshot {
-    /// Content-addressed immutable revision.
-    /// 内容寻址的不可变修订号。
-    pub pricing_revision: String,
-    /// Stable provider identity.
-    /// 稳定供应商标识。
-    pub provider_id: String,
-    /// Optional stable service-entry identity.
-    /// 可选稳定服务入口标识。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub service_entry_id: Option<String>,
-    /// Exact model identity.
-    /// 精确模型标识。
-    pub model_id: String,
-    /// ISO currency.
-    /// ISO 币种。
-    pub currency: String,
-    /// Effective input price per million tokens.
-    /// 生效输入每百万 Token 价格。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub input_per_million: Option<String>,
-    /// Effective output price per million tokens.
-    /// 生效输出每百万 Token 价格。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub output_per_million: Option<String>,
-    /// Effective cache-read price per million tokens.
-    /// 生效缓存读取每百万 Token 价格。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cache_read_per_million: Option<String>,
-    /// Effective cache-write price per million tokens.
-    /// 生效缓存写入每百万 Token 价格。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cache_write_per_million: Option<String>,
-    /// Stable source scope kind.
-    /// 稳定来源作用域类型。
-    pub source_kind: String,
-    /// Exact source identity.
-    /// 精确来源标识。
-    pub source_id: String,
-    /// Hexadecimal SHA-256 of the frozen revision material.
-    /// 冻结修订材料的十六进制 SHA-256。
-    pub content_hash: String,
-}
-
 /// Carries one provider-reported billing partition without collapsing it into token totals.
 /// 承载一项供应商报告的计费分区，且不会把它折叠进 Token 合计。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -180,26 +133,6 @@ pub struct RequestUsage {
     /// Total tokens.
     /// 总 Token。
     pub total_tokens: UsageValue,
-    /// Provider-reported decimal cost string.
-    /// 供应商报告的十进制费用字符串。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cost: Option<String>,
-    /// Locally estimated decimal cost from one frozen pricing revision.
-    /// 根据一份冻结价格修订在本地估算的十进制费用。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub estimated_cost: Option<String>,
-    /// ISO currency shared by reported or estimated cost facts.
-    /// 报告或估算成本事实共用的 ISO 币种。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cost_currency: Option<String>,
-    /// Immutable pricing revision used for the local estimate.
-    /// 本地估算使用的不可变价格修订号。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pricing_revision: Option<String>,
-    /// Frozen effective pricing profile used for the local estimate.
-    /// 本地估算使用的冻结生效价格 Profile。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pricing_profile: Option<PricingProfileSnapshot>,
     /// Provider-reported billing partitions retained separately from normalized token dimensions.
     /// 与规范化 Token 维度分开保留的供应商计费分区。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -288,21 +221,6 @@ impl RequestUsage {
             update_kind,
         );
         merge_usage_value(&mut self.total_tokens, update.total_tokens, update_kind);
-        if update.cost.is_some() {
-            self.cost = update.cost;
-        }
-        if update.estimated_cost.is_some() {
-            self.estimated_cost = update.estimated_cost;
-        }
-        if update.cost_currency.is_some() {
-            self.cost_currency = update.cost_currency;
-        }
-        if update.pricing_revision.is_some() {
-            self.pricing_revision = update.pricing_revision;
-        }
-        if update.pricing_profile.is_some() {
-            self.pricing_profile = update.pricing_profile;
-        }
         if !update.billing_details.is_empty() {
             self.billing_details = update.billing_details;
         }

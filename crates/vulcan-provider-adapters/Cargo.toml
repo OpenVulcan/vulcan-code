@@ -22,7 +22,6 @@ httpdate.workspace = true
 jsonschema.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-rust_decimal.workspace = true
 sha2.workspace = true
 hex = "0.4"
 tokio.workspace = true

@@ -671,19 +671,6 @@ pub(super) struct PublicAiUsageRefreshSettingsRequest {
     interval_seconds: u64,
 }
 
-/// Imports one exact cc-switch model-pricing document into the lowest-precedence catalog.
-/// 将一份精确的 cc-switch 模型价格文档导入最低优先级目录。
-#[derive(Clone, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct PublicAiCcSwitchPricingImportRequest {
-    /// Stable user-visible source identity recorded in each imported price.
-    /// 记录到每条导入价格中的稳定用户可见来源标识。
-    source_id: String,
-    /// Exact UTF-8 contents of cc-switch `model-pricing.json`.
-    /// cc-switch `model-pricing.json` 的精确 UTF-8 内容。
-    json: String,
-}
-
 /// Saves or clears the system-level Codex context-window policy.
 /// 保存或清除系统级 Codex 上下文窗口策略。
 #[derive(Debug, Clone, Deserialize)]
@@ -7019,56 +7006,6 @@ pub(super) async fn service_save_public_ai_usage_refresh_settings(
     )?;
     drop(transaction);
     Ok(snapshot)
-}
-
-/// Imports and atomically persists one cc-switch pricing document.
-/// 导入并原子持久化一份 cc-switch 价格文档。
-///
-/// # Parameters
-/// 参数
-/// `app` publishes the refreshed workbench, `state` owns configuration, and `request` carries the exact document.
-/// `app` 发布刷新后的工作台，`state` 持有配置，`request` 承载精确文档。
-///
-/// # Returns
-/// 返回值
-/// Returns the number of active catalog model prices imported after tombstones are applied.
-/// 返回应用删除标记后导入的有效目录模型价格数量。
-pub(super) async fn service_import_public_ai_cc_switch_pricing(
-    app: ServiceEventEmitter,
-    state: SharedServiceBridgeState,
-    request: PublicAiCcSwitchPricingImportRequest,
-) -> Result<usize, String> {
-    const MAX_CC_SWITCH_PRICING_BYTES: usize = 4 * 1024 * 1024;
-    if request.json.len() > MAX_CC_SWITCH_PRICING_BYTES {
-        return Err(format!(
-            "cc-switch model-pricing.json exceeds {MAX_CC_SWITCH_PRICING_BYTES} UTF-8 bytes."
-        ));
-    }
-    let source_id = request.source_id;
-    let json = request.json;
-    // transaction serializes the imported price image through Workbench publication.
-    // transaction 把导入价格镜像串行化到工作台发布完成。
-    let transaction = begin_public_ai_configuration_transaction().await;
-    // currentConfiguration is the exact paired before-image for compensation.
-    // currentConfiguration 是用于补偿的精确配对前镜像。
-    let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
-    let mut imported_count = 0usize;
-    let (_configuration, ()) = mutate_public_ai_configuration_and_publish_in_transaction(
-        &app,
-        &state,
-        runtime.as_ref(),
-        &current_configuration,
-        "导入 cc-switch 模型价格失败",
-        |configuration| {
-            imported_count = configuration
-                .billing
-                .import_cc_switch_model_pricing_json(source_id.as_str(), json.as_str())?;
-            Ok(())
-        },
-        |_configuration| Ok(()),
-    )?;
-    drop(transaction);
-    Ok(imported_count)
 }
 
 /// Saves the process-wide default Codex context-window policy.

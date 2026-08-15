@@ -19,8 +19,8 @@
 | `crates/vulcan-llm-core/src/responses_to_gemini.rs` | CLIProxyAPI `sdk/translator/`、`internal/translator/`；Vulcan 现有 Gemini profile | 行为与 fixture 参考 | Responses 转 Gemini generateContent/Code Assist |
 | `crates/vulcan-llm-core/src/reasoning_bridge.rs` | cc-switch `src-tauri/src/proxy/providers/transform_codex_chat.rs`、`transform_codex_anthropic.rs` | 行为参考 | reasoning item、签名与供应商字段桥接 |
 | `crates/vulcan-llm-core/src/responses_websocket.rs` | Codex `codex-rs/codex-api/src/endpoint/responses_websocket.rs`、`responses.rs`、`sse/responses.rs` | 搬运后适配 | 标准 Responses HTTP/SSE/WS 通讯与事件状态机 |
-| `crates/vulcan-llm-core/src/usage.rs` | cc-switch `src-tauri/src/services/provider/usage.rs`、`services/model_pricing.rs`；Vulcan `vulcan-ai-contract` | 行为参考与 Vulcan 原生实现 | 原始 usage 提取、来源路径、流式合并与计费事实 |
-| `crates/vulcan-provider-adapters/resources/cc-switch-model-pricing.v1.json` | cc-switch `src-tauri/src/database/schema.rs` 的 `Database::seed_model_pricing` | 固定提交机械提取 | 提供 189 条只读最低优先级默认价格；用户导入文件及 Vulcan 路由、模型、供应商覆盖仍具有更高优先级 |
+| `crates/vulcan-llm-core/src/usage.rs` | cc-switch `src-tauri/src/services/provider/usage.rs`；Vulcan `vulcan-ai-contract` | 行为参考与 Vulcan 原生实现 | 原始 usage 提取、来源路径与流式合并；不承担价格计算 |
+| `plugins/vulcan-usage-statistics/pricing/` | cc-switch `src-tauri/src/database/schema.rs` 的 `Database::seed_model_pricing` | 固定发行版机械提取并插件化适配 | 仅为统计插件提供参考价目表；主 crate 不包含该目录且内核不计算或存储价格 |
 | `crates/vulcan-service-kernel/src/context_compaction/` | Codex `codex-rs/codex-api/src/endpoint/compact.rs` 与 core compaction 回合控制 | 行为参考与 Vulcan 原生实现 | 回合中安全检查点、远端压缩、本地重写和继续执行 |
 
 ## 同步规则

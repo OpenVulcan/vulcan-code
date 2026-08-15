@@ -381,6 +381,57 @@
   background: var(--card);
 }
 
+/* Price editor layout stays host-themed while the mounted plugin owns its state. */
+/* 价格编辑器布局保持宿主主题，同时由挂载插件持有状态。 */
+.plugin-statistics-pricing-model {
+  width: min(100%, 420px);
+  margin-top: 12px;
+}
+
+/* Price dimensions remain independently editable at desktop and compact widths. */
+/* 各价格维度在桌面与紧凑宽度下均保持独立可编辑。 */
+.plugin-statistics-price-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: 12px 0;
+}
+
+/* Each price field binds a visible dimension label to one exact decimal string. */
+/* 每个价格字段把可见维度标签绑定到一个精确十进制字符串。 */
+.plugin-statistics-price-field {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+
+/* Raw plugin inputs inherit the same surface and focus contract as host forms. */
+/* 原生插件输入继承宿主表单相同的表面与焦点契约。 */
+.plugin-statistics-price-input {
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  padding: 0 9px;
+  border: 1px solid var(--input);
+  border-radius: calc(var(--radius) - 2px);
+  outline: none;
+  background: var(--background);
+  color: var(--foreground);
+  font: inherit;
+}
+
+.plugin-statistics-price-input:focus-visible {
+  border-color: var(--ring);
+  box-shadow: 0 0 0 2px color-mix(in oklch, var(--ring) 28%, transparent);
+}
+
+.plugin-statistics-price-input:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .plugin-statistics-table-wrap {
   width: 100%;
   margin-top: 10px;
@@ -436,10 +487,18 @@
   .plugin-statistics-summary-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .plugin-statistics-price-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 480px) {
   .plugin-statistics-summary-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .plugin-statistics-price-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 }

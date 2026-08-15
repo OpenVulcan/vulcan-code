@@ -10,7 +10,6 @@ use crate::{
 use async_stream::try_stream;
 use futures_util::{Stream, StreamExt};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
-use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -34,12 +33,11 @@ use vulcan_ai_protocols::{
     gemini_generate_content_path, gemini_replay_signature_payload, wrap_openai_reasoning_signature,
 };
 use vulcan_llm_core::{
-    AnthropicReasoningMode, CostCalculator, DEFAULT_RESPONSES_WEBSOCKET_MAX_AGE,
-    EncodedWireRequest, LlmCoreError, LlmProtocolRuntime, ModelPricing, ProtocolTransportProfile,
-    ProviderRouteContext, RESPONSES_WEBSOCKET_CONNECTION_LIMIT_CODE, ResponsesWebsocketConfig,
-    ResponsesWebsocketSession, UpstreamProtocol, UsageAccumulator, UsageExtractionProfile,
-    UsageRecordKind, converted_protocol_headers, encode_codex_responses_request,
-    project_responses_for_provider,
+    AnthropicReasoningMode, DEFAULT_RESPONSES_WEBSOCKET_MAX_AGE, EncodedWireRequest, LlmCoreError,
+    LlmProtocolRuntime, ProtocolTransportProfile, ProviderRouteContext,
+    RESPONSES_WEBSOCKET_CONNECTION_LIMIT_CODE, ResponsesWebsocketConfig, ResponsesWebsocketSession,
+    UpstreamProtocol, UsageAccumulator, UsageExtractionProfile, UsageRecordKind,
+    converted_protocol_headers, encode_codex_responses_request, project_responses_for_provider,
 };
 
 use tokio::sync::{Mutex as TokioMutex, oneshot};
@@ -122,9 +120,6 @@ pub struct ProviderExecutionRoute {
     /// Optional user-owned safe projection for one exact custom model.
     /// 可选的单个精确自定义模型用户自有安全投影。
     pub custom_model_projection: Option<CustomModelRequestProjection>,
-    /// Optional frozen local billing profile resolved from explicit configuration.
-    /// 从显式配置解析出的可选冻结本地计费 Profile。
-    pub billing_profile: Option<ResolvedBillingProfile>,
     /// Ordered request-projection profile chain effective for this exact model route; route
     /// defaults form the base and an explicitly present model-rule list replaces them, including
     /// an explicit empty list that clears the chain (plan §R8.4/§R8.5).
@@ -146,27 +141,6 @@ pub struct ProviderExecutionRoute {
     /// Content-addressed identity of the complete effective execution route.
     /// 完整生效执行路由的内容寻址身份。
     pub route_revision: String,
-}
-
-/// Frozen exact pricing facts applied to normalized usage updates.
-/// 应用于规范化用量更新的冻结精确价格事实。
-#[derive(Debug, Clone)]
-pub struct ResolvedBillingProfile {
-    /// Immutable content-addressed pricing revision.
-    /// 内容寻址的不可变价格修订号。
-    pub pricing_revision: String,
-    /// ISO currency for the local estimate.
-    /// 本地估算使用的 ISO 币种。
-    pub currency: String,
-    /// Per-million-token prices parsed without floating point.
-    /// 不经过浮点解析的每百万 Token 价格。
-    pub pricing: ModelPricing,
-    /// Exact provider-specific multiplier.
-    /// 精确供应商专属倍率。
-    pub multiplier: Decimal,
-    /// Serializable effective pricing evidence persisted with usage facts.
-    /// 随用量事实持久化的可序列化生效价格证据。
-    pub snapshot: vulcan_ai_contract::PricingProfileSnapshot,
 }
 
 impl ProviderExecutionRoute {
@@ -263,7 +237,6 @@ impl ProviderExecutionRoute {
             protocol_route,
             secondary_route,
             custom_model_projection: None,
-            billing_profile: None,
             request_projection_profiles,
             response_projection_profiles,
             upload_channels: Vec::new(),
@@ -2198,7 +2171,7 @@ impl ProviderExecutionClient {
                         semantic_output_observed,
                     ))?;
                 }
-                let mut profiled_usage_events = extract_profiled_usage_value_events(
+                let profiled_usage_events = extract_profiled_usage_value_events(
                     &usage_profiles,
                     UsageRecordKind::WebSocketFrame,
                     &frame.value,
@@ -2214,9 +2187,6 @@ impl ProviderExecutionClient {
                         ),
                     )
                 })?;
-                for usage_event in &mut profiled_usage_events {
-                    apply_local_cost_estimate(&route, usage_event);
-                }
                 for mut usage_event in profiled_usage_gate
                     .stage(profiled_usage_events)
                     .map_err(|error| {
@@ -2262,7 +2232,6 @@ impl ProviderExecutionClient {
                     {
                         continue;
                     }
-                    apply_local_cost_estimate(&route, &mut event);
                     let was_semantic_output_observed = semantic_output_observed;
                     update_semantic_output_observation(
                         &mut semantic_output_observed,
@@ -2322,7 +2291,6 @@ impl ProviderExecutionClient {
                 if profiled_usage_enabled && matches!(event, AiStreamEvent::UsageUpdated { .. }) {
                     continue;
                 }
-                apply_local_cost_estimate(&route, &mut event);
                 update_semantic_output_observation(&mut semantic_output_observed, &mut event);
                 terminal_observed |= matches!(
                     event,
@@ -2577,7 +2545,7 @@ impl ProviderExecutionClient {
                     Duration::from_millis(transport.stream_idle_timeout_ms),
                 )
                 .await?;
-                for mut usage_event in extract_profiled_usage_events(
+                for usage_event in extract_profiled_usage_events(
                     &usage_profiles,
                     UsageRecordKind::ErrorJsonBody,
                     body.as_str(),
@@ -2585,7 +2553,6 @@ impl ProviderExecutionClient {
                 )
                 .map_err(protocol_failure)?
                 {
-                    apply_local_cost_estimate(&route, &mut usage_event);
                     yield usage_event;
                 }
                 let body = project_response_record_text(&response_profiles, body.as_str())
@@ -2659,16 +2626,13 @@ impl ProviderExecutionClient {
                     .map_err(|error| {
                         stream_protocol_failure(error, semantic_output_observed)
                     })?;
-                    let mut profiled_usage_events = extract_profiled_usage_events(
+                    let profiled_usage_events = extract_profiled_usage_events(
                         &usage_profiles,
                         UsageRecordKind::SseEvent,
                         projected_data.as_str(),
                         &mut usage_accumulator,
                     )
                     .map_err(|error| stream_protocol_failure(error, semantic_output_observed))?;
-                    for usage_event in &mut profiled_usage_events {
-                        apply_local_cost_estimate(&route, usage_event);
-                    }
                     for mut usage_event in profiled_usage_gate
                         .stage(profiled_usage_events)
                         .map_err(|error| {
@@ -2697,7 +2661,6 @@ impl ProviderExecutionClient {
                         {
                             continue;
                         }
-                        apply_local_cost_estimate(&route, &mut event);
                         let was_semantic_output_observed = semantic_output_observed;
                         update_semantic_output_observation(
                             &mut semantic_output_observed,
@@ -2749,16 +2712,13 @@ impl ProviderExecutionClient {
                     frame.data.as_str(),
                 )
                 .map_err(|error| stream_protocol_failure(error, semantic_output_observed))?;
-                let mut profiled_usage_events = extract_profiled_usage_events(
+                let profiled_usage_events = extract_profiled_usage_events(
                     &usage_profiles,
                     UsageRecordKind::SseEvent,
                     projected_data.as_str(),
                     &mut usage_accumulator,
                 )
                 .map_err(|error| stream_protocol_failure(error, semantic_output_observed))?;
-                for usage_event in &mut profiled_usage_events {
-                    apply_local_cost_estimate(&route, usage_event);
-                }
                 for mut usage_event in profiled_usage_gate
                     .stage(profiled_usage_events)
                     .map_err(|error| stream_protocol_failure(error, semantic_output_observed))?
@@ -2783,7 +2743,6 @@ impl ProviderExecutionClient {
                     {
                         continue;
                     }
-                    apply_local_cost_estimate(&route, &mut event);
                     update_semantic_output_observation(
                         &mut semantic_output_observed,
                         &mut event,
@@ -2812,7 +2771,6 @@ impl ProviderExecutionClient {
                 if profiled_usage_enabled && matches!(event, AiStreamEvent::UsageUpdated { .. }) {
                     continue;
                 }
-                apply_local_cost_estimate(&route, &mut event);
                 let was_semantic_output_observed = semantic_output_observed;
                 update_semantic_output_observation(
                     &mut semantic_output_observed,
@@ -2984,38 +2942,6 @@ fn extract_profiled_usage_value_events(
         }
     }
     Ok(events)
-}
-
-/// Applies one frozen local price profile to a normalized usage event without replacing provider cost facts.
-/// 将一个冻结本地价格 Profile 应用于规范化用量事件且不替换供应商成本事实。
-fn apply_local_cost_estimate(route: &ProviderExecutionRoute, event: &mut AiStreamEvent) {
-    let Some(profile) = route.billing_profile.as_ref() else {
-        return;
-    };
-    let AiStreamEvent::UsageUpdated { usage } = event else {
-        return;
-    };
-    if usage.cost.is_some() {
-        // reported_currency must remain authoritative whenever provider cost evidence exists.
-        // 存在供应商成本证据时 reported_currency 必须保持权威。
-        let Some(reported_currency) = usage.cost_currency.as_deref() else {
-            usage
-                .validation_flags
-                .push(String::from("reported_cost_currency_missing"));
-            return;
-        };
-        if reported_currency != profile.currency {
-            usage.validation_flags.push(String::from(
-                "reported_and_estimated_cost_currency_mismatch",
-            ));
-            return;
-        }
-    }
-    let breakdown = CostCalculator::calculate(usage, &profile.pricing, profile.multiplier);
-    usage.estimated_cost = breakdown.total.map(|value| value.normalize().to_string());
-    usage.cost_currency = Some(profile.currency.clone());
-    usage.pricing_revision = Some(profile.pricing_revision.clone());
-    usage.pricing_profile = Some(profile.snapshot.clone());
 }
 
 /// Removes a Responses continuation whenever the wire request is explicitly non-persistent.
@@ -8234,81 +8160,12 @@ mod tests {
                 .protocol_route
                 .usage_extraction_profiles
                 .iter()
-                .all(|profile| profile.bindings.iter().any(|binding| {
-                    binding.field == vulcan_llm_core::UsageField::ReportedCostUsd
-                        && binding.pointers == [String::from("/usage/cost")]
+                .all(|profile| profile.bindings.iter().all(|binding| {
+                    binding
+                        .pointers
+                        .iter()
+                        .all(|pointer| pointer != "/usage/cost")
                 }))
-        );
-    }
-
-    /// Verifies local estimates never assign their currency to incompatible reported cost evidence.
-    /// 验证本地估算绝不会把自身币种赋给不兼容的供应商上报成本证据。
-    #[test]
-    fn local_cost_estimate_rejects_reported_currency_conflicts() {
-        // route owns the frozen USD estimate that intentionally conflicts with reported EUR.
-        // route 持有与供应商上报 EUR 故意冲突的冻结 USD 估算。
-        let mut route = pinned_openrouter_route(OPENAI_CHAT_PROFILE_ID);
-        route.billing_profile = Some(ResolvedBillingProfile {
-            pricing_revision: String::from("pricing-revision"),
-            currency: String::from("USD"),
-            pricing: ModelPricing::from_optional_strings(
-                Some("1"),
-                Some("2"),
-                Some("0"),
-                Some("0"),
-            )
-            .expect("pricing should parse"),
-            multiplier: Decimal::ONE,
-            snapshot: vulcan_ai_contract::PricingProfileSnapshot {
-                pricing_revision: String::from("pricing-revision"),
-                provider_id: String::from("openrouter"),
-                service_entry_id: Some(String::from("public")),
-                model_id: String::from("openai/gpt-5"),
-                currency: String::from("USD"),
-                input_per_million: Some(String::from("1")),
-                output_per_million: Some(String::from("2")),
-                cache_read_per_million: Some(String::from("0")),
-                cache_write_per_million: Some(String::from("0")),
-                source_kind: String::from("test"),
-                source_id: String::from("test"),
-                content_hash: String::from("content-hash"),
-            },
-        });
-        // event carries exact provider evidence before the local estimate is attempted.
-        // event 在尝试本地估算前承载精确供应商证据。
-        let mut event = AiStreamEvent::UsageUpdated {
-            usage: Box::new(vulcan_ai_contract::RequestUsage {
-                uncached_input_tokens: vulcan_ai_contract::UsageValue::Known {
-                    value: 1_000_000,
-                    source: vulcan_ai_contract::UsageValueSource::Reported,
-                },
-                output_tokens: vulcan_ai_contract::UsageValue::Known {
-                    value: 500_000,
-                    source: vulcan_ai_contract::UsageValueSource::Reported,
-                },
-                cost: Some(String::from("0.5")),
-                cost_currency: Some(String::from("EUR")),
-                ..vulcan_ai_contract::RequestUsage::default()
-            }),
-        };
-
-        apply_local_cost_estimate(&route, &mut event);
-
-        // usage is the post-projection evidence inspected for accidental currency overwrite.
-        // usage 是投影后用于检查意外币种覆盖的证据。
-        let AiStreamEvent::UsageUpdated { usage } = event else {
-            panic!("usage event should remain a usage event");
-        };
-        assert_eq!(usage.cost.as_deref(), Some("0.5"));
-        assert_eq!(usage.cost_currency.as_deref(), Some("EUR"));
-        assert!(usage.estimated_cost.is_none());
-        assert!(usage.pricing_revision.is_none());
-        assert!(usage.pricing_profile.is_none());
-        assert_eq!(
-            usage.validation_flags,
-            [String::from(
-                "reported_and_estimated_cost_currency_mismatch"
-            )]
         );
     }
 

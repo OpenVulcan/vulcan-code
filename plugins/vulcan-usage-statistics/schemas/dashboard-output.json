@@ -6,6 +6,7 @@
     "schemaRevision": { "type": "integer", "minimum": 0 },
     "aggregateRevision": { "type": "integer", "minimum": 0 },
     "healthStatus": { "type": "string", "minLength": 1 },
+    "pricingCatalog": { "$ref": "#/$defs/pricingCatalog" },
     "daily": {
       "type": "array",
       "maxItems": 500,
@@ -27,6 +28,7 @@
     "schemaRevision",
     "aggregateRevision",
     "healthStatus",
+    "pricingCatalog",
     "daily",
     "recentAttempts",
     "accounts"
@@ -40,6 +42,26 @@
     "nullableString": {
       "type": ["string", "null"]
     },
+    "pricingMatchStatus": {
+      "type": "string",
+      "enum": ["catalog_exact", "override_exact", "unmatched", "incomplete_usage"]
+    },
+    "pricingCatalog": {
+      "type": "object",
+      "properties": {
+        "catalogId": { "type": "string", "minLength": 1 },
+        "revision": { "type": "string", "minLength": 1 },
+        "currency": { "type": "string", "minLength": 1 },
+        "entryCount": { "type": "integer", "minimum": 0 },
+        "overrideCount": { "type": "integer", "minimum": 0 },
+        "matchingStrategy": {
+          "type": "string",
+          "const": "exact_canonical_model_id"
+        }
+      },
+      "required": ["catalogId", "revision", "currency", "entryCount", "overrideCount", "matchingStrategy"],
+      "additionalProperties": false
+    },
     "dailySummary": {
       "type": "object",
       "properties": {
@@ -49,7 +71,6 @@
         "consumerId": { "type": "string", "minLength": 1 },
         "operation": { "type": "string", "minLength": 1 },
         "modelId": { "type": "string", "minLength": 1 },
-        "currency": { "type": "string" },
         "attemptCount": { "type": "integer", "minimum": 0 },
         "successfulAttemptCount": { "type": "integer", "minimum": 0 },
         "reportedUsageAttemptCount": { "type": "integer", "minimum": 0 },
@@ -60,8 +81,11 @@
         "outputTokens": { "$ref": "#/$defs/nullableInteger" },
         "reasoningTokens": { "$ref": "#/$defs/nullableInteger" },
         "totalTokens": { "$ref": "#/$defs/nullableInteger" },
-        "reportedCost": { "$ref": "#/$defs/nullableString" },
         "estimatedCost": { "$ref": "#/$defs/nullableString" },
+        "estimatedCurrency": { "$ref": "#/$defs/nullableString" },
+        "pricingMatchStatus": { "$ref": "#/$defs/pricingMatchStatus" },
+        "pricingRevision": { "$ref": "#/$defs/nullableString" },
+        "pricingSourceId": { "$ref": "#/$defs/nullableString" },
         "aggregateRevision": { "type": "integer", "minimum": 0 }
       },
       "required": [
@@ -71,7 +95,6 @@
         "consumerId",
         "operation",
         "modelId",
-        "currency",
         "attemptCount",
         "successfulAttemptCount",
         "reportedUsageAttemptCount",
@@ -82,8 +105,11 @@
         "outputTokens",
         "reasoningTokens",
         "totalTokens",
-        "reportedCost",
         "estimatedCost",
+        "estimatedCurrency",
+        "pricingMatchStatus",
+        "pricingRevision",
+        "pricingSourceId",
         "aggregateRevision"
       ],
       "additionalProperties": false
@@ -118,16 +144,23 @@
         "errorCode": { "$ref": "#/$defs/nullableString" },
         "status": { "type": "string", "minLength": 1 },
         "usageAvailability": { "type": "string", "minLength": 1 },
+        "inputTokens": { "$ref": "#/$defs/nullableInteger" },
+        "uncachedInputTokens": { "$ref": "#/$defs/nullableInteger" },
+        "cacheReadTokens": { "$ref": "#/$defs/nullableInteger" },
+        "cacheWriteTokens": { "$ref": "#/$defs/nullableInteger" },
+        "outputTokens": { "$ref": "#/$defs/nullableInteger" },
+        "reasoningTokens": { "$ref": "#/$defs/nullableInteger" },
+        "audioInputTokens": { "$ref": "#/$defs/nullableInteger" },
+        "audioOutputTokens": { "$ref": "#/$defs/nullableInteger" },
         "totalTokens": { "$ref": "#/$defs/nullableInteger" },
         "billingDetails": {
           "type": "array",
           "items": { "$ref": "#/$defs/billingDetail" }
         },
-        "reportedCost": { "$ref": "#/$defs/nullableString" },
         "estimatedCost": { "$ref": "#/$defs/nullableString" },
-        "currency": { "$ref": "#/$defs/nullableString" },
+        "estimatedCurrency": { "$ref": "#/$defs/nullableString" },
+        "pricingMatchStatus": { "$ref": "#/$defs/pricingMatchStatus" },
         "pricingRevision": { "$ref": "#/$defs/nullableString" },
-        "pricingSourceKind": { "$ref": "#/$defs/nullableString" },
         "pricingSourceId": { "$ref": "#/$defs/nullableString" },
         "terminalAtMs": { "type": "integer" }
       },
@@ -145,13 +178,20 @@
         "errorCode",
         "status",
         "usageAvailability",
+        "inputTokens",
+        "uncachedInputTokens",
+        "cacheReadTokens",
+        "cacheWriteTokens",
+        "outputTokens",
+        "reasoningTokens",
+        "audioInputTokens",
+        "audioOutputTokens",
         "totalTokens",
         "billingDetails",
-        "reportedCost",
         "estimatedCost",
-        "currency",
+        "estimatedCurrency",
+        "pricingMatchStatus",
         "pricingRevision",
-        "pricingSourceKind",
         "pricingSourceId",
         "terminalAtMs"
       ],

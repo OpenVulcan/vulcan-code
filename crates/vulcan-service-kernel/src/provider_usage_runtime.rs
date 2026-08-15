@@ -11,10 +11,9 @@ use vulcan_workbench_model::{
     SessionProviderRequestTextMeasurement,
 };
 use vulcan_workspace_store::workspace_store::{
-    ProviderAccountUsageSnapshotRecord, ProviderPricingProfileRecord,
-    ProviderRateLimitSnapshotRecord, ProviderUsageAttemptRecord, ProviderUsageDashboard,
-    load_provider_usage_dashboard, persist_provider_account_usage_snapshot,
-    persist_provider_pricing_profile, persist_provider_rate_limit_snapshot,
+    ProviderAccountUsageSnapshotRecord, ProviderRateLimitSnapshotRecord,
+    ProviderUsageAttemptRecord, ProviderUsageDashboard, load_provider_usage_dashboard,
+    persist_provider_account_usage_snapshot, persist_provider_rate_limit_snapshot,
     persist_provider_usage_attempt_and_rebuild_daily,
 };
 
@@ -714,27 +713,6 @@ pub(crate) async fn persist_native_provider_usage_attempt(
         dispatch_facts(status.as_str(), dispatch_outcome.as_deref());
     let semantic_output_observed =
         telemetry_optional_bool(event, "semantic_output_observed").unwrap_or(false);
-    if let Some(profile) = usage.and_then(|value| value.pricing_profile.as_ref()) {
-        persist_provider_pricing_profile(
-            controller_runtime,
-            &ProviderPricingProfileRecord {
-                pricing_revision: profile.pricing_revision.clone(),
-                provider_id: profile.provider_id.clone(),
-                service_entry_id: profile.service_entry_id.clone(),
-                model_id: profile.model_id.clone(),
-                currency: profile.currency.clone(),
-                input_per_million: profile.input_per_million.clone(),
-                output_per_million: profile.output_per_million.clone(),
-                cache_read_per_million: profile.cache_read_per_million.clone(),
-                cache_write_per_million: profile.cache_write_per_million.clone(),
-                source_kind: profile.source_kind.clone(),
-                source_id: profile.source_id.clone(),
-                content_hash: profile.content_hash.clone(),
-                created_at_ms: telemetry_required_i64(event, "completed_at_ms")?,
-            },
-        )
-        .await?;
-    }
     let record = ProviderUsageAttemptRecord {
         logical_request_id: telemetry_string(event, "execution_id")?,
         attempt_id: telemetry_string(event, "request_id")?,
@@ -824,10 +802,6 @@ pub(crate) async fn persist_native_provider_usage_attempt(
             .map(|value| serde_json::to_string(&value.billing_details))
             .transpose()
             .map_err(|error| format!("failed to serialize provider billing details: {error}"))?,
-        reported_cost: usage.and_then(|value| value.reported_cost.clone()),
-        estimated_cost: usage.and_then(|value| value.estimated_cost.clone()),
-        currency: usage.and_then(|value| value.cost_currency.clone()),
-        pricing_revision: usage.and_then(|value| value.pricing_revision.clone()),
         calendar_date: telemetry_string(event, "calendar_date")?,
     };
     persist_provider_usage_attempt_and_rebuild_daily(
@@ -1227,11 +1201,6 @@ fn provider_usage_snapshot_from_event(
         validation_flags: usage.validation_flags.clone(),
         response_model: usage.response_model.clone(),
         response_id: usage.response_id.clone(),
-        reported_cost: usage.reported_cost.clone(),
-        estimated_cost: usage.estimated_cost.clone(),
-        cost_currency: usage.cost_currency.clone(),
-        pricing_revision: usage.pricing_revision.clone(),
-        pricing_profile: usage.pricing_profile.clone(),
         billing_details: usage.billing_details.clone(),
     })
 }

@@ -15,19 +15,17 @@ use crate::{
     ProviderExecutionFailure, ProviderExecutionRoute, ProviderExecutionStream, ProviderKind,
     ProviderMetadataClient, ProviderRegistry, ProviderToolCapabilityKind,
     ProviderToolExecutionResult, ProviderToolTarget, ProviderToolTargetSelection,
-    ProviderWireRequestCapture, ResolvedBillingProfile, ResolvedProviderManifest,
-    RuntimeConnectionCatalogs, SecondaryRouteOption, SecondaryRouteSelection,
+    ProviderWireRequestCapture, ResolvedProviderManifest, RuntimeConnectionCatalogs,
+    SecondaryRouteOption, SecondaryRouteSelection,
     native_inference::validate_native_action_binding,
 };
 use async_trait::async_trait;
 use futures_util::{StreamExt, stream};
-use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::path::Path;
-use std::str::FromStr;
 use std::sync::{
     Arc, Mutex as StdMutex, RwLock,
     atomic::{AtomicU64, Ordering},
@@ -42,7 +40,6 @@ use vulcan_ai_contract::{
     RerankResponse,
 };
 use vulcan_llm_core::LlmProtocolRuntime;
-use vulcan_llm_core::ModelPricing;
 
 /// Refreshes renewable tokens this long before their declared expiration.
 /// 在可续期 Token 声明过期前这么长时间执行刷新。
@@ -8647,13 +8644,6 @@ impl PublicAiRuntime {
                 route.protocol_route.response_projection_profiles.clone(),
             )?;
         }
-        route.billing_profile = resolve_billing_profile(
-            configuration,
-            provider_id,
-            route.entry.id.as_str(),
-            model_id,
-            &route.secondary_route,
-        )?;
         let route_revision = provider_execution_route_revision(&route, &model, &overrides)?;
         // The execution route carries the same immutable identity used by media-cache isolation.
         // 执行路由携带与媒体缓存隔离相同的不可变身份。
@@ -8976,104 +8966,6 @@ fn resolve_response_projection_chain(
                 })
         })
         .collect()
-}
-
-/// Resolves one immutable local billing profile from explicit persisted precedence layers.
-/// 从显式持久化优先级层解析一个不可变本地计费 Profile。
-fn resolve_billing_profile(
-    configuration: &PersistedAiConfiguration,
-    provider_id: &str,
-    service_entry_id: &str,
-    model_id: &str,
-    secondary_route: &SecondaryRouteSelection,
-) -> Result<Option<ResolvedBillingProfile>, String> {
-    if !configuration.billing.enabled {
-        return Ok(None);
-    }
-    let route_id = match secondary_route {
-        SecondaryRouteSelection::Automatic => None,
-        SecondaryRouteSelection::PinnedEndpoint { route_id, .. } => Some(route_id.as_str()),
-    };
-    let Some((scope, source_key, price)) =
-        configuration
-            .billing
-            .resolve_price_with_scope(provider_id, model_id, route_id)
-    else {
-        return Ok(None);
-    };
-    let pricing = ModelPricing::from_optional_strings(
-        price.input_cost_per_million.as_deref(),
-        price.output_cost_per_million.as_deref(),
-        price.cache_read_cost_per_million.as_deref(),
-        price.cache_creation_cost_per_million.as_deref(),
-    )
-    .map_err(|error| error.message)?;
-    let multiplier = price
-        .cost_multiplier
-        .as_deref()
-        .map(Decimal::from_str)
-        .transpose()
-        .map_err(|error| format!("Invalid frozen billing multiplier: {error}"))?
-        .unwrap_or(Decimal::ONE);
-    let revision_material = serde_json::to_vec(&serde_json::json!({
-        "scope": scope,
-        "source_key": &source_key,
-        "provider_id": provider_id,
-        "service_entry_id": service_entry_id,
-        "model_id": model_id,
-        "route_id": route_id,
-        "currency": configuration.billing.currency,
-        "price": price,
-    }))
-    .map_err(|error| format!("Failed to serialize frozen billing revision: {error}"))?;
-    let content_hash = format!("{:x}", Sha256::digest(revision_material));
-    let pricing_revision = format!("sha256:{content_hash}");
-    let snapshot = vulcan_ai_contract::PricingProfileSnapshot {
-        pricing_revision: pricing_revision.clone(),
-        provider_id: provider_id.to_string(),
-        service_entry_id: Some(service_entry_id.to_string()),
-        model_id: model_id.to_string(),
-        currency: configuration.billing.currency.clone(),
-        input_per_million: checked_multiply_price(pricing.input, multiplier, "input")?,
-        output_per_million: checked_multiply_price(pricing.output, multiplier, "output")?,
-        cache_read_per_million: checked_multiply_price(
-            pricing.cache_read,
-            multiplier,
-            "cache_read",
-        )?,
-        cache_write_per_million: checked_multiply_price(
-            pricing.cache_write,
-            multiplier,
-            "cache_write",
-        )?,
-        source_kind: scope.to_string(),
-        source_id: price.source.clone().unwrap_or(source_key),
-        content_hash,
-    };
-    Ok(Some(ResolvedBillingProfile {
-        pricing_revision,
-        currency: configuration.billing.currency.clone(),
-        pricing,
-        multiplier,
-        snapshot,
-    }))
-}
-
-/// Multiplies one optional decimal price and preserves an unknown price as unknown.
-/// 对一个可选十进制价格执行乘法，并让未知价格继续保持未知。
-fn checked_multiply_price(
-    price: Option<Decimal>,
-    multiplier: Decimal,
-    field: &str,
-) -> Result<Option<String>, String> {
-    price
-        .map(|value| {
-            value
-                .checked_mul(multiplier)
-                .map(|effective| effective.normalize().to_string())
-                .ok_or_else(|| format!("Frozen billing {field} price overflowed Decimal."))
-        })
-        .transpose()
 }
 
 /// Resolves provider and model request projections from low to high precedence.
@@ -10661,10 +10553,6 @@ fn provider_execution_route_revision(
         &canonical_protocol_route,
         &route.secondary_route,
         &route.custom_model_projection,
-        route
-            .billing_profile
-            .as_ref()
-            .map(|profile| &profile.snapshot),
         &route.request_projection_profiles,
         &route.response_projection_profiles,
         &route.upload_channels,
@@ -11883,59 +11771,6 @@ mod tests {
     fn first_batch_installs_process_rustls_provider() {
         let _runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
         assert!(rustls::crypto::CryptoProvider::get_default().is_some());
-    }
-
-    /// Verifies frozen attempts receive distinct immutable revisions for built-in and user price sources.
-    /// 验证冻结 attempt 会为内置与用户价格来源取得不同的不可变修订号。
-    #[test]
-    fn billing_profile_freezes_builtin_and_user_source_revisions() {
-        let mut configuration = PersistedAiConfiguration::default();
-        let builtin = resolve_billing_profile(
-            &configuration,
-            "openai",
-            "responses",
-            "gpt-5-nano",
-            &SecondaryRouteSelection::Automatic,
-        )
-        .expect("built-in pricing should resolve")
-        .expect("gpt-5-nano must have a frozen built-in price");
-        assert_eq!(builtin.snapshot.source_kind, "builtin_catalog_model");
-        assert_eq!(
-            builtin.snapshot.source_id,
-            "cc-switch:builtin:0345fad6048eed65b3423bedc8ce5711320ddfc3"
-        );
-
-        configuration
-            .billing
-            .import_cc_switch_model_pricing_json(
-                "user-file",
-                r#"{
-                    "version": 1,
-                    "models": [{
-                        "modelId": "gpt-5-nano",
-                        "displayName": "GPT-5 Nano",
-                        "inputCostPerMillion": "0.06",
-                        "outputCostPerMillion": "0.41",
-                        "cacheReadCostPerMillion": "0.006",
-                        "cacheCreationCostPerMillion": "0"
-                    }],
-                    "deletedModelIds": []
-                }"#,
-            )
-            .expect("user pricing should import");
-        let user = resolve_billing_profile(
-            &configuration,
-            "openai",
-            "responses",
-            "gpt-5-nano",
-            &SecondaryRouteSelection::Automatic,
-        )
-        .expect("user pricing should resolve")
-        .expect("user price should remain available");
-        assert_eq!(user.snapshot.source_kind, "catalog_model");
-        assert_eq!(user.snapshot.source_id, "cc-switch:user-file");
-        assert_ne!(user.pricing_revision, builtin.pricing_revision);
-        assert_ne!(user.snapshot.content_hash, builtin.snapshot.content_hash);
     }
 
     /// Verifies an accepted custom-model template remains executable when discovery is unavailable after restart.

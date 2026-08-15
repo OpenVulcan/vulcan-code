@@ -4302,13 +4302,6 @@
                       "/id"
                     ],
                     "encoding": "string"
-                  },
-                  {
-                    "field": "reported_cost_usd",
-                    "pointers": [
-                      "/usage/cost"
-                    ],
-                    "encoding": "decimal"
                   }
                 ],
                 "derivations": [
@@ -4370,13 +4363,6 @@
                       "/id"
                     ],
                     "encoding": "string"
-                  },
-                  {
-                    "field": "reported_cost_usd",
-                    "pointers": [
-                      "/usage/cost"
-                    ],
-                    "encoding": "decimal"
                   }
                 ],
                 "derivations": [
