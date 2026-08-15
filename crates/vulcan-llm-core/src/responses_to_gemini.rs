@@ -275,7 +275,13 @@ fn project_interaction_generation_controls(
         }
         if let Some(thinking) = config.get("thinkingConfig") {
             if let Some(level) = thinking.get("thinkingLevel") {
-                generation.insert(String::from("thinking_level"), level.clone());
+                let level = level.as_str().ok_or_else(|| {
+                    LlmCoreError::new("Gemini thinkingLevel must be a string enum.")
+                })?;
+                generation.insert(
+                    String::from("thinking_level"),
+                    Value::String(level.to_ascii_lowercase()),
+                );
             }
             if let Some(include) = thinking.get("includeThoughts").and_then(Value::as_bool) {
                 generation.insert(
@@ -794,6 +800,11 @@ fn project_gemini_controls(
             let level = canonical_reasoning_effort(effort).ok_or_else(|| {
                 LlmCoreError::new(format!("Unsupported Gemini reasoning effort `{effort}`."))
             })?;
+            // Native generateContent uses the REST enum spelling; Interactions keeps its separate
+            // lowercase generation_config contract in project_interaction_generation_controls.
+            // 原生 generateContent 使用 REST 枚举拼写；Interactions 仍在
+            // project_interaction_generation_controls 中保持独立的小写 generation_config 契约。
+            let level = level.to_ascii_uppercase();
             generation.insert(
                 String::from("thinkingConfig"),
                 json!({"thinkingLevel":level,"includeThoughts":true}),

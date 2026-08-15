@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "apikeyfun",
-  "revision": 4,
-  "published_at": "2026-08-14T00:00:00Z",
+  "revision": 5,
+  "published_at": "2026-08-15T00:00:00Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -88,6 +88,9 @@
         },
         {
           "protocol_profile_id": "google.gemini.generate_content",
+          "base_url_override": "https://api.apikey.fun/v1beta",
+          "model_discovery_base_url_override": "https://api.apikey.fun/v1",
+          "model_discovery_path": "/models",
           "usage_profile_refs": [],
           "request_profile_refs": [],
           "response_profile_refs": [],
@@ -947,6 +950,7 @@
       {"url": "https://api.apikey.fun/v1/models", "note": "Credential-scoped model discovery endpoint; runtime activation is the intersection with exact local rules."},
       {"url": "https://api.apikey.fun/v1/responses", "note": "Verified Responses route for Codex, Grok LLM, GLM, and DeepSeek groups."},
       {"url": "https://api.apikey.fun/v1/messages", "note": "Verified Anthropic Messages route for the Claude group and configured Kimi group."},
+      {"url": "https://api.apikey.fun/v1beta/models/gemini-3-flash:streamGenerateContent", "note": "Verified native Gemini GenerateContent SSE route; the model identifier is carried by the request path."},
       {"url": "https://api.apikey.fun/v1/images/generations", "note": "Verified GPT SSE and Grok synchronous image generation route."},
       {"url": "https://api.apikey.fun/v1/images/edits", "note": "Verified GPT multipart SSE image-edit route."},
       {"url": "https://api.apikey.fun/v1/videos/generations", "note": "Verified Grok video task creation route."}

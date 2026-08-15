@@ -36,6 +36,7 @@ import {
   type DraftConversationSelection,
 } from "@/components/workspace/workspace-resizable-body";
 import { retireMaterializedDraftSubmission } from "@/components/workspace/draft-submission-state";
+import { resolveEmptyWorkbenchDraftRoute } from "@/components/workspace/workbench-layout/empty-workbench-route";
 import { MediaUploadProgressPanel } from "@/components/workspace/media-upload-progress-panel";
 import { WorkbenchDialogs } from "@/components/workspace/workbench-dialogs";
 import { routeWorkspaceInputOwnerFromPointer } from "@/components/workspace/workspace-input-owner";
@@ -317,7 +318,11 @@ export function WorkbenchLayout(props: {
   // initialDraftConversationRef 为本地选择状态只计算一次首次启动草稿。
   const initialDraftConversationRef = React.useRef<DraftConversationSelection | null | undefined>(undefined);
   if (initialDraftConversationRef.current === undefined) {
-    initialDraftConversationRef.current = defaultDraftConversationForEmptyWorkbench(props.workbench);
+    initialDraftConversationRef.current = resolveEmptyWorkbenchDraftRoute(
+      props.workbench,
+      null,
+      null,
+    )?.draftConversation ?? null;
   }
   const initialDraftConversation = initialDraftConversationRef.current;
   // selectedConversationId stores the conversation selected in the sidebar.
@@ -1496,19 +1501,26 @@ export function WorkbenchLayout(props: {
     }
   }, [workbenchState.conversations]);
 
-  // Ensure service snapshots with projects but no sessions still have a draft send target.
-  // 确保服务快照存在项目但没有会话时仍有草稿发送目标。
+  // Route an empty active session collection to a draft owned by the last active project.
+  // 将空活动会话集合路由到最后活动项目拥有的草稿。
   React.useEffect(() => {
-    if (draftConversation || selectedConversationId || workbenchState.conversations.length > 0) {
+    // emptyWorkbenchRoute keeps the local draft and selected surface on one exact project-owned identity.
+    // emptyWorkbenchRoute 使本地草稿与选中界面保持为同一个项目所属身份。
+    const emptyWorkbenchRoute = resolveEmptyWorkbenchDraftRoute(
+      workbenchState,
+      activeProjectId,
+      draftConversation,
+    );
+    if (!emptyWorkbenchRoute) {
       return;
     }
-    const nextDraftConversation = defaultDraftConversationForEmptyWorkbench(workbenchState);
-    if (!nextDraftConversation) {
-      return;
+    if (draftConversation !== emptyWorkbenchRoute.draftConversation) {
+      setDraftConversation(emptyWorkbenchRoute.draftConversation);
     }
-    setDraftConversation(nextDraftConversation);
-    setSelectedConversationId(nextDraftConversation.id);
-  }, [draftConversation, selectedConversationId, workbenchState.conversations.length, workbenchState.projects]);
+    if (selectedConversationId !== emptyWorkbenchRoute.selectedConversationId) {
+      setSelectedConversationId(emptyWorkbenchRoute.selectedConversationId);
+    }
+  }, [activeProjectId, draftConversation, selectedConversationId, workbenchState.conversations, workbenchState.projects]);
 
   React.useEffect(() => {
     const serviceInstanceChanged = resetAcceptedWorkbenchOrderingForServiceInstance(
@@ -2142,35 +2154,6 @@ export function WorkbenchLayout(props: {
 
 // defaultDraftConversationForEmptyWorkbench creates a local draft when projects exist but sessions do not.
 // defaultDraftConversationForEmptyWorkbench 在存在项目但没有会话时创建本地草稿。
-function defaultDraftConversationForEmptyWorkbench(
-  // Workbench snapshot used to choose the draft owner project.
-  // 用于选择草稿归属项目的工作台快照。
-  workbench: WorkbenchSnapshot,
-): DraftConversationSelection | null {
-  if (workbench.conversations.length > 0) {
-    return null;
-  }
-  const project = workbench.projects[0] ?? null;
-  if (!project) {
-    return null;
-  }
-  return draftConversationForProject(project);
-}
-
-// draftConversationForProject creates the local route used before the first persisted send.
-// draftConversationForProject 创建首次持久化发送前使用的本地路由。
-function draftConversationForProject(
-  // Project that owns the future persisted conversation.
-  // 拥有未来持久化会话的项目。
-  project: ProjectSummary,
-): DraftConversationSelection {
-  return {
-    id: `draft-${project.id}-${Date.now()}`,
-    projectId: project.id,
-    projectName: project.name,
-  };
-}
-
 // formatWorkbenchTranslation replaces named placeholders in localized workbench messages.
 // formatWorkbenchTranslation 替换工作台本地化消息中的具名占位符。
 function formatWorkbenchTranslation(

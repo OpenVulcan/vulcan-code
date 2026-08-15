@@ -27,10 +27,11 @@ use vulcan_ai_contract::{
 };
 use vulcan_ai_protocols::{
     ANTHROPIC_MESSAGES_PROFILE_ID, ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID,
-    CLAUDE_CODE_MESSAGES_PROFILE_ID, GEMINI_GENERATE_CONTENT_PROFILE_ID,
-    GEMINI_INTERACTIONS_PROFILE_ID, GOOGLE_CODE_ASSIST_PROFILE_ID, OPENAI_CHAT_PROFILE_ID,
-    OPENAI_CODEX_RESPONSES_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID, ProtocolConversionError,
-    ProtocolStreamFraming, gemini_replay_signature_payload, wrap_openai_reasoning_signature,
+    CLAUDE_CODE_MESSAGES_PROFILE_ID, CODEX_RESPONSES_USER_AGENT,
+    GEMINI_GENERATE_CONTENT_PROFILE_ID, GEMINI_INTERACTIONS_PROFILE_ID,
+    GOOGLE_CODE_ASSIST_PROFILE_ID, OPENAI_CHAT_PROFILE_ID, OPENAI_CODEX_RESPONSES_PROFILE_ID,
+    OPENAI_RESPONSES_PROFILE_ID, ProtocolConversionError, ProtocolStreamFraming,
+    gemini_generate_content_path, gemini_replay_signature_payload, wrap_openai_reasoning_signature,
 };
 use vulcan_llm_core::{
     AnthropicReasoningMode, CostCalculator, DEFAULT_RESPONSES_WEBSOCKET_MAX_AGE,
@@ -41,7 +42,11 @@ use vulcan_llm_core::{
     project_responses_for_provider,
 };
 
-use tokio::sync::Mutex as TokioMutex;
+use tokio::sync::{Mutex as TokioMutex, oneshot};
+
+/// Stable VulcanCode user agent used by every non-Codex provider protocol.
+/// 所有非 Codex 供应商协议使用的稳定 VulcanCode 用户代理。
+const VULCAN_CODE_USER_AGENT: &str = "vulcan-code/0.1";
 
 /// Supplies the core-owned protocol runtime to the provider execution client.
 /// 为供应商执行客户端提供由核心拥有的协议运行时。
@@ -1846,6 +1851,63 @@ impl ProviderExecutionClient {
         secret: CredentialExecutionSecret,
         execution_id: String,
     ) -> ProviderExecutionStream {
+        self.execute_with_optional_wire_request_capture(route, request, secret, execution_id, None)
+    }
+
+    /// Starts one immutable execution and captures the exact encoded request used by its transport.
+    /// 启动一次不可变执行，并捕获其传输层实际使用的精确编码请求。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `route` is the resolved immutable route, `request` is the public request,
+    /// `secret` is the exact host-loaded credential, `execution_id` is stable, and
+    /// `wire_request_capture` receives the encoded request object immediately before dispatch.
+    /// `route` 是解析后的不可变路由，`request` 是公共请求，`secret` 是宿主加载的精确凭据，
+    /// `execution_id` 是稳定标识，`wire_request_capture` 在分派前接收编码后的请求对象。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A normalized event stream whose transport sends the same encoded request body as the capture.
+    /// 返回归一化事件流，其传输层发送与捕获内容相同的编码请求正文。
+    pub fn execute_with_wire_request_capture(
+        &self,
+        route: ProviderExecutionRoute,
+        request: AiExecutionRequest,
+        secret: CredentialExecutionSecret,
+        execution_id: String,
+        wire_request_capture: oneshot::Sender<EncodedWireRequest>,
+    ) -> ProviderExecutionStream {
+        self.execute_with_optional_wire_request_capture(
+            route,
+            request,
+            secret,
+            execution_id,
+            Some(wire_request_capture),
+        )
+    }
+
+    /// Starts one immutable execution with an optional exact wire-request capture channel.
+    /// 启动一次不可变执行，并可选启用精确 Wire 请求捕获通道。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `route`, `request`, `secret`, and `execution_id` freeze the physical execution;
+    /// `wire_request_capture` is present only when the host enabled complete request logging.
+    /// `route`、`request`、`secret` 与 `execution_id` 冻结物理执行；仅当宿主启用完整请求日志时
+    /// `wire_request_capture` 才存在。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A normalized event stream using exactly one declared transport.
+    /// 返回仅使用一个已声明传输的归一化事件流。
+    fn execute_with_optional_wire_request_capture(
+        &self,
+        route: ProviderExecutionRoute,
+        request: AiExecutionRequest,
+        secret: CredentialExecutionSecret,
+        execution_id: String,
+        wire_request_capture: Option<oneshot::Sender<EncodedWireRequest>>,
+    ) -> ProviderExecutionStream {
         // diagnostic_secret remains available only to the final stream error boundary after the
         // transport receives its own frozen credential clone.
         // diagnostic_secret 仅供最终流错误边界使用，传输层接收其独立的冻结凭据副本。
@@ -1865,9 +1927,10 @@ impl ProviderExecutionClient {
                 secret,
                 execution_id,
                 websocket_key.expect("allowed WebSocket route has a cache key"),
+                wire_request_capture,
             )
         } else {
-            self.execute_http(route, request, secret, execution_id)
+            self.execute_http(route, request, secret, execution_id, wire_request_capture)
         };
         // Every asynchronous error crosses one common secret-safe and bounded public boundary.
         // 每个异步错误都经过同一条不含秘密且有界的公共边界。
@@ -1886,9 +1949,13 @@ impl ProviderExecutionClient {
         secret: CredentialExecutionSecret,
         execution_id: String,
         websocket_key: String,
+        wire_request_capture: Option<oneshot::Sender<EncodedWireRequest>>,
     ) -> ProviderExecutionStream {
         let client = self.clone();
         Box::pin(try_stream! {
+            // wireRequestCapture remains available until the active WebSocket request is encoded.
+            // wireRequestCapture 保留到活动 WebSocket 请求完成编码时使用。
+            let mut wire_request_capture = wire_request_capture;
             let transport_started_at = Instant::now();
             let dispatched_at_ms = provider_transport_unix_millis()?;
             emit_provider_transport_trace(
@@ -1972,6 +2039,11 @@ impl ProviderExecutionClient {
                 session.previous_response_id(),
             );
             let encoded = client.encode_request_with_credential(&route, &wire_request, &secret)?;
+            // The capture clones the exact object whose body is handed to the active socket next.
+            // 捕获通道克隆下一步交给活动 Socket 的同一个精确请求对象。
+            if let Some(capture) = wire_request_capture.take() {
+                let _ = capture.send(encoded.clone());
+            }
             if let Err(error) = session.begin_response(encoded.body, None).await {
                 client.disable_responses_websocket(websocket_key.as_str());
                 Err(trace_provider_transport_failure(
@@ -2340,9 +2412,13 @@ impl ProviderExecutionClient {
         request: AiExecutionRequest,
         secret: CredentialExecutionSecret,
         execution_id: String,
+        wire_request_capture: Option<oneshot::Sender<EncodedWireRequest>>,
     ) -> ProviderExecutionStream {
         let client = self.clone();
         Box::pin(try_stream! {
+            // wireRequestCapture remains available until the HTTP request is ready for dispatch.
+            // wireRequestCapture 保留到 HTTP 请求准备分派时使用。
+            let mut wire_request_capture = wire_request_capture;
             let transport_started_at = Instant::now();
             emit_provider_transport_trace(
                 execution_id.as_str(),
@@ -2359,6 +2435,11 @@ impl ProviderExecutionClient {
                 .map_err(llm_core_protocol_failure)?;
             let url = route.request_url(encoded.path.as_str());
             let headers = execution_headers(&route, &encoded.headers, &secret)?;
+            // The capture clones the exact object whose body is serialized by reqwest next.
+            // 捕获通道克隆下一步由 reqwest 序列化的同一个精确请求对象。
+            if let Some(capture) = wire_request_capture.take() {
+                let _ = capture.send(encoded.clone());
+            }
             emit_provider_transport_trace(
                 execution_id.as_str(),
                 "http_sse",
@@ -3542,17 +3623,26 @@ fn project_responses_baseline_for_provider(
     request: &AiExecutionRequest,
     mut encoded: EncodedWireRequest,
 ) -> Result<EncodedWireRequest, ProviderExecutionFailure> {
+    // nativeCodexResponses is the single frozen authority for retaining Codex transport identity.
+    // nativeCodexResponses 是保留 Codex 传输身份的唯一冻结权威。
+    let native_codex_responses = route_uses_native_codex_responses(route);
     let Some(upstream_protocol) = upstream_protocol_for_route(route) else {
+        if !native_codex_responses {
+            // An unregistered target protocol never inherits Codex transport identity.
+            // 未注册的目标协议绝不继承 Codex 传输身份。
+            encoded.headers.clear();
+        }
         return Ok(encoded);
     };
+    if !native_codex_responses {
+        // Canonical Codex encoding is an internal body baseline. Every other declared protocol
+        // replaces its headers with only the target protocol's own required headers.
+        // 规范 Codex 编码只是内部正文基线。其他已声明协议必须把请求头替换为目标协议自身所需头。
+        encoded.headers = converted_protocol_headers(upstream_protocol);
+    }
     if matches!(upstream_protocol, UpstreamProtocol::OpenAiResponses) {
         return Ok(encoded);
     }
-    // Preserve only the converted protocol headers; the request body remains Responses-owned.
-    // 仅保留转换协议所需的请求头；请求正文仍由 Responses 核心拥有。
-    encoded
-        .headers
-        .extend(converted_protocol_headers(upstream_protocol));
 
     let mut canonical_request = request.clone();
     // Cross-protocol routes must replay complete history because a target protocol cannot reuse
@@ -3584,6 +3674,11 @@ fn project_responses_baseline_for_provider(
     encoded.body = project_responses_for_provider(canonical_body, &context).map_err(|error| {
         pre_dispatch_failure(format!("LLM provider conversion failed: {error}"))
     })?;
+    if matches!(upstream_protocol, UpstreamProtocol::GeminiGenerateContent) {
+        // Gemini selects the model in the dynamic path instead of retaining it in the converted body.
+        // Gemini 通过动态路径选择模型，而不是把模型标识保留在转换后的正文中。
+        encoded.path = gemini_generate_content_path(request.model_id.as_str());
+    }
     Ok(encoded)
 }
 
@@ -3591,6 +3686,22 @@ fn project_responses_baseline_for_provider(
 /// 解析 Responses 转换核心处理的供应商侧协议。
 fn upstream_protocol_for_route(route: &ProviderExecutionRoute) -> Option<UpstreamProtocol> {
     upstream_protocol_for_profile_id(route.protocol_route.protocol_profile_id.as_str())
+}
+
+/// Reports whether one frozen execution route uses the native Codex Responses wire contract.
+/// 判断冻结的执行路由是否使用原生 Codex Responses 线路契约。
+///
+/// # Parameters
+/// 参数
+/// `route` is the immutable provider route selected before execution.
+/// `route` 是执行前选定的不可变供应商路由。
+///
+/// # Returns
+/// 返回值
+/// `true` only for the native Codex Responses protocol profile.
+/// 仅原生 Codex Responses 协议 Profile 返回 `true`。
+fn route_uses_native_codex_responses(route: &ProviderExecutionRoute) -> bool {
+    route.protocol_route.protocol_profile_id == OPENAI_CODEX_RESPONSES_PROFILE_ID
 }
 
 /// Maps one exact registered protocol profile to the conversion-core wire protocol.
@@ -5810,6 +5921,18 @@ pub(crate) fn execution_headers(
             );
         }
     }
+    // User-Agent is a frozen protocol identity boundary. Only native Codex reproduces the
+    // adopted Codex client value; every other protocol identifies VulcanCode itself.
+    // User-Agent 是冻结的协议身份边界。仅原生 Codex 复现已采纳的 Codex 客户端值；
+    // 其他所有协议都使用 VulcanCode 自身身份。
+    headers.insert(
+        reqwest::header::USER_AGENT,
+        HeaderValue::from_static(if route_uses_native_codex_responses(route) {
+            CODEX_RESPONSES_USER_AGENT
+        } else {
+            VULCAN_CODE_USER_AGENT
+        }),
+    );
     Ok(headers)
 }
 
@@ -8268,6 +8391,77 @@ mod tests {
         }
     }
 
+    /// Verifies native Gemini routing preserves its dynamic model path and generation controls.
+    /// 验证原生 Gemini 路由保留动态模型路径与生成控制参数。
+    #[test]
+    fn gemini_generate_content_route_uses_native_model_path_and_controls() {
+        let client = ProviderExecutionClient::new(
+            reqwest::Client::new(),
+            Arc::new(ProtocolRegistry::first_batch().expect("profiles should register")),
+        );
+        let route =
+            bundled_manifest_route("google", "gemini-api", GEMINI_GENERATE_CONTENT_PROFILE_ID);
+        let mut request = minimal_request();
+        request.model_id = String::from("gemini-3-flash");
+        request.output_token_limit = Some(65_536);
+        request.reasoning_effort = Some(ReasoningEffort::Medium);
+
+        let encoded = client
+            .encode_request(&route, &request)
+            .expect("Gemini GenerateContent request should encode");
+
+        assert_eq!(
+            encoded.path,
+            "/models/gemini-3-flash:streamGenerateContent?alt=sse"
+        );
+        assert_eq!(
+            route.request_url(encoded.path.as_str()),
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash:streamGenerateContent?alt=sse"
+        );
+        assert!(encoded.body.get("model").is_none());
+        assert_eq!(encoded.body["generationConfig"]["maxOutputTokens"], 65_536);
+        assert_eq!(
+            encoded.body["generationConfig"]["thinkingConfig"]["thinkingLevel"],
+            "MEDIUM"
+        );
+        assert_eq!(
+            encoded.body["generationConfig"]["thinkingConfig"]["includeThoughts"],
+            true
+        );
+    }
+
+    /// Verifies APIKEY.FUN uses native Gemini execution without moving credential discovery to v1beta.
+    /// 验证 APIKEY.FUN 使用原生 Gemini 执行入口，同时不把凭据级模型发现迁移到 v1beta。
+    #[test]
+    fn apikeyfun_gemini_route_separates_execution_and_discovery_origins() {
+        let client = ProviderExecutionClient::new(
+            reqwest::Client::new(),
+            Arc::new(ProtocolRegistry::first_batch().expect("profiles should register")),
+        );
+        let route = bundled_manifest_route(
+            "apikeyfun",
+            "public-api",
+            GEMINI_GENERATE_CONTENT_PROFILE_ID,
+        );
+        let mut request = minimal_request();
+        request.model_id = String::from("gemini-3-flash");
+
+        let encoded = client
+            .encode_request(&route, &request)
+            .expect("APIKEY.FUN Gemini request should encode");
+
+        assert_eq!(
+            route.request_url(encoded.path.as_str()),
+            "https://api.apikey.fun/v1beta/models/gemini-3-flash:streamGenerateContent?alt=sse"
+        );
+        assert_eq!(
+            route
+                .protocol_route
+                .model_discovery_url(&route.entry, "/models"),
+            "https://api.apikey.fun/v1/models"
+        );
+    }
+
     /// Verifies WebSocket reuse keys are opaque and change with the exact endpoint snapshot.
     /// 验证 WebSocket 复用键不透明，并会随精确 endpoint 快照变化。
     #[test]
@@ -8438,6 +8632,110 @@ mod tests {
             );
         }
         String::from_utf8(bytes).expect("request should be UTF-8")
+    }
+
+    /// Verifies the captured API body is the exact JSON body received by the HTTP server.
+    /// 验证捕获的 API 正文就是 HTTP 服务器实际收到的精确 JSON 正文。
+    #[tokio::test]
+    async fn http_wire_request_capture_matches_dispatched_api_body() {
+        // listener accepts the one physical HTTP request emitted by the execution client.
+        // listener 接收执行客户端发出的唯一真实 HTTP 请求。
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        // address replaces the provider base URL with the bounded loopback endpoint.
+        // address 使用有界环回端点替代 Provider 基础 URL。
+        let address = listener.local_addr().expect("address should resolve");
+        // server records the body received over the socket and returns a valid Responses stream.
+        // server 记录 Socket 实际收到的正文，并返回有效的 Responses 流。
+        let server = tokio::spawn(async move {
+            // stream owns the accepted HTTP connection for this single test dispatch.
+            // stream 持有本次单一测试分派接受的 HTTP 连接。
+            let (mut stream, _) = listener.accept().await.expect("HTTP client should connect");
+            // request retains the complete HTTP request so the body boundary remains verifiable.
+            // request 保留完整 HTTP 请求，以便验证正文边界。
+            let request = read_test_http_request(&mut stream).await;
+            // body is the JSON value the loopback server actually received from reqwest.
+            // body 是环回服务器从 reqwest 实际收到的 JSON 值。
+            let (_, body) = request
+                .split_once("\r\n\r\n")
+                .expect("request should contain a body boundary");
+            let body: Value = serde_json::from_str(body).expect("request body should be JSON");
+            // responseBody completes the normalized stream without adding unrelated behavior.
+            // responseBody 完成规范化响应流，不引入无关行为。
+            let response_body = [
+                "data: {\"type\":\"response.created\",\"response\":{\"id\":\"response-capture\"}}\n\n",
+                "data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"item_id\":\"message-capture\",\"delta\":\"OK\"}\n\n",
+                "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"response-capture\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n",
+            ]
+            .concat();
+            // response is the complete bounded HTTP response sent back to the client.
+            // response 是回传给客户端的完整有界 HTTP 响应。
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                response_body.len(),
+                response_body
+            );
+            stream
+                .write_all(response.as_bytes())
+                .await
+                .expect("HTTP response should send");
+            body
+        });
+
+        // client uses the production encoder and HTTP transport under test.
+        // client 使用被测的生产编码器与 HTTP 传输。
+        let client = ProviderExecutionClient::new(
+            reqwest::Client::new(),
+            Arc::new(ProtocolRegistry::first_batch().expect("profiles should register")),
+        );
+        // route binds Responses directly to the loopback server and forbids protocol fallback.
+        // route 将 Responses 直接绑定到环回服务器，并禁止协议回退。
+        let mut route = pinned_openrouter_route(OPENAI_RESPONSES_PROFILE_ID);
+        route.protocol_route.base_url_override = Some(format!("http://{address}"));
+        // secret supplies the same credential projection used by ordinary execution.
+        // secret 提供常规执行使用的同一凭据投影。
+        let secret = crate::CredentialSecretEnvelope::new_api_key(String::from("secret"))
+            .expect("test key should validate")
+            .execution_secret()
+            .expect("test key should resolve");
+        // request explicitly disables reasoning so the final API field is independently asserted.
+        // request 显式关闭推理，以便独立断言最终 API 字段。
+        let mut request = minimal_request();
+        request.reasoning_effort = Some(ReasoningEffort::None);
+        // captureSender and captureReceiver transfer the exact transport-owned encoded request.
+        // captureSender 与 captureReceiver 传递传输层实际持有的精确编码请求。
+        let (capture_sender, capture_receiver) = oneshot::channel();
+        // response is the normalized stream produced by the real execution path.
+        // response 是真实执行路径产生的规范化响应流。
+        let mut response = client.execute_with_wire_request_capture(
+            route,
+            request,
+            secret,
+            String::from("execution-wire-capture"),
+            capture_sender,
+        );
+        // completed proves the mock response reached the declared terminal protocol event.
+        // completed 证明模拟响应到达已声明的协议终态事件。
+        let mut completed = false;
+        while let Some(event) = response.next().await {
+            completed |= matches!(
+                event.expect("captured request should succeed"),
+                AiStreamEvent::ResponseCompleted
+            );
+        }
+        // captured is the object cloned immediately before the HTTP dispatch call.
+        // captured 是紧邻 HTTP 分派调用之前克隆的请求对象。
+        let captured = capture_receiver
+            .await
+            .expect("transport should publish its exact encoded request");
+        // dispatched is the JSON body independently observed at the socket boundary.
+        // dispatched 是在 Socket 边界独立观察到的 JSON 正文。
+        let dispatched = server.await.expect("server should finish");
+
+        assert!(completed);
+        assert_eq!(captured.body, dispatched);
+        assert_eq!(captured.body["reasoning"]["effort"], "none");
     }
 
     /// Verifies store=false HTTP never emits a cursor and WS requires exact socket ownership.
@@ -9820,10 +10118,97 @@ mod tests {
                 .and_then(|value| value.to_str().ok()),
             Some("identity")
         );
+        assert_eq!(
+            headers
+                .get(reqwest::header::USER_AGENT)
+                .and_then(|value| value.to_str().ok()),
+            Some(VULCAN_CODE_USER_AGENT)
+        );
+        assert_eq!(
+            headers
+                .get("http-referer")
+                .and_then(|value| value.to_str().ok()),
+            Some("https://code.openvulcan.com")
+        );
+        assert_eq!(
+            headers
+                .get("x-openrouter-title")
+                .and_then(|value| value.to_str().ok()),
+            Some("Vulcan Code")
+        );
+        assert_eq!(
+            headers
+                .get("x-openrouter-categories")
+                .and_then(|value| value.to_str().ok()),
+            Some("programming-app")
+        );
+        assert!(!encoded.headers.contains_key("originator"));
+        assert!(!encoded.headers.contains_key("user-agent"));
 
         let forbidden =
             BTreeMap::from([(String::from("authorization"), String::from("Bearer other"))]);
         assert!(execution_headers(&route, &forbidden, &secret).is_err());
+    }
+
+    /// Verifies only the native Codex protocol preserves the exact adopted Codex user agent.
+    /// 验证仅原生 Codex 协议保留精确的已采纳 Codex 用户代理。
+    #[test]
+    fn native_codex_protocol_owns_exact_codex_user_agent() {
+        // route freezes the official Codex subscription and native protocol identity.
+        // route 冻结官方 Codex 订阅与原生协议身份。
+        let route = bundled_manifest_route(
+            "openai",
+            "codex-subscription",
+            OPENAI_CODEX_RESPONSES_PROFILE_ID,
+        );
+        // client executes the same canonical encoder used by production dispatch.
+        // client 执行与生产分派相同的规范编码器。
+        let client = ProviderExecutionClient::new(
+            reqwest::Client::new(),
+            Arc::new(ProtocolRegistry::first_batch().expect("profiles should register")),
+        );
+        // encoded carries the protocol-owned Codex identity before credential projection.
+        // encoded 在凭据投影前携带协议持有的 Codex 身份。
+        let encoded = client
+            .encode_request(&route, &minimal_request())
+            .expect("native Codex request should encode");
+        // secret models one valid Codex OAuth credential with its required account identity.
+        // secret 模拟一个包含必要账号身份的有效 Codex OAuth 凭据。
+        let secret = crate::CredentialSecretEnvelope::new(
+            crate::CredentialSecretMaterial::OpenAiCodexOAuth {
+                tokens: crate::OAuthTokenSet {
+                    access_token: String::from("access-token"),
+                    refresh_token: String::from("refresh-token"),
+                    issued_at_unix_ms: 1,
+                    expires_at_unix_ms: 2,
+                    scopes: BTreeSet::new(),
+                    account_subject: None,
+                    email: None,
+                },
+                id_token: None,
+                account_id: Some(String::from("account-id")),
+            },
+        )
+        .expect("Codex credential should validate")
+        .execution_secret()
+        .expect("Codex credential should resolve");
+        // headers are the final HTTP headers used by both HTTP and WebSocket transports.
+        // headers 是 HTTP 与 WebSocket 传输共同使用的最终 HTTP 请求头。
+        let headers = execution_headers(&route, &encoded.headers, &secret)
+            .expect("native Codex headers should resolve");
+
+        assert_eq!(
+            headers
+                .get(reqwest::header::USER_AGENT)
+                .and_then(|value| value.to_str().ok()),
+            Some(CODEX_RESPONSES_USER_AGENT)
+        );
+        assert_eq!(
+            headers
+                .get("originator")
+                .and_then(|value| value.to_str().ok()),
+            Some("codex_cli_rs")
+        );
     }
 
     /// Verifies one MiniMax credential selects protocol-specific paths and authentication.

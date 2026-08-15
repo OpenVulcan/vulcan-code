@@ -2594,6 +2594,9 @@
           },
           {
             "protocol_profile_id": "google.gemini.generate_content",
+            "base_url_override": "https://api.apikey.fun/v1beta",
+            "model_discovery_path": "/models",
+            "model_discovery_base_url_override": "https://api.apikey.fun/v1",
             "verified": true
           }
         ],
@@ -3837,7 +3840,7 @@
         "authentication": "open_ai_codex_bearer",
         "request_headers": {
           "originator": "codex_cli_rs",
-          "user-agent": "codex_cli_rs/0.144.1 (Windows 11; x86_64) vulcan-code/0.1"
+          "user-agent": "codex_cli_rs/0.144.1 (Windows 11; x86_64)"
         },
         "model_discovery": "open_ai_codex",
         "request_projector": "direct",
@@ -4119,6 +4122,7 @@
         "authentication": "bearer_authorization",
         "request_headers": {
           "http-referer": "https://code.openvulcan.com",
+          "x-openrouter-categories": "programming-app",
           "x-openrouter-metadata": "enabled",
           "x-openrouter-title": "Vulcan Code"
         },

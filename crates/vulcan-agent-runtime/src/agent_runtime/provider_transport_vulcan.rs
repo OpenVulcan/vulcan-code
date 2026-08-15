@@ -31,6 +31,7 @@ use vulcan_ai_contract::{
     ToolDefinition, ToolResult, UsageValue, canonicalize_codex_responses_replay_items,
     is_replayable_codex_responses_item,
 };
+use vulcan_ai_protocols::EncodedWireRequest;
 use vulcan_context::{SessionConversationState, SessionMessageEntry};
 use vulcan_core::provider::{
     VulcanProviderAdapter, VulcanProviderDeltaSink, VulcanStreamingProviderAdapter,
@@ -58,7 +59,7 @@ use vulcan_tools_manager::{
 const DEFAULT_PUBLIC_OUTPUT_TOKEN_LIMIT: u64 = 32_000;
 /// Versioned on-disk contract for complete provider request traces.
 /// 完整 Provider 请求追踪使用的版本化磁盘契约。
-const PROVIDER_REQUEST_TRACE_SCHEMA_VERSION: &str = "vulcan.provider-request-trace.v1";
+const PROVIDER_REQUEST_TRACE_SCHEMA_VERSION: &str = "vulcan.provider-request-trace.v2";
 /// Process-local monotonic tie breaker used when multiple requests start within one millisecond.
 /// 多个请求在同一毫秒启动时使用的进程本地单调消歧序号。
 static PROVIDER_REQUEST_TRACE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -468,8 +469,8 @@ impl VulcanPublicContractAdapter {
         }
     }
 
-    /// Persists the controller, canonical, and final wire stages for one exact provider dispatch.
-    /// 为一次精确 Provider 分派持久化控制器、规范请求与最终 Wire 三个阶段。
+    /// Persists the controller, canonical, and actually dispatched API request for one execution.
+    /// 为一次执行持久化控制器请求、规范请求与实际分派的 API 请求。
     ///
     /// # Parameters
     /// 参数
@@ -479,6 +480,8 @@ impl VulcanPublicContractAdapter {
     /// `public` 是分派使用的不可变供应商无关请求。
     /// `execution_id` is the physical call identity shared with the real execution client.
     /// `execution_id` 是与真实执行客户端共享的物理调用标识。
+    /// `encoded` is captured from the transport object immediately before HTTP or WebSocket dispatch.
+    /// `encoded` 是在 HTTP 或 WebSocket 分派前从传输对象直接捕获的编码请求。
     ///
     /// # Returns
     /// 返回值
@@ -489,20 +492,8 @@ impl VulcanPublicContractAdapter {
         controller_request: Value,
         public: &AiExecutionRequest,
         execution_id: &str,
+        encoded: EncodedWireRequest,
     ) -> Result<(), VulcanCoreError> {
-        let encoded = self
-            .client
-            .encode_effective_request_with_credential(&self.route, public, &self.secret)
-            .await
-            .map_err(|mut failure| {
-                attach_execution_route_context(
-                    &mut failure.error,
-                    self.provider_id(),
-                    self.route.entry.id.as_str(),
-                    self.model_id(),
-                );
-                public_execution_failure(self.provider_id(), *failure.error)
-            })?;
         let captured_at_unix_ms = provider_request_trace_timestamp_ms()
             .map_err(|error| provider_failure(self.provider_id(), &error))?;
         let sequence = PROVIDER_REQUEST_TRACE_SEQUENCE
@@ -560,20 +551,22 @@ impl VulcanPublicContractAdapter {
             "digests": {
                 "controller_request_sha256": controller_sha256,
                 "canonical_public_request_sha256": public_sha256,
-                "final_wire_body_sha256": wire_body_sha256,
+                "api_request_body_sha256": wire_body_sha256,
                 "canonical_public_top_level_sha256": public_field_sha256,
-                "final_wire_top_level_sha256": wire_field_sha256,
+                "api_request_top_level_sha256": wire_field_sha256,
             },
             "stages": {
                 "controller_request": controller_request,
                 "canonical_public_request": public_request,
-                "final_wire_request": {
-                    "path": encoded.path,
-                    "resolved_url": resolved_request_url,
-                    "headers": headers,
-                    "authentication_headers_included": false,
-                    "body": encoded.body,
-                },
+            },
+            "api_request": {
+                "capture_point": "transport_dispatch",
+                "method": "POST",
+                "path": encoded.path,
+                "resolved_url": resolved_request_url,
+                "headers": headers,
+                "authentication_headers_included": false,
+                "body": encoded.body,
             },
         });
         let file_stem = format!("{captured_at_unix_ms}-{sequence:06}-{execution_id}");
@@ -1018,20 +1011,61 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
                 )
             })?;
         let execution_id = uuid::Uuid::new_v4().to_string();
-        if let Some(controller_request) = trace_controller_request {
-            self.persist_complete_provider_request_trace(
-                controller_request,
-                &public,
-                execution_id.as_str(),
+        // requestTraceTask waits for the exact object produced inside the selected transport.
+        // requestTraceTask 等待所选传输内部产生的精确对象。
+        // Trace I/O runs independently so it cannot delay the API dispatch being diagnosed.
+        // 追踪 I/O 独立运行，因此不会延迟待诊断的 API 分派。
+        let (wire_request_capture, request_trace_task) =
+            if let Some(controller_request) = trace_controller_request {
+                // captureSender and captureReceiver transfer the one object used by this dispatch.
+                // captureSender 与 captureReceiver 传递本次分派实际使用的唯一请求对象。
+                let (capture_sender, capture_receiver) = tokio::sync::oneshot::channel();
+                // traceAdapter owns the immutable route and storage context for background writing.
+                // traceAdapter 持有后台写入所需的不可变路由与存储上下文。
+                let trace_adapter = self.clone();
+                // tracePublic preserves the canonical request only for diagnostic comparison.
+                // tracePublic 仅为诊断对比保留规范请求。
+                let trace_public = public.clone();
+                // traceExecutionId binds the captured request to the physical provider call.
+                // traceExecutionId 将捕获请求绑定到真实 Provider 调用。
+                let trace_execution_id = execution_id.clone();
+                // task persists the captured API request without blocking transport progress.
+                // task 在不阻塞传输进度的情况下持久化捕获的 API 请求。
+                let task = tokio::spawn(async move {
+                    let Ok(encoded) = capture_receiver.await else {
+                        // A closed capture channel means encoding failed before an API request existed.
+                        // 捕获通道关闭表示编码在 API 请求形成前失败，因此没有请求可保存。
+                        return Ok(());
+                    };
+                    trace_adapter
+                        .persist_complete_provider_request_trace(
+                            controller_request,
+                            &trace_public,
+                            trace_execution_id.as_str(),
+                            encoded,
+                        )
+                        .await
+                });
+                (Some(capture_sender), Some(task))
+            } else {
+                (None, None)
+            };
+        let mut stream = if let Some(capture_sender) = wire_request_capture {
+            self.client.execute_with_wire_request_capture(
+                self.route.clone(),
+                public.clone(),
+                self.secret.clone(),
+                execution_id,
+                capture_sender,
             )
-            .await?;
-        }
-        let mut stream = self.client.execute(
-            self.route.clone(),
-            public.clone(),
-            self.secret.clone(),
-            execution_id,
-        );
+        } else {
+            self.client.execute(
+                self.route.clone(),
+                public.clone(),
+                self.secret.clone(),
+                execution_id,
+            )
+        };
         // routeFingerprint binds replay signatures to the exact resolved endpoint used by this request.
         // routeFingerprint 将重放签名绑定到本次请求使用的精确已解析端点。
         let route_fingerprint = self.route.request_url("/responses");
@@ -1126,6 +1160,14 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
             if terminal_event {
                 break;
             }
+        }
+        if let Some(task) = request_trace_task {
+            task.await.map_err(|error| {
+                provider_failure(
+                    self.provider_id(),
+                    &format!("Provider API request trace task failed: {error}"),
+                )
+            })??;
         }
         let final_usage = response.usage.as_ref().map(public_usage_to_core);
         let final_response = response.finish()?;

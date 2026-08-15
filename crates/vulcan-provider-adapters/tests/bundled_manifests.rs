@@ -613,6 +613,23 @@ fn apikeyfun_manifest_is_a_closed_group_intersection() {
         document["model_defaults"]["unknown_model_policy"],
         "declared_rule_required"
     );
+    // geminiRoute separates the native v1beta execution base from OpenAI-style model discovery.
+    // geminiRoute 将原生 v1beta 执行基址与 OpenAI 风格模型发现入口分离。
+    let gemini_route = document["services"][0]["protocol_routes"]
+        .as_array()
+        .expect("apikeyfun protocol_routes should be an array")
+        .iter()
+        .find(|route| route["protocol_profile_id"] == "google.gemini.generate_content")
+        .expect("apikeyfun Gemini protocol route should exist");
+    assert_eq!(
+        gemini_route["base_url_override"],
+        "https://api.apikey.fun/v1beta"
+    );
+    assert_eq!(
+        gemini_route["model_discovery_base_url_override"],
+        "https://api.apikey.fun/v1"
+    );
+    assert_eq!(gemini_route["model_discovery_path"], "/models");
     // expectedProtocols is the complete local whitelist paired with its only declared wire route.
     // expectedProtocols 是完整本地白名单及其唯一声明 Wire 路由。
     let expected_protocols = [

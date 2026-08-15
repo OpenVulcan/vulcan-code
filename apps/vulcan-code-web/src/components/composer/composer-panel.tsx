@@ -655,7 +655,6 @@ export function ComposerPanel(props: {
               noMatchesLabel={t("composer.modelPicker.noMatches")}
               onValueChange={(choice) => void handlePersistedModelChoiceChange(choice)}
               openSignal={modelPickerOpenSignal}
-              preferPreferredConnection={!props.conversationId}
               providers={props.providers}
               value={modelChoice}
             />

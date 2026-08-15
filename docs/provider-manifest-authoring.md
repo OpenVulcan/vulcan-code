@@ -207,6 +207,21 @@ Schema v2 将凭据档的用途字段固定为 `default_usage_scopes`。它只�
 不得新增以供应商命名的 projector。新增字段差异应使用已注册 Mapping Transformer；新增 wire 协议
 或新的二级路由握手才属于需要升级宿主的引擎能力。
 
+### 3.1 User-Agent 与应用归因头边界
+
+最终推理请求的 `User-Agent` 由宿主按冻结的模型级协议统一投影，不能由供应商名称、请求正文或
+可变 Manifest 猜测：
+
+- 只有 `openai-codex-responses.v1` 使用已采纳 Codex 客户端的精确 `User-Agent`；
+- 其他全部协议统一使用 VulcanCode 自有 `User-Agent`；
+- Codex 规范请求只作为跨协议转换的内部正文基线时，必须丢弃 Codex `originator`、会话标识和
+  `User-Agent`，只保留目标协议自身要求的请求头；
+- HTTP 与 WebSocket 传输必须共用同一最终请求头投影，不能在某个传输分支重新覆盖协议身份。
+
+OpenRouter 应用归因由其随包 Manifest 的固定非秘密请求头声明。当前闭合契约同时发送
+`HTTP-Referer`、`X-OpenRouter-Title` 与 `X-OpenRouter-Categories`；分类只能使用官方识别值，单次
+最多两个、使用逗号分隔。VulcanCode 当前按独立桌面编程应用登记为 `programming-app`。
+
 `model_catalog.source_policy` 明确模型从哪里来：
 
 - `manifest_only`：只使用清单身份；

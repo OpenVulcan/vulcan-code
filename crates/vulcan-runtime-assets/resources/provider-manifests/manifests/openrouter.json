@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "openrouter",
-  "revision": 4,
-  "published_at": "2026-08-06T00:00:00Z",
+  "revision": 5,
+  "published_at": "2026-08-15T10:47:38Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -50,6 +50,7 @@
       "default_authentication": "bearer_authorization",
       "request_headers": {
         "http-referer": "https://code.openvulcan.com",
+        "x-openrouter-categories": "programming-app",
         "x-openrouter-metadata": "enabled",
         "x-openrouter-title": "Vulcan Code"
       },
@@ -809,6 +810,10 @@
       {
         "url": "https://openrouter.ai/docs/llms.txt",
         "note": "Curated featured model menu maintained by Vulcan; upstream catalog is not authoritative for the featured list. Protocol assignment is platform-level (OpenRouter conversion layer) with vendor-default selected protocol."
+      },
+      {
+        "url": "https://openrouter.ai/docs/app-attribution",
+        "note": "OpenRouter app attribution requires HTTP-Referer and supports X-OpenRouter-Title plus up to two recognized X-OpenRouter-Categories values."
       }
     ]
   }

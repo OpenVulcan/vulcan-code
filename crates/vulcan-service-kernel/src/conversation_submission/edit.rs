@@ -51,11 +51,41 @@ fn preserve_live_model_selection_for_prompt_replay(
     replay_runtime_state.active_provider_id = live_runtime_state.active_provider_id.clone();
     replay_runtime_state.active_connection_id = live_runtime_state.active_connection_id.clone();
     replay_runtime_state.active_model_id = live_runtime_state.active_model_id.clone();
-    // providerRouteLease must preserve `None`: model/protocol selection explicitly clears the old
-    // lease so the edited replay resolves the newly declared route instead of reviving history.
-    // providerRouteLease 必须保留 `None`：模型或协议选择会显式清除旧租约，确保编辑重放解析
-    // 新声明的路由，而不是复活历史路由。
     replay_runtime_state.provider_route_lease = live_runtime_state.provider_route_lease.clone();
+}
+
+/// Builds the explicit model-selection snapshot used by an edited prompt replay.
+/// 构建编辑提示词重放使用的显式模型选择快照。
+///
+/// # Parameters
+/// 参数
+/// `live_runtime_state` is the authoritative composer selection captured before rollback.
+/// `live_runtime_state` 是回滚前捕获的权威输入区选择。
+///
+/// # Returns
+/// 返回值
+/// The complete selection, no selection when all fields are absent, or an explicit partial-state error.
+/// 返回完整选择；三个字段均缺失时返回无选择；部分缺失时返回显式状态错误。
+fn prompt_replay_model_selection(
+    live_runtime_state: &SessionRuntimeStateEntry,
+) -> Result<Option<SubmissionModelSelection>, String> {
+    match (
+        live_runtime_state.active_provider_id.as_ref(),
+        live_runtime_state.active_connection_id.as_ref(),
+        live_runtime_state.active_model_id.as_ref(),
+    ) {
+        (Some(provider_id), Some(connection_id), Some(model_id)) => {
+            Ok(Some(SubmissionModelSelection {
+                provider_id: provider_id.clone(),
+                connection_id: connection_id.clone(),
+                model_id: model_id.clone(),
+            }))
+        }
+        (None, None, None) if live_runtime_state.provider_route_lease.is_none() => Ok(None),
+        _ => Err(String::from(
+            "ERR_USER_PROMPT_EDIT_MODEL_SELECTION_INCOMPLETE",
+        )),
+    }
 }
 
 impl UserPromptEditWorkspaceBackup {
@@ -286,6 +316,7 @@ pub(crate) async fn service_submit_user_prompt_edit(
         source_session,
         project_id,
         live_runtime_state,
+        replay_model_selection,
     ) = {
         let mut guard = state
             .lock()
@@ -323,12 +354,14 @@ pub(crate) async fn service_submit_user_prompt_edit(
             .get(&session_id)
             .cloned()
             .ok_or_else(|| String::from("ERR_USER_PROMPT_EDIT_RUNTIME_STATE_NOT_FOUND"))?;
+        let replay_model_selection = prompt_replay_model_selection(&live_runtime_state)?;
         (
             controller_runtime,
             guard.vmm_controller_registry.clone(),
             source_session,
             project_id,
             live_runtime_state,
+            replay_model_selection,
         )
     };
     // rewrite_fence blocks stale and replacement controllers until disk and retained state agree.
@@ -443,7 +476,7 @@ pub(crate) async fn service_submit_user_prompt_edit(
         None,
         Some(String::from("build")),
         None,
-        None,
+        replay_model_selection,
         None,
         Some(request.attachments),
         Some(edit_submission_authorization),
@@ -505,14 +538,24 @@ mod tests {
     /// Verifies an edited replay keeps the newly selected model and does not revive its historical protocol lease.
     /// 验证编辑重放保留新选择的模型，且不会复活历史协议租约。
     #[test]
-    fn prompt_replay_preserves_live_model_selection_and_cleared_lease() {
-        // liveRuntimeState represents a composer selection whose new route has not been leased yet.
-        // liveRuntimeState 表示输入区已经选择新路由、但尚未建立新租约的状态。
+    fn prompt_replay_preserves_live_model_selection_and_existing_lease() {
+        // liveRuntimeState represents the active composer target with its established hot lease.
+        // liveRuntimeState 表示输入区当前目标及其已建立的热租约。
         let live_runtime_state = SessionRuntimeStateEntry {
             active_provider_id: Some(String::from("custom:new-provider")),
             active_connection_id: Some(String::from("connection-new")),
             active_model_id: Some(String::from("model-new")),
-            provider_route_lease: None,
+            provider_route_lease: Some(SessionProviderRouteLeaseIdentity {
+                schema_version: 1,
+                provider_id: String::from("custom:new-provider"),
+                connection_id: String::from("connection-new"),
+                model_id: String::from("model-new"),
+                protocol_profile_id: String::from("google.gemini.generate_content"),
+                manifest_revision: 4,
+                manifest_generation: 1,
+                catalog_revision: String::from("catalog-live"),
+                route_revision: String::from("route-live-old"),
+            }),
             ..SessionRuntimeStateEntry::default()
         };
         // replayRuntimeState represents the historical route restored from before the edited prompt.
@@ -552,6 +595,18 @@ mod tests {
             replay_runtime_state.active_model_id.as_deref(),
             Some("model-new")
         );
-        assert!(replay_runtime_state.provider_route_lease.is_none());
+        assert_eq!(
+            replay_runtime_state.provider_route_lease,
+            live_runtime_state.provider_route_lease
+        );
+        assert_eq!(
+            prompt_replay_model_selection(&live_runtime_state)
+                .expect("complete live selection should project"),
+            Some(SubmissionModelSelection {
+                provider_id: String::from("custom:new-provider"),
+                connection_id: String::from("connection-new"),
+                model_id: String::from("model-new"),
+            })
+        );
     }
 }

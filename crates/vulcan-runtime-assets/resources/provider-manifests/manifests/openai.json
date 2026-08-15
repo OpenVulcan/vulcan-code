@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "openai",
-  "revision": 6,
-  "published_at": "2026-08-06T00:00:00Z",
+  "revision": 7,
+  "published_at": "2026-08-15T10:59:11Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -93,7 +93,7 @@
       "default_authentication": "open_ai_codex_bearer",
       "request_headers": {
         "originator": "codex_cli_rs",
-        "user-agent": "codex_cli_rs/0.144.1 (Windows 11; x86_64) vulcan-code/0.1"
+        "user-agent": "codex_cli_rs/0.144.1 (Windows 11; x86_64)"
       },
       "request_projector": "direct",
       "model_catalog": {

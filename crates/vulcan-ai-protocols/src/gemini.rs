@@ -34,6 +34,22 @@ pub fn gemini_replay_signature_payload(signature: &str) -> Option<&str> {
     crate::compatible_provider_signature(crate::SIGNATURE_PROVIDER_GEMINI, signature)
 }
 
+/// Builds the native Gemini streaming GenerateContent path for one exact model identifier.
+/// 为一个精确模型标识构建 Gemini 原生流式 GenerateContent 路径。
+///
+/// # Arguments
+/// 参数
+/// - `model_id`: The exact provider model identifier carried by the canonical request.
+/// - `model_id`：规范请求携带的精确供应商模型标识。
+///
+/// # Returns
+/// 返回值
+/// The same-origin request path expected by Gemini GenerateContent endpoints.
+/// Gemini GenerateContent 端点所需的同源请求路径。
+pub fn gemini_generate_content_path(model_id: &str) -> String {
+    format!("/models/{model_id}:streamGenerateContent?alt=sse")
+}
+
 /// Encodes and decodes the provider-independent Gemini GenerateContent wire contract.
 /// 编解码供应商无关的 Gemini GenerateContent Wire 契约。
 pub struct GeminiGenerateContentProfile;
@@ -155,7 +171,7 @@ impl ProtocolProfile for GeminiGenerateContentProfile {
         }
         project_gemini_request_controls(request, &mut body)?;
         Ok(EncodedWireRequest {
-            path: format!("/models/{}:streamGenerateContent?alt=sse", request.model_id),
+            path: gemini_generate_content_path(request.model_id.as_str()),
             headers: BTreeMap::new(),
             body: Value::Object(body),
         })
@@ -294,10 +310,10 @@ fn gemini_thinking_level(
     effort: vulcan_ai_contract::ReasoningEffort,
 ) -> Result<&'static str, ProtocolConversionError> {
     match effort {
-        vulcan_ai_contract::ReasoningEffort::Minimal => Ok("minimal"),
-        vulcan_ai_contract::ReasoningEffort::Low => Ok("low"),
-        vulcan_ai_contract::ReasoningEffort::Medium => Ok("medium"),
-        vulcan_ai_contract::ReasoningEffort::High => Ok("high"),
+        vulcan_ai_contract::ReasoningEffort::Minimal => Ok("MINIMAL"),
+        vulcan_ai_contract::ReasoningEffort::Low => Ok("LOW"),
+        vulcan_ai_contract::ReasoningEffort::Medium => Ok("MEDIUM"),
+        vulcan_ai_contract::ReasoningEffort::High => Ok("HIGH"),
         unsupported => Err(ProtocolConversionError::new(format!(
             "Gemini does not expose reasoning effort `{}`.",
             unsupported.as_str()
@@ -892,7 +908,7 @@ mod tests {
         );
         assert_eq!(
             encoded.body["generationConfig"]["thinkingConfig"]["thinkingLevel"],
-            "minimal"
+            "MINIMAL"
         );
         assert_eq!(
             encoded.body["generationConfig"]["thinkingConfig"]["includeThoughts"],

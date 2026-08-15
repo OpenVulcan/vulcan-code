@@ -131,9 +131,6 @@ export function ModelPickerControl(props: {
   // Whether the picker trigger is temporarily disabled by the host flow.
   // 筛选器触发器是否被宿主流程临时禁用。
   disabled?: boolean;
-  // Whether grouped model selection must prefer the backend-resolved account over a session-exact account.
-  // 聚合模型选择是否必须优先采用后端解析账号，而不是会话当前的精确账号。
-  preferPreferredConnection?: boolean;
 }) {
   // t resolves stable WebUI copy keys for the active language.
   // t 根据当前语言解析稳定的 WebUI 文案键。
@@ -247,13 +244,13 @@ export function ModelPickerControl(props: {
                   && selectedChoice.modelId === group.modelId
                   ? selectedChoice
                   : undefined;
-                // resolvedGroupChoice lets new sessions use the model-level account preference while
-                // materialized sessions retain their exact leased account.
-                // resolvedGroupChoice 让新会话采用模型级账号偏好，同时让已物化会话保留精确租约账号。
+                // resolvedGroupChoice makes an explicit model-row click adopt the current backend
+                // account preference. Exact account intent belongs to the separate account picker.
+                // resolvedGroupChoice 让显式模型行点击采用当前后端账号偏好；精确账号意图由独立账号选择器承载。
                 const resolvedGroupChoice = resolveModelPickerGroupChoice(
                   group,
                   exactGroupChoice,
-                  props.preferPreferredConnection,
+                  true,
                 );
                 // selected marks the grouped model independently from its chosen account.
                 // selected 独立于所选账号标记当前聚合模型。

@@ -22,8 +22,8 @@ use vulcan_workspace_store::workspace_store::WorkspaceSnapshot;
 
 use super::{
     ExistingSubmissionAdmissionAuthorization, PromptSessionMaterializationKind,
-    SharedServiceBridgeState, UserPromptEditSubmitRequest, active_kernel_session_ids,
-    advance_session_goal_dispatch_version,
+    SessionContinuationRuntimeBlockers, SharedServiceBridgeState, UserPromptEditSubmitRequest,
+    active_kernel_session_ids, advance_session_goal_dispatch_version,
     apply_webui_prompt_begin_outer_steps_deferred_context_persist,
     begin_existing_prompt_submission_exclusion, build_conversation_messages_patched_delta,
     build_vmm_hook_config_snapshot, capture_preserved_workspace_run_state,
@@ -722,6 +722,191 @@ async fn apply_submission_session_settings(
     Ok(())
 }
 
+/// Reports whether a persisted restart lease targets the same route owner but an older execution revision.
+/// 判断持久化的重启租约是否仍指向同一路由所有者、但执行修订已经过期。
+///
+/// # Parameters
+/// 参数
+/// `expected` is the non-secret lease identity restored with the session runtime state.
+/// `expected` 是随会话运行态恢复的非敏感租约身份。
+/// `actual` is the identity resolved from the currently installed provider manifest.
+/// `actual` 是从当前已安装供应商清单解析出的身份。
+///
+/// # Returns
+/// 返回值
+/// Returns true only when schema, provider, connection, model, and protocol are identical while
+/// the execution route revision changed.
+/// 仅当 Schema、供应商、连接、模型与协议完全相同且执行路由修订发生变化时返回 true。
+fn provider_route_lease_revision_changed_for_same_target(
+    expected: &vulcan_workbench_model::SessionProviderRouteLeaseIdentity,
+    actual: &vulcan_workbench_model::SessionProviderRouteLeaseIdentity,
+) -> bool {
+    expected.schema_version == actual.schema_version
+        && expected.provider_id == actual.provider_id
+        && expected.connection_id == actual.connection_id
+        && expected.model_id == actual.model_id
+        && expected.protocol_profile_id == actual.protocol_profile_id
+        && expected.route_revision != actual.route_revision
+}
+
+/// Refreshes a frozen pre-dispatch retry after the exact provider Manifest route changed.
+/// 在精确 Provider Manifest 路由变化后刷新尚未分发的冻结重试。
+///
+/// # Parameters
+/// 参数
+/// `runtime` resolves the currently installed immutable provider route.
+/// `runtime` 解析当前已安装的不可变 Provider 路由。
+/// `session_id` owns both the process-local and persisted route leases.
+/// `session_id` 同时拥有进程内与持久化路由租约。
+/// `runtime_state` is the detached submission state that may adopt the current route.
+/// `runtime_state` 是可以采用当前路由的分离提交状态。
+/// `retry_snapshot` is the exact frozen preparation checkpoint being claimed.
+/// `retry_snapshot` 是正在领取的精确冻结准备 checkpoint。
+///
+/// # Returns
+/// 返回值
+/// Success after either preserving the frozen route or revoking both stale lease identities.
+/// 保留冻结路由或撤销两处陈旧租约身份后返回成功。
+fn refresh_resume_preparation_route_after_manifest_change(
+    runtime: &vulcan_provider_adapters::PublicAiRuntime,
+    session_id: SessionId,
+    runtime_state: &mut vulcan_workbench_model::SessionRuntimeStateEntry,
+    retry_snapshot: &mut vulcan_workbench_model::ExecutionRetrySnapshot,
+) -> Result<(), String> {
+    let Some(error) = retry_snapshot.error.as_ref() else {
+        return Ok(());
+    };
+    if error.message
+        != vulcan_agent_runtime::agent_runtime::provider::PROVIDER_MANIFEST_ROUTE_CHANGED_MESSAGE
+        || !error.retryable
+        || error.dispatch_outcome == vulcan_ai_contract::DispatchOutcome::Dispatched
+        || error.semantic_output_observed
+        || error.side_effect_observed
+    {
+        return Ok(());
+    }
+    let vulcan_workbench_model::ExecutionRetryPendingAction::ResumePreparation { input } =
+        &retry_snapshot.pending_action
+    else {
+        return Ok(());
+    };
+    let expected_route = retry_snapshot
+        .provider_route
+        .as_ref()
+        .ok_or_else(|| String::from("ERR_CONVERSATION_CONTINUE_RETRY_ROUTE_MISSING"))?;
+    let provider_id = input
+        .active_provider_id
+        .as_deref()
+        .ok_or_else(|| String::from("ERR_CONVERSATION_CONTINUE_RETRY_PROVIDER_MISSING"))?;
+    let connection_id = input
+        .active_connection_id
+        .as_deref()
+        .ok_or_else(|| String::from("ERR_CONVERSATION_CONTINUE_RETRY_CONNECTION_MISSING"))?;
+    let model_id = input
+        .active_model_id
+        .as_deref()
+        .ok_or_else(|| String::from("ERR_CONVERSATION_CONTINUE_RETRY_MODEL_MISSING"))?;
+    if expected_route.provider_id != provider_id
+        || expected_route.connection_id != connection_id
+        || expected_route.model_id != model_id
+    {
+        return Err(String::from(
+            "ERR_CONVERSATION_CONTINUE_RETRY_ROUTE_CHANGED",
+        ));
+    }
+    let configuration = runtime.configuration_snapshot()?;
+    let resolved_selection = runtime.resolve_connection_model_selection(
+        &configuration,
+        connection_id,
+        provider_id,
+        model_id,
+    )?;
+    let resolved_identity =
+        vulcan_agent_runtime::agent_runtime::provider::provider_route_lease_identity(
+            &resolved_selection,
+        );
+    if !provider_route_lease_revision_changed_for_same_target(expected_route, &resolved_identity) {
+        return Ok(());
+    }
+
+    // A ResumePreparation checkpoint proves no provider request exists to replay. Revoking the
+    // stale identity makes the restored preparation lease the current same-protocol route.
+    // ResumePreparation checkpoint 证明不存在需要重放的 Provider 请求。撤销陈旧身份后，
+    // 恢复的准备阶段会租用当前同协议路由。
+    runtime.clear_session_selection_leases(session_id.to_string().as_str())?;
+    runtime_state.provider_route_lease = None;
+    retry_snapshot.provider_route = None;
+    Ok(())
+}
+
+/// Claims one frozen continuation before its retry precheck is restored into the working state.
+/// 在 retry precheck 恢复到工作状态前领取一条冻结 Continue。
+///
+/// # Parameters
+/// 参数
+/// `runtime` owns the current provider route generation and process-local leases.
+/// `runtime` 持有当前 Provider 路由代际与进程内租约。
+/// `runtime_state` is the detached canonical state before retry-owned precheck mutation.
+/// `runtime_state` 是 retry 自有 precheck 写入前的分离规范状态。
+/// `run_phase` and `blockers` are the current authoritative admission facts.
+/// `run_phase` 与 `blockers` 是当前权威准入事实。
+/// `expected_generation` and `expected_ledger_revision` bind the visible Continue generation.
+/// `expected_generation` 与 `expected_ledger_revision` 绑定可见 Continue 代际。
+/// `client_submission_id` uniquely owns the new physical attempt.
+/// `client_submission_id` 唯一拥有新的物理尝试。
+/// `retry_snapshot` is the exact frozen sidecar loaded by the Continue RPC.
+/// `retry_snapshot` 是 Continue RPC 加载的精确冻结 sidecar。
+///
+/// # Returns
+/// 返回值
+/// Success after the ledger and sidecar draft are claimed without creating precheck self-busy state.
+/// 在不创建 precheck 自阻塞状态的前提下领取账本与 sidecar 草稿后返回成功。
+fn claim_continuation_before_precheck_restore(
+    runtime: &vulcan_provider_adapters::PublicAiRuntime,
+    runtime_state: &mut vulcan_workbench_model::SessionRuntimeStateEntry,
+    session_id: SessionId,
+    run_phase: SessionRunPhase,
+    blockers: SessionContinuationRuntimeBlockers,
+    expected_generation: u64,
+    expected_ledger_revision: u64,
+    client_submission_id: &str,
+    retry_snapshot: &mut vulcan_workbench_model::ExecutionRetrySnapshot,
+) -> Result<(), String> {
+    resolve_session_continuation_eligibility(
+        runtime_state,
+        run_phase,
+        blockers,
+        Some((expected_generation, expected_ledger_revision)),
+    )
+    .map_err(String::from)?;
+    // The frozen sidecar must be fully valid before route refresh may clear a process-local lease.
+    // 在路由刷新可以清除进程内租约之前，必须先完整验证冻结 sidecar。
+    validate_execution_retry_snapshot_for_claim(runtime_state, session_id, retry_snapshot)?;
+    refresh_resume_preparation_route_after_manifest_change(
+        runtime,
+        session_id,
+        runtime_state,
+        retry_snapshot,
+    )?;
+    // Refresh changes both copies of the route identity, so the same strict guard proves their
+    // post-refresh state before the continuation ledger is claimed.
+    // 刷新会同时修改两份路由身份，因此在领取 Continue 账本前再次使用同一严格守卫证明
+    // 刷新后状态一致。
+    validate_execution_retry_snapshot_for_claim(runtime_state, session_id, retry_snapshot)?;
+    let claimed_at_ms = i64::try_from(current_unix_millis_value())
+        .map_err(|_| String::from("ERR_CONVERSATION_CONTINUE_TIMESTAMP_OUT_OF_RANGE"))?;
+    runtime_state.provider_call_ledger.claim_continuation(
+        expected_generation,
+        expected_ledger_revision,
+        client_submission_id.to_string(),
+        claimed_at_ms,
+    )?;
+    retry_snapshot.state = vulcan_workbench_model::ExecutionRetrySnapshotState::Claimed;
+    retry_snapshot.claimed_attempt_id = Some(client_submission_id.to_string());
+    retry_snapshot.updated_at = current_unix_millis_text();
+    Ok(())
+}
+
 /// Validates and applies one submission-scoped model selection to session runtime state.
 /// 校验并将单次提交范围的模型选择写入会话运行态。
 ///
@@ -766,6 +951,9 @@ fn apply_submission_model_selection(
             selection.connection_id, selection.provider_id
         ));
     }
+    // sessionLeaseScope is the stable owner key shared by process-local and persisted leases.
+    // sessionLeaseScope 是进程内租约与持久化租约共享的稳定所有者键。
+    let session_lease_scope = session_id.to_string();
     // leasedSelection is evaluated before current-catalog membership because an established
     // session route is intentionally allowed to outlive a hot Manifest model removal.
     // leasedSelection 在当前目录成员关系之前求值，因为已建立会话路由被明确允许在热更新
@@ -843,12 +1031,19 @@ fn apply_submission_model_selection(
             selection.connection_id, selection.model_id
         ));
     }
-    runtime.resolve_connection_model_selection(
+    // resolvedSelection freezes the exact currently installed route used to validate restart drift.
+    // resolvedSelection 冻结用于校验重启漂移的当前已安装精确路由。
+    let resolved_selection = runtime.resolve_connection_model_selection(
         &configuration,
         selection.connection_id.as_str(),
         selection.provider_id.as_str(),
         selection.model_id.as_str(),
     )?;
+    // processRouteLeaseAbsent distinguishes restart restoration from an in-process hot replacement.
+    // processRouteLeaseAbsent 区分重启恢复与进程内热替换。
+    let process_route_lease_absent = runtime
+        .session_selection_lease(session_lease_scope.as_str())?
+        .is_none();
     let runtime_state = workspace_snapshot
         .session_runtime_state
         .get_mut(&session_id)
@@ -862,8 +1057,30 @@ fn apply_submission_model_selection(
         != Some(selection.provider_id.as_str())
         || runtime_state.active_connection_id.as_deref() != Some(selection.connection_id.as_str())
         || runtime_state.active_model_id.as_deref() != Some(selection.model_id.as_str());
-    if target_changed {
-        runtime.clear_session_selection_leases(session_id.to_string().as_str())?;
+    // resolvedRouteIdentity is comparable with the persisted non-secret identity without retaining credentials.
+    // resolvedRouteIdentity 可与持久化的非敏感身份比较，且不会保留凭据。
+    let resolved_route_identity =
+        vulcan_agent_runtime::agent_runtime::provider::provider_route_lease_identity(
+            &resolved_selection,
+        );
+    // restartedRouteChanged permits an ordinary new submission after an application upgrade to
+    // adopt the installed route only when its owner and protocol are unchanged. An established
+    // process-local lease still wins, preserving in-flight and hot-reload route immutability.
+    // restartedRouteChanged 仅允许应用升级后的普通新提交在所有者与协议未变化时采用已安装路由；
+    // 已建立的进程内租约仍然优先，从而保持执行中请求与热更新路由不可变。
+    let restarted_route_changed = !target_changed
+        && process_route_lease_absent
+        && runtime_state
+            .provider_route_lease
+            .as_ref()
+            .is_some_and(|expected| {
+                provider_route_lease_revision_changed_for_same_target(
+                    expected,
+                    &resolved_route_identity,
+                )
+            });
+    if target_changed || restarted_route_changed {
+        runtime.clear_session_selection_leases(session_lease_scope.as_str())?;
         runtime_state.provider_route_lease = None;
     }
     runtime_state.active_provider_id = Some(selection.provider_id.clone());
@@ -1044,6 +1261,79 @@ mod submission_model_selection_tests {
                 .map(|active| active.model_id.as_str()),
             Some("openai/gpt-5.6-terra")
         );
+    }
+
+    /// Verifies a new session rebinds an invalid global account to the preferred account for the same model.
+    /// 验证新会话会把失效的全局账号重绑到同一模型的首选账号。
+    #[test]
+    fn new_session_rebinds_invalid_global_account_for_same_model() {
+        // runtime starts with one valid account exposing both test models.
+        // runtime 从一个公开两个测试模型的有效账号开始。
+        let runtime = configured_runtime();
+        let mut configuration = runtime
+            .configuration_snapshot()
+            .expect("configuration should remain readable");
+        // staleConnection represents another grouped credential whose catalog no longer contains the active model.
+        // staleConnection 表示同一分组中目录已不再包含活动模型的另一份凭据。
+        let stale_connection = CredentialConnection {
+            id: String::from("openrouter-stale-account"),
+            provider_id: String::from("openrouter"),
+            service_entry_id: String::from("public-api"),
+            credential_profile_id: String::from("api-key"),
+            credential_mode: CredentialMode::Token,
+            credential_id: String::from("credential-openrouter-stale-account"),
+            display_name: String::from("OpenRouter stale account"),
+            secret_reference: String::from("secret-openrouter-stale-account"),
+            management_secret_reference: None,
+            service_origin_override: None,
+            prompt_cache_by_protocol: BTreeMap::new(),
+        };
+        configuration
+            .connection_graph
+            .add_connection(
+                &runtime
+                    .providers()
+                    .expect("provider registry should resolve"),
+                stale_connection.clone(),
+            )
+            .expect("stale connection should register");
+        configuration
+            .connection_graph
+            .remember_model_connection("openrouter", "openai/gpt-5.6-sol", "openrouter-account")
+            .expect("valid model account preference should persist");
+        configuration.active = Some(vulcan_provider_adapters::ActiveAiModelSelection {
+            provider_id: String::from("openrouter"),
+            model_id: String::from("openai/gpt-5.6-sol"),
+            connection_id: stale_connection.id.clone(),
+        });
+        // staleCatalog deliberately omits the globally selected model while remaining a valid account catalog.
+        // staleCatalog 有意省略全局所选模型，同时保持为有效账号目录。
+        let stale_catalog = with_protocol_variants(
+            parse_openrouter_model_catalog(
+                stale_connection.id.as_str(),
+                1,
+                r#"{"data":[{"id":"openai/gpt-5.6-terra","name":"Stale account model","context_length":8192,"supported_parameters":["tools"],"architecture":{"input_modalities":["text"],"output_modalities":["text"]},"top_provider":{"max_completion_tokens":4096}}]}"#,
+            )
+            .expect("stale account catalog should parse"),
+            &[vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID],
+        );
+        runtime
+            .stage_source_catalog_for_testing(stale_catalog)
+            .expect("stale account source catalog should stage");
+        runtime
+            .replace_configuration(configuration.clone())
+            .expect("invalid global account fixture should install");
+        runtime
+            .reapply_model_catalog_overlays(&configuration)
+            .expect("account-scoped catalogs should publish");
+
+        let selection = crate::public_ai_workbench_selection(&configuration, &runtime, None, None)
+            .expect("new-session selection should resolve")
+            .expect("same model should remain available");
+
+        assert_eq!(selection.route.connection.provider_id, "openrouter");
+        assert_eq!(selection.model.id, "openai/gpt-5.6-sol");
+        assert_eq!(selection.route.connection.id, "openrouter-account");
     }
 
     /// Verifies an unchanged per-submit model snapshot preserves the session route lease.
@@ -1288,6 +1578,422 @@ mod submission_model_selection_tests {
                 .and_then(|runtime_state| runtime_state.provider_route_lease.as_ref())
                 .is_none(),
             "an explicit target change must clear the persisted lease identity"
+        );
+    }
+
+    /// Verifies an ordinary submission adopts a revised installed route after restart without weakening hot leases.
+    /// 验证普通提交在重启后采用已修订的安装路由，同时不削弱进程内热租约。
+    #[test]
+    fn unchanged_submission_adopts_revised_route_after_restart() {
+        let runtime = configured_runtime();
+        let session_id = Uuid::new_v4();
+        let mut workspace_snapshot = WorkspaceSnapshot {
+            task_projects: Vec::new(),
+            archived_task_projects: Vec::new(),
+            sessions: vec![SessionSummary::new(
+                session_id,
+                Some(String::from("project-a")),
+                "Restarted conversation",
+                "",
+                SessionState::Running,
+                0,
+                0,
+                "now",
+            )],
+            archived_sessions: Vec::new(),
+            session_messages: BTreeMap::new(),
+            archived_session_messages: BTreeMap::new(),
+            session_compactions: BTreeMap::new(),
+            archived_session_compactions: BTreeMap::new(),
+            session_runtime_state: BTreeMap::new(),
+            archived_session_runtime_state: BTreeMap::new(),
+            session_run_phases: BTreeMap::new(),
+            expanded_task_projects: BTreeSet::new(),
+            selected_session: session_id,
+            hydrated_session_ids: BTreeSet::new(),
+        };
+        ensure_webui_session_runtime_state(&mut workspace_snapshot, session_id, None)
+            .expect("session runtime state should initialize");
+        let selection = SubmissionModelSelection {
+            provider_id: String::from("openrouter"),
+            model_id: String::from("openai/gpt-5.6-sol"),
+            connection_id: String::from("openrouter-account"),
+        };
+        apply_submission_model_selection(
+            &runtime,
+            &mut workspace_snapshot,
+            session_id,
+            Some(&selection),
+        )
+        .expect("initial selection should apply");
+        let configuration = runtime
+            .configuration_snapshot()
+            .expect("configuration should remain readable");
+        let previous_selection = runtime
+            .resolve_connection_model_selection(
+                &configuration,
+                selection.connection_id.as_str(),
+                selection.provider_id.as_str(),
+                selection.model_id.as_str(),
+            )
+            .expect("previous route should resolve");
+        let previous_identity =
+            vulcan_agent_runtime::agent_runtime::provider::provider_route_lease_identity(
+                &previous_selection,
+            );
+        workspace_snapshot
+            .session_runtime_state
+            .get_mut(&session_id)
+            .expect("session runtime state should exist")
+            .provider_route_lease = Some(previous_identity.clone());
+
+        // revisedCatalog keeps the exact model owner and protocol while changing an execution capability.
+        // revisedCatalog 保持完全相同的模型所有者与协议，同时修改一项执行能力。
+        let revised_catalog = with_protocol_variants(
+            parse_openrouter_model_catalog(
+                "openrouter-account",
+                2,
+                r#"{"data":[{"id":"openai/gpt-5.6-terra","name":"Previous","context_length":8192,"supported_parameters":["tools"],"architecture":{"input_modalities":["text"],"output_modalities":["text"]},"top_provider":{"max_completion_tokens":4096}},{"id":"openai/gpt-5.6-sol","name":"Submitted","context_length":16384,"supported_parameters":["tools"],"architecture":{"input_modalities":["text"],"output_modalities":["text"]},"top_provider":{"max_completion_tokens":4096}}]}"#,
+            )
+            .expect("revised catalog should parse"),
+            &[vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID],
+        );
+        runtime
+            .stage_source_catalog_for_testing(revised_catalog)
+            .expect("revised source catalog should stage");
+        runtime
+            .reapply_model_catalog_overlays(&configuration)
+            .expect("revised generation should publish");
+        let revised_selection = runtime
+            .resolve_connection_model_selection(
+                &configuration,
+                selection.connection_id.as_str(),
+                selection.provider_id.as_str(),
+                selection.model_id.as_str(),
+            )
+            .expect("revised route should resolve");
+        assert_ne!(
+            previous_selection.route_revision, revised_selection.route_revision,
+            "the fixture must change only the installed execution revision"
+        );
+        assert!(
+            runtime
+                .session_selection_lease(session_id.to_string().as_str())
+                .expect("process-local lease should remain readable")
+                .is_none(),
+            "restart simulation must not retain a process-local route snapshot"
+        );
+
+        apply_submission_model_selection(
+            &runtime,
+            &mut workspace_snapshot,
+            session_id,
+            Some(&selection),
+        )
+        .expect("ordinary submission should adopt the revised installed route");
+        assert!(
+            workspace_snapshot
+                .session_runtime_state
+                .get(&session_id)
+                .and_then(|runtime_state| runtime_state.provider_route_lease.as_ref())
+                .is_none(),
+            "the obsolete persisted identity must clear before execution preparation"
+        );
+        let blueprint =
+            vulcan_agent_runtime::agent_runtime::provider::resolve_public_ai_provider_blueprint(
+                &runtime,
+                session_id.to_string().as_str(),
+                None,
+                vulcan_agent_runtime::provider_config::ReasoningEffortLevel::Off,
+                Some(selection.provider_id.as_str()),
+                Some(selection.model_id.as_str()),
+                Some(selection.connection_id.as_str()),
+            )
+            .expect("execution preparation should lease the revised route without reselection");
+        assert_eq!(
+            blueprint.route_revision, revised_selection.route_revision,
+            "the first post-restart ordinary submission must use the installed route revision"
+        );
+    }
+
+    /// Verifies a pre-dispatch Manifest failure revokes both stale route identities before retry.
+    /// 验证分发前的 Manifest 失败会在重试前撤销两处陈旧路由身份。
+    #[test]
+    fn resume_preparation_retry_adopts_revised_same_protocol_route() {
+        let runtime = configured_runtime();
+        let session_id = Uuid::new_v4();
+        let configuration = runtime
+            .configuration_snapshot()
+            .expect("configuration should remain readable");
+        let previous_selection = runtime
+            .resolve_connection_model_selection(
+                &configuration,
+                "openrouter-account",
+                "openrouter",
+                "openai/gpt-5.6-sol",
+            )
+            .expect("previous route should resolve");
+        let previous_identity =
+            vulcan_agent_runtime::agent_runtime::provider::provider_route_lease_identity(
+                &previous_selection,
+            );
+        runtime
+            .lease_session_selection(session_id.to_string(), previous_selection)
+            .expect("previous route should lease");
+
+        let revised_catalog = with_protocol_variants(
+            parse_openrouter_model_catalog(
+                "openrouter-account",
+                2,
+                r#"{"data":[{"id":"openai/gpt-5.6-terra","name":"Previous","context_length":8192,"supported_parameters":["tools"],"architecture":{"input_modalities":["text"],"output_modalities":["text"]},"top_provider":{"max_completion_tokens":4096}},{"id":"openai/gpt-5.6-sol","name":"Submitted","context_length":16384,"supported_parameters":["tools"],"architecture":{"input_modalities":["text"],"output_modalities":["text"]},"top_provider":{"max_completion_tokens":4096}}]}"#,
+            )
+            .expect("revised catalog should parse"),
+            &[vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID],
+        );
+        runtime
+            .stage_source_catalog_for_testing(revised_catalog)
+            .expect("revised source catalog should stage");
+        runtime
+            .reapply_model_catalog_overlays(&configuration)
+            .expect("revised generation should publish");
+
+        let mut runtime_state = vulcan_workbench_model::SessionRuntimeStateEntry {
+            active_provider_id: Some(String::from("openrouter")),
+            active_connection_id: Some(String::from("openrouter-account")),
+            active_model_id: Some(String::from("openai/gpt-5.6-sol")),
+            provider_route_lease: Some(previous_identity.clone()),
+            ..Default::default()
+        };
+        let preparation_input = vulcan_workbench_model::ExecutionRetryPreparationInput {
+            preparation_turn_id: String::from("turn-a"),
+            session_title: String::from("session-a"),
+            workspace_path: String::from("D:\\workspace"),
+            active_provider_id: Some(String::from("openrouter")),
+            active_connection_id: Some(String::from("openrouter-account")),
+            active_model_id: Some(String::from("openai/gpt-5.6-sol")),
+            original_source: PendingSessionPromptSource::UserFollowup,
+            prompt: String::from("retry prompt"),
+            hidden_model_guidance: None,
+            provider_visible_agent_messages: Vec::new(),
+            attachments: Vec::new(),
+            execution_mode: String::from("build"),
+            reasoning_effort: None,
+            boundary_events: Vec::new(),
+            canonical_user_message_id: None,
+            precheck_payload: serde_json::json!({}),
+            profile_payload: serde_json::json!({}),
+        };
+        let mut retry_snapshot = vulcan_workbench_model::ExecutionRetrySnapshot {
+            schema_version: vulcan_workbench_model::EXECUTION_RETRY_SNAPSHOT_SCHEMA_VERSION,
+            snapshot_id: Uuid::new_v4().to_string(),
+            session_id: session_id.to_string(),
+            generation: 1,
+            state: vulcan_workbench_model::ExecutionRetrySnapshotState::Frozen,
+            logical_execution_id: String::from("logical-a"),
+            logical_turn_id: Some(String::from("turn-a")),
+            physical_attempt_id: String::from("attempt-a"),
+            claimed_attempt_id: None,
+            provider_route: Some(previous_identity),
+            provider_service_entry_id: None,
+            credential_profile_id: None,
+            controller_config: None,
+            controller_snapshot: vulcan_core::types::ConversationSnapshot::default(),
+            pending_action:
+                vulcan_workbench_model::ExecutionRetryPendingAction::ResumePreparation {
+                    input: Box::new(preparation_input),
+                },
+            error: Some(vulcan_ai_contract::AiExecutionError {
+                category: vulcan_ai_contract::AiErrorCategory::Cancelled,
+                subcategory: Some(String::from("execution_interrupted")),
+                stage: String::from("service_execution"),
+                http_status: None,
+                transport: None,
+                websocket_close_code: None,
+                upstream_code: None,
+                upstream_type: None,
+                upstream_parameter: None,
+                upstream_message: None,
+                request_id: None,
+                provider_id: Some(String::from("openrouter")),
+                entry_id: None,
+                model_id: Some(String::from("openai/gpt-5.6-sol")),
+                message: String::from(
+                    "The provider manifest changed after this session activated; reselect the model to adopt the new route.",
+                ),
+                dispatch_outcome: vulcan_ai_contract::DispatchOutcome::Unknown,
+                semantic_output_observed: false,
+                side_effect_observed: false,
+                terminal: true,
+                retryable: true,
+                retry_after: None,
+            }),
+            canonical_digest: String::from("digest-a"),
+            context_generation_id: None,
+            created_at: String::from("1000"),
+            updated_at: String::from("1000"),
+        };
+
+        let mut dispatched_runtime_state = runtime_state.clone();
+        let mut dispatched_snapshot = retry_snapshot.clone();
+        dispatched_snapshot
+            .error
+            .as_mut()
+            .expect("fixture error should exist")
+            .dispatch_outcome = vulcan_ai_contract::DispatchOutcome::Dispatched;
+        refresh_resume_preparation_route_after_manifest_change(
+            &runtime,
+            session_id,
+            &mut dispatched_runtime_state,
+            &mut dispatched_snapshot,
+        )
+        .expect("explicitly dispatched evidence should preserve the frozen route");
+        assert!(dispatched_runtime_state.provider_route_lease.is_some());
+        assert!(dispatched_snapshot.provider_route.is_some());
+
+        refresh_resume_preparation_route_after_manifest_change(
+            &runtime,
+            session_id,
+            &mut runtime_state,
+            &mut retry_snapshot,
+        )
+        .expect("safe pre-dispatch retry should adopt the revised route");
+
+        assert!(runtime_state.provider_route_lease.is_none());
+        assert!(retry_snapshot.provider_route.is_none());
+        assert!(
+            runtime
+                .session_selection_lease(session_id.to_string().as_str())
+                .expect("process lease should remain readable")
+                .is_none()
+        );
+    }
+
+    /// Verifies Continue claims the frozen preparation before restoring its own precheck marker.
+    /// 验证 Continue 会在恢复自身 precheck 标记之前领取冻结准备态。
+    #[test]
+    fn continuation_claim_precedes_retry_precheck_restore() {
+        let runtime = configured_runtime();
+        let session_id = Uuid::new_v4();
+        let mut runtime_state = vulcan_workbench_model::SessionRuntimeStateEntry {
+            active_provider_id: Some(String::from("openrouter")),
+            active_connection_id: Some(String::from("openrouter-account")),
+            active_model_id: Some(String::from("openai/gpt-5.6-sol")),
+            ..Default::default()
+        };
+        let error_entry = vulcan_workbench_model::SessionMessageEntry::new(
+            vulcan_workbench_model::SessionMessageKind::Error,
+            "Provider error",
+            "failed",
+        )
+        .with_runtime_metadata("error-a", "1000");
+        runtime_state
+            .conversation_state
+            .records
+            .push(vulcan_context::SessionConversationRecord {
+                id: error_entry.id,
+                kind: error_entry.kind,
+                record_kind: error_entry.record_kind,
+                visible: error_entry.visible,
+                title: error_entry.title,
+                body: error_entry.body,
+                metadata: error_entry.metadata,
+                created_at: error_entry.created_at,
+            });
+        assert!(
+            runtime_state
+                .provider_call_ledger
+                .mark_continuation_terminal(
+                    Some(String::from("logical-a")),
+                    String::from("preparation_failed"),
+                    1000,
+                    String::from("error"),
+                    true,
+                )
+        );
+        let continuation = runtime_state.provider_call_ledger.continuation.clone();
+        let controller_snapshot = vulcan_agent_runtime::agent_runtime::provider_request_bridge_conversation::build_core_conversation_snapshot(
+            &runtime_state.conversation_state,
+        )
+        .expect("canonical retry state should project");
+        let canonical_bytes =
+            serde_json::to_vec(&controller_snapshot).expect("canonical retry state should encode");
+        let preparation_turn_id = String::from("precheck-a");
+        let mut retry_snapshot = vulcan_workbench_model::ExecutionRetrySnapshot {
+            schema_version: vulcan_workbench_model::EXECUTION_RETRY_SNAPSHOT_SCHEMA_VERSION,
+            snapshot_id: Uuid::new_v4().to_string(),
+            session_id: session_id.to_string(),
+            generation: 1,
+            state: vulcan_workbench_model::ExecutionRetrySnapshotState::Frozen,
+            logical_execution_id: String::from("logical-a"),
+            logical_turn_id: Some(preparation_turn_id.clone()),
+            physical_attempt_id: String::from("attempt-a"),
+            claimed_attempt_id: None,
+            provider_route: None,
+            provider_service_entry_id: None,
+            credential_profile_id: None,
+            controller_config: None,
+            controller_snapshot,
+            pending_action:
+                vulcan_workbench_model::ExecutionRetryPendingAction::ResumePreparation {
+                    input: Box::new(vulcan_workbench_model::ExecutionRetryPreparationInput {
+                        preparation_turn_id: preparation_turn_id.clone(),
+                        session_title: String::from("session-a"),
+                        workspace_path: String::from("D:\\workspace"),
+                        active_provider_id: Some(String::from("openrouter")),
+                        active_connection_id: Some(String::from("openrouter-account")),
+                        active_model_id: Some(String::from("openai/gpt-5.6-sol")),
+                        original_source: PendingSessionPromptSource::UserFollowup,
+                        prompt: String::from("retry prompt"),
+                        hidden_model_guidance: None,
+                        provider_visible_agent_messages: Vec::new(),
+                        attachments: Vec::new(),
+                        execution_mode: String::from("build"),
+                        reasoning_effort: None,
+                        boundary_events: Vec::new(),
+                        canonical_user_message_id: None,
+                        precheck_payload: serde_json::json!({}),
+                        profile_payload: serde_json::json!({}),
+                    }),
+                },
+            error: None,
+            canonical_digest: execution_retry_sha256_hex(&canonical_bytes),
+            context_generation_id: None,
+            created_at: String::from("1000"),
+            updated_at: String::from("1000"),
+        };
+
+        claim_continuation_before_precheck_restore(
+            &runtime,
+            &mut runtime_state,
+            session_id,
+            SessionRunPhase::Failed,
+            SessionContinuationRuntimeBlockers::default(),
+            continuation.generation,
+            continuation.expected_ledger_revision,
+            "continue-attempt-a",
+            &mut retry_snapshot,
+        )
+        .expect("Continue should claim before retry precheck restoration");
+        runtime_state.active_precheck_turn_id = Some(preparation_turn_id);
+
+        assert_eq!(
+            retry_snapshot.state,
+            vulcan_workbench_model::ExecutionRetrySnapshotState::Claimed
+        );
+        assert_eq!(
+            retry_snapshot.claimed_attempt_id.as_deref(),
+            Some("continue-attempt-a")
+        );
+        assert!(
+            runtime_state
+                .provider_call_ledger
+                .continuation
+                .claimed_at_ms
+                .is_some()
+        );
+        assert_eq!(
+            runtime_state.active_precheck_turn_id.as_deref(),
+            Some("precheck-a")
         );
     }
 }
@@ -1913,6 +2619,47 @@ async fn service_start_conversation_execution(
             current_unix_millis_value().saturating_sub(submit_run_prepare_started_at)
         ),
     );
+    if let Some((expected_generation, expected_ledger_revision)) =
+        submission_mode.continuation_expectation()
+    {
+        // blockers are captured before restoring the retry-owned precheck so Continue cannot
+        // classify its own active_precheck_turn_id as pre-existing queued work.
+        // blockers 在恢复 retry 自有 precheck 前捕获，避免 Continue 把自己写入的
+        // active_precheck_turn_id 误判成已有排队工作。
+        let blockers = {
+            let guard = state
+                .lock()
+                .map_err(|error| format!("failed to lock service state: {error}"))?;
+            let retained_workspace = guard
+                .workspace_snapshot
+                .as_ref()
+                .ok_or_else(|| String::from("ERR_WORKSPACE_SNAPSHOT_NOT_READY"))?;
+            session_continuation_runtime_blockers(&guard, retained_workspace, session_id)?
+        };
+        let run_phase = workspace_snapshot
+            .session_run_phases
+            .get(&session_id)
+            .copied()
+            .unwrap_or(SessionRunPhase::Idle);
+        let runtime_state = workspace_snapshot
+            .session_runtime_state
+            .get_mut(&session_id)
+            .ok_or_else(|| String::from("ERR_CONVERSATION_CONTINUE_RUNTIME_STATE_MISSING"))?;
+        let retry_snapshot = claimed_retry_snapshot
+            .as_mut()
+            .ok_or_else(|| String::from("ERR_CONVERSATION_CONTINUE_RETRY_SNAPSHOT_MISSING"))?;
+        claim_continuation_before_precheck_restore(
+            agent_runtime.public_ai_runtime.as_ref(),
+            runtime_state,
+            session_id,
+            run_phase,
+            blockers,
+            expected_generation,
+            expected_ledger_revision,
+            client_submission_id.as_str(),
+            retry_snapshot,
+        )?;
+    }
     let turn_begin_started_at = current_unix_millis_value();
     let resume_preparation_input =
         claimed_retry_snapshot
@@ -1980,50 +2727,14 @@ async fn service_start_conversation_execution(
         submission_target_label,
         current_unix_millis_value(),
     )?;
-    if let Some((expected_generation, expected_ledger_revision)) =
-        submission_mode.continuation_expectation()
-    {
-        let blockers = {
-            let guard = state
-                .lock()
-                .map_err(|error| format!("failed to lock service state: {error}"))?;
-            let retained_workspace = guard
-                .workspace_snapshot
-                .as_ref()
-                .ok_or_else(|| String::from("ERR_WORKSPACE_SNAPSHOT_NOT_READY"))?;
-            session_continuation_runtime_blockers(&guard, retained_workspace, session_id)?
-        };
-        let run_phase = workspace_snapshot
-            .session_run_phases
-            .get(&session_id)
-            .copied()
-            .unwrap_or(SessionRunPhase::Idle);
+    if submission_mode.continuation_expectation().is_some() {
         let runtime_state = workspace_snapshot
             .session_runtime_state
             .get_mut(&session_id)
             .ok_or_else(|| String::from("ERR_CONVERSATION_CONTINUE_RUNTIME_STATE_MISSING"))?;
-        resolve_session_continuation_eligibility(
-            runtime_state,
-            run_phase,
-            blockers,
-            Some((expected_generation, expected_ledger_revision)),
-        )
-        .map_err(String::from)?;
-        let claimed_at_ms = i64::try_from(current_unix_millis_value())
-            .map_err(|_| String::from("ERR_CONVERSATION_CONTINUE_TIMESTAMP_OUT_OF_RANGE"))?;
-        runtime_state.provider_call_ledger.claim_continuation(
-            expected_generation,
-            expected_ledger_revision,
-            client_submission_id.clone(),
-            claimed_at_ms,
-        )?;
         let retry_snapshot = claimed_retry_snapshot
             .as_mut()
             .ok_or_else(|| String::from("ERR_CONVERSATION_CONTINUE_RETRY_SNAPSHOT_MISSING"))?;
-        validate_execution_retry_snapshot_for_claim(runtime_state, session_id, retry_snapshot)?;
-        retry_snapshot.state = vulcan_workbench_model::ExecutionRetrySnapshotState::Claimed;
-        retry_snapshot.claimed_attempt_id = Some(client_submission_id.clone());
-        retry_snapshot.updated_at = current_unix_millis_text();
         let retry_reference =
             vulcan_workspace_store::workspace_store::persist_execution_retry_snapshot(
                 &controller_runtime.data_root,

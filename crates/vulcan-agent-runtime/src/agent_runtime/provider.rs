@@ -10,6 +10,10 @@ use crate::provider_config::ReasoningEffortLevel;
 /// 当前会话供应商路由租约身份的持久化 Schema 版本。
 const SESSION_PROVIDER_ROUTE_LEASE_SCHEMA_VERSION: u32 = 1;
 
+/// Stable diagnostic emitted when a persisted route no longer matches the installed Manifest.
+/// 当持久化路由不再匹配已安装 Manifest 时输出的稳定诊断。
+pub const PROVIDER_MANIFEST_ROUTE_CHANGED_MESSAGE: &str = "The provider manifest changed after this session activated; reselect the model to adopt the new route.";
+
 /// Resolved provider/model runtime blueprint used by execution preparation.
 /// 执行准备阶段使用的已解析 Provider/Model 运行时蓝图。
 #[derive(Debug, Clone)]
@@ -316,9 +320,7 @@ pub fn resolve_public_ai_provider_blueprint(
         if expected_route_lease.is_some_and(|identity| {
             !provider_route_lease_identity_matches(identity, &candidate_identity)
         }) {
-            return Err(String::from(
-                "The provider manifest changed after this session activated; reselect the model to adopt the new route.",
-            ));
+            return Err(String::from(PROVIDER_MANIFEST_ROUTE_CHANGED_MESSAGE));
         }
         // leasedSelection preserves a concurrently installed winner instead of replacing it.
         // leasedSelection 保留并发安装的胜出者，而不是将其替换。

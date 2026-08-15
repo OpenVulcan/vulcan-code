@@ -6087,14 +6087,49 @@ pub(super) async fn service_sync_public_ai_connection(
             Ok(()),
         ));
     }
-    // publicationResult makes a successful catalog or controlled failure observation visible as
-    // one complete generation before the RPC reports its discovery outcome.
-    // publicationResult 在 RPC 报告发现结果前，把成功目录或受控失败观测作为一个完整代际公开。
-    let publication_result = build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
-        .and_then(|snapshot| {
-            publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)
-                .map(|_| snapshot)
-        });
+    // publicationResult repairs an invalid global account binding against the refreshed catalog
+    // before exposing the new generation. Existing session leases remain untouched.
+    // publicationResult 在公开新代际前依据刷新后的目录修复失效的全局账号绑定；既有会话租约保持不变。
+    let publication_result = (|| {
+        // refreshedCatalogs is the exact effective account inventory published above.
+        // refreshedCatalogs 是上方已发布的精确账号有效目录。
+        let refreshed_catalogs = runtime.catalog_snapshot()?;
+        // repairedConfiguration changes only the global fallback used by future sessions.
+        // repairedConfiguration 只调整未来会话使用的全局回退选择。
+        let mut repaired_configuration = configuration.clone();
+        ensure_active_model_selection(
+            runtime.as_ref(),
+            &mut repaired_configuration,
+            &refreshed_catalogs,
+        )?;
+        if repaired_configuration.active != configuration.active {
+            // repairedActive is copied into the latest transaction snapshot and persisted before
+            // Workbench publication, preventing another restart from restoring the invalid pair.
+            // repairedActive 会写入最新事务快照并在工作台发布前持久化，避免重启后恢复无效组合。
+            let repaired_active = repaired_configuration.active.clone();
+            let (_installed_configuration, snapshot) =
+                mutate_public_ai_configuration_and_publish_in_transaction(
+                    &app,
+                    &state,
+                    runtime.as_ref(),
+                    &configuration,
+                    "修复公共 AI 活动模型账号失败",
+                    |candidate| {
+                        candidate.active = repaired_active;
+                        Ok(())
+                    },
+                    |candidate| build_public_ai_settings_snapshot(runtime.as_ref(), candidate),
+                )?;
+            Ok(snapshot)
+        } else {
+            build_public_ai_settings_snapshot(runtime.as_ref(), &configuration).and_then(
+                |snapshot| {
+                    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)
+                        .map(|_| snapshot)
+                },
+            )
+        }
+    })();
     let snapshot = match publication_result {
         Ok(snapshot) => snapshot,
         Err(primary) => {
@@ -9097,16 +9132,90 @@ fn ensure_active_model_selection(
     configuration: &mut PersistedAiConfiguration,
     catalogs: &BTreeMap<String, ConnectionModelCatalog>,
 ) -> Result<(), String> {
-    let active_is_unavailable = match configuration.active.as_ref() {
-        Some(selection) => {
-            !model_selection_is_available(runtime, configuration, catalogs, selection)?
-        }
-        None => false,
+    // activeSelection is cloned so the invalid exact account can be replaced without extending
+    // an immutable borrow of the configuration.
+    // activeSelection 通过克隆避免在替换无效精确账号时延长配置的不可变借用。
+    let Some(active_selection) = configuration.active.clone() else {
+        return Ok(());
     };
-    if active_is_unavailable {
-        configuration.active = first_enabled_model_selection(runtime, configuration, catalogs)?;
+    if model_selection_is_available(runtime, configuration, catalogs, &active_selection)? {
+        return Ok(());
     }
+    // sameModelSelection preserves the user's model choice when another credential account still
+    // exposes it; only a provider/model disappearance falls back to the first enabled model.
+    // sameModelSelection 在其他凭据账号仍公开该模型时保留用户模型选择；只有供应商/模型消失时
+    // 才回退到首个启用模型。
+    let same_model_selection = preferred_available_connection_for_model(
+        runtime,
+        configuration,
+        catalogs,
+        active_selection.provider_id.as_str(),
+        active_selection.model_id.as_str(),
+    )?;
+    configuration.active = match same_model_selection {
+        Some(selection) => Some(selection),
+        None => first_enabled_model_selection(runtime, configuration, catalogs)?,
+    };
     Ok(())
+}
+
+/// Resolves the preferred available credential for one existing provider/model choice.
+/// 为一个既有供应商/模型选择解析首选的可用凭据。
+///
+/// # Parameters
+/// 参数
+/// `runtime` validates provider-level access, `configuration` owns account preferences,
+/// `catalogs` is the effective account inventory, and the identifiers name the model.
+/// `runtime` 校验供应商级访问，`configuration` 持有账号偏好，`catalogs` 是有效账号目录，
+/// 两个标识用于指定模型。
+///
+/// # Returns
+/// 返回值
+/// The exact preferred available selection, or `None` when no account exposes the model.
+/// 返回精确的首选可用选择；没有账号公开该模型时返回 `None`。
+fn preferred_available_connection_for_model(
+    runtime: &PublicAiRuntime,
+    configuration: &PersistedAiConfiguration,
+    catalogs: &BTreeMap<String, ConnectionModelCatalog>,
+    provider_id: &str,
+    model_id: &str,
+) -> Result<Option<ActiveAiModelSelection>, String> {
+    // eligibleCatalogs excludes credentials that cannot participate in normal conversation routing.
+    // eligibleCatalogs 排除不能参与常规会话路由的凭据。
+    let mut eligible_catalogs = catalogs.clone();
+    eligible_catalogs.retain(|connection_id, _| {
+        !configuration.connection_is_pending_validation(connection_id.as_str())
+    });
+    let eligible_catalogs =
+        vulcan_provider_adapters::RuntimeConnectionCatalogs::from_snapshot(eligible_catalogs);
+    // modelExists proves resolveConnection has a valid deterministic candidate rather than
+    // converting its no-candidate error into control flow.
+    // modelExists 先证明 resolveConnection 存在确定候选，避免把无候选错误当作控制流吞掉。
+    let model_exists = configuration
+        .connection_graph
+        .connections
+        .values()
+        .filter(|connection| connection.provider_id == provider_id)
+        .any(|connection| {
+            eligible_catalogs
+                .get(connection.id.as_str())
+                .is_some_and(|catalog| catalog.models.iter().any(|model| model.id == model_id))
+        });
+    if !model_exists {
+        return Ok(None);
+    }
+    let connection = configuration.connection_graph.resolve_connection(
+        provider_id,
+        model_id,
+        &eligible_catalogs,
+    )?;
+    let selection = ActiveAiModelSelection {
+        provider_id: provider_id.to_string(),
+        model_id: model_id.to_string(),
+        connection_id: connection.id.clone(),
+    };
+    model_selection_is_available(runtime, configuration, catalogs, &selection)
+        .map(|available| available.then_some(selection))
 }
 
 /// Plans reconciliation of every explicitly selected session model without publishing mutations.
@@ -12298,6 +12407,112 @@ mod inference_settings_route_tests {
                 .unavailable_reason
                 .as_deref()
                 .is_some_and(|reason| reason.contains("unavailable for this model"))
+        );
+    }
+
+    /// Verifies an invalid global account rebinds to the same model on its preferred account.
+    /// 验证失效的全局账号会重新绑定到首选账号上的同一模型。
+    #[test]
+    fn invalid_active_account_rebinds_same_model_before_model_fallback() {
+        // providerId and modelId identify the user choice that must survive account discovery drift.
+        // providerId 与 modelId 标识在账号发现变化后仍必须保留的用户选择。
+        let provider_id = String::from("shared-provider");
+        let model_id = String::from("shared-model");
+        // staleConnection is the credential that no longer exposes the selected model.
+        // staleConnection 是已不再公开所选模型的凭据。
+        let stale_connection = CredentialConnection {
+            id: String::from("stale-connection"),
+            provider_id: provider_id.clone(),
+            service_entry_id: String::from("shared-entry"),
+            credential_profile_id: String::from("shared-profile"),
+            credential_mode: CredentialMode::Token,
+            credential_id: String::from("stale-credential"),
+            display_name: String::from("Stale account"),
+            secret_reference: String::from("stale-secret"),
+            management_secret_reference: None,
+            service_origin_override: None,
+            prompt_cache_by_protocol: BTreeMap::new(),
+        };
+        // availableConnection is the exact preferred credential that still exposes the model.
+        // availableConnection 是仍公开该模型的精确首选凭据。
+        let available_connection = CredentialConnection {
+            id: String::from("available-connection"),
+            provider_id: provider_id.clone(),
+            service_entry_id: String::from("shared-entry"),
+            credential_profile_id: String::from("shared-profile"),
+            credential_mode: CredentialMode::Token,
+            credential_id: String::from("available-credential"),
+            display_name: String::from("Available account"),
+            secret_reference: String::from("available-secret"),
+            management_secret_reference: None,
+            service_origin_override: None,
+            prompt_cache_by_protocol: BTreeMap::new(),
+        };
+        // configuration retains the stale exact active account and the valid model-level preference.
+        // configuration 保留失效的精确活动账号与有效的模型级账号偏好。
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration
+            .connection_graph
+            .connections
+            .insert(stale_connection.id.clone(), stale_connection.clone());
+        configuration.connection_graph.connections.insert(
+            available_connection.id.clone(),
+            available_connection.clone(),
+        );
+        configuration
+            .connection_graph
+            .remember_model_connection(
+                provider_id.as_str(),
+                model_id.as_str(),
+                available_connection.id.as_str(),
+            )
+            .expect("preferred model account should persist");
+        configuration.active = Some(ActiveAiModelSelection {
+            provider_id: provider_id.clone(),
+            model_id: model_id.clone(),
+            connection_id: stale_connection.id,
+        });
+        configuration.set_model_enabled(provider_id.as_str(), model_id.as_str(), true);
+        // capabilities prove the surviving model remains a valid conversation model.
+        // capabilities 证明保留下来的模型仍是有效会话模型。
+        let capabilities = ModelCapabilities {
+            operations: vec![AiOperation::ConversationRespond],
+            ..ModelCapabilities::default()
+        };
+        // catalogs contains the selected model only under the available credential.
+        // catalogs 只在可用凭据下包含所选模型。
+        let catalogs = BTreeMap::from([(
+            available_connection.id.clone(),
+            ConnectionModelCatalog {
+                connection_id: available_connection.id.clone(),
+                models: vec![vulcan_provider_adapters::ConnectionModel {
+                    id: model_id.clone(),
+                    display_name: String::from("Shared model"),
+                    capabilities,
+                    capability_evidence: vulcan_provider_adapters::ModelCapabilityEvidence::default(
+                    ),
+                    protocol_variants: BTreeMap::new(),
+                    resolved_protocol_binding: None,
+                }],
+                generation: 2,
+                page_count: 1,
+                discovery_schema_revision: String::from("account-rebind-test-v1"),
+            },
+        )]);
+        // runtime supplies provider-level access defaults without remote execution.
+        // runtime 提供供应商级访问默认值，不执行远程请求。
+        let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
+
+        ensure_active_model_selection(&runtime, &mut configuration, &catalogs)
+            .expect("invalid account should rebind");
+
+        assert_eq!(
+            configuration.active,
+            Some(ActiveAiModelSelection {
+                provider_id,
+                model_id,
+                connection_id: available_connection.id,
+            })
         );
     }
 

@@ -230,7 +230,25 @@ fn public_ai_workbench_selection_from_runtime_state(
                 .resolve_model_selection(configuration, provider_id, model_id)
                 .ok()
         });
-    Ok(provider_model_selection.or_else(|| runtime.resolve_active_selection(configuration).ok()))
+    Ok(provider_model_selection
+        // exactGlobalSelection retains the configured account while it remains executable.
+        // exactGlobalSelection 在配置账号仍可执行时保留该精确账号。
+        .or_else(|| runtime.resolve_active_selection(configuration).ok())
+        // reboundGlobalSelection keeps a blank/new session usable when credential-scoped discovery
+        // invalidated only the global account while the same provider/model remains available.
+        // reboundGlobalSelection 在凭据作用域发现只使全局账号失效、同一供应商/模型仍可用时，
+        // 保证空白/新会话仍可使用。
+        .or_else(|| {
+            configuration.active.as_ref().and_then(|active| {
+                runtime
+                    .resolve_model_selection(
+                        configuration,
+                        active.provider_id.as_str(),
+                        active.model_id.as_str(),
+                    )
+                    .ok()
+            })
+        }))
 }
 
 /// Projects credential-scoped model rows using an explicit effective workbench selection.
