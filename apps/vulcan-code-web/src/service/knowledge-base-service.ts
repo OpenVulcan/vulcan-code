@@ -204,8 +204,12 @@ export async function listManagedKnowledgeDocumentFolders(libraryId: string): Pr
 
 // readManagedKnowledgeDocument reads one library document without applying project or session ACLs.
 // readManagedKnowledgeDocument 读取一个知识库文档，不应用项目或会话 ACL。
-export async function readManagedKnowledgeDocument(libraryId: string, documentId: string): Promise<KnowledgeDocumentContent> {
-  return serviceClient.request<KnowledgeDocumentContent>("service_read_knowledge_library_document", { libraryId, documentId });
+export async function readManagedKnowledgeDocument(
+  libraryId: string,
+  documentId: string,
+  corpus: "raw" | "display" = "raw",
+): Promise<KnowledgeDocumentContent> {
+  return serviceClient.request<KnowledgeDocumentContent>("service_read_knowledge_library_document", { libraryId, documentId, corpus });
 }
 
 // searchManagedKnowledgeLibrary searches only the library selected in the management surface.

@@ -970,7 +970,57 @@ impl KnowledgeBaseRuntime {
             .await
             .map_err(|error| format!("恢复知识库操作状态失败：{error}"))?;
         self.recover_interrupted_replacements().await?;
+        self.recover_interrupted_derived_index_states().await?;
         self.cleanup_orphan_package_directories().await?;
+        Ok(())
+    }
+
+    /// Reconciles derived-index lifecycle flags after their executor disappeared during restart.
+    /// 在重启导致派生索引执行器消失后协调其生命周期标记。
+    ///
+    /// Returns: success after every interrupted active library becomes resumable.
+    /// 返回值：所有被中断的活动资料库均恢复为可继续状态后返回成功。
+    async fn recover_interrupted_derived_index_states(&self) -> Result<(), String> {
+        // Libraries are read after replacement recovery so status writes target the authoritative registry rows.
+        // 在覆盖恢复之后读取资料库，确保状态写入指向权威注册记录。
+        let libraries = self.list_libraries(None).await?;
+        for library in libraries
+            .into_iter()
+            .filter(|library| library.lifecycle_state == "active")
+        {
+            if let Some(recovered_status) = recovered_display_index_status(
+                library.settings.display_index.status,
+                library.settings.display_index.active_generation.is_some(),
+            ) {
+                // A published generation remains usable while the retained pending generation is completed.
+                // 已发布代次在保留的待完成代次补齐期间仍然可用。
+                let recovery_message =
+                    if library.settings.display_index.pending_generation.is_some() {
+                        "服务重启中断了显示库生成；已生成文档均已保留，可以继续生成"
+                    } else {
+                        "服务重启中断了显示库生成；尚未建立可恢复代次，请重新生成"
+                    };
+                self.set_display_index_status(
+                    &library.id,
+                    recovered_status,
+                    Some(String::from(recovery_message)),
+                )
+                .await?;
+            }
+            if let Some(recovered_status) = recovered_vector_index_status(
+                library.settings.vector_index.status,
+                library.settings.vector_index.active_generation.is_some(),
+            ) {
+                // Vector builds do not yet retain a resumable generation, so restart exposes an explicit rebuild state.
+                // 向量构建尚未保留可恢复代次，因此重启后显式进入重建状态。
+                self.set_vector_index_status(
+                    &library.id,
+                    recovered_status,
+                    Some(String::from("服务重启中断了向量索引生成，请重新生成")),
+                )
+                .await?;
+            }
+        }
         Ok(())
     }
 
@@ -2717,6 +2767,42 @@ impl KnowledgeBaseRuntime {
         Ok(rows.into_iter().map(|row| row.folder_path).collect())
     }
 
+    /// Reads one authoritative document summary without loading its Markdown body.
+    /// 在不加载 Markdown 正文的情况下读取一份权威文档摘要。
+    ///
+    /// `library_id` identifies the active library and `document_id` identifies the exact source
+    /// document shared with derived corpus rows.
+    /// `library_id` 标识活动知识库，`document_id` 标识与派生内容层记录共享的精确原始文档。
+    ///
+    /// Returns exact source metadata and chunk counts, or an error when the document is absent.
+    /// 返回精确来源元数据与切片数量；文档不存在时返回错误。
+    async fn read_document_summary(
+        &self,
+        library_id: &str,
+        document_id: &str,
+    ) -> Result<KnowledgeDocumentSummary, String> {
+        self.require_active_library(library_id).await?;
+        let (space_id, binding_id) = self.ensure_library_binding(library_id).await?;
+        // rows contains at most one exact source-document summary and never its Markdown body.
+        // rows 最多包含一条精确原始文档摘要，且绝不包含 Markdown 正文。
+        let rows: Vec<DocumentSummaryRow> = self
+            .query_library_rows(
+                &space_id,
+                &binding_id,
+                r#"SELECT d.id, d.source_id, d.relative_path, d.folder_path, d.title,
+                           d.byte_size, d.line_count, COUNT(c.id) AS chunk_count, d.updated_at_ms
+                    FROM knowledge_documents d
+                    LEFT JOIN knowledge_chunks c ON c.document_id = d.id
+                    WHERE d.id = ? GROUP BY d.id;"#,
+                vec![text(document_id)],
+            )
+            .await?;
+        rows.into_iter()
+            .next()
+            .ok_or_else(|| format!("资料文档不存在：{document_id}"))
+            .and_then(document_summary_from_row)
+    }
+
     /// Reads one authoritative document by ID without exposing physical source paths.
     /// 按标识符读取一份权威文档，且不暴露物理来源路径。
     pub async fn read_document(
@@ -3451,12 +3537,12 @@ impl KnowledgeBaseRuntime {
         Ok((hits, format!("{expression};vector")))
     }
 
-    /// Reads one active display document and all of its generation-scoped chunks.
-    /// 读取当前活动显示代次中的一份显示文档及其全部切片。
+    /// Reads one active display document by its stable source-document identifier.
+    /// 按稳定的原始文档标识读取当前活动显示代次中的一份显示文档。
     pub async fn read_display_document(
         &self,
         library_id: &str,
-        document_id: &str,
+        source_document_id: &str,
     ) -> Result<KnowledgeDisplayDocument, String> {
         let (space_id, binding_id) = self.ensure_display_binding(library_id).await?;
         let metadata_rows: Vec<DisplayMetadataRow> = self
@@ -3477,15 +3563,84 @@ impl KnowledgeBaseRuntime {
             .query_library_rows(
                 &space_id,
                 &binding_id,
-                "SELECT id, source_document_id, source_sha256, relative_path, folder_path, title, summary, keywords_json, symbols_json, embedding_text, markdown, generation, generated_at_ms FROM display_documents WHERE id = ? AND generation = ? LIMIT 1;",
-                vec![text(document_id), text(&generation)],
+                "SELECT id, source_document_id, source_sha256, relative_path, folder_path, title, summary, keywords_json, symbols_json, embedding_text, markdown, generation, generated_at_ms FROM display_documents WHERE source_document_id = ? AND generation = ? LIMIT 1;",
+                vec![text(source_document_id), text(&generation)],
             )
             .await?;
         let row = rows
             .into_iter()
             .next()
-            .ok_or_else(|| format!("显示库文档不存在：{document_id}"))?;
+            .ok_or_else(|| format!("显示库文档不存在：{source_document_id}"))?;
         row.into_display_document()
+    }
+
+    /// Reads one active display document as the common Markdown viewer contract.
+    /// 以通用 Markdown 阅读器契约读取当前活动显示代次中的一份显示文档。
+    ///
+    /// `library_id` identifies the owning library and `source_document_id` is the immutable raw
+    /// document identity shared by the source tree, search results, and derived display corpus.
+    /// `library_id` 标识所属知识库，`source_document_id` 是原始目录树、搜索结果与派生显示库共享的
+    /// 不可变文档身份。
+    ///
+    /// Returns display-layer metadata and Markdown while preserving the authoritative source id.
+    /// 返回显示层元数据与 Markdown，同时保留权威来源目录标识。
+    pub async fn read_display_document_content(
+        &self,
+        library_id: &str,
+        source_document_id: &str,
+    ) -> Result<KnowledgeDocumentContent, String> {
+        // sourceDocument supplies metadata intentionally not duplicated in the derived display
+        // database without loading the raw Markdown body.
+        // sourceDocument 在不加载原始 Markdown 正文的情况下，提供派生显示库中刻意不重复存储的元数据。
+        let source_document = self
+            .read_document_summary(library_id, source_document_id)
+            .await?;
+        // displayDocument is the exact active-generation derivative for the same source document.
+        // displayDocument 是同一原始文档在当前活动代次中的精确派生文档。
+        let display_document = self
+            .read_display_document(library_id, source_document_id)
+            .await?;
+        let (space_id, binding_id) = self.ensure_display_binding(library_id).await?;
+        // countRows obtains the exact active-generation display chunk count for viewer metadata.
+        // countRows 获取阅读器元数据所需的当前活动代次显示切片精确数量。
+        let count_rows: Vec<CountRow> = self
+            .query_library_rows(
+                &space_id,
+                &binding_id,
+                "SELECT 1 AS document_count, COUNT(*) AS chunk_count FROM display_chunks WHERE display_document_id = ? AND generation = ?;",
+                vec![text(&display_document.id), text(&display_document.generation)],
+            )
+            .await?;
+        // chunkCount is always produced by the aggregate query, including an exact zero.
+        // chunkCount 始终由聚合查询生成，包括精确的零值。
+        let chunk_count = count_rows
+            .into_iter()
+            .next()
+            .ok_or_else(|| String::from("读取显示库文档切片数量失败。"))?
+            .chunk_count;
+        // markdown owns the normalized display-layer body returned to the viewer.
+        // markdown 持有返回阅读器的规范化显示层正文。
+        let markdown = display_document.markdown;
+        // byteSize and lineCount describe the displayed Markdown rather than the raw source file.
+        // byteSize 与 lineCount 描述显示 Markdown，而不是原始来源文件。
+        let byte_size = u64::try_from(markdown.len())
+            .map_err(|_| String::from("显示库 Markdown 字节数超出支持范围。"))?;
+        let line_count = u64::try_from(markdown.lines().count().max(1))
+            .map_err(|_| String::from("显示库 Markdown 行数超出支持范围。"))?;
+        Ok(KnowledgeDocumentContent {
+            document: KnowledgeDocumentSummary {
+                id: display_document.source_document_id,
+                source_id: source_document.source_id,
+                relative_path: display_document.relative_path,
+                folder_path: display_document.folder_path,
+                title: display_document.title,
+                byte_size,
+                line_count,
+                chunk_count: nonnegative_u64(chunk_count, "display_chunk_count")?,
+                updated_at_ms: display_document.generated_at_ms,
+            },
+            content: markdown,
+        })
     }
 
     /// Lists active display chunks in deterministic pages for vector generation.
@@ -5945,12 +6100,20 @@ COMMIT;
         let mut settings = library.settings;
         let mut changed = false;
         if settings.curation.enabled
-            && matches!(
+            && (matches!(
                 settings.display_index.status,
-                KnowledgeDisplayIndexStatus::Ready | KnowledgeDisplayIndexStatus::Failed
-            )
+                KnowledgeDisplayIndexStatus::Ready
+                    | KnowledgeDisplayIndexStatus::Stale
+                    | KnowledgeDisplayIndexStatus::Failed
+            ) || settings.display_index.pending_generation.is_some())
         {
             settings.display_index.status = KnowledgeDisplayIndexStatus::Stale;
+            // A pending generation belongs to one immutable source revision and cannot survive a content change.
+            // 待完成代次只属于一个不可变来源修订，不能跨越内容变化继续使用。
+            settings.display_index.pending_generation = None;
+            settings.display_index.pending_source_content_revision = None;
+            settings.display_index.pending_prompt_version = None;
+            settings.display_index.pending_model_fingerprint = None;
             settings.display_index.last_error = Some(String::from(
                 "原始 Markdown 内容发生变化，显示库需要重新生成",
             ));
@@ -8970,6 +9133,46 @@ fn truncate_chars(value: &str, maximum: usize) -> String {
     value.chars().take(maximum).collect()
 }
 
+/// Maps an abandoned display build to the durable state exposed after restart.
+/// 将遗留显示库构建映射为重启后公开的持久化状态。
+///
+/// Parameters: `status` is the persisted lifecycle and `has_active_generation` reports whether a published generation remains.
+/// Returns: the reconciled state only when the old executor was marked building.
+/// 参数：`status` 是持久化生命周期，`has_active_generation` 表示是否仍有已发布代次。返回值：仅当旧执行器标记为构建中时返回协调状态。
+fn recovered_display_index_status(
+    status: KnowledgeDisplayIndexStatus,
+    has_active_generation: bool,
+) -> Option<KnowledgeDisplayIndexStatus> {
+    if status != KnowledgeDisplayIndexStatus::Building {
+        return None;
+    }
+    Some(if has_active_generation {
+        KnowledgeDisplayIndexStatus::Stale
+    } else {
+        KnowledgeDisplayIndexStatus::Failed
+    })
+}
+
+/// Maps an abandoned vector build to the durable state exposed after restart.
+/// 将遗留向量构建映射为重启后公开的持久化状态。
+///
+/// Parameters: `status` is the persisted lifecycle and `has_active_generation` reports whether a published generation remains.
+/// Returns: the reconciled state only when the old executor was marked building.
+/// 参数：`status` 是持久化生命周期，`has_active_generation` 表示是否仍有已发布代次。返回值：仅当旧执行器标记为构建中时返回协调状态。
+fn recovered_vector_index_status(
+    status: KnowledgeVectorIndexStatus,
+    has_active_generation: bool,
+) -> Option<KnowledgeVectorIndexStatus> {
+    if status != KnowledgeVectorIndexStatus::Building {
+        return None;
+    }
+    Some(if has_active_generation {
+        KnowledgeVectorIndexStatus::Stale
+    } else {
+        KnowledgeVectorIndexStatus::Failed
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -8980,6 +9183,32 @@ mod tests {
     use vldb_controller_client::{
         ClientRegistration, ControllerClient, ControllerClientConfig, ControllerProcessMode,
     };
+
+    /// Verifies restart recovery preserves published generations and releases abandoned building flags.
+    /// 验证重启恢复会保留已发布代次并释放遗留构建中标记。
+    #[test]
+    fn interrupted_derived_index_statuses_become_actionable() {
+        assert_eq!(
+            recovered_display_index_status(KnowledgeDisplayIndexStatus::Building, true),
+            Some(KnowledgeDisplayIndexStatus::Stale)
+        );
+        assert_eq!(
+            recovered_display_index_status(KnowledgeDisplayIndexStatus::Building, false),
+            Some(KnowledgeDisplayIndexStatus::Failed)
+        );
+        assert_eq!(
+            recovered_display_index_status(KnowledgeDisplayIndexStatus::Ready, true),
+            None
+        );
+        assert_eq!(
+            recovered_vector_index_status(KnowledgeVectorIndexStatus::Building, true),
+            Some(KnowledgeVectorIndexStatus::Stale)
+        );
+        assert_eq!(
+            recovered_vector_index_status(KnowledgeVectorIndexStatus::Building, false),
+            Some(KnowledgeVectorIndexStatus::Failed)
+        );
+    }
 
     /// Writes one compact package fixture with caller-controlled metadata entry and optional extra entry.
     /// 写入一个紧凑知识库包夹具，允许调用方控制元数据条目及可选额外条目。

@@ -197,7 +197,7 @@ pub fn validate_manifest(
             "unsupported_schema_version",
             path("schema_version"),
             format!(
-                "expected schema version `{MANIFEST_SCHEMA_VERSION}`, found `{}`",
+                "expected schema version `{MANIFEST_SCHEMA_VERSION}`, found `{}`; upgrade to a client release compatible with this manifest",
                 manifest.schema_version
             ),
         ));
@@ -338,7 +338,7 @@ fn validate_engine_contract(
             "unsupported_engine_contract",
             "engine_contract.minimum_manifest_engine",
             format!(
-                "manifest requires manifest engine {} but this host supports {}",
+                "manifest requires manifest engine {} but this host supports {}; upgrade the client before installing this manifest",
                 contract.minimum_manifest_engine,
                 super::CURRENT_MANIFEST_ENGINE
             ),
@@ -359,7 +359,9 @@ fn validate_engine_contract(
         errors.push(ManifestValidationError::new(
             "unsupported_engine_contract",
             "engine_contract.required_protocol_profiles",
-            format!("protocol profile `{id}` is not registered by this engine"),
+            format!(
+                "protocol profile `{id}` is not registered by this engine; upgrade the client before installing this manifest"
+            ),
         ));
     }
     for id in missing(
@@ -369,7 +371,9 @@ fn validate_engine_contract(
         errors.push(ManifestValidationError::new(
             "unsupported_engine_contract",
             "engine_contract.required_execution_primitives",
-            format!("execution primitive `{id}` is not registered by this engine"),
+            format!(
+                "execution primitive `{id}` is not registered by this engine; upgrade the client before installing this manifest"
+            ),
         ));
     }
     for id in missing(
@@ -379,14 +383,18 @@ fn validate_engine_contract(
         errors.push(ManifestValidationError::new(
             "unsupported_engine_contract",
             "engine_contract.required_upload_primitives",
-            format!("upload primitive `{id}` is not registered by this engine"),
+            format!(
+                "upload primitive `{id}` is not registered by this engine; upgrade the client before installing this manifest"
+            ),
         ));
     }
     for id in missing(&contract.required_transformers, &registry.transformers) {
         errors.push(ManifestValidationError::new(
             "unsupported_engine_contract",
             "engine_contract.required_transformers",
-            format!("transformer `{id}` is not registered by this engine"),
+            format!(
+                "transformer `{id}` is not registered by this engine; upgrade the client before installing this manifest"
+            ),
         ));
     }
     let required_protocols = contract
@@ -6447,7 +6455,7 @@ mod tests {
                         authentication: None,
                         key_prefix: None,
                         credential_role: None,
-                        allowed_usage_scopes: Default::default(),
+                        default_usage_scopes: Default::default(),
                     },
                 ],
                 default_authentication: None,
@@ -6797,7 +6805,7 @@ mod tests {
     #[test]
     fn unknown_schema_version_rejected() {
         let mut manifest = minimal_manifest();
-        manifest.schema_version = String::from("vulcan.provider-manifest.v2");
+        manifest.schema_version = String::from("vulcan.provider-manifest.v1");
         let errors = validate_manifest(&manifest, ManifestOwnership::System, &registry())
             .expect_err("unsupported schema must fail");
         assert!(
@@ -6805,6 +6813,25 @@ mod tests {
                 .iter()
                 .any(|e| e.code == "unsupported_schema_version")
         );
+        assert!(errors.iter().any(|error| {
+            error.code == "unsupported_schema_version" && error.message.contains("upgrade")
+        }));
+    }
+
+    /// Verifies a manifest requiring a newer engine fails closed and requests a client upgrade.
+    /// 验证要求更高引擎版本的 Manifest 会失败关闭并要求升级客户端。
+    #[test]
+    fn newer_manifest_engine_requires_client_upgrade() {
+        // manifest requires the next unsupported engine generation.
+        // manifest 要求下一个尚不支持的引擎代际。
+        let mut manifest = minimal_manifest();
+        manifest.engine_contract.minimum_manifest_engine =
+            super::super::CURRENT_MANIFEST_ENGINE + 1;
+        let errors = validate_manifest(&manifest, ManifestOwnership::System, &registry())
+            .expect_err("newer manifest engine must fail closed");
+        assert!(errors.iter().any(|error| {
+            error.code == "unsupported_engine_contract" && error.message.contains("upgrade")
+        }));
     }
 
     /// Verifies revision zero is rejected.
@@ -7027,7 +7054,7 @@ mod tests {
                 authentication: None,
                 key_prefix: None,
                 credential_role: None,
-                allowed_usage_scopes: Default::default(),
+                default_usage_scopes: Default::default(),
             },
         );
         manifest
@@ -7048,7 +7075,7 @@ mod tests {
                         authentication: None,
                         key_prefix: None,
                         credential_role: None,
-                        allowed_usage_scopes: Default::default(),
+                        default_usage_scopes: Default::default(),
                     },
                 ],
                 default_authentication: None,
@@ -7160,7 +7187,7 @@ mod tests {
     /// 验证解析期间未知字段被拒绝。
     #[test]
     fn unknown_field_rejected_during_parse() {
-        let text = r#"{"schema_version":"vulcan.provider-manifest.v1","unknown_top_level":1}"#;
+        let text = r#"{"schema_version":"vulcan.provider-manifest.v2","unknown_top_level":1}"#;
         let errors = parse_and_validate(text, ManifestOwnership::System, &registry())
             .expect_err("unknown field must fail");
         assert!(

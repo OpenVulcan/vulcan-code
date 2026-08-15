@@ -26,9 +26,6 @@ pub enum FieldSourceKind {
     /// The value came from a user-owned custom override outside the manifest.
     /// 值来自清单之外的用户自有覆盖。
     UserOverride,
-    /// The value came from migrated legacy configuration.
-    /// 值来自旧版配置迁移。
-    MigratedLegacy,
 }
 
 /// Provenance attached to one resolved model protocol binding or capability layer.

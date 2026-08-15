@@ -29,6 +29,7 @@ import { useI18n } from "@/i18n"
 import {
   loadPublicAiSettings,
   savePublicAiInternalModelEnabled,
+  savePublicAiModelEnabled,
 } from "@/service/settings-actions-service"
 import type {
   PublicAiModel,
@@ -231,7 +232,7 @@ export function ModelListSettingsArea() {
                 <p className="settings-muted-line">{t("settings.models.emptyCatalog")}</p>
               ) : visibleModelRows.length === 0 ? (
                 <p className="settings-muted-line">{t("settings.models.emptyFilter")}</p>
-              ) : visibleModelRows.map(({ modelId, routes }) => {
+              ) : visibleModelRows.map(({ modelId, routes, enabled }) => {
                 const representative = routes[0]
                 if (!representative) {
                   return null
@@ -241,7 +242,7 @@ export function ModelListSettingsArea() {
                   0,
                 )
                 const modelKey = `${selectedGroup.provider.id}/${modelId}`
-                const internalOperations = internalOperationsForModel(
+                const internalState = internalStateForModel(
                   snapshot,
                   selectedGroup.provider.id,
                   modelId,
@@ -326,29 +327,47 @@ export function ModelListSettingsArea() {
                         <SlidersHorizontal aria-hidden="true" size={14} />
                         {t("settings.modelCapabilities.shortLabel")}
                       </Button>
-                      {internalOperations.map((operation) => {
-                          const internalKey = `internal/${modelKey}/${operation.operation}`
-                          return (
-                            <label className="settings-model-switch-control" key={internalKey}>
-                              <span>{internalOperationLabel(operation.operation, t)}</span>
-                              <Switch
-                                aria-label={`${t("settings.inference.internalToggle")} ${representative.model.display_name}`}
-                                checked={operation.enabled}
-                                disabled={pendingMutationKey !== null}
-                                onCheckedChange={(checked) => {
-                                  runSnapshotMutation(internalKey, () => (
-                                    savePublicAiInternalModelEnabled({
-                                      providerId: selectedGroup.provider.id,
-                                      modelId,
-                                      operation: operation.operation,
-                                      enabled: checked,
-                                    })
-                                  ))
-                                }}
-                              />
-                            </label>
-                          )
-                        })}
+                      <label className="settings-model-switch-control">
+                        <span>{t("settings.models.conversationUse")}</span>
+                        <Switch
+                          aria-label={`${t("settings.models.conversationUse")} ${representative.model.display_name}`}
+                          checked={enabled}
+                          disabled={pendingMutationKey !== null}
+                          onCheckedChange={(checked) => {
+                            runSnapshotMutation(`conversation/${modelKey}`, () => (
+                              savePublicAiModelEnabled({
+                                providerId: selectedGroup.provider.id,
+                                modelId,
+                                enabled: checked,
+                              })
+                            ))
+                          }}
+                        />
+                      </label>
+                      {internalState ? (
+                        <label
+                          className="settings-model-switch-control"
+                          title={internalState.operations
+                            .map((operation) => internalOperationLabel(operation, t))
+                            .join("、")}
+                        >
+                          <span>{t("settings.models.internalUse")}</span>
+                          <Switch
+                            aria-label={`${t("settings.inference.internalToggle")} ${representative.model.display_name}`}
+                            checked={internalState.enabled}
+                            disabled={pendingMutationKey !== null}
+                            onCheckedChange={(checked) => {
+                              runSnapshotMutation(`internal/${modelKey}`, () => (
+                                savePublicAiInternalModelEnabled({
+                                  providerId: selectedGroup.provider.id,
+                                  modelId,
+                                  enabled: checked,
+                                })
+                              ))
+                            }}
+                          />
+                        </label>
+                      ) : null}
                     </div>
                   </article>
                 )
@@ -414,26 +433,38 @@ function modelRouteValue(route: PublicModelProtocolRoute): string {
   ])
 }
 
-// internalOperationsForModel returns deduplicated operation switches for one provider model.
-// internalOperationsForModel 返回一个供应商模型的去重操作开关。
-function internalOperationsForModel(
-  snapshot: PublicAiSettingsSnapshot,
+// InternalModelState describes one model-level internal-use switch and its available operations.
+// InternalModelState 描述一个模型级内部使用开关及其可用操作。
+export interface InternalModelState {
+  // Effective model-level internal-use state.
+  // 生效的模型级内部使用状态。
+  enabled: boolean
+  // Deduplicated internal operations exposed by configured routes.
+  // 已配置路由公开的去重内部操作。
+  operations: PublicAiOperation[]
+}
+
+// internalStateForModel returns one shared internal-use state and its operation capabilities.
+// internalStateForModel 返回一个共享内部使用状态及其操作能力。
+export function internalStateForModel(
+  snapshot: Pick<PublicAiSettingsSnapshot, "internalInferenceCandidates">,
   providerId: string,
   modelId: string,
-): Array<{ operation: PublicAiOperation; enabled: boolean }> {
-  const operations = new Map<PublicAiOperation, boolean>()
+): InternalModelState | null {
+  const operations = new Set<PublicAiOperation>()
+  let enabled = false
   for (const candidate of snapshot.internalInferenceCandidates) {
     if (
       candidate.route.provider_id === providerId
       && candidate.route.model_id === modelId
     ) {
-      operations.set(
-        candidate.route.operation,
-        (operations.get(candidate.route.operation) ?? false) || candidate.enabled,
-      )
+      operations.add(candidate.route.operation)
+      enabled ||= candidate.enabled
     }
   }
-  return Array.from(operations, ([operation, enabled]) => ({ operation, enabled }))
+  return operations.size > 0
+    ? { enabled, operations: Array.from(operations) }
+    : null
 }
 
 // internalOperationLabel returns the localized compact operation name.

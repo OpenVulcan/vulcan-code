@@ -15,7 +15,6 @@ import { ProviderIcon } from "@/components/features/settings/provider-icon"
 import { CustomProviderModelsDialog } from "@/components/features/settings/custom-provider-models-dialog"
 import { persistAndApplyCustomProviderSnapshot } from "@/components/features/settings/custom-provider-save-state"
 import { ProviderManifestStatusPanel } from "@/components/features/settings/provider-manifest-status"
-import { ProviderModelAccessDialog } from "@/components/features/settings/provider-model-access-dialog"
 import { localizedProviderDescription } from "@/components/features/settings/provider-presentation"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
@@ -350,7 +349,6 @@ export function ProviderManagementArea() {
       <SystemProviderTable
         connections={snapshot?.connections ?? []}
         loading={!snapshot}
-        onManageModels={openModels}
         providers={systemProviders}
       />
 
@@ -370,15 +368,7 @@ export function ProviderManagementArea() {
           provider={modelsProvider}
           snapshot={snapshot}
         />
-      ) : (
-        <ProviderModelAccessDialog
-          onOpenChange={setModelsDialogOpen}
-          onSaved={setSnapshot}
-          open={modelsDialogOpen && modelsProvider?.kind === "system"}
-          provider={modelsProvider}
-          snapshot={snapshot}
-        />
-      )}
+      ) : null}
       <AlertDialog onOpenChange={(open) => !open && setProviderToRemove(null)} open={providerToRemove !== null}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -604,7 +594,6 @@ function CustomProviderTable(props: {
 function SystemProviderTable(props: {
   connections: PublicAiSettingsSnapshot["connections"]
   loading: boolean
-  onManageModels: (provider: PublicAiProviderDescriptor) => void
   providers: PublicAiProviderDescriptor[]
 }) {
   const { t } = useI18n()
@@ -696,16 +685,9 @@ function SystemProviderTable(props: {
                       </Badge>
                     </TableCell>
                     <TableCell className="py-3 text-right align-top">
-                      <Button
-                        aria-label={t("settings.customProviders.manageModelsFor").replace("{provider}", provider.display_name)}
-                        onClick={() => props.onManageModels(provider)}
-                        size="icon-sm"
-                        title={t("settings.customProviders.manageModels")}
-                        type="button"
-                        variant="outline"
-                      >
-                        <ListTree className="size-4" />
-                      </Button>
+                      <span className="text-xs text-muted-foreground">
+                        {t("settings.models.liveModels")}
+                      </span>
                     </TableCell>
                   </TableRow>
                 )
@@ -963,11 +945,6 @@ function CustomProviderDialog(props: {
     providerId: props.provider?.id,
     displayName: displayName.trim(),
     baseUrl: baseUrl.trim(),
-    // protocol is the legacy single-protocol projection kept for older Service clients; the
-    // authoritative collection is persisted in full below (plan §R6.4).
-    // protocol 是为旧版 Service 客户端保留的旧版单协议投影；权威集合在下方完整持久化
-    // （方案 §R6.4）。
-    protocol: protocols[0] ?? "open_ai_responses",
     // The enabled protocol collection is authoritative and never empty.
     // 启用协议集合是权威事实且绝不为空。
     protocols,

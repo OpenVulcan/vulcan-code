@@ -2601,6 +2601,28 @@ mod tests {
         assert!(error.to_string().contains("summary index is missing"));
     }
 
+    /// Verifies official full reasoning text still requires its exact content index.
+    /// 验证官方完整思考文本仍然要求精确的内容索引。
+    #[test]
+    fn responses_reasoning_text_requires_index() {
+        // decoder preserves the strict provider-neutral Responses contract.
+        // decoder 保持严格且供应商无关的 Responses 契约。
+        let mut decoder = OpenAiResponsesStreamDecoder::new(String::from("execution"));
+        // error proves relay-specific adaptation cannot become a global zero-index fallback.
+        // error 证明中转站专属适配不能退化为全局第零索引兜底。
+        let error = decoder
+            .push_sse(
+                Some("response.reasoning_text.delta"),
+                r#"{"type":"response.reasoning_text.delta","item_id":"rs_123","output_index":0,"delta":"thinking"}"#,
+            )
+            .expect_err("missing reasoning content index must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("reasoning content index is missing")
+        );
+    }
+
     /// Verifies the official full reasoning-text delta is normalized into provider-neutral reasoning events.
     /// 验证官方完整思考文本增量会被规范化为供应商无关思考事件。
     #[test]

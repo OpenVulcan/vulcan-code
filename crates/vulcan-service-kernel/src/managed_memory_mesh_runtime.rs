@@ -2576,10 +2576,7 @@ mod tests {
                 secret_reference: String::from("secret-embedding"),
                 management_secret_reference: None,
                 service_origin_override: None,
-                verified_protocols: BTreeSet::new(),
-                selected_protocol: String::new(),
                 prompt_cache_by_protocol: BTreeMap::new(),
-                usage_scope_override: None,
             },
         );
         configuration.inference_profiles.insert(

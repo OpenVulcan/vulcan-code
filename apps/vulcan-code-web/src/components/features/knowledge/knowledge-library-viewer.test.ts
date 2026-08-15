@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import type { KnowledgeDocumentSummary } from "@/types";
-import { buildKnowledgeDocumentTree } from "./KnowledgeLibraryViewerDialog";
+import type { KnowledgeDisplayIndexState, KnowledgeDocumentSummary } from "@/types";
+import { buildKnowledgeDocumentTree, defaultKnowledgeBrowseCorpus } from "./KnowledgeLibraryViewerDialog";
 
 // knowledgeDocument creates one complete document summary for tree tests.
 // knowledgeDocument 为目录树测试创建一份完整文档摘要。
@@ -52,5 +52,25 @@ describe("buildKnowledgeDocumentTree", () => {
       name: "windows",
       children: [],
     });
+  });
+});
+
+// displayIndex creates the exact display lifecycle state used by corpus-default tests.
+// displayIndex 创建内容层默认值测试使用的精确显示库生命周期状态。
+function displayIndex(activeGeneration: string | null): KnowledgeDisplayIndexState {
+  return {
+    status: activeGeneration ? "ready" : "not_created",
+    activeGeneration,
+    generatedDocumentCount: activeGeneration ? 1 : 0,
+  };
+}
+
+describe("defaultKnowledgeBrowseCorpus", () => {
+  it("opens a published display generation by default", () => {
+    expect(defaultKnowledgeBrowseCorpus(displayIndex("generation-1"))).toBe("display");
+  });
+
+  it("keeps raw browsing when no display generation is published", () => {
+    expect(defaultKnowledgeBrowseCorpus(displayIndex(null))).toBe("raw");
   });
 });

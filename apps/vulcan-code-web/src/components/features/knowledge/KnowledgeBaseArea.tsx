@@ -32,7 +32,7 @@ import {
   repairKnowledgeIndex,
   rebuildKnowledgeIndex,
 } from "@/service/knowledge-base-service";
-import type { KnowledgeImportJobSummary, KnowledgeIndexIntegritySummary, KnowledgeLibrarySummary, KnowledgePackageInspection, KnowledgeRetrievalMode, KnowledgeSourceSummary } from "@/types";
+import type { KnowledgeDisplayIndexState, KnowledgeImportJobSummary, KnowledgeIndexIntegritySummary, KnowledgeLibrarySummary, KnowledgePackageInspection, KnowledgeRetrievalMode, KnowledgeSourceSummary } from "@/types";
 import type { PublicAiInternalInferenceCandidate } from "@/types/public-ai";
 
 // KnowledgeBusyOperation is the locale-independent identity of one serialized page mutation.
@@ -86,6 +86,40 @@ export function knowledgeImportProgressPercent(job: KnowledgeImportJobSummary | 
 export function knowledgeImportHasCommittedContent(job: KnowledgeImportJobSummary): boolean {
   return job.operationKind === "import"
     && ["indexing", "rebuilding", "verifying", "finalizing"].includes(job.phase);
+}
+
+// KnowledgeDisplayBuildAction describes the only action exposed by the display-generation button.
+// KnowledgeDisplayBuildAction 描述显示库生成按钮公开的唯一动作。
+export type KnowledgeDisplayBuildAction = {
+  // Stable action mode used by click handling.
+  // 点击处理使用的稳定动作模式。
+  mode: "start" | "resume" | "progress" | "complete";
+  // User-visible button label matching the persisted lifecycle.
+  // 与持久化生命周期匹配的用户可见按钮标签。
+  label: string;
+  // Whether starting another generation is forbidden.
+  // 是否禁止再次启动生成。
+  disabled: boolean;
+};
+
+// knowledgeDisplayBuildAction derives truthful generation behavior from durable display state.
+// knowledgeDisplayBuildAction 根据持久化显示库状态派生真实的生成行为。
+// Parameters: displayIndex is the authoritative persisted display lifecycle. Returns: one button action.
+// 参数：displayIndex 是权威持久化显示库生命周期。返回值：一个按钮动作。
+export function knowledgeDisplayBuildAction(displayIndex: KnowledgeDisplayIndexState): KnowledgeDisplayBuildAction {
+  if (displayIndex.status === "building") {
+    return { mode: "progress", label: "查看生成进度", disabled: false };
+  }
+  if (displayIndex.pendingGeneration) {
+    return { mode: "resume", label: "继续生成", disabled: false };
+  }
+  if (displayIndex.status === "ready" && displayIndex.activeGeneration) {
+    return { mode: "complete", label: "显示库已完成", disabled: true };
+  }
+  if (displayIndex.status === "stale" || (displayIndex.status === "failed" && displayIndex.activeGeneration)) {
+    return { mode: "start", label: "重新生成", disabled: false };
+  }
+  return { mode: "start", label: "生成显示库", disabled: false };
 }
 
 // KnowledgeBaseArea renders host-owned library content management and portable operations.
@@ -199,6 +233,9 @@ export function KnowledgeBaseArea() {
   // projectedAuthoritativeJobId prevents duplicate count refreshes after one import commits content.
   // projectedAuthoritativeJobId 防止一次导入提交内容后重复刷新权威计数。
   const projectedAuthoritativeJobId = React.useRef<string | null>(null);
+  // dismissedOperationDialogJobId prevents polling from reopening a job the user deliberately sent to background.
+  // dismissedOperationDialogJobId 防止轮询重新打开用户明确转入后台的任务。
+  const dismissedOperationDialogJobId = React.useRef<string | null>(null);
   // sourcePickerTarget controls the directory browser and preserves its add-or-remap intent.
   // sourcePickerTarget 控制目录浏览器并保留其新增或重新映射意图。
   const [sourcePickerTarget, setSourcePickerTarget] = React.useState<KnowledgeSourcePickerTarget | null>(null);
@@ -361,7 +398,7 @@ export function KnowledgeBaseArea() {
           setImportOutcome(null);
           setImportError("");
           setImportWarnings(job.warnings);
-          setImportProgressOpen(true);
+          if (dismissedOperationDialogJobId.current !== job.id) setImportProgressOpen(true);
           // ContentVisible identifies import phases reached only after authoritative rows and counts commit.
           // ContentVisible 标识仅在权威记录与计数提交后才会到达的导入阶段。
           const contentVisible = knowledgeImportHasCommittedContent(job);
@@ -425,6 +462,7 @@ export function KnowledgeBaseArea() {
     // TrackedOperation is cleared before an ambiguous start response can expose an older terminal row.
     // TrackedOperation 在可能出现不确定启动响应前清空，避免暴露旧终态记录。
     trackedOperationJobId.current = null;
+    dismissedOperationDialogJobId.current = null;
     handledTerminalJobId.current = null;
     projectedAuthoritativeJobId.current = null;
     setImportJob(null);
@@ -480,6 +518,7 @@ export function KnowledgeBaseArea() {
     // TrackedOperation is cleared before an ambiguous start response can expose an older terminal row.
     // TrackedOperation 在可能出现不确定启动响应前清空，避免暴露旧终态记录。
     trackedOperationJobId.current = null;
+    dismissedOperationDialogJobId.current = null;
     handledTerminalJobId.current = null;
     projectedAuthoritativeJobId.current = null;
     setImportJob(null);
@@ -517,6 +556,7 @@ export function KnowledgeBaseArea() {
     if (!acquireBusy(operation)) return;
     setImportLibraryId(libraryId);
     trackedOperationJobId.current = null;
+    dismissedOperationDialogJobId.current = null;
     handledTerminalJobId.current = null;
     projectedAuthoritativeJobId.current = null;
     setImportJob(null);
@@ -540,6 +580,33 @@ export function KnowledgeBaseArea() {
       releaseBusy(operation);
     }
   }, [acquireBusy, releaseBusy]);
+
+  // reopenDerivedOperationProgress reconnects the dialog to a detached operation without starting another build.
+  // reopenDerivedOperationProgress 将弹窗重新连接到分离式任务，且不会启动另一轮构建。
+  // Parameters: libraryId identifies the exact library whose durable job should be polled. Returns: nothing.
+  // 参数：libraryId 标识需要轮询持久化任务的精确资料库。返回值：无。
+  const reopenDerivedOperationProgress = React.useCallback((libraryId: string): void => {
+    dismissedOperationDialogJobId.current = null;
+    setImportLibraryId(libraryId);
+    setImportJob(null);
+    setImportError("");
+    setImportOutcome(null);
+    setImportCancelRequested(false);
+    setImportWarnings([]);
+    setImportProgressOpen(true);
+    setOperationPollRevision((revision) => revision + 1);
+  }, []);
+
+  // hideOperationProgress keeps detached execution running while hiding only the progress projection.
+  // hideOperationProgress 保持分离式执行继续运行，同时仅隐藏进度投影。
+  // Returns: nothing after the current durable job is marked as intentionally hidden.
+  // 返回值：将当前持久化任务标记为主动隐藏后不返回内容。
+  const hideOperationProgress = React.useCallback((): void => {
+    if (operationDialogRunning && importJob?.id) {
+      dismissedOperationDialogJobId.current = importJob.id;
+    }
+    setImportProgressOpen(false);
+  }, [importJob?.id, operationDialogRunning]);
 
   // runMutation serializes page mutations and refreshes authoritative registry state.
   // runMutation 串行化页面变更并刷新权威注册状态。
@@ -726,6 +793,15 @@ export function KnowledgeBaseArea() {
   // filteredLibraries applies the local quick filter without changing service state.
   // filteredLibraries 应用本地快速筛选且不改变服务状态。
   const filteredLibraries = libraries.filter((library) => `${library.name} ${library.description}`.toLocaleLowerCase().includes(searchText.toLocaleLowerCase()));
+  // displayBuildAction projects the selected library's durable generation state into one truthful button.
+  // displayBuildAction 将选中资料库的持久化生成状态投影为一个真实按钮。
+  const displayBuildAction = selectedLibrary
+    ? (operationRunning
+      && importLibraryId === selectedLibrary.id
+      && importJob?.operationKind === "display_build"
+      ? { mode: "progress", label: "查看生成进度", disabled: false } satisfies KnowledgeDisplayBuildAction
+      : knowledgeDisplayBuildAction(selectedLibrary.settings.displayIndex))
+    : null;
   // handleViewerOpenChange clears the exact reader owner when the dialog closes.
   // handleViewerOpenChange 在弹窗关闭时清除精确的阅读器所有者。
   const handleViewerOpenChange = React.useCallback((open: boolean) => {
@@ -812,7 +888,17 @@ export function KnowledgeBaseArea() {
                       <Button disabled={pageBusy || indexIntegrity.searchable} onClick={() => void startIndexOperation("repair", selectedLibrary.id)} variant="outline"><Wrench size={15} />{t("knowledge.repairIndex")}</Button>
                       <Button disabled={pageBusy} onClick={() => void startIndexOperation("rebuild", selectedLibrary.id)} variant="outline"><RefreshCw size={15} />{t("knowledge.rebuildIndex")}</Button>
                       {selectedLibrary.settings.curation.enabled ? (
-                        <Button disabled={pageBusy || selectedLibrary.settings.displayIndex.status === "building"} onClick={() => void startDerivedOperation("display-build", selectedLibrary.id)} variant="outline"><Wrench size={15} />生成显示库</Button>
+                        <Button
+                          disabled={Boolean(displayBuildAction?.disabled) || (pageBusy && displayBuildAction?.mode !== "progress")}
+                          onClick={() => {
+                            if (displayBuildAction?.mode === "progress") {
+                              reopenDerivedOperationProgress(selectedLibrary.id);
+                            } else {
+                              void startDerivedOperation("display-build", selectedLibrary.id);
+                            }
+                          }}
+                          variant="outline"
+                        ><Wrench size={15} />{displayBuildAction?.label ?? "生成显示库"}</Button>
                       ) : null}
                       {selectedLibrary.settings.embedding.enabled ? (
                         <Button disabled={pageBusy || selectedLibrary.settings.displayIndex.status !== "ready" || selectedLibrary.settings.vectorIndex.status === "building"} onClick={() => void startDerivedOperation("vector-build", selectedLibrary.id)} variant="outline"><Database size={15} />生成向量</Button>
@@ -962,12 +1048,16 @@ export function KnowledgeBaseArea() {
           : t("knowledge.pickerTitle")}
       />
       <Dialog onOpenChange={(open) => {
-        if (open || !operationDialogRunning) setImportProgressOpen(open);
+        if (open) {
+          setImportProgressOpen(true);
+        } else if (!operationDialogRunning || importJob?.id) {
+          hideOperationProgress();
+        }
       }} open={importProgressOpen}>
         <DialogContent
           className="knowledge-import-dialog"
           onOpenAutoFocus={(event) => event.preventDefault()}
-          showCloseButton={!operationDialogRunning}
+          showCloseButton={!operationDialogRunning || Boolean(importJob?.id)}
         >
           <DialogHeader>
             <DialogTitle>{displayedOperationKind === "repair"
@@ -981,7 +1071,10 @@ export function KnowledgeBaseArea() {
           {importWarnings.length > 0 ? <pre className="knowledge-import-warnings">{importWarnings.join("\n")}</pre> : null}
           <DialogFooter>
             {operationDialogRunning && importLibraryId ? (
-              <Button disabled={!importJob?.id || importCancelRequested} onClick={() => void requestImportCancellation()} type="button" variant="outline">{importCancelRequested ? t("knowledge.importDialog.cancelling") : t(displayedOperationKind === "import" ? "knowledge.cancelImport" : "knowledge.cancelOperation")}</Button>
+              <>
+                <Button disabled={!importJob?.id} onClick={hideOperationProgress} type="button" variant="ghost">后台运行</Button>
+                <Button disabled={!importJob?.id || importCancelRequested} onClick={() => void requestImportCancellation()} type="button" variant="outline">{importCancelRequested ? t("knowledge.importDialog.cancelling") : t(displayedOperationKind === "import" ? "knowledge.cancelImport" : "knowledge.cancelOperation")}</Button>
+              </>
             ) : (
               <Button onClick={() => setImportProgressOpen(false)} type="button">{t("knowledge.importDialog.close")}</Button>
             )}

@@ -12,7 +12,7 @@ use vulcan_provider_adapters::{ProviderDescriptor, ProviderRegistry};
 
 /// Golden file location relative to this crate.
 /// golden 文件相对当前 crate 的位置。
-const GOLDEN_RELATIVE_PATH: &str = "resources/golden/system-providers-v1.json";
+const GOLDEN_RELATIVE_PATH: &str = "resources/golden/system-providers-v2.json";
 
 /// Environment variable that regenerates the golden file instead of comparing.
 /// 设置后重新生成 golden 文件而不是比较。

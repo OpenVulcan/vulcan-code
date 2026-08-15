@@ -42,6 +42,15 @@ const SYNC_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 /// Accepted media type for every remote index/provider response.
 /// 每个远端 Index/供应商响应接受的媒体类型。
 const SYNC_ACCEPTED_CONTENT_TYPE: &str = "application/json";
+/// Header advertising the exact client release requesting a compatible manifest generation.
+/// 声明请求兼容 Manifest 代际的精确客户端发行版本请求头。
+const SYNC_CLIENT_VERSION_HEADER: &str = "x-vulcan-client-version";
+/// Header advertising the only provider-manifest schema understood by this client.
+/// 声明当前客户端唯一支持的 Provider Manifest Schema 请求头。
+const SYNC_MANIFEST_SCHEMA_HEADER: &str = "x-vulcan-manifest-schema";
+/// Header advertising the maximum provider-manifest engine understood by this client.
+/// 声明当前客户端支持的最高 Provider Manifest 引擎版本请求头。
+const SYNC_MANIFEST_ENGINE_HEADER: &str = "x-vulcan-manifest-engine";
 
 /// Reports whether one HTTP Content-Type value declares the exact JSON media type.
 /// 判断一个 HTTP Content-Type 值是否声明精确的 JSON 媒体类型。
@@ -671,7 +680,7 @@ pub fn restore_system_manifests_from_store(
                     manifest.snapshot_provenance.sha256.as_deref(),
                     failure_kind,
                 );
-            } else if !vulcan_provider_adapters::is_legacy_fallback_provider(&provider_id) {
+            } else {
                 emit_manifest_isolated_event(
                     &provider_id,
                     runtime.catalog_generation(),
@@ -870,7 +879,7 @@ pub fn restore_system_manifests_from_store(
                     failure_kind,
                 );
             }
-        } else if !vulcan_provider_adapters::is_legacy_fallback_provider(&provider_id) {
+        } else {
             emit_manifest_isolated_event(
                 &provider_id,
                 runtime.catalog_generation(),
@@ -1315,9 +1324,6 @@ pub struct ProviderManifestStatus {
     /// Whether the remote sync service is configured (external gate open).
     /// 远端同步服务是否已配置（外部门开启）。
     pub sync_configured: bool,
-    /// Whether this provider intentionally retains legacy model-to-protocol binding authority.
-    /// 该供应商是否有意保留旧版模型到协议绑定权威。
-    pub legacy_binding_pending: bool,
     /// Effective model-rule facts and their field-level provenance from the active snapshot.
     /// 当前生效快照中的有效模型规则事实及其字段级来源。
     pub model_rules: Vec<ManifestModelRuleStatus>,
@@ -4271,7 +4277,21 @@ impl ProviderManifestSyncService {
         // requested_url 是用于检测任何注入客户端重定向的规范端点身份。
         let requested_url = reqwest::Url::parse(url)
             .map_err(|error| format!("Manifest sync URL `{diagnostic_url}` is invalid: {error}"))?;
-        let mut request = self.http.get(requested_url.clone());
+        // Compatibility headers let the distribution service select one generation the current
+        // client can execute; local verification remains mandatory if the server misroutes it.
+        // 兼容性请求头使分发服务选择当前客户端可执行的代际；即使服务端误投，客户端仍必须独立校验。
+        let mut request = self
+            .http
+            .get(requested_url.clone())
+            .header(SYNC_CLIENT_VERSION_HEADER, env!("CARGO_PKG_VERSION"))
+            .header(
+                SYNC_MANIFEST_SCHEMA_HEADER,
+                vulcan_provider_adapters::provider_manifest::MANIFEST_SCHEMA_VERSION,
+            )
+            .header(
+                SYNC_MANIFEST_ENGINE_HEADER,
+                vulcan_provider_adapters::provider_manifest::CURRENT_MANIFEST_ENGINE.to_string(),
+            );
         if let Some(etag) = if_none_match {
             request = request.header(reqwest::header::IF_NONE_MATCH, etag);
         }
@@ -4461,9 +4481,7 @@ impl ProviderManifestSyncService {
         };
         // criticalError is present only when the provider has no executable trusted runtime layer.
         // criticalError 仅在供应商没有可执行可信运行时层时存在。
-        let critical_error = if active_manifest.is_none()
-            && !vulcan_provider_adapters::is_legacy_fallback_provider(provider_id)
-        {
+        let critical_error = if active_manifest.is_none() {
             bundled_failure.clone()
         } else {
             None
@@ -4714,9 +4732,6 @@ impl ProviderManifestSyncService {
             recent_telemetry_events_truncated,
             quarantine,
             sync_configured: self.remote_index_url.is_some() && !self.trusted_keys.is_empty(),
-            legacy_binding_pending: vulcan_provider_adapters::is_legacy_fallback_provider(
-                provider_id,
-            ),
             model_rules,
             model_bindings,
             model_binding_total_count,
@@ -4789,9 +4804,7 @@ impl ProviderManifestSyncService {
                 failure_kind: failure.failure_kind,
                 message: bounded_public_manifest_diagnostic(failure.message.as_str()),
             });
-        let critical_error = if active.is_none()
-            && !vulcan_provider_adapters::is_legacy_fallback_provider(provider_id)
-        {
+        let critical_error = if active.is_none() {
             Some(
                 bundled_failure
                     .clone()
@@ -4821,9 +4834,6 @@ impl ProviderManifestSyncService {
             recent_telemetry_events_truncated: false,
             quarantine: Vec::new(),
             sync_configured: self.remote_index_url.is_some() && !self.trusted_keys.is_empty(),
-            legacy_binding_pending: vulcan_provider_adapters::is_legacy_fallback_provider(
-                provider_id,
-            ),
             model_rules: Vec::new(),
             model_bindings: Vec::new(),
             model_binding_total_count: 0,
@@ -6032,6 +6042,22 @@ mod tests {
                     head.push(byte[0]);
                 }
                 let head_text = String::from_utf8_lossy(&head);
+                // Every index and provider request must advertise the same executable client
+                // boundary so remote delivery cannot depend on an implicit release guess.
+                // 每次 Index 与供应商请求都必须声明同一可执行客户端边界，远端分发不能依赖隐式版本猜测。
+                let lower_head = head_text.to_ascii_lowercase();
+                assert!(lower_head.contains(&format!(
+                    "{SYNC_CLIENT_VERSION_HEADER}: {}",
+                    env!("CARGO_PKG_VERSION")
+                )));
+                assert!(lower_head.contains(&format!(
+                    "{SYNC_MANIFEST_SCHEMA_HEADER}: {}",
+                    vulcan_provider_adapters::provider_manifest::MANIFEST_SCHEMA_VERSION
+                )));
+                assert!(lower_head.contains(&format!(
+                    "{SYNC_MANIFEST_ENGINE_HEADER}: {}",
+                    vulcan_provider_adapters::provider_manifest::CURRENT_MANIFEST_ENGINE
+                )));
                 let path = head_text.split_whitespace().nth(1).unwrap_or("/");
                 let (headers, body) = if path == "/index.json" {
                     (
@@ -7398,12 +7424,7 @@ mod tests {
                     secret_reference: String::from("signed-alibaba-secret"),
                     management_secret_reference: None,
                     service_origin_override: None,
-                    verified_protocols: std::collections::BTreeSet::from([
-                        vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID.to_string(),
-                    ]),
-                    selected_protocol: vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID.to_string(),
                     prompt_cache_by_protocol: std::collections::BTreeMap::new(),
-                    usage_scope_override: None,
                 },
             )
             .expect("Alibaba connection should register");
@@ -7427,12 +7448,7 @@ mod tests {
                     secret_reference: String::from("signed-alibaba-media-secret"),
                     management_secret_reference: None,
                     service_origin_override: None,
-                    verified_protocols: std::collections::BTreeSet::from([
-                        vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID.to_string(),
-                    ]),
-                    selected_protocol: vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID.to_string(),
                     prompt_cache_by_protocol: std::collections::BTreeMap::new(),
-                    usage_scope_override: None,
                 },
             )
             .expect("Alibaba media connection should register");
@@ -8308,13 +8324,7 @@ mod tests {
                     secret_reference: String::from("openai-discovery-secret"),
                     management_secret_reference: None,
                     service_origin_override: None,
-                    verified_protocols: BTreeSet::from([
-                        vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID.to_string(),
-                        vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID.to_string(),
-                    ]),
-                    selected_protocol: vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID.to_string(),
                     prompt_cache_by_protocol: BTreeMap::new(),
-                    usage_scope_override: None,
                 },
             )
             .expect("OpenAI connection should register");
@@ -8447,12 +8457,10 @@ mod tests {
         );
     }
 
-    /// Verifies status keeps APIKEY.FUN visibly on its intentional legacy boundary while
-    /// exposing concrete Alibaba provider-tool template instances (plan §R9/R10).
-    /// 验证状态会让 APIKEY.FUN 明确停留在有意保留的旧版边界，同时公开具体的 Alibaba
-    /// 供应商工具模板实例（方案 §R9/R10）。
+    /// Verifies APIKEY.FUN status reflects Manifest cutover while Alibaba template instances remain visible.
+    /// 验证 APIKEY.FUN 状态反映 Manifest 切换，同时保持 Alibaba 模板实例可见。
     #[test]
-    fn provider_manifest_status_exposes_legacy_boundary_and_template_instances() {
+    fn provider_manifest_status_exposes_apikeyfun_cutover_and_template_instances() {
         // directory isolates manifest-store state so both statuses come only from bundled facts.
         // directory 隔离 Manifest 存储状态，使两份状态都只来自内置事实。
         let directory = tempfile::tempdir().expect("temp dir should create");
@@ -8466,25 +8474,19 @@ mod tests {
         // runtime 持有权威的已编译内置代际。
         let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
 
-        // apikeyfun proves the placeholder manifest does not silently replace its retained binding.
-        // apikeyfun 证明占位清单不会静默替换其保留的绑定权威。
+        // apikeyfun proves the bundled Manifest is now the active binding authority.
+        // apikeyfun 证明内置 Manifest 现已成为活动绑定权威。
         let apikeyfun = service
             .provider_manifest_status(&runtime, "apikeyfun")
             .expect("APIKEY.FUN status should build");
-        assert!(
-            apikeyfun.legacy_binding_pending,
-            "APIKEY.FUN must remain visibly pending until authoritative model mappings arrive"
-        );
+        assert!(apikeyfun.bundled.is_some());
+        assert!(apikeyfun.active.is_some());
 
         // alibaba exposes generated targets without requiring the UI to recompute templates.
         // alibaba 公开生成目标，无需 UI 重新计算模板。
         let alibaba = service
             .provider_manifest_status(&runtime, "alibaba")
             .expect("Alibaba status should build");
-        assert!(
-            !alibaba.legacy_binding_pending,
-            "migrated providers must never be labeled as legacy binding authority"
-        );
         assert!(
             alibaba
                 .tool_target_template_instances

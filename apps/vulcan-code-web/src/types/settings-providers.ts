@@ -1,5 +1,6 @@
 import type { MainAreaId } from "./startup";
 import type { ComposerAttachmentSummary } from "./composer-skills";
+import type { PublicAiNativeToolKind, PublicAiResourceKind } from "./public-ai";
 
 export interface FeatureAreaSummary {
   // Stable feature area identifier.
@@ -145,10 +146,13 @@ export interface ProviderModelSummary {
   attachment?: boolean | null;
   // Input modalities accepted by the model.
   // 模型接受的输入模态集合。
-  inputModalities?: string[];
+  inputModalities?: PublicAiResourceKind[];
   // Output modalities emitted by the model.
   // 模型输出的模态集合。
-  outputModalities?: string[];
+  outputModalities?: PublicAiResourceKind[];
+  // Provider-native tools available on this exact credential and model route.
+  // 此精确凭据与模型路由可用的供应商原生工具。
+  providerNativeTools?: PublicAiNativeToolKind[];
   // Optional reasoning profile JSON text.
   // 可选推理档位配置 JSON 文本。
   reasoningProfileJson?: string | null;

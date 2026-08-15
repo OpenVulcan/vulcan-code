@@ -447,6 +447,10 @@ pub struct ProviderModelSummary {
     /// 归一化输出模态列表。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub output_modalities: Vec<String>,
+    /// Provider-native tools available on this exact credential and model route.
+    /// 此精确凭据与模型路由可用的供应商原生工具。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub provider_native_tools: Vec<String>,
     /// Optional reasoning profile JSON text.
     /// 可选推理档位配置 JSON 文本。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -730,5 +734,43 @@ mod plugin_summary_tests {
         assert_eq!(value["diagnostics"], serde_json::json!([]));
         assert_eq!(value["nameByLocale"], serde_json::json!({}));
         assert_eq!(value["capabilityByLocale"], serde_json::json!({}));
+    }
+}
+
+#[cfg(test)]
+mod provider_model_summary_tests {
+    use super::*;
+
+    /// Verifies exact provider-native tools use the camel-case WebUI contract.
+    /// 验证精确供应商原生工具使用 WebUI 所需的驼峰命名契约。
+    #[test]
+    fn provider_native_tools_are_serialized_for_the_model_picker() {
+        let summary = ProviderModelSummary {
+            id: String::from("deepseek-v4-flash"),
+            name: String::from("DeepSeek V4 Flash"),
+            active: true,
+            preferred_connection: true,
+            enabled: true,
+            status: None,
+            family: None,
+            context_limit: Some(131_072),
+            input_limit: None,
+            output_limit: Some(32_768),
+            reasoning: Some(true),
+            attachment: Some(true),
+            input_modalities: vec![String::from("image")],
+            output_modalities: Vec::new(),
+            provider_native_tools: vec![String::from("web_search")],
+            reasoning_profile_json: None,
+            reasoning_selection: None,
+            supports_secondary_routes: false,
+            secondary_route: None,
+        };
+
+        let value = serde_json::to_value(summary).expect("serialize provider model summary");
+        assert_eq!(
+            value["providerNativeTools"],
+            serde_json::json!(["web_search"])
+        );
     }
 }

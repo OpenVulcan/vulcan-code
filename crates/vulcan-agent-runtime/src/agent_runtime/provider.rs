@@ -155,11 +155,7 @@ pub fn provider_route_lease_identity(
         connection_id: selection.route.connection.id.clone(),
         model_id: selection.model.id.clone(),
         protocol_profile_id: selection.route.protocol_route.protocol_profile_id.clone(),
-        manifest_revision: selection
-            .protocol_binding
-            .as_ref()
-            .map(|binding| binding.manifest_revision)
-            .unwrap_or(0),
+        manifest_revision: selection.protocol_binding.manifest_revision,
         manifest_generation: selection.manifest_generation,
         catalog_revision: selection.catalog_revision.clone(),
         route_revision: selection.route_revision.clone(),
@@ -388,11 +384,7 @@ pub fn resolve_public_ai_provider_blueprint(
         model_id: selection.model.id.clone(),
         model_name: selection.model.display_name.clone(),
         protocol_profile_id: protocol_id.to_string(),
-        manifest_revision: selection
-            .protocol_binding
-            .as_ref()
-            .map(|binding| binding.manifest_revision)
-            .unwrap_or(0),
+        manifest_revision: selection.protocol_binding.manifest_revision,
         frozen_selection: Some(selection.clone()),
         route_revision: selection.route_revision.clone(),
         secondary_route: selection.route.secondary_route.clone(),

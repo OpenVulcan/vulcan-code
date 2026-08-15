@@ -2,8 +2,9 @@
 
 本手册对应：
 
-- `docs/plan/20260806-01-HOT_UPDATABLE_PROVIDER_MANIFEST_AND_MODEL_PROTOCOL_ROUTING.md`；
-- `docs/plan/20260807-02-PROVIDER_MANIFEST_FULL_REMEDIATION_AND_FIVE_PASS_AUDIT.md`；
+- `docs/新增系统供应商流程.md`；
+- `docs/completed/20260806/01-HOT_UPDATABLE_PROVIDER_MANIFEST_AND_MODEL_PROTOCOL_ROUTING.md`；
+- `docs/completed/20260807/02-PROVIDER_MANIFEST_FULL_REMEDIATION_AND_FIVE_PASS_AUDIT.md`；
 - `docs/completed/20260808/01-PROVIDER_MANIFEST_FINAL_GAP_REMEDIATION.md`。
 
 它说明如何只通过受签名 JSON 发布供应商与模型事实，以及何时必须修改宿主原语。本文不替代
@@ -26,7 +27,7 @@ crates/vulcan-runtime-assets/resources/provider-manifests/manifests/<provider>.j
 配套资源位于：
 
 ```text
-crates/vulcan-runtime-assets/resources/provider-manifests/schema/provider-manifest-v1.schema.json
+crates/vulcan-runtime-assets/resources/provider-manifests/schema/provider-manifest-v2.schema.json
 crates/vulcan-runtime-assets/resources/provider-manifests/schema/provider-index-v1.schema.json
 crates/vulcan-runtime-assets/resources/provider-manifests/fixtures/
 ```
@@ -43,7 +44,7 @@ crates/vulcan-runtime-assets/resources/provider-manifests/fixtures/
 | 已支持 Operation、Upload Channel 与异步生命周期的组合 | Manifest | 是 |
 | HTTP、流式解码、凭据投影、文件读取、资源上限、签名算法 | 宿主已注册原语 | 否 |
 | 新网络权限、新认证机制、新 Wire 编解码或新任意转换能力 | 宿主代码及安全审核 | 否 |
-| APIKEY.FUN 模型到协议事实 | 用户后续提供的权威映射 | 未提供前禁止猜测 |
+| APIKEY.FUN 模型到协议事实 | APIKEY.FUN Manifest 与已验证事实记录 | 新事实仍需先验证，禁止从分组或相邻模型猜测 |
 
 自定义供应商以 `custom:` 命名空间和独立文件持久化。它可以有多个实例、多个启用协议、发现模型
 和手动模型；实例之间的端点、凭据、模型和选择不得串用。
@@ -64,7 +65,7 @@ ASCII 字节，后缀只允许 `[A-Za-z0-9._-]`，单文件上限为 4 MiB。
 {
   "schema_version": "vulcan.custom-provider-manifest.v1",
   "provider_manifest": {
-    "schema_version": "vulcan.provider-manifest.v1",
+    "schema_version": "vulcan.provider-manifest.v2",
     "provider_id": "custom:example"
   },
   "local_overrides": {}
@@ -101,7 +102,7 @@ before-image，不是日志的短期代替品。
 
 ## 2. 根结构与标识规则
 
-每份系统清单使用 `schema_version: "vulcan.provider-manifest.v1"`，根字段包括：
+每份系统清单使用 `schema_version: "vulcan.provider-manifest.v2"`，根字段包括：
 
 | 字段 | 作用 | 关键约束 |
 | --- | --- | --- |
@@ -171,6 +172,21 @@ rebuild_json_template
 
 新增凭据录入方式意味着新增宿主能力与安全边界，必须升级软件并审核，不能只发布 JSON。远端
 清单不能改变随包 `credential_registration`，也不能改变凭据档的 `account_usage_query` 原语。
+
+### 2.2 用途声明是初始默认值，不是能力上限
+
+Schema v2 将凭据档的用途字段固定为 `default_usage_scopes`。它只负责在用户尚未作出模型级选择时，
+提供会话发布与非会话内部使用的初始默认值；它不是供应商、套餐或凭据对知识库、VMM 的授权上限。
+用户在模型列表保存的显式状态始终优先于此默认值。
+
+会话使用与内部使用是两个独立状态：关闭会话使用不会从模型管理目录或账号可达目录移除模型，
+也不会关闭知识库与 VMM；关闭内部使用同样不会影响会话模型选择。知识库和 VMM 共用一个模型级
+内部使用开关，但运行时仍用 `internal_background` 与 `external_service` 区分调度、鉴权和审计。
+`interactive_agent` 不能作为内部推理路由用途。
+
+清单热更新可以调整 `default_usage_scopes`，因为它属于数据默认值而非信任权限扩张；已经保存的用户
+显式状态不会被热更新覆盖。Schema v1 的 `allowed_usage_scopes` 语义不兼容，加载器必须直接拒绝，
+不得探测或降级解析。
 
 ## 3. 服务入口、目录来源与模型热新增
 
@@ -273,7 +289,7 @@ rebuild_json_template
 2. 启用多个协议时才允许逐模型选择；
 3. 没有显式选择时，固定优先级为：
    `openai-responses.v1`、`openai-codex-responses.v1`、`anthropic-messages.v1`、
-   `openai-chat-completions.v1`、`gemini-generate-content.v1`；
+   `openai-chat-completions.v1`、`google.gemini.generate_content`；
 4. 因此只要启用 Responses 就优先自动选 Responses；没有 Responses 才按上述顺序选择；
 5. 禁用已选择协议会要求重新解析/选择，绝不保留失效绑定；
 6. 保存后即按声明执行，不存在“先用 Responses 测试再切换”的探测阶段。
@@ -454,6 +470,12 @@ rtk proxy pwsh -NoProfile -File scripts/check_provider_manifest_release.ps1
 
 ## 10. 签名、同步与信任下限
 
+在线清单服务必须按客户端版本和引擎能力投放兼容版本。远端不得把高版本 schema、新原语或更高
+`minimum_manifest_engine` 发送给不支持的客户端；客户端仍需独立失败关闭校验。若收到不兼容清单，
+唯一处理方式是拒绝激活并提示升级客户端，不得探测旧协议、回退代码 descriptor 或临时忽略未知字段。
+客户端在 Index 和供应商清单请求中统一发送 `x-vulcan-client-version`、`x-vulcan-manifest-schema` 与
+`x-vulcan-manifest-engine`；在线分发必须使用这些显式能力边界选择代际，不能依赖未声明的客户端猜测。
+
 远端 Index 和供应商清单使用分离契约：
 
 1. 从单一配置的 HTTPS Index URL 获取原始字节；
@@ -531,18 +553,17 @@ Operation/Tool declaration 来源和选择 snapshot。UI 不得再实现第二�
 | 回滚后 UI 仍显示新模型 | 是否完成 generation 重建和 Workbench 发布，而非只交换文件 |
 | retry 改走其他协议 | frozen retry route guard；这是 P0，禁止加 fallback |
 
-## 13. 剩余代码硬编码台账与删除条件
+## 13. 宿主硬边界台账
 
 静态扫描命中必须人工分类，不能看到供应商名就删除，也不能看到“兼容”就永久保留。
 
 | 位置/类别 | 当前理由 | 禁止用途 | 删除或缩减条件 |
 | --- | --- | --- | --- |
-| `registry.rs` 的 APIKEY.FUN legacy allowlist 与 `legacy_descriptor_by_id` | 用户尚未提供模型到协议权威映射；这是唯一生产代码持有的系统供应商描述 | 不得扩展到其他已迁移供应商；APIKEY.FUN 占位 Manifest 不得接管绑定 | 用户提供映射并形成可执行 fixtures 后迁移 Manifest，同时删除 allowlist 与生产 descriptor |
-| `legacy_custom_descriptor_to_manifest` | 只迁移历史 `custom:` descriptor-only 文档 | 禁止接受系统供应商或缺少 `custom:` 前缀的输入 | 历史 v0 支持周期结束后连同冻结 fixture 一并删除 |
+| `project_custom_descriptor_manifest` | 把当前用户自有 `custom:` descriptor 投影为同代际 Manifest | 禁止接受系统供应商、缺少 `custom:` 前缀的输入或旧版单协议字段 | 自定义供应商改为直接编辑完整 Manifest 时删除 |
 | 通用 `generic_json` Operation/Upload/Async 原语 | 执行全部已迁移供应商目标；权限来自已编译 Manifest 和内置 trust ceiling | 禁止按供应商名、模型名或候选字段分流 | 长期保留为封闭宿主原语，并持续由生产目标 fixture 覆盖审计 |
-| `#[cfg(test)]` migration oracle | 仅证明历史解析器输出；不参与生产注册、发现、绑定或执行 | 禁止被非测试代码导出或调用 | 对应历史兼容窗口结束后换成冻结 golden fixture |
 
-`first_batch_legacy`、Alibaba/MiniMax/Tavily 供应商命名 adapter、静态系统 descriptor 目录和
+系统 Legacy allowlist、`legacy_descriptor_by_id`、`first_batch_legacy`、Alibaba/MiniMax/Tavily
+供应商命名 adapter、静态系统 descriptor 目录和
 `tool_catalog.rs` 已删除。发布门禁会拒绝这些文件重新出现，并要求全部生产目标的 adapter 都是
 `generic_json`、每个目标恰好由一个可执行 fixture 覆盖。
 
@@ -566,4 +587,4 @@ Operation/Tool declaration 来源和选择 snapshot。UI 不得再实现第二�
 - [ ] 签名私钥未进入仓库或日志；
 - [ ] 同步后验证 runtime generation 与 Workbench，而非只看文件落盘；
 - [ ] 回滚测试证明磁盘、runtime 与 UI 投影一起恢复；
-- [ ] APIKEY.FUN 或其他无证据事实保持显式未知，没有猜测。
+- [ ] 任何供应商的新事实在取得证据前保持显式未知，没有根据分组、协议或相邻模型猜测。

@@ -1,0 +1,135 @@
+{
+  "schema_version": "provider-manifest-execution-fixture.v1",
+  "fixture_id": "apikeyfun-grok-video-async",
+  "base_manifest": "tavily.json",
+  "production_target_refs": [
+    "apikeyfun::grok-imagine-video.generate"
+  ],
+  "tool_target": {
+    "target_id": "public-api.fixture-apikeyfun-grok-video",
+    "description": "APIKEY.FUN Grok Imagine asynchronous video generation fixture.",
+    "service_entry_id": "public-api",
+    "credential_profile_ids": ["api-key"],
+    "upstream_target_id": "grok-imagine-video",
+    "display_name": "APIKEY.FUN Grok Imagine Video Fixture",
+    "tool_id": "fixture_apikeyfun_grok_video_generate",
+    "capability": "video_generate",
+    "input_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "model": {"type": "string", "const": "grok-imagine-video"},
+        "prompt": {"type": "string", "minLength": 1},
+        "duration": {"type": "integer", "minimum": 1, "maximum": 15},
+        "resolution": {"type": "string", "enum": ["480p", "720p"]}
+      },
+      "required": ["model", "prompt", "duration", "resolution"]
+    },
+    "output": {
+      "kind": "resources",
+      "source_path": "/",
+      "normalized_result_path": "resources",
+      "resource_kind": "video",
+      "mime_types": ["video/mp4"],
+      "resource_decoders": [
+        {
+          "source_path": "/",
+          "encoding": "binary_body",
+          "resource_kind": "video",
+          "mime_type": "video/mp4",
+          "max_bytes": 1048576,
+          "output_id_prefix": "video"
+        }
+      ]
+    },
+    "execution": {
+      "endpoint_path": "/fixtures/apikeyfun-grok-video-start",
+      "authentication": "bearer_authorization",
+      "adapter": "generic_json",
+      "execution_kind": "http_json_async_poll"
+    }
+  },
+  "operation": {
+    "operation_id": "fixture.apikeyfun-grok-video-async",
+    "operation": "video_generate",
+    "carrier": "provider_tool",
+    "input_resources": ["image"],
+    "output_resources": ["video"],
+    "tool_target_refs": ["public-api.fixture-apikeyfun-grok-video"],
+    "request_profile_refs": [],
+    "response_profile_refs": [],
+    "upload_channel_refs": [],
+    "upload_bindings": [],
+    "timeout_ms": 2000,
+    "idempotent": false,
+    "async_execution": {
+      "poll_interval_ms": 250,
+      "max_backoff_ms": 1000,
+      "timeout_ms": 2000,
+      "cancellation_supported": false,
+      "generic_json": {
+        "poll_endpoint_path": "/fixtures/apikeyfun-grok-video-status",
+        "poll_method": "get",
+        "task_id_pointer": "/request_id",
+        "task_id_in_path": true,
+        "status_pointer": "/status",
+        "queued_statuses": ["pending"],
+        "running_statuses": [],
+        "success_statuses": ["done", "completed", "succeeded"],
+        "failure_statuses": ["failed", "error"],
+        "cancelled_statuses": ["cancelled"],
+        "success_follow_up": {
+          "endpoint_path": "/fixtures/apikeyfun-grok-video-content",
+          "method": "get",
+          "identifier_source": "provider_task_id",
+          "identifier_in_path": true,
+          "identifier_path_suffix": "content",
+          "response_body": "binary_resource"
+        }
+      }
+    }
+  },
+  "upload_channels": [],
+  "required_execution_primitives": ["http_json_async_poll"],
+  "required_upload_primitives": [],
+  "arguments": {
+    "model": "grok-imagine-video",
+    "prompt": "a corgi runs along the beach",
+    "duration": 2,
+    "resolution": "720p"
+  },
+  "interactions": [
+    {
+      "method": "POST",
+      "path": "/fixtures/apikeyfun-grok-video-start",
+      "expected_json_body": {
+        "model": "grok-imagine-video",
+        "prompt": "a corgi runs along the beach",
+        "duration": 2,
+        "resolution": "720p"
+      },
+      "response_status": 202,
+      "response_json_body": {"request_id": "video-task-1"}
+    },
+    {
+      "method": "GET",
+      "path": "/fixtures/apikeyfun-grok-video-status/video-task-1",
+      "response_status": 200,
+      "response_json_body": {"status": "pending"}
+    },
+    {
+      "method": "GET",
+      "path": "/fixtures/apikeyfun-grok-video-status/video-task-1",
+      "response_status": 200,
+      "response_json_body": {"status": "completed"}
+    },
+    {
+      "method": "GET",
+      "path": "/fixtures/apikeyfun-grok-video-content/video-task-1/content",
+      "response_status": 200,
+      "response_text_body": "fixture-video-bytes",
+      "response_content_type": "video/mp4"
+    }
+  ],
+  "expected_output_kind": "resources"
+}

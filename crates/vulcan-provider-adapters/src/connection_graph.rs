@@ -278,34 +278,15 @@ fn validate_connection(
             credential_profile.id
         ));
     }
-    entry.effective_usage_scopes(connection)?;
     if entry.kind == crate::ServiceEntryKind::ProviderTools {
-        if !connection.selected_protocol.is_empty() || !connection.verified_protocols.is_empty() {
-            return Err(format!(
-                "Provider-tools service entry `{}` cannot bind a conversation protocol.",
-                entry.id
-            ));
-        }
         return Ok(());
     }
-    let route = entry
-        .protocol_routes
-        .iter()
-        .find(|route| route.protocol_profile_id == connection.selected_protocol)
-        .ok_or_else(|| {
-            format!(
-                "Protocol `{}` is not registered for service entry `{}`.",
-                connection.selected_protocol, entry.id
-            )
-        })?;
-    if !route.verified
-        || !connection
-            .verified_protocols
-            .contains(&connection.selected_protocol)
-    {
+    // Protocol authority belongs to the active Provider Manifest, never to one credential record.
+    // 协议权威属于活动 Provider Manifest，绝不属于某条凭据记录。
+    if !entry.protocol_routes.iter().any(|route| route.verified) {
         return Err(format!(
-            "Protocol `{}` is not verified for connection `{}`.",
-            connection.selected_protocol, connection.id
+            "Service entry `{}` has no verified Manifest protocol route.",
+            entry.id
         ));
     }
     Ok(())
@@ -315,8 +296,6 @@ fn validate_connection(
 mod tests {
     use super::*;
     use crate::{CredentialMode, ProviderRegistry};
-    use std::collections::BTreeSet;
-    use vulcan_ai_protocols::{ANTHROPIC_MESSAGES_PROFILE_ID, OPENAI_CHAT_PROFILE_ID};
 
     /// Builds one strict OpenRouter registry.
     /// 构建一个严格 OpenRouter 注册表。
@@ -337,7 +316,7 @@ mod tests {
 
     /// Builds one test connection.
     /// 构建一个测试连接。
-    fn connection(id: &str, protocol: &str) -> CredentialConnection {
+    fn connection(id: &str) -> CredentialConnection {
         CredentialConnection {
             id: id.to_string(),
             provider_id: String::from("openrouter"),
@@ -349,13 +328,7 @@ mod tests {
             secret_reference: format!("secret-{id}"),
             management_secret_reference: None,
             service_origin_override: None,
-            verified_protocols: BTreeSet::from([
-                ANTHROPIC_MESSAGES_PROFILE_ID.to_string(),
-                OPENAI_CHAT_PROFILE_ID.to_string(),
-            ]),
-            selected_protocol: protocol.to_string(),
             prompt_cache_by_protocol: BTreeMap::new(),
-            usage_scope_override: None,
         }
     }
 
@@ -366,14 +339,25 @@ mod tests {
         let registry = registry();
         let mut graph = PersistedConnectionGraph::default();
         graph
-            .add_connection(&registry, connection("one", ANTHROPIC_MESSAGES_PROFILE_ID))
+            .add_connection(&registry, connection("one"))
             .expect("connection should register");
         graph
-            .add_connection(&registry, connection("two", OPENAI_CHAT_PROFILE_ID))
+            .add_connection(&registry, connection("two"))
             .expect("connection should register");
         assert_eq!(
             graph.account_preferences.provider_defaults["openrouter"],
             "one"
         );
+    }
+
+    /// Verifies connection admission depends on Manifest routes instead of credential protocol state.
+    /// 验证连接准入依赖 Manifest 路由，而不是凭据协议状态。
+    #[test]
+    fn system_connection_uses_manifest_protocol_authority() {
+        let registry = registry();
+        let mut graph = PersistedConnectionGraph::default();
+        graph
+            .add_connection(&registry, connection("system"))
+            .expect("signed system routes should authorize the credential connection");
     }
 }

@@ -104,8 +104,8 @@ pub(super) struct PublicAiSettingsSnapshot {
     /// Explicit override records that avoid exposing composite-key parsing to the browser.
     /// 避免浏览器解析组合键的显式覆盖记录。
     model_override_records: Vec<PublicAiModelOverrideRecord>,
-    /// Effective model access records derived from runtime catalogs and persisted choices.
-    /// 从运行时目录与持久化选择派生的有效模型访问记录。
+    /// Conversation publication records derived from runtime catalogs and persisted choices.
+    /// 从运行时目录与持久化选择派生的会话发布记录。
     model_access_records: Vec<PublicAiModelAccessRecord>,
     /// Signed provider-tool template models kept visible even while provider-disabled.
     /// 即使在供应商级关闭时仍保持可见的签名供应商工具模板模型。
@@ -423,12 +423,6 @@ pub(super) struct PublicAiConnectionSnapshot {
     /// User-visible connection name.
     /// 用户可见连接名称。
     display_name: String,
-    /// Verified protocol profile identifiers.
-    /// 已验证协议 Profile 标识。
-    verified_protocols: BTreeSet<String>,
-    /// Currently selected protocol profile.
-    /// 当前选定协议 Profile。
-    selected_protocol: String,
     /// Protocol-scoped public cache policies.
     /// 协议作用域的公共缓存策略。
     prompt_cache_by_protocol: BTreeMap<String, PromptCachePolicy>,
@@ -493,8 +487,6 @@ impl PublicAiConnectionSnapshot {
             credential_mode: connection.credential_mode,
             credential_id: connection.credential_id.clone(),
             display_name: connection.display_name.clone(),
-            verified_protocols: connection.verified_protocols.clone(),
-            selected_protocol: connection.selected_protocol.clone(),
             prompt_cache_by_protocol: connection.prompt_cache_by_protocol.clone(),
             pending_validation: configuration
                 .connection_is_pending_validation(connection.id.as_str()),
@@ -519,8 +511,8 @@ pub(super) struct PublicAiModelRouteRecord {
     /// Exact upstream model identifier.
     /// 精确上游模型标识。
     model_id: String,
-    /// Effective protocol frozen in the model binding or explicit legacy boundary, when executable.
-    /// 可执行时冻结在模型绑定或显式旧版边界中的生效协议。
+    /// Effective protocol frozen in the model binding, when executable.
+    /// 可执行时冻结在模型绑定中的生效协议。
     #[serde(skip_serializing_if = "Option::is_none")]
     protocol_id: Option<String>,
     /// Protocol variants available in this exact effective account catalog.
@@ -565,8 +557,8 @@ pub(super) struct PublicAiModelOverrideRecord {
     overrides: ModelExecutionOverrides,
 }
 
-/// Browser-facing provider-model access state.
-/// 面向浏览器的供应商模型访问状态。
+/// Browser-facing provider-model conversation publication state.
+/// 面向浏览器的供应商模型会话发布状态。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct PublicAiModelAccessRecord {
@@ -576,14 +568,14 @@ pub(super) struct PublicAiModelAccessRecord {
     /// Exact model identifier.
     /// 精确模型标识。
     model_id: String,
-    /// Effective enabled state after applying the persisted user choice.
-    /// 应用持久化用户选择后的有效启用状态。
+    /// Effective conversation enabled state after applying the persisted user choice.
+    /// 应用持久化用户选择后的有效会话启用状态。
     enabled: bool,
     /// Code-owned provider default before applying a user choice.
     /// 应用用户选择前由代码拥有的供应商默认值。
     default_enabled: bool,
-    /// Whether this exact model has an explicit user-owned access layer.
-    /// 此精确模型是否存在明确的用户持有访问层。
+    /// Whether this exact model has an explicit user-owned conversation layer.
+    /// 此精确模型是否存在明确的用户持有会话层。
     customized: bool,
 }
 
@@ -741,8 +733,8 @@ pub(super) struct PublicAiModelOverridesSaveRequest {
     overrides: Option<ModelExecutionOverrides>,
 }
 
-/// Saves one provider-model access choice independent from credentials and protocols.
-/// 保存一个独立于凭据和协议的供应商模型访问选择。
+/// Saves one provider-model conversation choice independent from credentials and protocols.
+/// 保存一个独立于凭据和协议的供应商模型会话选择。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct PublicAiModelEnabledSaveRequest {
@@ -761,21 +753,8 @@ pub(super) struct PublicAiModelEnabledSaveRequest {
     restore: bool,
 }
 
-/// Saves one enabled state for every synchronized model owned by a provider.
-/// 为一个供应商拥有的全部已同步模型保存同一启用状态。
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct PublicAiProviderModelsEnabledSaveRequest {
-    /// Exact provider identifier whose synchronized model set is mutated.
-    /// 要修改其已同步模型集合的精确供应商标识。
-    provider_id: String,
-    /// Requested enabled state for the complete provider model set.
-    /// 供应商完整模型集合请求的启用状态。
-    enabled: bool,
-}
-
-/// Saves one provider-model-operation internal access choice.
-/// 保存一项供应商、模型与操作作用域的内部访问选择。
+/// Saves one provider-model non-conversation internal-use choice.
+/// 保存一项供应商、模型级非会话内部使用选择。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct PublicAiInternalModelEnabledSaveRequest {
@@ -785,9 +764,6 @@ pub(super) struct PublicAiInternalModelEnabledSaveRequest {
     /// Exact model identifier.
     /// 精确模型标识。
     model_id: String,
-    /// Exact internal operation.
-    /// 精确内部操作。
-    operation: AiOperation,
     /// Requested enabled state.
     /// 请求的启用状态。
     enabled: bool,
@@ -991,9 +967,6 @@ pub(super) struct PublicAiCustomProviderSaveRequest {
     /// Exact compatible API base URL.
     /// 精确兼容 API 基础 URL。
     base_url: String,
-    /// The single compatible protocol served by this base URL.
-    /// 此基础 URL 提供的唯一兼容协议。
-    protocol: CustomProviderProtocol,
     /// Explicit remote-compaction policy for Codex Responses.
     /// Codex Responses 的显式远端压缩策略。
     #[serde(default)]
@@ -1025,9 +998,8 @@ pub(super) struct PublicAiCustomProviderSaveRequest {
     /// 自定义路径模式使用的同源相对发现路径。
     #[serde(default)]
     model_discovery_path: Option<String>,
-    /// Enabled compatible protocol collection; an empty collection keeps the legacy single protocol.
-    /// 启用的兼容协议集合；空集合保持旧版单协议语义。
-    #[serde(default)]
+    /// Non-empty compatible protocol collection served by this provider.
+    /// 此供应商提供的非空兼容协议集合。
     protocols: Vec<CustomProviderProtocol>,
     /// Per-protocol route overrides with route-specific base URL, path, discovery, and headers.
     /// 带路由专属基础 URL、路径、发现与请求头的逐协议路由覆盖。
@@ -1340,9 +1312,9 @@ struct PreparedCustomProviderCandidate {
     /// Strict projected provider descriptor.
     /// 严格投影后的供应商描述。
     descriptor: ProviderDescriptor,
-    /// Exact service, credential-profile, and protocol target used by every migrated account.
-    /// 每个迁移账号使用的精确服务、凭据配置档与协议目标。
-    connection_target: CustomProviderConnectionTarget,
+    /// Exact descriptor-owned activation identities used by every credential account.
+    /// 每个凭据账号使用的精确描述符自有激活身份。
+    activation_target: CustomProviderActivationTarget,
     /// Optional temporary connection used only when a metadata request has credential material.
     /// 仅在元数据请求具有凭据材料时使用的可选临时连接。
     validation_connection: Option<CredentialConnection>,
@@ -1354,22 +1326,22 @@ struct PreparedCustomProviderCandidate {
     updating_existing: bool,
 }
 
-/// Identifies the non-secret connection contract produced by one custom-provider descriptor.
-/// 标识一个自定义供应商描述符产生的非秘密连接契约。
+/// Identifies descriptor-owned activation identities for one custom provider.
+/// 标识一个自定义供应商由描述符持有的激活身份。
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct CustomProviderConnectionTarget {
+struct CustomProviderActivationTarget {
     /// Exact service entry selected by the provider descriptor.
     /// 供应商描述符选定的精确服务入口。
     service_entry_id: String,
     /// Exact credential profile selected by the provider descriptor.
     /// 供应商描述符选定的精确凭据配置档。
     credential_profile_id: String,
-    /// Exact selected single protocol.
-    /// 精确选定的唯一协议。
-    selected_protocol: String,
-    /// Closed verified protocol set admitted by the strict connection graph.
-    /// 严格连接图允许的封闭已验证协议集合。
-    verified_protocols: BTreeSet<String>,
+    /// Exact provider default protocol profile used by protocol-bound internal routes.
+    /// 协议绑定内部路由使用的精确供应商默认协议配置档。
+    default_protocol_profile_id: String,
+    /// Closed protocol profile set declared by the provider descriptor.
+    /// 供应商描述符声明的封闭协议配置档集合。
+    protocol_profile_ids: BTreeSet<String>,
 }
 
 /// Stores one candidate observation before the caller decides whether it may be persisted.
@@ -1426,20 +1398,11 @@ fn prepare_custom_provider_candidate(
         .provider_id
         .clone()
         .unwrap_or_else(|| format!("custom:{}", uuid::Uuid::new_v4().simple()));
-    // protocols stays authoritative when declared; an empty collection keeps the legacy
-    // single-protocol request shape for older clients.
-    // protocols 在声明时保持权威；空集合保留旧版单协议请求形态以兼容旧客户端。
-    let protocols = if request.protocols.is_empty() {
-        vec![request.protocol]
-    } else {
-        request.protocols.clone()
-    };
     let mut descriptor = CustomProviderDefinition {
         id: provider_id.clone(),
         display_name: request.display_name.clone(),
         base_url: request.base_url.clone(),
-        protocol: None,
-        protocols,
+        protocols: request.protocols.clone(),
         authentication: request.authentication,
         model_discovery_mode: request.model_discovery_mode,
         model_discovery_path: request.model_discovery_path.clone(),
@@ -1489,13 +1452,13 @@ fn prepare_custom_provider_candidate(
         .credential_profiles
         .first()
         .ok_or_else(|| String::from("Custom provider must declare one credential profile."))?;
-    // connection_target contains only descriptor-owned identities and remains valid without credentials.
-    // connection_target 仅包含描述符持有的身份，因此在没有凭据时仍然有效。
-    let connection_target = CustomProviderConnectionTarget {
+    // activationTarget contains only descriptor-owned identities and remains valid without credentials.
+    // activationTarget 仅包含描述符持有的身份，因此在没有凭据时仍然有效。
+    let activation_target = CustomProviderActivationTarget {
         service_entry_id: entry.id.clone(),
         credential_profile_id: profile.id.clone(),
-        selected_protocol: route.protocol_profile_id.clone(),
-        verified_protocols: entry
+        default_protocol_profile_id: route.protocol_profile_id.clone(),
+        protocol_profile_ids: entry
             .protocol_routes
             .iter()
             .map(|route| route.protocol_profile_id.clone())
@@ -1535,8 +1498,8 @@ fn prepare_custom_provider_candidate(
             existing_connection.map(|existing_connection| CredentialConnection {
                 id: temporary_connection_id,
                 provider_id: provider_id.clone(),
-                service_entry_id: connection_target.service_entry_id.clone(),
-                credential_profile_id: connection_target.credential_profile_id.clone(),
+                service_entry_id: activation_target.service_entry_id.clone(),
+                credential_profile_id: activation_target.credential_profile_id.clone(),
                 credential_mode: existing_connection.credential_mode,
                 credential_id: existing_connection.credential_id.clone(),
                 display_name: existing_connection.display_name.clone(),
@@ -1545,10 +1508,7 @@ fn prepare_custom_provider_candidate(
                     .management_secret_reference
                     .clone(),
                 service_origin_override: existing_connection.service_origin_override.clone(),
-                verified_protocols: connection_target.verified_protocols.clone(),
-                selected_protocol: connection_target.selected_protocol.clone(),
                 prompt_cache_by_protocol: existing_connection.prompt_cache_by_protocol.clone(),
-                usage_scope_override: existing_connection.usage_scope_override.clone(),
             }),
             None,
         )
@@ -1573,18 +1533,15 @@ fn prepare_custom_provider_candidate(
             Some(CredentialConnection {
                 id: temporary_connection_id,
                 provider_id: provider_id.clone(),
-                service_entry_id: connection_target.service_entry_id.clone(),
-                credential_profile_id: connection_target.credential_profile_id.clone(),
+                service_entry_id: activation_target.service_entry_id.clone(),
+                credential_profile_id: activation_target.credential_profile_id.clone(),
                 credential_mode: profile.credential_mode,
                 credential_id: format!("credential_{}", uuid::Uuid::new_v4().simple()),
                 display_name: credential_display_name.trim().to_string(),
                 secret_reference,
                 management_secret_reference: None,
                 service_origin_override: None,
-                verified_protocols: connection_target.verified_protocols.clone(),
-                selected_protocol: connection_target.selected_protocol.clone(),
                 prompt_cache_by_protocol: BTreeMap::new(),
-                usage_scope_override: None,
             }),
             Some(CredentialSecretEnvelope::new_api_key(secret.to_string())?),
         )
@@ -1592,7 +1549,7 @@ fn prepare_custom_provider_candidate(
     Ok(PreparedCustomProviderCandidate {
         provider_id,
         descriptor,
-        connection_target,
+        activation_target,
         validation_connection,
         temporary_secret,
         updating_existing,
@@ -1822,25 +1779,22 @@ fn custom_provider_edit_validation_candidates(
             let validation_connection = CredentialConnection {
                 id: format!("connection_{}", uuid::Uuid::new_v4().simple()),
                 provider_id: candidate.provider_id.clone(),
-                service_entry_id: candidate.connection_target.service_entry_id.clone(),
-                credential_profile_id: candidate.connection_target.credential_profile_id.clone(),
+                service_entry_id: candidate.activation_target.service_entry_id.clone(),
+                credential_profile_id: candidate.activation_target.credential_profile_id.clone(),
                 credential_mode: existing.credential_mode,
                 credential_id: existing.credential_id,
                 display_name: existing.display_name,
                 secret_reference: existing.secret_reference,
                 management_secret_reference: existing.management_secret_reference,
                 service_origin_override: existing.service_origin_override,
-                verified_protocols: candidate.connection_target.verified_protocols.clone(),
-                selected_protocol: candidate.connection_target.selected_protocol.clone(),
                 prompt_cache_by_protocol: existing.prompt_cache_by_protocol,
-                usage_scope_override: existing.usage_scope_override,
             };
             (
                 source_connection_id,
                 PreparedCustomProviderCandidate {
                     provider_id: candidate.provider_id.clone(),
                     descriptor: candidate.descriptor.clone(),
-                    connection_target: candidate.connection_target.clone(),
+                    activation_target: candidate.activation_target.clone(),
                     validation_connection: Some(validation_connection),
                     temporary_secret: None,
                     updating_existing: true,
@@ -1950,7 +1904,7 @@ fn migrate_custom_provider_connections(
     providers: &ProviderRegistry,
     configuration: &mut PersistedAiConfiguration,
     provider_id: &str,
-    target: &CustomProviderConnectionTarget,
+    target: &CustomProviderActivationTarget,
     validation_outcomes: &BTreeMap<String, CustomProviderConnectionValidationOutcome>,
 ) -> Result<(), String> {
     // migrated_connections freezes the complete replacement set before any graph is mutated.
@@ -1974,10 +1928,6 @@ fn migrate_custom_provider_connections(
                 })?;
             connection.service_entry_id = target.service_entry_id.clone();
             connection.credential_profile_id = target.credential_profile_id.clone();
-            connection.selected_protocol = target.selected_protocol.clone();
-            // verified_protocols admits the selected route into the strict graph; pending_validation separately blocks non-ready credentials.
-            // verified_protocols 将所选路由纳入严格连接图；pending_validation 另行封锁尚未就绪的凭据。
-            connection.verified_protocols = target.verified_protocols.clone();
             Ok(connection)
         })
         .collect::<Result<Vec<_>, String>>()?;
@@ -2033,7 +1983,7 @@ fn migrate_custom_provider_inference_route(
     route: &mut InferenceRouteConfiguration,
     provider_id: &str,
     connection_ids: &BTreeSet<String>,
-    target: &CustomProviderConnectionTarget,
+    target: &CustomProviderActivationTarget,
 ) -> Result<(), String> {
     if route.provider_id != provider_id || !connection_ids.contains(route.connection_id.as_str()) {
         return Ok(());
@@ -2055,12 +2005,12 @@ fn migrate_custom_provider_inference_route(
         ));
     };
     route.service_entry_id = target.service_entry_id.clone();
-    // A unique target protocol is a proven model binding. With multiple protocols, the
-    // connection default cannot prove this model's binding and must not rewrite the route.
-    // 唯一目标协议能够证明模型绑定。存在多个协议时，连接默认值无法证明该模型绑定，
+    // A unique target protocol is a proven model binding. With multiple protocols, the provider
+    // default cannot prove this model's binding and must not rewrite the route.
+    // 唯一目标协议能够证明模型绑定。存在多个协议时，供应商默认值无法证明该模型绑定，
     // 因此不得改写路由。
-    if target.verified_protocols.len() == 1 {
-        *protocol_profile_id = target.selected_protocol.clone();
+    if target.protocol_profile_ids.len() == 1 {
+        *protocol_profile_id = target.default_protocol_profile_id.clone();
     }
     Ok(())
 }
@@ -2331,7 +2281,7 @@ pub(super) async fn service_save_public_ai_custom_provider(
         let validation_connection = candidate.validation_connection.clone();
         // connectionTarget owns the route identity applied to every edited credential.
         // connectionTarget 持有应用到每份已编辑凭据的路由身份。
-        let connection_target = candidate.connection_target.clone();
+        let activation_target = candidate.activation_target.clone();
         // stagedObservations is complete before the first runtime staging write.
         // stagedObservations 在首次运行时暂存写入前已经完整。
         let mut staged_observations = Vec::new();
@@ -2446,7 +2396,7 @@ pub(super) async fn service_save_public_ai_custom_provider(
                         &effective_providers,
                         configuration,
                         provider_id.as_str(),
-                        &connection_target,
+                        &activation_target,
                         &edit_validation_outcomes,
                     )?;
                 }
@@ -2719,8 +2669,10 @@ pub(super) async fn service_validate_public_ai_custom_model(
                 .get(connection_id.as_str())
                 .ok_or_else(|| format!("Connection `{connection_id}` is no longer configured."))?;
             if current_connection.provider_id != provider_id
-                || current_connection.selected_protocol
-                    != selection.route.connection.selected_protocol
+                || current_connection.service_entry_id
+                    != selection.route.connection.service_entry_id
+                || current_connection.credential_profile_id
+                    != selection.route.connection.credential_profile_id
             {
                 return Err(format!(
                     "Connection `{connection_id}` changed while model validation was running."
@@ -4580,11 +4532,6 @@ async fn add_public_ai_connection_with_secret(
         ));
     }
     let service_entry_kind = entry.kind;
-    // selected_protocol is a persisted compatibility anchor derived exclusively from the
-    // manifest route order. It is never accepted from the user and never owns model execution.
-    // selected_protocol 是完全由 Manifest 路由顺序推导的持久化兼容锚点；它不接受用户输入，
-    // 也不拥有模型执行权威。
-    let selected_protocol = connection_protocol_anchor(entry)?;
     if credential_profile.credential_mode != credential_mode {
         return Err(format!(
             "Credential profile `{credential_profile_id}` does not support credential mode `{credential_mode:?}`."
@@ -4602,12 +4549,6 @@ async fn add_public_ai_connection_with_secret(
             ));
         }
     }
-    let verified_protocols = entry
-        .protocol_routes
-        .iter()
-        .filter(|route| route.verified)
-        .map(|route| route.protocol_profile_id.clone())
-        .collect();
     let connection = CredentialConnection {
         id: connection_id.clone(),
         provider_id,
@@ -4619,10 +4560,7 @@ async fn add_public_ai_connection_with_secret(
         secret_reference: secret_reference.clone(),
         management_secret_reference: management_secret_reference.clone(),
         service_origin_override,
-        verified_protocols,
-        selected_protocol,
         prompt_cache_by_protocol: BTreeMap::new(),
-        usage_scope_override: None,
     };
     let secret_store = runtime.credential_secret_store();
     CredentialSecretStore::create_secret(secret_store.as_ref(), secret_reference.as_str(), &secret)
@@ -4901,37 +4839,6 @@ fn registered_service_entry(
         })
 }
 
-/// Derives the non-authoritative connection protocol anchor from one manifest service entry.
-/// 从一个 Manifest 服务入口推导不具执行权威的连接协议锚点。
-///
-/// # Parameters
-/// 参数
-/// `entry` is the exact manifest-projected service entry selected for the credential.
-/// `entry` 是该凭据选择的精确 Manifest 投影服务入口。
-///
-/// # Returns
-/// 返回值
-/// The first verified route in declared order for conversation entries, an empty anchor for
-/// provider-tool entries, or an explicit error when a conversation entry has no verified route.
-/// 对话入口返回声明顺序中的第一条已验证路由，供应商工具入口返回空锚点；对话入口没有
-/// 已验证路由时返回显式错误。
-fn connection_protocol_anchor(entry: &ServiceEntry) -> Result<String, String> {
-    if entry.kind == ServiceEntryKind::ProviderTools {
-        return Ok(String::new());
-    }
-    entry
-        .protocol_routes
-        .iter()
-        .find(|route| route.verified)
-        .map(|route| route.protocol_profile_id.clone())
-        .ok_or_else(|| {
-            format!(
-                "Conversation service entry `{}` does not declare a verified protocol route.",
-                entry.id
-            )
-        })
-}
-
 /// Resolves one exact manifest-projected credential profile for settings validation.
 /// 为设置校验解析一个精确的 Manifest 投影凭据配置档。
 ///
@@ -5054,10 +4961,6 @@ pub(super) async fn service_update_public_ai_connection(
             &target_entry,
             request.service_origin_override.as_deref(),
         )?;
-    // target_protocol_anchor normalizes legacy connection metadata from the manifest rather
-    // than treating a browser field as protocol-routing authority.
-    // target_protocol_anchor 从 Manifest 规范化旧连接元数据，而不是把浏览器字段当作协议路由权威。
-    let target_protocol_anchor = connection_protocol_anchor(&target_entry)?;
     let target_entry_kind = registered_service_entry_kind(
         runtime.as_ref(),
         &current_configuration,
@@ -5077,7 +4980,6 @@ pub(super) async fn service_update_public_ai_connection(
     let identity_changed = current.service_entry_id != request.service_entry_id
         || current.credential_profile_id != request.credential_profile_id
         || current.credential_mode != request.credential_mode
-        || current.selected_protocol != target_protocol_anchor
         || current.service_origin_override != request.service_origin_override
         || request.secret.is_some();
     let secret_store = runtime.credential_secret_store();
@@ -5326,18 +5228,11 @@ fn apply_connection_update(
     candidate.service_entry_id = request.service_entry_id.clone();
     candidate.credential_profile_id = request.credential_profile_id.clone();
     candidate.credential_mode = request.credential_mode;
-    candidate.selected_protocol = connection_protocol_anchor(entry)?;
     candidate.service_origin_override =
         vulcan_provider_adapters::normalize_connection_service_origin_override(
             entry,
             request.service_origin_override.as_deref(),
         )?;
-    candidate.verified_protocols = entry
-        .protocol_routes
-        .iter()
-        .filter(|route| route.verified)
-        .map(|route| route.protocol_profile_id.clone())
-        .collect();
     configuration
         .connection_graph
         .connections
@@ -7365,8 +7260,8 @@ pub(super) async fn service_save_public_ai_model_overrides(
     Ok(snapshot)
 }
 
-/// Saves one provider-model access choice and reconciles invalid active selections.
-/// 保存一个供应商模型访问选择，并协调失效的当前选择。
+/// Saves one provider-model conversation choice and reconciles invalid active selections.
+/// 保存一个供应商模型会话选择，并协调失效的当前选择。
 pub(super) async fn service_save_public_ai_model_enabled(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
@@ -7490,134 +7385,13 @@ pub(super) async fn service_save_public_ai_model_enabled(
     Ok(snapshot)
 }
 
-/// Saves one provider-wide model access state and reconciles every affected active selection.
-/// 保存供应商范围的模型访问状态，并协调全部受影响的当前选择。
+/// Saves one model-level internal-use switch without changing conversation availability.
+/// 保存一项模型级内部使用开关且不改变会话可用性。
 ///
 /// # Parameters
 /// 参数
-/// `app` publishes the refreshed workbench, `state` owns the persisted graph, and `request` identifies one provider and state.
-/// `app` 发布刷新的工作台，`state` 持有持久化图，`request` 标识一个供应商及状态。
-///
-/// # Returns
-/// 返回值
-/// The complete refreshed settings snapshot after one atomic configuration mutation.
-/// 返回一次原子配置变更后的完整刷新设置快照。
-pub(super) async fn service_save_public_ai_provider_models_enabled(
-    app: ServiceEventEmitter,
-    state: SharedServiceBridgeState,
-    request: PublicAiProviderModelsEnabledSaveRequest,
-) -> Result<PublicAiSettingsSnapshot, String> {
-    let (runtime, _) = public_ai_runtime_and_configuration(&state)?;
-    // transaction keeps manifest publication, model enumeration, persistence, and response projection ordered.
-    // transaction 让 Manifest 发布、模型枚举、持久化与响应投影保持有序。
-    let _transaction = begin_public_ai_configuration_transaction().await;
-    // current_configuration is re-read only after transaction serialization.
-    // current_configuration 仅在事务串行化后重新读取。
-    let current_configuration = runtime.configuration_snapshot()?;
-    // settings_catalog contains effective and access-independent inventories from one generation.
-    // settings_catalog 包含来自同一代际的有效目录与独立于访问开关的目录。
-    let settings_catalog = runtime.settings_catalog_snapshot(&current_configuration)?;
-    // model_ids is the complete provider-owned conversation and template management union.
-    // model_ids 是供应商持有的完整对话与模板管理并集。
-    let mut model_ids = current_configuration
-        .connection_graph
-        .connections
-        .values()
-        .filter(|connection| connection.provider_id == request.provider_id)
-        .filter_map(|connection| {
-            settings_catalog
-                .model_support_catalogs
-                .get(connection.id.as_str())
-        })
-        .flat_map(|catalog| catalog.models.iter().map(|model| model.id.clone()))
-        .collect::<BTreeSet<_>>();
-    if let Some(manual_models) = current_configuration
-        .custom_models
-        .get(request.provider_id.as_str())
-    {
-        model_ids.extend(manual_models.keys().cloned());
-    }
-    // Template-only media models participate in the same provider-wide publication switch.
-    // 仅模板媒体模型参与相同的供应商范围发布开关。
-    model_ids.extend(
-        settings_catalog
-            .provider_tool_template_models
-            .iter()
-            .filter(|model| model.provider_id == request.provider_id)
-            .map(|model| model.model_id.clone()),
-    );
-    if model_ids.is_empty() {
-        return Err(format!(
-            "Provider `{}` does not expose synchronized models.",
-            request.provider_id
-        ));
-    }
-    // catalogs retains the same effective generation for fallback selection after the mutation.
-    // catalogs 为变更后的回退选择保留同一有效代际。
-    let catalogs = settings_catalog.catalogs;
-    // candidateConfiguration owns the complete provider-wide access change before activation.
-    // candidateConfiguration 在激活前持有完整供应商范围访问变更。
-    let mut candidate_configuration = current_configuration.clone();
-    for model_id in &model_ids {
-        candidate_configuration.set_model_enabled(
-            request.provider_id.as_str(),
-            model_id.as_str(),
-            request.enabled,
-        );
-    }
-    // fallback is computed once from the exact post-mutation configuration and catalog generation.
-    // fallback 从精确的修改后配置与目录代际中只计算一次。
-    let fallback = if request.enabled {
-        None
-    } else {
-        first_enabled_model_selection(runtime.as_ref(), &candidate_configuration, &catalogs)?
-    };
-    if !request.enabled
-        && candidate_configuration
-            .active
-            .as_ref()
-            .is_some_and(|selection| selection.provider_id == request.provider_id)
-    {
-        candidate_configuration.active = fallback.clone();
-    }
-    let (_configuration, snapshot) =
-        mutate_public_ai_configuration_and_publish_sessions_in_transaction(
-            &app,
-            &state,
-            runtime.as_ref(),
-            &current_configuration,
-            "批量保存公共 AI 模型启用状态失败",
-            |configuration| {
-                *configuration = candidate_configuration.clone();
-                Ok(())
-            },
-            |configuration| build_public_ai_settings_snapshot(runtime.as_ref(), configuration),
-            |workspace| {
-                Ok(if request.enabled {
-                    BTreeSet::new()
-                } else {
-                    reconcile_explicitly_revoked_session_model_selections(
-                        workspace,
-                        fallback.as_ref(),
-                        |_session_id, runtime_state| {
-                            runtime_state.active_provider_id.as_deref()
-                                == Some(request.provider_id.as_str())
-                        },
-                    )
-                })
-            },
-            "provider_model_access_revoked",
-        )?;
-    Ok(snapshot)
-}
-
-/// Saves one internal model operation switch without changing conversation availability.
-/// 保存一项内部模型操作开关且不改变会话可用性。
-///
-/// # Parameters
-/// 参数
-/// `app`, `state`, and `request` identify the settings transaction and exact operation.
-/// `app`、`state` 与 `request` 标识设置事务及精确操作。
+/// `app`, `state`, and `request` identify the settings transaction and exact model.
+/// `app`、`state` 与 `request` 标识设置事务及精确模型。
 ///
 /// # Returns
 /// 返回值
@@ -7628,17 +7402,6 @@ pub(super) async fn service_save_public_ai_internal_model_enabled(
     state: SharedServiceBridgeState,
     request: PublicAiInternalModelEnabledSaveRequest,
 ) -> Result<PublicAiSettingsSnapshot, String> {
-    if !matches!(
-        request.operation,
-        AiOperation::ConversationRespond
-            | AiOperation::EmbeddingCreate
-            | AiOperation::RerankDocuments
-    ) {
-        return Err(format!(
-            "Operation `{}` is not configurable as an internal inference model.",
-            request.operation.as_str()
-        ));
-    }
     // transaction serializes validation, activation, and Workbench publication.
     // transaction 串行化校验、激活与工作台发布。
     let transaction = begin_public_ai_configuration_transaction().await;
@@ -7651,14 +7414,11 @@ pub(super) async fn service_save_public_ai_internal_model_enabled(
             .any(|candidate| {
                 candidate.route.provider_id == request.provider_id
                     && candidate.route.model_id == request.model_id
-                    && candidate.route.operation == request.operation
             });
     if !exists {
         return Err(format!(
-            "Provider `{}` model `{}` does not expose registered internal operation `{}`.",
-            request.provider_id,
-            request.model_id,
-            request.operation.as_str()
+            "Provider `{}` model `{}` does not expose a registered internal inference operation.",
+            request.provider_id, request.model_id
         ));
     }
     let (_configuration, snapshot) = mutate_public_ai_configuration_and_publish_in_transaction(
@@ -7671,7 +7431,6 @@ pub(super) async fn service_save_public_ai_internal_model_enabled(
             configuration.set_internal_model_enabled(
                 request.provider_id.as_str(),
                 request.model_id.as_str(),
-                request.operation,
                 request.enabled,
             );
             Ok(())
@@ -7816,12 +7575,11 @@ pub(super) async fn service_save_public_ai_inference_route(
                 "Inference route operation differs from the requested profile operation.",
             ));
         }
-        // Selecting a route is an explicit enable action for that exact internal operation.
-        // 选择路由即显式启用该精确内部操作。
-        let mut validation_configuration = current_configuration.clone();
-        enable_internal_inference_route(&mut validation_configuration, route);
+        // Route selection consumes the model-level state owned by Model List and must never
+        // mutate or bypass it from a consumer-specific settings surface.
+        // 路由选择只消费“模型列表”持有的模型级状态，绝不能从消费者专属设置界面修改或绕过它。
         let selection =
-            runtime.resolve_internal_inference_selection(&validation_configuration, route)?;
+            runtime.resolve_internal_inference_selection(&current_configuration, route)?;
         validate_vmm_llm_reasoning_policy(
             request.consumer_profile_id.as_str(),
             request.operation,
@@ -7835,11 +7593,6 @@ pub(super) async fn service_save_public_ai_inference_route(
         &current_configuration,
         "保存内部推理路由失败",
         |configuration| {
-            if let Some(route) = request.route.as_ref() {
-                // Persist capability enablement and route binding in one configuration mutation.
-                // 在一次配置变更中同时持久化能力启用与路由绑定。
-                enable_internal_inference_route(configuration, route);
-            }
             let profile = configuration
                 .inference_profiles
                 .entry(request.consumer_profile_id.clone())
@@ -7874,25 +7627,6 @@ pub(super) async fn service_save_public_ai_inference_route(
     )?;
     drop(transaction);
     Ok(snapshot)
-}
-
-/// Enables the exact internal operation owned by one selected inference route.
-/// 启用一条已选推理路由所拥有的精确内部操作。
-///
-/// # Parameters
-/// 参数
-/// `configuration` receives the explicit capability state and `route` identifies its owner.
-/// `configuration` 接收显式能力状态，`route` 标识其归属。
-fn enable_internal_inference_route(
-    configuration: &mut PersistedAiConfiguration,
-    route: &InferenceRouteConfiguration,
-) {
-    configuration.set_internal_model_enabled(
-        route.provider_id.as_str(),
-        route.model_id.as_str(),
-        route.operation,
-        true,
-    );
 }
 
 /// Executes one real provider-backed embedding or rerank settings test.
@@ -9766,8 +9500,8 @@ pub(crate) fn public_ai_available_model_selectors(
     runtime.available_model_selectors(&configuration)
 }
 
-/// Resolves one account's closed model-directory kind from its credential-verified routes.
-/// 从账号经凭据验证的路由解析封闭模型目录类型。
+/// Resolves one account's closed model-directory kind from its active Manifest routes.
+/// 从账号的活动 Manifest 路由解析封闭模型目录类型。
 ///
 /// # Parameters
 /// 参数
@@ -9777,9 +9511,9 @@ pub(crate) fn public_ai_available_model_selectors(
 /// # Returns
 /// 返回值
 /// A browser-safe aggregate kind. Any remote route makes the account synchronizable; otherwise
-/// fixed identity outranks manual identity. Incomplete legacy routes are unavailable.
+/// fixed identity outranks manual identity. Entries without a verified route are unavailable.
 /// 返回浏览器安全的聚合类型。任一远端路由都会使账号可同步；否则固定身份优先于手工身份。
-/// 不完整的历史路由返回不可用。
+/// 没有已验证路由的入口返回不可用。
 fn connection_model_directory_kind(
     providers: &ProviderRegistry,
     connection: &CredentialConnection,
@@ -9794,19 +9528,12 @@ fn connection_model_directory_kind(
     else {
         return PublicAiModelDirectoryKind::Unavailable;
     };
-    // hasDynamic, hasFixed, and hasManual summarize route-owned discovery contracts without
-    // promoting the deprecated connection protocol to model-directory authority.
-    // hasDynamic、hasFixed 与 hasManual 汇总路由持有的发现契约，不会把已废弃连接协议
-    // 提升为模型目录权威。
+    // hasDynamic, hasFixed, and hasManual summarize route-owned discovery contracts.
+    // hasDynamic、hasFixed 与 hasManual 汇总路由持有的发现契约。
     let mut has_dynamic = false;
     let mut has_fixed = false;
     let mut has_manual = false;
-    for route in entry.protocol_routes.iter().filter(|route| {
-        route.verified
-            && connection
-                .verified_protocols
-                .contains(route.protocol_profile_id.as_str())
-    }) {
+    for route in entry.protocol_routes.iter().filter(|route| route.verified) {
         match route.resolved_model_discovery(entry.model_discovery) {
             ModelDiscoveryKind::Manual => has_manual = true,
             ModelDiscoveryKind::ManifestStatic => has_fixed = true,
@@ -9869,25 +9596,20 @@ fn build_connection_model_access_policy_records(
 ///
 /// # Parameters
 /// 参数
-/// `connection` owns the legacy compatibility protocol; `model` owns the immutable model binding.
-/// `connection` 持有旧版兼容协议；`model` 持有不可变模型绑定。
+/// `model` owns the immutable model binding.
+/// `model` 持有不可变模型绑定。
 ///
 /// # Returns
 /// 返回值
-/// The frozen model protocol, or the connection protocol only for the explicit legacy allowlist.
-/// 返回冻结的模型协议；只有显式旧版允许名单才返回连接协议。
-fn effective_catalog_model_protocol_id<'a>(
-    connection: &'a CredentialConnection,
-    model: &'a vulcan_provider_adapters::ConnectionModel,
-) -> Option<&'a str> {
+/// The frozen model protocol, or `None` when the model is not executable.
+/// 返回冻结的模型协议；模型不可执行时返回 `None`。
+fn effective_catalog_model_protocol_id(
+    model: &vulcan_provider_adapters::ConnectionModel,
+) -> Option<&str> {
     model
         .resolved_protocol_binding
         .as_ref()
         .map(|binding| binding.protocol_profile_id.as_str())
-        .or_else(|| {
-            vulcan_provider_adapters::is_legacy_fallback_provider(connection.provider_id.as_str())
-                .then_some(connection.selected_protocol.as_str())
-        })
 }
 
 /// Returns the stable browser-facing identifier for one frozen model-binding source.
@@ -9910,9 +9632,6 @@ fn public_ai_model_binding_source_id(
         vulcan_provider_adapters::ModelProtocolBindingSource::CustomUser => "custom_user",
         vulcan_provider_adapters::ModelProtocolBindingSource::CustomAutoDefault => {
             "custom_auto_default"
-        }
-        vulcan_provider_adapters::ModelProtocolBindingSource::MigratedCustomLegacy => {
-            "migrated_custom_legacy"
         }
     }
 }
@@ -10018,26 +9737,17 @@ fn build_public_ai_model_route_records(
             continue;
         };
         for model in &catalog.models {
-            // protocolId consumes the frozen model-level binding. The connection field is used
-            // only for the explicitly isolated legacy provider whose cutover awaits user facts.
-            // protocolId 消费冻结的模型级绑定。连接字段仅用于显式隔离、等待用户事实后切换的
-            // 旧版供应商。
-            let protocol_id =
-                effective_catalog_model_protocol_id(connection, model).map(str::to_string);
+            // protocolId consumes only the frozen model-level binding.
+            // protocolId 只消费冻结的模型级绑定。
+            let protocol_id = effective_catalog_model_protocol_id(model).map(str::to_string);
             // binding is the immutable backend authority for source, rule, and revision facts.
             // binding 是来源、规则与修订事实的不可变后端权威。
             let binding = model.resolved_protocol_binding.as_ref();
-            // bindingSource identifies the explicit APIKEY.FUN compatibility boundary separately.
-            // bindingSource 单独标识显式 APIKEY.FUN 兼容边界。
+            // bindingSource identifies the exact model-level binding authority.
+            // bindingSource 单独标识当前模型级绑定来源。
             let binding_source = binding
                 .map(|binding| public_ai_model_binding_source_id(binding.source))
-                .map(str::to_string)
-                .or_else(|| {
-                    vulcan_provider_adapters::is_legacy_fallback_provider(
-                        connection.provider_id.as_str(),
-                    )
-                    .then(|| String::from("connection_default"))
-                });
+                .map(str::to_string);
             let manifest_revision = binding
                 .map(|binding| binding.manifest_revision)
                 .or_else(|| {
@@ -10588,6 +10298,36 @@ fn build_internal_inference_candidates(
     providers: &vulcan_provider_adapters::ProviderRegistry,
     catalogs: &BTreeMap<String, ConnectionModelCatalog>,
 ) -> Result<Vec<PublicAiInternalInferenceCandidate>, String> {
+    // defaultInternalEnabledByProvider resolves each provider-wide suggestion once so every
+    // credential route for the same model exposes one stable shared switch.
+    // defaultInternalEnabledByProvider 只解析一次各供应商级建议，使同一模型的所有凭据路由
+    // 公开一个稳定的共享开关。
+    let default_internal_enabled_by_provider = providers
+        .providers()
+        .into_iter()
+        .map(|provider| {
+            provider
+                .default_internal_use_for_connections(
+                    configuration
+                        .connection_graph
+                        .connections
+                        .values()
+                        .filter(|connection| {
+                            connection.provider_id == provider.id
+                                && !configuration
+                                    .connection_is_pending_validation(connection.id.as_str())
+                        }),
+                )
+                .map(|enabled| (provider.id.clone(), enabled))
+        })
+        .collect::<Result<BTreeMap<_, _>, _>>()?;
+    // internalUsageScopes preserves runtime scheduling and authorization classifications while
+    // model enablement remains shared across Knowledge and VMM consumers.
+    // internalUsageScopes 保留运行时调度与鉴权分类，同时让知识库与 VMM 消费方共享模型启用状态。
+    let internal_usage_scopes = BTreeSet::from([
+        InferenceUsageScope::InternalBackground,
+        InferenceUsageScope::ExternalService,
+    ]);
     let mut candidates = Vec::new();
     for connection in configuration.connection_graph.connections.values() {
         if configuration.connection_is_pending_validation(connection.id.as_str()) {
@@ -10614,7 +10354,15 @@ fn build_internal_inference_candidates(
                     connection.service_entry_id, connection.id
                 )
             })?;
-        let usage_scopes = entry.effective_usage_scopes(connection)?;
+        let default_internal_enabled = default_internal_enabled_by_provider
+            .get(provider.id.as_str())
+            .copied()
+            .ok_or_else(|| {
+                format!(
+                    "Provider `{}` is missing its internal-use default projection.",
+                    provider.id
+                )
+            })?;
         for model in &catalog.models {
             for operation in model
                 .capabilities
@@ -10633,12 +10381,10 @@ fn build_internal_inference_candidates(
                 let binding = match operation {
                     AiOperation::ConversationRespond => {
                         // Internal LLM consumers must persist the same frozen model binding used
-                        // by interactive execution; the connection protocol is never a second
-                        // resolver outside the explicit legacy allowlist.
-                        // 内部 LLM 消费方必须持久化交互执行所使用的同一冻结模型绑定；显式旧版
-                        // 允许名单之外，连接协议绝不能成为第二套解析器。
-                        let Some(protocol_profile_id) =
-                            effective_catalog_model_protocol_id(connection, model)
+                        // by interactive execution; connection credentials never resolve protocols.
+                        // 内部 LLM 消费方必须持久化交互执行所使用的同一冻结模型绑定；连接凭据
+                        // 绝不解析协议。
+                        let Some(protocol_profile_id) = effective_catalog_model_protocol_id(model)
                         else {
                             continue;
                         };
@@ -10658,7 +10404,7 @@ fn build_internal_inference_candidates(
                     }
                     _ => continue,
                 };
-                for usage_scope in usage_scopes.iter().copied() {
+                for usage_scope in internal_usage_scopes.iter().copied() {
                     candidates.push(PublicAiInternalInferenceCandidate {
                         provider_display_name: provider.display_name.clone(),
                         service_entry_display_name: entry.display_name.clone(),
@@ -10677,9 +10423,9 @@ fn build_internal_inference_candidates(
                         enabled: configuration.internal_model_is_enabled(
                             connection.provider_id.as_str(),
                             model.id.as_str(),
-                            operation,
+                            default_internal_enabled,
                         ),
-                        usage_scopes: usage_scopes.clone(),
+                        usage_scopes: internal_usage_scopes.clone(),
                         capabilities: model.capabilities.clone(),
                         overrides: configuration
                             .internal_model_overrides
@@ -10751,8 +10497,7 @@ pub(super) fn resolve_knowledge_internal_inference_candidate(
         })?;
     if !candidate.enabled {
         return Err(format!(
-            "知识库模型路由当前未启用内部操作：provider={provider_id}, model={model_id}, operation={}",
-            operation.as_str()
+            "知识库模型当前未在模型列表启用内部使用：provider={provider_id}, model={model_id}"
         ));
     }
     Ok(candidate)
@@ -10776,7 +10521,6 @@ pub(super) async fn sync_knowledge_inference_profile(
     // transaction 把路由校验串行化到配置档与工作台发布完成。
     let transaction = begin_public_ai_configuration_transaction().await;
     let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
-    let mut validation_configuration = current_configuration.clone();
     for route in [curation_route.as_ref(), embedding_route.as_ref()]
         .into_iter()
         .flatten()
@@ -10790,9 +10534,8 @@ pub(super) async fn sync_knowledge_inference_profile(
                 route.operation.as_str()
             ));
         }
-        enable_internal_inference_route(&mut validation_configuration, route);
         let selection =
-            runtime.resolve_internal_inference_selection(&validation_configuration, route)?;
+            runtime.resolve_internal_inference_selection(&current_configuration, route)?;
         validate_vmm_llm_reasoning_policy(
             consumer_profile_id,
             route.operation,
@@ -12003,12 +11746,7 @@ mod inference_settings_route_tests {
                 secret_reference: String::from("isolated-settings-secret"),
                 management_secret_reference: None,
                 service_origin_override: None,
-                verified_protocols: BTreeSet::from([String::from(
-                    vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID,
-                )]),
-                selected_protocol: String::from(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
                 prompt_cache_by_protocol: BTreeMap::new(),
-                usage_scope_override: None,
             },
         );
         configuration.custom_provider_manifest_failures = vec![CustomProviderManifestFailure {
@@ -12131,34 +11869,6 @@ mod inference_settings_route_tests {
         }
     }
 
-    /// Verifies the persisted connection anchor follows declared Manifest route order.
-    /// 验证持久化连接锚点遵循 Manifest 声明的路由顺序。
-    #[test]
-    fn connection_protocol_anchor_uses_manifest_order() {
-        // entry is the exact bundled OpenRouter service contract, including route ordering.
-        // entry 是精确的内置 OpenRouter 服务契约，包含路由顺序。
-        let catalog = vulcan_provider_adapters::load_bundled_resolved_catalog();
-        let entry = catalog
-            .manifest("openrouter")
-            .and_then(|manifest| {
-                manifest
-                    .descriptor
-                    .service_entries
-                    .iter()
-                    .find(|entry| entry.id == "public-api")
-            })
-            .expect("OpenRouter public entry should exist");
-        let expected = entry
-            .protocol_routes
-            .iter()
-            .find(|route| route.verified)
-            .expect("OpenRouter should declare a verified route")
-            .protocol_profile_id
-            .clone();
-
-        assert_eq!(connection_protocol_anchor(entry), Ok(expected));
-    }
-
     /// Builds one exact internal inference route for settings-boundary regression tests.
     /// 为设置边界回归测试构建一条精确内部推理路由。
     ///
@@ -12273,10 +11983,7 @@ mod inference_settings_route_tests {
             secret_reference: String::from("alibaba-template-secret"),
             management_secret_reference: None,
             service_origin_override: None,
-            verified_protocols: BTreeSet::from([String::from("openai-responses.v1")]),
-            selected_protocol: String::from("openai-responses.v1"),
             prompt_cache_by_protocol: BTreeMap::new(),
-            usage_scope_override: None,
         };
         configuration
             .connection_graph
@@ -12326,8 +12033,8 @@ mod inference_settings_route_tests {
         // runtime supplies the signed OpenRouter registry without external network access.
         // runtime 在不访问外部网络的情况下提供已签名 OpenRouter 注册表。
         let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
-        // connection deliberately retains Chat as its discovery compatibility protocol.
-        // connection 刻意保留 Chat 作为发现兼容协议。
+        // connection owns credential identity only; the model binding owns protocol selection.
+        // connection 只持有凭据身份；模型绑定持有协议选择。
         let connection = CredentialConnection {
             id: String::from("openrouter-model-binding-account"),
             provider_id: String::from("openrouter"),
@@ -12339,13 +12046,7 @@ mod inference_settings_route_tests {
             secret_reference: String::from("openrouter-model-binding-secret"),
             management_secret_reference: None,
             service_origin_override: None,
-            verified_protocols: BTreeSet::from([
-                String::from(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
-                String::from(vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID),
-            ]),
-            selected_protocol: String::from(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
             prompt_cache_by_protocol: BTreeMap::new(),
-            usage_scope_override: None,
         };
         // capabilities expose one internal conversation operation through the frozen variant.
         // capabilities 通过冻结变体公开一项内部对话操作。
@@ -12389,6 +12090,14 @@ mod inference_settings_route_tests {
                 connection.clone(),
             )
             .expect("OpenRouter connection should register");
+        // Independent switches create the exact internal-only state from the acceptance matrix.
+        // 两个独立开关构造验收矩阵中的精确“仅内部使用”状态。
+        configuration.set_model_enabled("openrouter", "openai/gpt-model-bound-to-responses", false);
+        configuration.set_internal_model_enabled(
+            "openrouter",
+            "openai/gpt-model-bound-to-responses",
+            true,
+        );
         // catalogs contains the coherent frozen account snapshot under review.
         // catalogs 包含本次检查的一致冻结账号快照。
         let catalogs = BTreeMap::from([(
@@ -12421,6 +12130,31 @@ mod inference_settings_route_tests {
             InferenceRouteBinding::Protocol {
                 protocol_profile_id: String::from(vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID,),
             }
+        );
+        assert!(
+            candidate.enabled,
+            "conversation disablement must not hide an explicitly enabled internal model"
+        );
+        configuration.set_internal_model_enabled(
+            "openrouter",
+            "openai/gpt-model-bound-to-responses",
+            false,
+        );
+        // disabledCandidates proves an explicit internal denial wins over the provider default
+        // without removing manageable route identities.
+        // disabledCandidates 证明显式内部禁用优先于供应商默认值，且不会删除可管理路由身份。
+        let disabled_candidates = build_internal_inference_candidates(
+            &configuration,
+            &runtime
+                .providers()
+                .expect("provider registry should resolve"),
+            &catalogs,
+        )
+        .expect("disabled internal candidates should remain manageable");
+        assert!(
+            disabled_candidates
+                .iter()
+                .all(|candidate| !candidate.enabled)
         );
         // route_records must expose the same frozen protocol authority and its complete provenance.
         // route_records 必须公开同一冻结协议权威及其完整溯源。
@@ -12471,7 +12205,6 @@ mod inference_settings_route_tests {
             id: provider_id.clone(),
             display_name: String::from("Model Route Status"),
             base_url: String::from("https://model-route-status.example.test/v1"),
-            protocol: None,
             authentication: CustomProviderAuthentication::BearerAuthorization,
             model_discovery_mode: CustomProviderModelDiscoveryMode::Standard,
             model_discovery_path: None,
@@ -12499,13 +12232,7 @@ mod inference_settings_route_tests {
             secret_reference: String::from("model-route-status-secret"),
             management_secret_reference: None,
             service_origin_override: None,
-            verified_protocols: BTreeSet::from([
-                String::from(vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID),
-                String::from(vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID),
-            ]),
-            selected_protocol: String::from(vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID),
             prompt_cache_by_protocol: BTreeMap::new(),
-            usage_scope_override: None,
         };
         let providers = runtime
             .effective_providers(&configuration)
@@ -12603,10 +12330,7 @@ mod inference_settings_route_tests {
             secret_reference: String::from("fallback-secret"),
             management_secret_reference: None,
             service_origin_override: None,
-            verified_protocols: BTreeSet::from([String::from("fallback-protocol")]),
-            selected_protocol: String::from("fallback-protocol"),
             prompt_cache_by_protocol: BTreeMap::new(),
-            usage_scope_override: None,
         };
         // conversation_capabilities make both catalog models valid text-conversation candidates.
         // conversation_capabilities 使两个目录模型都成为有效文本会话候选。
@@ -12654,6 +12378,11 @@ mod inference_settings_route_tests {
             model_id: preferred_model_id.clone(),
             connection_id: connection_id.clone(),
         });
+        // Explicit model access keeps this isolated reconciliation fixture independent of any
+        // system Manifest identity.
+        // 显式模型访问使该隔离协调夹具不依赖任何系统 Manifest 身份。
+        configuration.set_model_enabled(provider_id.as_str(), preferred_model_id.as_str(), true);
+        configuration.set_model_enabled(provider_id.as_str(), first_model_id.as_str(), true);
         // catalogs contains the authoritative process-local account model catalog.
         // catalogs 包含权威的进程内账号模型目录。
         let catalogs = BTreeMap::from([(connection_id.clone(), catalog)]);
@@ -12844,35 +12573,6 @@ mod inference_settings_route_tests {
         );
     }
 
-    /// Verifies choosing one route enables only its exact model operation.
-    /// 验证选择一条路由只会启用其精确模型操作。
-    #[test]
-    fn selected_route_enables_exact_internal_operation() {
-        let route = route_fixture(
-            AiOperation::ConversationRespond,
-            InferenceUsageScope::ExternalService,
-        );
-        let mut configuration = PersistedAiConfiguration::default();
-
-        enable_internal_inference_route(&mut configuration, &route);
-
-        assert!(configuration.internal_model_is_enabled(
-            route.provider_id.as_str(),
-            route.model_id.as_str(),
-            AiOperation::ConversationRespond,
-        ));
-        assert!(!configuration.internal_model_is_enabled(
-            route.provider_id.as_str(),
-            route.model_id.as_str(),
-            AiOperation::EmbeddingCreate,
-        ));
-        assert!(!configuration.internal_model_is_enabled(
-            route.provider_id.as_str(),
-            "other-model",
-            AiOperation::ConversationRespond,
-        ));
-    }
-
     /// Verifies a route stored in the wrong operation slot is rejected explicitly.
     /// 验证存入错误操作槽位的路由会被显式拒绝。
     #[test]
@@ -12990,7 +12690,7 @@ mod inference_settings_route_tests {
             provider_id: None,
             display_name: String::from("Codex Proxy"),
             base_url: String::from("https://proxy.example.test/v1"),
-            protocol: CustomProviderProtocol::OpenAiCodexResponses,
+            protocols: vec![CustomProviderProtocol::OpenAiCodexResponses],
             remote_compaction_policy: ResponsesRemoteCompactionPolicy::EnabledWithLocalFallback,
             websocket_policy: ResponsesWebsocketPolicy::UnverifiedOverride,
             authentication: CustomProviderAuthentication::BearerAuthorization,
@@ -12999,7 +12699,6 @@ mod inference_settings_route_tests {
             validation_connection_id: None,
             model_discovery_mode: CustomProviderModelDiscoveryMode::Manual,
             model_discovery_path: None,
-            protocols: Vec::new(),
             protocol_routes: Vec::new(),
             request_headers: BTreeMap::new(),
             allow_manual_fallback: false,
@@ -13040,11 +12739,10 @@ mod inference_settings_route_tests {
             id: provider_id.clone(),
             display_name: String::from("Codex Proxy"),
             base_url: String::from("https://proxy.example.test/v1"),
-            protocol: Some(CustomProviderProtocol::OpenAiCodexResponses),
+            protocols: vec![CustomProviderProtocol::OpenAiCodexResponses],
             authentication: CustomProviderAuthentication::BearerAuthorization,
             model_discovery_mode: CustomProviderModelDiscoveryMode::Manual,
             model_discovery_path: None,
-            protocols: Vec::new(),
             protocol_routes: Vec::new(),
             request_headers: BTreeMap::new(),
         }
@@ -13062,7 +12760,7 @@ mod inference_settings_route_tests {
             provider_id: Some(provider_id),
             display_name: String::from("Codex Proxy"),
             base_url: String::from("https://proxy.example.test/v1"),
-            protocol: CustomProviderProtocol::OpenAiCodexResponses,
+            protocols: vec![CustomProviderProtocol::OpenAiCodexResponses],
             remote_compaction_policy: ResponsesRemoteCompactionPolicy::EnabledWithLocalFallback,
             websocket_policy: ResponsesWebsocketPolicy::UnverifiedOverride,
             authentication: CustomProviderAuthentication::BearerAuthorization,
@@ -13071,7 +12769,6 @@ mod inference_settings_route_tests {
             validation_connection_id: None,
             model_discovery_mode: CustomProviderModelDiscoveryMode::Manual,
             model_discovery_path: None,
-            protocols: Vec::new(),
             protocol_routes: Vec::new(),
             request_headers: BTreeMap::new(),
             allow_manual_fallback: false,
@@ -13102,11 +12799,10 @@ mod inference_settings_route_tests {
             id: provider_id.clone(),
             display_name: String::from("Test Provider"),
             base_url: String::from("https://old.example.test/v1"),
-            protocol: Some(CustomProviderProtocol::OpenAiResponses),
+            protocols: vec![CustomProviderProtocol::OpenAiResponses],
             authentication: CustomProviderAuthentication::BearerAuthorization,
             model_discovery_mode: CustomProviderModelDiscoveryMode::Standard,
             model_discovery_path: None,
-            protocols: Vec::new(),
             protocol_routes: Vec::new(),
             request_headers: BTreeMap::new(),
         }
@@ -13124,6 +12820,7 @@ mod inference_settings_route_tests {
             .protocol_routes
             .first()
             .expect("custom provider protocol route should exist");
+        let existing_protocol_id = route.protocol_profile_id.clone();
         let existing = CredentialConnection {
             id: String::from("connection-existing"),
             provider_id: provider_id.clone(),
@@ -13135,10 +12832,7 @@ mod inference_settings_route_tests {
             secret_reference: String::from("secret-existing"),
             management_secret_reference: None,
             service_origin_override: None,
-            verified_protocols: BTreeSet::from([route.protocol_profile_id.clone()]),
-            selected_protocol: route.protocol_profile_id.clone(),
             prompt_cache_by_protocol: BTreeMap::new(),
-            usage_scope_override: None,
         };
         let mut configuration = PersistedAiConfiguration::default();
         configuration
@@ -13152,7 +12846,7 @@ mod inference_settings_route_tests {
             provider_id: Some(provider_id.clone()),
             display_name: String::from("Renamed Provider"),
             base_url: String::from("https://new.example.test/v1"),
-            protocol: CustomProviderProtocol::OpenAiChat,
+            protocols: vec![CustomProviderProtocol::OpenAiChat],
             remote_compaction_policy: ResponsesRemoteCompactionPolicy::Disabled,
             websocket_policy: ResponsesWebsocketPolicy::Disabled,
             authentication: CustomProviderAuthentication::BearerAuthorization,
@@ -13161,7 +12855,6 @@ mod inference_settings_route_tests {
             validation_connection_id: Some(existing.id.clone()),
             model_discovery_mode: CustomProviderModelDiscoveryMode::Standard,
             model_discovery_path: None,
-            protocols: Vec::new(),
             protocol_routes: Vec::new(),
             request_headers: BTreeMap::new(),
             allow_manual_fallback: false,
@@ -13187,8 +12880,8 @@ mod inference_settings_route_tests {
         assert_eq!(candidate_connection.credential_id, existing.credential_id);
         assert_eq!(candidate_connection.display_name, existing.display_name);
         assert_ne!(
-            candidate.connection_target.selected_protocol,
-            existing.selected_protocol
+            candidate.activation_target.default_protocol_profile_id,
+            existing_protocol_id
         );
         assert!(
             custom_provider_connection_contract_changed(&configuration, &candidate)
@@ -13200,7 +12893,7 @@ mod inference_settings_route_tests {
             provider_id: Some(provider_id.clone()),
             display_name: String::from("Cosmetic Rename"),
             base_url: String::from("https://old.example.test/v1"),
-            protocol: CustomProviderProtocol::OpenAiResponses,
+            protocols: vec![CustomProviderProtocol::OpenAiResponses],
             remote_compaction_policy: ResponsesRemoteCompactionPolicy::Disabled,
             websocket_policy: ResponsesWebsocketPolicy::Disabled,
             authentication: CustomProviderAuthentication::BearerAuthorization,
@@ -13209,7 +12902,6 @@ mod inference_settings_route_tests {
             validation_connection_id: Some(existing.id.clone()),
             model_discovery_mode: CustomProviderModelDiscoveryMode::Standard,
             model_discovery_path: None,
-            protocols: Vec::new(),
             protocol_routes: Vec::new(),
             request_headers: BTreeMap::new(),
             allow_manual_fallback: false,
@@ -13271,7 +12963,7 @@ mod inference_settings_route_tests {
             connection_id: existing.id.clone(),
             model_id: String::from("internal-model"),
             binding: InferenceRouteBinding::Protocol {
-                protocol_profile_id: existing.selected_protocol.clone(),
+                protocol_profile_id: existing_protocol_id,
             },
             operation: AiOperation::ConversationRespond,
             usage_scope: InferenceUsageScope::ExternalService,
@@ -13306,8 +12998,12 @@ mod inference_settings_route_tests {
                 source_connection.secret_reference
             );
             assert_eq!(
-                validation_connection.selected_protocol,
-                candidate.connection_target.selected_protocol
+                validation_connection.service_entry_id,
+                candidate.activation_target.service_entry_id
+            );
+            assert_eq!(
+                validation_connection.credential_profile_id,
+                candidate.activation_target.credential_profile_id
             );
         }
         // providers is the effective registry containing only the newly selected custom protocol.
@@ -13357,7 +13053,7 @@ mod inference_settings_route_tests {
             &providers,
             &mut configuration,
             provider_id.as_str(),
-            &candidate.connection_target,
+            &candidate.activation_target,
             &validation_outcomes,
         )
         .expect("every compatible credential must migrate");
@@ -13371,31 +13067,30 @@ mod inference_settings_route_tests {
                 .get(connection_id)
                 .expect("migrated connection must remain addressable");
             assert_eq!(
-                migrated.selected_protocol,
-                candidate.connection_target.selected_protocol
+                migrated.service_entry_id,
+                candidate.activation_target.service_entry_id
+            );
+            assert_eq!(
+                migrated.credential_profile_id,
+                candidate.activation_target.credential_profile_id
             );
             assert_eq!(migrated.secret_reference, secret_reference);
         }
-        assert_eq!(
-            configuration.connection_graph.connections[existing.id.as_str()].verified_protocols,
-            candidate.connection_target.verified_protocols
-        );
-        assert_eq!(
-            configuration.connection_graph.connections[sibling.id.as_str()].verified_protocols,
-            candidate.connection_target.verified_protocols
-        );
         // migrated_inference_route proves internal consumers remain executable after the protocol switch.
         // migrated_inference_route 验证内部消费者在协议切换后仍保持可执行。
         let migrated_inference_route =
             &configuration.inference_profiles["vmm"].llm_routes["precheck_l1"];
         assert_eq!(
             migrated_inference_route.service_entry_id,
-            candidate.connection_target.service_entry_id
+            candidate.activation_target.service_entry_id
         );
         assert_eq!(
             migrated_inference_route.binding,
             InferenceRouteBinding::Protocol {
-                protocol_profile_id: candidate.connection_target.selected_protocol.clone(),
+                protocol_profile_id: candidate
+                    .activation_target
+                    .default_protocol_profile_id
+                    .clone(),
             }
         );
 
@@ -13418,7 +13113,7 @@ mod inference_settings_route_tests {
                 &providers,
                 &mut failing_configuration,
                 provider_id.as_str(),
-                &candidate.connection_target,
+                &candidate.activation_target,
                 &validation_outcomes,
             )
             .is_err()
@@ -13541,10 +13236,10 @@ mod inference_settings_route_tests {
         assert!(request.template_decisions.is_empty());
     }
 
-    /// Verifies one incomplete legacy protocol route cannot block the complete settings snapshot.
-    /// 验证一条不完整的历史协议路由不会阻塞完整设置快照。
+    /// Verifies a system connection derives its directory kind from Manifest routes alone.
+    /// 验证系统连接只从 Manifest 路由派生目录类型。
     #[test]
-    fn incomplete_connection_protocol_is_isolated_from_model_management() {
+    fn system_connection_directory_uses_manifest_routes() {
         // providers supplies one exact built-in route for the isolation boundary.
         // providers 提供一条精确内置路由，用于验证隔离边界。
         let providers = ProviderRegistry::first_batch().expect("built-in provider registry");
@@ -13563,8 +13258,8 @@ mod inference_settings_route_tests {
             .credential_profiles
             .first()
             .expect("MiniMax credential profile");
-        // connection intentionally retains an empty protocol from an incomplete legacy record.
-        // connection 刻意保留不完整历史记录中的空协议。
+        // connection contains no protocol state by design.
+        // connection 按设计不包含协议状态。
         let connection = CredentialConnection {
             id: String::from("legacy-incomplete"),
             provider_id: provider.id.clone(),
@@ -13576,15 +13271,12 @@ mod inference_settings_route_tests {
             secret_reference: String::from("legacy-secret"),
             management_secret_reference: None,
             service_origin_override: None,
-            verified_protocols: BTreeSet::new(),
-            selected_protocol: String::new(),
             prompt_cache_by_protocol: BTreeMap::new(),
-            usage_scope_override: None,
         };
 
         assert_eq!(
             connection_model_directory_kind(&providers, &connection),
-            PublicAiModelDirectoryKind::Unavailable
+            PublicAiModelDirectoryKind::Dynamic
         );
     }
 
@@ -13598,7 +13290,6 @@ mod inference_settings_route_tests {
             id: String::from("custom:mixed-directory"),
             display_name: String::from("Mixed Directory"),
             base_url: String::from("https://mixed-directory.example.test/v1"),
-            protocol: None,
             protocols: vec![
                 CustomProviderProtocol::OpenAiResponses,
                 CustomProviderProtocol::OpenAiChat,
@@ -13642,13 +13333,7 @@ mod inference_settings_route_tests {
             secret_reference: String::from("mixed-directory-secret"),
             management_secret_reference: None,
             service_origin_override: None,
-            verified_protocols: BTreeSet::from([
-                String::from(vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID),
-                String::from(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
-            ]),
-            selected_protocol: String::from(vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID),
             prompt_cache_by_protocol: BTreeMap::new(),
-            usage_scope_override: None,
         };
         // providers is the exact effective registry consumed by the browser projection.
         // providers 是浏览器投影消费的精确有效注册表。
@@ -13662,17 +13347,19 @@ mod inference_settings_route_tests {
         );
     }
 
-    /// Verifies multi-protocol migration never replaces a model binding with the connection default.
-    /// 验证多协议迁移绝不会用连接默认值替换模型绑定。
+    /// Verifies multi-protocol activation never replaces a model binding with the provider default.
+    /// 验证多协议激活绝不会用供应商默认值替换模型绑定。
     #[test]
     fn multi_protocol_migration_preserves_exact_internal_route_binding() {
         // target exposes Responses first while retaining Chat as another enabled protocol.
         // target 首选 Responses，同时保留 Chat 作为另一项启用协议。
-        let target = CustomProviderConnectionTarget {
+        let target = CustomProviderActivationTarget {
             service_entry_id: String::from("custom-entry-v2"),
             credential_profile_id: String::from("api-key"),
-            selected_protocol: String::from(vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID),
-            verified_protocols: BTreeSet::from([
+            default_protocol_profile_id: String::from(
+                vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID,
+            ),
+            protocol_profile_ids: BTreeSet::from([
                 String::from(vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID),
                 String::from(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
             ]),
@@ -13708,7 +13395,7 @@ mod inference_settings_route_tests {
             InferenceRouteBinding::Protocol {
                 protocol_profile_id: String::from(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID,),
             },
-            "the connection default must not replace an exact model route"
+            "the provider default must not replace an exact model route"
         );
     }
 
@@ -13720,7 +13407,6 @@ mod inference_settings_route_tests {
             provider_id: None,
             display_name: String::from("Multi Protocol"),
             base_url: String::from("https://multi.example.test/v1"),
-            protocol: CustomProviderProtocol::OpenAiChat,
             remote_compaction_policy: ResponsesRemoteCompactionPolicy::Disabled,
             websocket_policy: ResponsesWebsocketPolicy::Disabled,
             authentication: CustomProviderAuthentication::BearerAuthorization,
@@ -13746,12 +13432,12 @@ mod inference_settings_route_tests {
         let entry = &candidate.descriptor.service_entries[0];
         assert_eq!(entry.protocol_routes.len(), 3);
         assert_eq!(
-            candidate.connection_target.verified_protocols.len(),
+            candidate.activation_target.protocol_profile_ids.len(),
             3,
             "every enabled protocol must stay verified for the connection"
         );
         assert_eq!(
-            candidate.connection_target.selected_protocol,
+            candidate.activation_target.default_protocol_profile_id,
             entry.protocol_routes[0].protocol_profile_id
         );
     }
@@ -13765,7 +13451,6 @@ mod inference_settings_route_tests {
             provider_id: Some(String::from("custom:multi")),
             display_name: String::from("Multi Protocol"),
             base_url: String::from("https://multi.example.test/v1"),
-            protocol: CustomProviderProtocol::OpenAiChat,
             remote_compaction_policy: ResponsesRemoteCompactionPolicy::Disabled,
             websocket_policy: ResponsesWebsocketPolicy::Disabled,
             authentication: CustomProviderAuthentication::BearerAuthorization,
@@ -13793,7 +13478,6 @@ mod inference_settings_route_tests {
             id: String::from("custom:multi"),
             display_name: String::from("Multi Protocol"),
             base_url: String::from("https://multi.example.test/v1"),
-            protocol: None,
             protocols: vec![
                 CustomProviderProtocol::OpenAiResponses,
                 CustomProviderProtocol::AnthropicMessages,
@@ -13837,7 +13521,6 @@ mod inference_settings_route_tests {
             id: String::from("custom:multi"),
             display_name: String::from("Multi Protocol"),
             base_url: String::from("https://multi.example.test/v1"),
-            protocol: None,
             protocols: vec![
                 CustomProviderProtocol::OpenAiResponses,
                 CustomProviderProtocol::OpenAiChat,
@@ -13874,11 +13557,11 @@ mod inference_settings_route_tests {
             descriptor: candidate_descriptor,
             validation_connection: None,
             temporary_secret: None,
-            connection_target: CustomProviderConnectionTarget {
+            activation_target: CustomProviderActivationTarget {
                 service_entry_id: String::from("default"),
                 credential_profile_id: String::from("api-key"),
-                selected_protocol: String::from("openai-responses.v1"),
-                verified_protocols: BTreeSet::from([
+                default_protocol_profile_id: String::from("openai-responses.v1"),
+                protocol_profile_ids: BTreeSet::from([
                     String::from("openai-responses.v1"),
                     String::from("openai-chat-completions.v1"),
                 ]),
@@ -13900,7 +13583,6 @@ mod inference_settings_route_tests {
             provider_id: None,
             display_name: String::from("Header Provider"),
             base_url: String::from("https://headers.example.test/v1"),
-            protocol: CustomProviderProtocol::OpenAiChat,
             remote_compaction_policy: ResponsesRemoteCompactionPolicy::Disabled,
             websocket_policy: ResponsesWebsocketPolicy::Disabled,
             authentication: CustomProviderAuthentication::BearerAuthorization,
@@ -13940,7 +13622,6 @@ mod inference_settings_route_tests {
                 provider_id: None,
                 display_name: String::from("Unsafe Header"),
                 base_url: String::from("https://unsafe.example.test/v1"),
-                protocol: CustomProviderProtocol::OpenAiChat,
                 remote_compaction_policy: ResponsesRemoteCompactionPolicy::Disabled,
                 websocket_policy: ResponsesWebsocketPolicy::Disabled,
                 authentication: CustomProviderAuthentication::BearerAuthorization,

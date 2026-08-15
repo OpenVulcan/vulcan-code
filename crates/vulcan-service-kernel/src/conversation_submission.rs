@@ -934,13 +934,7 @@ mod submission_model_selection_tests {
             secret_reference: String::from("secret-openrouter-account"),
             management_secret_reference: None,
             service_origin_override: None,
-            verified_protocols: BTreeSet::from([
-                String::from("openai-chat-completions.v1"),
-                String::from("openai-responses.v1"),
-            ]),
-            selected_protocol: String::from("openai-chat-completions.v1"),
             prompt_cache_by_protocol: BTreeMap::new(),
-            usage_scope_override: None,
         };
         configuration
             .connection_graph
@@ -1201,9 +1195,12 @@ mod submission_model_selection_tests {
         assert!(
             rows.iter()
                 .any(|row| row.catalog_models.iter().any(|model| {
-                    model.id == selection.model_id && model.active && model.status.is_some()
+                    model.id == selection.model_id
+                        && model.active
+                        && !model.preferred_connection
+                        && model.status.is_some()
                 })),
-            "the leased model must remain visible only as the selected session row"
+            "the leased model must remain visible only as a selected, non-preferred session row"
         );
         let changed_sessions =
             crate::public_ai_settings::reconcile_missing_session_model_selections(

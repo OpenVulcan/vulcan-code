@@ -13,7 +13,6 @@ import {
   Sparkles,
   Trash2,
   Users,
-  X,
 } from "lucide-react"
 
 import { CustomModelTemplateCard } from "@/components/features/settings/custom-model-template-card"
@@ -96,8 +95,6 @@ import {
   savePublicAiCustomModelProtocolPreferences,
   savePublicAiCustomModels,
   savePublicAiModelCapabilityOverrides,
-  savePublicAiModelEnabled,
-  savePublicAiProviderModelsEnabled,
   syncPublicAiConnection,
   validatePublicAiCustomModel,
 } from "@/service/settings-actions-service"
@@ -127,10 +124,6 @@ interface CustomProviderModelsDialogProps {
   provider: PublicAiProviderDescriptor | null
   snapshot: PublicAiSettingsSnapshot | null
 }
-
-// CustomModelFilter is the user-facing enabled-state filter.
-// CustomModelFilter 是面向用户的启用状态筛选器。
-type CustomModelFilter = "all" | "enabled" | "disabled"
 
 // EMPTY_PROJECTION is the safe request projection used until the user declares exact mappings.
 // EMPTY_PROJECTION 是用户声明精确映射前使用的安全请求投影。
@@ -351,7 +344,6 @@ export function CustomProviderModelsDialog(props: CustomProviderModelsDialogProp
   const [manualModels, setManualModels] = React.useState<PublicAiCustomModelDefinition[]>([])
   const [selectedModelId, setSelectedModelId] = React.useState<string | null>(null)
   const [query, setQuery] = React.useState("")
-  const [filter, setFilter] = React.useState<CustomModelFilter>("all")
   const [advancedTextDrafts, setAdvancedTextDrafts] = React.useState<Record<string, AdvancedModelTextDraft>>({})
   const [dirtyManualModelIds, setDirtyManualModelIds] = React.useState<Set<string>>(new Set())
   // manualModelsDirty is derived from the single authoritative dirty-model identity set.
@@ -468,13 +460,11 @@ export function CustomProviderModelsDialog(props: CustomProviderModelsDialogProp
   const visibleRows = React.useMemo(() => {
     const normalizedQuery = query.trim().toLocaleLowerCase()
     return rows.filter((row) => {
-      if (filter === "enabled" && !row.enabled) return false
-      if (filter === "disabled" && row.enabled) return false
       return !normalizedQuery
         || row.id.toLocaleLowerCase().includes(normalizedQuery)
         || row.displayName.toLocaleLowerCase().includes(normalizedQuery)
     })
-  }, [filter, query, rows])
+  }, [query, rows])
 
   const providerDefaults = props.provider && props.snapshot
     ? resolveDirectCustomProviderDefaults(
@@ -693,40 +683,6 @@ export function CustomProviderModelsDialog(props: CustomProviderModelsDialogProp
     props.onOpenChange(open)
   }, [manualModelsDirty, props])
 
-  // setModelEnabled persists one provider-model access decision without changing accounts.
-  // setModelEnabled 持久化一个供应商模型访问决定且不改变账号。
-  const setModelEnabled = React.useCallback(async (row: CustomProviderModelRow, enabled: boolean) => {
-    if (!props.provider) return
-    setSaving(true)
-    setError(null)
-    try {
-      acceptSnapshot(await savePublicAiModelEnabled({
-        providerId: props.provider.id,
-        modelId: row.id,
-        enabled,
-      }))
-    } catch (reason) {
-      setError(errorMessage(reason))
-    } finally {
-      setSaving(false)
-    }
-  }, [acceptSnapshot, props.provider])
-
-  // setAllEnabled applies one provider-scoped state to the synchronized model union.
-  // setAllEnabled 将一个供应商作用域状态应用到同步模型并集。
-  const setAllEnabled = React.useCallback(async (enabled: boolean) => {
-    if (!props.provider) return
-    setSaving(true)
-    setError(null)
-    try {
-      acceptSnapshot(await savePublicAiProviderModelsEnabled({ providerId: props.provider.id, enabled }))
-    } catch (reason) {
-      setError(errorMessage(reason))
-    } finally {
-      setSaving(false)
-    }
-  }, [acceptSnapshot, props.provider])
-
   // removeManualDefinition removes only user-owned state; a remotely discovered model remains visible.
   // removeManualDefinition 仅移除用户自有状态；远程发现模型仍保持可见。
   const removeManualDefinition = React.useCallback(async () => {
@@ -760,15 +716,7 @@ export function CustomProviderModelsDialog(props: CustomProviderModelsDialogProp
                 <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
                 <Input className="pl-9" onChange={(event) => setQuery(event.target.value)} placeholder={t("settings.customModels.search")} value={query} />
               </div>
-              <div className="flex gap-2">
-                <Select onValueChange={(value) => setFilter(value as CustomModelFilter)} value={filter}>
-                  <SelectTrigger className="min-w-0 flex-1"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">{t("settings.customModels.filterAll")}</SelectItem>
-                    <SelectItem value="enabled">{t("settings.customModels.filterEnabled")}</SelectItem>
-                    <SelectItem value="disabled">{t("settings.customModels.filterDisabled")}</SelectItem>
-                  </SelectContent>
-                </Select>
+              <div className="flex justify-end gap-2">
                 <Tooltip delayDuration={500}>
                   <TooltipTrigger asChild>
                     <Button aria-label={t("settings.customModels.addManual")} onClick={() => setManualDialogOpen(true)} size="icon" type="button">
@@ -777,10 +725,6 @@ export function CustomProviderModelsDialog(props: CustomProviderModelsDialogProp
                   </TooltipTrigger>
                   <TooltipContent>{t("settings.customModels.addManual")}</TooltipContent>
                 </Tooltip>
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <Button disabled={saving || rows.length === 0} onClick={() => void setAllEnabled(true)} size="sm" type="button" variant="outline"><CheckCheck className="mr-2 size-4" />{t("settings.customModels.enableAll")}</Button>
-                <Button disabled={saving || rows.length === 0} onClick={() => void setAllEnabled(false)} size="sm" type="button" variant="outline"><X className="mr-2 size-4" />{t("settings.customModels.disableAll")}</Button>
               </div>
             </div>
             <ScrollArea className="min-h-0 flex-1">
@@ -804,13 +748,6 @@ export function CustomProviderModelsDialog(props: CustomProviderModelsDialogProp
                         <Badge variant="secondary"><Users className="mr-1 size-3" />{row.accounts.filter(accountExposesModel).length}</Badge>
                       </span>
                     </button>
-                    <Switch
-                      aria-label={`${row.displayName} · ${t("settings.customModels.enabled")}`}
-                      checked={row.enabled}
-                      className="mt-3"
-                      disabled={saving}
-                      onCheckedChange={(enabled) => void setModelEnabled(row, enabled)}
-                    />
                   </div>
                 ))}
                 {visibleRows.length === 0 ? <p className="px-3 py-10 text-center text-sm text-muted-foreground">{t("settings.customModels.empty")}</p> : null}
@@ -822,7 +759,7 @@ export function CustomProviderModelsDialog(props: CustomProviderModelsDialogProp
               <ScrollArea className="h-full">
                 <div className="space-y-4 p-5">
                   <Button className="md:hidden" onClick={() => setMobileDetailOpen(false)} size="sm" type="button" variant="ghost"><ArrowLeft className="mr-2 size-4" />{t("settings.customModels.backToList")}</Button>
-                  <ModelDetailHeader disabled={saving} onEnabledChange={(enabled) => void setModelEnabled(selectedRow, enabled)} row={selectedRow} />
+                  <ModelDetailHeader row={selectedRow} />
                   <CustomModelTemplateCard decision={selectedRow.templateDecision} modelId={selectedRow.id} onSaved={acceptSnapshot} providerId={props.provider.id} />
                   <Tabs defaultValue="overview">
                     <TabsList className="grid w-full grid-cols-4">
@@ -1271,17 +1208,15 @@ function DiscoverySummary(props: {
   )
 }
 
-// ModelDetailHeader renders immutable identity and one provider-model access switch.
-// ModelDetailHeader 渲染不可变身份与一个供应商模型访问开关。
-function ModelDetailHeader(props: { disabled: boolean; onEnabledChange: (enabled: boolean) => void; row: CustomProviderModelRow }) {
-  const { t } = useI18n()
+// ModelDetailHeader renders immutable model identity; availability is owned by the model list.
+// ModelDetailHeader 渲染不可变模型身份；可用状态由模型列表管理。
+function ModelDetailHeader(props: { row: CustomProviderModelRow }) {
   return (
     <div className="flex flex-wrap items-start justify-between gap-3">
       <div className="min-w-0">
         <h3 className="truncate text-lg font-semibold">{props.row.displayName}</h3>
         <p className="truncate font-mono text-xs text-muted-foreground">{props.row.id}</p>
       </div>
-      <label className="flex items-center gap-2 text-sm"><span>{t("settings.customModels.enabled")}</span><Switch checked={props.row.enabled} disabled={props.disabled} onCheckedChange={props.onEnabledChange} /></label>
     </div>
   )
 }
@@ -1467,8 +1402,8 @@ function AccountAvailabilityEditor(props: {
                 ) : null}
                 <Switch
                   aria-label={`${account.connection.display_name} · ${t("settings.customModels.accountAvailable")}`}
-                  checked={props.row.enabled && accountIncludesModel(account)}
-                  disabled={!props.row.enabled || savingConnectionId !== null}
+                  checked={accountIncludesModel(account)}
+                  disabled={savingConnectionId !== null}
                   onCheckedChange={(enabled) => void saveAvailability(account.connection.id, enabled)}
                 />
               </div>

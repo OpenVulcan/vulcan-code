@@ -500,10 +500,10 @@ fn document_from_configuration(
 ) -> Result<CustomProviderManifestDocumentV1, String> {
     let mut provider_manifest = match configuration.custom_provider_manifests.get(provider_id) {
         Some(provider_manifest) => provider_manifest.clone(),
-        None => vulcan_provider_adapters::legacy_custom_descriptor_to_manifest(descriptor)?,
+        None => vulcan_provider_adapters::project_custom_descriptor_manifest(descriptor)?,
     };
     let generated_compatibility_manifest =
-        vulcan_provider_adapters::legacy_custom_descriptor_to_manifest(descriptor)?;
+        vulcan_provider_adapters::project_custom_descriptor_manifest(descriptor)?;
     let compiled = vulcan_provider_adapters::compile_manifest(
         &provider_manifest,
         ManifestOwnership::Custom,
@@ -734,7 +734,7 @@ fn parse_document(provider_id: &str, text: &str) -> Result<ParsedCustomProviderD
         (
             CustomProviderManifestDocumentV1 {
                 schema_version: CUSTOM_PROVIDER_MANIFEST_SCHEMA_VERSION.to_string(),
-                provider_manifest: vulcan_provider_adapters::legacy_custom_descriptor_to_manifest(
+                provider_manifest: vulcan_provider_adapters::project_custom_descriptor_manifest(
                     &descriptor,
                 )?,
                 local_overrides: CustomProviderLocalOverridesV1::default(),
@@ -1704,7 +1704,7 @@ mod tests {
                     authentication: None,
                     key_prefix: None,
                     credential_role: None,
-                    allowed_usage_scopes: Default::default(),
+                    default_usage_scopes: Default::default(),
                 }],
                 authentication: AuthenticationProjection::BearerAuthorization,
                 request_headers: BTreeMap::new(),
@@ -1729,7 +1729,7 @@ mod tests {
                     provider_request_id_headers: Vec::new(),
                     verified: true,
                 }],
-                allowed_usage_scopes: BTreeSet::new(),
+                default_usage_scopes: BTreeSet::new(),
             }],
         }
     }
@@ -1913,7 +1913,7 @@ mod tests {
         let provider_id = "custom:profile-preservation";
         let descriptor = custom_descriptor(provider_id);
         let mut existing_manifest =
-            vulcan_provider_adapters::legacy_custom_descriptor_to_manifest(&descriptor)
+            vulcan_provider_adapters::project_custom_descriptor_manifest(&descriptor)
                 .expect("baseline custom manifest should build");
         let mut custom_declaration = existing_manifest
             .usage_profiles
@@ -1964,7 +1964,7 @@ mod tests {
         let provider_id = "custom:revision-exhaustion";
         let descriptor = custom_descriptor(provider_id);
         let mut existing_manifest =
-            vulcan_provider_adapters::legacy_custom_descriptor_to_manifest(&descriptor)
+            vulcan_provider_adapters::project_custom_descriptor_manifest(&descriptor)
                 .expect("baseline custom manifest should build");
         existing_manifest.revision = u64::MAX;
         existing_manifest.display.name = String::from("Outdated display name");

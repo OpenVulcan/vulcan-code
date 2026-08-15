@@ -14,7 +14,7 @@
     "upstream_target_id": "coding-plan-vlm",
     "display_name": "MiniMax Vision Generic Fixture",
     "tool_id": "fixture_minimax_vision_generic",
-    "capability": "media_analyze",
+    "capability": "image_understand",
     "input_schema": {
       "type": "object",
       "additionalProperties": false,
@@ -40,7 +40,7 @@
   },
   "operation": {
     "operation_id": "fixture.minimax-vision-generic",
-    "operation": "media_analyze",
+    "operation": "image_understand",
     "carrier": "provider_tool",
     "input_resources": ["image"],
     "output_resources": [],

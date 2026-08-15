@@ -2759,7 +2759,7 @@ mod tests {
             request_projector: crate::RequestProjectorKind::Direct,
             model_discovery: crate::ModelDiscoveryKind::ProviderToolsOnly,
             protocol_routes: Vec::new(),
-            allowed_usage_scopes: Default::default(),
+            default_usage_scopes: Default::default(),
         }
     }
 
@@ -2776,7 +2776,7 @@ mod tests {
             authentication: None,
             key_prefix: None,
             credential_role: None,
-            allowed_usage_scopes: Default::default(),
+            default_usage_scopes: Default::default(),
         }
     }
 

@@ -180,7 +180,7 @@ fn cmd_validate_all(args: &[String]) -> Result<(), CliError> {
 /// 仅当 Schema 是有效 Draft 2020-12 Schema 且每份文档均符合时返回成功。
 fn validate_manifest_json_schema(directory: &Path) -> Result<(), CliError> {
     let schema_path = vulcan_runtime_assets::source_provider_manifest_schema_directory()
-        .join("provider-manifest-v1.schema.json");
+        .join("provider-manifest-v2.schema.json");
     let schema_text = read_bounded(&schema_path)?;
     let schema = parse_bounded_json(&schema_text, &format!("schema `{}`", schema_path.display()))?;
     jsonschema::draft202012::meta::validate(&schema).map_err(|error| {

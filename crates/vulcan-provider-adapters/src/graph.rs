@@ -77,9 +77,9 @@ pub struct CredentialProfile {
     /// 可选声明凭据角色，供上传与秘密投影守卫消费。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credential_role: Option<String>,
-    /// Usage scopes permitted by the exact provider product contract.
-    /// 精确供应商产品契约允许的使用场景。
-    pub allowed_usage_scopes: BTreeSet<InferenceUsageScope>,
+    /// Initial usage defaults suggested by the exact provider product contract.
+    /// 精确供应商产品契约建议的初始使用默认值。
+    pub default_usage_scopes: BTreeSet<InferenceUsageScope>,
 }
 
 /// Describes one provider service entry.
@@ -126,9 +126,9 @@ pub struct ServiceEntry {
     /// Verified protocol routes available through this entry.
     /// 此入口可用的已验证协议路由。
     pub protocol_routes: Vec<ProtocolRoute>,
-    /// Usage scopes permitted by this exact product or regional service entry.
-    /// 当前精确产品或区域服务入口允许的使用场景。
-    pub allowed_usage_scopes: BTreeSet<InferenceUsageScope>,
+    /// Union of initial usage defaults advertised by this product or regional entry.
+    /// 当前产品或区域服务入口公布的初始使用默认值并集。
+    pub default_usage_scopes: BTreeSet<InferenceUsageScope>,
 }
 
 /// Declares the bounded host and path contract for one credential-scoped service origin.
@@ -247,8 +247,8 @@ impl ServiceEntry {
             .find(|profile| profile.id == profile_id)
     }
 
-    /// Resolves the effective usage scopes for one exact credential connection.
-    /// 解析一个精确凭据连接的有效使用场景。
+    /// Resolves the default usage scopes for one exact credential connection.
+    /// 解析一个精确凭据连接的默认使用场景。
     ///
     /// # Parameters
     /// 参数
@@ -257,9 +257,9 @@ impl ServiceEntry {
     ///
     /// # Returns
     /// 返回值
-    /// The product/profile intersection narrowed by the optional user override.
-    /// 返回产品与配置档交集，并由可选用户覆盖进一步收窄。
-    pub fn effective_usage_scopes(
+    /// The credential-profile defaults used only when no explicit model preference exists.
+    /// 返回仅在模型没有显式用户偏好时使用的凭据配置档默认值。
+    pub fn default_usage_scopes_for_connection(
         &self,
         connection: &CredentialConnection,
     ) -> Result<BTreeSet<InferenceUsageScope>, String> {
@@ -277,21 +277,7 @@ impl ServiceEntry {
                     connection.credential_profile_id, self.id
                 )
             })?;
-        let product_scopes: BTreeSet<_> = profile
-            .allowed_usage_scopes
-            .intersection(&self.allowed_usage_scopes)
-            .copied()
-            .collect();
-        let Some(override_scopes) = connection.usage_scope_override.as_ref() else {
-            return Ok(product_scopes);
-        };
-        if !override_scopes.is_subset(&product_scopes) {
-            return Err(format!(
-                "Connection `{}` usage-scope override exceeds product `{}` permissions.",
-                connection.id, self.id
-            ));
-        }
-        Ok(override_scopes.clone())
+        Ok(profile.default_usage_scopes.clone())
     }
 }
 
@@ -709,26 +695,10 @@ pub struct CredentialConnection {
     /// 供应商声明可配置入口使用的可选凭据作用域服务源地址。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub service_origin_override: Option<String>,
-    /// Verified protocol profile identifiers.
-    /// 已验证协议 Profile 标识。
-    pub verified_protocols: BTreeSet<String>,
-    /// Manifest-derived compatibility protocol anchor.
-    /// Manifest 推导的兼容协议锚点。
-    ///
-    /// This field is retained only for persisted-configuration shape and rollback compatibility.
-    /// New writes derive it from the service entry's declared route order. Discovery and execution
-    /// must never consult it as protocol authority (plan §12.2).
-    /// 本字段仅为持久化配置形状与版本回滚兼容而保留。新写入值从服务入口声明的路由顺序
-    /// 推导；发现与执行绝不能把它作为协议权威（方案 §12.2）。
-    pub selected_protocol: String,
     /// Protocol-scoped prompt-cache settings.
     /// 协议作用域的提示词缓存设置。
     #[serde(default)]
     pub prompt_cache_by_protocol: BTreeMap<String, PromptCachePolicy>,
-    /// Optional user narrowing of the credential-profile usage scopes.
-    /// 用户对凭据配置档使用场景的可选收窄。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub usage_scope_override: Option<BTreeSet<InferenceUsageScope>>,
 }
 
 /// Maximum models accepted in one credential-scoped runtime catalog.

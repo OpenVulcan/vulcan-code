@@ -1,5 +1,5 @@
 {
-  "schema_version": "vulcan.provider-manifest.v1",
+  "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "qiniu",
   "revision": 1,
   "published_at": "2026-08-06T00:00:00Z",
@@ -38,7 +38,7 @@
           "credential_mode": "token",
           "billing_kind": "pay_as_you_go",
           "account_usage_query": "unsupported",
-          "allowed_usage_scopes": [
+          "default_usage_scopes": [
             "interactive_agent",
             "internal_background",
             "external_service"

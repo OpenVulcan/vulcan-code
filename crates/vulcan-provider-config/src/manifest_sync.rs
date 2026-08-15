@@ -885,9 +885,6 @@ fn validate_service_entry_trust_ceiling(
             || candidate_profile.authentication != bundled_profile.authentication
             || candidate_profile.key_prefix != bundled_profile.key_prefix
             || candidate_profile.credential_role != bundled_profile.credential_role
-            || !candidate_profile
-                .allowed_usage_scopes
-                .is_subset(&bundled_profile.allowed_usage_scopes)
         {
             return Err(format!(
                 "Credential profile `{}` expands its bundled credential authority.",
@@ -1261,7 +1258,7 @@ pub fn verify_provider_bytes(
         return Err(ProviderManifestVerificationError::new(
             ProviderManifestVerificationFailureKind::EngineIncompatible,
             format!(
-                "Provider `{}` requires engine contract {} but this engine supports {}.",
+                "Provider `{}` requires engine contract {} but this client supports {}. Upgrade the client before activating this manifest.",
                 entry.provider_id, entry.minimum_engine_contract, engine_contract
             ),
         ));
@@ -2049,6 +2046,10 @@ mod tests {
         assert_eq!(
             engine_error.kind(),
             ProviderManifestVerificationFailureKind::EngineIncompatible
+        );
+        assert!(
+            engine_error.to_string().contains("Upgrade the client"),
+            "an incompatible online generation must require a client upgrade"
         );
 
         let malformed = "{}";

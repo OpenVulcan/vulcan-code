@@ -1,0 +1,101 @@
+{
+  "schema_version": "provider-manifest-execution-fixture.v1",
+  "fixture_id": "apikeyfun-grok-image-sync",
+  "base_manifest": "tavily.json",
+  "production_target_refs": [
+    "apikeyfun::grok-imagine-image.generate",
+    "apikeyfun::grok-imagine-image-quality.generate"
+  ],
+  "tool_target": {
+    "target_id": "public-api.fixture-apikeyfun-grok-image",
+    "description": "APIKEY.FUN Grok Imagine synchronous image generation fixture.",
+    "service_entry_id": "public-api",
+    "credential_profile_ids": ["api-key"],
+    "upstream_target_id": "grok-imagine-image",
+    "display_name": "APIKEY.FUN Grok Imagine Fixture",
+    "tool_id": "fixture_apikeyfun_grok_image_generate",
+    "capability": "image_generate",
+    "input_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "model": {"type": "string", "const": "grok-imagine-image"},
+        "prompt": {"type": "string", "minLength": 1},
+        "n": {"type": "integer", "const": 1},
+        "aspect_ratio": {"type": "string"},
+        "resolution": {"type": "string", "const": "1k"},
+        "response_format": {"type": "string", "const": "b64_json"}
+      },
+      "required": ["model", "prompt", "n", "aspect_ratio", "resolution", "response_format"]
+    },
+    "output": {
+      "kind": "resources",
+      "source_path": "/data",
+      "normalized_result_path": "resources",
+      "resource_kind": "image",
+      "mime_types": ["image/jpeg"],
+      "resource_decoders": [
+        {
+          "source_path": "/data/0/b64_json",
+          "encoding": "base64",
+          "resource_kind": "image",
+          "mime_type": "image/jpeg",
+          "max_bytes": 1048576,
+          "output_id_prefix": "image"
+        }
+      ]
+    },
+    "execution": {
+      "endpoint_path": "/fixtures/apikeyfun-grok-image",
+      "authentication": "bearer_authorization",
+      "adapter": "generic_json",
+      "execution_kind": "http_json_sync"
+    }
+  },
+  "operation": {
+    "operation_id": "fixture.apikeyfun-grok-image-sync",
+    "operation": "image_generate",
+    "carrier": "provider_tool",
+    "input_resources": [],
+    "output_resources": ["image"],
+    "tool_target_refs": ["public-api.fixture-apikeyfun-grok-image"],
+    "request_profile_refs": [],
+    "response_profile_refs": [],
+    "upload_channel_refs": [],
+    "upload_bindings": [],
+    "timeout_ms": 60000,
+    "idempotent": false
+  },
+  "upload_channels": [],
+  "required_execution_primitives": ["http_json_sync"],
+  "required_upload_primitives": [],
+  "arguments": {
+    "model": "grok-imagine-image",
+    "prompt": "draw a cinematic coastline",
+    "n": 1,
+    "aspect_ratio": "16:9",
+    "resolution": "1k",
+    "response_format": "b64_json"
+  },
+  "interactions": [
+    {
+      "method": "POST",
+      "path": "/fixtures/apikeyfun-grok-image",
+      "expected_json_body": {
+        "model": "grok-imagine-image",
+        "prompt": "draw a cinematic coastline",
+        "n": 1,
+        "aspect_ratio": "16:9",
+        "resolution": "1k",
+        "response_format": "b64_json"
+      },
+      "response_status": 200,
+      "response_json_body": {
+        "data": [
+          {"b64_json": "/9j/2Q=="}
+        ]
+      }
+    }
+  ],
+  "expected_output_kind": "resources"
+}

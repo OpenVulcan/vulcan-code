@@ -25,6 +25,81 @@ fn current_execution_registry_contains_only_runtime_backed_primitives() {
     );
 }
 
+/// Verifies APIKEY.FUN DeepSeek keeps one canonical reasoning channel without weakening Responses validation.
+/// 验证 APIKEY.FUN DeepSeek 在不放宽 Responses 校验的前提下只保留一条规范思考通道。
+#[test]
+fn apikeyfun_deepseek_response_profile_filters_only_mirrored_reasoning_events() {
+    // manifestPath owns the exact bundled provider definition under test.
+    // manifestPath 指向本测试使用的精确内置供应商定义。
+    let manifest_path =
+        vulcan_runtime_assets::source_bundled_provider_manifests_directory().join("apikeyfun.json");
+    // manifestText is compiled through the same system-manifest path used at publication.
+    // manifestText 通过发布时使用的同一系统 Manifest 路径编译。
+    let manifest_text = std::fs::read_to_string(&manifest_path)
+        .unwrap_or_else(|_| panic!("missing APIKEY.FUN manifest at {}", manifest_path.display()));
+    // compiled freezes model-scoped response-profile ownership and executable payloads.
+    // compiled 冻结模型作用域响应 Profile 的归属与可执行载荷。
+    let compiled = super::compiler::compile_manifest_text(
+        manifest_text.as_str(),
+        super::ManifestOwnership::System,
+    )
+    .expect("APIKEY.FUN manifest must compile");
+    // deepseekRule must own the relay-specific response projection while unrelated models do not.
+    // deepseekRule 必须持有中转站专属响应投影，而无关模型不得继承该投影。
+    let deepseek_rule = compiled
+        .rule_instances
+        .iter()
+        .find(|rule| rule.rule_id == "deepseek-v4-flash")
+        .expect("DeepSeek V4 Flash rule must compile");
+    assert_eq!(
+        deepseek_rule.response_profile_refs,
+        vec![String::from(
+            "apikeyfun.deepseek.responses.reasoning-mirror.v1"
+        )]
+    );
+    let unrelated_rule = compiled
+        .rule_instances
+        .iter()
+        .find(|rule| rule.rule_id == "gpt-5-6-sol")
+        .expect("unrelated GPT rule must compile");
+    assert!(unrelated_rule.response_profile_refs.is_empty());
+
+    // responseProfile is the exact frozen payload selected by both DeepSeek rules.
+    // responseProfile 是两条 DeepSeek 规则选择的精确冻结载荷。
+    let response_profile = compiled
+        .response_profiles
+        .iter()
+        .find(|profile| profile.profile_id == "apikeyfun.deepseek.responses.reasoning-mirror.v1")
+        .and_then(|profile| profile.payload.clone())
+        .expect("DeepSeek reasoning mirror profile must compile");
+    // cases prove only the invalid duplicated channel is renamed into ignored lifecycle metadata.
+    // cases 证明只有无效重复通道会被改名为可忽略的生命周期元数据。
+    let cases = [
+        (
+            "response.reasoning_text.delta",
+            "response.apikeyfun.reasoning_text_mirror.delta",
+        ),
+        (
+            "response.reasoning_text.done",
+            "response.apikeyfun.reasoning_text_mirror.done",
+        ),
+        (
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+        ),
+        ("response.output_text.delta", "response.output_text.delta"),
+    ];
+    for (wire_type, expected_type) in cases {
+        let projected = crate::execution::project_json_response_profiles(
+            std::slice::from_ref(&response_profile),
+            serde_json::json!({"type": wire_type, "delta": "verified"}),
+        )
+        .expect("APIKEY.FUN response projection must succeed");
+        assert_eq!(projected["type"], expected_type);
+        assert_eq!(projected["delta"], "verified");
+    }
+}
+
 /// Resolves one committed JSON Schema resource in the runtime-assets crate.
 /// 解析 runtime-assets crate 中一份已提交 JSON Schema 资源。
 fn schema_resource(relative: &str) -> PathBuf {
@@ -194,7 +269,7 @@ fn rust_model_catalog_fields() -> BTreeSet<&'static str> {
 /// 验证 Manifest JSON Schema 与 Rust DTO 顶层保持同步。
 #[test]
 fn manifest_schema_top_level_matches_rust_dto() {
-    let schema = load_schema("provider-manifest-v1.schema.json");
+    let schema = load_schema("provider-manifest-v2.schema.json");
     let properties = schema["properties"]
         .as_object()
         .expect("schema must declare properties");
@@ -222,7 +297,7 @@ fn manifest_schema_top_level_matches_rust_dto() {
 /// 验证服务入口子字段在 Schema 声明契约内保持一致。
 #[test]
 fn manifest_schema_service_contract_is_consistent() {
-    let schema = load_schema("provider-manifest-v1.schema.json");
+    let schema = load_schema("provider-manifest-v2.schema.json");
     let services = &schema["properties"]["services"];
     assert_eq!(services["type"], "array");
     assert_eq!(services["maxItems"], 64);
@@ -267,7 +342,7 @@ fn manifest_schema_service_contract_is_consistent() {
 /// 验证模型规则子字段与 Rust DTO 精确一致。
 #[test]
 fn manifest_schema_model_rule_contract_is_consistent() {
-    let schema = load_schema("provider-manifest-v1.schema.json");
+    let schema = load_schema("provider-manifest-v2.schema.json");
     let properties = schema["properties"]["model_rules"]["items"]["properties"]
         .as_object()
         .expect("model-rule items must declare properties");
@@ -283,12 +358,12 @@ fn manifest_schema_model_rule_contract_is_consistent() {
 /// 验证已提交 Schema 在模型参数的每一层都拒绝未知字段。
 #[test]
 fn manifest_schema_closes_model_parameter_definitions() {
-    let schema = load_schema("provider-manifest-v1.schema.json");
+    let schema = load_schema("provider-manifest-v2.schema.json");
     jsonschema::draft202012::meta::validate(&schema)
         .expect("provider manifest schema must remain valid Draft 2020-12");
     let validator =
         jsonschema::draft202012::new(&schema).expect("provider manifest schema must compile");
-    let manifest_path = schema_resource("provider-manifest-v1.schema.json")
+    let manifest_path = schema_resource("provider-manifest-v2.schema.json")
         .parent()
         .expect("schema path must have a parent")
         .parent()
@@ -341,7 +416,7 @@ fn manifest_parser_closes_imported_nested_contracts() {
         ("alibaba.json", "/tool_targets/0/execution"),
         ("alibaba.json", "/tool_targets/1/output/resource_decoders/0"),
     ];
-    let manifests_directory = schema_resource("provider-manifest-v1.schema.json")
+    let manifests_directory = schema_resource("provider-manifest-v2.schema.json")
         .parent()
         .expect("schema path must have a parent")
         .parent()
@@ -375,7 +450,7 @@ fn manifest_parser_closes_imported_nested_contracts() {
 /// 验证已提交 JSON Schema 与 Rust 解析一致地封闭导入嵌套契约。
 #[test]
 fn manifest_schema_closes_imported_nested_contracts() {
-    let schema = load_schema("provider-manifest-v1.schema.json");
+    let schema = load_schema("provider-manifest-v2.schema.json");
     jsonschema::draft202012::meta::validate(&schema)
         .expect("provider manifest schema must remain valid Draft 2020-12");
     let validator =
@@ -395,7 +470,7 @@ fn manifest_schema_closes_imported_nested_contracts() {
         ("alibaba.json", "/tool_targets/0/execution"),
         ("alibaba.json", "/tool_targets/1/output/resource_decoders/0"),
     ];
-    let manifests_directory = schema_resource("provider-manifest-v1.schema.json")
+    let manifests_directory = schema_resource("provider-manifest-v2.schema.json")
         .parent()
         .expect("schema path must have a parent")
         .parent()
@@ -428,10 +503,10 @@ fn manifest_schema_closes_imported_nested_contracts() {
 /// 验证 Rust 解析拒绝已提交 Schema 所拒绝的每一个未知对象字段。
 #[test]
 fn manifest_parser_matches_schema_unknown_field_closure() {
-    let schema = load_schema("provider-manifest-v1.schema.json");
+    let schema = load_schema("provider-manifest-v2.schema.json");
     let validator =
         jsonschema::draft202012::new(&schema).expect("provider manifest schema must compile");
-    let manifests_directory = schema_resource("provider-manifest-v1.schema.json")
+    let manifests_directory = schema_resource("provider-manifest-v2.schema.json")
         .parent()
         .expect("schema path must have a parent")
         .parent()
@@ -505,7 +580,7 @@ fn manifest_parser_matches_schema_unknown_field_closure() {
 /// 验证畸形参数值域及继承后的依赖关系会阻止编译。
 #[test]
 fn manifest_compiler_rejects_invalid_model_parameter_contracts() {
-    let manifest_path = schema_resource("provider-manifest-v1.schema.json")
+    let manifest_path = schema_resource("provider-manifest-v2.schema.json")
         .parent()
         .expect("schema path must have a parent")
         .parent()
@@ -622,7 +697,7 @@ fn index_schema_contract_is_stable() {
 /// 验证 Schema fixture 能接受冻结的示例清单形态。
 #[test]
 fn manifest_schema_accepts_minimal_shape() {
-    let schema = load_schema("provider-manifest-v1.schema.json");
+    let schema = load_schema("provider-manifest-v2.schema.json");
     let properties = schema["properties"]
         .as_object()
         .expect("schema must declare properties");
@@ -655,7 +730,7 @@ fn manifest_schema_accepts_minimal_shape() {
 /// DeepSeek manifest fixture mirroring the code-owned descriptor shape.
 /// 镜像代码持有描述形态的 DeepSeek 清单 fixture。
 const DEEPSEEK_MANIFEST: &str = r#"{
-  "schema_version": "vulcan.provider-manifest.v1",
+  "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "deepseek",
   "revision": 1,
   "published_at": "2026-08-06T00:00:00Z",
@@ -686,7 +761,7 @@ const DEEPSEEK_MANIFEST: &str = r#"{
           "billing_kind": "pay_as_you_go",
           "account_usage_query": "deep_seek_balance",
           "key_prefix": "sk-",
-          "allowed_usage_scopes": [
+          "default_usage_scopes": [
             "interactive_agent",
             "internal_background",
             "external_service"
@@ -892,7 +967,7 @@ fn rule_for_model_picks_most_specific() {
 fn capability_templates_merge_with_presence_semantics() {
     let manifest: super::ProviderManifestV1 = serde_json::from_str(
         r#"{
-          "schema_version": "vulcan.provider-manifest.v1",
+          "schema_version": "vulcan.provider-manifest.v2",
           "provider_id": "probe-merge",
           "revision": 1,
           "published_at": "2026-08-07T00:00:00Z",
@@ -1411,7 +1486,7 @@ fn bundled_reasoning_rules_match_legacy_reasoning_catalog() {
 #[test]
 fn rule_scope_strict_subset_wins_regardless_of_json_order() {
     let manifest_text = r#"{
-          "schema_version": "vulcan.provider-manifest.v1",
+          "schema_version": "vulcan.provider-manifest.v2",
           "provider_id": "probe-scope",
           "revision": 1,
           "published_at": "2026-08-07T00:00:00Z",
@@ -1518,7 +1593,7 @@ fn rule_scope_strict_subset_wins_regardless_of_json_order() {
 #[test]
 fn rule_scope_identical_targets_are_duplicate_authority() {
     let manifest_text = r#"{
-          "schema_version": "vulcan.provider-manifest.v1",
+          "schema_version": "vulcan.provider-manifest.v2",
           "provider_id": "probe-incomparable",
           "revision": 1,
           "published_at": "2026-08-07T00:00:00Z",
@@ -1581,7 +1656,7 @@ fn rule_scope_identical_targets_are_duplicate_authority() {
 #[test]
 fn capability_template_missing_list_field_inherits_default() {
     let manifest_text = r#"{
-          "schema_version": "vulcan.provider-manifest.v1",
+          "schema_version": "vulcan.provider-manifest.v2",
           "provider_id": "probe-presence",
           "revision": 1,
           "published_at": "2026-08-07T00:00:00Z",
@@ -1666,7 +1741,7 @@ fn capability_template_missing_list_field_inherits_default() {
 fn capability_patch_null_clears_nullable_limit() {
     let manifest: super::ProviderManifestV1 = serde_json::from_str(
         r#"{
-          "schema_version": "vulcan.provider-manifest.v1",
+          "schema_version": "vulcan.provider-manifest.v2",
           "provider_id": "probe-null",
           "revision": 1,
           "published_at": "2026-08-07T00:00:00Z",
@@ -1744,7 +1819,7 @@ fn capability_patch_null_clears_nullable_limit() {
 #[test]
 fn capability_patch_null_on_non_nullable_field_rejected() {
     let text = r#"{
-      "schema_version": "vulcan.provider-manifest.v1",
+      "schema_version": "vulcan.provider-manifest.v2",
       "provider_id": "probe-bad-null",
       "revision": 1,
       "published_at": "2026-08-07T00:00:00Z",
@@ -1840,7 +1915,7 @@ fn compile_with_source_layer_preserves_exact_layer() {
 #[test]
 fn model_parameter_presence_merges_by_id_and_explicit_empty_clears() {
     let manifest_text = r#"{
-          "schema_version": "vulcan.provider-manifest.v1",
+          "schema_version": "vulcan.provider-manifest.v2",
           "provider_id": "probe-params",
           "revision": 1,
           "published_at": "2026-08-07T00:00:00Z",

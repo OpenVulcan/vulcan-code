@@ -1,7 +1,7 @@
 {
-  "schema_version": "vulcan.provider-manifest.v1",
+  "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "apikeyfun",
-  "revision": 2,
+  "revision": 4,
   "published_at": "2026-08-14T00:00:00Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
@@ -45,7 +45,7 @@
           "credential_mode": "token",
           "billing_kind": "provider_managed",
           "account_usage_query": "unsupported",
-          "allowed_usage_scopes": [
+          "default_usage_scopes": [
             "interactive_agent",
             "internal_background",
             "external_service"
@@ -526,9 +526,10 @@
       "capabilities": {
         "operations": ["conversation_respond"], "input_resources": [], "output_resources": [],
         "reasoning": "native", "provider_native_tools": [], "reasoning_control": "toggle",
-        "reasoning_efforts": ["none", "high", "max"], "context_limit": 1048576,
+        "reasoning_efforts": ["none", "high", "low", "max"], "context_limit": 1048576,
         "evidence_revision": "deepseek.v4.2026-08-13"
-      }
+      },
+      "response_profile_refs": ["apikeyfun.deepseek.responses.reasoning-mirror.v1"]
     },
     {
       "rule_id": "deepseek-v4-flash",
@@ -538,9 +539,10 @@
       "capabilities": {
         "operations": ["conversation_respond"], "input_resources": [], "output_resources": [],
         "reasoning": "native", "provider_native_tools": [], "reasoning_control": "toggle",
-        "reasoning_efforts": ["none", "high", "max"], "context_limit": 1048576,
+        "reasoning_efforts": ["none", "high", "low", "max"], "context_limit": 1048576,
         "evidence_revision": "deepseek.v4.2026-08-13"
-      }
+      },
+      "response_profile_refs": ["apikeyfun.deepseek.responses.reasoning-mirror.v1"]
     }
   ],
   "usage_profiles": [],
@@ -575,7 +577,29 @@
       }
     }
   ],
-  "response_profiles": [],
+  "response_profiles": [
+    {
+      "profile_id": "apikeyfun.deepseek.responses.reasoning-mirror.v1",
+      "description": "Ignore APIKEY.FUN DeepSeek reasoning_text mirror events and retain reasoning_summary_text as the single reasoning channel.",
+      "payload": {
+        "profile_id": "apikeyfun.deepseek.responses.reasoning-mirror.v1",
+        "revision": 1,
+        "steps": [
+          {
+            "op": "enum_map",
+            "path": "/type",
+            "source": "body_json_pointer",
+            "source_path": "/type",
+            "mapping": {
+              "response.reasoning_text.delta": "response.apikeyfun.reasoning_text_mirror.delta",
+              "response.reasoning_text.done": "response.apikeyfun.reasoning_text_mirror.done"
+            },
+            "unmatched": "keep_literal"
+          }
+        ]
+      }
+    }
+  ],
   "upload_channels": [
     {
       "upload_channel_id": "inline.image-data-url",

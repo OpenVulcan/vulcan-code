@@ -1908,8 +1908,6 @@ export type TranslationKey =
   | "settings.customModels.importDescription"
   | "settings.customModels.importSelected"
   | "settings.customModels.addManual"
-  | "settings.customModels.enableAll"
-  | "settings.customModels.disableAll"
   | "settings.customModels.enabled"
   | "settings.customModels.disabled"
   | "settings.customModels.protocolPreference"
@@ -2232,9 +2230,8 @@ export type TranslationKey =
   | "settings.contextWindowPolicy.scopeBodyAfterPrefix"
   | "settings.contextWindowPolicy.fallbackBuffer"
   | "settings.contextWindowPolicy.clear"
-  | "settings.models.enabled"
-  | "settings.models.disabled"
-  | "settings.models.toggle"
+  | "settings.models.conversationUse"
+  | "settings.models.internalUse"
   | "settings.models.loadingCatalog"
   | "settings.models.provider"
   | "settings.models.liveModels"
@@ -2242,9 +2239,7 @@ export type TranslationKey =
   | "settings.models.catalogSummary"
   | "settings.models.memoryOnly"
   | "settings.models.emptyCatalog"
-  | "settings.models.availableAccounts"
   | "settings.models.availableCredentials"
-  | "settings.models.status"
   | "settings.models.additionalConditions"
   | "settings.models.routeEffectiveProtocol"
   | "settings.models.routeAvailableProtocols"
@@ -2258,12 +2253,6 @@ export type TranslationKey =
   | "settings.models.expandProviders"
   | "settings.models.searchLabel"
   | "settings.models.searchPlaceholder"
-  | "settings.models.statusFilter"
-  | "settings.models.filterAll"
-  | "settings.models.filterEnabled"
-  | "settings.models.filterDisabled"
-  | "settings.models.enableAll"
-  | "settings.models.disableAll"
   | "settings.models.filteredSummary"
   | "settings.models.emptyFilter"
   | "settings.models.inputModalities"
@@ -4544,8 +4533,6 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.customModels.importDescription": "仅选中的目录模型会复制到用户覆盖层；同步来源不会被修改。",
     "settings.customModels.importSelected": "导入 {count} 个模型",
     "settings.customModels.addManual": "手动添加模型",
-    "settings.customModels.enableAll": "全部启用",
-    "settings.customModels.disableAll": "全部禁用",
     "settings.customModels.enabled": "启用",
     "settings.customModels.protocolPreference": "协议偏好",
     "settings.customModels.protocolPreferenceHint": "多协议供应商可逐模型固定执行协议；Auto 按固定优先级解析。",
@@ -4556,7 +4543,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.customModels.disabled": "关闭",
     "settings.credentialModels.manage": "管理此账号的模型",
     "settings.credentialModels.title": "账号模型",
-    "settings.credentialModels.description": "只控制此账号可调用的模型，不会修改供应商目录，也不会影响同一供应商的其他账号。",
+    "settings.credentialModels.description": "只控制此账号能否到达模型；会话使用与内部使用在模型列表中独立控制。",
     "settings.credentialModels.search": "搜索模型名称或 ID",
     "settings.credentialModels.filterAll": "全部",
     "settings.credentialModels.filterEnabled": "已启用",
@@ -4868,9 +4855,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.contextWindowPolicy.scopeBodyAfterPrefix": "稳定前缀之后（BodyAfterPrefix）",
     "settings.contextWindowPolicy.fallbackBuffer": "回退缓冲 Token",
     "settings.contextWindowPolicy.clear": "清除本层策略",
-    "settings.models.enabled": "已启用",
-    "settings.models.disabled": "已关闭",
-    "settings.models.toggle": "切换模型启用状态",
+    "settings.models.conversationUse": "会话使用",
+    "settings.models.internalUse": "内部使用",
     "settings.models.loadingCatalog": "正在读取实时模型目录…",
     "settings.models.provider": "供应商",
     "settings.models.liveModels": "实时模型",
@@ -4878,9 +4864,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.models.catalogSummary": "{provider} · 总计 {count}",
     "settings.models.memoryOnly": "仅保存在内存；启动和手动同步后更新",
     "settings.models.emptyCatalog": "当前没有已同步的模型。请先在“模型供应商”中添加账号并同步。",
-    "settings.models.availableAccounts": "{model} · {count} 个可用账号",
     "settings.models.availableCredentials": "{count} 个可用凭据",
-    "settings.models.status": "状态",
     "settings.models.additionalConditions": "{protocol} · 附加条件",
     "settings.models.routeEffectiveProtocol": "后端生效协议",
     "settings.models.routeAvailableProtocols": "可用协议",
@@ -4894,12 +4878,6 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.models.expandProviders": "展开供应商分类",
     "settings.models.searchLabel": "搜索模型",
     "settings.models.searchPlaceholder": "搜索模型名称或 ID",
-    "settings.models.statusFilter": "按启用状态筛选模型",
-    "settings.models.filterAll": "全部状态",
-    "settings.models.filterEnabled": "仅已启用",
-    "settings.models.filterDisabled": "仅已关闭",
-    "settings.models.enableAll": "全部启用",
-    "settings.models.disableAll": "全部禁用",
     "settings.models.filteredSummary": "显示 {visible} / {total} 个模型",
     "settings.models.emptyFilter": "当前筛选条件下没有模型。",
     "settings.models.inputModalities": "输入",
@@ -7177,8 +7155,6 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.customModels.importDescription": "Only selected catalog models are copied into the user overlay. The synchronized source remains unchanged.",
     "settings.customModels.importSelected": "Import {count} models",
     "settings.customModels.addManual": "Add a model manually",
-    "settings.customModels.enableAll": "Enable all",
-    "settings.customModels.disableAll": "Disable all",
     "settings.customModels.enabled": "Enabled",
     "settings.customModels.protocolPreference": "Protocol preference",
     "settings.customModels.protocolPreferenceHint": "Multi-protocol providers may pin one execution protocol per model; Auto resolves by fixed priority.",
@@ -7189,7 +7165,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.customModels.disabled": "Disabled",
     "settings.credentialModels.manage": "Manage models for this account",
     "settings.credentialModels.title": "Account models",
-    "settings.credentialModels.description": "Controls only the models callable through this account. It does not modify the provider catalog or sibling accounts.",
+    "settings.credentialModels.description": "Controls only whether this account can reach each model. Conversation and internal use are controlled independently in Model List.",
     "settings.credentialModels.search": "Search model name or ID",
     "settings.credentialModels.filterAll": "All",
     "settings.credentialModels.filterEnabled": "Enabled",
@@ -7501,9 +7477,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.contextWindowPolicy.scopeBodyAfterPrefix": "Body after stable prefix",
     "settings.contextWindowPolicy.fallbackBuffer": "Fallback buffer tokens",
     "settings.contextWindowPolicy.clear": "Clear this policy layer",
-    "settings.models.enabled": "Enabled",
-    "settings.models.disabled": "Disabled",
-    "settings.models.toggle": "Toggle model availability",
+    "settings.models.conversationUse": "Conversation use",
+    "settings.models.internalUse": "Internal use",
     "settings.models.loadingCatalog": "Loading the live model catalog…",
     "settings.models.provider": "Provider",
     "settings.models.liveModels": "Live models",
@@ -7511,9 +7486,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.models.catalogSummary": "{provider} · {count} total",
     "settings.models.memoryOnly": "Memory only; updated at startup and after manual synchronization",
     "settings.models.emptyCatalog": "No synchronized models are available. Add an account under Model Providers and synchronize it first.",
-    "settings.models.availableAccounts": "{model} · {count} available accounts",
     "settings.models.availableCredentials": "{count} available credentials",
-    "settings.models.status": "Status",
     "settings.models.additionalConditions": "{protocol} · Additional conditions",
     "settings.models.routeEffectiveProtocol": "Backend effective protocol",
     "settings.models.routeAvailableProtocols": "Available protocols",
@@ -7527,12 +7500,6 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.models.expandProviders": "Expand provider categories",
     "settings.models.searchLabel": "Search models",
     "settings.models.searchPlaceholder": "Search model name or ID",
-    "settings.models.statusFilter": "Filter models by enabled state",
-    "settings.models.filterAll": "All states",
-    "settings.models.filterEnabled": "Enabled only",
-    "settings.models.filterDisabled": "Disabled only",
-    "settings.models.enableAll": "Enable all",
-    "settings.models.disableAll": "Disable all",
     "settings.models.filteredSummary": "Showing {visible} of {total} models",
     "settings.models.emptyFilter": "No models match the current filters.",
     "settings.models.inputModalities": "Input",

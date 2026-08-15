@@ -1,10 +1,10 @@
-//! Explicit descriptor-only custom-provider v0 compatibility converter.
-//! 显式的仅描述符自定义供应商 v0 兼容转换器。
+//! Current custom-provider descriptor to Manifest projector.
+//! 当前自定义供应商描述符到 Manifest 的投影器。
 //!
-//! This module accepts only the historical user-owned standalone descriptor schema. Bundled
-//! system manifests are never generated from Rust descriptors and remain the single authority.
-//! 本模块只接受历史用户自有独立描述符 Schema。内置系统 Manifest 绝不从 Rust 描述符生成，
-//! 并始终保持唯一权威。
+//! This module accepts only the current user-owned descriptor schema. Bundled system manifests
+//! are never generated from Rust descriptors and remain the single authority.
+//! 本模块只接受当前用户自有描述符 Schema。内置系统 Manifest 绝不从 Rust 描述符生成，并始终
+//! 保持唯一权威。
 
 use super::{
     CatalogMembershipPolicy, EngineContract, ManifestCapabilityPatch, ManifestCategory,
@@ -17,25 +17,25 @@ use crate::{
     CredentialDirectoryVisibility, ProviderCategory, ProviderDescriptor, ProviderKind, ServiceEntry,
 };
 
-/// Converts one descriptor-only custom-provider v0 record into a current manifest document.
-/// 把一条仅描述符自定义供应商 v0 记录转换为当前 Manifest 文档。
+/// Projects one current custom-provider descriptor into its Manifest document.
+/// 把一条当前自定义供应商描述符投影为 Manifest 文档。
 ///
 /// # Parameters
 /// 参数
-/// `provider` is the exact historical custom descriptor and must use the reserved custom prefix.
-/// `provider` 是精确的历史自定义描述符，且必须使用保留的自定义前缀。
+/// `provider` is the exact current custom descriptor and must use the reserved custom prefix.
+/// `provider` 是精确的当前自定义描述符，且必须使用保留的自定义前缀。
 ///
 /// # Returns
 /// 返回值
 /// A current data-owned manifest shell, or an explicit ownership error for non-custom input.
 /// 返回当前数据持有的 Manifest 外壳；非自定义输入返回显式所有权错误。
-pub fn legacy_custom_descriptor_to_manifest(
+pub fn project_custom_descriptor_manifest(
     provider: &ProviderDescriptor,
 ) -> Result<ProviderManifestV1, String> {
     let has_custom_prefix = provider.id.starts_with("custom:");
     if provider.kind != ProviderKind::Custom {
         return Err(format!(
-            "Legacy descriptor conversion accepts only custom providers: `{}`.",
+            "Custom descriptor projection accepts only custom providers: `{}`.",
             provider.id
         ));
     }
@@ -52,11 +52,11 @@ pub fn legacy_custom_descriptor_to_manifest(
         .map(convert_service_entry)
         .collect::<Vec<_>>();
     let usage_profiles = materialize_standard_usage_profiles(&mut services);
-    // catalogMembershipPolicy preserves descriptor-v0 discovery authority. Those records carried
-    // no exact model declarations, so DeclaredOnly would erase every successfully discovered model
-    // immediately after standalone-manifest migration.
-    // catalogMembershipPolicy 保留描述符 v0 的发现权威。旧记录没有精确模型声明，因此若使用
-    // DeclaredOnly，会在迁移为独立 Manifest 后立即删除全部已成功发现模型。
+    // catalogMembershipPolicy preserves the current descriptor's discovery authority. Custom
+    // descriptors carry no exact model declarations, so DeclaredOnly would erase every
+    // successfully discovered model.
+    // catalogMembershipPolicy 保留当前描述符的发现权威。自定义描述符不携带精确模型声明，
+    // 因此 DeclaredOnly 会删除全部已成功发现模型。
     let catalog_membership_policy = if services
         .iter()
         .filter_map(|entry| entry.model_catalog.as_ref())
@@ -83,13 +83,12 @@ pub fn legacy_custom_descriptor_to_manifest(
     if selected_protocol.is_none() {
         selected_protocol = supported_protocols.first().cloned();
     }
-    // defaultCapabilities is the conservative signed snapshot required by migrated custom
-    // conversation bindings; discovery may narrow explicit limits and modalities later.
-    // defaultCapabilities 是迁移后自定义会话绑定所需的保守签名快照；发现结果随后可收紧
-    // 明确限制与模态。
+    // defaultCapabilities is the conservative snapshot required by current custom conversation
+    // bindings; discovery may narrow explicit limits and modalities later.
+    // defaultCapabilities 是当前自定义会话绑定所需的保守快照；发现结果随后可收紧明确限制与模态。
     let default_capabilities = (!supported_protocols.is_empty()).then(|| ManifestCapabilityPatch {
         operations: Some(vec![vulcan_ai_contract::AiOperation::ConversationRespond]),
-        evidence_revision: Some(String::from("custom-legacy.default-capabilities.v1")),
+        evidence_revision: Some(String::from("custom-descriptor.default-capabilities.v1")),
         ..ManifestCapabilityPatch::default()
     });
 
@@ -136,11 +135,11 @@ pub fn legacy_custom_descriptor_to_manifest(
         credential_registration: provider.credential_registration,
         services,
         model_defaults: ModelDefaults {
-            // Descriptor-only v0 custom providers had no model-rule layer. Conversation entries
-            // therefore retain their declared default protocol, while provider-tools-only records
-            // expose no model binding.
-            // 仅描述符 v0 自定义供应商没有模型规则层。因此会话入口保留其声明的默认协议，
-            // 纯 Provider Tool 记录则不暴露任何模型绑定。
+            // Current custom descriptors have no model-rule layer. Conversation entries therefore
+            // retain their declared default protocol, while provider-tools-only records expose no
+            // model binding.
+            // 当前自定义描述符没有模型规则层。因此会话入口保留其声明的默认协议，纯 Provider Tool
+            // 记录则不暴露任何模型绑定。
             default_enabled: true,
             catalog_membership_policy,
             unknown_model_policy: if supported_protocols.is_empty() {
@@ -351,7 +350,7 @@ fn convert_credential_profile(profile: &crate::CredentialProfile) -> ManifestCre
         authentication: profile.authentication,
         key_prefix: profile.key_prefix.clone(),
         credential_role: profile.credential_role.clone(),
-        allowed_usage_scopes: profile.allowed_usage_scopes.clone(),
+        default_usage_scopes: profile.default_usage_scopes.clone(),
     }
 }
 

@@ -175,8 +175,7 @@ impl ProviderRequestTelemetryContext {
         // frozenSelection 是 Manifest 代际、绑定来源与投影 Profile 修订的唯一权威；
         // 遥测绝不重新解析活动目录。
         let frozen_selection = preparation.model_blueprint.frozen_selection.as_ref();
-        let protocol_binding =
-            frozen_selection.and_then(|selection| selection.protocol_binding.as_ref());
+        let protocol_binding = frozen_selection.map(|selection| &selection.protocol_binding);
         let binding_source = protocol_binding
             .map(|binding| match binding.source {
                 vulcan_provider_adapters::ModelProtocolBindingSource::SystemManifest => {
@@ -186,11 +185,8 @@ impl ProviderRequestTelemetryContext {
                 vulcan_provider_adapters::ModelProtocolBindingSource::CustomAutoDefault => {
                     "custom_auto_default"
                 }
-                vulcan_provider_adapters::ModelProtocolBindingSource::MigratedCustomLegacy => {
-                    "migrated_custom_legacy"
-                }
             })
-            .unwrap_or("connection_default")
+            .unwrap_or("unresolved")
             .to_string();
         let binding_rule_id = protocol_binding
             .map(|binding| binding.rule_id.as_str())

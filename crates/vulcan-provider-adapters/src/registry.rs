@@ -1,9 +1,10 @@
 //! Strict provider adapter registry.
 //! 严格供应商适配器注册表。
 
-use crate::{RequestProjectorKind, ServiceEntry};
+use crate::{CredentialConnection, RequestProjectorKind, ServiceEntry};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use vulcan_ai_contract::InferenceUsageScope;
 
 /// Identifies whether a provider definition is code-owned or user-owned.
 /// 标识供应商定义由代码持有还是由用户持有。
@@ -158,6 +159,50 @@ pub struct ProviderDescriptor {
     pub service_entries: Vec<ServiceEntry>,
 }
 
+impl ProviderDescriptor {
+    /// Resolves the provider-wide initial internal-use default from configured credential profiles.
+    /// 根据已配置凭据配置档解析供应商级初始内部使用默认值。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `connections` must contain only connections owned by this exact provider.
+    /// `connections` 必须只包含此精确供应商持有的连接。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` when any configured credential profile suggests background or external internal use.
+    /// 任一已配置凭据配置档建议后台或外部内部使用时返回 `true`。
+    pub fn default_internal_use_for_connections<'a>(
+        &self,
+        connections: impl IntoIterator<Item = &'a CredentialConnection>,
+    ) -> Result<bool, String> {
+        let mut default_enabled = false;
+        for connection in connections {
+            if connection.provider_id != self.id {
+                return Err(format!(
+                    "Connection `{}` belongs to provider `{}`, not `{}`.",
+                    connection.id, connection.provider_id, self.id
+                ));
+            }
+            let entry = self
+                .service_entries
+                .iter()
+                .find(|entry| entry.id == connection.service_entry_id)
+                .ok_or_else(|| {
+                    format!(
+                        "Service entry `{}` referenced by connection `{}` is not registered for provider `{}`.",
+                        connection.service_entry_id, connection.id, self.id
+                    )
+                })?;
+            let default_usage_scopes = entry.default_usage_scopes_for_connection(connection)?;
+            default_enabled |= default_usage_scopes
+                .contains(&InferenceUsageScope::InternalBackground)
+                || default_usage_scopes.contains(&InferenceUsageScope::ExternalService);
+        }
+        Ok(default_enabled)
+    }
+}
+
 /// Stores strict provider registrations.
 /// 保存严格供应商注册项。
 #[derive(Debug, Clone, Default)]
@@ -167,39 +212,17 @@ pub struct ProviderRegistry {
     providers: BTreeMap<String, ProviderDescriptor>,
 }
 
-/// Providers that must stay on the legacy descriptor path until their external facts land.
-/// 外部事实到齐前必须停留在旧描述路径的供应商。
-///
-/// APIKEY.FUN stays legacy until the user provides the model-to-protocol mapping (plan stage
-/// 13); cutting over would disable every currently usable model under the zero-guess rule.
-/// APIKEY.FUN 在用户提供模型-协议映射前保持旧路径（方案阶段 13）；
-/// 在零猜测规则下切换会让当前全部可用模型停用。
-const LEGACY_FALLBACK_PROVIDERS: &[&str] = &["apikeyfun"];
-
-/// Reports whether one provider id is on the explicit legacy-fallback allowlist.
-/// 报告一个供应商标识是否位于显式旧版回退允许名单。
-///
-/// Only providers on this allowlist may resolve through the old connection protocol when
-/// their manifest is missing or invalid; every other cut-over system provider must fail
-/// closed so the system resolver never reads the legacy connection protocol.
-/// 只有本允许名单内的供应商在 Manifest 缺失或无效时可以走旧连接协议解析；
-/// 其余已切换的系统供应商必须失败封闭，使系统解析器绝不读取旧连接协议。
-pub fn is_legacy_fallback_provider(provider_id: &str) -> bool {
-    LEGACY_FALLBACK_PROVIDERS.contains(&provider_id)
-}
-
 impl ProviderRegistry {
     /// Builds the enabled public-provider registry from the single authoritative catalog.
     /// 从唯一权威目录构建已启用公共供应商注册表。
     ///
     /// The catalog is compiled exactly once by the runtime and shared with binding,
     /// discovery, and execution; the registry derives from it instead of re-loading and
-    /// re-compiling the bundled files (plan §17.6). Providers on the legacy fallback
-    /// allowlist keep their code-owned descriptor; any other missing or invalid manifest
-    /// fails closed so the system resolver never guesses a protocol (plan §13.1).
+    /// re-compiling the bundled files (plan §17.6). A missing or invalid system Manifest fails
+    /// closed so the resolver never guesses a protocol (plan §13.1).
     /// 目录由运行时恰好编译一次，并与绑定、发现、执行共享；注册表从目录派生，而不是
-    /// 重新加载并重新编译内置文件（方案 §17.6）。旧版回退允许名单内的供应商保留代码持有
-    /// 描述；其余供应商的清单缺失或无效时失败封闭，使系统解析器绝不猜测协议（方案 §13.1）。
+    /// 重新加载并重新编译内置文件（方案 §17.6）。系统清单缺失或无效时失败封闭，使解析器
+    /// 绝不猜测协议（方案 §13.1）。
     ///
     /// # Returns
     /// 返回值
@@ -219,21 +242,12 @@ impl ProviderRegistry {
     ///
     /// # Returns
     /// 返回值
-    /// A strict registry; missing non-allowlist manifests fail closed.
-    /// 返回严格注册表；允许名单之外清单缺失时失败封闭。
+    /// A strict registry built only from active system Manifests.
+    /// 返回只从活动系统 Manifest 构建的严格注册表。
     pub fn from_catalog(
         catalog: &crate::provider_manifest::ResolvedProviderCatalog,
     ) -> Result<Self, String> {
         let mut registry = Self::default();
-        // The explicit compatibility allowlist is registered first because APIKEY.FUN must
-        // remain usable even when its placeholder manifest is absent. No other provider may
-        // enter through this code-owned path.
-        // 先注册显式兼容允许名单，因为即使 APIKEY.FUN 的占位清单缺失也必须保持可用；
-        // 其他任何供应商都不得通过这条代码持有路径进入注册表。
-        for provider_id in LEGACY_FALLBACK_PROVIDERS {
-            registry.register(legacy_descriptor_by_id(provider_id)?)?;
-        }
-
         for (provider_id, resolved) in &catalog.manifests {
             if resolved.descriptor.kind != ProviderKind::System {
                 continue;
@@ -243,9 +257,6 @@ impl ProviderRegistry {
                     "bundled manifest file `{provider_id}` declares provider `{}`",
                     resolved.descriptor.id
                 ));
-            }
-            if is_legacy_fallback_provider(provider_id) {
-                continue;
             }
             registry.register(resolved.descriptor.clone())?;
         }
@@ -517,26 +528,6 @@ fn validate_public_provider_url(provider_id: &str, field: &str, value: &str) -> 
     Ok(())
 }
 
-/// Resolves one explicitly permitted legacy descriptor by provider id.
-/// 按供应商 ID 解析一个被显式允许的旧描述。
-///
-/// # Parameters
-/// 参数
-/// `provider_id` is the exact identifier on the legacy-fallback allowlist.
-/// `provider_id` 是旧版回退允许名单中的精确标识。
-///
-/// # Returns
-/// 返回值
-/// The compatibility descriptor, or an error for every non-allowlisted provider.
-/// 返回兼容描述；任何不在允许名单内的供应商都会返回错误。
-fn legacy_descriptor_by_id(provider_id: &str) -> Result<ProviderDescriptor, String> {
-    let descriptor = match provider_id {
-        "apikeyfun" => crate::providers::apikeyfun_descriptor(),
-        _ => return Err(format!("unknown legacy provider id `{provider_id}`")),
-    };
-    Ok(descriptor)
-}
-
 #[cfg(test)]
 mod tests {
     //! Strict provider execution-scope registration tests.
@@ -547,11 +538,94 @@ mod tests {
         ProviderPartnershipKind, ProviderPromotionDisclosureKey, ProviderRegistry,
     };
     use crate::{
-        AccountUsageQueryKind, AuthenticationProjection, CustomProviderAuthentication,
-        CustomProviderDefinition, CustomProviderModelDiscoveryMode, CustomProviderProtocol,
-        RequestProjectorKind,
+        AccountUsageQueryKind, AuthenticationProjection, CredentialConnection, CredentialMode,
+        CustomProviderAuthentication, CustomProviderDefinition, CustomProviderModelDiscoveryMode,
+        CustomProviderProtocol, RequestProjectorKind,
     };
     use std::collections::BTreeMap;
+
+    /// Builds one exact configured credential needed by provider-default projection tests.
+    /// 构建供应商默认值投影测试所需的一条精确已配置凭据。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `provider_id`, `service_entry_id`, `credential_profile_id`, and `credential_mode` identify
+    /// the exact registered credential profile under test.
+    /// `provider_id`、`service_entry_id`、`credential_profile_id` 与 `credential_mode` 标识
+    /// 被测的精确已注册凭据配置档。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A persistence-shaped connection without unrelated protocol or cache state.
+    /// 返回一条不含无关协议或缓存状态的持久化形状连接。
+    fn credential_connection_fixture(
+        provider_id: &str,
+        service_entry_id: &str,
+        credential_profile_id: &str,
+        credential_mode: CredentialMode,
+    ) -> CredentialConnection {
+        CredentialConnection {
+            id: format!("{provider_id}-{credential_profile_id}"),
+            provider_id: provider_id.to_string(),
+            service_entry_id: service_entry_id.to_string(),
+            credential_profile_id: credential_profile_id.to_string(),
+            credential_mode,
+            credential_id: format!("{provider_id}-{credential_profile_id}"),
+            display_name: credential_profile_id.to_string(),
+            secret_reference: format!("secret:{provider_id}:{credential_profile_id}"),
+            management_secret_reference: None,
+            service_origin_override: None,
+            prompt_cache_by_protocol: BTreeMap::new(),
+        }
+    }
+
+    /// Verifies credential-profile scope declarations produce a provider-wide initial default only.
+    /// 验证凭据配置档用途声明只产生供应商级初始默认值。
+    ///
+    /// # Returns
+    /// 返回值
+    /// This assertion-only regression test returns no value.
+    /// 此纯断言回归测试不返回值。
+    #[test]
+    fn internal_use_default_combines_configured_credential_profile_suggestions() {
+        let registry = ProviderRegistry::first_batch().expect("built-in registry should be valid");
+        let openai = registry
+            .provider("openai")
+            .expect("OpenAI provider should be registered");
+        let codex = credential_connection_fixture(
+            "openai",
+            "codex-subscription",
+            "codex-oauth",
+            CredentialMode::Auth,
+        );
+        let public_api =
+            credential_connection_fixture("openai", "public-api", "api-key", CredentialMode::Token);
+        assert!(
+            !openai
+                .default_internal_use_for_connections([&codex])
+                .expect("Codex profile default should resolve")
+        );
+        assert!(
+            openai
+                .default_internal_use_for_connections([&codex, &public_api])
+                .expect("provider-wide default should resolve")
+        );
+
+        let opencode_go = registry
+            .provider("opencode-go")
+            .expect("OpenCode Go provider should be registered");
+        let go_api = credential_connection_fixture(
+            "opencode-go",
+            "go-api",
+            "api-key",
+            CredentialMode::Token,
+        );
+        assert!(
+            !opencode_go
+                .default_internal_use_for_connections([&go_api])
+                .expect("OpenCode Go initial default should resolve")
+        );
+    }
 
     /// Verifies a system descriptor may select any registered projector without a provider-id table.
     /// 验证系统描述符无需供应商 ID 映射表即可选择任意已注册投影器。
@@ -579,12 +653,11 @@ mod tests {
             id: String::from("custom:credential-scope"),
             display_name: String::from("Credential scope"),
             base_url: String::from("https://example.com/v1"),
-            protocol: Some(crate::custom_provider::CustomProviderProtocol::OpenAiChat),
+            protocols: vec![crate::custom_provider::CustomProviderProtocol::OpenAiChat],
             authentication:
                 crate::custom_provider::CustomProviderAuthentication::BearerAuthorization,
             model_discovery_mode: crate::custom_provider::CustomProviderModelDiscoveryMode::Manual,
             model_discovery_path: None,
-            protocols: Vec::new(),
             protocol_routes: Vec::new(),
             request_headers: BTreeMap::new(),
         }
@@ -605,11 +678,10 @@ mod tests {
             id: String::from("custom:tampered"),
             display_name: String::from("Tampered"),
             base_url: String::from("https://example.com/v1"),
-            protocol: Some(CustomProviderProtocol::OpenAiChat),
+            protocols: vec![CustomProviderProtocol::OpenAiChat],
             authentication: CustomProviderAuthentication::BearerAuthorization,
             model_discovery_mode: CustomProviderModelDiscoveryMode::Standard,
             model_discovery_path: None,
-            protocols: Vec::new(),
             protocol_routes: Vec::new(),
             request_headers: BTreeMap::new(),
         }
@@ -708,7 +780,16 @@ mod tests {
         // Expected routes are closed per provider and must not inherit another provider's capabilities.
         // 预期路由按供应商封闭，禁止继承其他供应商能力。
         let expected_routes = [
-            ("apikeyfun", 2, vec!["openai-chat-completions.v1"]),
+            (
+                "apikeyfun",
+                1,
+                vec![
+                    "anthropic-messages-video.v1",
+                    "anthropic-messages.v1",
+                    "google.gemini.generate_content",
+                    "openai-responses.v1",
+                ],
+            ),
             ("claudeapi", 1, vec!["anthropic-messages.v1"]),
             (
                 "qiniu",
@@ -763,8 +844,8 @@ mod tests {
             (
                 "apikeyfun",
                 "https://api.apikey.fun/v1",
-                "openai-chat-completions.v1",
-                "/chat/completions",
+                "openai-responses.v1",
+                "/responses",
                 None,
                 AuthenticationProjection::BearerAuthorization,
                 None,
@@ -843,48 +924,44 @@ mod tests {
         }
     }
 
-    /// Verifies APIKEY.FUN exposes its default and image-disabled SLB endpoints independently.
-    /// 验证 APIKEY.FUN 独立暴露默认入口与禁用生图的 SLB 入口。
+    /// Verifies APIKEY.FUN exposes the single Manifest-owned public service and exact route set.
+    /// 验证 APIKEY.FUN 公开由 Manifest 持有的唯一公共服务及精确路由集合。
     #[test]
-    fn apikeyfun_exposes_exact_default_and_slb_service_entries() {
+    fn apikeyfun_exposes_exact_manifest_service_entry() {
         let registry = ProviderRegistry::first_batch().expect("built-in registry should be valid");
         let provider = registry
             .provider("apikeyfun")
             .expect("APIKEY.FUN provider should be registered");
-        let entries = provider
+        // entry is the sole signed conversation service owned by the bundled Manifest.
+        // entry 是内置 Manifest 持有的唯一已签名会话服务。
+        let entry = provider
             .service_entries
+            .first()
+            .expect("APIKEY.FUN public service should exist");
+        assert_eq!(provider.service_entries.len(), 1);
+        assert_eq!(entry.id, "public-api");
+        assert_eq!(entry.display_name, "APIKEY.FUN Public API");
+        assert_eq!(entry.base_url, "https://api.apikey.fun/v1");
+        // routes closes the complete protocol-to-endpoint contract after Manifest cutover.
+        // routes 封闭 Manifest 切换后的完整协议到入口契约。
+        let routes = entry
+            .protocol_routes
             .iter()
-            .map(|entry| {
-                let route = entry
-                    .protocol_routes
-                    .iter()
-                    .find(|route| route.protocol_profile_id == "openai-chat-completions.v1")
-                    .expect("APIKEY.FUN entry should expose the OpenAI Chat route");
+            .map(|route| {
                 (
-                    entry.id.as_str(),
-                    entry.display_name.as_str(),
-                    entry.base_url.as_str(),
+                    route.protocol_profile_id.as_str(),
                     route.endpoint_path.as_deref(),
                 )
             })
-            .collect::<Vec<_>>();
-
+            .collect::<BTreeMap<_, _>>();
         assert_eq!(
-            entries,
-            vec![
-                (
-                    "public-api",
-                    "Default API",
-                    "https://api.apikey.fun/v1",
-                    Some("/chat/completions"),
-                ),
-                (
-                    "slb-api",
-                    "SLB API (Image Generation Disabled)",
-                    "https://slb.apikey.fun/v1",
-                    Some("/chat/completions"),
-                ),
-            ]
+            routes,
+            BTreeMap::from([
+                ("anthropic-messages-video.v1", Some("/messages")),
+                ("anthropic-messages.v1", Some("/messages")),
+                ("google.gemini.generate_content", None),
+                ("openai-responses.v1", Some("/responses")),
+            ])
         );
     }
 
@@ -892,7 +969,11 @@ mod tests {
     /// 验证推广合作类型不能静默展示另一种披露文案。
     #[test]
     fn rejects_mismatched_promotion_disclosure() {
-        let mut provider = crate::providers::apikeyfun_descriptor();
+        let mut provider = ProviderRegistry::first_batch()
+            .expect("built-in registry should be valid")
+            .provider("apikeyfun")
+            .cloned()
+            .expect("APIKEY.FUN should be registered from its Manifest");
         provider
             .promotion
             .as_mut()
@@ -909,7 +990,11 @@ mod tests {
     /// 验证推广链接不能隐藏在普通注册披露之后。
     #[test]
     fn rejects_undisclosed_referral_url() {
-        let mut provider = crate::providers::apikeyfun_descriptor();
+        let mut provider = ProviderRegistry::first_batch()
+            .expect("built-in registry should be valid")
+            .provider("apikeyfun")
+            .cloned()
+            .expect("APIKEY.FUN should be registered from its Manifest");
         let promotion = provider
             .promotion
             .as_mut()

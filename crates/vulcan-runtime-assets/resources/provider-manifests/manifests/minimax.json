@@ -1,5 +1,5 @@
 {
-  "schema_version": "vulcan.provider-manifest.v1",
+  "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "minimax",
   "revision": 10,
   "published_at": "2026-08-09T00:00:00Z",
@@ -47,7 +47,7 @@
           "billing_kind": "pay_as_you_go",
           "account_usage_query": "unsupported",
           "key_prefix": "sk-api-",
-          "allowed_usage_scopes": [
+          "default_usage_scopes": [
             "interactive_agent",
             "internal_background",
             "external_service"
@@ -60,7 +60,7 @@
           "billing_kind": "token_plan",
           "account_usage_query": "mini_max_token_plan",
           "key_prefix": "sk-cp-",
-          "allowed_usage_scopes": [
+          "default_usage_scopes": [
             "interactive_agent"
           ]
         },
@@ -72,7 +72,7 @@
           "billing_kind": "token_plan",
           "account_usage_query": "mini_max_token_plan",
           "authentication": "bearer_authorization",
-          "allowed_usage_scopes": [
+          "default_usage_scopes": [
             "interactive_agent"
           ]
         }
@@ -145,7 +145,7 @@
           "billing_kind": "pay_as_you_go",
           "account_usage_query": "unsupported",
           "key_prefix": "sk-api-",
-          "allowed_usage_scopes": [
+          "default_usage_scopes": [
             "interactive_agent",
             "internal_background",
             "external_service"
@@ -158,7 +158,7 @@
           "billing_kind": "token_plan",
           "account_usage_query": "mini_max_token_plan",
           "key_prefix": "sk-cp-",
-          "allowed_usage_scopes": [
+          "default_usage_scopes": [
             "interactive_agent"
           ]
         },
@@ -170,7 +170,7 @@
           "billing_kind": "token_plan",
           "account_usage_query": "mini_max_token_plan",
           "authentication": "bearer_authorization",
-          "allowed_usage_scopes": [
+          "default_usage_scopes": [
             "interactive_agent"
           ]
         }

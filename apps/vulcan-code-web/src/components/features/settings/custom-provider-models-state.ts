@@ -27,8 +27,6 @@ export interface CustomProviderModelAccountState {
 export interface CustomProviderModelRow {
   id: string
   displayName: string
-  enabled: boolean
-  defaultEnabled: boolean
   manualDefinition?: PublicAiCustomModelDefinition
   effectiveModel?: PublicAiModel
   // Strongest resolved capability baseline available even when every account hides the model.
@@ -59,11 +57,6 @@ export function buildCustomProviderModelRows(
     .filter((connection) => connection.provider_id === providerId)
     .sort((left, right) => left.display_name.localeCompare(right.display_name))
   const manualDefinitions = snapshot.customModels?.[providerId] ?? {}
-  const accessByModel = new Map(
-    snapshot.modelAccessRecords
-      .filter((record) => record.providerId === providerId)
-      .map((record) => [record.modelId, record]),
-  )
   const capabilityOverridesByModel = new Map(
     (snapshot.modelCapabilityOverrideRecords ?? [])
       .filter((record) => record.providerId === providerId)
@@ -122,7 +115,6 @@ export function buildCustomProviderModelRows(
       const firstEffective = accounts.find((account) => account.effectiveModel)?.effectiveModel
       const firstSupport = accounts.find((account) => account.supportModel)?.supportModel
       const manualDefinition = manualDefinitions[modelId]
-      const access = accessByModel.get(modelId)
       return {
         id: modelId,
         displayName:
@@ -131,8 +123,6 @@ export function buildCustomProviderModelRows(
           ?? firstSupport?.display_name
           ?? firstEffective?.display_name
           ?? modelId,
-        enabled: access?.enabled ?? manualDefinition?.enabled ?? false,
-        defaultEnabled: access?.defaultEnabled ?? manualDefinition?.enabled ?? false,
         manualDefinition,
         effectiveModel: firstEffective,
         capabilityModel: firstEffective ?? firstSupport,

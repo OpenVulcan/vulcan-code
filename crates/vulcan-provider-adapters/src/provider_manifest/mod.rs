@@ -3,8 +3,8 @@
 
 pub mod binding;
 pub mod compiler;
+pub mod custom_projection;
 pub mod inheritance;
-pub mod legacy;
 pub mod matcher;
 pub mod provenance;
 pub mod schema;
@@ -16,8 +16,8 @@ mod tests;
 
 pub use binding::*;
 pub use compiler::*;
+pub use custom_projection::*;
 pub use inheritance::*;
-pub use legacy::*;
 pub use matcher::*;
 pub use provenance::*;
 pub use schema::*;
@@ -169,7 +169,7 @@ pub const CURRENT_MANIFEST_ENGINE: u32 = 1;
 
 /// Manifest schema revision identifier fixed by this crate.
 /// 当前 crate 固定的 Manifest Schema 修订标识。
-pub const MANIFEST_SCHEMA_VERSION: &str = "vulcan.provider-manifest.v1";
+pub const MANIFEST_SCHEMA_VERSION: &str = "vulcan.provider-manifest.v2";
 
 /// Header names that no manifest may declare, for system or custom providers.
 /// 任何清单（系统或自定义）都不得声明的请求头名称。

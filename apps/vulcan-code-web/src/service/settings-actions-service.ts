@@ -435,8 +435,8 @@ export async function savePublicAiModelOverrides(request: {
   return serviceClient.request<PublicAiSettingsSnapshot>("service_save_public_ai_model_overrides", { request });
 }
 
-// savePublicAiModelEnabled persists one provider-model access choice.
-// savePublicAiModelEnabled 持久化一个供应商模型访问选择。
+// savePublicAiModelEnabled persists one provider-model conversation choice.
+// savePublicAiModelEnabled 持久化一个供应商模型会话选择。
 export async function savePublicAiModelEnabled(request: {
   providerId: string;
   modelId: string;
@@ -449,24 +449,11 @@ export async function savePublicAiModelEnabled(request: {
   );
 }
 
-// savePublicAiProviderModelsEnabled atomically applies one enabled state to every synchronized model of a provider.
-// savePublicAiProviderModelsEnabled 原子地为一个供应商的全部已同步模型应用同一启用状态。
-export async function savePublicAiProviderModelsEnabled(request: {
-  providerId: string;
-  enabled: boolean;
-}): Promise<PublicAiSettingsSnapshot> {
-  return serviceClient.request<PublicAiSettingsSnapshot>(
-    "service_save_public_ai_provider_models_enabled",
-    { request },
-  );
-}
-
-// savePublicAiInternalModelEnabled persists one operation-scoped internal model switch.
-// savePublicAiInternalModelEnabled 持久化一个操作作用域内部模型开关。
+// savePublicAiInternalModelEnabled persists one model-level non-conversation internal-use switch.
+// savePublicAiInternalModelEnabled 持久化一个模型级非会话内部使用开关。
 export async function savePublicAiInternalModelEnabled(request: {
   providerId: string;
   modelId: string;
-  operation: PublicAiOperation;
   enabled: boolean;
 }): Promise<PublicAiSettingsSnapshot> {
   return serviceClient.request<PublicAiSettingsSnapshot>(

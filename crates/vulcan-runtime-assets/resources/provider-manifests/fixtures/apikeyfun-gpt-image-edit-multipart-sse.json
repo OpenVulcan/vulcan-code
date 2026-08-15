@@ -1,0 +1,173 @@
+{
+  "schema_version": "provider-manifest-execution-fixture.v1",
+  "fixture_id": "apikeyfun-gpt-image-edit-multipart-sse",
+  "base_manifest": "tavily.json",
+  "production_target_refs": [
+    "apikeyfun::gpt-image-2.edit"
+  ],
+  "tool_target": {
+    "target_id": "public-api.fixture-apikeyfun-gpt-image-edit",
+    "description": "APIKEY.FUN GPT Image 2 masked multipart SSE editing fixture.",
+    "service_entry_id": "public-api",
+    "credential_profile_ids": ["api-key"],
+    "upstream_target_id": "gpt-image-2",
+    "display_name": "APIKEY.FUN GPT Image 2 Edit Fixture",
+    "tool_id": "fixture_apikeyfun_gpt_image_edit",
+    "capability": "image_edit",
+    "input_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "image_path": {"type": "string", "minLength": 1},
+        "mask_path": {"type": "string", "minLength": 1},
+        "prompt": {"type": "string", "minLength": 1},
+        "model": {"type": "string", "const": "gpt-image-2"},
+        "n": {"type": "integer", "const": 1},
+        "quality": {"type": "string"},
+        "size": {"type": "string"},
+        "stream": {"type": "boolean", "const": true},
+        "response_format": {"type": "string", "const": "b64_json"}
+      },
+      "required": ["image_path", "mask_path", "prompt", "model", "n", "quality", "size", "stream", "response_format"]
+    },
+    "output": {
+      "kind": "resources",
+      "source_path": "/",
+      "normalized_result_path": "resources",
+      "resource_kind": "image",
+      "mime_types": ["image/png"],
+      "resource_decoders": [
+        {
+          "source_path": "/b64_json",
+          "encoding": "base64",
+          "resource_kind": "image",
+          "mime_type": "image/png",
+          "optional": true,
+          "max_bytes": 1048576,
+          "output_id_prefix": "image"
+        },
+        {
+          "source_path": "/data/0/b64_json",
+          "encoding": "base64",
+          "resource_kind": "image",
+          "mime_type": "image/png",
+          "optional": true,
+          "max_bytes": 1048576,
+          "output_id_prefix": "data-image"
+        },
+        {
+          "source_path": "/item/result",
+          "encoding": "base64",
+          "resource_kind": "image",
+          "mime_type": "image/png",
+          "optional": true,
+          "max_bytes": 1048576,
+          "output_id_prefix": "item-image"
+        }
+      ]
+    },
+    "execution": {
+      "endpoint_path": "/fixtures/apikeyfun-gpt-image-edit",
+      "authentication": "bearer_authorization",
+      "adapter": "generic_json",
+      "execution_kind": "http_multipart_sse",
+      "multipart_request": {
+        "fields": [
+          {"argument_path": "/image", "field_name": "image", "file": true, "required": true},
+          {"argument_path": "/mask", "field_name": "mask", "file": true, "required": true},
+          {"argument_path": "/prompt", "field_name": "prompt", "required": true},
+          {"argument_path": "/model", "field_name": "model", "required": true},
+          {"argument_path": "/n", "field_name": "n", "required": true},
+          {"argument_path": "/quality", "field_name": "quality", "required": true},
+          {"argument_path": "/size", "field_name": "size", "required": true},
+          {"argument_path": "/stream", "field_name": "stream", "required": true},
+          {"argument_path": "/response_format", "field_name": "response_format", "required": true}
+        ]
+      },
+      "sse_events": {
+        "event_type_path": "/type",
+        "nonterminal_event_types": ["image_generation.partial_image"],
+        "terminal_event_types": ["image_generation.completed"],
+        "allow_done_record": true
+      }
+    }
+  },
+  "operation": {
+    "operation_id": "fixture.apikeyfun-gpt-image-edit-multipart-sse",
+    "operation": "image_edit",
+    "carrier": "provider_tool",
+    "input_resources": ["image"],
+    "output_resources": ["image"],
+    "tool_target_refs": ["public-api.fixture-apikeyfun-gpt-image-edit"],
+    "request_profile_refs": [],
+    "response_profile_refs": [],
+    "upload_channel_refs": ["fixture.apikeyfun-inline-image", "fixture.apikeyfun-inline-mask"],
+    "upload_bindings": [
+      {
+        "source_path": "/image_path",
+        "target_path": "/image",
+        "upload_channel_refs": ["fixture.apikeyfun-inline-image"],
+        "mime_type": "image/png",
+        "required": true,
+        "remove_source": true
+      },
+      {
+        "source_path": "/mask_path",
+        "target_path": "/mask",
+        "upload_channel_refs": ["fixture.apikeyfun-inline-mask"],
+        "mime_type": "image/png",
+        "required": true,
+        "remove_source": true
+      }
+    ],
+    "timeout_ms": 60000,
+    "idempotent": false
+  },
+  "upload_channels": [
+    {
+      "upload_channel_id": "fixture.apikeyfun-inline-image",
+      "description": "Fixture source image Data URL channel.",
+      "primitive": "inline_data_url",
+      "accepted_mime_types": ["image/png"],
+      "max_bytes": 1024,
+      "max_count": 1,
+      "progress_supported": false,
+      "cancellation_supported": false,
+      "reference_encoding": "response_url"
+    },
+    {
+      "upload_channel_id": "fixture.apikeyfun-inline-mask",
+      "description": "Fixture PNG mask Data URL channel.",
+      "primitive": "inline_data_url",
+      "accepted_mime_types": ["image/png"],
+      "max_bytes": 1024,
+      "max_count": 1,
+      "progress_supported": false,
+      "cancellation_supported": false,
+      "reference_encoding": "response_url"
+    }
+  ],
+  "required_execution_primitives": ["http_multipart_sse"],
+  "required_upload_primitives": ["inline_data_url"],
+  "arguments": {
+    "image_path": "data:image/png;base64,iVBORw0KGgo=",
+    "mask_path": "data:image/png;base64,iVBORw0KGgo=",
+    "prompt": "change the masked area to blue",
+    "model": "gpt-image-2",
+    "n": 1,
+    "quality": "auto",
+    "size": "1024x1024",
+    "stream": true,
+    "response_format": "b64_json"
+  },
+  "interactions": [
+    {
+      "method": "POST",
+      "path": "/fixtures/apikeyfun-gpt-image-edit",
+      "response_status": 200,
+      "response_text_body": "data: {\"type\":\"image_generation.partial_image\"}\n\ndata: {\"type\":\"image_generation.completed\",\"data\":[{\"b64_json\":\"iVBORw0KGgo=\"}]}\n\ndata: [DONE]\n\n",
+      "response_content_type": "text/event-stream"
+    }
+  ],
+  "expected_output_kind": "resources"
+}

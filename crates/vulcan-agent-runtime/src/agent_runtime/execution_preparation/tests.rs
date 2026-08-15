@@ -652,13 +652,7 @@ fn test_runtime_foundation(config: &ProviderConfigurationFile) -> RuntimeFoundat
             secret_reference: String::from("secret-a"),
             management_secret_reference: None,
             service_origin_override: None,
-            verified_protocols: std::collections::BTreeSet::from([
-                String::from(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
-                String::from(vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID),
-            ]),
-            selected_protocol: String::from(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
             prompt_cache_by_protocol: BTreeMap::new(),
-            usage_scope_override: None,
         },
     );
     public_configuration.set_model_enabled("openrouter", "openai/gpt-5.6-sol", true);

@@ -126,7 +126,7 @@ mod tests {
     /// 构建一个含两个入口与两个凭据配置档的最小清单。
     fn manifest_with_services() -> ProviderManifestV1 {
         serde_json::from_value(serde_json::json!({
-            "schema_version": "vulcan.provider-manifest.v1",
+            "schema_version": "vulcan.provider-manifest.v2",
             "provider_id": "probe-scope",
             "revision": 1,
             "published_at": "2026-08-07T00:00:00Z",

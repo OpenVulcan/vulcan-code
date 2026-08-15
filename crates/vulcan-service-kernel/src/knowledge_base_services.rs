@@ -1425,6 +1425,11 @@ pub(super) async fn service_build_knowledge_display_index(
 ) -> Result<Value, String> {
     let runtime = retained_knowledge_runtime(&state)?;
     let library = runtime.get_library(&library_id).await?;
+    if knowledge_display_generation_is_current(&library.settings) {
+        return Err(String::from(
+            "当前显示库已经生成完毕且内容为最新，无需重复生成",
+        ));
+    }
     let job = runtime
         .start_external_operation(
             &library_id,
@@ -1485,6 +1490,23 @@ pub(super) async fn service_build_knowledge_display_index(
         }
     });
     serde_json::to_value(job).map_err(|error| format!("serialize display operation: {error}"))
+}
+
+/// Returns whether the published display generation exactly matches current source and model policy.
+/// 返回已发布显示代次是否与当前原始内容及模型策略完全一致。
+///
+/// Parameters: `settings` is the persisted library policy whose ready flag is invalidated on source mutation.
+/// Returns: true only when no pending generation remains and every persisted provenance field matches.
+/// 参数：`settings` 是持久化资料库策略，其 ready 标记会在来源变更时失效。返回值：仅当不存在待完成代次且全部持久化来源字段匹配时返回 true。
+fn knowledge_display_generation_is_current(settings: &KnowledgeLibrarySettings) -> bool {
+    settings.display_index.status == KnowledgeDisplayIndexStatus::Ready
+        && settings.display_index.active_generation.is_some()
+        && settings.display_index.pending_generation.is_none()
+        && settings.display_index.source_content_revision.is_some()
+        && settings.display_index.indexed_prompt_version.as_deref()
+            == Some(settings.curation.prompt_version.as_str())
+        && settings.display_index.indexed_model_fingerprint
+            == settings.curation.desired_model_fingerprint
 }
 
 /// Builds and atomically publishes the AI-curated display corpus for one library.
@@ -1580,10 +1602,17 @@ async fn run_knowledge_display_index(
             offset = offset.saturating_add(page_len as u32);
         }
         let total_documents = source_documents.len() as u64;
+        let mut generated_documents = u64::try_from(existing_hashes.len())
+            .map_err(|_| String::from("恢复显示库进度时已保存文档数量溢出"))?;
         runtime
-            .update_external_operation_progress(&job_id, "curating", 0, total_documents, None)
+            .update_external_operation_progress(
+                &job_id,
+                "curating",
+                generated_documents,
+                total_documents,
+                None,
+            )
             .await?;
-        let mut generated_documents = 0_u64;
         let mut failed_documents = Vec::new();
         let source_batches = group_knowledge_display_sources(source_documents, |document| {
             usize::try_from(document.byte_size).unwrap_or(usize::MAX)
@@ -1595,7 +1624,6 @@ async fn run_knowledge_display_index(
             }
 
             let mut source_batch = Vec::with_capacity(summary_batch.len());
-            let mut skipped_in_batch = 0_u64;
             for document in summary_batch {
                 match runtime.read_document(&library_id, &document.id).await {
                     Ok(source) => {
@@ -1604,7 +1632,8 @@ async fn run_knowledge_display_index(
                             existing_hashes.get(&source.document.id),
                             Some(existing_hash) if existing_hash == &source_hash
                         ) {
-                            skipped_in_batch = skipped_in_batch.saturating_add(1);
+                            // The document was counted from the persisted pending generation before scanning began.
+                            // 该文档已在扫描开始前从持久化待完成代次计入进度。
                         } else {
                             if resumed {
                                 runtime
@@ -1626,18 +1655,6 @@ async fn run_knowledge_display_index(
                         ));
                     }
                 }
-            }
-            generated_documents = generated_documents.saturating_add(skipped_in_batch);
-            if skipped_in_batch > 0 {
-                runtime
-                    .update_external_operation_progress(
-                        &job_id,
-                        "curating",
-                        generated_documents,
-                        total_documents,
-                        None,
-                    )
-                    .await?;
             }
             if source_batch.is_empty() {
                 continue;
@@ -2948,16 +2965,28 @@ pub(super) async fn service_list_knowledge_library_folders(
         .map_err(|error| format!("serialize managed knowledge folders: {error}"))
 }
 
-/// Reads one authoritative Markdown document for the trusted management surface.
-/// 为受信任的管理界面读取一份权威 Markdown 文档。
+/// Reads one explicitly selected raw or display Markdown document for the trusted management surface.
+/// 为受信任的管理界面读取一份显式选择的原始库或显示库 Markdown 文档。
 pub(super) async fn service_read_knowledge_library_document(
     state: SharedServiceBridgeState,
     library_id: String,
     document_id: String,
+    corpus: Option<String>,
 ) -> Result<Value, String> {
-    let document = retained_knowledge_runtime(&state)?
-        .read_document(&library_id, &document_id)
-        .await?;
+    // runtime is the retained controller-backed knowledge runtime used by both corpus layers.
+    // runtime 是两个内容层共同使用的持久控制器知识库运行时。
+    let runtime = retained_knowledge_runtime(&state)?;
+    // document is read only from the explicitly requested corpus; unknown values fail closed.
+    // document 仅从显式请求的内容层读取；未知值按失败关闭处理。
+    let document = match corpus.as_deref().unwrap_or("raw") {
+        "raw" => runtime.read_document(&library_id, &document_id).await?,
+        "display" => {
+            runtime
+                .read_display_document_content(&library_id, &document_id)
+                .await?
+        }
+        unsupported => return Err(format!("不支持的资料库浏览层：{unsupported}")),
+    };
     serde_json::to_value(document)
         .map_err(|error| format!("serialize managed knowledge document: {error}"))
 }
@@ -3516,6 +3545,25 @@ async fn require_authorized_library(
 mod tests {
     use super::*;
     use vulcan_workspace_store::knowledge_base::KnowledgeDocumentSummary;
+
+    /// Verifies only a fully published generation matching current provenance blocks a duplicate build.
+    /// 验证只有与当前来源完全匹配的已发布代次会阻止重复构建。
+    #[test]
+    fn current_display_generation_blocks_only_exact_duplicate_builds() {
+        let mut settings = KnowledgeLibrarySettings::default();
+        settings.curation.desired_model_fingerprint = Some(String::from("model-a"));
+        settings.display_index.status = KnowledgeDisplayIndexStatus::Ready;
+        settings.display_index.active_generation = Some(String::from("generation-a"));
+        settings.display_index.source_content_revision = Some(7);
+        settings.display_index.indexed_prompt_version =
+            Some(settings.curation.prompt_version.clone());
+        settings.display_index.indexed_model_fingerprint = Some(String::from("model-a"));
+
+        assert!(knowledge_display_generation_is_current(&settings));
+
+        settings.display_index.pending_generation = Some(String::from("generation-b"));
+        assert!(!knowledge_display_generation_is_current(&settings));
+    }
 
     /// Verifies host-owned document identifiers are not exposed in the curation prompt.
     /// 验证宿主持有的文档标识不会暴露给整理模型提示词。

@@ -543,7 +543,13 @@
 }
 
 .knowledge-viewer-title {
+  flex: 1;
   min-width: 0;
+}
+
+.knowledge-viewer-corpus-mode {
+  width: 116px;
+  flex: none;
 }
 
 .knowledge-viewer-title > h2 {

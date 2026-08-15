@@ -232,14 +232,10 @@ impl ProviderExecutionRoute {
             protocol_route.usage_extraction_profiles =
                 vulcan_llm_core::standard_usage_profiles(protocol);
         }
-        if !protocol_route.verified
-            || !connection
-                .verified_protocols
-                .contains(effective_protocol_id)
-        {
+        if !protocol_route.verified {
             return Err(pre_dispatch_failure(format!(
-                "Protocol `{}` is not verified for connection `{}`.",
-                effective_protocol_id, connection.id
+                "Protocol `{}` is not verified by service entry `{}`.",
+                effective_protocol_id, entry.id
             )));
         }
         if !matches!(secondary_route, SecondaryRouteSelection::Automatic)
@@ -7437,12 +7433,9 @@ mod tests {
             secret_reference: String::from("secret"),
             management_secret_reference: None,
             service_origin_override: None,
-            verified_protocols: BTreeSet::from([protocol_id.to_string()]),
-            selected_protocol: protocol_id.to_string(),
             prompt_cache_by_protocol: BTreeMap::new(),
-            usage_scope_override: None,
         };
-        let effective_protocol_id = connection.selected_protocol.clone();
+        let effective_protocol_id = protocol_id.to_string();
         let mut route = ProviderExecutionRoute::resolve(
             provider,
             entry,
@@ -8339,9 +8332,6 @@ mod tests {
         let mut route = pinned_openrouter_route(OPENAI_CHAT_PROFILE_ID);
         route.protocol_route.protocol_profile_id = String::from(GEMINI_INTERACTIONS_PROFILE_ID);
         route.protocol_route.endpoint_path = Some(String::from("/interactions"));
-        route.connection.selected_protocol = String::from(GEMINI_INTERACTIONS_PROFILE_ID);
-        route.connection.verified_protocols =
-            BTreeSet::from([String::from(GEMINI_INTERACTIONS_PROFILE_ID)]);
         let mut request = minimal_request();
         request.messages.push(vulcan_ai_contract::AiMessage {
             role: vulcan_ai_contract::MessageRole::Assistant,
@@ -8587,9 +8577,6 @@ mod tests {
             remote_compaction: ResponsesRemoteCompactionPolicy::Disabled,
             websocket: ResponsesWebsocketPolicy::Verified,
         });
-        route.connection.selected_protocol = String::from(OPENAI_CODEX_RESPONSES_PROFILE_ID);
-        route.connection.verified_protocols =
-            BTreeSet::from([String::from(OPENAI_CODEX_RESPONSES_PROFILE_ID)]);
         let secret = crate::CredentialSecretEnvelope::new_api_key(String::from("secret"))
             .expect("test key should validate")
             .execution_secret()
@@ -8727,9 +8714,6 @@ mod tests {
             remote_compaction: ResponsesRemoteCompactionPolicy::Disabled,
             websocket: ResponsesWebsocketPolicy::Verified,
         });
-        route.connection.selected_protocol = String::from(OPENAI_CODEX_RESPONSES_PROFILE_ID);
-        route.connection.verified_protocols =
-            BTreeSet::from([String::from(OPENAI_CODEX_RESPONSES_PROFILE_ID)]);
         let secret = crate::CredentialSecretEnvelope::new_api_key(String::from("secret"))
             .expect("test key should validate")
             .execution_secret()
@@ -8917,9 +8901,6 @@ mod tests {
         );
         let mut route = pinned_openrouter_route(OPENAI_RESPONSES_PROFILE_ID);
         route.protocol_route.protocol_profile_id = String::from(OPENAI_CODEX_RESPONSES_PROFILE_ID);
-        route.connection.selected_protocol = String::from(OPENAI_CODEX_RESPONSES_PROFILE_ID);
-        route.connection.verified_protocols =
-            BTreeSet::from([String::from(OPENAI_CODEX_RESPONSES_PROFILE_ID)]);
         let mut request = minimal_request();
         request.continuation = Some(AiContinuation {
             provider_id: route.provider.id.clone(),

@@ -107,21 +107,10 @@ export function CredentialModelAccessDialog(props: CredentialModelAccessDialogPr
       (record) => record.connectionId === connection.id,
     )
     : undefined
-  // providerEnabledModelIds is the closed provider-level allow-set from the authoritative snapshot.
-  // providerEnabledModelIds 是权威快照提供的封闭供应商级允许集合。
-  const providerEnabledModelIds = React.useMemo(
-    () => new Set(
-      props.snapshot?.modelAccessRecords
-        .filter((record) => (
-          connection?.provider_id === record.providerId && record.enabled
-        ))
-        .map((record) => record.modelId) ?? [],
-    ),
-    [connection?.provider_id, props.snapshot?.modelAccessRecords],
-  )
+  // supportModels remains independent from conversation publication so an account can serve internal-only models.
+  // supportModels 独立于会话发布状态，使账号可以服务仅供内部使用的模型。
   const supportModels = connection
-    ? (props.snapshot?.modelSupportCatalogs[connection.id]?.models ?? [])
-      .filter((model) => providerEnabledModelIds.has(model.id))
+    ? props.snapshot?.modelSupportCatalogs[connection.id]?.models ?? []
     : []
   const effectiveModelIds = React.useMemo(
     () => new Set(
@@ -135,9 +124,8 @@ export function CredentialModelAccessDialog(props: CredentialModelAccessDialogPr
   // modelIsEnabled resolves immediate optimistic feedback before the authoritative snapshot arrives.
   // modelIsEnabled 在权威快照返回前解析即时乐观反馈。
   const modelIsEnabled = React.useCallback((modelId: string) => (
-    providerEnabledModelIds.has(modelId)
-    && (optimisticEnabled[modelId] ?? effectiveModelIds.has(modelId))
-  ), [effectiveModelIds, optimisticEnabled, providerEnabledModelIds])
+    optimisticEnabled[modelId] ?? effectiveModelIds.has(modelId)
+  ), [effectiveModelIds, optimisticEnabled])
 
   const normalizedQuery = query.trim().toLocaleLowerCase()
   const visibleModels = supportModels.filter((model) => {
@@ -244,9 +232,6 @@ export function CredentialModelAccessDialog(props: CredentialModelAccessDialogPr
                 <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
                   <Badge variant="outline">{props.provider?.display_name ?? connection?.provider_id}</Badge>
                   {props.entry ? <Badge variant="outline">{props.entry.display_name}</Badge> : null}
-                  {connection?.verified_protocols.map((protocolId) => (
-                    <Badge key={protocolId} variant="outline">{protocolId}</Badge>
-                  ))}
                   <Badge variant="secondary">{directoryLabel}</Badge>
                 </div>
               </div>

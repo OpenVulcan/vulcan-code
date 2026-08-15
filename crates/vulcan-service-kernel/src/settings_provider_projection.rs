@@ -372,6 +372,12 @@ pub(crate) fn public_ai_provider_rows_for_selection(
                                 .iter()
                                 .map(public_resource_kind_label)
                                 .collect(),
+                            provider_native_tools: model
+                                .capabilities
+                                .provider_native_tools
+                                .iter()
+                                .map(public_native_tool_label)
+                                .collect(),
                             reasoning_profile_json: None,
                             reasoning_selection: reasoning_selection(
                                 &ProviderConfigurationFile::default(),
@@ -407,7 +413,10 @@ pub(crate) fn public_ai_provider_rows_for_selection(
                 id: selection.model.id.clone(),
                 name: selection.model.display_name.clone(),
                 active: true,
-                preferred_connection: true,
+                // A lease-only row identifies the current session route but is absent from the
+                // effective catalog, so it must never become a new-session account preference.
+                // 仅租约行标识当前会话路由，但它不在有效目录中，因此绝不能成为新会话账号偏好。
+                preferred_connection: false,
                 enabled: true,
                 status: Some(String::from("会话路由已冻结；重新选择模型后使用最新目录")),
                 family: None,
@@ -431,6 +440,11 @@ pub(crate) fn public_ai_provider_rows_for_selection(
                     .output_resources
                     .iter()
                     .map(public_resource_kind_label)
+                    .collect(),
+                provider_native_tools: capabilities
+                    .provider_native_tools
+                    .iter()
+                    .map(public_native_tool_label)
                     .collect(),
                 reasoning_profile_json: None,
                 reasoning_selection: reasoning_selection(
@@ -520,6 +534,26 @@ fn public_resource_kind_label(kind: &vulcan_ai_contract::ResourceKind) -> String
         vulcan_ai_contract::ResourceKind::Audio => String::from("audio"),
         vulcan_ai_contract::ResourceKind::Video => String::from("video"),
         vulcan_ai_contract::ResourceKind::File => String::from("file"),
+    }
+}
+
+/// Returns the stable public label for one provider-native tool kind.
+/// 返回一项供应商原生工具类型的稳定公共标签。
+///
+/// # Parameters
+/// 参数
+/// `kind` is the exact tool capability resolved for the model route.
+/// `kind` 是为模型路由解析出的精确工具能力。
+///
+/// # Returns
+/// 返回值
+/// A stable lowercase tool label shared with the WebUI contract.
+/// 与 WebUI 契约共享的稳定小写工具标签。
+fn public_native_tool_label(kind: &vulcan_ai_contract::NativeToolKind) -> String {
+    match kind {
+        vulcan_ai_contract::NativeToolKind::WebSearch => String::from("web_search"),
+        vulcan_ai_contract::NativeToolKind::CodeInterpreter => String::from("code_interpreter"),
+        vulcan_ai_contract::NativeToolKind::ImageGeneration => String::from("image_generation"),
     }
 }
 

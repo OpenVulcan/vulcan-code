@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "vulcan.provider-manifest.v1",
-  "title": "Vulcan Provider Manifest v1",
+  "$id": "vulcan.provider-manifest.v2",
+  "title": "Vulcan Provider Manifest v2",
   "description": "Declarative provider capability manifest: services, protocol routes, model rules, profiles, operations, upload channels, and tool targets.",
   "type": "object",
   "additionalProperties": false,
@@ -19,7 +19,7 @@
   "properties": {
     "schema_version": {
       "type": "string",
-      "const": "vulcan.provider-manifest.v1"
+      "const": "vulcan.provider-manifest.v2"
     },
     "provider_id": {
       "type": "string",
@@ -244,10 +244,17 @@
                 "credential_role": {
                   "type": "string"
                 },
-                "allowed_usage_scopes": {
+                "default_usage_scopes": {
                   "type": "array",
+                  "description": "Initial usage defaults only; explicit user model choices may enable or disable conversation and non-conversation internal use independently.",
+                  "uniqueItems": true,
                   "items": {
-                    "type": "string"
+                    "type": "string",
+                    "enum": [
+                      "interactive_agent",
+                      "internal_background",
+                      "external_service"
+                    ]
                   }
                 }
               }

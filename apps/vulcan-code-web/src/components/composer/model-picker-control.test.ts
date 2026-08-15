@@ -68,6 +68,44 @@ describe("model picker account grouping", () => {
     expect(resolveModelPickerGroupChoice(groups[0]!, undefined).connectionId).toBe("connection-cn");
   });
 
+  // Verifies the picker receives exact route-native media and search declarations from the backend summary.
+  // 验证选择器从后端摘要接收精确路由原生的媒体与搜索声明。
+  it("projects built-in capabilities from the exact credential model route", () => {
+    const providers = miniMaxProviders();
+    providers[0]!.models![0]!.inputModalities = ["image", "video"];
+    providers[0]!.models![0]!.providerNativeTools = ["web_search"];
+
+    const choice = modelPickerChoicesFromProviders(providers)[0]!;
+    expect(choice.inputModalities).toEqual(["image", "video"]);
+    expect(choice.providerNativeTools).toEqual(["web_search"]);
+  });
+
+  // Verifies grouped rows display the account that selection will actually activate instead of a capability union.
+  // 验证聚合行展示选择操作实际激活的账号，而不是能力并集。
+  it("keeps built-in capabilities scoped to the resolved account", () => {
+    const providers = miniMaxProviders();
+    providers[1]!.models![0]!.providerNativeTools = ["web_search"];
+    const choices = modelPickerChoicesFromProviders(providers);
+    const group = groupModelPickerChoices(choices)[0]!;
+
+    expect(resolveModelPickerGroupChoice(group, undefined).providerNativeTools).toEqual([]);
+    expect(resolveModelPickerGroupChoice(group, choices[1]).providerNativeTools).toEqual([
+      "web_search",
+    ]);
+  });
+
+  // Verifies a new-session model click follows the backend model-account preference instead of a stale global route.
+  // 验证新会话点击模型时遵循后端模型账号偏好，而不是沿用陈旧的全局路由。
+  it("prefers the model account binding for a new session", () => {
+    const choices = modelPickerChoicesFromProviders(miniMaxProviders());
+    const group = groupModelPickerChoices(choices)[0]!;
+
+    expect(resolveModelPickerGroupChoice(group, choices[1], true).connectionId)
+      .toBe("connection-cn");
+    expect(resolveModelPickerGroupChoice(group, choices[1], false).connectionId)
+      .toBe("connection-api");
+  });
+
   it("filters only by model name or model id", () => {
     // choices carries provider, account, and model labels used to prove the filter boundary.
     // choices 携带供应商、账号与模型标签，用于证明过滤边界。
@@ -124,9 +162,8 @@ describe("modelAccountProtocolDisplayName", () => {
 });
 
 describe("modelAccountEffectiveProtocolId", () => {
-  // Verifies one shared credential displays the exact selected model route instead of its
-  // connection-level compatibility anchor.
-  // 验证共享凭据展示精确选中模型路由，而不是连接级兼容锚点。
+  // Verifies one shared credential displays the exact selected model route from backend authority.
+  // 验证共享凭据展示后端权威提供的精确选中模型路由。
   it("uses the backend provider-account-model route as its sole authority", () => {
     // choice identifies the Responses-bound model on one multi-protocol account.
     // choice 标识一个多协议账号上绑定 Responses 的模型。

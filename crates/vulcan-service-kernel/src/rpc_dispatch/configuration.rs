@@ -54,7 +54,6 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_select_public_ai_model",
     "service_save_public_ai_model_overrides",
     "service_save_public_ai_model_enabled",
-    "service_save_public_ai_provider_models_enabled",
     "service_save_public_ai_internal_model_enabled",
     "service_save_public_ai_internal_model_overrides",
     "service_save_public_ai_inference_route",
@@ -384,14 +383,6 @@ pub(super) async fn dispatch(
         ),
         "service_save_public_ai_model_enabled" => rpc_json_result(
             service_save_public_ai_model_enabled(
-                app,
-                state,
-                rpc_required_param(params, "request")?,
-            )
-            .await,
-        ),
-        "service_save_public_ai_provider_models_enabled" => rpc_json_result(
-            service_save_public_ai_provider_models_enabled(
                 app,
                 state,
                 rpc_required_param(params, "request")?,

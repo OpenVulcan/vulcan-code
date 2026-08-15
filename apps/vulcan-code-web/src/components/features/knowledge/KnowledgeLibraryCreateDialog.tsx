@@ -100,6 +100,31 @@ function candidateLabel(candidate: PublicAiInternalInferenceCandidate): string {
   return `${candidate.providerDisplayName} · ${candidate.modelDisplayName}`;
 }
 
+// knowledgeCurationCandidates returns enabled background LLM routes from the shared internal pool.
+// knowledgeCurationCandidates 从共享内部模型池返回已启用的后台 LLM 路由。
+export function knowledgeCurationCandidates(
+  candidates: PublicAiInternalInferenceCandidate[],
+): PublicAiInternalInferenceCandidate[] {
+  return candidates.filter((candidate) => (
+    candidate.enabled
+    && candidate.route.usage_scope === "internal_background"
+    && candidate.route.operation === "conversation_respond"
+  ));
+}
+
+// knowledgeEmbeddingCandidates returns enabled background embedding routes with declared capabilities.
+// knowledgeEmbeddingCandidates 返回已启用且声明向量能力的后台向量路由。
+export function knowledgeEmbeddingCandidates(
+  candidates: PublicAiInternalInferenceCandidate[],
+): PublicAiInternalInferenceCandidate[] {
+  return candidates.filter((candidate) => (
+    candidate.enabled
+    && candidate.route.usage_scope === "internal_background"
+    && candidate.route.operation === "embedding_create"
+    && Boolean(candidate.capabilities.embedding)
+  ));
+}
+
 // KnowledgeLibraryCreateDialog renders creation-time policy and model selection.
 // KnowledgeLibraryCreateDialog 渲染创建阶段的策略与模型选择。
 export function KnowledgeLibraryCreateDialog({
@@ -126,8 +151,8 @@ export function KnowledgeLibraryCreateDialog({
   onCompatibilityOverrideChange,
   onSubmit,
 }: KnowledgeLibraryCreateDialogProps) {
-  const curationCandidates = candidates.filter((candidate) => candidate.enabled && candidate.route.usage_scope === "internal_background" && candidate.route.operation === "conversation_respond");
-  const embeddingCandidates = candidates.filter((candidate) => candidate.enabled && candidate.route.usage_scope === "internal_background" && candidate.route.operation === "embedding_create" && candidate.capabilities.embedding);
+  const curationCandidates = knowledgeCurationCandidates(candidates);
+  const embeddingCandidates = knowledgeEmbeddingCandidates(candidates);
   const requiresCuration = retrievalMode !== "raw_bm25";
   const requiresEmbedding = retrievalMode === "display_hybrid";
   const curationCandidate = curationCandidates.find((candidate) => routeKey(candidate) === curationCandidateKey) ?? null;

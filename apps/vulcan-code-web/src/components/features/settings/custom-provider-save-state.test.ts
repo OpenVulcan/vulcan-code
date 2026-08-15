@@ -13,7 +13,6 @@ function requestFixture(providerId?: string): PublicAiCustomProviderSaveRequest 
     providerId,
     displayName: "Fixture Provider",
     baseUrl: "https://example.test/v1",
-    protocol: "open_ai_responses",
     protocols: ["open_ai_responses"],
     protocolRoutes: [],
     remoteCompactionPolicy: "disabled",

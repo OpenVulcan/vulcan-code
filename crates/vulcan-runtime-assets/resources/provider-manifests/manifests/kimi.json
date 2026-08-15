@@ -1,5 +1,5 @@
 {
-  "schema_version": "vulcan.provider-manifest.v1",
+  "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "kimi",
   "revision": 3,
   "published_at": "2026-08-06T00:00:00Z",
@@ -39,7 +39,7 @@
           "billing_kind": "pay_as_you_go",
           "account_usage_query": "unsupported",
           "key_prefix": "sk-",
-          "allowed_usage_scopes": [
+          "default_usage_scopes": [
             "interactive_agent",
             "internal_background",
             "external_service"
@@ -79,7 +79,7 @@
           "billing_kind": "pay_as_you_go",
           "account_usage_query": "unsupported",
           "key_prefix": "sk-",
-          "allowed_usage_scopes": [
+          "default_usage_scopes": [
             "interactive_agent",
             "internal_background",
             "external_service"
@@ -118,7 +118,7 @@
           "credential_mode": "token",
           "billing_kind": "token_plan",
           "account_usage_query": "kimi_coding_plan",
-          "allowed_usage_scopes": [
+          "default_usage_scopes": [
             "interactive_agent"
           ]
         },
@@ -130,7 +130,7 @@
           "billing_kind": "token_plan",
           "account_usage_query": "kimi_coding_plan",
           "authentication": "coding_device_bearer",
-          "allowed_usage_scopes": [
+          "default_usage_scopes": [
             "interactive_agent"
           ]
         }

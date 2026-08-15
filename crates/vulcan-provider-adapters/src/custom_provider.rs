@@ -155,10 +155,6 @@ pub struct CustomProviderDefinition {
     /// Exact shared API base URL.
     /// 精确共享 API 基础 URL。
     pub base_url: String,
-    /// Legacy single-protocol declaration kept for compatible reads; never serialized by new saves.
-    /// 兼容读取保留的旧版单协议声明；新保存不再序列化该字段。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub protocol: Option<CustomProviderProtocol>,
     /// The verified compatible protocols served by this provider.
     /// 该供应商提供的已验证兼容协议集合。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -222,24 +218,15 @@ pub fn validate_custom_provider_identifier(provider_id: &str) -> Result<(), Stri
 }
 
 impl CustomProviderDefinition {
-    /// Returns the enabled protocol set, falling back to the legacy single declaration.
-    /// 返回启用的协议集合；旧版单声明存在时回退到该单协议。
+    /// Returns the enabled protocol set.
+    /// 返回启用的协议集合。
     ///
     /// # Returns
     /// 返回值
-    /// Non-empty protocols when the new collection is declared, otherwise the legacy protocol.
-    /// 新集合已声明时返回非空集合，否则返回旧版协议。
+    /// The exact declared protocol collection.
+    /// 返回精确声明的协议集合。
     pub fn effective_protocols(&self) -> Vec<CustomProviderProtocol> {
-        if !self.protocols.is_empty() {
-            return self.protocols.clone();
-        }
-        self.protocol.into_iter().collect()
-    }
-
-    /// Returns whether this definition uses the legacy single-protocol declaration.
-    /// 返回此定义是否使用旧版单协议声明。
-    pub fn uses_legacy_protocol_declaration(&self) -> bool {
-        self.protocols.is_empty() && self.protocol.is_some()
+        self.protocols.clone()
     }
 
     /// Validates and projects this definition into the runtime provider descriptor.
@@ -374,7 +361,7 @@ impl CustomProviderDefinition {
                     authentication: None,
                     key_prefix: None,
                     credential_role: None,
-                    allowed_usage_scopes: BTreeSet::from([
+                    default_usage_scopes: BTreeSet::from([
                         InferenceUsageScope::InteractiveAgent,
                         InferenceUsageScope::InternalBackground,
                         InferenceUsageScope::ExternalService,
@@ -387,7 +374,7 @@ impl CustomProviderDefinition {
                 model_discovery: model_discovery.1,
                 request_projector: crate::RequestProjectorKind::Direct,
                 protocol_routes,
-                allowed_usage_scopes: BTreeSet::from([
+                default_usage_scopes: BTreeSet::from([
                     InferenceUsageScope::InteractiveAgent,
                     InferenceUsageScope::InternalBackground,
                     InferenceUsageScope::ExternalService,
@@ -903,11 +890,10 @@ mod tests {
             id: String::from("custom:example"),
             display_name: String::from("Example"),
             base_url: String::from("https://example.com/v1/"),
-            protocol: Some(CustomProviderProtocol::OpenAiResponses),
+            protocols: vec![CustomProviderProtocol::OpenAiResponses],
             authentication: CustomProviderAuthentication::BearerAuthorization,
             model_discovery_mode: CustomProviderModelDiscoveryMode::Standard,
             model_discovery_path: None,
-            protocols: Vec::new(),
             protocol_routes: Vec::new(),
             request_headers: BTreeMap::new(),
         }
@@ -929,11 +915,10 @@ mod tests {
             id: String::from("custom:gemini-relay"),
             display_name: String::from("Gemini Relay"),
             base_url: String::from("https://example.com/v1beta"),
-            protocol: Some(CustomProviderProtocol::GeminiGenerateContent),
+            protocols: vec![CustomProviderProtocol::GeminiGenerateContent],
             authentication: CustomProviderAuthentication::GoogleApiKey,
             model_discovery_mode: CustomProviderModelDiscoveryMode::Standard,
             model_discovery_path: None,
-            protocols: Vec::new(),
             protocol_routes: Vec::new(),
             request_headers: BTreeMap::new(),
         }
@@ -965,11 +950,10 @@ mod tests {
             id: String::from("custom:codex-example"),
             display_name: String::from("Codex example"),
             base_url: String::from("https://example.com/v1"),
-            protocol: Some(CustomProviderProtocol::OpenAiCodexResponses),
+            protocols: vec![CustomProviderProtocol::OpenAiCodexResponses],
             authentication: CustomProviderAuthentication::BearerAuthorization,
             model_discovery_mode: CustomProviderModelDiscoveryMode::Manual,
             model_discovery_path: None,
-            protocols: Vec::new(),
             protocol_routes: Vec::new(),
             request_headers: BTreeMap::new(),
         }
@@ -1027,11 +1011,10 @@ mod tests {
             id: String::from("custom:example"),
             display_name: String::from("Example"),
             base_url: String::from("example.com/v1"),
-            protocol: Some(CustomProviderProtocol::OpenAiChat),
+            protocols: vec![CustomProviderProtocol::OpenAiChat],
             authentication: CustomProviderAuthentication::BearerAuthorization,
             model_discovery_mode: CustomProviderModelDiscoveryMode::Standard,
             model_discovery_path: None,
-            protocols: Vec::new(),
             protocol_routes: Vec::new(),
             request_headers: BTreeMap::new(),
         }
@@ -1054,11 +1037,10 @@ mod tests {
                 id: String::from("custom:unsafe-example"),
                 display_name: String::from("Unsafe example"),
                 base_url: String::from(base_url),
-                protocol: Some(CustomProviderProtocol::OpenAiChat),
+                protocols: vec![CustomProviderProtocol::OpenAiChat],
                 authentication: CustomProviderAuthentication::BearerAuthorization,
                 model_discovery_mode: CustomProviderModelDiscoveryMode::Standard,
                 model_discovery_path: None,
-                protocols: Vec::new(),
                 protocol_routes: Vec::new(),
                 request_headers: BTreeMap::new(),
             }
@@ -1077,11 +1059,10 @@ mod tests {
             id: String::from("custom:path-example"),
             display_name: String::from("Path example"),
             base_url: String::from("https://example.com/v1"),
-            protocol: Some(CustomProviderProtocol::OpenAiChat),
+            protocols: vec![CustomProviderProtocol::OpenAiChat],
             authentication: CustomProviderAuthentication::BearerAuthorization,
             model_discovery_mode: CustomProviderModelDiscoveryMode::CustomPath,
             model_discovery_path: Some(String::from("/catalog/models")),
-            protocols: Vec::new(),
             protocol_routes: Vec::new(),
             request_headers: BTreeMap::new(),
         }
@@ -1098,11 +1079,10 @@ mod tests {
             id: String::from("custom:path-example"),
             display_name: String::from("Path example"),
             base_url: String::from("https://example.com/v1"),
-            protocol: Some(CustomProviderProtocol::OpenAiChat),
+            protocols: vec![CustomProviderProtocol::OpenAiChat],
             authentication: CustomProviderAuthentication::BearerAuthorization,
             model_discovery_mode: CustomProviderModelDiscoveryMode::CustomPath,
             model_discovery_path: Some(String::from("/../models")),
-            protocols: Vec::new(),
             protocol_routes: Vec::new(),
             request_headers: BTreeMap::new(),
         }
@@ -1122,11 +1102,10 @@ mod tests {
                 id: String::from("custom:path-example"),
                 display_name: String::from("Path example"),
                 base_url: String::from("https://example.com/v1"),
-                protocol: Some(CustomProviderProtocol::OpenAiChat),
+                protocols: vec![CustomProviderProtocol::OpenAiChat],
                 authentication: CustomProviderAuthentication::BearerAuthorization,
                 model_discovery_mode: CustomProviderModelDiscoveryMode::CustomPath,
                 model_discovery_path: Some(String::from(unsafe_path)),
-                protocols: Vec::new(),
                 protocol_routes: Vec::new(),
                 request_headers: BTreeMap::new(),
             }
@@ -1146,11 +1125,10 @@ mod tests {
             id: String::from("custom:persisted-example"),
             display_name: String::from("Persisted example"),
             base_url: String::from("https://example.com/v1"),
-            protocol: Some(CustomProviderProtocol::OpenAiChat),
+            protocols: vec![CustomProviderProtocol::OpenAiChat],
             authentication: CustomProviderAuthentication::BearerAuthorization,
             model_discovery_mode: CustomProviderModelDiscoveryMode::CustomPath,
             model_discovery_path: Some(String::from("/catalog/models")),
-            protocols: Vec::new(),
             protocol_routes: Vec::new(),
             request_headers: BTreeMap::new(),
         }

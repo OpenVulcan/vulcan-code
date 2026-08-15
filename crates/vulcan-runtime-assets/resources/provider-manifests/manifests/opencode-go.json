@@ -1,5 +1,5 @@
 {
-  "schema_version": "vulcan.provider-manifest.v1",
+  "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "opencode-go",
   "revision": 1,
   "published_at": "2026-08-13T00:00:00Z",
@@ -41,7 +41,7 @@
           "billing_kind": "token_plan",
           "account_usage_query": "unsupported",
           "key_prefix": "sk-",
-          "allowed_usage_scopes": ["interactive_agent"]
+          "default_usage_scopes": ["interactive_agent"]
         }
       ],
       "default_authentication": "bearer_authorization",

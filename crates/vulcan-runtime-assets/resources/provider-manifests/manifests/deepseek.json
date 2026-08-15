@@ -1,5 +1,5 @@
 {
-  "schema_version": "vulcan.provider-manifest.v1",
+  "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "deepseek",
   "revision": 7,
   "published_at": "2026-08-13T00:00:00Z",
@@ -40,7 +40,7 @@
           "billing_kind": "pay_as_you_go",
           "account_usage_query": "deep_seek_balance",
           "key_prefix": "sk-",
-          "allowed_usage_scopes": [
+          "default_usage_scopes": [
             "interactive_agent",
             "internal_background",
             "external_service"

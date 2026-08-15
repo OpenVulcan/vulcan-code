@@ -143,14 +143,6 @@ export function ruleProvenanceSummary(
   return `${manifestFieldSourceLabel(provenance.source)}${rule} · r${provenance.manifest_revision}`
 }
 
-// legacyBindingPendingLabel exposes the intentional APIKEY.FUN compatibility boundary; pending
-// controls visibility and the return value is the stable browser label or null.
-// legacyBindingPendingLabel 暴露有意保留的 APIKEY.FUN 兼容边界；pending 控制可见性，返回稳定
-// 浏览器标签或 null。
-export function legacyBindingPendingLabel(pending: boolean): string | null {
-  return pending ? "Legacy binding pending" : null
-}
-
 // templateInstanceSummary renders one immutable template instance; instance supplies the exact
 // template, service entry, model identity, display name, and generated target identity.
 // templateInstanceSummary 渲染一个不可变模板实例；instance 提供精确模板、服务入口、模型身份、
@@ -383,11 +375,6 @@ export function ProviderManifestStatusPanel() {
                       {status.active ? (
                         <Badge variant="outline">
                           引擎 v{status.active.minimum_manifest_engine} · {manifestProvenanceStatusLabel(status.active.provenance_status)} · {status.active.evidence_source_count} 证据
-                        </Badge>
-                      ) : null}
-                      {status.legacy_binding_pending ? (
-                        <Badge variant="outline">
-                          {legacyBindingPendingLabel(status.legacy_binding_pending)}
                         </Badge>
                       ) : null}
                     </div>

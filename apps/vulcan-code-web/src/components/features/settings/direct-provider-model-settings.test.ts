@@ -17,8 +17,6 @@ function rowWithCapabilities(
   return {
     id: "model-a",
     displayName: "Model A",
-    enabled: true,
-    defaultEnabled: true,
     accounts: [],
     capabilityOverrides,
     effectiveModel: {

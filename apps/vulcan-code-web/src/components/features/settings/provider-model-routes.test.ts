@@ -58,8 +58,6 @@ function connectionFixture(id: string, serviceEntryId: string): PublicAiConnecti
     credential_mode: "token",
     credential_id: `credential-${id}`,
     display_name: id,
-    verified_protocols: ["openai-chat-completions.v1"],
-    selected_protocol: "openai-chat-completions.v1",
     prompt_cache_by_protocol: {},
     pending_validation: false,
   }
@@ -88,17 +86,6 @@ function catalogFixture(connectionId: string): PublicAiConnectionCatalog {
       },
     }],
   }
-}
-
-// modelAccessFixture projects one authoritative provider-level model access record.
-// modelAccessFixture 投影一条权威供应商级模型访问记录。
-function modelAccessFixture(enabled: boolean) {
-  return [{
-    providerId: providerFixture.id,
-    modelId: "model-1",
-    enabled,
-    defaultEnabled: true,
-  }]
 }
 
 // modelRouteFixture supplies one backend-authoritative route record.
@@ -133,7 +120,6 @@ describe("buildProviderModelGroups", () => {
         [defaultConnection.id]: catalogFixture(defaultConnection.id),
         [fastConnection.id]: catalogFixture(fastConnection.id),
       },
-      modelAccessRecords: modelAccessFixture(true),
       modelRouteRecords: [
         modelRouteFixture(defaultConnection.id, "default-api"),
         modelRouteFixture(fastConnection.id, "fast-api"),
@@ -156,7 +142,6 @@ describe("buildProviderModelGroups", () => {
       providers: [providerFixture],
       connections: [defaultConnection],
       catalogs: { [defaultConnection.id]: catalogFixture(defaultConnection.id) },
-      modelAccessRecords: modelAccessFixture(true),
       modelRouteRecords: [modelRouteFixture(defaultConnection.id, "default-api")],
       modelSupportCatalogs: { [defaultConnection.id]: catalogFixture(defaultConnection.id) },
     })
@@ -165,7 +150,7 @@ describe("buildProviderModelGroups", () => {
     expect(groups[0]?.models.get("model-1")?.[0]?.serviceEntryId).toBe("default-api")
   })
 
-  it("hides a model when every account has disabled it", () => {
+  it("keeps a model manageable when every account has disabled it", () => {
     const connection = connectionFixture("disabled-account", "default-api")
     const disabledCatalog = {
       ...catalogFixture(connection.id),
@@ -175,26 +160,31 @@ describe("buildProviderModelGroups", () => {
       providers: [providerFixture],
       connections: [connection],
       catalogs: { [connection.id]: disabledCatalog },
-      modelAccessRecords: modelAccessFixture(true),
       modelRouteRecords: [modelRouteFixture(connection.id, "default-api")],
       modelSupportCatalogs: { [connection.id]: catalogFixture(connection.id) },
     })
 
-    expect(groups).toHaveLength(0)
+    expect(groups[0]?.models.get("model-1")?.[0]?.accountCount).toBe(0)
   })
 
-  it("hides a provider-disabled model even when an account catalog still contains it", () => {
+  it("keeps a conversation-disabled model visible for independent model management", () => {
     const connection = connectionFixture("provider-disabled-account", "default-api")
-    const groups = buildProviderModelGroups({
+    const snapshot = {
       providers: [providerFixture],
       connections: [connection],
       catalogs: { [connection.id]: catalogFixture(connection.id) },
-      modelAccessRecords: modelAccessFixture(false),
+      modelAccessRecords: [{
+        providerId: providerFixture.id,
+        modelId: "model-1",
+        enabled: false,
+        defaultEnabled: true,
+      }],
       modelRouteRecords: [modelRouteFixture(connection.id, "default-api")],
       modelSupportCatalogs: { [connection.id]: catalogFixture(connection.id) },
-    })
+    }
+    const groups = buildProviderModelGroups(snapshot)
 
-    expect(groups).toHaveLength(0)
+    expect(groups[0]?.models.get("model-1")).toHaveLength(1)
   })
 
   it("uses the backend model binding when it differs from the connection default", () => {
@@ -203,7 +193,6 @@ describe("buildProviderModelGroups", () => {
       providers: [providerFixture],
       connections: [connection],
       catalogs: { [connection.id]: catalogFixture(connection.id) },
-      modelAccessRecords: modelAccessFixture(true),
       modelRouteRecords: [
         modelRouteFixture(connection.id, "default-api", "openai-responses.v1"),
       ],
@@ -234,7 +223,6 @@ describe("buildProviderModelGroups", () => {
       providers: [providerFixture],
       connections: [connection],
       catalogs: { [connection.id]: catalogFixture(connection.id) },
-      modelAccessRecords: modelAccessFixture(true),
       modelRouteRecords: [blockedRecord],
       modelSupportCatalogs: { [connection.id]: catalogFixture(connection.id) },
     })
@@ -262,7 +250,6 @@ describe("buildProviderModelGroups", () => {
         [firstConnection.id]: catalogFixture(firstConnection.id),
         [secondConnection.id]: catalogFixture(secondConnection.id),
       },
-      modelAccessRecords: modelAccessFixture(true),
       modelRouteRecords: [
         modelRouteFixture(firstConnection.id, "default-api"),
         secondRecord,

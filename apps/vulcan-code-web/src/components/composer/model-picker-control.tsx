@@ -1,6 +1,7 @@
 import * as React from "react";
 import { Check, Cpu, RefreshCw, Search, UserRound } from "lucide-react";
 import { ProviderIcon } from "@/components/features/settings/provider-icon";
+import { ModelBuiltinCapabilityIcons } from "@/components/shared/model-builtin-capabilities";
 import {
   CredentialUsageOverview,
   usageCapabilitySupportsQuotaWindows,
@@ -35,7 +36,12 @@ import {
   loadPublicAiSettings,
   queryPublicAiConnectionUsage,
 } from "@/service/settings-actions-service";
-import type { ProviderSummary, PublicAiSettingsSnapshot } from "@/types";
+import type {
+  ProviderSummary,
+  PublicAiNativeToolKind,
+  PublicAiResourceKind,
+  PublicAiSettingsSnapshot,
+} from "@/types";
 
 // ModelPickerChoice describes one flattened workbench model row.
 // ModelPickerChoice 描述模型筛选器中的单条扁平工作台模型行。
@@ -58,6 +64,12 @@ export interface ModelPickerChoice {
   // Human-readable model label.
   // 人类可读的模型标签。
   modelName: string;
+  // Non-text resources accepted by this exact credential and model route.
+  // 此精确凭据与模型路由接受的非文本资源。
+  inputModalities: PublicAiResourceKind[];
+  // Provider-native tools available on this exact credential and model route.
+  // 此精确凭据与模型路由可用的供应商原生工具。
+  providerNativeTools: PublicAiNativeToolKind[];
   // Whether this row is the active workbench model.
   // 该行是否为当前激活的工作台模型。
   active: boolean;
@@ -119,6 +131,9 @@ export function ModelPickerControl(props: {
   // Whether the picker trigger is temporarily disabled by the host flow.
   // 筛选器触发器是否被宿主流程临时禁用。
   disabled?: boolean;
+  // Whether grouped model selection must prefer the backend-resolved account over a session-exact account.
+  // 聚合模型选择是否必须优先采用后端解析账号，而不是会话当前的精确账号。
+  preferPreferredConnection?: boolean;
 }) {
   // t resolves stable WebUI copy keys for the active language.
   // t 根据当前语言解析稳定的 WebUI 文案键。
@@ -232,9 +247,14 @@ export function ModelPickerControl(props: {
                   && selectedChoice.modelId === group.modelId
                   ? selectedChoice
                   : undefined;
-                // resolvedGroupChoice follows active, backend-preferred, then stable first-account order.
-                // resolvedGroupChoice 依次遵循当前激活、后端首选与稳定首账号顺序。
-                const resolvedGroupChoice = resolveModelPickerGroupChoice(group, exactGroupChoice);
+                // resolvedGroupChoice lets new sessions use the model-level account preference while
+                // materialized sessions retain their exact leased account.
+                // resolvedGroupChoice 让新会话采用模型级账号偏好，同时让已物化会话保留精确租约账号。
+                const resolvedGroupChoice = resolveModelPickerGroupChoice(
+                  group,
+                  exactGroupChoice,
+                  props.preferPreferredConnection,
+                );
                 // selected marks the grouped model independently from its chosen account.
                 // selected 独立于所选账号标记当前聚合模型。
                 const selected = Boolean(exactGroupChoice);
@@ -266,7 +286,14 @@ export function ModelPickerControl(props: {
                         <span className="model-picker-row-meta">{group.providerName}</span>
                       </span>
                     </Button>
-                    <span className="model-picker-row-id">{group.modelId}</span>
+                    <span className="model-picker-row-side">
+                      <span className="model-picker-row-id">{group.modelId}</span>
+                      <ModelBuiltinCapabilityIcons
+                        className="model-picker-row-capabilities"
+                        inputResources={resolvedGroupChoice.inputModalities}
+                        providerNativeTools={resolvedGroupChoice.providerNativeTools}
+                      />
+                    </span>
                   </div>
                 );
               })
@@ -622,6 +649,8 @@ export function modelPickerChoicesFromProviders(providers: ProviderSummary[]): M
       accountName: provider.accountName ?? provider.name,
       modelId: model.id,
       modelName: model.name,
+      inputModalities: [...(model.inputModalities ?? [])],
+      providerNativeTools: [...(model.providerNativeTools ?? [])],
       active: Boolean(model.active),
       preferredConnection: Boolean(model.preferredConnection),
     }));
@@ -675,12 +704,25 @@ export function groupModelPickerChoices(choices: ModelPickerChoice[]): ModelPick
   return Array.from(groups.values());
 }
 
-// resolveModelPickerGroupChoice selects the exact, active, preferred, or stable first account.
-// resolveModelPickerGroupChoice 依次选择精确、激活、首选或稳定首账号。
+// resolveModelPickerGroupChoice selects the account for one grouped model according to session scope.
+// resolveModelPickerGroupChoice 根据会话作用域为一个聚合模型选择账号。
+// Parameters: group owns the current accounts, selectedChoice is the session-exact route, and
+// preferPreferredConnection makes a new session follow the backend model-account preference.
+// 参数：group 持有当前账号，selectedChoice 是会话精确路由，preferPreferredConnection 让新会话
+// 遵循后端模型账号偏好。
+// Returns: one exact account route that can be submitted without changing account-picker semantics.
+// 返回值：一条可直接提交且不改变账号选择器语义的精确账号路由。
 export function resolveModelPickerGroupChoice(
   group: ModelPickerModelGroup,
   selectedChoice: ModelPickerChoice | undefined,
+  preferPreferredConnection = false,
 ): ModelPickerChoice {
+  // preferred is the backend authority recorded for this provider/model pair.
+  // preferred 是后端为该供应商与模型组合记录的权威账号。
+  const preferred = group.accounts.find((choice) => choice.preferredConnection);
+  if (preferPreferredConnection && preferred) {
+    return preferred;
+  }
   if (
     selectedChoice
     && selectedChoice.providerId === group.providerId
@@ -692,7 +734,7 @@ export function resolveModelPickerGroupChoice(
   // resolved is the first explicit account matching the backend selection order.
   // resolved 是按照后端选择顺序命中的第一个明确账号。
   const resolved = group.accounts.find((choice) => choice.active)
-    ?? group.accounts.find((choice) => choice.preferredConnection)
+    ?? preferred
     ?? group.accounts[0];
   if (!resolved) {
     throw new Error("Model picker groups must contain at least one account.");

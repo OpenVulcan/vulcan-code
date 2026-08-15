@@ -1,0 +1,125 @@
+{
+  "schema_version": "provider-manifest-execution-fixture.v1",
+  "fixture_id": "apikeyfun-gpt-image-generate-sse",
+  "base_manifest": "tavily.json",
+  "production_target_refs": [
+    "apikeyfun::gpt-image-2.generate"
+  ],
+  "tool_target": {
+    "target_id": "public-api.fixture-apikeyfun-gpt-image-generate",
+    "description": "APIKEY.FUN GPT Image 2 SSE generation fixture.",
+    "service_entry_id": "public-api",
+    "credential_profile_ids": ["api-key"],
+    "upstream_target_id": "gpt-image-2",
+    "display_name": "APIKEY.FUN GPT Image 2 Fixture",
+    "tool_id": "fixture_apikeyfun_gpt_image_generate",
+    "capability": "image_generate",
+    "input_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "model": {"type": "string", "const": "gpt-image-2"},
+        "prompt": {"type": "string", "minLength": 1},
+        "n": {"type": "integer", "const": 1},
+        "size": {"type": "string"},
+        "quality": {"type": "string"},
+        "stream": {"type": "boolean", "const": true},
+        "response_format": {"type": "string", "const": "b64_json"}
+      },
+      "required": ["model", "prompt", "n", "size", "quality", "stream", "response_format"]
+    },
+    "output": {
+      "kind": "resources",
+      "source_path": "/",
+      "normalized_result_path": "resources",
+      "resource_kind": "image",
+      "mime_types": ["image/png"],
+      "resource_decoders": [
+        {
+          "source_path": "/b64_json",
+          "encoding": "base64",
+          "resource_kind": "image",
+          "mime_type": "image/png",
+          "optional": true,
+          "max_bytes": 1048576,
+          "output_id_prefix": "image"
+        },
+        {
+          "source_path": "/data/0/b64_json",
+          "encoding": "base64",
+          "resource_kind": "image",
+          "mime_type": "image/png",
+          "optional": true,
+          "max_bytes": 1048576,
+          "output_id_prefix": "data-image"
+        },
+        {
+          "source_path": "/item/result",
+          "encoding": "base64",
+          "resource_kind": "image",
+          "mime_type": "image/png",
+          "optional": true,
+          "max_bytes": 1048576,
+          "output_id_prefix": "item-image"
+        }
+      ]
+    },
+    "execution": {
+      "endpoint_path": "/fixtures/apikeyfun-gpt-image-generate",
+      "authentication": "bearer_authorization",
+      "adapter": "generic_json",
+      "execution_kind": "http_json_sse",
+      "sse_events": {
+        "event_type_path": "/type",
+        "nonterminal_event_types": ["image_generation.partial_image"],
+        "terminal_event_types": ["image_generation.completed"],
+        "allow_done_record": true
+      }
+    }
+  },
+  "operation": {
+    "operation_id": "fixture.apikeyfun-gpt-image-generate-sse",
+    "operation": "image_generate",
+    "carrier": "provider_tool",
+    "input_resources": [],
+    "output_resources": ["image"],
+    "tool_target_refs": ["public-api.fixture-apikeyfun-gpt-image-generate"],
+    "request_profile_refs": [],
+    "response_profile_refs": [],
+    "upload_channel_refs": [],
+    "upload_bindings": [],
+    "timeout_ms": 60000,
+    "idempotent": false
+  },
+  "upload_channels": [],
+  "required_execution_primitives": ["http_json_sse"],
+  "required_upload_primitives": [],
+  "arguments": {
+    "model": "gpt-image-2",
+    "prompt": "draw a blue mountain",
+    "n": 1,
+    "size": "1024x1024",
+    "quality": "high",
+    "stream": true,
+    "response_format": "b64_json"
+  },
+  "interactions": [
+    {
+      "method": "POST",
+      "path": "/fixtures/apikeyfun-gpt-image-generate",
+      "expected_json_body": {
+        "model": "gpt-image-2",
+        "prompt": "draw a blue mountain",
+        "n": 1,
+        "size": "1024x1024",
+        "quality": "high",
+        "stream": true,
+        "response_format": "b64_json"
+      },
+      "response_status": 200,
+      "response_text_body": "data: {\"type\":\"image_generation.partial_image\"}\n\ndata: {\"type\":\"image_generation.completed\",\"b64_json\":\"iVBORw0KGgo=\"}\n\ndata: [DONE]\n\n",
+      "response_content_type": "text/event-stream"
+    }
+  ],
+  "expected_output_kind": "resources"
+}

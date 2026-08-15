@@ -32,8 +32,6 @@ function connectionFixture(id: string, displayName: string): PublicAiConnection 
     credential_mode: "token",
     credential_id: `credential-${id}`,
     display_name: displayName,
-    verified_protocols: ["openai-chat-completions.v1"],
-    selected_protocol: "openai-chat-completions.v1",
     prompt_cache_by_protocol: {},
     pending_validation: false,
   }
@@ -172,7 +170,6 @@ describe("custom provider model state", () => {
       128_000,
     ])
     expect(shared?.accounts[1].availabilityOverride).toBe(false)
-    expect(shared?.enabled).toBe(true)
   })
 
   it("shows synchronized source models without an import step and distinguishes effective exposure", () => {

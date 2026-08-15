@@ -371,6 +371,11 @@ fn opencode_go_manifest_matches_source_derived_model_contracts() {
     // document exposes route paths and authentication exactly as declared on the wire.
     // document 以声明的 Wire 形态公开精确路由路径与认证方式。
     let document: Value = serde_json::from_str(&text).expect("parse OpenCode Go manifest JSON");
+    assert_eq!(
+        document.pointer("/services/0/credential_profiles/0/default_usage_scopes"),
+        Some(&serde_json::json!(["interactive_agent"])),
+        "OpenCode Go must keep conversation-only as its initial default, not an internal-use ceiling"
+    );
     // routes is the only OpenCode Go conversation service route collection.
     // routes 是唯一的 OpenCode Go 会话服务路由集合。
     let routes = document
@@ -665,6 +670,39 @@ fn apikeyfun_manifest_is_a_closed_group_intersection() {
         })
         .collect::<BTreeMap<_, _>>();
     assert_eq!(actual_protocols, expected_protocols);
+
+    // deepseekReasoningEfforts keeps relay declarations identical to the official DeepSeek rules.
+    // deepseekReasoningEfforts 确保中转声明与 DeepSeek 官方规则完全一致。
+    let deepseek_text = load_bundled_manifests()
+        .remove("deepseek")
+        .expect("deepseek bundled manifest should exist");
+    // deepseekDocument is the official capability authority used for relay parity checks.
+    // deepseekDocument 是中转一致性检查所使用的官方能力权威。
+    let deepseek_document: Value =
+        serde_json::from_str(&deepseek_text).expect("deepseek manifest should parse");
+    for model_id in ["deepseek-v4-pro", "deepseek-v4-flash"] {
+        // officialRule is the exact official DeepSeek model declaration.
+        // officialRule 是精确的 DeepSeek 官方模型声明。
+        let official_rule = deepseek_document["model_rules"]
+            .as_array()
+            .expect("deepseek model_rules should be an array")
+            .iter()
+            .find(|rule| rule["matcher"]["value"] == model_id)
+            .expect("official DeepSeek model rule should exist");
+        // relayRule is the matching APIKEY.FUN relay declaration.
+        // relayRule 是对应的 APIKEY.FUN 中转声明。
+        let relay_rule = document["model_rules"]
+            .as_array()
+            .expect("apikeyfun model_rules should be an array")
+            .iter()
+            .find(|rule| rule["matcher"]["value"] == model_id)
+            .expect("APIKEY.FUN DeepSeek model rule should exist");
+        assert_eq!(
+            relay_rule["capabilities"]["reasoning_efforts"],
+            official_rule["capabilities"]["reasoning_efforts"],
+            "APIKEY.FUN reasoning levels must match official DeepSeek for `{model_id}`"
+        );
+    }
 
     // targets is the exact reviewed extension inventory; the unusable Grok edit id is absent.
     // targets 是精确已审核扩展清单；不可用的 Grok 编辑标识不存在。

@@ -60,27 +60,14 @@ export function compactServiceEntryName(displayName: string): string {
     .trim()
 }
 
-// buildProviderModelGroups derives stable provider routes from support catalogs and counts enabled accounts from effective catalogs.
-// buildProviderModelGroups 从支持目录派生稳定供应商路由，并从有效目录统计已启用账号。
+// buildProviderModelGroups derives every manageable provider model independently from conversation publication.
+// buildProviderModelGroups 独立于会话发布状态派生全部可管理供应商模型。
 export function buildProviderModelGroups(
   snapshot: Pick<
     PublicAiSettingsSnapshot,
-    "providers" | "connections" | "catalogs" | "modelAccessRecords" | "modelSupportCatalogs" | "modelRouteRecords"
+    "providers" | "connections" | "catalogs" | "modelSupportCatalogs" | "modelRouteRecords"
   >,
 ): PublicProviderModels[] {
-  // providerEnabledModelIds is the authoritative provider-level allow-set projected by the backend.
-  // providerEnabledModelIds 是后端投影的权威供应商级允许集合。
-  const providerEnabledModelIds = new Map<string, Set<string>>()
-  for (const record of snapshot.modelAccessRecords) {
-    if (!record.enabled) {
-      continue
-    }
-    // enabledModelIds is the exact allow-set for one provider.
-    // enabledModelIds 是一个供应商的精确允许集合。
-    const enabledModelIds = providerEnabledModelIds.get(record.providerId) ?? new Set<string>()
-    enabledModelIds.add(record.modelId)
-    providerEnabledModelIds.set(record.providerId, enabledModelIds)
-  }
   // connectionsById resolves only display/catalog ownership; protocol authority comes from
   // backend modelRouteRecords.
   // connectionsById 只解析显示与目录所有权；协议权威来自后端 modelRouteRecords。
@@ -88,9 +75,6 @@ export function buildProviderModelGroups(
   return snapshot.providers
     .map((provider) => {
       const models = new Map<string, PublicModelProtocolRoute[]>()
-      // enabledModelIds closes this user-facing list to provider-enabled models only.
-      // enabledModelIds 将此用户列表封闭为仅包含供应商已启用模型。
-      const enabledModelIds = providerEnabledModelIds.get(provider.id) ?? new Set<string>()
       for (const record of snapshot.modelRouteRecords ?? []) {
         if (
           record.providerId !== provider.id
@@ -116,14 +100,11 @@ export function buildProviderModelGroups(
         if (!effectiveCatalog || !supportCatalog || !serviceEntry) {
           continue
         }
-        const effectiveModel = effectiveCatalog.models.find((model) => model.id === record.modelId)
-        if (!effectiveModel || !enabledModelIds.has(effectiveModel.id)) {
+        const model = supportCatalog.models.find((candidate) => candidate.id === record.modelId)
+        if (!model) {
           continue
         }
-        const supportModelsById = new Map(
-          supportCatalog.models.map((model) => [model.id, model]),
-        )
-        const model = supportModelsById.get(effectiveModel.id) ?? effectiveModel
+        const accountEnabled = effectiveCatalog.models.some((candidate) => candidate.id === record.modelId)
         const routes = models.get(model.id) ?? []
         // availableProtocols is a canonical set so route aggregation never depends on DTO order.
         // availableProtocols 是规范集合，确保路由聚合绝不依赖 DTO 顺序。
@@ -140,10 +121,10 @@ export function buildProviderModelGroups(
           ))
         ))
         if (existing) {
-          existing.accountCount += 1
+          existing.accountCount += Number(accountEnabled)
         } else {
           routes.push({
-            accountCount: 1,
+            accountCount: Number(accountEnabled),
             availableProtocols,
             bindingSource: record.bindingSource,
             bindingRuleId: record.bindingRuleId,

@@ -9,11 +9,25 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { listManagedKnowledgeDocumentFolders, listManagedKnowledgeDocuments, readManagedKnowledgeDocument, searchManagedKnowledgeLibrary } from "@/service/knowledge-base-service";
-import type { KnowledgeDocumentContent, KnowledgeDocumentSummary, KnowledgeLibrarySummary, KnowledgeSearchResult } from "@/types";
+import type { KnowledgeDisplayIndexState, KnowledgeDocumentContent, KnowledgeDocumentSummary, KnowledgeLibrarySummary, KnowledgeSearchResult } from "@/types";
 
 // KNOWLEDGE_VIEWER_PAGE_SIZE bounds each folder request so opening the viewer never reads the complete catalog.
 // KNOWLEDGE_VIEWER_PAGE_SIZE 限制每次目录请求，确保打开阅读器时不会读取完整文档目录。
 const KNOWLEDGE_VIEWER_PAGE_SIZE = 100;
+
+// KnowledgeBrowseCorpus selects the exact Markdown layer shown by the viewer.
+// KnowledgeBrowseCorpus 选择阅读器展示的精确 Markdown 内容层。
+type KnowledgeBrowseCorpus = "raw" | "display";
+
+// defaultKnowledgeBrowseCorpus prefers an explicitly published display generation.
+// defaultKnowledgeBrowseCorpus 优先选择已明确发布的显示库代次。
+// `displayIndex` is the durable display lifecycle state; the return value is the exact initial
+// corpus and never silently substitutes raw content for an active display generation.
+// `displayIndex` 是持久化显示库生命周期状态；返回值是精确的初始内容层，绝不会为活动显示代次
+// 静默替换成原始内容。
+export function defaultKnowledgeBrowseCorpus(displayIndex: KnowledgeDisplayIndexState): KnowledgeBrowseCorpus {
+  return displayIndex.activeGeneration?.trim() ? "display" : "raw";
+}
 
 // KnowledgeDirectoryPage stores one lazily loaded exact-folder page sequence.
 // KnowledgeDirectoryPage 保存一个按需加载的精确目录分页序列。
@@ -74,6 +88,9 @@ export function KnowledgeLibraryViewerDialog(props: {
   // selectedDocument stores the complete authoritative Markdown currently shown on the right.
   // selectedDocument 保存右侧当前展示的完整权威 Markdown。
   const [selectedDocument, setSelectedDocument] = React.useState<KnowledgeDocumentContent | null>(null);
+  // browseCorpus stores the explicit Markdown layer used by document reads.
+  // browseCorpus 保存文档读取使用的显式 Markdown 内容层。
+  const [browseCorpus, setBrowseCorpus] = React.useState<KnowledgeBrowseCorpus>("raw");
   // documentLoading indicates that the selected Markdown body is being loaded.
   // documentLoading 表示选中的 Markdown 正文正在加载。
   const [documentLoading, setDocumentLoading] = React.useState(false);
@@ -123,7 +140,7 @@ export function KnowledgeLibraryViewerDialog(props: {
     try {
       // content is the authoritative Markdown body returned by the management RPC.
       // content 是管理 RPC 返回的权威 Markdown 正文。
-      const content = await readManagedKnowledgeDocument(props.library.id, documentId);
+      const content = await readManagedKnowledgeDocument(props.library.id, documentId, browseCorpus);
       if (documentRequestSequence.current !== sequence) return;
       setSelectedDocument(content);
       setPreviewMode("rendered");
@@ -132,7 +149,7 @@ export function KnowledgeLibraryViewerDialog(props: {
     } finally {
       if (documentRequestSequence.current === sequence) setDocumentLoading(false);
     }
-  }, [props.library]);
+  }, [browseCorpus, props.library]);
 
   // loadDirectoryPage reads one bounded page for the exact folder selected by the user.
   // loadDirectoryPage 为用户选择的精确目录读取一页有界数据。
@@ -198,6 +215,7 @@ export function KnowledgeLibraryViewerDialog(props: {
     setDirectoryPages({});
     directoryRequestsInFlight.current.clear();
     setSelectedDocument(null);
+    setBrowseCorpus(defaultKnowledgeBrowseCorpus(library.settings.displayIndex));
     setCatalogLoading(true);
     setDocumentLoading(false);
     setSearchText("");
@@ -299,6 +317,15 @@ export function KnowledgeLibraryViewerDialog(props: {
     setSearchResult(null);
   }, []);
 
+  // changeBrowseCorpus invalidates any body from the previous layer before the next explicit read.
+  // changeBrowseCorpus 在下一次显式读取前使上一内容层的正文失效。
+  const changeBrowseCorpus = React.useCallback((corpus: KnowledgeBrowseCorpus) => {
+    documentRequestSequence.current += 1;
+    setDocumentLoading(false);
+    setSelectedDocument(null);
+    setBrowseCorpus(corpus);
+  }, []);
+
   // handleOpenChange invalidates pending work before the parent closes the dialog.
   // handleOpenChange 在父组件关闭弹窗前使等待中的任务失效。
   const handleOpenChange = React.useCallback((open: boolean) => {
@@ -317,6 +344,15 @@ export function KnowledgeLibraryViewerDialog(props: {
       <DialogContent className={`knowledge-viewer-dialog${isMaximized ? " maximized" : ""}`} showCloseButton={false}>
         <header className="knowledge-viewer-header">
           <span className="knowledge-viewer-title"><BookOpen size={18} /><DialogTitle>{props.library.name}</DialogTitle></span>
+          <Select onValueChange={(value) => changeBrowseCorpus(value as KnowledgeBrowseCorpus)} value={browseCorpus}>
+            <SelectTrigger aria-label="浏览内容层" className="knowledge-viewer-corpus-mode">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="raw">原始库</SelectItem>
+              <SelectItem disabled={!props.library.settings.displayIndex.activeGeneration?.trim()} value="display">显示库</SelectItem>
+            </SelectContent>
+          </Select>
           <span className="knowledge-viewer-window-actions">
             <Button aria-label={t(isMaximized ? "knowledge.viewer.restore" : "knowledge.viewer.maximize")} onClick={() => setIsMaximized((current) => !current)} size="icon" type="button" variant="outline">
               {isMaximized ? <Minimize2 size={16} /> : <Maximize2 size={16} />}

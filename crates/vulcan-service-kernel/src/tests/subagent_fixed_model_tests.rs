@@ -52,10 +52,7 @@ fn single_visible_public_model_configuration() -> (
             secret_reference: String::from("secret-a"),
             management_secret_reference: None,
             service_origin_override: None,
-            verified_protocols: std::collections::BTreeSet::from([String::from("openai_chat")]),
-            selected_protocol: String::from("openai_chat"),
             prompt_cache_by_protocol: std::collections::BTreeMap::new(),
-            usage_scope_override: None,
         },
     );
     let catalog = vulcan_provider_adapters::parse_openrouter_model_catalog(

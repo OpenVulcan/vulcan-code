@@ -129,7 +129,7 @@ pub(crate) fn apply_connection_provider_tool_origin(
 mod tests {
     use super::*;
     use crate::{CredentialMode, ProviderRegistry};
-    use std::collections::{BTreeMap, BTreeSet};
+    use std::collections::BTreeMap;
 
     /// Resolves one bundled service entry used by origin-policy tests.
     /// 解析源地址策略测试使用的一个内置服务入口。
@@ -220,10 +220,7 @@ mod tests {
             service_origin_override: Some(String::from(
                 "https://ws-example.ap-southeast-1.maas.aliyuncs.com",
             )),
-            verified_protocols: BTreeSet::new(),
-            selected_protocol: String::new(),
             prompt_cache_by_protocol: BTreeMap::new(),
-            usage_scope_override: None,
         };
         // The selected entry owns the fallback origin for targets without an explicit endpoint.
         // 所选服务入口为未显式声明端点的目标持有回退源地址。

@@ -257,11 +257,7 @@ fn provider_selection_diagnostic_context(
         .map(|profile| format!("{}@{}", profile.profile_id, profile.revision))
         .collect::<Vec<_>>()
         .join(",");
-    let manifest_revision = selection
-        .protocol_binding
-        .as_ref()
-        .map(|binding| binding.manifest_revision)
-        .unwrap_or(0);
+    let manifest_revision = selection.protocol_binding.manifest_revision;
     format!(
         "provider={}, model={}, protocol={}, manifest_revision={}, manifest_generation={}, request_profiles=[{}], response_profiles=[{}]",
         selection.route.provider.id,
@@ -446,11 +442,7 @@ fn execute_provider_prompt_stream_with_capture_mode(
                 .protocol_profile_id
                 .clone(),
             catalog_generation: frozen_manifest_generation,
-            manifest_revision: public_execution
-                .protocol_binding
-                .as_ref()
-                .map(|binding| binding.manifest_revision)
-                .unwrap_or(0),
+            manifest_revision: public_execution.protocol_binding.manifest_revision,
             route_revision: frozen_route_revision,
         };
         if let Err(error) =
@@ -652,14 +644,7 @@ mod tests {
             secret_reference: String::from("secret-missing"),
             management_secret_reference: None,
             service_origin_override: None,
-            verified_protocols: BTreeSet::from([
-                ANTHROPIC_MESSAGES_PROFILE_ID.to_string(),
-                OPENAI_CHAT_PROFILE_ID.to_string(),
-                OPENAI_RESPONSES_PROFILE_ID.to_string(),
-            ]),
-            selected_protocol: OPENAI_CHAT_PROFILE_ID.to_string(),
             prompt_cache_by_protocol: BTreeMap::new(),
-            usage_scope_override: None,
         };
         configuration
             .connection_graph
@@ -812,13 +797,7 @@ mod tests {
             secret_reference: String::from("secret-deepseek"),
             management_secret_reference: None,
             service_origin_override: None,
-            verified_protocols: BTreeSet::from([
-                ANTHROPIC_MESSAGES_PROFILE_ID.to_string(),
-                OPENAI_CHAT_PROFILE_ID.to_string(),
-            ]),
-            selected_protocol: OPENAI_CHAT_PROFILE_ID.to_string(),
             prompt_cache_by_protocol: BTreeMap::new(),
-            usage_scope_override: None,
         };
         configuration
             .connection_graph
@@ -884,11 +863,7 @@ mod tests {
             .session_provider_route_lease_identity()
             .expect("leased blueprint must expose a persisted identity");
         let frozen_protocol = before.route.protocol_route.protocol_profile_id.clone();
-        let frozen_revision = before
-            .protocol_binding
-            .as_ref()
-            .map(|binding| binding.manifest_revision)
-            .unwrap_or(0);
+        let frozen_revision = before.protocol_binding.manifest_revision;
 
         // conflictingTarget proves the session owner is the uniqueness key. A different model
         // cannot establish a second lease unless the explicit reselection path first clears the

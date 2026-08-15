@@ -145,6 +145,7 @@ pub(super) async fn dispatch(
                 state,
                 rpc_required_param(params, "libraryId")?,
                 rpc_required_param(params, "documentId")?,
+                rpc_optional_param(params, "corpus")?,
             )
             .await
         }

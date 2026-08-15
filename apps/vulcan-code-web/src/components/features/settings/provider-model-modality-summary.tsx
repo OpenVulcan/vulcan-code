@@ -15,6 +15,10 @@ import {
   providerModelModalities,
   type ProviderModelModality,
 } from "@/components/features/settings/provider-model-modalities"
+import {
+  ModelBuiltinCapabilityIcons,
+  modelBuiltinCapabilities,
+} from "@/components/shared/model-builtin-capabilities"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { useI18n } from "@/i18n"
 import type { PublicAiModel } from "@/types"
@@ -32,19 +36,40 @@ interface ProviderModelModalitySummaryProps {
 export function ProviderModelModalitySummary(props: ProviderModelModalitySummaryProps) {
   const { t } = useI18n()
   const modalities = providerModelModalities(props.model)
-  if (modalities.input.length === 0 && modalities.output.length === 0) {
+  // genericInputModalities excludes media inputs already represented as explicit understanding capabilities.
+  // genericInputModalities 排除已经由明确理解能力表示的媒体输入。
+  const genericInputModalities = modalities.input.filter((modality) => (
+    modality !== "image" && modality !== "video" && modality !== "audio"
+  ))
+  const providerNativeTools = props.model.capabilities.provider_native_tools ?? []
+  // builtinCapabilities prevents media-only routes from being hidden by the generic-modality filter.
+  // builtinCapabilities 防止仅媒体路由被通用模态过滤器隐藏。
+  const builtinCapabilities = modelBuiltinCapabilities({
+    inputResources: props.model.capabilities.input_resources ?? [],
+    providerNativeTools,
+  })
+  if (
+    genericInputModalities.length === 0
+    && modalities.output.length === 0
+    && builtinCapabilities.length === 0
+  ) {
     return null
   }
   return (
     <span className="settings-model-modality-summary">
-      {modalities.input.length > 0 ? (
+      <ModelBuiltinCapabilityIcons
+        className="settings-model-builtin-capabilities"
+        inputResources={props.model.capabilities.input_resources ?? []}
+        providerNativeTools={providerNativeTools}
+      />
+      {genericInputModalities.length > 0 ? (
         <span className="settings-model-modality-group">
           <ModalityIcon
             icon={<ArrowDownToLine aria-hidden="true" />}
             label={t("settings.models.inputModalities")}
             muted
           />
-          {modalities.input.map((modality) => (
+          {genericInputModalities.map((modality) => (
             <ModalityIcon
               icon={modelModalityIcon(modality)}
               key={`input/${modality}`}

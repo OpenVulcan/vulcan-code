@@ -198,11 +198,9 @@ export interface PublicAiCustomProviderSaveRequest {
   providerId?: string;
   displayName: string;
   baseUrl: string;
-  protocol: PublicAiCustomProviderProtocol;
-  // The authoritative enabled protocol collection; an empty collection keeps the legacy
-  // single-protocol request shape for older clients.
-  // 权威的启用协议集合；空集合保留旧版单协议请求形态以兼容旧客户端。
-  protocols?: PublicAiCustomProviderProtocol[];
+  // The authoritative non-empty enabled protocol collection.
+  // 权威的非空启用协议集合。
+  protocols: PublicAiCustomProviderProtocol[];
   // Per-protocol route overrides; each protocol may appear at most once.
   // 逐协议路由覆盖；每个协议最多出现一次。
   protocolRoutes?: PublicAiCustomProviderProtocolRoute[];
@@ -430,8 +428,6 @@ export interface PublicAiConnection {
   credential_mode: CredentialMode;
   credential_id: string;
   display_name: string;
-  verified_protocols: string[];
-  selected_protocol: string;
   prompt_cache_by_protocol: Record<string, unknown>;
   // Whether normal routing is blocked until one explicit model validation succeeds.
   // 在一次显式模型验证成功前是否阻止常规路由。
@@ -468,6 +464,10 @@ export interface PublicAiModelCapabilityEvidence {
   supports_text_output?: boolean;
 }
 
+// PublicAiNativeToolKind identifies one provider-executed capability declared by an exact model route.
+// PublicAiNativeToolKind 标识由精确模型路由声明的一项供应商执行能力。
+export type PublicAiNativeToolKind = "web_search" | "code_interpreter" | "image_generation";
+
 // PublicAiModelCapabilities carries exact route controls used by workbench and internal inference.
 // PublicAiModelCapabilities 承载工作台与内部推理使用的精确路由控件。
 export interface PublicAiModelCapabilities {
@@ -480,6 +480,9 @@ export interface PublicAiModelCapabilities {
   // Resource modalities emitted by this exact model route.
   // 此精确模型路由输出的资源模态。
   output_resources?: PublicAiResourceKind[];
+  // Provider-native tools available on this exact protocol and model route.
+  // 此精确协议与模型路由可用的供应商原生工具。
+  provider_native_tools?: PublicAiNativeToolKind[];
   // Evidence revision proving the exact capability projection.
   // 证明精确能力投影的证据修订号。
   evidence_revision: string;
@@ -597,7 +600,7 @@ export interface PublicAiModelRouteRecord {
   availableProtocols: string[];
   // Stable backend binding-source identifier when a binding exists.
   // 存在绑定时的稳定后端绑定来源标识。
-  bindingSource?: "system_manifest" | "custom_user" | "custom_auto_default" | "migrated_custom_legacy" | "connection_default";
+  bindingSource?: "system_manifest" | "custom_user" | "custom_auto_default";
   // Stable manifest rule identifier when present.
   // 存在时的稳定 Manifest 规则标识。
   bindingRuleId?: string;
@@ -638,8 +641,8 @@ export interface PublicAiModelOverrideRecord {
   overrides: PublicAiModelOverrides;
 }
 
-// PublicAiModelAccessRecord carries one provider-model effective and default access state.
-// PublicAiModelAccessRecord 承载一个供应商模型的有效及默认访问状态。
+// PublicAiModelAccessRecord carries one provider-model effective and default conversation state.
+// PublicAiModelAccessRecord 承载一个供应商模型的有效及默认会话状态。
 export interface PublicAiModelAccessRecord {
   providerId: string;
   modelId: string;
@@ -1565,7 +1568,6 @@ export interface ProviderManifestStatus {
   recent_telemetry_events_truncated: boolean;
   quarantine: QuarantineSummary[];
   sync_configured: boolean;
-  legacy_binding_pending: boolean;
   model_rules: ManifestModelRuleStatus[];
   model_bindings: ManifestModelBindingStatus[];
   model_binding_total_count: number;

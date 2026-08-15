@@ -313,10 +313,10 @@ pub struct ManifestCredentialProfile {
     /// 可选声明的凭据角色，供宿主秘密投影消费。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credential_role: Option<String>,
-    /// Usage scopes permitted by the exact provider product contract.
-    /// 精确供应商产品契约允许的使用场景。
+    /// Initial usage defaults suggested by the exact provider product contract.
+    /// 精确供应商产品契约建议的初始使用默认值。
     #[serde(default)]
-    pub allowed_usage_scopes: BTreeSet<InferenceUsageScope>,
+    pub default_usage_scopes: BTreeSet<InferenceUsageScope>,
 }
 
 /// Model-catalog source policy and discovery declaration for one entry.

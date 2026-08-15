@@ -519,6 +519,18 @@ async fn probe_minimax_region(
     Ok(())
 }
 
+/// Reports whether one service route may participate in model discovery.
+/// 报告一条服务路由是否可以参与模型发现。
+///
+/// `route` is the candidate service route compiled from the active Provider Manifest.
+/// `route` 是从活动 Provider Manifest 编译得到的候选服务路由。
+///
+/// Returns true exactly when the active Manifest marks the route as verified.
+/// 仅当活动 Manifest 把该路由标记为已验证时返回 true。
+pub(crate) fn route_is_available_for_discovery(route: &ProtocolRoute) -> bool {
+    route.verified
+}
+
 #[async_trait]
 impl ProviderMetadataClient for HttpProviderMetadataClient {
     async fn discover_models(
@@ -538,19 +550,17 @@ impl ProviderMetadataClient for HttpProviderMetadataClient {
                     connection.credential_profile_id, entry.id
                 ))
             })?;
-        // Every route verified by both the service definition and this exact credential
-        // participates in discovery. Routes sharing one discovery signature are grouped and
-        // discovered exactly once; distinct signatures merge per-model protocol variants
-        // (plan §14.2).
-        // 只有服务定义与当前精确凭据共同验证的路由才参与发现。共享同一发现签名的路由
-        // 分组后恰好发现一次；不同签名按模型身份合并协议变体（方案 §14.2）。
+        // The active Provider Manifest owns the complete verified route set for both system and
+        // custom providers. Shared signatures are discovered once and then projected into
+        // per-model protocol variants (plan §14.2).
+        // 活动 Provider Manifest 为系统与自定义供应商持有完整的已验证路由集合。共享签名只发现
+        // 一次，随后投影为逐模型协议变体（方案 §14.2）。
         let mut groups: BTreeMap<String, Vec<&ProtocolRoute>> = BTreeMap::new();
-        for route in entry.protocol_routes.iter().filter(|route| {
-            route.verified
-                && connection
-                    .verified_protocols
-                    .contains(route.protocol_profile_id.as_str())
-        }) {
+        for route in entry
+            .protocol_routes
+            .iter()
+            .filter(|route| route_is_available_for_discovery(route))
+        {
             let authentication = route
                 .resolved_authentication(entry.authentication, credential_profile.authentication);
             let url = route.model_discovery_url(
@@ -3350,8 +3360,9 @@ mod tests {
         append_unique_discovered_models, build_manifest_static_catalog, controlled_error_summary,
         decode_deepseek_balance, decode_kimi_coding_plan_usage, default_discovery_path,
         manifest_protocol_authorizes_model_variant, minimax_key_profile_id, minimax_quota_windows,
-        register_pagination_cursor, resolve_minimax_region, subtract_non_negative_decimal,
-        tavily_usage_window, validate_discovered_catalog_bounds, validate_pagination_boundary,
+        register_pagination_cursor, resolve_minimax_region, route_is_available_for_discovery,
+        subtract_non_negative_decimal, tavily_usage_window, validate_discovered_catalog_bounds,
+        validate_pagination_boundary,
     };
     use crate::{
         ConnectionModel, ConnectionModelCatalog, CredentialConnection, CredentialMode,
@@ -3512,11 +3523,10 @@ mod tests {
             id: provider_id.to_string(),
             display_name: String::from("Local Fixture"),
             base_url: base_url.to_string(),
-            protocol: Some(CustomProviderProtocol::OpenAiChat),
+            protocols: vec![CustomProviderProtocol::OpenAiChat],
             authentication: CustomProviderAuthentication::BearerAuthorization,
             model_discovery_mode: CustomProviderModelDiscoveryMode::Standard,
             model_discovery_path: None,
-            protocols: Vec::new(),
             protocol_routes: Vec::new(),
             request_headers: BTreeMap::new(),
         }
@@ -3533,10 +3543,7 @@ mod tests {
             secret_reference: String::from("secret"),
             management_secret_reference: None,
             service_origin_override: None,
-            verified_protocols: BTreeSet::from([OPENAI_CHAT_PROFILE_ID.to_string()]),
-            selected_protocol: OPENAI_CHAT_PROFILE_ID.to_string(),
             prompt_cache_by_protocol: BTreeMap::new(),
-            usage_scope_override: None,
         };
         (provider, connection)
     }
@@ -3562,7 +3569,7 @@ mod tests {
             id: provider_id.to_string(),
             display_name: String::from("Local Anthropic Fixture"),
             base_url: base_url.to_string(),
-            protocol: Some(CustomProviderProtocol::AnthropicMessages),
+            protocols: vec![CustomProviderProtocol::AnthropicMessages],
             authentication: CustomProviderAuthentication::XApiKey,
             model_discovery_mode: if model_discovery_path.is_some() {
                 CustomProviderModelDiscoveryMode::CustomPath
@@ -3570,7 +3577,6 @@ mod tests {
                 CustomProviderModelDiscoveryMode::Standard
             },
             model_discovery_path: model_discovery_path.map(str::to_string),
-            protocols: Vec::new(),
             protocol_routes: Vec::new(),
             request_headers: BTreeMap::new(),
         }
@@ -3587,10 +3593,7 @@ mod tests {
             secret_reference: String::from("secret"),
             management_secret_reference: None,
             service_origin_override: None,
-            verified_protocols: BTreeSet::from([ANTHROPIC_MESSAGES_PROFILE_ID.to_string()]),
-            selected_protocol: ANTHROPIC_MESSAGES_PROFILE_ID.to_string(),
             prompt_cache_by_protocol: BTreeMap::new(),
-            usage_scope_override: None,
         };
         (provider, connection)
     }
@@ -4390,6 +4393,33 @@ mod tests {
         assert!(window.remaining.is_none());
     }
 
+    /// Verifies the active Manifest is the only route authority used by discovery.
+    /// 验证活动 Manifest 是模型发现使用的唯一路由权威。
+    #[test]
+    fn discovery_uses_only_active_manifest_routes() {
+        let registry = crate::ProviderRegistry::first_batch().expect("provider registry");
+        // provider is the cut-over APIKEY.FUN descriptor compiled from the bundled Manifest.
+        // provider 是从内置 Manifest 编译得到的已切换 APIKEY.FUN 描述器。
+        let provider = registry
+            .provider("apikeyfun")
+            .expect("APIKEY.FUN provider must register");
+        // entry owns every route that the signed system Manifest authorizes for this credential kind.
+        // entry 持有已签名系统 Manifest 为此凭据类型授权的全部路由。
+        let entry = provider
+            .service_entries
+            .iter()
+            .find(|entry| entry.id == "public-api")
+            .expect("APIKEY.FUN public entry must exist");
+        assert_eq!(
+            entry
+                .protocol_routes
+                .iter()
+                .filter(|route| route_is_available_for_discovery(route))
+                .count(),
+            4
+        );
+    }
+
     /// Verifies multi-protocol discovery groups identical discovery signatures into one request
     /// set and fills per-protocol model variants on every merged model.
     /// 验证多协议发现把相同发现签名分组为一次请求集合，并为每个合并模型填充按协议变体。
@@ -4406,10 +4436,12 @@ mod tests {
             .find(|entry| entry.id == "public-api")
             .expect("openrouter public-api entry must exist")
             .clone();
+        // routes captures every Manifest-authorized discovery protocol for variant assertions.
+        // routes 捕获每个经 Manifest 授权的发现协议，用于变体断言。
         let routes = entry
             .protocol_routes
             .iter()
-            .filter(|route| route.verified)
+            .filter(|route| route_is_available_for_discovery(route))
             .map(|route| route.protocol_profile_id.clone())
             .collect::<Vec<_>>();
         assert_eq!(
@@ -4438,10 +4470,7 @@ mod tests {
             secret_reference: String::from("secret"),
             management_secret_reference: None,
             service_origin_override: None,
-            verified_protocols: routes.iter().cloned().collect(),
-            selected_protocol: OPENAI_CHAT_PROFILE_ID.to_string(),
             prompt_cache_by_protocol: BTreeMap::new(),
-            usage_scope_override: None,
         };
         let secret = CredentialSecretEnvelope::new_api_key(String::from("test-key"))
             .expect("test credential envelope")
@@ -4498,10 +4527,10 @@ mod tests {
         );
     }
 
-    /// Verifies discovery excludes service routes that the exact credential has not verified.
-    /// 验证发现过程会排除当前精确凭据尚未验证的服务路由。
+    /// Verifies discovery projects every protocol route verified by the active Manifest.
+    /// 验证发现过程会投影活动 Manifest 验证的每条协议路由。
     #[tokio::test]
-    async fn discovery_projects_only_credential_verified_protocol_variants() {
+    async fn discovery_projects_all_manifest_verified_protocol_variants() {
         // registry supplies the signed multi-protocol OpenRouter entry.
         // registry 提供已签名的多协议 OpenRouter 入口。
         let registry = crate::ProviderRegistry::first_batch().expect("provider registry");
@@ -4529,8 +4558,8 @@ mod tests {
         ])
         .await;
         entry.base_url = origin;
-        // connection verifies only Responses even though the service entry exposes three routes.
-        // connection 只验证 Responses，尽管服务入口公开了三条路由。
+        // connection owns credentials only; it carries no protocol state.
+        // connection 只持有凭据，不携带协议状态。
         let connection = CredentialConnection {
             id: String::from("openrouter-responses-only-account"),
             provider_id: String::from("openrouter"),
@@ -4542,10 +4571,7 @@ mod tests {
             secret_reference: String::from("secret"),
             management_secret_reference: None,
             service_origin_override: None,
-            verified_protocols: BTreeSet::from([String::from(OPENAI_RESPONSES_PROFILE_ID)]),
-            selected_protocol: OPENAI_RESPONSES_PROFILE_ID.to_string(),
             prompt_cache_by_protocol: BTreeMap::new(),
-            usage_scope_override: None,
         };
         // secret is confined to the local fixture request boundary.
         // secret 被限制在本地夹具请求边界内。
@@ -4554,8 +4580,8 @@ mod tests {
             .execution_secret()
             .expect("test execution secret");
 
-        // catalog must contain no variant for an account-unverified protocol.
-        // catalog 不得包含当前账号未验证协议的任何变体。
+        // catalog contains one variant for every Manifest-verified service route.
+        // catalog 为每条 Manifest 已验证服务路由包含一个变体。
         let catalog = HttpProviderMetadataClient::new(reqwest::Client::new())
             .discover_models(&provider, &entry, &connection, &secret, None, 8)
             .await
@@ -4572,7 +4598,11 @@ mod tests {
             .expect("credential-visible model should exist");
         assert_eq!(
             model.protocol_variants.keys().cloned().collect::<Vec<_>>(),
-            vec![String::from(OPENAI_RESPONSES_PROFILE_ID)],
+            vec![
+                String::from(ANTHROPIC_MESSAGES_PROFILE_ID),
+                String::from(OPENAI_CHAT_PROFILE_ID),
+                String::from(OPENAI_RESPONSES_PROFILE_ID),
+            ],
         );
     }
 
@@ -4648,12 +4678,6 @@ mod tests {
         responses_route.model_discovery_path = Some(String::from("/models"));
         responses_route.base_url_override = Some(openai_origin.clone());
 
-        let routes = entry
-            .protocol_routes
-            .iter()
-            .filter(|route| route.verified)
-            .map(|route| route.protocol_profile_id.clone())
-            .collect::<Vec<_>>();
         let connection = CredentialConnection {
             id: String::from("openrouter-account"),
             provider_id: String::from("openrouter"),
@@ -4665,10 +4689,7 @@ mod tests {
             secret_reference: String::from("secret"),
             management_secret_reference: None,
             service_origin_override: None,
-            verified_protocols: routes.iter().cloned().collect(),
-            selected_protocol: OPENAI_CHAT_PROFILE_ID.to_string(),
             prompt_cache_by_protocol: BTreeMap::new(),
-            usage_scope_override: None,
         };
         let secret = CredentialSecretEnvelope::new_api_key(String::from("test-key"))
             .expect("test credential envelope")

@@ -27,9 +27,6 @@ pub enum ModelProtocolBindingSource {
     /// Auto-resolved custom provider default at a configuration activation boundary.
     /// 配置激活边界自动解析的自定义供应商默认。
     CustomAutoDefault,
-    /// Migrated legacy custom-provider binding; never injected into system resolution.
-    /// 迁移的旧版自定义供应商绑定；绝不注入系统解析链。
-    MigratedCustomLegacy,
 }
 
 /// One immutable model-level protocol binding.
@@ -299,11 +296,8 @@ pub fn resolve_custom_model_protocol_binding(
             });
         }
     }
-    // A single enabled protocol produces the unique provider default with no selector (plan
-    // §13.3.1). Descriptor-only legacy data has no trustworthy per-model provenance, while
-    // MigratedCustomLegacy remains reserved for migrations that carry exact model evidence.
-    // 单一启用协议直接产生唯一供应商默认且不显示选择器（方案 §13.3.1）。仅描述符旧数据不含
-    // 可信逐模型来源；MigratedCustomLegacy 保留给携带精确模型证据的迁移。
+    // A single enabled protocol produces the unique provider default with no selector.
+    // 单一启用协议直接产生唯一供应商默认且不显示选择器。
     if enabled.len() == 1 {
         let only_protocol = *enabled.iter().next().expect("non-empty set");
         if !available.contains(only_protocol) {
@@ -400,7 +394,7 @@ mod tests {
     #[test]
     fn credential_scoped_rule_outranks_global_rule() {
         let text = r#"{
-            "schema_version": "vulcan.provider-manifest.v1",
+            "schema_version": "vulcan.provider-manifest.v2",
             "provider_id": "probe-provider",
             "revision": 1,
             "published_at": "2026-08-07T00:00:00Z",

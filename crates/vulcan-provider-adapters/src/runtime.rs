@@ -878,9 +878,6 @@ struct ResolvedProviderGeneration {
     /// Immutable discovery catalogs paired with this activation for source-presence decisions.
     /// 与本次激活配对、用于判断来源是否存在的不可变发现目录。
     source_catalogs: RuntimeConnectionCatalogs,
-    /// Legacy or manually installed catalogs paired with this activation as a closed fallback.
-    /// 与本次激活配对、作为封闭回退的旧版或手工安装目录。
-    fallback_catalogs: RuntimeConnectionCatalogs,
     /// Account usage facts that influenced plan-scoped model membership at this activation.
     /// 在本次激活中影响套餐作用域模型成员关系的账号用量事实。
     usage_cache: BTreeMap<String, AccountUsageSnapshot>,
@@ -1141,9 +1138,9 @@ fn validate_responses_compact_execution_route(
 ///
 /// # Returns
 /// 返回值
-/// A manual model's declared default, then the selected manifest default, or the provider-neutral
-/// enabled default when no manifest exists.
-/// 依次返回手工模型声明默认值、所选 Manifest 默认值；无 Manifest 时返回供应商无关的启用默认值。
+/// A manual model's declared default, then the selected manifest default. Undeclared models fail
+/// closed when no manifest exists.
+/// 依次返回手工模型声明默认值、所选 Manifest 默认值；无 Manifest 时未声明模型失败关闭。
 fn runtime_model_default_enabled_from_manifest(
     configuration: &PersistedAiConfiguration,
     provider_id: &str,
@@ -1156,7 +1153,7 @@ fn runtime_model_default_enabled_from_manifest(
         .custom_model(provider_id, model_id)
         .map_or_else(
             || {
-                manifest.is_none_or(|manifest| {
+                manifest.is_some_and(|manifest| {
                     crate::provider_manifest::manifest_default_enabled(
                         manifest,
                         service_entry_id,
@@ -1181,9 +1178,9 @@ fn runtime_model_default_enabled_from_manifest(
 ///
 /// # Returns
 /// 返回值
-/// Explicit user/manual-model ownership first, then the selected manifest default; providers
-/// without a manifest inherit the provider-neutral enabled default.
-/// 依次返回显式用户/手工模型所有权与所选清单默认值；无清单供应商继承供应商无关的启用默认值。
+/// Explicit user/manual-model ownership first, then the selected manifest default. Undeclared
+/// models fail closed when no manifest exists.
+/// 依次返回显式用户/手工模型所有权与所选清单默认值；无 Manifest 时未声明模型失败关闭。
 fn runtime_model_is_enabled_from_manifest(
     configuration: &PersistedAiConfiguration,
     provider_id: &str,
@@ -1363,10 +1360,7 @@ fn runtime_configuration_for_manifest_catalog(
     let isolated_system_provider_ids = manifests
         .bundled_failures
         .keys()
-        .filter(|provider_id| {
-            manifests.manifest(provider_id.as_str()).is_none()
-                && !crate::is_legacy_fallback_provider(provider_id.as_str())
-        })
+        .filter(|provider_id| manifests.manifest(provider_id.as_str()).is_none())
         .cloned()
         .collect::<BTreeSet<_>>();
     // customProjection first removes standalone custom failures using their persisted authority.
@@ -1380,31 +1374,17 @@ fn runtime_configuration_for_manifest_catalog(
 ///
 /// # Parameters
 /// 参数
-/// `generation` owns activated catalogs plus the closed legacy/manual fallback inputs captured
-/// at the same activation boundary.
-/// `generation` 持有在同一激活边界捕获的已激活目录及封闭旧版/手工回退输入。
+/// `generation` owns the exact activated catalogs captured at the same activation boundary.
+/// `generation` 持有在同一激活边界捕获的精确已激活目录。
 ///
 /// # Returns
 /// 返回值
-/// A connection catalog map that applies the same source-aware fallback rule as request selection.
-/// 返回一份应用与请求选择相同来源感知回退规则的连接目录映射。
+/// The exact activated connection catalog map.
+/// 返回精确的已激活连接目录映射。
 fn effective_catalog_snapshot_from_generation(
     generation: &ResolvedProviderGeneration,
 ) -> BTreeMap<String, ConnectionModelCatalog> {
-    // effective_catalogs starts from the catalogs explicitly frozen at activation.
-    // effective_catalogs 从激活时显式冻结的目录开始构建。
-    let mut effective_catalogs = generation.activated_effective_catalogs.snapshot();
-    for (connection_id, catalog) in generation.fallback_catalogs.snapshot() {
-        if !effective_catalogs.contains_key(connection_id.as_str())
-            && generation
-                .source_catalogs
-                .get(connection_id.as_str())
-                .is_none()
-        {
-            effective_catalogs.insert(connection_id, catalog);
-        }
-    }
-    effective_catalogs
+    generation.activated_effective_catalogs.snapshot()
 }
 
 /// Stable schema marker for a source catalog that contains only user-managed manual identities.
@@ -1423,11 +1403,10 @@ const MANUAL_MODEL_CATALOG_SCHEMA_REVISION: &str = "manual.models.v1";
 ///
 /// # Returns
 /// 返回值
-/// The explicit Manifest policy, or the closed custom-provider policy derived from its declared
-/// discovery mode. The explicit APIKEY.FUN allowlist retains its code-owned discovery contract;
-/// every other missing non-custom authority fails closed.
-/// 返回显式 Manifest 策略，或从自定义供应商已声明发现模式派生的封闭策略；缺少非自定义
-/// 权威时，仅显式 APIKEY.FUN 允许名单保留代码持有的发现契约，其他情况失败关闭。
+/// Returns the explicit Manifest policy or the closed custom-provider policy derived from its
+/// declared discovery mode. A missing non-custom authority fails closed.
+/// 返回显式 Manifest 策略，或从自定义供应商已声明发现模式派生的封闭策略；
+/// 缺失的非自定义权威一律失败关闭。
 fn resolved_model_source_policy(
     configuration: &PersistedAiConfiguration,
     provider_id: &str,
@@ -1436,27 +1415,6 @@ fn resolved_model_source_policy(
 ) -> Result<ModelSourcePolicy, String> {
     if let Some(manifest) = manifest {
         return manifest.model_source_policy(service_entry_id);
-    }
-    if crate::is_legacy_fallback_provider(provider_id) {
-        // legacyProvider is the sole code-owned descriptor explicitly retained until the user
-        // supplies APIKEY.FUN's authoritative model mapping.
-        // legacyProvider 是在用户提供 APIKEY.FUN 权威模型映射前显式保留的唯一代码持有描述。
-        let legacy_provider = crate::providers::apikeyfun_descriptor();
-        let entry = legacy_provider
-            .service_entries
-            .iter()
-            .find(|entry| entry.id == service_entry_id)
-            .ok_or_else(|| {
-                format!(
-                    "Legacy provider `{provider_id}` has no service entry `{service_entry_id}`."
-                )
-            })?;
-        return match entry.model_discovery {
-            ModelDiscoveryKind::OpenAi => Ok(ModelSourcePolicy::DiscoveryOnly),
-            discovery => Err(format!(
-                "Legacy provider `{provider_id}` service entry `{service_entry_id}` uses unsupported discovery contract `{discovery:?}`."
-            )),
-        };
     }
     let entry = resolve_custom_model_service_entry(configuration, provider_id, service_entry_id)?;
     // Custom providers may declare a distinct discovery contract per protocol route. The source
@@ -2257,7 +2215,6 @@ impl PublicAiRuntime {
                 manifests: initial_manifest_generation,
                 activated_effective_catalogs: RuntimeConnectionCatalogs::default(),
                 source_catalogs: RuntimeConnectionCatalogs::default(),
-                fallback_catalogs: RuntimeConnectionCatalogs::default(),
                 usage_cache: BTreeMap::new(),
             })));
         Ok(Self {
@@ -3223,18 +3180,13 @@ impl PublicAiRuntime {
         provider_id: &str,
         model_id: &str,
     ) -> bool {
-        // manifest retains one published default snapshot for this complete lookup and is absent
-        // for the explicit legacy fallback allowlist.
-        // manifest 为本次完整查询保留一份已发布默认值快照；显式旧版回退允许名单不使用该快照。
+        // manifest retains one published default snapshot for this complete lookup.
+        // manifest 为本次完整查询保留一份已发布默认值快照。
         let manifest = self
             .resolved_provider_generation
             .read()
             .ok()
-            .and_then(|generation| {
-                (!crate::registry::is_legacy_fallback_provider(provider_id))
-                    .then(|| generation.manifests.manifest_arc(provider_id))
-                    .flatten()
-            });
+            .and_then(|generation| generation.manifests.manifest_arc(provider_id));
         // scoped_default aggregates all concrete route scopes without relying on map order.
         // scoped_default 不依赖 Map 顺序地聚合全部具体路由作用域。
         let scoped_default = configuration
@@ -3322,14 +3274,9 @@ impl PublicAiRuntime {
             .get(connection_id)
             .ok_or_else(|| format!("Connection `{connection_id}` is not configured."))?;
         let generation = self.selection_catalog_snapshot()?;
-        let manifest =
-            if crate::registry::is_legacy_fallback_provider(connection.provider_id.as_str()) {
-                None
-            } else {
-                generation
-                    .manifests
-                    .manifest(connection.provider_id.as_str())
-            };
+        let manifest = generation
+            .manifests
+            .manifest(connection.provider_id.as_str());
         Ok(runtime_model_is_enabled_from_manifest(
             configuration,
             connection.provider_id.as_str(),
@@ -3352,8 +3299,8 @@ impl PublicAiRuntime {
     /// # Returns
     /// 返回值
     /// Explicit user/manual-model state wins, then the currently published manifest default;
-    /// providers without a manifest inherit the provider-neutral enabled default.
-    /// 显式用户/手工模型状态优先；其次采用当前已发布清单默认值；无清单供应商继承供应商无关的启用默认值。
+    /// undeclared models without a manifest fail closed.
+    /// 显式用户/手工模型状态优先；其次采用当前已发布清单默认值；无 Manifest 的未声明模型失败关闭。
     pub fn model_is_enabled(
         &self,
         configuration: &PersistedAiConfiguration,
@@ -4585,20 +4532,15 @@ impl PublicAiRuntime {
                     crate::AccountUsageQueryKind::KimiCodingPlan
                 )
             });
-        // remoteDiscoveryEnabled requires a remote implementation authorized by both the signed
-        // source policy and this exact credential; no error path can enable it later.
-        // remoteDiscoveryEnabled 要求远端实现同时获得签名来源策略与当前精确凭据授权；
-        // 任何错误路径都不能再启用它。
+        // remoteDiscoveryEnabled requires a remote implementation authorized by the source policy
+        // and the active Manifest route set. Credential records never own protocol authority.
+        // remoteDiscoveryEnabled 要求远端实现同时获得来源策略与活动 Manifest 路由集合授权；
+        // 凭据记录永远不持有协议权威。
         let remote_discovery_enabled = source_policy.includes_discovery()
             && entry
                 .protocol_routes
                 .iter()
-                .filter(|route| {
-                    route.verified
-                        && connection
-                            .verified_protocols
-                            .contains(route.protocol_profile_id.as_str())
-                })
+                .filter(|route| crate::client::route_is_available_for_discovery(route))
                 .any(|route| {
                     model_discovery_is_remote(route.resolved_model_discovery(entry.model_discovery))
                 });
@@ -4932,7 +4874,7 @@ impl PublicAiRuntime {
             system_manifests.as_ref(),
             current_manifests.as_ref(),
         )?;
-        let mut effective = self.resolve_model_catalog_overlays_with_manifests(
+        let effective = self.resolve_model_catalog_overlays_with_manifests(
             runtime_configuration,
             manifests.as_ref(),
         )?;
@@ -4941,52 +4883,6 @@ impl PublicAiRuntime {
             .read()
             .map_err(|_| String::from("The source AI model catalog lock is poisoned."))?
             .clone();
-        let fallback_catalogs = self
-            .catalogs
-            .read()
-            .map_err(|_| String::from("The AI model catalog lock is poisoned."))?
-            .snapshot();
-        // Source-less legacy and explicitly installed manual catalogs are already complete
-        // effective snapshots. Preserve only entries the immutable source projection cannot
-        // rebuild, so mixed modern/legacy workspaces publish one complete generation.
-        // 无来源的旧版目录与显式安装的手工目录已经是完整有效快照。仅保留不可变来源投影
-        // 无法重建的条目，使现代/旧版混合工作区发布一个完整代际。
-        for (connection_id, catalog) in fallback_catalogs {
-            // policyManaged is true for every Manifest/custom entry whose source policy must be
-            // re-evaluated; preserving an old catalog would bypass a newly restrictive policy.
-            // policyManaged 对每个必须重新求值来源策略的 Manifest/自定义入口为 true；保留旧目录
-            // 会绕过新收紧的策略。
-            let policy_managed = runtime_configuration
-                .connection_graph
-                .connections
-                .get(connection_id.as_str())
-                .is_some_and(|connection| {
-                    manifests
-                        .manifest(connection.provider_id.as_str())
-                        .is_some()
-                        || runtime_configuration
-                            .custom_providers
-                            .contains_key(connection.provider_id.as_str())
-                });
-            // isolatedCustomProvider prevents a pre-failure legacy catalog from surviving as an
-            // undeclared executable fallback after its standalone authority becomes invalid.
-            // isolatedCustomProvider 防止独立权威失效后，失败前的旧目录作为未声明可执行回退继续存在。
-            let isolated_custom_provider = runtime_configuration
-                .connection_graph
-                .connections
-                .get(connection_id.as_str())
-                .is_some_and(|connection| {
-                    runtime_configuration
-                        .custom_provider_manifest_is_isolated(connection.provider_id.as_str())
-                });
-            if effective.get(connection_id.as_str()).is_none()
-                && source_catalogs.get(connection_id.as_str()).is_none()
-                && !policy_managed
-                && !isolated_custom_provider
-            {
-                effective.replace(catalog);
-            }
-        }
         // publishedRevision is proven before any runtime field changes so exhaustion cannot
         // leave a partially installed configuration/catalog image.
         // publishedRevision 在任何运行时字段改变前完成证明，避免耗尽错误留下部分安装的
@@ -5003,7 +4899,6 @@ impl PublicAiRuntime {
             manifests,
             activated_effective_catalogs: effective.clone(),
             source_catalogs,
-            fallback_catalogs: effective.clone(),
             usage_cache,
         });
         // Every fallible write guard is acquired before the first assignment. The immutable
@@ -5588,19 +5483,12 @@ impl PublicAiRuntime {
             else {
                 continue;
             };
-            // effectiveProtocolId mirrors request selection: frozen model bindings are
-            // authoritative, while only the explicit legacy-system allowlist may retain the
-            // connection protocol until its model mappings are supplied.
-            // effectiveProtocolId 镜像请求选择：冻结的模型绑定具有权威性；只有显式旧版系统
-            // 允许名单可在模型映射补齐前继续保留连接协议。
+            // effectiveProtocolId mirrors request selection and accepts only frozen model bindings.
+            // effectiveProtocolId 镜像请求选择，并且只接受冻结的模型绑定。
             let effective_protocol_id = model
                 .resolved_protocol_binding
                 .as_ref()
-                .map(|binding| binding.protocol_profile_id.as_str())
-                .or_else(|| {
-                    crate::registry::is_legacy_fallback_provider(provider_id)
-                        .then_some(connection.selected_protocol.as_str())
-                });
+                .map(|binding| binding.protocol_profile_id.as_str());
             if effective_protocol_id != Some(protocol_id) {
                 continue;
             }
@@ -7903,16 +7791,6 @@ impl PublicAiRuntime {
         let generation = self.selection_catalog_snapshot()?;
         let configuration = generation.configuration.as_ref();
         let mut eligible_catalogs = generation.activated_effective_catalogs.snapshot();
-        for (connection_id, catalog) in generation.fallback_catalogs.snapshot() {
-            if !eligible_catalogs.contains_key(connection_id.as_str())
-                && generation
-                    .source_catalogs
-                    .get(connection_id.as_str())
-                    .is_none()
-            {
-                eligible_catalogs.insert(connection_id, catalog);
-            }
-        }
         eligible_catalogs.retain(|connection_id, _| {
             !configuration.connection_is_pending_validation(connection_id.as_str())
         });
@@ -7992,15 +7870,15 @@ impl PublicAiRuntime {
     /// 返回操作与账号用途范围均已显式授权的不可变选择。
     pub fn resolve_internal_inference_selection(
         &self,
-        _configuration: &PersistedAiConfiguration,
+        configuration: &PersistedAiConfiguration,
         inference_route: &InferenceRouteConfiguration,
     ) -> Result<ResolvedPublicAiSelection, String> {
         // generation freezes every internal-inference authorization input.
         // generation 冻结每项内部推理授权输入。
         let generation = self.selection_catalog_snapshot()?;
-        // configuration belongs to the same immutable generation as model membership and routes.
-        // configuration 与模型成员关系及路由属于同一不变代际。
-        let configuration = generation.configuration.as_ref();
+        // The caller-owned configuration permits validation of one exact pending settings
+        // transaction, while model membership and protocol routes remain frozen by generation.
+        // 调用方持有的配置允许校验一个精确的待提交设置事务；模型成员关系与协议路由仍由代际冻结。
         let connection = configuration
             .connection_graph
             .connections
@@ -8030,14 +7908,10 @@ impl PublicAiRuntime {
             Some(inference_route.operation),
             Arc::clone(&generation),
         )?;
-        let usage_scopes = selection
-            .route
-            .entry
-            .effective_usage_scopes(&selection.route.connection)?;
-        if !usage_scopes.contains(&inference_route.usage_scope) {
+        if inference_route.usage_scope == InferenceUsageScope::InteractiveAgent {
             return Err(format!(
-                "Credential connection `{}` does not authorize usage scope `{:?}`.",
-                inference_route.connection_id, inference_route.usage_scope
+                "Internal inference connection `{}` cannot use the interactive-agent scope.",
+                inference_route.connection_id
             ));
         }
         match (&inference_route.binding, inference_route.operation) {
@@ -8348,38 +8222,24 @@ impl PublicAiRuntime {
         // manifest, source, or model catalogs (plan F3).
         // 调用方在账号选择前已捕获该不可变 Arc。热更新可并发发布新代际，但下方任何决策
         // 都不会重新读取可变 Manifest、来源目录或模型目录（方案 F3）。
-        if let Some(operation) = required_internal_operation {
-            if !configuration.internal_model_is_enabled(provider_id, model_id, operation) {
-                return Err(format!(
-                    "Model `{model_id}` is disabled for internal operation `{}` on provider `{provider_id}`.",
-                    operation.as_str()
-                ));
-            }
-        } else if !runtime_model_is_enabled_from_manifest(
-            configuration,
-            provider_id,
-            connection.service_entry_id.as_str(),
-            Some(connection.credential_profile_id.as_str()),
-            model_id,
-            if crate::registry::is_legacy_fallback_provider(provider_id) {
-                None
-            } else {
-                catalog_snapshot.manifests.manifest(provider_id)
-            },
-        ) {
+        if required_internal_operation.is_none()
+            && !runtime_model_is_enabled_from_manifest(
+                configuration,
+                provider_id,
+                connection.service_entry_id.as_str(),
+                Some(connection.credential_profile_id.as_str()),
+                model_id,
+                catalog_snapshot.manifests.manifest(provider_id),
+            )
+        {
             return Err(format!(
                 "Model `{model_id}` is disabled for provider `{provider_id}`."
             ));
         }
         let (model, catalog_revision) = {
-            // Selections read the effective catalog frozen at the last explicit activation
-            // boundary first; unactivated configuration mutations stay invisible until the
-            // next activation. Catalogs without an activated snapshot fall back to the
-            // overlay rebuild, and legacy/manual catalogs without a source snapshot fall
-            // back to the mutable catalog (plan §R4.7/R4.8).
-            // 选择优先读取最近一次显式激活边界冻结的有效目录；未激活的配置变更在下次
-            // 激活前不可见。没有激活快照的目录回退覆盖重建，没有源快照的旧版/手工目录
-            // 回退可变目录（方案 §R4.7/R4.8）。
+            // Selections read only the effective catalog frozen at the last explicit activation
+            // boundary; unactivated configuration mutations and mutable catalogs stay invisible.
+            // 选择只读取最近一次显式激活边界冻结的有效目录；未激活配置变更与可变目录保持不可见。
             let activated = catalog_snapshot
                 .activated_effective_catalogs
                 .get(connection.id.as_str())
@@ -8396,16 +8256,12 @@ impl PublicAiRuntime {
                         connection.id
                     ));
                 }
-                None => catalog_snapshot
-                    .fallback_catalogs
-                    .get(connection.id.as_str())
-                    .cloned()
-                    .ok_or_else(|| {
-                        format!(
-                            "No published catalog exists for connection `{}`.",
-                            connection.id
-                        )
-                    })?,
+                None => {
+                    return Err(format!(
+                        "No activated catalog exists for connection `{}`.",
+                        connection.id
+                    ));
+                }
             };
             let model = catalog
                 .models
@@ -8439,21 +8295,36 @@ impl PublicAiRuntime {
                     connection.service_entry_id, provider.id
                 )
             })?;
+        if required_internal_operation.is_some() {
+            let default_internal_enabled = provider.default_internal_use_for_connections(
+                configuration
+                    .connection_graph
+                    .connections
+                    .values()
+                    .filter(|candidate| {
+                        candidate.provider_id == provider_id
+                            && !configuration
+                                .connection_is_pending_validation(candidate.id.as_str())
+                    }),
+            )?;
+            if !configuration.internal_model_is_enabled(
+                provider_id,
+                model_id,
+                default_internal_enabled,
+            ) {
+                return Err(format!(
+                    "Model `{model_id}` is disabled for non-conversation internal use on provider `{provider_id}`."
+                ));
+            }
+        }
         // Resolve the model-level protocol binding first; the same effective protocol then
         // drives capability projection, overrides, prompt cache, parameters, the execution
         // route, internal-inference checks, and route revision (plan §13.4).
         // 先解析模型级协议绑定；同一生效协议随后驱动能力投影、覆盖、提示词缓存、参数、
         // 执行路由、内部推理校验与路由修订（方案 §13.4）。
-        // A bundled presentation manifest must not silently acquire routing authority for an
-        // explicitly legacy provider. APIKEY.FUN remains on its verified legacy route until an
-        // authoritative per-model mapping is supplied and deliberately activated.
-        // 内置展示清单不得为显式旧版供应商静默取得路由权威。APIKEY.FUN 在权威逐模型映射
-        // 提供并被明确激活前，始终保留已验证的旧版路由。
-        let active_manifest = if crate::registry::is_legacy_fallback_provider(provider_id) {
-            None
-        } else {
-            catalog_snapshot.manifests.manifest_arc(provider_id)
-        };
+        // activeManifest is the only system routing authority for this frozen generation.
+        // activeManifest 是当前冻结代际的唯一系统路由权威。
+        let active_manifest = catalog_snapshot.manifests.manifest_arc(provider_id);
         let protocol_binding = match provider.kind {
             crate::ProviderKind::System => match &active_manifest {
                 Some(manifest) => {
@@ -8476,20 +8347,12 @@ impl PublicAiRuntime {
                             manifest.revision
                         ));
                     }
-                    Some(binding)
+                    binding
                 }
                 None => {
-                    // System providers outside the explicit legacy allowlist must fail closed when
-                    // their manifest is missing; the old connection protocol is never an authority
-                    // for the system resolver (plan §13.1).
-                    // 显式旧版允许名单之外的系统供应商在清单缺失时必须失败封闭；
-                    // 旧连接协议绝不对系统解析器构成权威（方案 §13.1）。
-                    if !crate::registry::is_legacy_fallback_provider(provider_id) {
-                        return Err(format!(
-                            "Provider `{provider_id}` has no active system manifest; model `{model_id}` execution is blocked."
-                        ));
-                    }
-                    None
+                    return Err(format!(
+                        "Provider `{provider_id}` has no active system manifest; model `{model_id}` execution is blocked."
+                    ));
                 }
             },
             crate::ProviderKind::Custom => {
@@ -8503,51 +8366,43 @@ impl PublicAiRuntime {
                         "Custom model `{model_id}` has no protocol binding frozen at the active catalog boundary; save a valid model protocol preference and reactivate the provider catalog."
                     )
                 })?;
-                // A standalone custom Manifest owns the binding revision exactly. Revision zero
-                // is accepted only for the descriptor-only compatibility path before migration.
-                // 独立自定义 Manifest 精确持有绑定修订；修订零仅允许用于迁移前的仅描述符兼容路径。
+                // A standalone custom Manifest owns the binding revision exactly.
+                // 独立自定义 Manifest 精确持有绑定修订。
                 // sourceIsCustom rejects system authority from the custom execution branch.
                 // sourceIsCustom 拒绝系统权威进入自定义执行分支。
                 let source_is_custom = matches!(
                     binding.source,
                     crate::provider_manifest::ModelProtocolBindingSource::CustomUser
                         | crate::provider_manifest::ModelProtocolBindingSource::CustomAutoDefault
-                        | crate::provider_manifest::ModelProtocolBindingSource::MigratedCustomLegacy
                 );
                 // revisionIsCurrent proves the binding belongs to the same activated contract.
                 // revisionIsCurrent 证明绑定属于同一份已激活契约。
                 let revision_is_current = active_manifest
                     .as_ref()
-                    .map(|manifest| binding.manifest_revision == manifest.revision)
-                    .unwrap_or(binding.manifest_revision == 0);
+                    .is_some_and(|manifest| binding.manifest_revision == manifest.revision);
                 if !source_is_custom || !revision_is_current {
                     return Err(format!(
                         "Custom model `{model_id}` frozen binding does not belong to the active custom manifest revision."
                     ));
                 }
-                Some(binding)
+                binding
             }
         };
-        // Project the effective binding's per-protocol variant onto the compatibility
-        // capability fields; the top-level projection is never an authority for guessing
-        // the protocol (plan §13.1/§13.4). A system-manifest binding must prove its exact
-        // protocol variant unconditionally; an empty variant map is never a compatibility
-        // bypass (plan §R5.1). Custom bindings are frozen with their exact variant at catalog
-        // activation; only the explicit unbound legacy provider path has no binding.
-        // 将生效绑定的按协议变体投影到兼容能力字段；顶层投影绝不用于猜测协议（方案 §13.1/§13.4）。
-        // 系统清单绑定无条件要求其精确协议变体；空变体映射绝不是兼容绕过（方案 §R5.1）。
-        // 自定义绑定在目录激活时冻结其精确变体；只有显式无绑定旧版供应商路径没有绑定。
+        // Project the effective binding's per-protocol variant onto the effective capability
+        // fields; the top-level projection is never an authority for guessing the protocol.
+        // 将生效绑定的按协议变体投影到有效能力字段；顶层投影绝不用于猜测协议。
         let mut model = model;
-        if let Some(binding) = &protocol_binding {
-            if let Some(variant) = model.protocol_variants.get(&binding.protocol_profile_id) {
-                model.capabilities = variant.capabilities.clone();
-                model.capability_evidence = variant.capability_evidence.clone();
-            } else {
-                return Err(format!(
-                    "Model `{model_id}` has no capability variant for its bound protocol `{}`; execution is blocked.",
-                    binding.protocol_profile_id
-                ));
-            }
+        if let Some(variant) = model
+            .protocol_variants
+            .get(&protocol_binding.protocol_profile_id)
+        {
+            model.capabilities = variant.capabilities.clone();
+            model.capability_evidence = variant.capability_evidence.clone();
+        } else {
+            return Err(format!(
+                "Model `{model_id}` has no capability variant for its bound protocol `{}`; execution is blocked.",
+                protocol_binding.protocol_profile_id
+            ));
         }
         // The protocol variant is the per-route capability authority, but persisted user
         // capability overrides are the highest layer and must win over the projection
@@ -8583,34 +8438,9 @@ impl PublicAiRuntime {
                 "Model `{model_id}` does not expose bidirectional text conversation."
             ));
         }
-        // Only the explicit legacy system allowlist may execute without a model-level binding.
-        // 只有显式旧版系统允许名单可在没有模型级绑定时执行。
-        let effective_protocol_id = match protocol_binding.as_ref() {
-            Some(binding) => binding.protocol_profile_id.as_str(),
-            None if crate::registry::is_legacy_fallback_provider(provider_id) => {
-                connection.selected_protocol.as_str()
-            }
-            None => {
-                return Err(format!(
-                    "Provider `{provider_id}` model `{model_id}` has no active protocol binding."
-                ));
-            }
-        };
-        // routeConnection projects a signed system-manifest binding into the immutable request
-        // snapshot. Persisted verified_protocols is creation-time compatibility state and may not
-        // contain a protocol introduced by a later hot manifest; it must not override the current
-        // signed per-model route. Custom and explicit legacy routes retain their persisted set.
-        // routeConnection 把签名系统 Manifest 绑定投影进不可变请求快照。持久化
-        // verified_protocols 是创建时兼容状态，可能不含后续热更新 Manifest 新增的协议；它
-        // 不能覆盖当前签名模型级路由。自定义与显式旧版路由仍保留其持久化集合。
-        let mut route_connection = connection.clone();
-        if protocol_binding.as_ref().is_some_and(|binding| {
-            binding.source == crate::provider_manifest::ModelProtocolBindingSource::SystemManifest
-        }) {
-            route_connection
-                .verified_protocols
-                .insert(effective_protocol_id.to_string());
-        }
+        // Every executable model owns one active model-level protocol binding.
+        // 每个可执行模型都持有一项活动的模型级协议绑定。
+        let effective_protocol_id = protocol_binding.protocol_profile_id.as_str();
         let override_key = PersistedAiConfiguration::provider_model_protocol_key(
             connection.provider_id.as_str(),
             model.id.as_str(),
@@ -8641,7 +8471,7 @@ impl PublicAiRuntime {
         let mut route = ProviderExecutionRoute::resolve(
             provider,
             entry.clone(),
-            route_connection,
+            connection.clone(),
             secondary_route,
             effective_protocol_id,
         )
@@ -8700,10 +8530,7 @@ impl PublicAiRuntime {
         let route_revision = provider_execution_route_revision(&route, &model, &overrides)?;
         // The execution route carries the same immutable identity used by media-cache isolation.
         // 执行路由携带与媒体缓存隔离相同的不可变身份。
-        route.manifest_revision = protocol_binding
-            .as_ref()
-            .map(|binding| binding.manifest_revision)
-            .unwrap_or(0);
+        route.manifest_revision = protocol_binding.manifest_revision;
         route.manifest_generation = catalog_snapshot.manifests.generation;
         route.route_revision = route_revision.clone();
         Ok(ResolvedPublicAiSelection {
@@ -9311,7 +9138,6 @@ fn apply_model_catalog_overlays(
             id: provider_id.to_string(),
             display_name: String::from("Catalog Overlay Fixture"),
             base_url: String::from("https://fixture.example.test/v1"),
-            protocol: None,
             protocols: vec![crate::CustomProviderProtocol::OpenAiChat],
             authentication: crate::CustomProviderAuthentication::BearerAuthorization,
             model_discovery_mode: discovery_mode,
@@ -9612,10 +9438,10 @@ fn apply_model_catalog_overlays_with_account_plan(
         }
     }
     // custom_baseline is deliberately protocol-neutral. Exact protocol behavior is applied only
-    // to per-protocol variants below, then the frozen model binding projects one variant back to
-    // the compatibility view. A connection compatibility anchor is never capability authority.
+    // to per-protocol variants below, then the frozen model binding projects one variant into the
+    // effective model view. Connection credentials never carry protocol authority.
     // custom_baseline 有意保持协议中立。下方只对逐协议变体应用精确协议行为，再由冻结模型绑定
-    // 把唯一变体投影回兼容视图；连接兼容锚点绝不是能力权威。
+    // 把唯一变体投影到有效模型视图；连接凭据绝不携带协议权威。
     let custom_baseline =
         custom_provider.then(|| custom_provider_system_baseline_for_protocol(None));
     // custom_provider_settings is the optional user-owned provider layer above catalog declarations.
@@ -9742,9 +9568,9 @@ fn apply_model_catalog_overlays_with_account_plan(
                     &mut discovered_model.capabilities,
                 );
                 // Manual advanced fields are an allowed post-Manifest user layer and therefore
-                // must reach every executable protocol variant, not only the compatibility view.
+                // must reach every executable protocol variant, not only the effective view.
                 // 手工高级字段是允许的 Manifest 后用户层，因此必须进入每个可执行协议变体，
-                // 而不是只修改兼容视图。
+                // 而不是只修改有效视图。
                 for variant in discovered_model.protocol_variants.values_mut() {
                     apply_custom_model_advanced_declaration(
                         &definition.capabilities,
@@ -9977,9 +9803,7 @@ fn apply_model_catalog_overlays_with_account_plan(
             catalog.generation,
             &mut catalog.models,
         )?;
-    } else if let Some(manifest) = manifest
-        && !crate::registry::is_legacy_fallback_provider(provider_id)
-    {
+    } else if let Some(manifest) = manifest {
         let connection = configuration
             .connection_graph
             .connections
@@ -10008,9 +9832,9 @@ fn apply_model_catalog_overlays_with_account_plan(
                     .contains(&AiOperation::ConversationRespond)
         });
     }
-    // Validate request projection against the effective binding compatibility view after binding
+    // Validate request projection against the effective bound-model view after binding
     // freeze, so a projection cannot be accepted using another protocol's capabilities.
-    // 在绑定冻结后依据生效绑定兼容视图校验请求投影，避免使用另一协议能力错误放行投影。
+    // 在绑定冻结后依据有效绑定模型视图校验请求投影，避免使用另一协议能力错误放行投影。
     for model in &catalog.models {
         let manifest_managed_unbound =
             (custom_provider || manifest.is_some()) && model.resolved_protocol_binding.is_none();
@@ -10245,10 +10069,10 @@ fn project_frozen_model_binding_compatibility(model: &mut ConnectionModel) -> Re
         .protocol_variants
         .get(binding.protocol_profile_id.as_str())
     else {
-        // A discovery mismatch blocks only this model. Clearing the compatibility view prevents
+        // A discovery mismatch blocks only this model. Clearing the effective view prevents
         // workbench admission while preserving the frozen binding and observed variants for the
         // model-level status explanation.
-        // 发现不一致只阻止当前模型。清空兼容视图可阻止工作台准入，同时保留冻结绑定与已观测
+        // 发现不一致只阻止当前模型。清空有效视图可阻止工作台准入，同时保留冻结绑定与已观测
         // 变体，用于模型级状态解释。
         model.capabilities = ModelCapabilities::default();
         model.capability_evidence = ModelCapabilityEvidence::default();
@@ -10680,13 +10504,13 @@ fn provider_execution_route_revision(
         &canonical_origin_policy,
         &route.entry.native_inference_bindings,
         route.entry.request_projector,
-        &route.entry.allowed_usage_scopes,
+        &route.entry.default_usage_scopes,
     );
     // connectionExecutionIdentity retains credential, origin, and authorization ownership while
-    // excluding the account label, management-only secret, compatibility protocol anchor, and
-    // policies already resolved into `overrides`.
-    // connectionExecutionIdentity 保留凭据、源地址与授权归属，同时排除账号标签、仅管理秘密、
-    // 兼容协议锚点，以及已解析进 `overrides` 的策略。
+    // excluding the account label, management-only secret, and policies already resolved into
+    // `overrides`.
+    // connectionExecutionIdentity 保留凭据、源地址与授权归属，同时排除账号标签、仅管理秘密，
+    // 以及已解析进 `overrides` 的策略。
     let connection_execution_identity = (
         &route.connection.id,
         &route.connection.provider_id,
@@ -10696,7 +10520,6 @@ fn provider_execution_route_revision(
         &route.connection.credential_id,
         &route.connection.secret_reference,
         &route.connection.service_origin_override,
-        &route.connection.usage_scope_override,
     );
     // modelExecutionIdentity contains the only model facts read during request construction and
     // response normalization. Display labels, discovery evidence, other protocol variants, and
@@ -10749,12 +10572,9 @@ pub struct ResolvedPublicAiSelection {
     /// Provider-manifest catalog generation frozen with this selection.
     /// 与此选择一同冻结的供应商清单目录代数。
     pub manifest_generation: u64,
-    /// Model-level protocol binding that produced this selection; `None` is reserved for the
-    /// explicit legacy-provider allowlist whose audited compatibility route remains connection
-    /// anchored until authoritative per-model mappings are activated.
-    /// 产生此选择的模型级协议绑定；`None` 仅保留给显式旧版供应商允许名单，这些供应商在权威
-    /// 逐模型映射激活前继续使用已审计的连接兼容路由。
-    pub protocol_binding: Option<crate::provider_manifest::ModelProtocolBinding>,
+    /// Model-level protocol binding that produced this selection.
+    /// 产生此选择的模型级协议绑定。
+    pub protocol_binding: crate::provider_manifest::ModelProtocolBinding,
     /// Content-addressed revision of the exact LLM route and request projection snapshot.
     /// 精确 LLM 路由与请求投影快照的内容寻址修订号。
     pub route_revision: String,
@@ -10777,7 +10597,7 @@ pub struct ResolvedPublicAiExecution {
     pub overrides: crate::ModelExecutionOverrides,
     /// Model-level protocol binding that produced this execution.
     /// 产生此执行的模型级协议绑定。
-    pub protocol_binding: Option<crate::provider_manifest::ModelProtocolBinding>,
+    pub protocol_binding: crate::provider_manifest::ModelProtocolBinding,
     /// Shared public execution client.
     /// 共享公共执行客户端。
     pub client: ProviderExecutionClient,
@@ -12074,14 +11894,7 @@ mod tests {
             secret_reference: format!("secret-{id}"),
             management_secret_reference: None,
             service_origin_override: None,
-            verified_protocols: BTreeSet::from([
-                ANTHROPIC_MESSAGES_PROFILE_ID.to_string(),
-                OPENAI_CHAT_PROFILE_ID.to_string(),
-                OPENAI_RESPONSES_PROFILE_ID.to_string(),
-            ]),
-            selected_protocol: OPENAI_CHAT_PROFILE_ID.to_string(),
             prompt_cache_by_protocol: BTreeMap::new(),
-            usage_scope_override: None,
         }
     }
 
@@ -12966,12 +12779,7 @@ mod tests {
             .insert(provider.id.clone(), provider);
         configuration.connection_graph.connections.insert(
             String::from("one"),
-            custom_connection(
-                "one",
-                "custom:manual-catalog",
-                OPENAI_CHAT_PROFILE_ID,
-                &[OPENAI_CHAT_PROFILE_ID],
-            ),
+            custom_connection("one", "custom:manual-catalog"),
         );
         configuration
             .custom_models
@@ -13039,12 +12847,7 @@ mod tests {
             .insert(provider.id.clone(), provider);
         configuration.connection_graph.connections.insert(
             String::from("merged-account"),
-            custom_connection(
-                "merged-account",
-                "custom:merged-catalog",
-                OPENAI_CHAT_PROFILE_ID,
-                &[OPENAI_CHAT_PROFILE_ID],
-            ),
+            custom_connection("merged-account", "custom:merged-catalog"),
         );
         configuration
             .custom_models
@@ -13123,12 +12926,7 @@ mod tests {
         configuration
             .custom_providers
             .insert(provider.id.clone(), provider);
-        let custom_connection = custom_connection(
-            "custom-account",
-            "custom:test",
-            OPENAI_CHAT_PROFILE_ID,
-            &[OPENAI_CHAT_PROFILE_ID],
-        );
+        let custom_connection = custom_connection("custom-account", "custom:test");
         configuration
             .connection_graph
             .connections
@@ -13178,12 +12976,7 @@ mod tests {
         configuration
             .custom_providers
             .insert(provider.id.clone(), provider);
-        let custom_connection = custom_connection(
-            "custom-account",
-            "custom:test",
-            OPENAI_CHAT_PROFILE_ID,
-            &[OPENAI_CHAT_PROFILE_ID],
-        );
+        let custom_connection = custom_connection("custom-account", "custom:test");
         configuration
             .connection_graph
             .connections
@@ -14532,9 +14325,9 @@ mod tests {
         );
     }
 
-    /// Verifies the manifest-first enabled resolution order: user override, then manual model,
-    /// then bundled manifest default, then legacy default.
-    /// 验证 manifest-first 启用解析顺序：用户覆盖、手动模型、内置清单默认、旧版默认。
+    /// Verifies the manifest-first enabled resolution order: user override, manual model, then
+    /// bundled manifest default; undeclared providers fail closed.
+    /// 验证 manifest-first 启用解析顺序：用户覆盖、手动模型、内置清单默认；未声明供应商失败关闭。
     #[test]
     fn runtime_model_is_enabled_follows_manifest_first_precedence() {
         let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
@@ -14570,14 +14363,14 @@ mod tests {
         );
         assert!(runtime.model_is_enabled(&manual, "openrouter", "user/private-model"));
 
-        // Providers without a bundled manifest fall back to the legacy default (enabled).
-        // 无内置清单的供应商回退到旧版默认（启用）。
-        assert!(runtime.model_is_enabled(&configuration, "unknown-provider", "any-model"));
+        // Providers without a bundled manifest or manual declaration fail closed.
+        // 无内置 Manifest 且无手工声明的供应商失败关闭。
+        assert!(!runtime.model_is_enabled(&configuration, "unknown-provider", "any-model"));
     }
 
-    /// Verifies model-level protocol routing: two models on one connection bind to their own
-    /// manifest-declared protocols instead of the connection default (plan §13.4).
-    /// 验证模型级协议路由：同一连接上的两个模型绑定各自清单声明协议，而非连接默认协议（方案 §13.4）。
+    /// Verifies model-level protocol routing: two models on one credential bind to their own
+    /// manifest-declared protocols.
+    /// 验证模型级协议路由：同一凭据上的两个模型绑定各自 Manifest 声明协议。
     #[test]
     fn model_level_protocol_routing_uses_declared_bindings_per_model() {
         let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
@@ -14633,7 +14426,7 @@ mod tests {
                 OPENAI_CHAT_PROFILE_ID,
                 &crate::ModelExecutionOverrides::default(),
             )
-            .expect_err("the connection default must not authorize model settings");
+            .expect_err("another protocol must not authorize model settings");
         assert!(
             wrong_protocol_error.contains("effective protocol"),
             "unexpected wrong-protocol error: {wrong_protocol_error}"
@@ -14672,9 +14465,9 @@ mod tests {
             .expect("GPT-5.6 Sol must resolve");
         assert_eq!(
             sol.route.protocol_route.protocol_profile_id, OPENAI_RESPONSES_PROFILE_ID,
-            "GPT-5.6 Sol binds to responses despite the chat connection default"
+            "GPT-5.6 Sol binds to its declared Responses protocol"
         );
-        let binding = sol.protocol_binding.as_ref().expect("system binding");
+        let binding = &sol.protocol_binding;
         assert_eq!(binding.protocol_profile_id, OPENAI_RESPONSES_PROFILE_ID);
         assert!(binding.manifest_revision >= 1);
 
@@ -14688,11 +14481,98 @@ mod tests {
             .expect("Claude Sonnet 5 must resolve");
         assert_eq!(
             claude.route.protocol_route.protocol_profile_id, ANTHROPIC_MESSAGES_PROFILE_ID,
-            "Claude Sonnet 5 binds to anthropic despite the chat connection default"
+            "Claude Sonnet 5 binds to its declared Anthropic protocol"
         );
         assert_ne!(
             sol.route_revision, claude.route_revision,
             "distinct protocol bindings must produce distinct route revisions"
+        );
+    }
+
+    /// Verifies APIKEY.FUN routes a credential-only connection through its signed model binding.
+    /// 验证 APIKEY.FUN 会通过已签名模型绑定路由仅含凭据身份的连接。
+    #[test]
+    fn apikeyfun_manifest_uses_model_protocol_binding() {
+        let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
+        let mut configuration = PersistedAiConfiguration::default();
+        // apikeyfunConnection stores only credential and service identity.
+        // apikeyfunConnection 仅保存凭据与服务身份，协议由当前 Manifest 模型绑定提供。
+        let mut apikeyfun_connection = connection("apikeyfun-account");
+        apikeyfun_connection.provider_id = String::from("apikeyfun");
+        apikeyfun_connection.service_entry_id = String::from("public-api");
+        configuration
+            .connection_graph
+            .connections
+            .insert(apikeyfun_connection.id.clone(), apikeyfun_connection);
+
+        let model_id = "deepseek-v4-flash";
+        // sourceCatalog represents one `/models` identity projected through the signed Responses rule.
+        // sourceCatalog 表示一个通过已签名 Responses 规则投影的 `/models` 身份。
+        let source_catalog = with_protocol_variants(
+            parse_openai_model_catalog(
+                "apikeyfun-account",
+                1,
+                format!(r#"{{"data":[{{"id":"{model_id}"}}]}}"#).as_str(),
+            )
+            .expect("compatible catalog should parse"),
+            &[OPENAI_RESPONSES_PROFILE_ID],
+        );
+        install_source_catalog(&runtime, source_catalog.clone());
+        runtime
+            .replace_catalog(source_catalog)
+            .expect("catalog should install");
+        runtime
+            .reapply_model_catalog_overlays(&configuration)
+            .expect("APIKEY.FUN Manifest catalog should publish");
+
+        let selection = runtime
+            .resolve_connection_model_selection(
+                &configuration,
+                "apikeyfun-account",
+                "apikeyfun",
+                model_id,
+            )
+            .expect("declared APIKEY.FUN model should resolve");
+        assert_eq!(
+            selection.route.protocol_route.protocol_profile_id,
+            OPENAI_RESPONSES_PROFILE_ID
+        );
+        assert_eq!(
+            selection.protocol_binding.source,
+            crate::provider_manifest::ModelProtocolBindingSource::SystemManifest
+        );
+    }
+
+    /// Verifies APIKEY.FUN authorizes Manifest discovery before reading the credential.
+    /// 验证 APIKEY.FUN 会先授权 Manifest 发现路由，再读取凭据。
+    #[tokio::test]
+    async fn apikeyfun_manifest_authorizes_discovery_before_credential_access() {
+        let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
+        let mut configuration = PersistedAiConfiguration::default();
+        // apikeyfunConnection stores only credential and service identity.
+        // apikeyfunConnection 仅保存凭据与服务身份，不保存任何协议历史。
+        let mut apikeyfun_connection = connection("apikeyfun-account");
+        apikeyfun_connection.provider_id = String::from("apikeyfun");
+        apikeyfun_connection.service_entry_id = String::from("public-api");
+        configuration.connection_graph.connections.insert(
+            apikeyfun_connection.id.clone(),
+            apikeyfun_connection.clone(),
+        );
+
+        // The unavailable store is the first expected boundary after discovery authorization. A
+        // discovery-identity error here would prove the Manifest route was not used.
+        // 不可用存储是发现授权后的首个预期边界；若此处出现发现身份错误，则证明未使用 Manifest 路由。
+        let error = runtime
+            .refresh_connection_catalog(&configuration, apikeyfun_connection.id.as_str())
+            .await
+            .expect_err("the unavailable test store must reject the credential read");
+        assert!(
+            error.contains("credential secret resolver"),
+            "signed discovery should reach the credential boundary, got: {error}"
+        );
+        assert!(
+            !error.contains("discovery identity without a remote discovery implementation"),
+            "signed discovery must not be rejected by stale protocol history: {error}"
         );
     }
 
@@ -14705,8 +14585,6 @@ mod tests {
         let mut apikeyfun = connection("apikeyfun-account");
         apikeyfun.provider_id = String::from("apikeyfun");
         apikeyfun.service_entry_id = String::from("public-api");
-        apikeyfun.verified_protocols = BTreeSet::from([OPENAI_CHAT_PROFILE_ID.to_string()]);
-        apikeyfun.selected_protocol = OPENAI_CHAT_PROFILE_ID.to_string();
         configuration
             .connection_graph
             .add_connection(
@@ -14811,12 +14689,7 @@ mod tests {
 
     /// Builds one custom-provider connection for multi-instance isolation tests.
     /// 为多实例隔离测试构建一个自定义供应商连接。
-    fn custom_connection(
-        id: &str,
-        provider_id: &str,
-        selected_protocol: &str,
-        verified_protocols: &[&str],
-    ) -> CredentialConnection {
+    fn custom_connection(id: &str, provider_id: &str) -> CredentialConnection {
         CredentialConnection {
             id: id.to_string(),
             provider_id: provider_id.to_string(),
@@ -14828,13 +14701,7 @@ mod tests {
             secret_reference: format!("secret-{id}"),
             management_secret_reference: None,
             service_origin_override: None,
-            verified_protocols: verified_protocols
-                .iter()
-                .map(|protocol| protocol.to_string())
-                .collect(),
-            selected_protocol: selected_protocol.to_string(),
             prompt_cache_by_protocol: BTreeMap::new(),
-            usage_scope_override: None,
         }
     }
 
@@ -14849,6 +14716,29 @@ mod tests {
             protocols,
             crate::CustomProviderModelDiscoveryMode::Standard,
         )
+    }
+
+    /// Installs one current custom descriptor together with its same-generation Manifest.
+    /// 同时安装一个当前自定义描述符及其同代际 Manifest。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `configuration` receives both authorities and `provider` is the exact current descriptor.
+    /// `configuration` 接收两项权威，`provider` 是精确的当前描述符。
+    fn install_current_custom_provider(
+        configuration: &mut PersistedAiConfiguration,
+        provider: crate::ProviderDescriptor,
+    ) {
+        // manifest is projected before the descriptor moves into persisted configuration.
+        // manifest 在描述符移入持久化配置前完成投影。
+        let manifest = crate::provider_manifest::project_custom_descriptor_manifest(&provider)
+            .expect("current custom descriptor must project to a Manifest");
+        configuration
+            .custom_provider_manifests
+            .insert(provider.id.clone(), manifest);
+        configuration
+            .custom_providers
+            .insert(provider.id.clone(), provider);
     }
 
     /// Builds one custom provider definition with an exact model-source mode.
@@ -14874,7 +14764,6 @@ mod tests {
             id: provider_id.to_string(),
             display_name: String::from("Multi Protocol Fixture"),
             base_url: String::from("https://fixture.example.test/v1"),
-            protocol: None,
             protocols: protocols.to_vec(),
             authentication: crate::CustomProviderAuthentication::BearerAuthorization,
             model_discovery_mode,
@@ -14896,7 +14785,6 @@ mod tests {
             id: String::from("custom:mixed-discovery"),
             display_name: String::from("Mixed Discovery"),
             base_url: String::from("https://mixed-discovery.example.test/v1"),
-            protocol: None,
             protocols: vec![
                 crate::CustomProviderProtocol::OpenAiResponses,
                 crate::CustomProviderProtocol::OpenAiChat,
@@ -14963,15 +14851,9 @@ mod tests {
             "custom:gamma",
             &[crate::CustomProviderProtocol::GeminiGenerateContent],
         );
-        configuration
-            .custom_providers
-            .insert(provider_a.id.clone(), provider_a);
-        configuration
-            .custom_providers
-            .insert(provider_b.id.clone(), provider_b);
-        configuration
-            .custom_providers
-            .insert(provider_c.id.clone(), provider_c);
+        install_current_custom_provider(&mut configuration, provider_a);
+        install_current_custom_provider(&mut configuration, provider_b);
+        install_current_custom_provider(&mut configuration, provider_c);
         let effective_providers = runtime
             .effective_providers(&configuration)
             .expect("effective providers should resolve");
@@ -14979,12 +14861,7 @@ mod tests {
             .connection_graph
             .add_connection(
                 &effective_providers,
-                custom_connection(
-                    "alpha-account",
-                    "custom:alpha",
-                    OPENAI_CHAT_PROFILE_ID,
-                    &[OPENAI_CHAT_PROFILE_ID],
-                ),
+                custom_connection("alpha-account", "custom:alpha"),
             )
             .expect("alpha connection should register");
         let effective_providers = runtime
@@ -14994,12 +14871,7 @@ mod tests {
             .connection_graph
             .add_connection(
                 &effective_providers,
-                custom_connection(
-                    "beta-account",
-                    "custom:beta",
-                    ANTHROPIC_MESSAGES_PROFILE_ID,
-                    &[ANTHROPIC_MESSAGES_PROFILE_ID],
-                ),
+                custom_connection("beta-account", "custom:beta"),
             )
             .expect("beta connection should register");
         let effective_providers = runtime
@@ -15009,12 +14881,7 @@ mod tests {
             .connection_graph
             .add_connection(
                 &effective_providers,
-                custom_connection(
-                    "gamma-account",
-                    "custom:gamma",
-                    GEMINI_GENERATE_CONTENT_PROFILE_ID,
-                    &[GEMINI_GENERATE_CONTENT_PROFILE_ID],
-                ),
+                custom_connection("gamma-account", "custom:gamma"),
             )
             .expect("gamma connection should register");
         // Every provider owns the same model identifier; the identities must never leak.
@@ -15046,10 +14913,7 @@ mod tests {
             alpha.route.protocol_route.protocol_profile_id,
             OPENAI_CHAT_PROFILE_ID
         );
-        let binding = alpha
-            .protocol_binding
-            .as_ref()
-            .expect("custom binding must exist");
+        let binding = &alpha.protocol_binding;
         assert_eq!(binding.protocol_profile_id, OPENAI_CHAT_PROFILE_ID);
 
         // beta and gamma are absent from the alpha catalog and must never resolve there.
@@ -15090,27 +14954,15 @@ mod tests {
             &[crate::CustomProviderProtocol::OpenAiChat],
             crate::CustomProviderModelDiscoveryMode::Manual,
         );
-        configuration
-            .custom_providers
-            .insert(healthy_provider_id.to_string(), healthy_provider);
+        install_current_custom_provider(&mut configuration, healthy_provider);
         configuration.connection_graph.connections.extend([
             (
                 healthy_connection_id.to_string(),
-                custom_connection(
-                    healthy_connection_id,
-                    healthy_provider_id,
-                    OPENAI_CHAT_PROFILE_ID,
-                    &[OPENAI_CHAT_PROFILE_ID],
-                ),
+                custom_connection(healthy_connection_id, healthy_provider_id),
             ),
             (
                 isolated_connection_id.to_string(),
-                custom_connection(
-                    isolated_connection_id,
-                    isolated_provider_id,
-                    OPENAI_CHAT_PROFILE_ID,
-                    &[OPENAI_CHAT_PROFILE_ID],
-                ),
+                custom_connection(isolated_connection_id, isolated_provider_id),
             ),
         ]);
         configuration.custom_models.insert(
@@ -15164,7 +15016,9 @@ mod tests {
             .map(|_| ())
             .expect_err("isolated provider execution must fail closed");
         assert!(
-            isolated_error.contains("No published catalog exists"),
+            isolated_error.contains("disabled")
+                || isolated_error.contains("no active system manifest")
+                || isolated_error.contains("No activated catalog exists"),
             "{isolated_error}"
         );
     }
@@ -15177,7 +15031,7 @@ mod tests {
             "custom:manifest-descriptor-match",
             &[crate::CustomProviderProtocol::OpenAiChat],
         );
-        let manifest = crate::provider_manifest::legacy_custom_descriptor_to_manifest(&provider)
+        let manifest = crate::provider_manifest::project_custom_descriptor_manifest(&provider)
             .expect("custom descriptor should project to one manifest");
         let compiled = crate::provider_manifest::compile_manifest(
             &manifest,
@@ -15225,12 +15079,7 @@ mod tests {
             .connection_graph
             .add_connection(
                 &effective_providers,
-                custom_connection(
-                    "manifest-tools-account",
-                    provider.id.as_str(),
-                    OPENAI_CHAT_PROFILE_ID,
-                    &[OPENAI_CHAT_PROFILE_ID],
-                ),
+                custom_connection("manifest-tools-account", provider.id.as_str()),
             )
             .expect("custom connection should register");
         // sourceCatalog supplies one exact executable model whose binding must carry the custom
@@ -15249,7 +15098,7 @@ mod tests {
         configuration.set_model_enabled(provider.id.as_str(), "manifest/model", true);
 
         let mut document = serde_json::to_value(
-            crate::provider_manifest::legacy_custom_descriptor_to_manifest(&provider)
+            crate::provider_manifest::project_custom_descriptor_manifest(&provider)
                 .expect("custom descriptor should project to a manifest"),
         )
         .expect("custom manifest should serialize");
@@ -15333,8 +15182,7 @@ mod tests {
                 "manifest/model",
             )
             .expect("first custom manifest model must resolve")
-            .protocol_binding
-            .expect("first custom manifest binding must exist");
+            .protocol_binding;
         assert_eq!(first_binding.manifest_revision, 1);
 
         document["revision"] = serde_json::json!(2);
@@ -15357,8 +15205,7 @@ mod tests {
                 "manifest/model",
             )
             .expect("pre-activation custom model must remain selectable")
-            .protocol_binding
-            .expect("pre-activation custom binding must remain frozen");
+            .protocol_binding;
         assert_eq!(still_frozen_binding.manifest_revision, 1);
         runtime
             .reapply_model_catalog_overlays(&configuration)
@@ -15377,8 +15224,7 @@ mod tests {
                 "manifest/model",
             )
             .expect("replacement custom manifest model must resolve")
-            .protocol_binding
-            .expect("replacement custom manifest binding must exist");
+            .protocol_binding;
         assert_eq!(replaced_binding.manifest_revision, 2);
     }
 
@@ -15396,14 +15242,7 @@ mod tests {
                 crate::CustomProviderProtocol::OpenAiResponses,
             ],
         );
-        let enabled_profiles = provider.service_entries[0]
-            .protocol_routes
-            .iter()
-            .map(|route| route.protocol_profile_id.clone())
-            .collect::<Vec<_>>();
-        configuration
-            .custom_providers
-            .insert(provider.id.clone(), provider);
+        install_current_custom_provider(&mut configuration, provider);
         let effective_providers = runtime
             .effective_providers(&configuration)
             .expect("effective providers should resolve");
@@ -15411,15 +15250,7 @@ mod tests {
             .connection_graph
             .add_connection(
                 &effective_providers,
-                custom_connection(
-                    "multi-account",
-                    "custom:multi",
-                    OPENAI_CHAT_PROFILE_ID,
-                    &enabled_profiles
-                        .iter()
-                        .map(String::as_str)
-                        .collect::<Vec<_>>(),
-                ),
+                custom_connection("multi-account", "custom:multi"),
             )
             .expect("multi connection should register");
         let catalog = with_protocol_variants(
@@ -15478,10 +15309,7 @@ mod tests {
                 "auto/model",
             )
             .expect("auto model must resolve");
-        let binding = auto
-            .protocol_binding
-            .as_ref()
-            .expect("auto binding must exist");
+        let binding = &auto.protocol_binding;
         assert_eq!(
             binding.protocol_profile_id, OPENAI_RESPONSES_PROFILE_ID,
             "auto must pick the highest fixed-priority protocol even when declared last"
@@ -15509,14 +15337,7 @@ mod tests {
                 crate::CustomProviderProtocol::AnthropicMessages,
             ],
         );
-        let enabled_profiles = provider.service_entries[0]
-            .protocol_routes
-            .iter()
-            .map(|route| route.protocol_profile_id.clone())
-            .collect::<Vec<_>>();
-        configuration
-            .custom_providers
-            .insert(provider.id.clone(), provider);
+        install_current_custom_provider(&mut configuration, provider);
         let effective_providers = runtime
             .effective_providers(&configuration)
             .expect("effective providers should resolve");
@@ -15524,15 +15345,7 @@ mod tests {
             .connection_graph
             .add_connection(
                 &effective_providers,
-                custom_connection(
-                    "model-intersection-account",
-                    "custom:model-intersection",
-                    ANTHROPIC_MESSAGES_PROFILE_ID,
-                    &enabled_profiles
-                        .iter()
-                        .map(String::as_str)
-                        .collect::<Vec<_>>(),
-                ),
+                custom_connection("model-intersection-account", "custom:model-intersection"),
             )
             .expect("multi-protocol connection should register");
         let catalog = with_protocol_variants(
@@ -15561,9 +15374,7 @@ mod tests {
                 "anthropic-only/model",
             )
             .expect("the model's discovered Anthropic route must remain executable");
-        let binding = selection
-            .protocol_binding
-            .expect("the exact model-level Auto binding must exist");
+        let binding = selection.protocol_binding;
         assert_eq!(
             binding.protocol_profile_id, ANTHROPIC_MESSAGES_PROFILE_ID,
             "provider-wide Responses support must not fabricate Responses support for this model"
@@ -15645,14 +15456,7 @@ mod tests {
                 crate::CustomProviderProtocol::GeminiGenerateContent,
             ],
         );
-        let enabled_profiles = provider.service_entries[0]
-            .protocol_routes
-            .iter()
-            .map(|route| route.protocol_profile_id.clone())
-            .collect::<Vec<_>>();
-        configuration
-            .custom_providers
-            .insert(provider.id.clone(), provider);
+        install_current_custom_provider(&mut configuration, provider);
         let effective_providers = runtime
             .effective_providers(&configuration)
             .expect("effective providers should resolve");
@@ -15660,15 +15464,7 @@ mod tests {
             .connection_graph
             .add_connection(
                 &effective_providers,
-                custom_connection(
-                    "variant-policy-account",
-                    "custom:variant-policy",
-                    OPENAI_RESPONSES_PROFILE_ID,
-                    &enabled_profiles
-                        .iter()
-                        .map(String::as_str)
-                        .collect::<Vec<_>>(),
-                ),
+                custom_connection("variant-policy-account", "custom:variant-policy"),
             )
             .expect("custom connection should register");
         configuration.custom_model_protocol_preferences.insert(
@@ -15744,14 +15540,7 @@ mod tests {
                 crate::CustomProviderProtocol::OpenAiResponses,
             ],
         );
-        let enabled_profiles = provider.service_entries[0]
-            .protocol_routes
-            .iter()
-            .map(|route| route.protocol_profile_id.clone())
-            .collect::<Vec<_>>();
-        configuration
-            .custom_providers
-            .insert(provider.id.clone(), provider);
+        install_current_custom_provider(&mut configuration, provider);
         let effective_providers = runtime
             .effective_providers(&configuration)
             .expect("effective providers should resolve");
@@ -15759,15 +15548,7 @@ mod tests {
             .connection_graph
             .add_connection(
                 &effective_providers,
-                custom_connection(
-                    "frozen-account",
-                    "custom:frozen",
-                    OPENAI_CHAT_PROFILE_ID,
-                    &enabled_profiles
-                        .iter()
-                        .map(String::as_str)
-                        .collect::<Vec<_>>(),
-                ),
+                custom_connection("frozen-account", "custom:frozen"),
             )
             .expect("frozen connection should register");
         let catalog = with_protocol_variants(
@@ -15852,8 +15633,7 @@ mod tests {
                 "frozen/model",
             )
             .expect("frozen model must resolve")
-            .protocol_binding
-            .expect("frozen binding must exist");
+            .protocol_binding;
         assert_eq!(binding.protocol_profile_id, OPENAI_RESPONSES_PROFILE_ID);
 
         // A preference change is a configuration activation boundary: the next resolution
@@ -15880,8 +15660,7 @@ mod tests {
                 "frozen/model",
             )
             .expect("frozen model must rebind")
-            .protocol_binding
-            .expect("rebound binding must exist");
+            .protocol_binding;
         assert_eq!(
             rebound.protocol_profile_id, ANTHROPIC_MESSAGES_PROFILE_ID,
             "a preference drift must re-freeze the binding at the activation boundary"
@@ -15908,8 +15687,7 @@ mod tests {
                 "frozen/model",
             )
             .expect("frozen model must resolve again")
-            .protocol_binding
-            .expect("auto binding must exist");
+            .protocol_binding;
         assert_eq!(
             auto_again.protocol_profile_id, OPENAI_RESPONSES_PROFILE_ID,
             "removing the explicit preference must re-freeze the fixed-priority auto binding"
@@ -15928,9 +15706,7 @@ mod tests {
         provider.service_entries[0]
             .protocol_routes
             .retain(|route| route.protocol_profile_id != OPENAI_RESPONSES_PROFILE_ID);
-        configuration
-            .custom_providers
-            .insert(provider.id.clone(), provider);
+        install_current_custom_provider(&mut configuration, provider);
         runtime
             .reapply_model_catalog_overlays(&configuration)
             .expect("overlays should reapply");
@@ -15942,8 +15718,7 @@ mod tests {
                 "frozen/model",
             )
             .expect("frozen model must resolve under the narrowed set")
-            .protocol_binding
-            .expect("narrowed binding must exist");
+            .protocol_binding;
         assert_ne!(
             narrowed.protocol_profile_id, OPENAI_RESPONSES_PROFILE_ID,
             "a frozen binding outside the enabled set must be re-frozen away"
@@ -15961,9 +15736,7 @@ mod tests {
                 crate::CustomProviderProtocol::OpenAiResponses,
             ],
         );
-        configuration
-            .custom_providers
-            .insert(widened.id.clone(), widened);
+        install_current_custom_provider(&mut configuration, widened);
         runtime
             .reapply_model_catalog_overlays(&configuration)
             .expect("overlays should reapply after widening the protocol set");
@@ -15975,8 +15748,7 @@ mod tests {
                 "frozen/model",
             )
             .expect("frozen model must resolve under the widened set")
-            .protocol_binding
-            .expect("widened Auto binding must exist");
+            .protocol_binding;
         assert_eq!(
             widened_auto.protocol_profile_id, OPENAI_RESPONSES_PROFILE_ID,
             "Auto must re-freeze to the newly enabled highest-priority protocol"
@@ -16002,14 +15774,7 @@ mod tests {
                 crate::CustomProviderProtocol::OpenAiResponses,
             ],
         );
-        let enabled_profiles = provider.service_entries[0]
-            .protocol_routes
-            .iter()
-            .map(|route| route.protocol_profile_id.clone())
-            .collect::<Vec<_>>();
-        configuration
-            .custom_providers
-            .insert(provider.id.clone(), provider);
+        install_current_custom_provider(&mut configuration, provider);
         let effective_providers = runtime
             .effective_providers(&configuration)
             .expect("effective providers should resolve");
@@ -16017,15 +15782,7 @@ mod tests {
             .connection_graph
             .add_connection(
                 &effective_providers,
-                custom_connection(
-                    "explicit-account",
-                    "custom:explicit",
-                    OPENAI_CHAT_PROFILE_ID,
-                    &enabled_profiles
-                        .iter()
-                        .map(String::as_str)
-                        .collect::<Vec<_>>(),
-                ),
+                custom_connection("explicit-account", "custom:explicit"),
             )
             .expect("explicit connection should register");
         let catalog = with_protocol_variants(
@@ -16066,10 +15823,7 @@ mod tests {
                 "explicit/model",
             )
             .expect("explicit model must resolve");
-        let binding = selection
-            .protocol_binding
-            .as_ref()
-            .expect("explicit binding must exist");
+        let binding = &selection.protocol_binding;
         assert_eq!(
             binding.protocol_profile_id, ANTHROPIC_MESSAGES_PROFILE_ID,
             "the explicit user choice must never be refreshed away"
@@ -16090,9 +15844,7 @@ mod tests {
             "custom:explicit",
             &[crate::CustomProviderProtocol::OpenAiChat],
         );
-        configuration
-            .custom_providers
-            .insert(String::from("custom:explicit"), narrowed);
+        install_current_custom_provider(&mut configuration, narrowed);
         runtime
             .reapply_model_catalog_overlays(&configuration)
             .expect("the invalid explicit preference must publish a blocked catalog state");
@@ -16164,10 +15916,6 @@ mod tests {
         let mut deepseek_connection = connection("deepseek-existing-account");
         deepseek_connection.provider_id = String::from("deepseek");
         deepseek_connection.service_entry_id = String::from("official-api");
-        deepseek_connection.verified_protocols = BTreeSet::from([
-            ANTHROPIC_MESSAGES_PROFILE_ID.to_string(),
-            OPENAI_CHAT_PROFILE_ID.to_string(),
-        ]);
         configuration
             .connection_graph
             .add_connection(
@@ -16403,8 +16151,6 @@ mod tests {
         tavily_connection.provider_id = String::from("tavily");
         tavily_connection.service_entry_id = String::from("public-api");
         tavily_connection.credential_profile_id = String::from("api-key");
-        tavily_connection.selected_protocol.clear();
-        tavily_connection.verified_protocols.clear();
         configuration
             .connection_graph
             .add_connection(
@@ -16454,13 +16200,7 @@ mod tests {
                     secret_reference: String::from("secret-alibaba-activation"),
                     management_secret_reference: None,
                     service_origin_override: None,
-                    verified_protocols: BTreeSet::from([
-                        OPENAI_CHAT_PROFILE_ID.to_string(),
-                        ANTHROPIC_MESSAGES_PROFILE_ID.to_string(),
-                    ]),
-                    selected_protocol: OPENAI_CHAT_PROFILE_ID.to_string(),
                     prompt_cache_by_protocol: BTreeMap::new(),
-                    usage_scope_override: None,
                 },
             )
             .expect("Alibaba connection should register");
@@ -16668,7 +16408,6 @@ mod tests {
         alibaba_connection.provider_id = String::from("alibaba");
         alibaba_connection.service_entry_id = String::from("model-studio-cn");
         alibaba_connection.credential_profile_id = String::from("api-key");
-        alibaba_connection.selected_protocol = OPENAI_RESPONSES_PROFILE_ID.to_string();
         configuration
             .connection_graph
             .add_connection(
@@ -16794,10 +16533,6 @@ mod tests {
         let mut tavily_connection = connection("tavily-account");
         tavily_connection.provider_id = String::from("tavily");
         tavily_connection.service_entry_id = String::from("public-api");
-        // The provider-tools entry binds no conversation protocol.
-        // Provider-tools 入口不绑定任何会话协议。
-        tavily_connection.selected_protocol = String::new();
-        tavily_connection.verified_protocols = BTreeSet::new();
         configuration
             .connection_graph
             .add_connection(
@@ -16941,8 +16676,6 @@ mod tests {
         let mut tavily_connection = connection("tavily-account");
         tavily_connection.provider_id = String::from("tavily");
         tavily_connection.service_entry_id = String::from("public-api");
-        tavily_connection.selected_protocol = String::new();
-        tavily_connection.verified_protocols = BTreeSet::new();
         configuration
             .connection_graph
             .add_connection(
@@ -17170,14 +16903,7 @@ mod tests {
                 crate::CustomProviderProtocol::OpenAiResponses,
             ],
         );
-        let enabled_profiles = provider.service_entries[0]
-            .protocol_routes
-            .iter()
-            .map(|route| route.protocol_profile_id.clone())
-            .collect::<Vec<_>>();
-        configuration
-            .custom_providers
-            .insert(provider.id.clone(), provider);
+        install_current_custom_provider(&mut configuration, provider);
         let effective_providers = runtime
             .effective_providers(&configuration)
             .expect("effective providers should resolve");
@@ -17185,15 +16911,7 @@ mod tests {
             .connection_graph
             .add_connection(
                 &effective_providers,
-                custom_connection(
-                    "frozen-account",
-                    "custom:frozen",
-                    OPENAI_CHAT_PROFILE_ID,
-                    &enabled_profiles
-                        .iter()
-                        .map(String::as_str)
-                        .collect::<Vec<_>>(),
-                ),
+                custom_connection("frozen-account", "custom:frozen"),
             )
             .expect("frozen connection should register");
         let catalog = with_protocol_variants(
@@ -17227,8 +16945,7 @@ mod tests {
                 "frozen/model",
             )
             .expect("frozen model must resolve")
-            .protocol_binding
-            .expect("frozen binding must exist");
+            .protocol_binding;
         assert_eq!(binding.protocol_profile_id, OPENAI_RESPONSES_PROFILE_ID);
 
         // Mutating the in-memory configuration without any activation must be invisible to
@@ -17248,8 +16965,7 @@ mod tests {
                 "frozen/model",
             )
             .expect("frozen model must resolve")
-            .protocol_binding
-            .expect("frozen binding must exist");
+            .protocol_binding;
         assert_eq!(
             still_frozen.protocol_profile_id, OPENAI_RESPONSES_PROFILE_ID,
             "an unactivated preference mutation must not rebind the model"
@@ -17259,11 +16975,10 @@ mod tests {
     /// R5/§13.3: request execution never resolves a missing custom binding from live settings.
     /// R5/§13.3：请求执行绝不从实时设置解析缺失的自定义绑定。
     ///
-    /// A raw legacy-shaped fallback catalog intentionally lacks the activation-time binding. Even
-    /// though the current provider configuration can produce an Auto choice, selection must fail
-    /// closed until the catalog crosses an explicit activation boundary.
-    /// 原始旧形态回退目录刻意缺少激活时绑定。即使当前供应商配置可产生 Auto 选择，模型选择也
-    /// 必须失败封闭，直到目录跨越显式激活边界。
+    /// A malformed activated catalog intentionally lacks the activation-time binding. Even though
+    /// the current provider configuration can produce an Auto choice, selection must fail closed.
+    /// 一份异常已激活目录刻意缺少激活时绑定。即使当前供应商配置可产生 Auto 选择，模型选择也
+    /// 必须失败关闭。
     #[test]
     fn missing_custom_catalog_binding_never_resolves_live_at_request_time() {
         let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
@@ -17275,14 +16990,7 @@ mod tests {
                 crate::CustomProviderProtocol::OpenAiResponses,
             ],
         );
-        let enabled_profiles = provider.service_entries[0]
-            .protocol_routes
-            .iter()
-            .map(|route| route.protocol_profile_id.clone())
-            .collect::<Vec<_>>();
-        configuration
-            .custom_providers
-            .insert(provider.id.clone(), provider);
+        install_current_custom_provider(&mut configuration, provider);
         let effective_providers = runtime
             .effective_providers(&configuration)
             .expect("effective providers should resolve");
@@ -17290,15 +16998,7 @@ mod tests {
             .connection_graph
             .add_connection(
                 &effective_providers,
-                custom_connection(
-                    "missing-binding-account",
-                    "custom:missing-binding",
-                    OPENAI_CHAT_PROFILE_ID,
-                    &enabled_profiles
-                        .iter()
-                        .map(String::as_str)
-                        .collect::<Vec<_>>(),
-                ),
+                custom_connection("missing-binding-account", "custom:missing-binding"),
             )
             .expect("custom connection should register");
         let catalog = parse_openai_model_catalog(
@@ -17308,17 +17008,18 @@ mod tests {
         )
         .expect("raw catalog should parse");
         configuration.set_model_enabled("custom:missing-binding", "missing/binding", true);
-        // candidate_generation simulates a published pre-freeze compatibility catalog while
-        // preserving the complete immutable generation boundary used by request selection.
-        // candidate_generation 模拟一份已发布但早于冻结的兼容目录，同时保留请求选择使用的
-        // 完整不可变代际边界。
+        // candidateGeneration injects one malformed activated catalog while preserving the
+        // immutable generation boundary used by request selection.
+        // candidateGeneration 注入一份异常已激活目录，同时保留请求选择使用的不可变代际边界。
         let mut candidate_generation = runtime
             .selection_catalog_snapshot()
             .expect("published generation should load")
             .as_ref()
             .clone();
         candidate_generation.configuration = Arc::new(configuration.clone());
-        candidate_generation.fallback_catalogs.replace(catalog);
+        candidate_generation
+            .activated_effective_catalogs
+            .replace(catalog);
         *runtime
             .resolved_provider_generation
             .write()
@@ -17595,10 +17296,10 @@ mod tests {
         );
     }
 
-    /// Verifies the explicit APIKEY.FUN legacy authority survives a failed placeholder baseline.
-    /// 验证显式 APIKEY.FUN 旧版权威可在占位基线失败后继续工作。
+    /// Verifies APIKEY.FUN fails closed when its authoritative bundled Manifest is unavailable.
+    /// 验证 APIKEY.FUN 的权威内置 Manifest 不可用时会失败封闭。
     #[test]
-    fn runtime_settings_projection_retains_apikeyfun_legacy_fallback() {
+    fn runtime_settings_projection_isolates_invalid_apikeyfun_manifest() {
         let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
         let current = runtime
             .selection_catalog_snapshot()
@@ -17610,47 +17311,41 @@ mod tests {
             String::from("apikeyfun"),
             crate::provider_manifest::BundledProviderManifestFailure {
                 failure_kind: String::from("bundled_baseline_invalid"),
-                message: String::from("isolated placeholder baseline"),
+                message: String::from("isolated authoritative baseline"),
             },
         );
-        let failed_placeholder_catalog = Arc::new(
+        let isolated_catalog = Arc::new(
             crate::provider_manifest::ResolvedProviderCatalog::build_with_bundled_failures(
                 manifests,
                 bundled_failures,
                 current.manifests.generation + 1,
             )
-            .expect("legacy placeholder failure catalog should build"),
+            .expect("provider-local failed catalog should build"),
         );
-        let mut legacy_generation = current.as_ref().clone();
-        legacy_generation.manifests = failed_placeholder_catalog;
-        let legacy_catalog = catalog("apikeyfun-account");
-        legacy_generation.source_catalogs = RuntimeConnectionCatalogs::from_snapshot(
-            BTreeMap::from([(String::from("apikeyfun-account"), legacy_catalog.clone())]),
-        );
-        legacy_generation.activated_effective_catalogs = RuntimeConnectionCatalogs::from_snapshot(
-            BTreeMap::from([(String::from("apikeyfun-account"), legacy_catalog)]),
-        );
+        let mut isolated_generation = current.as_ref().clone();
+        isolated_generation.manifests = isolated_catalog;
         *runtime
             .resolved_provider_generation
             .write()
             .expect("published generation lock should remain healthy") =
-            Arc::new(legacy_generation);
+            Arc::new(isolated_generation);
 
         let mut configuration = PersistedAiConfiguration::default();
-        let mut legacy_connection = connection("apikeyfun-account");
-        legacy_connection.provider_id = String::from("apikeyfun");
-        legacy_connection.service_entry_id = String::from("public-api");
-        legacy_connection.verified_protocols = BTreeSet::from([OPENAI_CHAT_PROFILE_ID.to_string()]);
-        legacy_connection.selected_protocol = OPENAI_CHAT_PROFILE_ID.to_string();
+        // apikeyfunConnection represents persisted account state that must be removed from the
+        // executable projection when its signed provider authority is unavailable.
+        // apikeyfunConnection 表示持久化账号状态；其已签名供应商权威不可用时，必须从可执行投影移除。
+        let mut apikeyfun_connection = connection("apikeyfun-account");
+        apikeyfun_connection.provider_id = String::from("apikeyfun");
+        apikeyfun_connection.service_entry_id = String::from("public-api");
         configuration
             .connection_graph
             .connections
-            .insert(legacy_connection.id.clone(), legacy_connection);
-        // configuredGeneration installs the explicit APIKEY.FUN legacy fixture as one image.
-        // configuredGeneration 把显式 APIKEY.FUN 旧版夹具作为一份完整镜像安装。
+            .insert(apikeyfun_connection.id.clone(), apikeyfun_connection);
+        // configuredGeneration installs the intentional isolated-provider fixture as one image.
+        // configuredGeneration 把刻意构造的隔离供应商夹具作为一份完整镜像安装。
         let mut configured_generation = runtime
             .selection_catalog_snapshot()
-            .expect("legacy generation should remain published")
+            .expect("isolated generation should remain published")
             .as_ref()
             .clone();
         configured_generation.configuration = Arc::new(configuration.clone());
@@ -17662,28 +17357,16 @@ mod tests {
 
         let snapshot = runtime
             .settings_catalog_snapshot(&configuration)
-            .expect("legacy provider settings should remain available");
+            .expect("healthy provider settings should remain available");
 
         assert!(
-            snapshot
+            !snapshot
                 .runtime_configuration
                 .connection_graph
                 .connections
                 .contains_key("apikeyfun-account")
         );
-        assert!(snapshot.providers.provider("apikeyfun").is_some());
-        let selection = runtime
-            .resolve_connection_model_selection(
-                &configuration,
-                "apikeyfun-account",
-                "apikeyfun",
-                "openai/gpt-5.6-sol",
-            )
-            .expect("legacy discovered model should retain its declared Chat route");
-        assert_eq!(
-            selection.route.protocol_route.protocol_profile_id,
-            OPENAI_CHAT_PROFILE_ID
-        );
+        assert!(snapshot.providers.provider("apikeyfun").is_none());
     }
 
     /// R3/§R3.2: identical content rebuilds produce the identical content digest.
@@ -17890,9 +17573,7 @@ mod tests {
                             "deepseek-v4-pro",
                         )
                         .expect("real selection API must resolve");
-                    let binding = selection
-                        .protocol_binding
-                        .expect("deepseek must retain a system binding");
+                    let binding = selection.protocol_binding;
                     let expected_protocol = match binding.manifest_revision {
                         revision if revision == old_revision => OPENAI_RESPONSES_PROFILE_ID,
                         revision if revision == new_revision => OPENAI_CHAT_PROFILE_ID,
@@ -17949,11 +17630,7 @@ mod tests {
             )
             .expect("the activated selection must resolve");
         assert_eq!(
-            published
-                .protocol_binding
-                .expect("DeepSeek must retain a manifest binding")
-                .manifest_revision,
-            new_revision,
+            published.protocol_binding.manifest_revision, new_revision,
             "the writer must actually publish the staged generation"
         );
     }
@@ -18536,7 +18213,7 @@ mod tests {
                     ]);
                 }
                 let manifest_value = serde_json::json!({
-                    "schema_version": "vulcan.provider-manifest.v1",
+                    "schema_version": "vulcan.provider-manifest.v2",
                     "provider_id": "source-policy-probe",
                     "revision": 1,
                     "published_at": "2026-08-09T00:00:00Z",
@@ -18612,10 +18289,7 @@ mod tests {
                     secret_reference: String::from("secret-source-policy"),
                     management_secret_reference: None,
                     service_origin_override: None,
-                    verified_protocols: BTreeSet::from([OPENAI_CHAT_PROFILE_ID.to_string()]),
-                    selected_protocol: OPENAI_CHAT_PROFILE_ID.to_string(),
                     prompt_cache_by_protocol: BTreeMap::new(),
-                    usage_scope_override: None,
                 };
                 let mut configuration = PersistedAiConfiguration::default();
                 configuration
@@ -18763,10 +18437,7 @@ mod tests {
             secret_reference: String::from("unavailable-secret-must-not-be-read"),
             management_secret_reference: None,
             service_origin_override: None,
-            verified_protocols: BTreeSet::from([route.protocol_profile_id.clone()]),
-            selected_protocol: route.protocol_profile_id.clone(),
             prompt_cache_by_protocol: BTreeMap::new(),
-            usage_scope_override: None,
         };
         let mut configuration = PersistedAiConfiguration::default();
         configuration
@@ -18794,7 +18465,6 @@ mod tests {
             id: String::from("custom:manual-only-probe"),
             display_name: String::from("Manual Only Probe"),
             base_url: String::from("https://manual-only.example.test/v1"),
-            protocol: None,
             protocols: vec![crate::CustomProviderProtocol::OpenAiChat],
             authentication: crate::CustomProviderAuthentication::BearerAuthorization,
             model_discovery_mode: crate::CustomProviderModelDiscoveryMode::Manual,
@@ -18827,10 +18497,7 @@ mod tests {
             secret_reference: String::from("unavailable-secret-must-not-be-read"),
             management_secret_reference: None,
             service_origin_override: None,
-            verified_protocols: BTreeSet::from([route.protocol_profile_id.clone()]),
-            selected_protocol: route.protocol_profile_id.clone(),
             prompt_cache_by_protocol: BTreeMap::new(),
-            usage_scope_override: None,
         };
         let mut configuration = PersistedAiConfiguration::default();
         configuration

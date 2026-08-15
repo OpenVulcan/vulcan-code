@@ -23,7 +23,7 @@ use vulcan_context::{ContextCompactionPolicy, ContextWindowPolicyOverrides};
 
 /// Identifies the current persisted AI configuration schema.
 /// 标识当前持久化 AI 配置 Schema。
-pub const PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION: u32 = 14;
+pub const PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION: u32 = 15;
 
 /// Stores only user-declared differences from immutable model capability sources.
 /// 仅保存用户相对于不可变模型能力来源声明的差异。
@@ -994,8 +994,8 @@ pub struct PersistedAiConfiguration {
     /// 按抗冲突组合键索引的供应商、模型与协议覆盖。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub model_overrides: BTreeMap<String, ModelExecutionOverrides>,
-    /// User model-access choices that differ from the provider default policy.
-    /// 与供应商默认策略不同的用户模型启用选择。
+    /// User conversation-publication choices that differ from the provider default policy.
+    /// 与供应商默认策略不同的用户模型会话发布选择。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub model_enabled_overrides: BTreeMap<String, bool>,
     /// User-owned capability differences keyed by provider and model.
@@ -1021,8 +1021,8 @@ pub struct PersistedAiConfiguration {
     /// 精确供应商模型级稀疏 Codex 上下文窗口默认值。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub model_context_window_policy_overrides: BTreeMap<String, ContextWindowPolicyOverrides>,
-    /// Internal model access choices scoped by provider, model, and operation.
-    /// 按供应商、模型与操作限定作用域的内部模型访问选择。
+    /// Explicit non-conversation internal-use choices scoped by provider and model.
+    /// 按供应商与模型限定作用域的显式非会话内部使用选择。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub internal_model_enabled_overrides: BTreeMap<String, bool>,
     /// Independent inference routes grouped by stable consumer profile identifier.
@@ -1331,7 +1331,7 @@ impl PersistedAiConfiguration {
                 };
                 Ok(normalized || inserted_vmm)
             }
-            10..=13 => {
+            10..=14 => {
                 self.normalize_direct_provider_model_settings();
                 self.inference_profiles
                     .entry(String::from("vmm"))
@@ -1418,7 +1418,7 @@ impl PersistedAiConfiguration {
                 "Unsupported persisted AI configuration schema version {unsupported}; supported version is {PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION}."
             )),
         }?;
-        if source_schema_version != PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION {
+        if source_schema_version < 14 {
             // Provider-tool selection semantics changed incompatibly in schema 14. Old scalar and
             // mixed-media selections are intentionally discarded instead of being guessed into
             // the new direct-selection and model-extension stores.
@@ -1428,6 +1428,14 @@ impl PersistedAiConfiguration {
             self.provider_tool_enabled_capabilities.clear();
             self.provider_extension_target_sets.clear();
             self.provider_tool_disabled_targets.clear();
+        }
+        if source_schema_version < PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION {
+            // Schema 15 replaces operation-scoped truthy-only internal model keys with explicit
+            // provider/model booleans. Historical keys are intentionally discarded because an
+            // absent false state cannot be reconstructed without guessing user intent.
+            // Schema 15 使用显式供应商/模型布尔值取代按操作且仅保存 true 的内部模型键。
+            // 旧结构无法还原缺失的 false 状态，因此有意丢弃，避免猜测用户意图。
+            self.internal_model_enabled_overrides.clear();
         }
         self.billing.validate()?;
         self.validate_context_window_policy_layers()?;
@@ -2359,6 +2367,8 @@ impl PersistedAiConfiguration {
         self.model_overrides
             .retain(|key, _| !key.starts_with(provider_model_prefix.as_str()));
         self.internal_model_enabled_overrides
+            .remove(provider_model_key.as_str());
+        self.internal_model_overrides
             .retain(|key, _| !key.starts_with(provider_model_prefix.as_str()));
 
         let connection_ids = self
@@ -2731,50 +2741,76 @@ impl PersistedAiConfiguration {
         )
     }
 
-    /// Reports whether one model operation is enabled for internal inference.
-    /// 报告一项模型操作是否已为内部推理启用。
+    /// Reports whether one model is enabled for non-conversation internal inference.
+    /// 报告一个模型是否已为非会话内部推理启用。
     ///
     /// # Parameters
     /// 参数
-    /// `provider_id`, `model_id`, and `operation` identify one exact internal capability.
-    /// `provider_id`、`model_id` 与 `operation` 标识一项精确内部能力。
+    /// `provider_id` and `model_id` identify one exact model; `default_enabled` is the stable
+    /// provider-wide suggestion aggregated from configured credential profiles.
+    /// `provider_id` 与 `model_id` 标识一个精确模型；`default_enabled` 是从已配置凭据档
+    /// 聚合得到的稳定供应商级建议值。
     ///
     /// # Returns
     /// 返回值
-    /// The explicit state, defaulting to disabled.
-    /// 返回显式状态，默认禁用。
+    /// The explicit user state when present, otherwise the supplied Manifest default.
+    /// 存在显式用户状态时返回该状态，否则返回传入的 Manifest 默认值。
     pub fn internal_model_is_enabled(
         &self,
         provider_id: &str,
         model_id: &str,
-        operation: AiOperation,
+        default_enabled: bool,
     ) -> bool {
         self.internal_model_enabled_overrides
-            .get(Self::internal_model_operation_key(provider_id, model_id, operation).as_str())
+            .get(Self::provider_model_key(provider_id, model_id).as_str())
             .copied()
-            .unwrap_or(false)
+            .unwrap_or(default_enabled)
     }
 
-    /// Stores one explicit internal model operation state.
-    /// 保存一项显式内部模型操作状态。
+    /// Returns one explicit internal-use override without applying Manifest defaults.
+    /// 返回一项未应用 Manifest 默认值的显式内部使用覆盖。
     ///
     /// # Parameters
     /// 参数
-    /// `provider_id`, `model_id`, `operation`, and `enabled` identify the exact state.
-    /// `provider_id`、`model_id`、`operation` 与 `enabled` 标识精确状态。
-    pub fn set_internal_model_enabled(
-        &mut self,
+    /// `provider_id` and `model_id` identify one exact model.
+    /// `provider_id` 与 `model_id` 标识一个精确模型。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The explicit state or `None` when the selected credential default remains authoritative.
+    /// 返回显式状态；所选凭据默认值仍具权威时返回 `None`。
+    pub fn internal_model_enabled_override(
+        &self,
         provider_id: &str,
         model_id: &str,
-        operation: AiOperation,
-        enabled: bool,
-    ) {
-        let key = Self::internal_model_operation_key(provider_id, model_id, operation);
-        if enabled {
-            self.internal_model_enabled_overrides.insert(key, true);
-        } else {
-            self.internal_model_enabled_overrides.remove(key.as_str());
-        }
+    ) -> Option<bool> {
+        self.internal_model_enabled_overrides
+            .get(Self::provider_model_key(provider_id, model_id).as_str())
+            .copied()
+    }
+
+    /// Stores one explicit non-conversation internal-use state.
+    /// 保存一项显式非会话内部使用状态。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `provider_id`, `model_id`, and `enabled` identify the exact state.
+    /// `provider_id`、`model_id` 与 `enabled` 标识精确状态。
+    pub fn set_internal_model_enabled(&mut self, provider_id: &str, model_id: &str, enabled: bool) {
+        let key = Self::provider_model_key(provider_id, model_id);
+        self.internal_model_enabled_overrides.insert(key, enabled);
+    }
+
+    /// Restores the provider-declared internal-use default for one model.
+    /// 恢复一个模型由供应商声明的内部使用默认值。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `provider_id` and `model_id` identify one exact model.
+    /// `provider_id` 与 `model_id` 标识一个精确模型。
+    pub fn restore_internal_model_enabled(&mut self, provider_id: &str, model_id: &str) {
+        self.internal_model_enabled_overrides
+            .remove(Self::provider_model_key(provider_id, model_id).as_str());
     }
 
     /// Reports whether one model is enabled after applying the persisted user override.
@@ -2834,16 +2870,16 @@ impl PersistedAiConfiguration {
     ///
     /// # Returns
     /// 返回值
-    /// The explicit user choice, or `None` when the user never overrode this model.
-    /// 返回显式用户选择；用户从未覆盖该模型时返回 `None`。
+    /// The explicit conversation choice, or `None` when the user never overrode this model.
+    /// 返回显式会话选择；用户从未覆盖该模型时返回 `None`。
     pub fn model_enabled_override(&self, provider_id: &str, model_id: &str) -> Option<bool> {
         self.model_enabled_overrides
             .get(Self::provider_model_key(provider_id, model_id).as_str())
             .copied()
     }
 
-    /// Stores one explicit model enabled choice, including a value equal to its inherited default.
-    /// 保存一个明确的模型启用选择，即使该值与继承默认值相同也保留。
+    /// Stores one explicit conversation choice, including a value equal to its inherited default.
+    /// 保存一个明确的会话选择，即使该值与继承默认值相同也保留。
     ///
     /// # Parameters
     /// 参数
@@ -2854,8 +2890,8 @@ impl PersistedAiConfiguration {
         self.model_enabled_overrides.insert(key, enabled);
     }
 
-    /// Restores one model enabled choice to its inherited provider or model default.
-    /// 将一个模型启用选择恢复为继承的供应商或模型默认值。
+    /// Restores one model conversation choice to its inherited provider or model default.
+    /// 将一个模型会话选择恢复为继承的供应商或模型默认值。
     ///
     /// # Parameters
     /// 参数
@@ -2895,11 +2931,10 @@ mod tests {
             id: provider_id.to_string(),
             display_name: provider_id.to_string(),
             base_url: String::from("https://example.com/v1"),
-            protocol: Some(CustomProviderProtocol::OpenAiResponses),
+            protocols: vec![CustomProviderProtocol::OpenAiResponses],
             authentication: CustomProviderAuthentication::BearerAuthorization,
             model_discovery_mode: CustomProviderModelDiscoveryMode::Standard,
             model_discovery_path: None,
-            protocols: Vec::new(),
             protocol_routes: Vec::new(),
             request_headers: BTreeMap::new(),
         }
@@ -2934,10 +2969,7 @@ mod tests {
             secret_reference: format!("secret-{connection_id}"),
             management_secret_reference: None,
             service_origin_override: None,
-            verified_protocols: BTreeSet::from([String::from("openai_responses")]),
-            selected_protocol: String::from("openai_responses"),
             prompt_cache_by_protocol: BTreeMap::new(),
-            usage_scope_override: None,
         }
     }
 
@@ -3432,6 +3464,74 @@ mod tests {
         assert!(historical.provider_tool_enabled_capabilities.is_empty());
         assert!(historical.provider_extension_target_sets.is_empty());
         assert!(historical.provider_tool_disabled_targets.is_empty());
+    }
+
+    /// Verifies migration from schema fourteen discards old operation switches while preserving provider tools.
+    /// 验证从 Schema 十四迁移时丢弃旧按操作开关，同时保留 Provider Tool 设置。
+    #[test]
+    fn schema_fourteen_replaces_internal_switches_without_erasing_provider_tools() {
+        let mut historical = PersistedAiConfiguration::default();
+        historical.schema_version = 14;
+        historical.internal_model_enabled_overrides.insert(
+            PersistedAiConfiguration::internal_model_operation_key(
+                "opencode-go",
+                "deepseek-v4-flash",
+                AiOperation::ConversationRespond,
+            ),
+            true,
+        );
+        let target = ProviderToolTargetSelection {
+            connection_id: String::from("search-connection"),
+            target_id: String::from("search-target"),
+        };
+        historical
+            .provider_tool_selections
+            .insert(ProviderToolCapabilityKind::WebSearch, target.clone());
+        historical
+            .provider_tool_enabled_capabilities
+            .insert(ProviderToolCapabilityKind::WebSearch);
+
+        assert!(historical.migrate_to_current_schema().expect("migration"));
+        assert_eq!(
+            historical.schema_version,
+            PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION
+        );
+        assert!(historical.internal_model_enabled_overrides.is_empty());
+        assert_eq!(
+            historical
+                .provider_tool_selections
+                .get(&ProviderToolCapabilityKind::WebSearch),
+            Some(&target),
+        );
+        assert!(
+            historical
+                .provider_tool_enabled_capabilities
+                .contains(&ProviderToolCapabilityKind::WebSearch)
+        );
+    }
+
+    /// Verifies conversation publication and non-conversation internal use are independent states.
+    /// 验证会话发布与非会话内部使用是相互独立的状态。
+    #[test]
+    fn conversation_and_internal_model_states_are_independent() {
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration.set_model_enabled("opencode-go", "deepseek-v4-flash", false);
+        configuration.set_internal_model_enabled("opencode-go", "deepseek-v4-flash", true);
+
+        assert!(!configuration.model_is_enabled("opencode-go", "deepseek-v4-flash"));
+        assert!(
+            configuration.internal_model_is_enabled("opencode-go", "deepseek-v4-flash", false,)
+        );
+
+        configuration.set_model_enabled("opencode-go", "deepseek-v4-flash", true);
+        configuration.set_internal_model_enabled("opencode-go", "deepseek-v4-flash", false);
+        assert!(configuration.model_is_enabled("opencode-go", "deepseek-v4-flash"));
+        assert!(
+            !configuration.internal_model_is_enabled("opencode-go", "deepseek-v4-flash", true,)
+        );
+
+        configuration.restore_internal_model_enabled("opencode-go", "deepseek-v4-flash");
+        assert!(configuration.internal_model_is_enabled("opencode-go", "deepseek-v4-flash", true,));
     }
 
     /// Builds one minimal exact billing price fixture.
@@ -3984,10 +4084,7 @@ mod tests {
                 secret_reference: String::from("secret"),
                 management_secret_reference: None,
                 service_origin_override: None,
-                verified_protocols: BTreeSet::from([String::from("openai_chat")]),
-                selected_protocol: String::from("openai_chat"),
                 prompt_cache_by_protocol: BTreeMap::new(),
-                usage_scope_override: None,
             },
         );
         configuration
@@ -4011,11 +4108,7 @@ mod tests {
             ModelExecutionOverrides::default(),
         );
         configuration.internal_model_enabled_overrides.insert(
-            PersistedAiConfiguration::internal_model_operation_key(
-                provider_id,
-                model_id,
-                AiOperation::EmbeddingCreate,
-            ),
+            PersistedAiConfiguration::provider_model_key(provider_id, model_id),
             true,
         );
         configuration
@@ -4117,9 +4210,9 @@ mod tests {
         let retained_descriptor = custom_provider_descriptor(retained_provider);
         // These manifests prove the hydrated runtime map follows the descriptor lifecycle.
         // 这些 Manifest 证明已补水运行时映射会遵循描述的生命周期。
-        let removed_manifest = crate::legacy_custom_descriptor_to_manifest(&removed_descriptor)
+        let removed_manifest = crate::project_custom_descriptor_manifest(&removed_descriptor)
             .expect("removed custom manifest should build");
-        let retained_manifest = crate::legacy_custom_descriptor_to_manifest(&retained_descriptor)
+        let retained_manifest = crate::project_custom_descriptor_manifest(&retained_descriptor)
             .expect("retained custom manifest should build");
         configuration
             .custom_providers

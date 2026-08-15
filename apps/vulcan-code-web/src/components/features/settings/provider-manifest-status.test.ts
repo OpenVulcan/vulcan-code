@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   activeLayerLabel,
-  legacyBindingPendingLabel,
   manifestFieldSourceLabel,
   manifestModelBindingChangeLabel,
   manifestModelBindingIdentity,
@@ -167,13 +166,6 @@ describe("provider-manifest-status helpers", () => {
     });
     expect(summary.kind).toBe("rejected");
     expect(summary.text).toBe("index_check_failed");
-  });
-
-  // Exposes the intentional APIKEY.FUN compatibility boundary without marking migrated providers.
-  // 暴露有意保留的 APIKEY.FUN 兼容边界，且不会错误标记已迁移供应商。
-  it("labels only a pending legacy binding", () => {
-    expect(legacyBindingPendingLabel(true)).toBe("Legacy binding pending");
-    expect(legacyBindingPendingLabel(false)).toBeNull();
   });
 
   // Renders every identity in one Alibaba template-generated tool target.

@@ -1763,9 +1763,9 @@ fn compile_service_entry(
         .map(compile_credential_profile)
         .collect::<Vec<_>>();
 
-    let mut allowed_usage_scopes: BTreeSet<InferenceUsageScope> = BTreeSet::new();
+    let mut default_usage_scopes: BTreeSet<InferenceUsageScope> = BTreeSet::new();
     for profile in &credential_profiles {
-        allowed_usage_scopes.extend(profile.allowed_usage_scopes.iter().copied());
+        default_usage_scopes.extend(profile.default_usage_scopes.iter().copied());
     }
 
     let protocol_routes = entry
@@ -1814,7 +1814,7 @@ fn compile_service_entry(
             .request_projector
             .unwrap_or(RequestProjectorKind::Direct),
         protocol_routes,
-        allowed_usage_scopes,
+        default_usage_scopes,
     })
 }
 
@@ -1831,7 +1831,7 @@ fn compile_credential_profile(profile: &super::ManifestCredentialProfile) -> Cre
         authentication: profile.authentication,
         key_prefix: profile.key_prefix.clone(),
         credential_role: profile.credential_role.clone(),
-        allowed_usage_scopes: profile.allowed_usage_scopes.clone(),
+        default_usage_scopes: profile.default_usage_scopes.clone(),
     }
 }
 
