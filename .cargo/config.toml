@@ -1,4 +1,15 @@
 # Keep vendored MSVC C dependencies aligned with Rust's dynamic C runtime.
 # 让通过 MSVC 编译的内置 C 依赖统一使用 Rust 默认的动态 C 运行时。
+# Keep Cargo compiler process fan-out bounded on developer machines.
+# 限制开发机上的 Cargo 编译进程并发度。
+[build]
+jobs = 4
+
+# Keep the test harness conservative while allowing an explicit shell override.
+# 保持测试 harness 并发度适中，同时允许命令行环境变量显式覆盖。
 [env]
+RUST_TEST_THREADS = { value = "4", force = false }
+
+# Keep vendored MSVC C dependencies aligned with Rust's dynamic C runtime.
+# 让通过 MSVC 编译的内置 C 依赖统一使用 Rust 默认的动态 C 运行时。
 CL = { value = "/MD", force = false }

@@ -19,7 +19,13 @@ fn temp_dir() -> PathBuf {
 /// 验证规范用户技能根目录位于 Vulcan Code 数据目录下。
 #[test]
 fn default_user_skill_root_uses_vulcan_code_directory() {
-    assert!(default_user_skill_root().ends_with(Path::new(".vulcan/code/skills")));
+    assert!(
+        default_user_skill_root().ends_with(
+            Path::new(vulcan_runtime_assets::USER_VULCAN_ROOT_DIRECTORY_NAME)
+                .join("code")
+                .join("skills")
+        )
+    );
 }
 
 /// Verifies the packaged RunLua guide exists in the program system-skill source and separates both tool families.

@@ -21,3 +21,6 @@ windows-sys = { version = "0.61.2", features = [
     "Win32_System_JobObjects",
     "Win32_System_Threading",
 ] }
+
+[dependencies]
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }

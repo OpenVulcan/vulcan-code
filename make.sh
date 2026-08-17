@@ -32,6 +32,10 @@ PowerShellScriptPath="$ScriptDir/make.ps1"
 # BundledToolsDepsScriptPath 指向 Unix-like 原生 sg 与 rg 依赖安装器。
 BundledToolsDepsScriptPath="$ScriptDir/scripts/install_bundled_tools.sh"
 
+# RustDevToolsDepsScriptPath points at the native Unix-like Cargo developer-tool installer.
+# RustDevToolsDepsScriptPath 指向 Unix-like 原生 Cargo 开发工具安装器。
+RustDevToolsDepsScriptPath="$ScriptDir/scripts/install_rust_dev_tools.sh"
+
 # CommandMode selects the top-level command such as build, run, release, or deps.
 # CommandMode 用于选择顶层命令，例如 build、run、release 或 deps。
 CommandMode=${1:-}
@@ -140,6 +144,28 @@ invoke_bundled_tools_deps() {
     sh "$BundledToolsDepsScriptPath"
 }
 
+# invoke_rust_dev_tools_deps installs and validates the Cargo tools required by workspace maintenance.
+# invoke_rust_dev_tools_deps 安装并验证工作区维护所需的 Cargo 工具。
+invoke_rust_dev_tools_deps() {
+    if [ ! -f "$RustDevToolsDepsScriptPath" ]; then
+        echo "Missing Rust developer-tools dependency script: $RustDevToolsDepsScriptPath" >&2
+        exit 1
+    fi
+    sh "$RustDevToolsDepsScriptPath"
+}
+
+# invoke_system_initialization bootstraps every repository dependency in the documented order.
+# invoke_system_initialization 按文档约定顺序引导全部仓库依赖。
+invoke_system_initialization() {
+    invoke_rust_dev_tools_deps
+    invoke_powershell_route deps host
+    invoke_bundled_tools_deps
+    invoke_powershell_route deps lua
+    invoke_powershell_route deps cbm
+    invoke_powershell_route deps vmm
+    echo "==> System initialization completed."
+}
+
 # show_usage prints the supported command forms so contributors can recover from invalid input.
 # show_usage 用于输出支持的命令形式，方便贡献者在输入无效参数后快速恢复。
 show_usage() {
@@ -157,10 +183,13 @@ show_usage() {
     echo "  ./make.sh run         # run Tauri/WebUI debug build; Vite is managed separately"
     echo "  ./make.sh run release # run Tauri/WebUI release build"
     echo "  ./make.sh deps        # install host + official LuaSkills runtime dependencies"
+    echo "  ./make.sh deps rust-tools # install cargo-hakari and cargo-nextest"
+    echo "  ./make.sh init-system # bootstrap Rust tools and all repository dependencies"
     echo "  ./make.sh deps host   # install host native dependencies only"
     echo "  ./make.sh deps tools  # install the latest bundled sg and rg tools"
     echo "  ./make.sh deps lua    # install official LuaSkills runtime dependencies only"
     echo "  ./make.sh deps cbm    # install the pinned native Codebase Memory runtime only"
+    echo "  ./make.sh deps vmm    # install the managed VMM runtime dependencies only"
 }
 
 # NormalizedMode stores the canonical top-level command token used by the dispatcher below.
@@ -239,12 +268,23 @@ case "$NormalizedMode" in
             exit 1
         fi
         ;;
+    init-system)
+        if [ "$NormalizedVariant" != "" ]; then
+            echo "Unsupported init-system command: '$CommandVariant'" >&2
+            show_usage
+            exit 1
+        fi
+        invoke_system_initialization
+        ;;
     deps)
         case "$NormalizedVariant" in
             tools)
                 invoke_bundled_tools_deps
                 ;;
-            ""|all|host|lua|cbm)
+            rust-tools)
+                invoke_rust_dev_tools_deps
+                ;;
+            ""|all|host|lua|cbm|vmm)
                 invoke_powershell_route deps "$NormalizedVariant"
                 ;;
             *)

@@ -149,8 +149,8 @@ impl TaskRuntime {
             .map(|registry| registry.clone())
     }
 
-    /// Seeds one debug-only TaskRuntime resident subagent entry for service-layer tests.
-    /// 为服务层测试播种一条仅调试构建可用的 TaskRuntime 常驻子代理条目。
+    /// Seeds one test-only TaskRuntime resident subagent entry for service-layer tests.
+    /// 为服务层测试播种一条仅测试使用的 TaskRuntime 常驻子代理条目。
     ///
     /// # Parameters
     /// 参数
@@ -161,12 +161,12 @@ impl TaskRuntime {
     /// 返回值
     /// `Ok(())` when the task record and registry entry are inserted successfully.
     /// 任务记录与注册表条目成功写入时返回 `Ok(())`。
-    #[cfg(debug_assertions)]
-    pub fn seed_debug_subagent_registry_entry(
+    #[cfg(feature = "test-support")]
+    pub fn seed_test_subagent_registry_entry(
         &self,
-        seed: DebugSubagentRegistryEntrySeed,
+        seed: TestSubagentRegistryEntrySeed,
     ) -> Result<(), String> {
-        let DebugSubagentRegistryEntrySeed {
+        let TestSubagentRegistryEntrySeed {
             root_session_id,
             parent_session_id,
             task_id,

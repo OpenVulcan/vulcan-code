@@ -8,13 +8,12 @@ use vulcan_prompt_composer::{
     PromptComposerError, PromptComposerResourceConfig, PromptInvalidationEvent,
     PromptInvalidationReason, PromptSegment, session::fingerprint::compute_assembly_fingerprint,
 };
+use vulcan_runtime_assets::user_vulcan_code_root_for_home;
 
 /// User-level Vulcan root directory name.
 /// 用户级 Vulcan 根目录名。
-const USER_VULCAN_DIR_NAME: &str = ".vulcan";
 /// User-level Vulcan Code namespace directory name.
 /// 用户级 Vulcan Code 命名空间目录名。
-const USER_VULCAN_CODE_DIR_NAME: &str = "code";
 /// Prompt-composer resource directory name.
 /// 提示词组合资源目录名。
 const PROMPT_RESOURCE_DIR_NAME: &str = "prompt";
@@ -196,10 +195,8 @@ fn build_default_runtime_prompt_composer_engine() -> PromptComposerEngine {
 /// Return default user-level prompt-composer resource directories.
 /// 返回默认用户级提示词组合资源目录。
 fn default_prompt_composer_resource_config() -> Option<PromptComposerResourceConfig> {
-    let prompt_root = dirs::home_dir()?
-        .join(USER_VULCAN_DIR_NAME)
-        .join(USER_VULCAN_CODE_DIR_NAME)
-        .join(PROMPT_RESOURCE_DIR_NAME);
+    let home = dirs::home_dir()?;
+    let prompt_root = user_vulcan_code_root_for_home(&home).join(PROMPT_RESOURCE_DIR_NAME);
     Some(PromptComposerResourceConfig {
         personality_directory: Some(prompt_root.join(PROMPT_PERSONALITY_DIR_NAME)),
         tool_help_directory: Some(prompt_root.join(PROMPT_TOOL_HELP_DIR_NAME)),
@@ -814,8 +811,8 @@ mod tests {
         );
     }
 
-    /// Verifies default prompt resource directories use the user `.vulcan/code` namespace.
-    /// 验证默认提示词资源目录使用用户级 `.vulcan/code` 命名空间。
+    /// Verifies default prompt resource directories use the profile-specific user Code namespace.
+    /// 验证默认提示词资源目录使用按构建配置区分的用户级 Code 命名空间。
     #[test]
     fn default_prompt_resource_directories_use_vulcan_code_namespace() {
         let Some(resources) = default_prompt_composer_resource_config() else {
@@ -829,12 +826,22 @@ mod tests {
             .expect("tool-help directory should be available when home exists");
 
         assert!(
-            personality_directory.ends_with(Path::new(".vulcan/code/prompt/personalities")),
+            personality_directory.ends_with(
+                Path::new(vulcan_runtime_assets::USER_VULCAN_ROOT_DIRECTORY_NAME)
+                    .join("code")
+                    .join("prompt")
+                    .join("personalities"),
+            ),
             "{}",
             personality_directory.display()
         );
         assert!(
-            tool_help_directory.ends_with(Path::new(".vulcan/code/prompt/tool-help")),
+            tool_help_directory.ends_with(
+                Path::new(vulcan_runtime_assets::USER_VULCAN_ROOT_DIRECTORY_NAME)
+                    .join("code")
+                    .join("prompt")
+                    .join("tool-help"),
+            ),
             "{}",
             tool_help_directory.display()
         );

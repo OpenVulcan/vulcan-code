@@ -112,11 +112,8 @@ pub fn webui_service_discovery_snapshot_path(
     home_dir: Option<PathBuf>,
     temp_dir: PathBuf,
 ) -> PathBuf {
-    home_dir
-        .unwrap_or(temp_dir)
-        .join(".vulcan")
-        .join("code")
-        .join("webui-service.json")
+    let root = home_dir.unwrap_or(temp_dir);
+    vulcan_runtime_assets::user_vulcan_code_root_for_home(&root).join("webui-service.json")
 }
 
 /// Decodes one URL query component enough for opaque service tokens.

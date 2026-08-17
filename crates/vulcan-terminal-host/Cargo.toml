@@ -20,6 +20,7 @@ portable-pty = "0.9.0"
 serde.workspace = true
 vt100.workspace = true
 vulcan-terminal-host-protocol.workspace = true
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = [

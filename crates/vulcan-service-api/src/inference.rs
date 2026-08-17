@@ -36,8 +36,7 @@ pub fn inference_service_discovery_snapshot_path(
 ) -> PathBuf {
     home_dir
         .map(|home| {
-            home.join(".vulcan")
-                .join("code")
+            vulcan_runtime_assets::user_vulcan_code_root_for_home(&home)
                 .join("inference-service.json")
         })
         .unwrap_or_else(|| temp_dir.join("vulcan-code-inference-service.json"))
@@ -768,7 +767,7 @@ mod inference_client_tests {
         InferenceServiceDiscoverySnapshot {
             api_version: INFERENCE_SERVICE_API_VERSION,
             status: String::from("ready"),
-            base_url: String::from("http://127.0.0.1:17891"),
+            base_url: format!("http://127.0.0.1:{}", crate::WEBUI_SERVICE_HTTP_PORT),
             process_id: 42,
             caller_id: String::from("vmm"),
             consumer_profile_id: String::from("vmm"),
@@ -806,7 +805,10 @@ mod inference_client_tests {
     #[test]
     fn discovery_rejects_non_root_origin() {
         let mut discovery = discovery_fixture();
-        discovery.base_url = String::from("http://127.0.0.1:17891/untrusted");
+        discovery.base_url = format!(
+            "http://127.0.0.1:{}/untrusted",
+            crate::WEBUI_SERVICE_HTTP_PORT
+        );
         assert!(matches!(
             InferenceServiceClient::from_discovery(reqwest::Client::new(), discovery),
             Err(InferenceServiceClientError::InvalidContract(_))

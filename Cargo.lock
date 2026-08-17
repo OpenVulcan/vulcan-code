@@ -6442,6 +6442,7 @@ dependencies = [
  "vulcan-vmm",
  "vulcan-workbench-model",
  "vulcan-workspace-store",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6450,6 +6451,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6457,6 +6459,7 @@ name = "vulcan-change-set"
 version = "0.1.0"
 dependencies = [
  "serde_json",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6473,6 +6476,7 @@ dependencies = [
  "vulcan-service-api",
  "vulcan-service-host",
  "vulcan-service-kernel",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6482,6 +6486,7 @@ dependencies = [
  "serde",
  "serde_json",
  "vulcan-core",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6493,6 +6498,7 @@ dependencies = [
  "vulcan-context",
  "vulcan-core",
  "vulcan-prompt-composer",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6501,6 +6507,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6515,6 +6522,7 @@ dependencies = [
  "tokio",
  "uuid",
  "vulcan-ai-contract",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6524,11 +6532,15 @@ dependencies = [
  "notify",
  "tokio",
  "tracing",
+ "workspace-hack",
 ]
 
 [[package]]
 name = "vulcan-hello"
 version = "0.1.0"
+dependencies = [
+ "workspace-hack",
+]
 
 [[package]]
 name = "vulcan-hooks"
@@ -6539,6 +6551,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "vulcan-context-injection",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6555,6 +6568,7 @@ dependencies = [
  "vulcan-runtime-assets",
  "vulcan-terminal-host-protocol",
  "vulcan-workbench-model",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6568,6 +6582,7 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "vulcan-ai-contract",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6577,6 +6592,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6585,6 +6601,7 @@ version = "0.1.0"
 dependencies = [
  "serde_json",
  "vulcan-tools-luaskills-call",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6594,6 +6611,7 @@ dependencies = [
  "serde",
  "serde_json",
  "vulcan-session-core",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6612,6 +6630,7 @@ dependencies = [
  "tokio-util",
  "vulcan-host-tools",
  "vulcan-runtime-assets",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6632,6 +6651,7 @@ dependencies = [
  "vulcan-prompt-skills",
  "vulcan-runtime-assets",
  "vulcan-task-session",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6639,6 +6659,7 @@ name = "vulcan-process-lifecycle"
 version = "0.1.0"
 dependencies = [
  "windows-sys 0.61.2",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6647,6 +6668,7 @@ version = "0.1.0"
 dependencies = [
  "encoding_rs",
  "vulcan-runtime-assets",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6660,6 +6682,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "vulcan-runtime-assets",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6688,6 +6711,7 @@ dependencies = [
  "vulcan-context",
  "vulcan-llm-core",
  "vulcan-runtime-assets",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6707,6 +6731,7 @@ dependencies = [
  "vulcan-provider-adapters",
  "vulcan-runtime-assets",
  "vulcan-vmm",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6721,6 +6746,7 @@ dependencies = [
  "vulcan-provider-adapters",
  "vulcan-provider-config",
  "vulcan-runtime-assets",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6729,6 +6755,7 @@ version = "0.1.0"
 dependencies = [
  "dirs",
  "encoding_rs",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6743,7 +6770,9 @@ dependencies = [
  "time",
  "vulcan-ai-contract",
  "vulcan-luaskills-config",
+ "vulcan-runtime-assets",
  "vulcan-vmm",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6760,6 +6789,7 @@ dependencies = [
  "uuid",
  "vulcan-ai-contract",
  "vulcan-service-api",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6815,6 +6845,7 @@ dependencies = [
  "vulcan-vmm",
  "vulcan-workbench-model",
  "vulcan-workspace-store",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6841,6 +6872,7 @@ dependencies = [
  "vulcan-runtime-assets",
  "vulcan-vmm",
  "vulcan-workspace-store",
+ "workspace-hack",
  "xz2",
  "zip",
 ]
@@ -6853,6 +6885,7 @@ dependencies = [
  "serde_json",
  "vulcan-context",
  "vulcan-session-core",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6863,6 +6896,7 @@ dependencies = [
  "serde",
  "serde_json",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6870,6 +6904,7 @@ name = "vulcan-subagent-core"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6884,6 +6919,7 @@ dependencies = [
  "vulcan-context-compaction",
  "vulcan-runtime-assets",
  "vulcan-session-core",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6896,6 +6932,7 @@ dependencies = [
  "vt100",
  "vulcan-terminal-host-protocol",
  "windows-sys 0.61.2",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6905,6 +6942,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6912,6 +6950,7 @@ name = "vulcan-tools-luaskills-call"
 version = "0.1.0"
 dependencies = [
  "serde_json",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6919,6 +6958,7 @@ name = "vulcan-tools-manager"
 version = "0.1.0"
 dependencies = [
  "serde_json",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6936,6 +6976,7 @@ dependencies = [
  "tonic 0.12.3",
  "tonic-build 0.12.3",
  "vulcan-context-injection",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6955,6 +6996,7 @@ dependencies = [
  "vulcan-subagent-core",
  "vulcan-task-session",
  "vulcan-vmm",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6983,6 +7025,7 @@ dependencies = [
  "vulcan-session-core",
  "vulcan-vmm",
  "vulcan-workbench-model",
+ "workspace-hack",
  "zip",
 ]
 
@@ -7918,6 +7961,84 @@ dependencies = [
  "serde_json",
  "unicode-xid",
  "wasmparser",
+]
+
+[[package]]
+name = "workspace-hack"
+version = "0.1.0"
+dependencies = [
+ "aho-corasick",
+ "axum 0.8.9",
+ "axum-core 0.5.6",
+ "bit-set",
+ "bytes",
+ "cc",
+ "deranged",
+ "either",
+ "erased-serde",
+ "fastrand",
+ "flate2",
+ "foldhash 0.2.0",
+ "form_urlencoded",
+ "futures-channel",
+ "futures-core",
+ "futures-sink",
+ "futures-task",
+ "futures-util",
+ "getrandom 0.2.17",
+ "getrandom 0.3.4",
+ "hashbrown 0.17.0",
+ "hyper",
+ "hyper-util",
+ "idna",
+ "indexmap 1.9.3",
+ "indexmap 2.14.0",
+ "libc",
+ "lock_api",
+ "memchr",
+ "miniz_oxide",
+ "once_cell",
+ "parking_lot",
+ "percent-encoding",
+ "phf_shared",
+ "proc-macro2",
+ "prost 0.13.5",
+ "prost 0.14.3",
+ "pulldown-cmark",
+ "quote",
+ "regex",
+ "regex-automata",
+ "regex-syntax",
+ "reqwest 0.12.28",
+ "rustls",
+ "rustls-webpki",
+ "schemars 0.8.22",
+ "semver",
+ "serde",
+ "serde_core",
+ "serde_json",
+ "simd-adler32",
+ "slab",
+ "smallvec",
+ "stable_deref_trait",
+ "syn 2.0.117",
+ "sync_wrapper",
+ "tauri",
+ "tauri-build",
+ "tauri-macros",
+ "tauri-utils",
+ "time",
+ "time-macros",
+ "tokio",
+ "tokio-rustls",
+ "tokio-stream",
+ "tokio-tungstenite",
+ "tokio-util",
+ "tower 0.5.3",
+ "tracing",
+ "tungstenite",
+ "url",
+ "uuid",
 ]
 
 [[package]]

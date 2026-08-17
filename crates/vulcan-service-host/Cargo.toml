@@ -19,6 +19,7 @@ tower-http = { version = "0.6.7", features = ["cors"] }
 uuid.workspace = true
 vulcan-ai-contract.workspace = true
 vulcan-service-api.workspace = true
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt"] }

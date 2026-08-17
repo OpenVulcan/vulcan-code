@@ -3,6 +3,106 @@
 
 use std::path::{Path, PathBuf};
 
+/// Build-profile-specific user root directory name used by every user-scoped Vulcan resource.
+/// 所有用户级 Vulcan 资源统一使用的按构建配置区分的用户根目录名。
+pub const USER_VULCAN_ROOT_DIRECTORY_NAME: &str = if cfg!(debug_assertions) {
+    ".vulcan-debug"
+} else {
+    ".vulcan"
+};
+
+/// User-level Vulcan Code namespace directory name.
+/// 用户级 Vulcan Code 命名空间目录名。
+pub const USER_VULCAN_CODE_DIRECTORY_NAME: &str = "code";
+
+/// Release browser-facing service start port.
+/// Release 浏览器侧服务起始端口。
+pub const RELEASE_WEBUI_SERVICE_HTTP_PORT: u16 = 17_891;
+
+/// Release browser-facing service end port.
+/// Release 浏览器侧服务结束端口。
+pub const RELEASE_WEBUI_SERVICE_HTTP_PORT_END: u16 = 17_920;
+
+/// Debug browser-facing service start port.
+/// Debug 浏览器侧服务起始端口。
+pub const DEBUG_WEBUI_SERVICE_HTTP_PORT: u16 = 17_921;
+
+/// Debug browser-facing service end port.
+/// Debug 浏览器侧服务结束端口。
+pub const DEBUG_WEBUI_SERVICE_HTTP_PORT_END: u16 = 17_950;
+
+/// Release VLDB controller port.
+/// Release VLDB 控制器端口。
+pub const RELEASE_VLDB_CONTROLLER_PORT: u16 = 19_801;
+
+/// Debug VLDB controller port.
+/// Debug VLDB 控制器端口。
+pub const DEBUG_VLDB_CONTROLLER_PORT: u16 = 19_802;
+
+/// Port offset reserved for the managed VMM child next to the browser service.
+/// 为浏览器服务旁边的托管 VMM 子进程预留的端口偏移量。
+pub const MANAGED_VMM_PORT_OFFSET: u16 = 10;
+
+/// Returns the default browser-facing service start port for the current Cargo profile.
+/// 返回当前 Cargo 构建配置对应的浏览器侧服务起始端口。
+pub const fn default_webui_service_http_port() -> u16 {
+    if cfg!(debug_assertions) {
+        DEBUG_WEBUI_SERVICE_HTTP_PORT
+    } else {
+        RELEASE_WEBUI_SERVICE_HTTP_PORT
+    }
+}
+
+/// Returns the default browser-facing service end port for the current Cargo profile.
+/// 返回当前 Cargo 构建配置对应的浏览器侧服务结束端口。
+pub const fn default_webui_service_http_port_end() -> u16 {
+    if cfg!(debug_assertions) {
+        DEBUG_WEBUI_SERVICE_HTTP_PORT_END
+    } else {
+        RELEASE_WEBUI_SERVICE_HTTP_PORT_END
+    }
+}
+
+/// Returns the default VLDB controller port for the current Cargo profile.
+/// 返回当前 Cargo 构建配置对应的 VLDB 控制器端口。
+pub const fn default_vldb_controller_port() -> u16 {
+    if cfg!(debug_assertions) {
+        DEBUG_VLDB_CONTROLLER_PORT
+    } else {
+        RELEASE_VLDB_CONTROLLER_PORT
+    }
+}
+
+/// Builds the user Vulcan root below one explicit home directory.
+/// 根据一个明确的用户主目录构建用户级 Vulcan 根目录。
+pub fn user_vulcan_root_for_home(home: &Path) -> PathBuf {
+    home.join(USER_VULCAN_ROOT_DIRECTORY_NAME)
+}
+
+/// Builds the user Vulcan Code root below one explicit home directory.
+/// 根据一个明确的用户主目录构建用户级 Vulcan Code 根目录。
+pub fn user_vulcan_code_root_for_home(home: &Path) -> PathBuf {
+    user_vulcan_root_for_home(home).join(USER_VULCAN_CODE_DIRECTORY_NAME)
+}
+
+/// Resolves the current user's build-profile-specific Vulcan root.
+/// 解析当前用户对应当前构建配置的 Vulcan 根目录。
+pub fn resolve_user_vulcan_root() -> Option<PathBuf> {
+    dirs::home_dir().map(|home| user_vulcan_root_for_home(&home))
+}
+
+/// Resolves the current user's build-profile-specific Vulcan Code root.
+/// 解析当前用户对应当前构建配置的 Vulcan Code 根目录。
+pub fn resolve_user_vulcan_code_root() -> Option<PathBuf> {
+    dirs::home_dir().map(|home| user_vulcan_code_root_for_home(&home))
+}
+
+/// Returns the current profile's default VLDB controller endpoint.
+/// 返回当前构建配置对应的 VLDB 控制器默认端点。
+pub fn default_vldb_controller_endpoint() -> String {
+    format!("http://127.0.0.1:{}", default_vldb_controller_port())
+}
+
 /// Shared external user-text decoding boundaries.
 /// 共享的外部用户文本解码边界。
 pub mod text_decode;
@@ -427,10 +527,10 @@ pub fn resolve_bundled_tool_bin_directory() -> Option<PathBuf> {
 ///
 /// # Returns
 /// 返回值
-/// The exact `~/vulcan/code/plugins` directory, or `None` when the home directory is unavailable.
-/// 返回精确的 `~/vulcan/code/plugins` 目录；无法取得用户主目录时返回 `None`。
+/// The exact `<user-vulcan-root>/code/plugins` directory, or `None` when the home directory is unavailable.
+/// 返回精确的 `<user-vulcan-root>/code/plugins` 目录；无法取得用户主目录时返回 `None`。
 pub fn resolve_user_plugin_root() -> Option<PathBuf> {
-    dirs::home_dir().map(|home| home.join("vulcan").join("code").join("plugins"))
+    resolve_user_vulcan_code_root().map(|root| root.join("plugins"))
 }
 
 /// Returns the current user's Vulcan plugin state root.
@@ -438,10 +538,10 @@ pub fn resolve_user_plugin_root() -> Option<PathBuf> {
 ///
 /// # Returns
 /// 返回值
-/// The exact `~/vulcan/code/plugin-state` directory, or `None` when home is unavailable.
-/// 返回精确的 `~/vulcan/code/plugin-state` 目录；无法取得用户主目录时返回 `None`。
+/// The exact `<user-vulcan-root>/code/plugin-state` directory, or `None` when home is unavailable.
+/// 返回精确的 `<user-vulcan-root>/code/plugin-state` 目录；无法取得用户主目录时返回 `None`。
 pub fn resolve_user_plugin_state_root() -> Option<PathBuf> {
-    dirs::home_dir().map(|home| home.join("vulcan").join("code").join("plugin-state"))
+    resolve_user_vulcan_code_root().map(|root| root.join("plugin-state"))
 }
 
 /// Returns the current user's Vulcan plugin dependency runtime root.
@@ -449,10 +549,10 @@ pub fn resolve_user_plugin_state_root() -> Option<PathBuf> {
 ///
 /// # Returns
 /// 返回值
-/// The exact `~/vulcan/code/plugin-runtime` directory, or `None` when home is unavailable.
-/// 返回精确的 `~/vulcan/code/plugin-runtime` 目录；无法取得用户主目录时返回 `None`。
+/// The exact `<user-vulcan-root>/code/plugin-runtime` directory, or `None` when home is unavailable.
+/// 返回精确的 `<user-vulcan-root>/code/plugin-runtime` 目录；无法取得用户主目录时返回 `None`。
 pub fn resolve_user_plugin_runtime_root() -> Option<PathBuf> {
-    dirs::home_dir().map(|home| home.join("vulcan").join("code").join("plugin-runtime"))
+    resolve_user_vulcan_code_root().map(|root| root.join("plugin-runtime"))
 }
 
 /// Resolves the host-owned distribution root shared by managed Python and Node consumers.
@@ -531,6 +631,57 @@ fn controller_executable_name() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Verifies the user root name is selected by the compiled Cargo profile.
+    /// 验证用户根目录名由当前编译使用的 Cargo 配置选择。
+    #[test]
+    fn user_vulcan_root_name_matches_build_profile() {
+        let expected = if cfg!(debug_assertions) {
+            ".vulcan-debug"
+        } else {
+            ".vulcan"
+        };
+        assert_eq!(USER_VULCAN_ROOT_DIRECTORY_NAME, expected);
+    }
+
+    /// Verifies debug and release service/controller defaults are disjoint.
+    /// 验证 Debug 与 Release 的服务和控制器默认端口彼此不重叠。
+    #[test]
+    fn profile_port_defaults_are_disjoint() {
+        assert_ne!(
+            DEBUG_WEBUI_SERVICE_HTTP_PORT,
+            RELEASE_WEBUI_SERVICE_HTTP_PORT
+        );
+        assert_ne!(DEBUG_VLDB_CONTROLLER_PORT, RELEASE_VLDB_CONTROLLER_PORT);
+        assert_eq!(MANAGED_VMM_PORT_OFFSET, 10);
+    }
+
+    /// Verifies plugin roots stay below the profile-specific user Code namespace.
+    /// 验证插件根目录始终位于按构建配置区分的用户 Code 命名空间下。
+    #[test]
+    fn user_plugin_roots_use_profile_specific_code_root() {
+        let home = PathBuf::from(r"C:\Users\example");
+        let code_root = user_vulcan_code_root_for_home(&home);
+
+        assert_eq!(
+            code_root.join("plugins"),
+            home.join(USER_VULCAN_ROOT_DIRECTORY_NAME)
+                .join(USER_VULCAN_CODE_DIRECTORY_NAME)
+                .join("plugins")
+        );
+        assert_eq!(
+            code_root.join("plugin-state"),
+            home.join(USER_VULCAN_ROOT_DIRECTORY_NAME)
+                .join(USER_VULCAN_CODE_DIRECTORY_NAME)
+                .join("plugin-state")
+        );
+        assert_eq!(
+            code_root.join("plugin-runtime"),
+            home.join(USER_VULCAN_ROOT_DIRECTORY_NAME)
+                .join(USER_VULCAN_CODE_DIRECTORY_NAME)
+                .join("plugin-runtime")
+        );
+    }
 
     /// Verify drive and UNC verbatim paths share one stable native conversion.
     /// 验证盘符与 UNC verbatim 路径共享同一稳定原生转换。

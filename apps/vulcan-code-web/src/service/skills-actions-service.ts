@@ -22,6 +22,7 @@ import type {
   WorkbenchSnapshot,
 } from "@/types";
 import {
+  BROWSER_PREVIEW_USER_VULCAN_ROOT,
   updateBrowserFallbackWorkbench,
 } from "@/service/browser-fallback-workbench";
 import {
@@ -249,7 +250,7 @@ export async function installLuaSkill(skillId: string, source: string, sourceTyp
         displayName: normalizedSkillId,
         version: "0.1.0",
         rootName: "USER",
-        skillDir: `C:/Users/20000/.vulcan/code/luaskills-user/skills/${normalizedSkillId}`,
+        skillDir: `C:/Users/20000/${BROWSER_PREVIEW_USER_VULCAN_ROOT}/code/luaskills-user/skills/${normalizedSkillId}`,
         enabled: true,
         managed: true,
         sourceType,

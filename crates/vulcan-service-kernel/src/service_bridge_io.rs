@@ -686,7 +686,10 @@ mod tests {
         vulcan_service_api::InferenceServiceDiscoverySnapshot {
             api_version: vulcan_service_api::INFERENCE_SERVICE_API_VERSION,
             status: String::from("ready"),
-            base_url: String::from("http://127.0.0.1:17601"),
+            base_url: format!(
+                "http://127.0.0.1:{}",
+                vulcan_service_api::WEBUI_SERVICE_HTTP_PORT
+            ),
             process_id: 42,
             caller_id: String::from("vmm-local"),
             consumer_profile_id: String::from("vmm"),

@@ -1,5 +1,5 @@
 {
-  "endpoint": "http://127.0.0.1:19801",
+  "endpoint": null,
   "autoSpawn": true,
   "processMode": "managed",
   "minimumUptimeSecs": 300,

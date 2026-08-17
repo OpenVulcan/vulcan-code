@@ -6,6 +6,10 @@ import type {
   WorkbenchSnapshot,
 } from "@/types";
 
+// BROWSER_PREVIEW_USER_VULCAN_ROOT is the build-profile-specific user root shown by browser fallback data.
+// BROWSER_PREVIEW_USER_VULCAN_ROOT 是浏览器回退数据展示的按构建配置区分的用户根目录。
+export const BROWSER_PREVIEW_USER_VULCAN_ROOT = import.meta.env.DEV ? ".vulcan-debug" : ".vulcan";
+
 // BrowserFallbackStartup is used when the WebUI runs outside Tauri during frontend development.
 // BrowserFallbackStartup 用于 WebUI 在 Tauri 外部进行前端开发时展示。
 export const browserFallbackStartup: StartupSnapshot = {
@@ -298,8 +302,8 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
     ],
   },
   agentSkills: {
-    systemRoot: "C:/Users/20000/.vulcan/code/skills/.system",
-    userRoot: "C:/Users/20000/.vulcan/code/skills",
+    systemRoot: `C:/Users/20000/${BROWSER_PREVIEW_USER_VULCAN_ROOT}/code/skills/.system`,
+    userRoot: `C:/Users/20000/${BROWSER_PREVIEW_USER_VULCAN_ROOT}/code/skills`,
     notice: "浏览器预览模式正在显示技能示例目录。",
     errors: [],
     categories: [
@@ -350,8 +354,8 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
         },
         origin: { kind: "builtin", label: "VulcanCode", managed: true },
         resources: { scripts: 0, references: 1, assets: 1 },
-        skillFile: "C:/Users/20000/.vulcan/code/skills/.system/security-review/SKILL.md",
-        baseDir: "C:/Users/20000/.vulcan/code/skills/.system/security-review",
+        skillFile: `C:/Users/20000/${BROWSER_PREVIEW_USER_VULCAN_ROOT}/code/skills/.system/security-review/SKILL.md`,
+        baseDir: `C:/Users/20000/${BROWSER_PREVIEW_USER_VULCAN_ROOT}/code/skills/.system/security-review`,
         emoji: "🧭",
         color: "#DC2626",
         body: "Use this skill when the user explicitly requests a security review.",
@@ -360,7 +364,7 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
   },
   subagentCatalog: {
     systemRoot: "D:/openvulcan/vulcan-code/output/resources/subagents",
-    userRoot: "C:/Users/20000/.vulcan/agents",
+    userRoot: `C:/Users/20000/${BROWSER_PREVIEW_USER_VULCAN_ROOT}/agents`,
     notice: "Browser preview mode is showing a sample agent catalog.",
     childAgentForbiddenToolIds: [],
     errors: [],

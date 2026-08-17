@@ -74,7 +74,7 @@ CBM 仓库只构建并发布 `vulcan-codebase-memory-mcp` 专版产物，不再�
 output/dependencies/runtimes/codebase-memory/manifest.json
 ```
 
-清单必须固定协议、版本、平台、相对可执行文件名和小写 SHA-256。宿主会在启动前验证平台、路径边界和文件摘要；不会从 `PATH` 选择公共 `codebase-memory-mcp`。Sidecar cache root 位于 Vulcan Code 的用户可写应用数据目录，通过唯一显式环境变量 `VULCAN_CBM_CACHE_DIR` 传入，不写入打包资产目录。
+清单必须固定协议、版本、平台、相对可执行文件名和小写 SHA-256。宿主会在启动前验证平台、路径边界和文件摘要；不会从 `PATH` 选择公共 `codebase-memory-mcp`。Sidecar cache root 位于 Vulcan Code 的用户可写应用数据目录，通过唯一显式环境变量 `VULCAN_CBM_CACHE_DIR` 传入，不写入打包资产目录；该 Sidecar 使用 stdio，不监听 TCP 端口，release/debug 的隔离由用户数据根目录分别为 `~/.vulcan/code` 与 `~/.vulcan-debug/code` 保证。
 
 CBM 源码只允许在 CBM 仓库或其发布 CI 中编译。Vulcan Code 的 `make build`、`make br` 与 `make release` 只构建宿主，不检出、不调用也不编译 CBM 源码。
 

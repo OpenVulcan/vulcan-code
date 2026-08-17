@@ -12,3 +12,4 @@ workspace = true
 [dependencies]
 dirs.workspace = true
 encoding_rs = "0.8.35"
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }

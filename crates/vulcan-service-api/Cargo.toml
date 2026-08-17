@@ -18,4 +18,6 @@ serde_json.workspace = true
 time = { version = "0.3.44", features = ["formatting", "local-offset", "macros", "serde"] }
 vulcan-ai-contract.workspace = true
 vulcan-luaskills-config.workspace = true
+vulcan-runtime-assets.workspace = true
 vulcan-vmm.workspace = true
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }

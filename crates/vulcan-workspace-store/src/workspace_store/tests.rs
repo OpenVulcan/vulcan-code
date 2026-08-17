@@ -439,6 +439,7 @@ fn session_addon_state_write_does_not_rewrite_segmented_state_document() {
             provider_route_lease: None,
             provider_tool_selections: Default::default(),
             provider_tool_enabled_capabilities: Default::default(),
+            provider_extension_target_sets: Default::default(),
             provider_tool_settings_initialized: false,
             provider_tool_selections_overridden: false,
         },

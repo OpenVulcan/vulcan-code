@@ -12,3 +12,4 @@ workspace = true
 [dependencies]
 serde_json.workspace = true
 vulcan-tools-luaskills-call.workspace = true
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }

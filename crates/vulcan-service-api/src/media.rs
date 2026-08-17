@@ -110,9 +110,14 @@ fn is_allowed_generated_service_media_path(path: &Path) -> bool {
             _ => None,
         })
         .collect::<Vec<_>>();
-    normalized_components
-        .windows(3)
-        .any(|window| window == [".vulcan", "code", "attachments"])
+    normalized_components.windows(3).any(|window| {
+        // Workspace attachments retain `.vulcan`, while user-profile attachments use the build-profile-aware root.
+        // 工作区附件保留 `.vulcan`，用户配置附件则使用感知构建配置的根目录。
+        (window[0] == ".vulcan"
+            || window[0] == vulcan_runtime_assets::USER_VULCAN_ROOT_DIRECTORY_NAME)
+            && window[1] == "code"
+            && window[2] == "attachments"
+    })
 }
 
 /// Returns whether a media path can be served by the local media route.
@@ -122,6 +127,47 @@ fn is_allowed_service_media_asset_path(path: &Path) -> bool {
         return true;
     }
     has_supported_service_media_asset_extension(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies generated JSON attachments remain servable from both authoritative attachment roots.
+    /// 验证生成的 JSON 附件可从两个权威附件根目录提供。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns normally after both roots are accepted and a lookalike root is rejected.
+    /// 两个根目录均被接受且相似伪根目录被拒绝后正常返回。
+    #[test]
+    fn generated_json_attachments_accept_workspace_and_profile_roots() {
+        // WorkspaceAttachment represents the unchanged workspace-local storage contract.
+        // WorkspaceAttachment 表示保持不变的工作区本地存储契约。
+        let workspace_attachment = PathBuf::from("workspace")
+            .join(".vulcan")
+            .join("code")
+            .join("attachments")
+            .join("payload.json");
+        // ProfileAttachment represents the build-profile-aware user storage contract.
+        // ProfileAttachment 表示感知构建配置的用户存储契约。
+        let profile_attachment = PathBuf::from("profile")
+            .join(vulcan_runtime_assets::USER_VULCAN_ROOT_DIRECTORY_NAME)
+            .join("code")
+            .join("attachments")
+            .join("payload.json");
+        // LookalikeAttachment proves only exact authoritative root components are accepted.
+        // LookalikeAttachment 证明仅接受精确的权威根目录组件。
+        let lookalike_attachment = PathBuf::from("profile")
+            .join(".vulcan-debug-backup")
+            .join("code")
+            .join("attachments")
+            .join("payload.json");
+
+        assert!(is_allowed_service_media_asset_path(&workspace_attachment));
+        assert!(is_allowed_service_media_asset_path(&profile_attachment));
+        assert!(!is_allowed_service_media_asset_path(&lookalike_attachment));
+    }
 }
 
 /// Returns whether a local path extension is supported by the media route.

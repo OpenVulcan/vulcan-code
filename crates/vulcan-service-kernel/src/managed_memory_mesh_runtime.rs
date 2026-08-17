@@ -1667,8 +1667,9 @@ fn preferred_vmm_address(discovery: &InferenceServiceDiscoverySnapshot) -> Resul
     let port = origin
         .port_or_known_default()
         .ok_or_else(|| String::from("WebUI 推理地址缺少端口。"))?;
-    if port <= u16::MAX - 10 {
-        Ok(format!("127.0.0.1:{}", port + 10))
+    let port_offset = vulcan_runtime_assets::MANAGED_VMM_PORT_OFFSET;
+    if port <= u16::MAX - port_offset {
+        Ok(format!("127.0.0.1:{}", port + port_offset))
     } else {
         Ok(String::from("127.0.0.1:0"))
     }
@@ -2217,6 +2218,35 @@ mod tests {
             profile_instruction_error: profile_instruction_error.map(str::to_string),
             rerank_error: rerank_error.map(str::to_string),
         }
+    }
+
+    /// Verifies the managed VMM port follows the profile-specific WebUI service port.
+    /// 验证托管 VMM 端口会跟随按编译配置区分的 WebUI 服务端口。
+    #[test]
+    fn preferred_vmm_address_follows_profile_service_port() {
+        let discovery = InferenceServiceDiscoverySnapshot {
+            api_version: INFERENCE_SERVICE_API_VERSION,
+            status: String::from("ready"),
+            base_url: format!(
+                "http://127.0.0.1:{}",
+                vulcan_service_api::WEBUI_SERVICE_HTTP_PORT
+            ),
+            process_id: std::process::id(),
+            caller_id: String::from("vmm-local"),
+            consumer_profile_id: String::from("vmm"),
+            access_token: String::from("test-token"),
+            expires_at_unix_ms: u64::MAX,
+            started_at_unix_ms: String::from("1"),
+        };
+
+        assert_eq!(
+            preferred_vmm_address(&discovery).expect("resolve preferred VMM address"),
+            format!(
+                "127.0.0.1:{}",
+                vulcan_service_api::WEBUI_SERVICE_HTTP_PORT
+                    + vulcan_runtime_assets::MANAGED_VMM_PORT_OFFSET
+            )
+        );
     }
 
     /// Verifies the generated host manifest survives strict semantic JSON round-trip.

@@ -745,15 +745,15 @@ fn default_workspace_project_root() -> Result<std::path::PathBuf, String> {
 ///
 /// # Parameters
 /// 参数
-/// `home` is the user home directory that owns the `.vulcan` data root.
-/// `home` 是拥有 `.vulcan` 数据根目录的用户主目录。
+/// `home` is the user home directory that owns the profile-specific Vulcan data root.
+/// `home` 是拥有按构建配置区分的 Vulcan 数据根目录的用户主目录。
 ///
 /// # Returns
 /// 返回值
-/// Returns `<home>/.vulcan/projects/vulcan_project`.
-/// 返回 `<home>/.vulcan/projects/vulcan_project`。
+/// Returns `<home>/<user-vulcan-root>/projects/vulcan_project`.
+/// 返回 `<home>/<user-vulcan-root>/projects/vulcan_project`。
 fn default_workspace_project_root_from_home(home: &std::path::Path) -> std::path::PathBuf {
-    home.join(".vulcan")
+    vulcan_runtime_assets::user_vulcan_root_for_home(home)
         .join("projects")
         .join(DEFAULT_WORKSPACE_PROJECT_DIRECTORY)
 }
@@ -1368,9 +1368,10 @@ mod tests {
     #[test]
     fn default_workspace_project_root_uses_user_vulcan_projects_directory() {
         let root = default_workspace_project_root_from_home(std::path::Path::new("example-home"));
-        let expected_suffix = std::path::PathBuf::from(".vulcan")
-            .join("projects")
-            .join("vulcan_project");
+        let expected_suffix =
+            std::path::PathBuf::from(vulcan_runtime_assets::USER_VULCAN_ROOT_DIRECTORY_NAME)
+                .join("projects")
+                .join("vulcan_project");
 
         assert!(root.ends_with(expected_suffix));
     }

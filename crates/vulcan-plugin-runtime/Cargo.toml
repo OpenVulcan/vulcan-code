@@ -23,6 +23,7 @@ vulcan-hooks = { path = "../vulcan-hooks" }
 vulcan-prompt-skills = { path = "../vulcan-prompt-skills" }
 vulcan-runtime-assets.workspace = true
 vulcan-task-session = { path = "../vulcan-task-session" }
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 
 [dev-dependencies]
 tempfile = "3.23.0"

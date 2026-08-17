@@ -455,7 +455,8 @@ pub async fn enforce_tool_result_budget(
 }
 ```
 
-**持久化目录**：`~/.vulcan/code/tool-results/{session_id}/{tool_result_id}.txt`
+**持久化目录**：`<user-vulcan-root>/code/tool-results/{session_id}/{tool_result_id}.txt`。
+其中 `<user-vulcan-root>` 在 release 中为 `~/.vulcan`，在 debug 中为 `~/.vulcan-debug`。
 
 #### 2.6.6 Cache Guard（Prompt Cache 保护）
 
@@ -741,7 +742,7 @@ pub enum PromptSkillSource {
 ### 4.3 存储布局
 
 ```
-~/.vulcan/code/
+<user-vulcan-root>/code/
 ├── prompt-skills/
 │   ├── built-in/
 │   │   ├── code-review/skill.yaml + template.md
@@ -964,7 +965,7 @@ skills:
 | `prompt_skill_hub/` 模块骨架 | `prompt_skill_hub/mod.rs` | P0 |
 | Prompt Skill 注册表 | `prompt_skill_hub/registry.rs` | P0 |
 | 极简模板引擎 | `prompt_skill_hub/template.rs` | P0 |
-| 目录布局初始化 | `~/.vulcan/code/prompt-skills/` | P0 |
+| 目录布局初始化 | `<user-vulcan-root>/code/prompt-skills/` | P0 |
 | 5 个内置 Prompt Skill | `built-in/` | P1 |
 | System Prompt 构建流程增强 | `agent_runtime/config.rs` | P0 |
 | 与 Budget 集成 | `context/budget.rs` | P0 |

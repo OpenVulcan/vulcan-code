@@ -25,11 +25,12 @@ pub const WEBUI_REDACTED_SECRET_PLACEHOLDER: &str = "********";
 
 /// Default local port used by the browser-facing WebUI service.
 /// 浏览器侧 WebUI 服务使用的默认本地端口。
-pub const WEBUI_SERVICE_HTTP_PORT: u16 = 17891;
+pub const WEBUI_SERVICE_HTTP_PORT: u16 = vulcan_runtime_assets::default_webui_service_http_port();
 
 /// Last local port tried by automatic browser-facing service discovery.
 /// 浏览器侧服务自动发现尝试的最后一个本地端口。
-pub const WEBUI_SERVICE_HTTP_PORT_END: u16 = 17920;
+pub const WEBUI_SERVICE_HTTP_PORT_END: u16 =
+    vulcan_runtime_assets::default_webui_service_http_port_end();
 
 /// Environment variable name used to override the browser-facing service port.
 /// 用于覆盖浏览器侧服务端口的环境变量名。
@@ -330,16 +331,17 @@ mod tests {
     /// 验证浏览器侧 CORS 仅允许回环 HTTP 与受信任 Tauri 来源。
     #[test]
     fn webui_service_origin_allows_only_loopback_http_and_tauri_origins() {
+        let service_port = WEBUI_SERVICE_HTTP_PORT;
         for origin in [
-            "http://localhost:17601",
-            "https://localhost:443",
-            "http://127.0.0.1:17601",
-            "http://[::1]:17601",
-            "tauri://localhost",
-            "http://tauri.localhost",
-            "https://tauri.localhost",
+            format!("http://localhost:{service_port}"),
+            String::from("https://localhost:443"),
+            format!("http://127.0.0.1:{service_port}"),
+            format!("http://[::1]:{service_port}"),
+            String::from("tauri://localhost"),
+            String::from("http://tauri.localhost"),
+            String::from("https://tauri.localhost"),
         ] {
-            assert!(webui_service_origin_text_is_allowed(origin));
+            assert!(webui_service_origin_text_is_allowed(&origin));
         }
 
         for origin in [
@@ -358,8 +360,9 @@ mod tests {
     /// 验证浏览器 WebSocket 来源必须存在才会被接受。
     #[test]
     fn webui_service_required_origin_rejects_missing_origin() {
+        let service_origin = format!("http://127.0.0.1:{WEBUI_SERVICE_HTTP_PORT}");
         assert!(webui_service_required_origin_text_is_allowed(Some(
-            "http://127.0.0.1:17601"
+            &service_origin
         )));
         assert!(!webui_service_required_origin_text_is_allowed(None));
         assert!(!webui_service_required_origin_text_is_allowed(Some(
@@ -451,11 +454,11 @@ mod tests {
 
         assert_eq!(
             webui_service_discovery_snapshot_path(Some(home.clone()), temp.clone()),
-            home.join(".vulcan").join("code").join("webui-service.json")
+            vulcan_runtime_assets::user_vulcan_code_root_for_home(&home).join("webui-service.json")
         );
         assert_eq!(
             webui_service_discovery_snapshot_path(None, temp.clone()),
-            temp.join(".vulcan").join("code").join("webui-service.json")
+            vulcan_runtime_assets::user_vulcan_code_root_for_home(&temp).join("webui-service.json")
         );
     }
 
@@ -463,13 +466,20 @@ mod tests {
     /// 验证浏览器服务发现快照保持 URL 与主机字段一致。
     #[test]
     fn webui_service_ready_discovery_snapshot_builds_consistent_url() {
-        let snapshot =
-            webui_service_ready_discovery_snapshot(17891, 42, "123456789", "token-value");
+        let snapshot = webui_service_ready_discovery_snapshot(
+            WEBUI_SERVICE_HTTP_PORT,
+            42,
+            "123456789",
+            "token-value",
+        );
 
         assert_eq!(snapshot.status, "ready");
         assert_eq!(snapshot.host, WEBUI_SERVICE_LOOPBACK_HOST);
-        assert_eq!(snapshot.base_url, "http://127.0.0.1:17891");
-        assert_eq!(snapshot.port, 17891);
+        assert_eq!(
+            snapshot.base_url,
+            format!("http://127.0.0.1:{WEBUI_SERVICE_HTTP_PORT}")
+        );
+        assert_eq!(snapshot.port, WEBUI_SERVICE_HTTP_PORT);
         assert_eq!(snapshot.pid, 42);
         assert_eq!(snapshot.started_at, "123456789");
         assert_eq!(snapshot.service_token, "token-value");
@@ -479,8 +489,12 @@ mod tests {
     /// 验证浏览器发现快照的调试格式绝不暴露服务令牌。
     #[test]
     fn webui_service_discovery_debug_redacts_service_token() {
-        let snapshot =
-            webui_service_ready_discovery_snapshot(17891, 42, "123456789", "token-value");
+        let snapshot = webui_service_ready_discovery_snapshot(
+            WEBUI_SERVICE_HTTP_PORT,
+            42,
+            "123456789",
+            "token-value",
+        );
         let debug = format!("{snapshot:?}");
 
         assert!(debug.contains("<redacted>"));

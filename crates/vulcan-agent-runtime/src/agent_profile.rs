@@ -9,7 +9,9 @@ use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use vulcan_runtime_assets::text_decode::decode_complete_user_text;
+use vulcan_runtime_assets::{
+    text_decode::decode_complete_user_text, user_vulcan_code_root_for_home,
+};
 use vulcan_session_core::ExecutionRuntimePolicyRequest;
 
 /// Relative directory name that stores user-authored agent markdown files.
@@ -124,7 +126,7 @@ pub fn agent_profile_root_directory() -> PathBuf {
     let home = dirs::home_dir()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
-    home.join(".vulcan").join("code")
+    user_vulcan_code_root_for_home(&home)
 }
 
 /// Returns the directory that stores user-authored agent markdown files.

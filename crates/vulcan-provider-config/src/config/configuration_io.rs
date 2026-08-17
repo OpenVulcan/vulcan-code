@@ -196,7 +196,7 @@ pub fn configuration_file_path() -> PathBuf {
             .to_path_buf()
     });
 
-    home.join(".vulcan").join("vulcan-code.json")
+    runtime_assets::user_vulcan_root_for_home(&home).join("vulcan-code.json")
 }
 
 /// Returns the sole standalone public AI connection file path.
@@ -204,17 +204,15 @@ pub fn configuration_file_path() -> PathBuf {
 ///
 /// # Returns
 /// 返回值
-/// `~/.vulcan/code/ai-connections.toml`.
-/// 返回 `~/.vulcan/code/ai-connections.toml`。
+/// `<user-vulcan-root>/code/ai-connections.toml`.
+/// 返回 `<user-vulcan-root>/code/ai-connections.toml`。
 pub fn public_ai_connections_file_path() -> PathBuf {
     let home = dirs::home_dir().unwrap_or_else(|| {
         std::env::current_dir()
             .unwrap_or_else(|_| PathBuf::from("."))
             .to_path_buf()
     });
-    home.join(".vulcan")
-        .join("code")
-        .join("ai-connections.toml")
+    runtime_assets::user_vulcan_code_root_for_home(&home).join("ai-connections.toml")
 }
 
 /// Loads the standalone version-one public AI connection file.

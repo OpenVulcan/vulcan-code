@@ -42,7 +42,7 @@ define route-command
 endef
 endif
 
-.PHONY: help sync vite start stop status build build-release release run run-release br br-release licenses deps deps-all deps-host deps-vldb deps-rtk deps-tools deps-lua deps-cbm deps-vmm host vldb rtk tools lua cbm vmm all
+.PHONY: help sync vite start stop status build build-release release run run-release br br-release licenses deps deps-all deps-host deps-vldb deps-rtk deps-tools deps-lua deps-cbm deps-vmm init-system deps-rust-tools host vldb rtk tools lua cbm vmm rust-tools all
 
 # VITE_ACTION captures the required lifecycle action from `make vite start`, `stop`, or `status`.
 # VITE_ACTION 从 `make vite start`、`stop` 或 `status` 中捕获必需的生命周期操作。
@@ -73,10 +73,12 @@ help:
 	@echo "  make br-release    # build and run Tauri/WebUI release"
 	@echo "  make licenses      # generate Rust third-party notices"
 	@echo "  make deps          # install host + Lua + Codebase Memory + VMM dependencies"
+	@echo "  make init-system   # bootstrap Rust tools and all repository dependencies"
 	@echo "  make deps-host     # install host dependencies"
 	@echo "  make deps-vldb     # install vldb-controller host dependency"
 	@echo "  make deps-rtk      # install RTK host dependency"
 	@echo "  make deps-tools    # install the latest bundled sg and rg tools"
+	@echo "  make deps-rust-tools # install cargo-hakari and cargo-nextest"
 	@echo "  make deps-lua      # install Lua dependencies"
 	@echo "  make deps-cbm      # install the pinned native Codebase Memory runtime"
 	@echo "  make deps-vmm      # build and install the managed VMM runtime dependency"
@@ -170,6 +172,11 @@ licenses:
 deps:
 	$(call route-command,$(DEPS_ROUTE_COMMAND))
 
+# init-system routes the ordered fresh-environment bootstrap command.
+# init-system 转发新环境的一键有序初始化命令。
+init-system:
+	$(call route-command,init-system)
+
 # deps-all routes the explicit all-dependencies installation step.
 # deps-all 路由显式全部依赖安装步骤。
 deps-all:
@@ -194,6 +201,11 @@ deps-rtk:
 # deps-tools 路由最新版内建 sg 与 rg 安装步骤。
 deps-tools:
 	$(call route-command,deps tools)
+
+# deps-rust-tools routes Rust workspace maintenance-tool installation.
+# deps-rust-tools 转发 Rust 工作区维护工具安装步骤。
+deps-rust-tools:
+	$(call route-command,deps rust-tools)
 
 # deps-lua routes Lua dependency installation.
 # deps-lua 路由 Lua 依赖安装步骤。
@@ -253,6 +265,16 @@ ifneq ($(filter deps,$(MAKECMDGOALS)),)
 	@:
 else
 	$(call route-command,deps tools)
+
+endif
+
+# rust-tools is a deps companion no-op when used as `make deps rust-tools`.
+# rust-tools 在 `make deps rust-tools` 形式中作为 deps 的伴随空目标。
+rust-tools:
+ifneq ($(filter deps,$(MAKECMDGOALS)),)
+	@:
+else
+	$(call route-command,deps rust-tools)
 endif
 
 # lua is a deps companion no-op when used as `make deps lua`.

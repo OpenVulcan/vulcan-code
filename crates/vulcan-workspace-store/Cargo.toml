@@ -32,6 +32,7 @@ vulcan-runtime-assets.workspace = true
 vulcan-session-core.workspace = true
 vulcan-workbench-model.workspace = true
 vulcan-vmm.workspace = true
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 
 [dev-dependencies]
 encoding_rs = "0.8.35"

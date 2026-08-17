@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use vulcan_runtime_assets::text_decode::decode_complete_user_text;
+use vulcan_runtime_assets::{text_decode::decode_complete_user_text, user_vulcan_root_for_home};
 
 mod install;
 
@@ -24,7 +24,7 @@ pub const SKILL_FILE_NAME: &str = "SKILL.md";
 
 /// Default directory name used below the user's home directory.
 /// 用户主目录下使用的默认目录名。
-pub const DEFAULT_USER_SKILL_DIR: &str = ".vulcan/code/skills";
+pub const DEFAULT_USER_SKILL_DIR: &str = "code/skills";
 
 /// Directory name that stores host-managed system prompt skills.
 /// 存放宿主管理系统提示词技能的目录名。
@@ -635,9 +635,10 @@ pub enum PromptSkillStateSource {
 /// Resolves the default user prompt skill root.
 /// 解析默认用户提示词技能根目录。
 pub fn default_user_skill_root() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(DEFAULT_USER_SKILL_DIR)
+    let user_vulcan_root = dirs::home_dir()
+        .map(|home| user_vulcan_root_for_home(&home))
+        .unwrap_or_else(|| user_vulcan_root_for_home(Path::new(".")));
+    user_vulcan_root.join(DEFAULT_USER_SKILL_DIR)
 }
 
 /// Resolves the default host-managed system prompt skill root.

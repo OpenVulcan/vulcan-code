@@ -79,6 +79,10 @@ $CodebaseMemoryDepsScriptPath = Join-Path $ScriptDir "scripts\install_codebase_m
 # VmmDepsScriptPath 用于指向显式准备托管 VMM 依赖的脚本。
 $VmmDepsScriptPath = Join-Path $ScriptDir "scripts\package_vmm_runtime.ps1"
 
+# RustDevToolsScriptPath points at the Rust workspace maintenance-tool installer.
+# RustDevToolsScriptPath 用于指向 Rust 工作区维护工具安装器。
+$RustDevToolsScriptPath = Join-Path $ScriptDir "scripts\install_rust_dev_tools.ps1"
+
 # RustNoticesScriptPath points at the dedicated PowerShell notice-generation script for the About page.
 # RustNoticesScriptPath 用于指向关于页面专用的 Rust 许可证声明生成脚本。
 $RustNoticesScriptPath = Join-Path $ScriptDir "scripts\generate_rust_third_party_notices.ps1"
@@ -202,11 +206,12 @@ function Invoke-TauriBuildAndRun {
 # DependencyKind 用于选择要初始化的依赖域。
 function Invoke-DependencyInstall {
     param(
-        [ValidateSet("host", "vldb", "rtk", "tools", "lua", "cbm", "vmm")]
+        [ValidateSet("rust-tools", "host", "vldb", "rtk", "tools", "lua", "cbm", "vmm")]
         [string]$DependencyKind
     )
 
     $ScriptPath = switch ($DependencyKind) {
+        "rust-tools" { $RustDevToolsScriptPath }
         "host" { $HostDepsScriptPath }
         "vldb" { $HostDepsScriptPath }
         "rtk"  { $HostDepsScriptPath }
@@ -236,6 +241,29 @@ function Invoke-DependencyInstall {
     if ($LASTEXITCODE -ne 0) {
         exit $LASTEXITCODE
     }
+}
+
+# Invoke-SystemInitialization installs Rust tooling first, then initializes every repository-owned dependency domain.
+# Invoke-SystemInitialization 先安装 Rust 工具，再初始化仓库拥有的全部依赖域。
+# Variant must be empty because init-system is the single ordered bootstrap contract for a fresh environment.
+# Variant 必须为空，因为 init-system 是新环境的一键有序初始化契约。
+function Invoke-SystemInitialization {
+    param(
+        [string]$Variant
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($Variant)) {
+        throw "Unsupported init-system command: '$Variant'"
+    }
+
+    Invoke-DependencyInstall -DependencyKind "rust-tools"
+    Invoke-DependencyInstall -DependencyKind "host"
+    Invoke-DependencyInstall -DependencyKind "tools"
+    Invoke-DependencyInstall -DependencyKind "lua"
+    Invoke-DependencyInstall -DependencyKind "cbm"
+    Invoke-DependencyInstall -DependencyKind "vmm"
+
+    Write-Host "==> System initialization completed."
 }
 
 # Invoke-RustThirdPartyNoticeGeneration delegates About-page Rust notice generation to the dedicated PowerShell script.
@@ -268,6 +296,8 @@ function Show-Usage {
     Write-Host "  ./make run         # run Tauri/WebUI debug build; Vite is managed separately"
     Write-Host "  ./make run release # run Tauri/WebUI release build"
     Write-Host "  ./make deps        # install host + LuaSkills + Codebase Memory + VMM runtime dependencies"
+    Write-Host "  ./make deps rust-tools # install cargo-hakari and cargo-nextest"
+    Write-Host "  ./make init-system # bootstrap Rust tools and all repository dependencies"
     Write-Host "  ./make deps host   # install host native dependencies only"
     Write-Host "  ./make deps vldb   # install vldb-controller host dependency only"
     Write-Host "  ./make deps rtk    # install RTK host dependency only"
@@ -354,6 +384,9 @@ switch ($NormalizedMode) {
             exit 1
         }
     }
+    "init-system" {
+        Invoke-SystemInitialization -Variant $NormalizedVariant
+    }
     "deps" {
         switch ($NormalizedVariant) {
             "" {
@@ -378,6 +411,9 @@ switch ($NormalizedMode) {
             }
             "rtk" {
                 Invoke-DependencyInstall -DependencyKind "rtk"
+            }
+            "rust-tools" {
+                Invoke-DependencyInstall -DependencyKind "rust-tools"
             }
             "tools" {
                 Invoke-DependencyInstall -DependencyKind "tools"

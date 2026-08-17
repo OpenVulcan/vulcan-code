@@ -19,6 +19,7 @@ serde_json.workspace = true
 tokio.workspace = true
 tokio-tungstenite.workspace = true
 vulcan-ai-contract.workspace = true
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 
 [lints]
 workspace = true

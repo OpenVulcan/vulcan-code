@@ -43,3 +43,7 @@ debug 模式下的 `run` 与 `br` 不再自动启动或停止 Vite；开发服�
 pnpm --dir apps/vulcan-code-web run lint
 pnpm --dir apps/vulcan-code-web run build
 ```
+
+## 开发环境初始化
+
+新环境先执行 `make init-system`，统一安装 Rust 工作区工具与仓库依赖；Cargo 并发限制、workspace-hack 和 nextest 配置见 [`docs/development-environment.md`](docs/development-environment.md)。

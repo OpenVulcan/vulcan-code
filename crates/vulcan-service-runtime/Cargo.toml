@@ -30,6 +30,7 @@ vulcan-vmm.workspace = true
 vulcan-workspace-store.workspace = true
 xz2.workspace = true
 zip.workspace = true
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 
 [build-dependencies]
 semver = "1"

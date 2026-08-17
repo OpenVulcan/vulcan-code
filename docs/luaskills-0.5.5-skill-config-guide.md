@@ -17,12 +17,14 @@ Vulcan Code 为两个 LuaSkills 引擎传入同一个固定配置根：
 生产环境默认展开为：
 
 ```text
-~/.vulcan/code/luaskills-config/
+<user-vulcan-root>/code/luaskills-config/
 ├── skills/
 │   └── config.json
 └── system-skills/
     └── config.json
 ```
+
+其中 `<user-vulcan-root>` 会随构建配置变化：release 为 `~/.vulcan`，debug 为 `~/.vulcan-debug`。
 
 普通 USER 技能使用 `skills/config.json`，ROOT 系统技能使用 `system-skills/config.json`。配置根与技能安装目录、构建产物和运行时资源目录相互独立。
 

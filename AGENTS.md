@@ -40,3 +40,12 @@
 - 专项契约变化时，同步更新对应按需文档和源码测试；不要把完整实现细节复制回 `AGENTS.md`。
 - 链接目标已经删除、移动或与当前源码不一致时，必须在同一任务中修正或移除链接。
 - 已完成计划可以保存决策证据，但不能作为当前运行时契约的唯一来源。
+
+## 四、测试与构建资源约束
+
+1. **默认并发上限。** 仓库 `.cargo/config.toml` 将 Cargo 编译并发限制为 `build.jobs = 4`，常规 Rust 测试 harness 限制为 `RUST_TEST_THREADS = 4`；不得在验证命令中无故移除或绕过这两个默认值。
+2. **nextest 约束。** `.config/nextest.toml` 将默认 `test-threads` 限制为 4；使用 nextest 时保留该配置，若临时提高并发必须明确说明原因与资源风险。
+3. **共享资源测试必须串行。** 涉及共享 Provider Manifest、服务内核注册表、端口或其他进程级资源的测试，使用 `--test-threads=1`；nextest 使用 `cargo nextest run --test-threads=1`，避免并行测试互相争用导致假失败。
+4. **优先小范围验证。** 修改后先执行目标 crate 的 `cargo check` 或定向测试，再决定是否运行工作区级测试；工作区全量测试可能同时启动大量测试进程，不得默认无约束执行。
+5. **doctest 单独执行。** `cargo nextest` 不覆盖 doctest；需要验证文档测试时必须额外执行 `cargo test --doc`。
+6. **新环境入口。** 新开发环境优先执行 `make init-system`，不要要求会话手工拼接宿主、Lua、Codebase Memory、VMM 和 Rust 测试工具安装命令；初始化入口的变更必须同步更新 `docs/development-environment.md`。

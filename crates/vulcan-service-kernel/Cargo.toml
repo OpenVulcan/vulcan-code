@@ -55,12 +55,16 @@ vulcan-tools-manager.workspace = true
 vulcan-vmm.workspace = true
 vulcan-workbench-model.workspace = true
 vulcan-workspace-store.workspace = true
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 
 [target.'cfg(windows)'.dependencies]
 vulcan-process-lifecycle = { path = "../vulcan-process-lifecycle" }
 
 [dev-dependencies]
 tempfile = "3.27.0"
+# Enables deterministic task-runtime registry seeding only while compiling service-kernel tests.
+# 仅在编译 service-kernel 测试时启用确定性的任务运行时注册表播种能力。
+vulcan-agent-runtime = { workspace = true, features = ["test-support"] }
 # Enables the provider runtime HTTP-client injection seam for signed transport E2E tests.
 # 为签名传输 E2E 测试启用供应商运行时 HTTP 客户端注入接缝。
 vulcan-provider-adapters = { workspace = true, features = ["test-support"] }

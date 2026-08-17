@@ -27,7 +27,7 @@ Agent Skills 的核心原则是：
 - 当前“技能”区域内部包含 `lua` 与 `agent` 两个子页面。
 - Agent Skills 已经具有独立的刷新响应和版本投影，并非必须继续依附 LuaSkills。
 - Agent Skills 已支持全局启停、单技能启停、项目级继承/启用/停用覆盖，以及智能体级提示词技能策略。
-- Agent Skills 当前从系统根和用户根加载，默认用户根为 `~/.vulcan/code/skills`，默认系统根位于其 `.system` 子目录。
+- Agent Skills 当前从系统根和用户根加载，用户根为 `<user-vulcan-root>/code/skills`，默认系统根位于其 `.system` 子目录；release 的 `<user-vulcan-root>` 为 `~/.vulcan`，debug 为 `~/.vulcan-debug`。
 - 当前扫描器只扫描两个根目录的直接子目录，并读取其中的 `SKILL.md`。
 - 同名技能由后扫描的用户层覆盖系统层。
 - 当前 `SKILL.md` 只解析 `name` 与 `description`。
@@ -319,7 +319,7 @@ origin:
 建议放在 Agent Skills 用户根目录的宿主管理子目录中，例如：
 
 ```text
-~/.vulcan/code/skills/.vulcan/
+<user-vulcan-root>/code/skills/.vulcan/
   categories.yaml
   catalog-overrides.yaml
   origins.yaml

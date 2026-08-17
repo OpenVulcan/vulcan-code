@@ -1125,10 +1125,10 @@ pub struct TaskRuntime {
     max_depth: usize,
 }
 
-/// Debug-only input for seeding one resident subagent registry entry.
-/// 用于播种一条常驻子代理注册表条目的仅调试输入。
-#[cfg(debug_assertions)]
-pub struct DebugSubagentRegistryEntrySeed {
+/// Test-only input for seeding one resident subagent registry entry.
+/// 用于播种一条常驻子代理注册表条目的仅测试输入。
+#[cfg(feature = "test-support")]
+pub struct TestSubagentRegistryEntrySeed {
     /// Root session that owns the seeded child-agent tree.
     /// 拥有待播种子代理树的根会话。
     pub root_session_id: SessionId,

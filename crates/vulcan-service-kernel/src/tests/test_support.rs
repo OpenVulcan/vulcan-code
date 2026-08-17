@@ -3,8 +3,7 @@
 
 use super::*;
 
-#[cfg(debug_assertions)]
-use vulcan_agent_runtime::agent_runtime::task_runtime::DebugSubagentRegistryEntrySeed;
+use vulcan_agent_runtime::agent_runtime::task_runtime::TestSubagentRegistryEntrySeed;
 
 /// Records one completed physical Provider call in a service-kernel test runtime state.
 /// 在 Service Kernel 测试运行态中记录一次已经完成的 Provider 物理调用。
@@ -244,7 +243,6 @@ pub(super) fn seed_test_subagent_registry_from_panel_states(
 /// `root_session_id` 是子代理树的根父会话。
 /// `states` are fixture states converted into resident TaskRuntime entries.
 /// `states` 是转换为常驻 TaskRuntime 条目的夹具状态。
-#[cfg(debug_assertions)]
 pub(super) fn seed_test_live_subagent_registry_from_panel_states(
     guard: &mut ServiceBridgeState,
     root_session_id: SessionId,
@@ -260,7 +258,7 @@ pub(super) fn seed_test_live_subagent_registry_from_panel_states(
         .task_runtime;
     for state in states {
         task_runtime
-            .seed_debug_subagent_registry_entry(DebugSubagentRegistryEntrySeed {
+            .seed_test_subagent_registry_entry(TestSubagentRegistryEntrySeed {
                 root_session_id,
                 parent_session_id: state.parent_session_id,
                 task_id: state.task_id,

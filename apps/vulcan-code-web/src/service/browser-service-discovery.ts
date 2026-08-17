@@ -34,13 +34,15 @@ const BROWSER_SERVICE_URL_STORAGE_KEY = "vulcan.service.url";
 // BROWSER_SERVICE_TOKEN_STORAGE_KEY 保存当前浏览器服务实例令牌，供媒体 URL 使用。
 const BROWSER_SERVICE_TOKEN_STORAGE_KEY = "vulcan.service.token";
 
-// DEFAULT_BROWSER_SERVICE_URL is the loopback endpoint started by the desktop service.
-// DEFAULT_BROWSER_SERVICE_URL 是桌面服务启动的回环端点。
-const DEFAULT_BROWSER_SERVICE_URL = "http://127.0.0.1:17891";
+// DEFAULT_BROWSER_SERVICE_URL is the profile-specific loopback endpoint started by the desktop service.
+// DEFAULT_BROWSER_SERVICE_URL 是桌面服务按构建配置启动的回环端点。
+const DEFAULT_BROWSER_SERVICE_URL = import.meta.env.DEV
+  ? "http://127.0.0.1:17921"
+  : "http://127.0.0.1:17891";
 
-// BROWSER_SERVICE_PORT_END is the last loopback port probed for automatic discovery.
-// BROWSER_SERVICE_PORT_END 是自动发现探测的最后一个回环端口。
-const BROWSER_SERVICE_PORT_END = 17920;
+// BROWSER_SERVICE_PORT_END is the profile-specific last loopback port probed for automatic discovery.
+// BROWSER_SERVICE_PORT_END 是自动发现按构建配置探测的最后一个回环端口。
+const BROWSER_SERVICE_PORT_END = import.meta.env.DEV ? 17950 : 17920;
 
 // BROWSER_SERVICE_HEALTH_TIMEOUT_MS caps each discovery probe without treating brief startup stalls as offline.
 // BROWSER_SERVICE_HEALTH_TIMEOUT_MS 限制单次发现探测时长，同时避免把短暂启动卡顿误判为离线。

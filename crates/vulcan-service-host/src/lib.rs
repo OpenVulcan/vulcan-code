@@ -2312,7 +2312,7 @@ mod tests {
     use axum::body::{Body, to_bytes};
     use serde_json::json;
     use tower::ServiceExt;
-    use vulcan_service_api::webui_service_ready_discovery_snapshot;
+    use vulcan_service_api::{WEBUI_SERVICE_HTTP_PORT, webui_service_ready_discovery_snapshot};
 
     /// Verifies the event socket accepts only one exact well-formed client UUID query value.
     /// 验证事件套接字只接受一个精确且格式正确的客户端 UUID 查询值。
@@ -2591,7 +2591,7 @@ mod tests {
             });
         build_webui_service_router(WebuiServiceHttpConfig {
             discovery: Arc::new(Mutex::new(webui_service_ready_discovery_snapshot(
-                17891,
+                WEBUI_SERVICE_HTTP_PORT,
                 42,
                 "123",
                 "test-token",
@@ -2604,7 +2604,7 @@ mod tests {
             inference_discovery: Arc::new(Mutex::new(InferenceServiceDiscoverySnapshot {
                 api_version: INFERENCE_SERVICE_API_VERSION,
                 status: String::from("ready"),
-                base_url: String::from("http://127.0.0.1:17891"),
+                base_url: format!("http://127.0.0.1:{WEBUI_SERVICE_HTTP_PORT}"),
                 process_id: 42,
                 caller_id: String::from("test-caller"),
                 consumer_profile_id: String::from("test-profile"),

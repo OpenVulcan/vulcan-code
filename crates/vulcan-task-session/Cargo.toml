@@ -17,6 +17,7 @@ vulcan-context.workspace = true
 vulcan-context-compaction.workspace = true
 vulcan-runtime-assets.workspace = true
 vulcan-session-core.workspace = true
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 
 [dev-dependencies]
 encoding_rs = "0.8.35"

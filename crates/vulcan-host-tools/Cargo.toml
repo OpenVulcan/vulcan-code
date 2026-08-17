@@ -20,3 +20,4 @@ vt100.workspace = true
 vulcan-runtime-assets.workspace = true
 vulcan-terminal-host-protocol.workspace = true
 vulcan-workbench-model.workspace = true
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }

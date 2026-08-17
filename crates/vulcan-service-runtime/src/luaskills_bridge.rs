@@ -1470,7 +1470,8 @@ fn build_host_options(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .map(str::to_string);
+        .map(str::to_string)
+        .or_else(|| Some(vulcan_runtime_assets::default_vldb_controller_endpoint()));
     host_options.space_controller.auto_spawn = controller.auto_spawn;
     host_options.space_controller.executable_path = controller
         .executable_path

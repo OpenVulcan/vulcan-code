@@ -296,6 +296,7 @@ fn build_controller_client_config(
     controller: &PersistedControllerConfiguration,
 ) -> Result<ControllerClientConfig, String> {
     let mut config = ControllerClientConfig::default();
+    config.endpoint = runtime_assets::default_vldb_controller_endpoint();
 
     if let Some(endpoint) = controller.endpoint.as_deref() {
         let trimmed = endpoint.trim();
@@ -760,7 +761,7 @@ pub fn application_data_root() -> PathBuf {
                 .to_path_buf()
         });
 
-        home.join(".vulcan").join("code")
+        runtime_assets::user_vulcan_code_root_for_home(&home)
     }
 }
 
@@ -778,10 +779,10 @@ pub fn application_luaskills_config_root() -> Result<PathBuf, String> {
     #[cfg(not(test))]
     // root requires the platform home directory and deliberately has no current-directory fallback.
     // root 要求平台主目录存在，并刻意不提供当前目录回退。
-    let root = dirs::home_dir()
-        .ok_or_else(|| String::from("无法解析 LuaSkills 技能包配置根：系统主目录不可用。"))?
-        .join(".vulcan")
-        .join("code");
+    let home = dirs::home_dir()
+        .ok_or_else(|| String::from("无法解析 LuaSkills 技能包配置根：系统主目录不可用。"))?;
+    #[cfg(not(test))]
+    let root = runtime_assets::user_vulcan_code_root_for_home(&home);
 
     if !root.is_absolute() {
         return Err(format!(
@@ -1079,6 +1080,19 @@ mod tests {
         assert_eq!(
             application_luaskills_config_root().expect("resolve LuaSkills config root"),
             application_data_root().join("luaskills-config")
+        );
+    }
+
+    /// Verifies an empty persisted controller endpoint resolves to the compiled profile default.
+    /// 验证持久化控制器端点为空时会解析为当前编译配置的默认端点。
+    #[test]
+    fn controller_client_config_uses_profile_default_endpoint() {
+        let config = build_controller_client_config(&PersistedControllerConfiguration::default())
+            .expect("build default controller client config");
+
+        assert_eq!(
+            config.endpoint,
+            runtime_assets::default_vldb_controller_endpoint()
         );
     }
 }

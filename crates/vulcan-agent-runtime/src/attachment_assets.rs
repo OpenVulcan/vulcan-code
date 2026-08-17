@@ -13,6 +13,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 use vulcan_core::types::{ConversationAttachment, ConversationAttachmentKind};
+use vulcan_runtime_assets::user_vulcan_code_root_for_home;
 
 /// Stable hidden workspace directory used to retain host-managed attachment copies.
 /// 用于保留宿主管理附件副本的稳定隐藏工作区目录名称。
@@ -82,10 +83,7 @@ pub fn resolve_managed_attachment_root(workspace_path: &str) -> PathBuf {
 
     let home_directory = dirs::home_dir()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-    home_directory
-        .join(WORKSPACE_VULCAN_DIR_NAME)
-        .join(WORKSPACE_CODE_DIR_NAME)
-        .join(MANAGED_ATTACHMENT_DIR_NAME)
+    user_vulcan_code_root_for_home(&home_directory).join(MANAGED_ATTACHMENT_DIR_NAME)
 }
 
 /// Resolves the supported attachment descriptor for one local file path when the extension is recognized by the host.
@@ -1110,7 +1108,13 @@ mod tests {
     fn resolve_managed_attachment_root_uses_shared_home_fallback() {
         let managed_root = resolve_managed_attachment_root("");
 
-        assert!(managed_root.ends_with(Path::new(".vulcan/code/attachments")));
+        assert!(
+            managed_root.ends_with(
+                Path::new(vulcan_runtime_assets::USER_VULCAN_ROOT_DIRECTORY_NAME)
+                    .join("code")
+                    .join("attachments")
+            )
+        );
     }
 
     /// Verifies the managed attachment root stays inside the workspace-local `.vulcan/code/attachments` subtree.

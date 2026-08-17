@@ -317,6 +317,16 @@ pub async fn spawn_terminal_host(
         .stderr(Stdio::piped())
         .kill_on_drop(true);
     apply_windows_no_window(&mut command);
+    // VULCAN_HOME keeps the terminal host and its PTY child aligned with the compiled user profile.
+    // VULCAN_HOME 让终端宿主及其 PTY 子进程与当前编译用户配置保持一致。
+    if env::var_os("VULCAN_HOME").is_none() {
+        if let Some(user_vulcan_root) = crate::runtime_assets::resolve_user_vulcan_root() {
+            command.env(
+                "VULCAN_HOME",
+                crate::runtime_assets::native_host_path(&user_vulcan_root),
+            );
+        }
+    }
     apply_child_path_prefixes(&mut command, path_prefixes)?;
     let mut child = command.spawn().map_err(|error| {
         format!(

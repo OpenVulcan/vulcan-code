@@ -1,0 +1,4 @@
+# Keep nextest's test-process concurrency bounded on developer machines.
+# 限制 nextest 的测试进程并发度，避免开发机被测试进程占满。
+[profile.default]
+test-threads = 4

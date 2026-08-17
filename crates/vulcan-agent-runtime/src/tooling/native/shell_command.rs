@@ -343,6 +343,17 @@ fn apply_shell_command_process_options(
 ) -> Result<(), NativeToolError> {
     apply_windows_release_no_window(command);
 
+    // VULCAN_HOME gives bundled skill scripts the same profile-specific user root as the Rust host.
+    // VULCAN_HOME 让内置技能脚本与 Rust 宿主使用相同的按构建配置区分的用户根目录。
+    if std::env::var_os("VULCAN_HOME").is_none() {
+        if let Some(user_vulcan_root) = crate::runtime_assets::resolve_user_vulcan_root() {
+            command.env(
+                "VULCAN_HOME",
+                crate::runtime_assets::native_host_path(&user_vulcan_root),
+            );
+        }
+    }
+
     for (name, value) in &process_options.environment {
         command.env(name, value);
     }
