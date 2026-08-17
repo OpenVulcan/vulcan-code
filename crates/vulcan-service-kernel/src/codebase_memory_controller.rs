@@ -1836,7 +1836,7 @@ fn managed_server_distribution() -> Result<ManagedCodebaseMemoryDistribution, St
             executable_path.display()
         )
     })?;
-    let digest = format!("{:x}", Sha256::digest(executable_bytes));
+    let digest = hex::encode(Sha256::digest(executable_bytes));
     if digest != manifest.sha256 {
         return Err(format!(
             "Codebase Memory managed runtime checksum mismatch for `{}`.",

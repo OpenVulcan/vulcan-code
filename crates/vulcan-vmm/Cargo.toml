@@ -11,16 +11,18 @@ workspace = true
 
 [dependencies]
 async-trait.workspace = true
+hex.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 sha2.workspace = true
 tokio = { workspace = true, features = ["time"] }
 tonic.workspace = true
+tonic-prost.workspace = true
 prost.workspace = true
 vulcan-context-injection.workspace = true
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 
 [build-dependencies]
-prost-build = "0.13.5"
-tonic-build.workspace = true
+prost-build = "0.14.4"
+tonic-prost-build.workspace = true
 protoc-bin-vendored.workspace = true

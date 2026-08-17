@@ -15,13 +15,13 @@ reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
-hex = "0.4"
-toml = "0.8"
+hex.workspace = true
+toml = "1.1"
 vulcan-core.workspace = true
 vulcan-runtime-assets.workspace = true
 vulcan-provider-adapters.workspace = true
 vulcan-vmm.workspace = true
-ed25519-dalek = { version = "2", features = ["fast"] }
+ed25519-dalek = { version = "3", features = ["fast"] }
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 
 [dev-dependencies]

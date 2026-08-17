@@ -4381,7 +4381,7 @@ fn responses_cache_scope_id(
         hasher.update((value.len() as u64).to_be_bytes());
         hasher.update(value.as_bytes());
     }
-    format!("vulcan-responses:sha256:{:x}", hasher.finalize())
+    format!("vulcan-responses:sha256:{}", hex::encode(hasher.finalize()))
 }
 
 /// Validates one Responses execution request against the exact selected-model capabilities.

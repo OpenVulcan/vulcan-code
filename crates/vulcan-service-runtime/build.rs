@@ -164,8 +164,7 @@ fn read_managed_runtime_versions(manifest_path: &Path) -> Result<ManagedRuntimeV
 fn read_exact_luaskills_version(manifest_path: &Path) -> Result<Version, String> {
     let text = fs::read_to_string(manifest_path)
         .map_err(|error| format!("failed to read {}: {error}", manifest_path.display()))?;
-    let document = text
-        .parse::<Value>()
+    let document = toml::from_str::<Value>(&text)
         .map_err(|error| format!("failed to parse {}: {error}", manifest_path.display()))?;
     let dependency = document
         .get("workspace")

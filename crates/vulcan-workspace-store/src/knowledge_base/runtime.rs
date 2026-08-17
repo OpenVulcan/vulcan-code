@@ -8931,7 +8931,7 @@ fn sha256_file_hex(path: &Path) -> Result<String, String> {
         }
         digest.update(&buffer[..read]);
     }
-    Ok(format!("{:x}", digest.finalize()))
+    Ok(hex::encode(digest.finalize()))
 }
 
 /// Produces a filesystem-safe timestamped archive name without overwriting prior exports.
@@ -9266,7 +9266,7 @@ mod tests {
             chunk_count: 0,
             index_status: String::from("ready"),
             exported_at_ms: 1,
-            content_sha256: format!("{:x}", Sha256::digest(database)),
+            content_sha256: hex::encode(Sha256::digest(database)),
             content_bytes: database.len() as u64,
             derived_artifacts: Vec::new(),
         };

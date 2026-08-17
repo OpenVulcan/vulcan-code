@@ -313,7 +313,7 @@ fn serialized_character_units(value: &impl Serialize) -> Result<usize, String> {
 fn digest_serializable(value: &impl Serialize) -> Result<String, String> {
     let bytes = serde_json::to_vec(value)
         .map_err(|error| format!("Provider budget evidence serialization failed: {error}"))?;
-    Ok(format!("sha256:{:x}", Sha256::digest(bytes)))
+    Ok(format!("sha256:{}", hex::encode(Sha256::digest(bytes))))
 }
 
 /// Shared mutable baseline updated only after a Provider call boundary is durably persisted.

@@ -623,7 +623,7 @@ fn spawn_sse_listener(input: SseListenerInput) -> tokio::task::JoinHandle<()> {
             };
 
             observed_connection = true;
-            let mut stream = SseStream::from_byte_stream(response.bytes_stream());
+            let mut stream = SseStream::from_bytes_stream(response.bytes_stream());
             loop {
                 tokio::select! {
                     _ = shutdown_token.cancelled() => {
@@ -824,7 +824,14 @@ async fn deliver_server_message(
 ) {
     let request_key = match &message {
         JsonRpcMessage::Response(response) => request_id_key(&response.id),
-        JsonRpcMessage::Error(error) => request_id_key(&error.id),
+        JsonRpcMessage::Error(error) => {
+            // An error response without an id cannot be correlated with any pending request.
+            // 不含请求标识的错误响应无法与任何待处理请求建立关联。
+            let Some(request_id) = error.id.as_ref() else {
+                return;
+            };
+            request_id_key(request_id)
+        }
         _ => return,
     };
 

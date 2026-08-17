@@ -12,5 +12,5 @@ workspace = true
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
-tokio = { version = "1.52.2", features = ["io-util"] }
+tokio = { version = "1.53.1", features = ["io-util"] }
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }

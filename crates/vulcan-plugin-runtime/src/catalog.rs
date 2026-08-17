@@ -2406,7 +2406,7 @@ pub(crate) fn compute_package_fingerprint(package_root: &Path) -> Result<String,
         digest.update(&bytes);
         digest.update([0xff]);
     }
-    Ok(format!("{:x}", digest.finalize()))
+    Ok(hex::encode(digest.finalize()))
 }
 
 /// Recursively collects regular package files while rejecting symbolic links and path escape.

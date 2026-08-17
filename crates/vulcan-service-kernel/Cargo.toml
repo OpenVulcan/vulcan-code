@@ -11,16 +11,16 @@ workspace = true
 
 [dependencies]
 async-trait.workspace = true
-base64 = "0.22.1"
+base64 = "0.23.1"
 dirs.workspace = true
 encoding_rs = "0.8.35"
-futures-util = "0.3.31"
+futures-util = "0.3.34"
 ignore.workspace = true
 jsonschema.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-time = { version = "0.3.44", features = ["formatting", "local-offset", "macros", "serde"] }
+time = { version = "0.3.55", features = ["formatting", "local-offset", "macros", "serde"] }
 tokio = { workspace = true, features = ["process", "rt-multi-thread"] }
 uuid.workspace = true
 vldb-controller-client.workspace = true
@@ -30,6 +30,7 @@ vulcan-llm-core.workspace = true
 keyring.workspace = true
 vulcan-provider-adapters.workspace = true
 luaskills.workspace = true
+hex.workspace = true
 sha2.workspace = true
 vulcan-context.workspace = true
 vulcan-context-compaction.workspace = true
@@ -70,5 +71,5 @@ vulcan-agent-runtime = { workspace = true, features = ["test-support"] }
 vulcan-provider-adapters = { workspace = true, features = ["test-support"] }
 # HTTPS loopback server for the local signing-server E2E (plan §R7.14).
 # 供本地签名服务器 E2E 使用的 HTTPS 回环服务器（方案 §R7.14）。
-rcgen = "0.13"
+rcgen = "0.14"
 tokio-rustls = "0.26"

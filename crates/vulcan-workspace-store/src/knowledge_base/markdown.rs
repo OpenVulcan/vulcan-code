@@ -116,7 +116,7 @@ pub fn chunk_markdown(content: &str) -> Vec<ParsedMarkdownChunk> {
 /// Computes a lowercase hexadecimal SHA-256 digest.
 /// 计算小写十六进制 SHA-256 摘要。
 pub fn sha256_hex(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    hex::encode(Sha256::digest(bytes))
 }
 
 /// Extracts heading offsets, levels, and inline text with pulldown-cmark.

@@ -95,7 +95,7 @@ fn provider_request_trace_sha256(value: &Value) -> Result<String, String> {
         .map_err(|error| format!("Provider request trace digest serialization failed: {error}"))?;
     let mut hasher = Sha256::new();
     hasher.update(encoded);
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok(hex::encode(hasher.finalize()))
 }
 
 /// Computes per-field digests for every top-level JSON object member.

@@ -17,23 +17,24 @@ test-support = []
 [dependencies]
 async-stream = "0.3.6"
 async-trait.workspace = true
-base64 = "0.22.1"
+base64 = "0.23.1"
 dirs.workspace = true
 encoding_rs = "0.8.35"
-filetime = "0.2.26"
-futures-channel = "0.3.31"
-futures-util = "0.3.31"
+filetime = "0.2.29"
+futures-channel = "0.3.34"
+futures-util = "0.3.34"
 jsonschema.workspace = true
 luaskills.workspace = true
-png = "0.17.16"
+png = "0.18.1"
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml = "0.9"
+hex.workspace = true
 sha2.workspace = true
-tempfile = "3.23.0"
-time = { version = "0.3.44", features = ["formatting", "local-offset", "macros", "parsing"] }
-tokio = { version = "1.52.2", features = ["rt", "sync", "time", "net", "io-util", "fs"] }
+tempfile = "3.27.0"
+time = { version = "0.3.55", features = ["formatting", "local-offset", "macros", "parsing"] }
+tokio = { version = "1.53.1", features = ["rt", "sync", "time", "net", "io-util", "fs"] }
 uuid.workspace = true
 vldb-controller-client.workspace = true
 vulcan-context.workspace = true

@@ -346,10 +346,14 @@ impl McpTransport for StdioTransport {
     /// Returns the exact server identity negotiated by rmcp during initialize.
     /// 返回 rmcp 在 initialize 阶段协商得到的精确服务器身份。
     fn server_identity(&self) -> Option<McpServerIdentity> {
-        self.peer.peer_info().map(|info| McpServerIdentity {
-            protocol_version: info.protocol_version.to_string(),
-            product: info.server_info.name.clone(),
-            version: info.server_info.version.clone(),
+        self.peer.peer_info().and_then(|info| {
+            info.server_info
+                .as_ref()
+                .map(|server_info| McpServerIdentity {
+                    protocol_version: info.protocol_version.to_string(),
+                    product: server_info.name.clone(),
+                    version: server_info.version.clone(),
+                })
         })
     }
 

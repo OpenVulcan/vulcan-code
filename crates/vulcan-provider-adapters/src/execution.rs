@@ -1073,7 +1073,7 @@ fn prepared_media_key(
         local_path.to_string_lossy(),
     ))
     .ok()?;
-    Some(format!("sha256:{:x}", Sha256::digest(material)))
+    Some(format!("sha256:{}", hex::encode(Sha256::digest(material))))
 }
 
 /// Removes expired prepared media references and enforces the global process-local capacity.
@@ -3107,7 +3107,7 @@ fn responses_websocket_cache_key(
         "root_session_id": root_session_id,
     }))
     .ok()?;
-    Some(format!("sha256:{:x}", Sha256::digest(material)))
+    Some(format!("sha256:{}", hex::encode(Sha256::digest(material))))
 }
 
 /// Selects the least-recently-used WebSocket session that has no external owner.

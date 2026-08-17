@@ -10,7 +10,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-futures-core = "0.3.31"
+futures-core = "0.3.34"
 serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true

@@ -9447,8 +9447,8 @@ fn apply_model_catalog_overlays_with_account_plan(
                         capabilities: model.capabilities.clone(),
                         capability_evidence: model.capability_evidence.clone(),
                         discovery_signature: format!(
-                            "sha256:{:x}",
-                            Sha256::digest(material.as_bytes())
+                            "sha256:{}",
+                            hex::encode(Sha256::digest(material.as_bytes()))
                         ),
                         catalog_generation: catalog.generation,
                     },
@@ -9754,8 +9754,8 @@ fn apply_model_catalog_overlays_with_account_plan(
                             capabilities: variant_capabilities,
                             capability_evidence: capability_evidence.clone(),
                             discovery_signature: format!(
-                                "sha256:{:x}",
-                                Sha256::digest(material.as_bytes())
+                                "sha256:{}",
+                                hex::encode(Sha256::digest(material.as_bytes()))
                             ),
                             catalog_generation: catalog.generation,
                         },
@@ -10016,7 +10016,10 @@ fn ensure_manual_custom_bound_variant(
         ProtocolModelVariant {
             capabilities: model.capabilities.clone(),
             capability_evidence: model.capability_evidence.clone(),
-            discovery_signature: format!("sha256:{:x}", Sha256::digest(material.as_bytes())),
+            discovery_signature: format!(
+                "sha256:{}",
+                hex::encode(Sha256::digest(material.as_bytes()))
+            ),
             catalog_generation,
         },
     );
@@ -10453,7 +10456,7 @@ fn effective_model_catalog_content_revision(
     let material = serde_json::to_vec(&canonical_catalog).map_err(|error| {
         format!("failed to serialize effective model catalog revision: {error}")
     })?;
-    Ok(format!("sha256:{:x}", Sha256::digest(material)))
+    Ok(format!("sha256:{}", hex::encode(Sha256::digest(material))))
 }
 
 /// Builds the immutable revision for one exact LLM execution route.
@@ -10560,7 +10563,7 @@ fn provider_execution_route_revision(
         overrides,
     ))
     .map_err(|error| format!("failed to serialize provider route revision: {error}"))?;
-    Ok(format!("sha256:{:x}", Sha256::digest(material)))
+    Ok(format!("sha256:{}", hex::encode(Sha256::digest(material))))
 }
 
 /// Carries immutable public selection metadata without credential material.

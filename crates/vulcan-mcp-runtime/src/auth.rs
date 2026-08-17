@@ -215,11 +215,11 @@ impl McpOAuthSession {
             .map(String::as_str)
             .collect::<Vec<_>>();
         let mut manager = self.manager.lock().await;
-        let metadata = manager
-            .discover_metadata()
+        let metadata_resolution = manager
+            .resolve_metadata()
             .await
             .map_err(|error| McpRuntimeError::transport(format!("mcp.oauth.discover: {error}")))?;
-        manager.set_metadata(metadata);
+        manager.set_metadata(metadata_resolution.metadata);
 
         if let Some(client_id) = self.spec.client_id.as_deref() {
             let mut client_config =

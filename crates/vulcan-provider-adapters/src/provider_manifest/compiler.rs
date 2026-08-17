@@ -1063,7 +1063,7 @@ fn template_instance_target_id(
         digest.update((value.len() as u64).to_be_bytes());
         digest.update(value.as_bytes());
     }
-    format!("template.{template_id}.{:x}", digest.finalize())
+    format!("template.{template_id}.{}", hex::encode(digest.finalize()))
 }
 
 /// Compiles one validated manifest with an explicit manifest source layer.

@@ -1596,7 +1596,7 @@ async fn hash_signed_upload_source(
         }
         hash.update(&buffer[..read]);
     }
-    Ok(format!("{:x}", hash.finalize()))
+    Ok(hex::encode(hash.finalize()))
 }
 
 /// Maps one trusted MIME type to a safe temporary object extension.

@@ -47,7 +47,7 @@ pub fn discovery_signature(
         DISCOVERY_FORMAT_VERSION,
     ))
     .expect("discovery signature material must serialize");
-    format!("sha256:{:x}", Sha256::digest(material))
+    format!("sha256:{}", hex::encode(Sha256::digest(material)))
 }
 
 #[cfg(test)]

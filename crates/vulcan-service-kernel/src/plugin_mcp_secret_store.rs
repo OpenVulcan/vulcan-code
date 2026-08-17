@@ -124,7 +124,7 @@ fn plugin_secret_entry(
         digest.update(component.len().to_be_bytes());
         digest.update(component.as_bytes());
     }
-    let account = format!("sha256:{:x}", digest.finalize());
+    let account = format!("sha256:{}", hex::encode(digest.finalize()));
     Entry::new(VULCAN_PLUGIN_MCP_SECRET_SERVICE, &account)
         .map_err(|_| String::from("Failed to open the operating-system credential store."))
 }

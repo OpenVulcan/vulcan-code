@@ -14,7 +14,7 @@ encoding_rs = "0.8.35"
 serde.workspace = true
 serde_json.workspace = true
 sys-locale = "0.3.2"
-tokio = { version = "1.52.2", features = ["macros", "process", "io-util", "sync", "time", "rt"] }
+tokio = { version = "1.53.1", features = ["macros", "process", "io-util", "sync", "time", "rt"] }
 uuid.workspace = true
 vt100.workspace = true
 vulcan-runtime-assets.workspace = true

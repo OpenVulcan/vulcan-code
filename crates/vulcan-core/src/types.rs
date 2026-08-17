@@ -212,7 +212,7 @@ pub fn provider_rewrite_fingerprint_for_system_prompt(system_prompt: &str) -> St
     hasher.update(b"vulcan-provider-rewrite-fingerprint:v1\0");
     hasher.update(system_prompt.len().to_le_bytes());
     hasher.update(system_prompt.as_bytes());
-    format!("{:x}", hasher.finalize())
+    hex::encode(hasher.finalize())
 }
 
 /// Returns whether one `usize` field is zero for compact protocol serialization.

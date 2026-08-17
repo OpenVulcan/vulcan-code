@@ -412,7 +412,7 @@ mod tests {
     #[test]
     fn rmcp_call_tool_result_falls_back_to_plain_text() {
         let mut result = CallToolResult::default();
-        result.content = vec![rmcp::model::Content::text("plain-text")];
+        result.content = vec![rmcp::model::ContentBlock::text("plain-text")];
 
         assert_eq!(
             rmcp_call_tool_result_to_value(result).expect("plain text should decode"),

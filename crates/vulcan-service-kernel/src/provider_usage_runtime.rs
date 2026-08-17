@@ -78,7 +78,8 @@ pub(crate) async fn persist_native_account_usage_snapshots(
             })?;
         let revision_material = serde_json::to_vec(&(entry, credential_profile))
             .map_err(|error| format!("failed to serialize account endpoint profile: {error}"))?;
-        let endpoint_profile_revision = format!("sha256:{:x}", Sha256::digest(&revision_material));
+        let endpoint_profile_revision =
+            format!("sha256:{}", hex::encode(Sha256::digest(&revision_material)));
         let payload_json = serde_json::to_string(snapshot)
             .map_err(|error| format!("failed to serialize account-usage snapshot: {error}"))?;
         if payload_json.len() > 64 * 1024 {

@@ -1468,7 +1468,7 @@ fn generic_json_async_recovery_context(
                         "Provider task recovery identity source `{pointer}` contains a non-string or empty item."
                     )
                 })?;
-            Ok(format!("{:x}", Sha256::digest(identity.as_bytes())))
+            Ok(hex::encode(Sha256::digest(identity.as_bytes())))
         })
         .collect::<Result<Vec<_>, String>>()?;
     Ok(ProviderAsyncTaskRecoveryContext::OrderedSha256 { fingerprints })
@@ -1786,7 +1786,7 @@ async fn execute_generic_json_async_batch_follow_up(
                     follow_up.item_identity_pointer
                 )
             })?;
-        let fingerprint = format!("{:x}", Sha256::digest(identity.as_bytes()));
+        let fingerprint = hex::encode(Sha256::digest(identity.as_bytes()));
         if items_by_fingerprint.insert(fingerprint, item).is_some() {
             return Err(String::from(
                 "Provider task batch follow-up returned duplicate identities.",

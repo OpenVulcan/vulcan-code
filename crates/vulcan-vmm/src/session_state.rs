@@ -2126,7 +2126,7 @@ fn controller_command_hash(command_id: &str) -> String {
 fn hex_sha256(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
-    format!("{:x}", hasher.finalize())
+    hex::encode(hasher.finalize())
 }
 
 /// Formats a finite score for UI display with the provider-context precision.

@@ -12,9 +12,9 @@ workspace = true
 [dependencies]
 async-trait.workspace = true
 futures = "0.3"
-http = "1.3"
+http = "1.5"
 reqwest = { version = "0.13", default-features = true, features = ["json", "stream"] }
-rmcp = { version = "1.6", default-features = false, features = [
+rmcp = { version = "3.1", default-features = false, features = [
     "client",
     "auth",
     "macros",
@@ -25,7 +25,7 @@ rmcp = { version = "1.6", default-features = false, features = [
 serde.workspace = true
 serde_json.workspace = true
 sse-stream = "0.2"
-tokio = { version = "1.40", features = ["rt-multi-thread", "macros", "sync", "process", "io-util", "io-std", "time"] }
+tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "sync", "process", "io-util", "io-std", "time"] }
 tokio-util = "0.7"
 vulcan-host-tools.workspace = true
 vulcan-runtime-assets.workspace = true

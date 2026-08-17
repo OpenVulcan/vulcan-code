@@ -83,7 +83,7 @@ impl StreamableHttpClient for AuthenticatedStreamableHttpClient {
     async fn get_stream(
         &self,
         uri: std::sync::Arc<str>,
-        session_id: std::sync::Arc<str>,
+        session_id: Option<std::sync::Arc<str>>,
         last_event_id: Option<String>,
         auth_header: Option<String>,
         custom_headers: HashMap<http::HeaderName, http::HeaderValue>,

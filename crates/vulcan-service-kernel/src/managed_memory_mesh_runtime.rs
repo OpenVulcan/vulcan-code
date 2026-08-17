@@ -320,7 +320,7 @@ impl ManagedMemoryMeshRuntime {
         )?;
         let manifest_bytes = serde_json::to_vec_pretty(&manifest)
             .map_err(|error| format!("序列化 VMM 托管清单失败：{error}"))?;
-        let manifest_digest = format!("{:x}", Sha256::digest(&manifest_bytes));
+        let manifest_digest = hex::encode(Sha256::digest(&manifest_bytes));
         atomic_write_private(&manifest_path, &manifest_bytes)?;
         let log_path = managed_root.join("logs").join("vmm-managed.log");
         if let Some(parent) = log_path.parent() {
@@ -2072,7 +2072,7 @@ fn managed_config_assets_digest(root: &Path) -> Result<String, String> {
         digest.update(bytes);
         digest.update([0]);
     }
-    Ok(format!("{:x}", digest.finalize()))
+    Ok(hex::encode(digest.finalize()))
 }
 
 /// Collects regular configuration files while rejecting symlink escapes.
@@ -2113,7 +2113,7 @@ fn collect_managed_config_files(
 fn sha256_file(path: &Path) -> Result<String, String> {
     let bytes = fs::read(path)
         .map_err(|error| format!("读取 VMM 打包二进制 `{}` 失败：{error}", path.display()))?;
-    Ok(format!("{:x}", Sha256::digest(bytes)))
+    Ok(hex::encode(Sha256::digest(bytes)))
 }
 
 /// Terminates and reaps one child after a bounded graceful observation period.
