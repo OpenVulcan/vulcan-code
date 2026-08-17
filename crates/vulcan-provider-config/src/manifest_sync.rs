@@ -880,7 +880,7 @@ fn validate_service_entry_trust_ceiling(
                 )
             })?;
         if candidate_profile.credential_mode != bundled_profile.credential_mode
-            || candidate_profile.oauth_provider != bundled_profile.oauth_provider
+            || candidate_profile.authorization != bundled_profile.authorization
             || candidate_profile.account_usage_query != bundled_profile.account_usage_query
             || candidate_profile.authentication != bundled_profile.authentication
             || candidate_profile.key_prefix != bundled_profile.key_prefix

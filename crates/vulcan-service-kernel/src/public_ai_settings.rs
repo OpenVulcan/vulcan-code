@@ -34,7 +34,8 @@ use vulcan_provider_adapters::{
     ProviderToolTargetSelection, PublicAiRuntime, PublicAiRuntimeSettingsCatalogSnapshot,
     ResponsesRemoteCompactionPolicy, ResponsesRouteFeatures, ResponsesWebsocketPolicy,
     ServiceEntry, ServiceEntryKind, StagedConnectionCatalogObservation,
-    registered_native_action_binding_id, validate_custom_provider_identifier,
+    credential_authorization_binding, registered_native_action_binding_id,
+    validate_custom_provider_identifier,
 };
 use vulcan_service_api::{ServiceEventEmitter, WorkbenchSnapshot};
 
@@ -4089,21 +4090,32 @@ pub(super) async fn service_start_public_ai_oauth(
                 request.credential_profile_id, request.service_entry_id
             )
         })?;
-    let oauth_provider = credential_profile.oauth_provider.ok_or_else(|| {
+    let authorization = credential_profile.authorization.as_ref().ok_or_else(|| {
         format!(
-            "Credential profile `{}` does not declare an OAuth flow.",
+            "Credential profile `{}` does not declare an authorization flow.",
             request.credential_profile_id
         )
     })?;
     if credential_profile.credential_mode != CredentialMode::Auth {
         return Err(format!(
-            "Credential profile `{}` does not support renewable authorization.",
+            "Credential profile `{}` does not support host-managed authorization.",
             request.credential_profile_id
         ));
     }
+    let authorization_binding = credential_authorization_binding(
+        request.provider_id.as_str(),
+        request.service_entry_id.as_str(),
+        request.credential_profile_id.as_str(),
+        authorization,
+    )?;
     let challenge = runtime
         .oauth()
-        .start(oauth_provider, request.client)
+        .start(
+            authorization,
+            authorization_binding,
+            credential_profile.key_prefix.clone(),
+            request.client,
+        )
         .await?;
     if let Err(error) =
         shell_host_from_state(&state)?.open_url(challenge.authorization_url.as_str())
@@ -4182,9 +4194,21 @@ pub(super) async fn service_commit_public_ai_oauth_connection(
                 request.credential_profile_id, request.service_entry_id
             )
         })?;
-    if credential_profile.oauth_provider != Some(snapshot.provider_kind) {
+    let authorization = credential_profile.authorization.as_ref().ok_or_else(|| {
+        format!(
+            "Credential profile `{}` no longer declares an authorization flow.",
+            request.credential_profile_id
+        )
+    })?;
+    let expected_authorization_binding = credential_authorization_binding(
+        request.provider_id.as_str(),
+        request.service_entry_id.as_str(),
+        request.credential_profile_id.as_str(),
+        authorization,
+    )?;
+    if snapshot.authorization_binding != expected_authorization_binding {
         return Err(String::from(
-            "OAuth transaction does not belong to the selected service entry.",
+            "Authorization transaction does not belong to the selected service entry.",
         ));
     }
     let material = runtime
@@ -5631,6 +5655,57 @@ where
         mutate,
         prepare_output,
         |configuration| publish_public_ai_workbench(app, state, runtime, configuration).map(|_| ()),
+    )
+}
+
+/// Mutates provider-tool configuration without reconciling unrelated session model routes.
+/// 修改供应商工具配置时不协调无关的会话模型路由。
+///
+/// # Parameters
+/// 参数
+/// `app`, `state`, and `runtime` own the publication boundary; `before_configuration` is the
+/// durable before-image; `save_error_context` labels persistence; `mutate` builds the candidate;
+/// `prepare_output` completes the response projection.
+/// `app`、`state` 与 `runtime` 持有发布边界；`before_configuration` 是持久化前镜像；
+/// `save_error_context` 标记持久化；`mutate` 构建候选；`prepare_output` 完成响应投影。
+///
+/// # Returns
+/// 返回值
+/// The installed configuration and output after provider-tool publication, or a compensated error.
+/// 供应商工具发布后的已安装配置与输出，或已完成补偿的错误。
+fn mutate_public_ai_configuration_and_publish_without_session_model_reconciliation_in_transaction<
+    Mutation,
+    PrepareOutput,
+    Output,
+>(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    runtime: &PublicAiRuntime,
+    before_configuration: &PersistedAiConfiguration,
+    save_error_context: &str,
+    mutate: Mutation,
+    prepare_output: PrepareOutput,
+) -> Result<(PersistedAiConfiguration, Output), String>
+where
+    Mutation: FnOnce(&mut PersistedAiConfiguration) -> Result<(), String>,
+    PrepareOutput: FnOnce(&PersistedAiConfiguration) -> Result<Output, String>,
+{
+    mutate_public_ai_configuration_and_publish_using_in_transaction(
+        state,
+        runtime,
+        before_configuration,
+        save_error_context,
+        mutate,
+        prepare_output,
+        |configuration| {
+            publish_public_ai_workbench_without_session_model_reconciliation(
+                app,
+                state,
+                runtime,
+                configuration,
+            )
+            .map(|_| ())
+        },
     )
 }
 
@@ -8191,7 +8266,7 @@ pub(super) async fn service_save_public_ai_provider_tool_selection(
             ));
         }
     }
-    let (_configuration, snapshot) = mutate_public_ai_configuration_and_publish_in_transaction(
+    let (_configuration, snapshot) = mutate_public_ai_configuration_and_publish_without_session_model_reconciliation_in_transaction(
         &app,
         &state,
         runtime.as_ref(),
@@ -8232,7 +8307,7 @@ pub(super) async fn service_save_public_ai_provider_extension_target_set(
         &current_configuration,
         &replacement,
     )?;
-    let (_configuration, snapshot) = mutate_public_ai_configuration_and_publish_in_transaction(
+    let (_configuration, snapshot) = mutate_public_ai_configuration_and_publish_without_session_model_reconciliation_in_transaction(
         &app,
         &state,
         runtime.as_ref(),
@@ -8321,7 +8396,7 @@ pub(super) async fn service_save_public_ai_provider_tool_capability_enabled(
             request.capability
         ));
     }
-    let (_configuration, snapshot) = mutate_public_ai_configuration_and_publish_in_transaction(
+    let (_configuration, snapshot) = mutate_public_ai_configuration_and_publish_without_session_model_reconciliation_in_transaction(
         &app,
         &state,
         runtime.as_ref(),
@@ -8430,6 +8505,7 @@ pub(super) async fn service_public_ai_session_provider_tool_selections(
                 state_changed.then_some(session_id).into_iter().collect(),
             ))
         },
+        false,
         "provider_tool_settings_initialize",
         || Ok(()),
     )?;
@@ -8651,6 +8727,7 @@ pub(super) async fn service_save_public_ai_session_provider_tool_selections(
                 BTreeSet::from([session_id]),
             ))
         },
+        false,
         "provider_tool_settings",
         || Ok(()),
     )?;
@@ -10953,6 +11030,37 @@ pub(crate) fn publish_public_ai_workbench(
     publish_public_ai_workbench_with_commit(app, state, runtime, configuration, || Ok(()))
 }
 
+/// Publishes provider-tool changes while preserving every session model route lease.
+/// 发布供应商工具变更，同时保留全部会话模型路由租约。
+///
+/// # Parameters
+/// 参数
+/// `app` emits the snapshot, `state` owns Workbench state, and `runtime` plus `configuration`
+/// identify the exact provider projection.
+/// `app` 发出快照，`state` 持有工作台状态，`runtime` 与 `configuration` 标识精确供应商投影。
+///
+/// # Returns
+/// 返回值
+/// The updated Workbench snapshot after an atomic provider-tool-only state replacement.
+/// 在原子替换仅供应商工具状态后返回更新的工作台快照。
+fn publish_public_ai_workbench_without_session_model_reconciliation(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    runtime: &PublicAiRuntime,
+    configuration: &PersistedAiConfiguration,
+) -> Result<WorkbenchSnapshot, String> {
+    publish_public_ai_workbench_with_workspace_reconciliation_and_commit(
+        app,
+        state,
+        runtime,
+        configuration,
+        |_workspace| Ok(PublicAiWorkspaceReconciliation::default()),
+        false,
+        "provider_tool_settings",
+        || Ok(()),
+    )
+}
+
 /// Publishes one public AI Workbench candidate after a caller-owned pre-publication commit.
 /// 在调用方持有的发布前提交成功后发布一份公共 AI 工作台候选。
 ///
@@ -11081,6 +11189,7 @@ where
         |workspace| {
             reconcile_sessions(workspace).map(PublicAiWorkspaceReconciliation::route_revocations)
         },
+        true,
         persistence_reason,
         commit,
     )
@@ -11092,10 +11201,12 @@ where
 /// # Parameters
 /// 参数
 /// `app`, `state`, `runtime`, and `configuration` identify the projection; `reconcile_workspace`
-/// returns separately tracked changed and route-revoked sessions; `persistence_reason` labels
+/// returns separately tracked changed and route-revoked sessions; `reconcile_session_models`
+/// controls whether unrelated catalog-only model reconciliation runs; `persistence_reason` labels
 /// durable session rows; `commit` performs the final fallible external transition.
 /// `app`、`state`、`runtime` 与 `configuration` 标识投影；`reconcile_workspace` 分别返回已修改
-/// 与路由已撤销会话；`persistence_reason` 标记持久会话行；`commit` 执行最终可失败外部转换。
+/// 与路由已撤销会话；`reconcile_session_models` 控制是否运行无关的仅目录模型协调；
+/// `persistence_reason` 标记持久会话行；`commit` 执行最终可失败外部转换。
 ///
 /// # Returns
 /// 返回值
@@ -11111,6 +11222,7 @@ fn publish_public_ai_workbench_with_workspace_reconciliation_and_commit<
     runtime: &PublicAiRuntime,
     configuration: &PersistedAiConfiguration,
     reconcile_workspace: ReconcileWorkspace,
+    reconcile_session_models: bool,
     persistence_reason: &'static str,
     commit: Commit,
 ) -> Result<WorkbenchSnapshot, String>
@@ -11140,13 +11252,18 @@ where
                 let mut forced_workspace = workspace.clone();
                 let explicit_reconciliation = reconcile_workspace(&mut forced_workspace)?;
                 let revoked_session_ids = explicit_reconciliation.revoked_session_ids;
-                let (planned_workspace, catalog_changed_session_ids) =
+                let (planned_workspace, catalog_changed_session_ids) = if reconcile_session_models {
                     plan_reconciled_session_model_selections(
                         &forced_workspace,
                         runtime,
                         configuration,
                         &catalogs,
-                    )?;
+                    )?
+                } else {
+                    // Provider-tool changes do not change the model route owned by this session.
+                    // 供应商工具变更不会改变该会话拥有的模型路由。
+                    (forced_workspace, BTreeSet::new())
+                };
                 let mut changed_session_ids = explicit_reconciliation.changed_session_ids;
                 changed_session_ids.extend(catalog_changed_session_ids);
                 (
@@ -11231,10 +11348,16 @@ where
             .collect::<Vec<_>>();
         // requiredAbsentLeaseScopeIds contains catalog-only changes whose leases must remain absent.
         // requiredAbsentLeaseScopeIds 包含租约必须保持缺失的仅目录变更。
-        let required_absent_lease_scope_ids = changed_session_ids
-            .difference(&revoked_session_ids)
-            .map(ToString::to_string)
-            .collect::<Vec<_>>();
+        let required_absent_lease_scope_ids = if reconcile_session_models {
+            changed_session_ids
+                .difference(&revoked_session_ids)
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        } else {
+            // Provider-tool persistence is independent of model-route lease ownership.
+            // 供应商工具持久化独立于模型路由租约所有权。
+            Vec::new()
+        };
         // leaseGuard atomically removes explicit revocations and excludes every concurrent writer.
         // leaseGuard 原子移除显式撤销，并排除全部并发写入方。
         let lease_guard =

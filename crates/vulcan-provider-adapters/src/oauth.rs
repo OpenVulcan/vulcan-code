@@ -1,7 +1,10 @@
-//! Provider authorization-code and PKCE runtime.
-//! 供应商授权码与 PKCE 运行时。
+//! Provider authorization runtime for registered OAuth and declarative browser callbacks.
+//! 用于已注册 OAuth 与声明式浏览器回调的供应商授权运行时。
 
-use crate::{CredentialSecretEnvelope, CredentialSecretMaterial, MiniMaxRegion, OAuthTokenSet};
+use crate::{
+    BrowserCallbackAuthorization, BrowserCallbackUrlHost, CredentialAuthorization,
+    CredentialSecretEnvelope, CredentialSecretMaterial, MiniMaxRegion, OAuthTokenSet,
+};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use reqwest::{
     Client, Url,
@@ -19,7 +22,7 @@ use tokio::{
     net::{TcpListener, TcpStream},
     sync::{Mutex, oneshot},
     task::AbortHandle,
-    time::{sleep, timeout},
+    time::{Instant, sleep, timeout, timeout_at},
 };
 use uuid::Uuid;
 
@@ -44,6 +47,9 @@ const OAUTH_HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const OAUTH_RESPONSE_MAX_BYTES: usize = 1024 * 1024;
 const OAUTH_CALLBACK_MAX_BYTES: usize = 16 * 1024;
 const OAUTH_MAX_LIVE_TRANSACTIONS: usize = 64;
+/// Maximum HTTP header bytes accepted by a declarative browser callback.
+/// 声明式浏览器回调接受的 HTTP Header 最大字节数。
+const BROWSER_CALLBACK_MAX_HEADER_BYTES: usize = 16 * 1024;
 const MINIMAX_OAUTH_CLIENT_ID: &str = "659cf4c1-615c-45f6-a5f6-4bf15eb476e5";
 const MINIMAX_GLOBAL_ACCOUNT_URL: &str = "https://account.minimax.io";
 const MINIMAX_CHINA_ACCOUNT_URL: &str = "https://account.minimaxi.com";
@@ -86,6 +92,39 @@ pub enum OAuthProviderKind {
     KimiCodingPlan,
 }
 
+/// Derives one opaque transaction binding from an exact provider authorization scope.
+/// 从精确供应商授权作用域派生一个不透明事务绑定。
+///
+/// # Parameters
+/// 参数
+/// `provider_id`, `service_entry_id`, and `credential_profile_id` identify the selected scope;
+/// `authorization` is the complete compiled declaration frozen by the transaction.
+/// `provider_id`、`service_entry_id` 与 `credential_profile_id` 标识选中作用域；`authorization`
+/// 是由事务冻结的完整已编译声明。
+///
+/// # Returns
+/// 返回值
+/// A deterministic non-secret SHA-256 binding safe to expose in transaction snapshots, or an
+/// explicit serialization failure.
+/// 返回可安全暴露在事务快照中的确定性非秘密 SHA-256 绑定，或明确的序列化失败。
+pub fn credential_authorization_binding(
+    provider_id: &str,
+    service_entry_id: &str,
+    credential_profile_id: &str,
+    authorization: &CredentialAuthorization,
+) -> Result<String, String> {
+    let declaration = serde_json::to_vec(authorization)
+        .map_err(|_| String::from("Failed to bind the credential authorization declaration."))?;
+    let mut digest = Sha256::new();
+    for identity in [provider_id, service_entry_id, credential_profile_id] {
+        digest.update(identity.len().to_be_bytes());
+        digest.update(identity.as_bytes());
+    }
+    digest.update(declaration.len().to_be_bytes());
+    digest.update(declaration);
+    Ok(format!("auth_{}", hex::encode(digest.finalize())))
+}
+
 /// Carries user-owned OAuth client configuration without exposing it in snapshots.
 /// 承载用户自有 OAuth 客户端配置且不在快照中暴露。
 #[derive(Clone, Default, Deserialize)]
@@ -113,9 +152,9 @@ pub enum OAuthTransactionPhase {
     /// A loopback listener is waiting for the provider callback.
     /// 回环监听器正在等待供应商回调。
     WaitingForCallback,
-    /// The callback passed state validation and token exchange is running.
-    /// 回调已通过 State 校验且正在交换 Token。
-    ExchangingToken,
+    /// Authorization succeeded and secure credential finalization is running.
+    /// 授权已成功且正在完成安全凭据收尾。
+    FinalizingCredential,
     /// Validated credential material is ready for secure persistence.
     /// 已验证凭据材料已准备好安全持久化。
     Succeeded,
@@ -148,9 +187,9 @@ pub struct OAuthTransactionSnapshot {
     /// Opaque transaction identifier.
     /// 不透明事务标识。
     pub transaction_id: String,
-    /// Exact provider authorization kind.
-    /// 精确供应商授权类别。
-    pub provider_kind: OAuthProviderKind,
+    /// Exact provider/service/credential-profile binding that started this transaction.
+    /// 启动此事务的精确供应商/服务/凭据档绑定。
+    pub authorization_binding: String,
     /// Current observable phase.
     /// 当前可观察阶段。
     pub phase: OAuthTransactionPhase,
@@ -471,8 +510,11 @@ impl OAuthAuthorizationRuntime {
     ///
     /// # Parameters
     /// 参数
-    /// `provider_kind` selects an exact reviewed flow and `client` supplies user-owned settings when required.
-    /// `provider_kind` 选择精确已审核流程，`client` 在需要时提供用户自有设置。
+    /// `authorization` is the compiled Manifest declaration, `authorization_binding` freezes its
+    /// exact scope, `required_secret_prefix` is an optional declared token constraint, and `client`
+    /// supplies user-owned OAuth settings when required.
+    /// `authorization` 是已编译 Manifest 声明，`authorization_binding` 冻结其精确作用域，
+    /// `required_secret_prefix` 是可选已声明 Token 约束，`client` 在需要时提供用户自有 OAuth 设置。
     ///
     /// # Returns
     /// 返回值
@@ -480,17 +522,131 @@ impl OAuthAuthorizationRuntime {
     /// 成功保留回环端口后返回浏览器挑战。
     pub async fn start(
         &self,
+        authorization: &CredentialAuthorization,
+        authorization_binding: String,
+        required_secret_prefix: Option<String>,
+        client: OAuthClientConfiguration,
+    ) -> Result<OAuthAuthorizationChallenge, String> {
+        match authorization {
+            CredentialAuthorization::RegisteredOauth { provider } => {
+                self.start_registered_oauth(*provider, authorization_binding, client)
+                    .await
+            }
+            CredentialAuthorization::BrowserCallback { profile } => {
+                self.start_browser_callback_flow(
+                    profile.clone(),
+                    authorization_binding,
+                    required_secret_prefix,
+                )
+                .await
+            }
+        }
+    }
+
+    /// Starts one declarative browser callback that directly delivers host-managed credentials.
+    /// 启动一个直接交付宿主管理凭据的声明式浏览器回调。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `profile` is the validated callback contract, `authorization_binding` identifies the exact
+    /// credential profile, and `required_secret_prefix` optionally constrains the delivered secret.
+    /// `profile` 是已校验回调契约，`authorization_binding` 标识精确凭据档，
+    /// `required_secret_prefix` 可选约束交付秘密。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A loopback browser challenge after one configured port has been reserved.
+    /// 在成功保留一个配置端口后返回回环浏览器挑战。
+    async fn start_browser_callback_flow(
+        &self,
+        profile: BrowserCallbackAuthorization,
+        authorization_binding: String,
+        required_secret_prefix: Option<String>,
+    ) -> Result<OAuthAuthorizationChallenge, String> {
+        let transaction_id = format!("auth_{}", Uuid::new_v4().simple());
+        let state = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+        let listener = bind_browser_callback_listener(&profile).await?;
+        let callback_url = browser_callback_url(&profile, &listener)?;
+        let authorization_url = browser_authorization_url(&profile, callback_url.as_str(), &state)?;
+        let timeout_duration = Duration::from_secs(profile.listener.timeout_seconds);
+        let expires_at_unix_ms = unix_millis()?
+            .checked_add(timeout_duration.as_millis() as u64)
+            .ok_or_else(|| String::from("Browser authorization expiration overflowed."))?;
+        let snapshot = OAuthTransactionSnapshot {
+            transaction_id: transaction_id.clone(),
+            authorization_binding,
+            phase: OAuthTransactionPhase::WaitingForCallback,
+            expires_at_unix_ms,
+            message: None,
+        };
+        let transactions = Arc::clone(&self.transactions);
+        let transaction_id_for_task = transaction_id.clone();
+        let profile_for_task = profile.clone();
+        let (start_sender, start_receiver) = oneshot::channel();
+        let task = tokio::spawn(async move {
+            if start_receiver.await.is_err() {
+                return;
+            }
+            let result = receive_browser_callback_credential(
+                listener,
+                &profile_for_task,
+                state.as_str(),
+                required_secret_prefix.as_deref(),
+                timeout_duration,
+            )
+            .await;
+            finish_transaction(transactions, transaction_id_for_task.as_str(), result).await;
+        });
+        self.register_transaction(transaction_id.as_str(), snapshot.clone(), &task)
+            .await?;
+        if start_sender.send(()).is_err() {
+            self.transactions
+                .lock()
+                .await
+                .remove(transaction_id.as_str());
+            return Err(String::from(
+                "Browser callback task stopped before registration.",
+            ));
+        }
+        Ok(OAuthAuthorizationChallenge {
+            transaction: snapshot,
+            authorization_url,
+            flow_kind: OAuthAuthorizationFlowKind::LoopbackCallback,
+            user_code: None,
+            poll_interval_ms: None,
+        })
+    }
+
+    /// Starts one reviewed registered OAuth or Device Flow primitive.
+    /// 启动一个已审核的已注册 OAuth 或 Device Flow 原语。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `provider_kind` selects the host primitive, `authorization_binding` freezes the exact
+    /// Manifest scope, and `client` supplies user-owned OAuth client values when required.
+    /// `provider_kind` 选择宿主原语，`authorization_binding` 冻结精确 Manifest 作用域，`client`
+    /// 在需要时提供用户持有的 OAuth Client 值。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A browser-safe challenge backed by one registered transaction.
+    /// 返回由一个已注册事务支撑的浏览器安全挑战。
+    async fn start_registered_oauth(
+        &self,
         provider_kind: OAuthProviderKind,
+        authorization_binding: String,
         client: OAuthClientConfiguration,
     ) -> Result<OAuthAuthorizationChallenge, String> {
         if matches!(
             provider_kind,
             OAuthProviderKind::MiniMaxGlobalTokenPlan | OAuthProviderKind::MiniMaxChinaTokenPlan
         ) {
-            return self.start_minimax_device_flow(provider_kind).await;
+            return self
+                .start_minimax_device_flow(provider_kind, authorization_binding)
+                .await;
         }
         if provider_kind == OAuthProviderKind::KimiCodingPlan {
-            return self.start_kimi_device_flow().await;
+            return self.start_kimi_device_flow(authorization_binding).await;
         }
         let transaction_id = format!("oauth_{}", Uuid::new_v4().simple());
         let state = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
@@ -503,7 +659,7 @@ impl OAuthAuthorizationRuntime {
             .ok_or_else(|| String::from("OAuth transaction expiration overflowed."))?;
         let snapshot = OAuthTransactionSnapshot {
             transaction_id: transaction_id.clone(),
-            provider_kind,
+            authorization_binding,
             phase: OAuthTransactionPhase::WaitingForCallback,
             expires_at_unix_ms,
             message: None,
@@ -528,25 +684,8 @@ impl OAuthAuthorizationRuntime {
             .await;
             finish_transaction(transactions, transaction_id_for_task.as_str(), result).await;
         });
-        let mut registered_transactions = self.transactions.lock().await;
-        let now_unix_ms = unix_millis()?;
-        registered_transactions
-            .retain(|_, transaction| transaction.snapshot.expires_at_unix_ms > now_unix_ms);
-        if registered_transactions.len() >= OAUTH_MAX_LIVE_TRANSACTIONS {
-            task.abort();
-            return Err(String::from(
-                "Too many OAuth authorization transactions are active.",
-            ));
-        }
-        registered_transactions.insert(
-            transaction_id.clone(),
-            OAuthTransaction {
-                snapshot: snapshot.clone(),
-                material: None,
-                abort_handle: task.abort_handle(),
-            },
-        );
-        drop(registered_transactions);
+        self.register_transaction(transaction_id.as_str(), snapshot.clone(), &task)
+            .await?;
         if start_sender.send(()).is_err() {
             self.transactions
                 .lock()
@@ -580,6 +719,7 @@ impl OAuthAuthorizationRuntime {
     async fn start_minimax_device_flow(
         &self,
         provider_kind: OAuthProviderKind,
+        authorization_binding: String,
     ) -> Result<OAuthAuthorizationChallenge, String> {
         let (region, account_url) = minimax_region_authority(provider_kind)?;
         let transaction_id = format!("oauth_{}", Uuid::new_v4().simple());
@@ -634,7 +774,7 @@ impl OAuthAuthorizationRuntime {
         };
         let snapshot = OAuthTransactionSnapshot {
             transaction_id: transaction_id.clone(),
-            provider_kind,
+            authorization_binding,
             phase: OAuthTransactionPhase::WaitingForUserAuthorization,
             expires_at_unix_ms: device.expired_in,
             message: None,
@@ -694,7 +834,10 @@ impl OAuthAuthorizationRuntime {
     /// 返回值
     /// A browser-safe challenge while the process polls with the retained device identity.
     /// 返回浏览器安全挑战，同时进程使用保留的设备身份进行轮询。
-    async fn start_kimi_device_flow(&self) -> Result<OAuthAuthorizationChallenge, String> {
+    async fn start_kimi_device_flow(
+        &self,
+        authorization_binding: String,
+    ) -> Result<OAuthAuthorizationChallenge, String> {
         let transaction_id = format!("oauth_{}", Uuid::new_v4().simple());
         let device_id = Uuid::new_v4().hyphenated().to_string();
         let response = self
@@ -755,7 +898,7 @@ impl OAuthAuthorizationRuntime {
         };
         let snapshot = OAuthTransactionSnapshot {
             transaction_id: transaction_id.clone(),
-            provider_kind: OAuthProviderKind::KimiCodingPlan,
+            authorization_binding,
             phase: OAuthTransactionPhase::WaitingForUserAuthorization,
             expires_at_unix_ms,
             message: None,
@@ -824,8 +967,7 @@ impl OAuthAuthorizationRuntime {
     ) -> Result<(), String> {
         let mut registered_transactions = self.transactions.lock().await;
         let now_unix_ms = unix_millis()?;
-        registered_transactions
-            .retain(|_, transaction| transaction.snapshot.expires_at_unix_ms > now_unix_ms);
+        abort_and_remove_expired_transactions(&mut registered_transactions, now_unix_ms);
         if registered_transactions.len() >= OAUTH_MAX_LIVE_TRANSACTIONS {
             task.abort();
             return Err(String::from(
@@ -940,7 +1082,8 @@ impl OAuthAuthorizationRuntime {
     ) -> Result<CredentialSecretMaterial, String> {
         match material {
             CredentialSecretMaterial::ApiKey { .. }
-            | CredentialSecretMaterial::StaticBearer { .. } => Ok(material.clone()),
+            | CredentialSecretMaterial::StaticBearer { .. }
+            | CredentialSecretMaterial::BrowserCallbackAuthorization { .. } => Ok(material.clone()),
             CredentialSecretMaterial::OpenAiCodexOAuth {
                 tokens,
                 id_token,
@@ -1038,6 +1181,35 @@ impl OAuthAuthorizationRuntime {
                     device_id: device_id.clone(),
                 })
             }
+        }
+    }
+}
+
+/// Aborts and removes every authorization transaction whose declared lifetime has elapsed.
+/// 中止并移除每个声明生命周期已经结束的授权事务。
+///
+/// # Parameters
+/// 参数
+/// `transactions` is the locked process-local transaction registry and `now_unix_ms` is the
+/// current trusted Unix-millisecond timestamp.
+/// `transactions` 是已锁定的进程内事务注册表，`now_unix_ms` 是当前可信 Unix 毫秒时间戳。
+///
+/// # Returns
+/// 返回值
+/// This function returns nothing after every expired task has been cancelled and removed.
+/// 在取消并移除全部过期任务后，此函数不返回数据。
+fn abort_and_remove_expired_transactions(
+    transactions: &mut BTreeMap<String, OAuthTransaction>,
+    now_unix_ms: u64,
+) {
+    let expired_transaction_ids = transactions
+        .iter()
+        .filter(|(_, transaction)| transaction.snapshot.expires_at_unix_ms <= now_unix_ms)
+        .map(|(transaction_id, _)| transaction_id.clone())
+        .collect::<Vec<_>>();
+    for transaction_id in expired_transaction_ids {
+        if let Some(transaction) = transactions.remove(transaction_id.as_str()) {
+            transaction.abort_handle.abort();
         }
     }
 }
@@ -1197,7 +1369,7 @@ async fn poll_minimax_device_flow(
         set_transaction_phase(
             transactions,
             transaction_id,
-            OAuthTransactionPhase::ExchangingToken,
+            OAuthTransactionPhase::FinalizingCredential,
         )
         .await;
         return build_minimax_credential_material(flow.region, token);
@@ -1277,7 +1449,7 @@ async fn poll_kimi_device_flow(
         set_transaction_phase(
             transactions,
             transaction_id,
-            OAuthTransactionPhase::ExchangingToken,
+            OAuthTransactionPhase::FinalizingCredential,
         )
         .await;
         return build_kimi_credential_material(token, flow.device_id.as_str());
@@ -1660,6 +1832,690 @@ fn merge_minimax_refreshed_token_set(
     Ok(tokens)
 }
 
+/// Carries one controlled browser-callback request failure and its HTTP response status.
+/// 承载一个受控浏览器回调请求失败及其 HTTP 响应状态。
+#[derive(Debug)]
+struct BrowserCallbackRequestFailure {
+    /// HTTP status returned to the authorization page.
+    /// 返回给授权页面的 HTTP 状态。
+    status_code: u16,
+    /// Controlled transaction failure text that never contains the delivered secret.
+    /// 不包含交付秘密的受控事务失败文本。
+    message: String,
+}
+
+/// Distinguishes a browser CORS preflight from the credential-bearing JSON request.
+/// 区分浏览器 CORS 预检与携带凭据的 JSON 请求。
+#[derive(Debug)]
+enum BrowserCallbackRequest {
+    /// Browser preflight that must be acknowledged without completing the transaction.
+    /// 必须确认但不能结束事务的浏览器预检。
+    Preflight,
+    /// Validated JSON document delivered by the authorization page.
+    /// 授权页面交付的已校验 JSON 文档。
+    Document(serde_json::Value),
+}
+
+/// Distinguishes a provider-declared rejection from an invalid callback document.
+/// 区分供应商声明的拒绝与无效回调文档。
+#[derive(Debug)]
+enum BrowserCallbackExtractionFailure {
+    /// Provider explicitly rejected the user's authorization.
+    /// 供应商明确拒绝了用户授权。
+    ProviderRejected(String),
+    /// Returned State did not match the in-memory transaction.
+    /// 返回 State 与内存事务不匹配。
+    StateMismatch(String),
+    /// Callback fields failed the declared contract.
+    /// 回调字段未通过声明契约。
+    Invalid(String),
+}
+
+/// Binds one configured IPv4 loopback port for a declarative browser callback.
+/// 为声明式浏览器回调绑定一个已配置 IPv4 回环端口。
+///
+/// # Parameters
+/// 参数
+/// `profile` owns the inclusive reviewed port range.
+/// `profile` 持有包含边界的已审核端口范围。
+///
+/// # Returns
+/// 返回值
+/// The first successfully bound listener, or one controlled range failure.
+/// 返回首个成功绑定的监听器，或一个受控范围失败。
+async fn bind_browser_callback_listener(
+    profile: &BrowserCallbackAuthorization,
+) -> Result<TcpListener, String> {
+    let mut last_error = None;
+    for port in profile.listener.port_start..=profile.listener.port_end {
+        let address = format!("127.0.0.1:{port}");
+        match TcpListener::bind(address.as_str()).await {
+            Ok(listener) => return Ok(listener),
+            Err(error) => last_error = Some(error),
+        }
+    }
+    Err(format!(
+        "Failed to bind a browser authorization callback port in {}-{}: {}",
+        profile.listener.port_start,
+        profile.listener.port_end,
+        last_error
+            .map(|error| error.to_string())
+            .unwrap_or_else(|| String::from("the configured range was empty"))
+    ))
+}
+
+/// Builds the absolute callback URL from one bound loopback listener.
+/// 从一个已绑定回环监听器构建绝对回调 URL。
+///
+/// # Parameters
+/// 参数
+/// `profile` declares host and path while `listener` owns the selected port.
+/// `profile` 声明主机与路径，`listener` 持有所选端口。
+///
+/// # Returns
+/// 返回值
+/// The exact HTTP callback URL advertised to the authorization page.
+/// 返回通告给授权页面的精确 HTTP 回调 URL。
+fn browser_callback_url(
+    profile: &BrowserCallbackAuthorization,
+    listener: &TcpListener,
+) -> Result<String, String> {
+    let port = listener
+        .local_addr()
+        .map_err(|error| format!("Failed to inspect browser callback listener: {error}"))?
+        .port();
+    let host = match profile.listener.url_host {
+        BrowserCallbackUrlHost::Localhost => "localhost",
+        BrowserCallbackUrlHost::LoopbackIpv4 => "127.0.0.1",
+    };
+    Ok(format!("http://{host}:{port}{}", profile.listener.path))
+}
+
+/// Appends callback and State parameters to one reviewed authorization URL.
+/// 向一个已审核授权 URL 追加回调与 State 参数。
+///
+/// # Parameters
+/// 参数
+/// `profile` declares parameter names, `callback_url` is the bound loopback endpoint, and `state`
+/// belongs to the exact in-memory transaction.
+/// `profile` 声明参数名，`callback_url` 是已绑定回环端点，`state` 属于精确内存事务。
+///
+/// # Returns
+/// 返回值
+/// The complete HTTPS URL opened by the host.
+/// 返回宿主打开的完整 HTTPS URL。
+fn browser_authorization_url(
+    profile: &BrowserCallbackAuthorization,
+    callback_url: &str,
+    state: &str,
+) -> Result<String, String> {
+    let mut url = Url::parse(profile.authorization_url.as_str())
+        .map_err(|error| format!("Invalid browser authorization URL: {error}"))?;
+    url.query_pairs_mut()
+        .append_pair(profile.callback_query_parameter.as_str(), callback_url)
+        .append_pair(profile.state_query_parameter.as_str(), state);
+    Ok(url.to_string())
+}
+
+/// Derives the single trusted browser origin from the declared authorization URL.
+/// 从声明的授权 URL 派生唯一可信浏览器来源。
+///
+/// # Parameters
+/// 参数
+/// `profile` contains the reviewed HTTPS authorization endpoint.
+/// `profile` 包含已审核的 HTTPS 授权端点。
+///
+/// # Returns
+/// 返回值
+/// The serialized non-opaque origin used by callback CORS responses.
+/// 返回用于回调 CORS 响应的已序列化非不透明来源。
+fn browser_callback_cors_origin(profile: &BrowserCallbackAuthorization) -> Result<String, String> {
+    let authorization_url = Url::parse(profile.authorization_url.as_str())
+        .map_err(|error| format!("Invalid browser authorization URL: {error}"))?;
+    let origin = authorization_url.origin().ascii_serialization();
+    if origin == "null" {
+        return Err(String::from(
+            "Browser authorization URL did not provide a network origin.",
+        ));
+    }
+    Ok(origin)
+}
+
+/// Receives, validates, acknowledges, and converts one browser callback credential.
+/// 接收、校验、确认并转换一个浏览器回调凭据。
+///
+/// # Parameters
+/// 参数
+/// `listener` owns the reserved loopback port, `profile` is the closed callback contract,
+/// `expected_state` belongs to the transaction, `required_secret_prefix` is optional, and
+/// `timeout_duration` bounds accept plus body processing.
+/// `listener` 持有已保留回环端口，`profile` 是封闭回调契约，`expected_state` 属于事务，
+/// `required_secret_prefix` 可选，`timeout_duration` 限制接受与正文处理总时长。
+///
+/// # Returns
+/// 返回值
+/// Validated host-managed credential material, or a controlled failure after best-effort response.
+/// 返回已校验的宿主管理凭据材料，或在尽力响应后的受控失败。
+async fn receive_browser_callback_credential(
+    listener: TcpListener,
+    profile: &BrowserCallbackAuthorization,
+    expected_state: &str,
+    required_secret_prefix: Option<&str>,
+    timeout_duration: Duration,
+) -> Result<CredentialSecretMaterial, String> {
+    let cors_origin = browser_callback_cors_origin(profile)?;
+    let deadline = Instant::now() + timeout_duration;
+    loop {
+        let (mut stream, _) = timeout_at(deadline, listener.accept())
+            .await
+            .map_err(|_| String::from("Browser authorization timed out."))?
+            .map_err(|error| format!("Browser callback listener failed: {error}"))?;
+        let request = match timeout_at(
+            deadline,
+            read_browser_callback_request(&mut stream, profile),
+        )
+        .await
+        {
+            Ok(Ok(request)) => request,
+            Ok(Err(failure)) => {
+                let _ = write_browser_callback_response(
+                    &mut stream,
+                    failure.status_code,
+                    false,
+                    Some(failure.message.as_str()),
+                    cors_origin.as_str(),
+                )
+                .await;
+                continue;
+            }
+            Err(_) => {
+                let message = String::from("Browser callback request timed out.");
+                let _ = write_browser_callback_response(
+                    &mut stream,
+                    408,
+                    false,
+                    Some(&message),
+                    cors_origin.as_str(),
+                )
+                .await;
+                return Err(message);
+            }
+        };
+        let document = match request {
+            BrowserCallbackRequest::Preflight => {
+                let _ = write_browser_callback_preflight(&mut stream, cors_origin.as_str()).await;
+                continue;
+            }
+            BrowserCallbackRequest::Document(document) => document,
+        };
+        return match extract_browser_callback_material(
+            &document,
+            &profile.response,
+            expected_state,
+            required_secret_prefix,
+        ) {
+            Ok(material) => {
+                let _ = write_browser_callback_response(
+                    &mut stream,
+                    200,
+                    true,
+                    None,
+                    cors_origin.as_str(),
+                )
+                .await;
+                Ok(material)
+            }
+            Err(BrowserCallbackExtractionFailure::ProviderRejected(message)) => {
+                let _ = write_browser_callback_response(
+                    &mut stream,
+                    200,
+                    true,
+                    None,
+                    cors_origin.as_str(),
+                )
+                .await;
+                Err(message)
+            }
+            Err(BrowserCallbackExtractionFailure::StateMismatch(message)) => {
+                let _ = write_browser_callback_response(
+                    &mut stream,
+                    403,
+                    false,
+                    Some(message.as_str()),
+                    cors_origin.as_str(),
+                )
+                .await;
+                Err(message)
+            }
+            Err(BrowserCallbackExtractionFailure::Invalid(message)) => {
+                let _ = write_browser_callback_response(
+                    &mut stream,
+                    400,
+                    false,
+                    Some(message.as_str()),
+                    cors_origin.as_str(),
+                )
+                .await;
+                Err(message)
+            }
+        };
+    }
+}
+
+/// Reads one complete bounded browser callback request.
+/// 读取一个完整有界浏览器回调请求。
+///
+/// # Parameters
+/// 参数
+/// `stream` is the accepted loopback connection and `profile` declares path and body limits.
+/// `stream` 是已接受回环连接，`profile` 声明路径与正文限制。
+///
+/// # Returns
+/// 返回值
+/// A CORS preflight, parsed JSON document, or one HTTP-classified validation failure.
+/// 返回 CORS 预检、已解析 JSON 文档或一个带 HTTP 分类的校验失败。
+async fn read_browser_callback_request(
+    stream: &mut TcpStream,
+    profile: &BrowserCallbackAuthorization,
+) -> Result<BrowserCallbackRequest, BrowserCallbackRequestFailure> {
+    let mut request = Vec::with_capacity(2048);
+    let header_end = loop {
+        if request.len() >= BROWSER_CALLBACK_MAX_HEADER_BYTES {
+            return Err(browser_callback_request_failure(
+                431,
+                "Browser callback headers exceeded the size limit.",
+            ));
+        }
+        let mut chunk = [0_u8; 1024];
+        let read = stream.read(&mut chunk).await.map_err(|error| {
+            browser_callback_request_failure(
+                400,
+                format!("Failed to read browser callback: {error}"),
+            )
+        })?;
+        if read == 0 {
+            return Err(browser_callback_request_failure(
+                400,
+                "Browser callback ended before its headers completed.",
+            ));
+        }
+        request.extend_from_slice(&chunk[..read]);
+        if let Some(index) = request.windows(4).position(|window| window == b"\r\n\r\n") {
+            break index + 4;
+        }
+    };
+    if header_end > BROWSER_CALLBACK_MAX_HEADER_BYTES {
+        return Err(browser_callback_request_failure(
+            431,
+            "Browser callback headers exceeded the size limit.",
+        ));
+    }
+    let headers = std::str::from_utf8(&request[..header_end]).map_err(|_| {
+        browser_callback_request_failure(400, "Browser callback headers were not valid UTF-8.")
+    })?;
+    let mut lines = headers.split("\r\n");
+    let request_line = lines.next().ok_or_else(|| {
+        browser_callback_request_failure(400, "Browser callback request line was missing.")
+    })?;
+    let mut request_parts = request_line.split_whitespace();
+    let method = request_parts.next().unwrap_or_default();
+    let target = request_parts.next().unwrap_or_default();
+    let callback_url = Url::parse(format!("http://127.0.0.1{target}").as_str()).map_err(|_| {
+        browser_callback_request_failure(400, "Browser callback target was invalid.")
+    })?;
+    if callback_url.path() != profile.listener.path {
+        return Err(browser_callback_request_failure(
+            404,
+            "Browser callback path was not registered.",
+        ));
+    }
+    if method == "OPTIONS" {
+        return Ok(BrowserCallbackRequest::Preflight);
+    }
+    if method != "POST" {
+        return Err(browser_callback_request_failure(
+            405,
+            "Browser callback requires POST.",
+        ));
+    }
+    let mut content_length = None;
+    let mut content_type_json = false;
+    for line in lines.filter(|line| !line.is_empty()) {
+        let (name, value) = line.split_once(':').ok_or_else(|| {
+            browser_callback_request_failure(400, "Browser callback header was malformed.")
+        })?;
+        let name = name.trim();
+        let value = value.trim();
+        if name.eq_ignore_ascii_case("content-length") {
+            if content_length.is_some() {
+                return Err(browser_callback_request_failure(
+                    400,
+                    "Browser callback repeated Content-Length.",
+                ));
+            }
+            content_length = Some(value.parse::<usize>().map_err(|_| {
+                browser_callback_request_failure(
+                    400,
+                    "Browser callback Content-Length was invalid.",
+                )
+            })?);
+        } else if name.eq_ignore_ascii_case("content-type") {
+            content_type_json = value
+                .split(';')
+                .next()
+                .is_some_and(|mime| mime.trim().eq_ignore_ascii_case("application/json"));
+        } else if name.eq_ignore_ascii_case("transfer-encoding") {
+            return Err(browser_callback_request_failure(
+                400,
+                "Browser callback does not accept Transfer-Encoding.",
+            ));
+        }
+    }
+    if !content_type_json {
+        return Err(browser_callback_request_failure(
+            415,
+            "Browser callback requires application/json.",
+        ));
+    }
+    let content_length = content_length.ok_or_else(|| {
+        browser_callback_request_failure(411, "Browser callback requires Content-Length.")
+    })?;
+    if content_length == 0 || content_length > profile.listener.max_body_bytes {
+        return Err(browser_callback_request_failure(
+            413,
+            "Browser callback body exceeded the configured size limit.",
+        ));
+    }
+    let complete_length = header_end.checked_add(content_length).ok_or_else(|| {
+        browser_callback_request_failure(413, "Browser callback body length overflowed.")
+    })?;
+    while request.len() < complete_length {
+        let remaining = complete_length - request.len();
+        let mut chunk = vec![0_u8; remaining.min(4096)];
+        let read = stream.read(&mut chunk).await.map_err(|error| {
+            browser_callback_request_failure(
+                400,
+                format!("Failed to read browser callback body: {error}"),
+            )
+        })?;
+        if read == 0 {
+            return Err(browser_callback_request_failure(
+                400,
+                "Browser callback body ended before Content-Length.",
+            ));
+        }
+        request.extend_from_slice(&chunk[..read]);
+    }
+    let document = serde_json::from_slice(&request[header_end..complete_length]).map_err(|_| {
+        browser_callback_request_failure(400, "Browser callback body was not valid JSON.")
+    })?;
+    Ok(BrowserCallbackRequest::Document(document))
+}
+
+/// Constructs one controlled request failure without accepting secret material.
+/// 构造一个不接受秘密材料的受控请求失败。
+///
+/// # Parameters
+/// 参数
+/// `status_code` is returned to the browser and `message` is safe transaction text.
+/// `status_code` 返回给浏览器，`message` 是安全事务文本。
+///
+/// # Returns
+/// 返回值
+/// One classified browser-callback failure.
+/// 返回一个已分类浏览器回调失败。
+fn browser_callback_request_failure(
+    status_code: u16,
+    message: impl Into<String>,
+) -> BrowserCallbackRequestFailure {
+    BrowserCallbackRequestFailure {
+        status_code,
+        message: message.into(),
+    }
+}
+
+/// Extracts one closed credential mapping from a validated callback JSON document.
+/// 从已校验回调 JSON 文档提取一个封闭凭据映射。
+///
+/// # Parameters
+/// 参数
+/// `document` is the callback JSON, `mapping` declares every consumed field, `expected_state`
+/// owns CSRF validation, and `required_secret_prefix` optionally constrains the secret.
+/// `document` 是回调 JSON，`mapping` 声明每个消费字段，`expected_state` 持有 CSRF 校验，
+/// `required_secret_prefix` 可选约束秘密。
+///
+/// # Returns
+/// 返回值
+/// Strongly typed secure material or a provider/contract failure without secret disclosure.
+/// 返回强类型安全材料，或不泄露秘密的供应商/契约失败。
+fn extract_browser_callback_material(
+    document: &serde_json::Value,
+    mapping: &crate::BrowserCallbackResponseMapping,
+    expected_state: &str,
+    required_secret_prefix: Option<&str>,
+) -> Result<CredentialSecretMaterial, BrowserCallbackExtractionFailure> {
+    let returned_state =
+        required_callback_string(document, mapping.state_json_pointer.as_str(), "State", 4096)?;
+    if returned_state != expected_state {
+        return Err(BrowserCallbackExtractionFailure::StateMismatch(
+            String::from("Browser callback State did not match."),
+        ));
+    }
+    if let Some(error_pointer) = mapping.error_json_pointer.as_deref()
+        && let Some(error_code) = optional_callback_string(document, error_pointer)
+    {
+        let description = mapping
+            .error_description_json_pointer
+            .as_deref()
+            .and_then(|pointer| optional_callback_string(document, pointer));
+        let message = description.map_or_else(
+            || format!("Browser authorization was rejected with code `{error_code}`."),
+            |description| {
+                format!(
+                    "Browser authorization was rejected with code `{error_code}`: {description}"
+                )
+            },
+        );
+        return Err(BrowserCallbackExtractionFailure::ProviderRejected(
+            bounded_browser_callback_message(message.as_str()),
+        ));
+    }
+    let secret = required_callback_string(
+        document,
+        mapping.secret_json_pointer.as_str(),
+        "secret",
+        8192,
+    )?;
+    if required_secret_prefix.is_some_and(|prefix| !secret.starts_with(prefix)) {
+        return Err(BrowserCallbackExtractionFailure::Invalid(String::from(
+            "Browser callback secret did not match the declared prefix.",
+        )));
+    }
+    let provider_subject = required_callback_string(
+        document,
+        mapping.subject_json_pointer.as_str(),
+        "provider subject",
+        2048,
+    )?;
+    let provider_username = required_callback_string(
+        document,
+        mapping.username_json_pointer.as_str(),
+        "provider user name",
+        2048,
+    )?;
+    let credential_label = required_callback_string(
+        document,
+        mapping.credential_label_json_pointer.as_str(),
+        "credential label",
+        2048,
+    )?;
+    Ok(CredentialSecretMaterial::BrowserCallbackAuthorization {
+        secret,
+        projection: mapping.secret_projection,
+        provider_subject,
+        provider_username,
+        credential_label,
+    })
+}
+
+/// Reads one required bounded JSON Pointer string.
+/// 读取一个必需的有界 JSON Pointer 字符串。
+///
+/// # Parameters
+/// 参数
+/// `document` owns callback data, `pointer` selects a field, `label` is diagnostic text, and
+/// `maximum_bytes` bounds retained non-container data.
+/// `document` 持有回调数据，`pointer` 选择字段，`label` 是诊断文本，`maximum_bytes` 限制保留数据。
+///
+/// # Returns
+/// 返回值
+/// The exact non-empty string or one contract failure.
+/// 返回精确非空字符串或一个契约失败。
+fn required_callback_string(
+    document: &serde_json::Value,
+    pointer: &str,
+    label: &str,
+    maximum_bytes: usize,
+) -> Result<String, BrowserCallbackExtractionFailure> {
+    let value = document
+        .pointer(pointer)
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .filter(|value| value.len() <= maximum_bytes)
+        .ok_or_else(|| {
+            BrowserCallbackExtractionFailure::Invalid(format!(
+                "Browser callback omitted a valid {label}."
+            ))
+        })?;
+    Ok(value.to_string())
+}
+
+/// Reads one optional bounded provider message string.
+/// 读取一个可选有界供应商消息字符串。
+///
+/// # Parameters
+/// 参数
+/// `document` owns callback data and `pointer` selects the optional string.
+/// `document` 持有回调数据，`pointer` 选择可选字符串。
+///
+/// # Returns
+/// 返回值
+/// A sanitized non-empty string when present.
+/// 存在时返回清理后的非空字符串。
+fn optional_callback_string(document: &serde_json::Value, pointer: &str) -> Option<String> {
+    document
+        .pointer(pointer)
+        .and_then(serde_json::Value::as_str)
+        .map(bounded_browser_callback_message)
+        .filter(|value| !value.is_empty())
+}
+
+/// Bounds provider callback diagnostics and removes control characters.
+/// 限制供应商回调诊断并移除控制字符。
+///
+/// # Parameters
+/// 参数
+/// `message` is provider-controlled non-secret text.
+/// `message` 是供应商控制的非秘密文本。
+///
+/// # Returns
+/// 返回值
+/// At most 512 safe Unicode scalar values.
+/// 返回最多 512 个安全 Unicode 标量值。
+fn bounded_browser_callback_message(message: &str) -> String {
+    message
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(512)
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
+/// Writes one bounded JSON response to the browser callback connection.
+/// 向浏览器回调连接写入一个有界 JSON 响应。
+///
+/// # Parameters
+/// 参数
+/// `stream` is the accepted connection, `status_code` selects the HTTP status, `success` is the
+/// provider acknowledgement, `error` is optional controlled text, and `cors_origin` is the exact
+/// authorization-page origin.
+/// `stream` 是已接受连接，`status_code` 选择 HTTP 状态，`success` 是供应商确认，`error`
+/// 是可选受控文本，`cors_origin` 是精确授权页面来源。
+///
+/// # Returns
+/// 返回值
+/// Success after the complete response has been written.
+/// 完整响应写入后返回成功。
+async fn write_browser_callback_response(
+    stream: &mut TcpStream,
+    status_code: u16,
+    success: bool,
+    error: Option<&str>,
+    cors_origin: &str,
+) -> Result<(), String> {
+    let reason = match status_code {
+        200 => "OK",
+        400 => "Bad Request",
+        403 => "Forbidden",
+        404 => "Not Found",
+        405 => "Method Not Allowed",
+        408 => "Request Timeout",
+        411 => "Length Required",
+        413 => "Payload Too Large",
+        415 => "Unsupported Media Type",
+        431 => "Request Header Fields Too Large",
+        _ => "Bad Request",
+    };
+    let body_document = match error {
+        Some(error) => serde_json::json!({
+            "success": success,
+            "error": bounded_browser_callback_message(error),
+        }),
+        None => serde_json::json!({"success": success}),
+    };
+    let body = serde_json::to_vec(&body_document)
+        .map_err(|error| format!("Failed to encode browser callback response: {error}"))?;
+    let response = format!(
+        "HTTP/1.1 {status_code} {reason}\r\nAccess-Control-Allow-Origin: {cors_origin}\r\nAccess-Control-Allow-Methods: POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len(),
+    );
+    stream
+        .write_all(response.as_bytes())
+        .await
+        .map_err(|error| format!("Failed to write browser callback response headers: {error}"))?;
+    stream
+        .write_all(body.as_slice())
+        .await
+        .map_err(|error| format!("Failed to write browser callback response body: {error}"))
+}
+
+/// Writes the CORS acknowledgement required before a browser callback JSON POST.
+/// 写入浏览器回调 JSON POST 前所需的 CORS 确认。
+///
+/// # Parameters
+/// 参数
+/// `stream` is the accepted preflight connection and `cors_origin` is the exact authorization-page
+/// origin derived from the provider declaration.
+/// `stream` 是已接受的预检连接，`cors_origin` 是从供应商声明派生的精确授权页面来源。
+///
+/// # Returns
+/// 返回值
+/// Success after the complete bodyless 204 response has been written.
+/// 完整无正文 204 响应写入后返回成功。
+async fn write_browser_callback_preflight(
+    stream: &mut TcpStream,
+    cors_origin: &str,
+) -> Result<(), String> {
+    let response = format!(
+        "HTTP/1.1 204 No Content\r\nAccess-Control-Allow-Origin: {cors_origin}\r\nAccess-Control-Allow-Methods: POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    );
+    stream
+        .write_all(response.as_bytes())
+        .await
+        .map_err(|error| format!("Failed to write browser callback preflight response: {error}"))
+}
+
 async fn bind_callback_listener(provider_kind: OAuthProviderKind) -> Result<TcpListener, String> {
     let address = match provider_kind {
         OAuthProviderKind::OpenAiCodex => "127.0.0.1:1455",
@@ -1920,7 +2776,7 @@ async fn receive_and_exchange_callback(
     set_transaction_phase(
         transactions,
         transaction_id,
-        OAuthTransactionPhase::ExchangingToken,
+        OAuthTransactionPhase::FinalizingCredential,
     )
     .await;
     exchange_authorization_code(client, flow, code.as_str()).await
@@ -2525,17 +3381,59 @@ fn unix_millis() -> Result<u64, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        KimiTokenResponse, MiniMaxTokenResponse, OAuthAuthorizationRuntime,
-        OAuthClientConfiguration, OAuthProviderKind, OAuthTokenResponse, OAuthTransaction,
-        OAuthTransactionPhase, OAuthTransactionSnapshot, build_kimi_credential_material,
-        build_minimax_credential_material, build_oauth_flow, build_pkce_challenge,
-        build_pkce_verifier, kimi_device_model, merge_refreshed_token_set, parse_callback_request,
-        unix_millis, validate_callback_state, validate_kimi_verification_uri,
-        validate_minimax_verification_uri,
+        BrowserCallbackExtractionFailure, BrowserCallbackRequest, KimiTokenResponse,
+        MiniMaxTokenResponse, OAuthAuthorizationRuntime, OAuthClientConfiguration,
+        OAuthProviderKind, OAuthTokenResponse, OAuthTransaction, OAuthTransactionPhase,
+        OAuthTransactionSnapshot, abort_and_remove_expired_transactions, browser_authorization_url,
+        browser_callback_url, build_kimi_credential_material, build_minimax_credential_material,
+        build_oauth_flow, build_pkce_challenge, build_pkce_verifier,
+        credential_authorization_binding, extract_browser_callback_material, kimi_device_model,
+        merge_refreshed_token_set, parse_callback_request, read_browser_callback_request,
+        receive_browser_callback_credential, unix_millis, validate_callback_state,
+        validate_kimi_verification_uri, validate_minimax_verification_uri,
     };
-    use crate::{CredentialSecretMaterial, MiniMaxRegion, OAuthTokenSet};
+    use crate::{
+        BrowserCallbackAuthorization, BrowserCallbackListener, BrowserCallbackResponseMapping,
+        BrowserCallbackSecretProjection, BrowserCallbackUrlHost, CredentialAuthorization,
+        CredentialSecretMaterial, MiniMaxRegion, OAuthTokenSet,
+    };
     use reqwest::Client;
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::{TcpListener, TcpStream};
+
+    /// Builds the reviewed declarative callback profile used by CommandCode tests.
+    /// 构建 CommandCode 测试使用的已审核声明式回调配置档。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The exact browser-callback contract documented by CommandCode.
+    /// 返回 CommandCode 文档记录的精确浏览器回调契约。
+    fn commandcode_browser_callback_profile() -> BrowserCallbackAuthorization {
+        BrowserCallbackAuthorization {
+            authorization_url: String::from("https://commandcode.ai/studio/auth/cli"),
+            callback_query_parameter: String::from("callback"),
+            state_query_parameter: String::from("state"),
+            listener: BrowserCallbackListener {
+                url_host: BrowserCallbackUrlHost::Localhost,
+                path: String::from("/callback"),
+                port_start: 5959,
+                port_end: 5968,
+                timeout_seconds: 300,
+                max_body_bytes: 10 * 1024,
+            },
+            response: BrowserCallbackResponseMapping {
+                secret_json_pointer: String::from("/apiKey"),
+                state_json_pointer: String::from("/state"),
+                subject_json_pointer: String::from("/userId"),
+                username_json_pointer: String::from("/userName"),
+                credential_label_json_pointer: String::from("/keyName"),
+                error_json_pointer: Some(String::from("/error")),
+                error_description_json_pointer: Some(String::from("/error_description")),
+                secret_projection: BrowserCallbackSecretProjection::Bearer,
+            },
+        }
+    }
 
     #[test]
     fn pkce_verifier_and_challenge_use_supported_alphabets() {
@@ -2577,6 +3475,327 @@ mod tests {
             validate_callback_state(String::from("code"), String::from("returned"), "expected")
                 .expect_err("mismatched state must fail");
         assert_eq!(error, "OAuth callback state did not match.");
+    }
+
+    /// Verifies a declarative browser flow advertises the exact loopback callback and State.
+    /// 验证声明式浏览器流程会通告精确回环回调与 State。
+    #[tokio::test]
+    async fn browser_callback_authorization_url_contains_exact_callback_and_state() {
+        let profile = commandcode_browser_callback_profile();
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test listener should bind");
+        let callback_url = browser_callback_url(&profile, &listener).expect("callback URL");
+        let authorization_url =
+            browser_authorization_url(&profile, callback_url.as_str(), "state-value")
+                .expect("authorization URL");
+        let parsed = reqwest::Url::parse(authorization_url.as_str()).expect("valid URL");
+        let query = parsed
+            .query_pairs()
+            .collect::<std::collections::BTreeMap<_, _>>();
+        assert_eq!(
+            query.get("callback").map(|value| value.as_ref()),
+            Some(callback_url.as_str())
+        );
+        assert_eq!(
+            query.get("state").map(|value| value.as_ref()),
+            Some("state-value")
+        );
+    }
+
+    /// Verifies the callback mapping creates only the declared Bearer credential and identities.
+    /// 验证回调映射只创建已声明的 Bearer 凭据与身份字段。
+    #[test]
+    fn browser_callback_mapping_extracts_declared_credential() {
+        let profile = commandcode_browser_callback_profile();
+        let document = serde_json::json!({
+            "apiKey": "user_test-secret",
+            "state": "state-value",
+            "userId": "user-123",
+            "userName": "Tester",
+            "keyName": "CLI Login"
+        });
+        let material = extract_browser_callback_material(
+            &document,
+            &profile.response,
+            "state-value",
+            Some("user_"),
+        )
+        .expect("valid callback material");
+        assert!(matches!(
+            material,
+            CredentialSecretMaterial::BrowserCallbackAuthorization {
+                secret,
+                projection: BrowserCallbackSecretProjection::Bearer,
+                provider_subject,
+                provider_username,
+                credential_label,
+            } if secret == "user_test-secret"
+                && provider_subject == "user-123"
+                && provider_username == "Tester"
+                && credential_label == "CLI Login"
+        ));
+    }
+
+    /// Verifies callback State mismatches and provider denials remain distinct failures.
+    /// 验证回调 State 不匹配与供应商拒绝保持为不同失败。
+    #[test]
+    fn browser_callback_mapping_classifies_state_and_provider_rejection() {
+        let profile = commandcode_browser_callback_profile();
+        let mismatch = serde_json::json!({
+            "apiKey": "user_test-secret",
+            "state": "foreign-state",
+            "userId": "user-123",
+            "userName": "Tester",
+            "keyName": "CLI Login"
+        });
+        assert!(matches!(
+            extract_browser_callback_material(
+                &mismatch,
+                &profile.response,
+                "expected-state",
+                Some("user_")
+            ),
+            Err(BrowserCallbackExtractionFailure::StateMismatch(_))
+        ));
+        let rejected = serde_json::json!({
+            "state": "expected-state",
+            "error": "access_denied",
+            "error_description": "The user denied authorization."
+        });
+        assert!(matches!(
+            extract_browser_callback_material(
+                &rejected,
+                &profile.response,
+                "expected-state",
+                Some("user_")
+            ),
+            Err(BrowserCallbackExtractionFailure::ProviderRejected(message))
+                if message.contains("access_denied")
+        ));
+    }
+
+    /// Verifies the bounded HTTP reader accepts the documented JSON POST contract.
+    /// 验证有界 HTTP 读取器接受文档记录的 JSON POST 契约。
+    #[tokio::test]
+    async fn browser_callback_reader_accepts_documented_json_post() {
+        let profile = commandcode_browser_callback_profile();
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test listener should bind");
+        let address = listener.local_addr().expect("listener address");
+        let profile_for_task = profile.clone();
+        let reader = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("callback connection");
+            read_browser_callback_request(&mut stream, &profile_for_task).await
+        });
+        let body = serde_json::to_vec(&serde_json::json!({
+            "apiKey": "user_test-secret",
+            "state": "state-value",
+            "userId": "user-123",
+            "userName": "Tester",
+            "keyName": "CLI Login"
+        }))
+        .expect("callback JSON");
+        let mut client = TcpStream::connect(address)
+            .await
+            .expect("client should connect");
+        let headers = format!(
+            "POST /callback HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        );
+        client
+            .write_all(headers.as_bytes())
+            .await
+            .expect("headers should write");
+        client
+            .write_all(body.as_slice())
+            .await
+            .expect("body should write");
+        client.shutdown().await.expect("client should close");
+        let request = reader
+            .await
+            .expect("reader task")
+            .expect("callback should parse");
+        let BrowserCallbackRequest::Document(document) = request else {
+            panic!("documented POST must produce a credential document");
+        };
+        assert_eq!(document["userId"], "user-123");
+    }
+
+    /// Verifies a browser preflight is acknowledged and the same transaction accepts the JSON POST.
+    /// 验证浏览器预检得到确认且同一事务继续接受 JSON POST。
+    #[tokio::test]
+    async fn browser_callback_receiver_continues_after_cors_preflight() {
+        let profile = commandcode_browser_callback_profile();
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test listener should bind");
+        let address = listener.local_addr().expect("listener address");
+        let profile_for_task = profile.clone();
+        let receiver = tokio::spawn(async move {
+            receive_browser_callback_credential(
+                listener,
+                &profile_for_task,
+                "state-value",
+                None,
+                std::time::Duration::from_secs(5),
+            )
+            .await
+        });
+
+        let mut preflight_client = TcpStream::connect(address)
+            .await
+            .expect("preflight client should connect");
+        preflight_client
+            .write_all(
+                b"OPTIONS /callback HTTP/1.1\r\nHost: localhost\r\nOrigin: https://commandcode.ai\r\nAccess-Control-Request-Method: POST\r\nAccess-Control-Request-Headers: content-type\r\n\r\n",
+            )
+            .await
+            .expect("preflight should write");
+        preflight_client
+            .shutdown()
+            .await
+            .expect("preflight request should close");
+        let mut preflight_response = Vec::new();
+        preflight_client
+            .read_to_end(&mut preflight_response)
+            .await
+            .expect("preflight response should read");
+        let preflight_response =
+            String::from_utf8(preflight_response).expect("preflight response should be UTF-8");
+        assert!(preflight_response.starts_with("HTTP/1.1 204 No Content\r\n"));
+        assert!(
+            preflight_response.contains("Access-Control-Allow-Origin: https://commandcode.ai\r\n")
+        );
+        assert!(preflight_response.contains("Access-Control-Allow-Methods: POST, OPTIONS\r\n"));
+        assert!(preflight_response.contains("Access-Control-Allow-Headers: Content-Type\r\n"));
+
+        let body = serde_json::to_vec(&serde_json::json!({
+            "apiKey": "opaque-test-secret",
+            "state": "state-value",
+            "userId": "user-123",
+            "userName": "Tester",
+            "keyName": "CLI Login"
+        }))
+        .expect("callback JSON");
+        let mut callback_client = TcpStream::connect(address)
+            .await
+            .expect("callback client should connect");
+        let headers = format!(
+            "POST /callback HTTP/1.1\r\nHost: localhost\r\nOrigin: https://commandcode.ai\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        );
+        callback_client
+            .write_all(headers.as_bytes())
+            .await
+            .expect("callback headers should write");
+        callback_client
+            .write_all(body.as_slice())
+            .await
+            .expect("callback body should write");
+        callback_client
+            .shutdown()
+            .await
+            .expect("callback request should close");
+        let mut callback_response = Vec::new();
+        callback_client
+            .read_to_end(&mut callback_response)
+            .await
+            .expect("callback response should read");
+        let callback_response =
+            String::from_utf8(callback_response).expect("callback response should be UTF-8");
+        assert!(callback_response.starts_with("HTTP/1.1 200 OK\r\n"));
+        assert!(
+            callback_response.contains("Access-Control-Allow-Origin: https://commandcode.ai\r\n")
+        );
+
+        let material = receiver
+            .await
+            .expect("receiver task should finish")
+            .expect("callback should succeed");
+        assert!(matches!(
+            material,
+            CredentialSecretMaterial::BrowserCallbackAuthorization {
+                secret,
+                provider_subject,
+                provider_username,
+                credential_label,
+                ..
+            } if secret == "opaque-test-secret"
+                && provider_subject == "user-123"
+                && provider_username == "Tester"
+                && credential_label == "CLI Login"
+        ));
+    }
+
+    /// Verifies transaction bindings are stable and credential-profile scoped.
+    /// 验证事务绑定稳定且限定在凭据配置档作用域内。
+    #[test]
+    fn credential_authorization_bindings_are_profile_scoped() {
+        let commandcode = CredentialAuthorization::RegisteredOauth {
+            provider: OAuthProviderKind::ClaudeCode,
+        };
+        let first =
+            credential_authorization_binding("commandcode", "provider-api", "login", &commandcode)
+                .expect("authorization binding");
+        assert_eq!(
+            first,
+            credential_authorization_binding("commandcode", "provider-api", "login", &commandcode)
+                .expect("stable authorization binding")
+        );
+        assert_ne!(
+            first,
+            credential_authorization_binding(
+                "commandcode",
+                "provider-api",
+                "user-api-key",
+                &commandcode
+            )
+            .expect("profile-scoped authorization binding")
+        );
+        assert_ne!(
+            first,
+            credential_authorization_binding(
+                "commandcode",
+                "provider-api",
+                "login",
+                &CredentialAuthorization::RegisteredOauth {
+                    provider: OAuthProviderKind::OpenAiCodex,
+                },
+            )
+            .expect("declaration-scoped authorization binding")
+        );
+    }
+
+    /// Verifies pruning an expired authorization also cancels its background listener task.
+    /// 验证清理过期授权时也会取消其后台监听任务。
+    #[tokio::test]
+    async fn expired_authorization_pruning_aborts_background_task() {
+        let task = tokio::spawn(std::future::pending::<()>());
+        let mut transactions = BTreeMap::from([(
+            String::from("expired"),
+            OAuthTransaction {
+                snapshot: OAuthTransactionSnapshot {
+                    transaction_id: String::from("expired"),
+                    authorization_binding: String::from("binding"),
+                    phase: OAuthTransactionPhase::WaitingForCallback,
+                    expires_at_unix_ms: 100,
+                    message: None,
+                },
+                material: None,
+                abort_handle: task.abort_handle(),
+            },
+        )]);
+
+        abort_and_remove_expired_transactions(&mut transactions, 100);
+
+        assert!(transactions.is_empty());
+        assert!(
+            task.await
+                .expect_err("expired task must be aborted")
+                .is_cancelled()
+        );
     }
 
     /// Verifies public Gemini OAuth retains the user project and requests the official scope.
@@ -2810,7 +4029,7 @@ mod tests {
             OAuthTransaction {
                 snapshot: OAuthTransactionSnapshot {
                     transaction_id: transaction_id.clone(),
-                    provider_kind: OAuthProviderKind::OpenAiCodex,
+                    authorization_binding: String::from("auth-test-binding"),
                     phase: OAuthTransactionPhase::WaitingForCallback,
                     expires_at_unix_ms: u64::MAX,
                     message: None,

@@ -3,6 +3,7 @@ name = "vulcan-service-runtime"
 description = "Runtime adapters used by the Vulcan Core Service."
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 
@@ -18,7 +19,7 @@ libc.workspace = true
 reqwest = { workspace = true, features = ["blocking"] }
 serde.workspace = true
 serde_json.workspace = true
-serde_yaml = "0.9"
+serde_yaml.workspace = true
 sha2.workspace = true
 tar.workspace = true
 tokio.workspace = true
@@ -33,6 +34,6 @@ zip.workspace = true
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 
 [build-dependencies]
-semver = "1"
+semver.workspace = true
 serde_json.workspace = true
-toml = "1.1"
+toml.workspace = true

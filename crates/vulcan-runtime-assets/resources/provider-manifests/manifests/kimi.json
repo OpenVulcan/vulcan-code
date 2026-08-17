@@ -1,7 +1,7 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "kimi",
-  "revision": 3,
+  "revision": 5,
   "published_at": "2026-08-06T00:00:00Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
@@ -118,6 +118,7 @@
           "credential_mode": "token",
           "billing_kind": "token_plan",
           "account_usage_query": "kimi_coding_plan",
+          "account_model_access": {},
           "default_usage_scopes": [
             "interactive_agent"
           ]
@@ -126,9 +127,13 @@
           "credential_profile_id": "coding-plan-login",
           "display_name": "Coding Plan Login",
           "credential_mode": "auth",
-          "oauth_provider": "kimi_coding_plan",
+          "authorization": {
+            "kind": "registered_oauth",
+            "provider": "kimi_coding_plan"
+          },
           "billing_kind": "token_plan",
           "account_usage_query": "kimi_coding_plan",
+          "account_model_access": {},
           "authentication": "coding_device_bearer",
           "default_usage_scopes": [
             "interactive_agent"

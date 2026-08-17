@@ -3,6 +3,7 @@ name = "vulcan-tools-luaskills-call"
 description = "Shared call_luaskill dispatcher protocol helpers for VulcanCode hosts."
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 

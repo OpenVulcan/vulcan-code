@@ -1698,7 +1698,7 @@ mod tests {
                     id: String::from("api-key"),
                     display_name: String::from("API Key"),
                     credential_mode: CredentialMode::Token,
-                    oauth_provider: None,
+                    authorization: None,
                     billing_kind: CredentialBillingKind::ProviderManaged,
                     account_usage_query: AccountUsageQueryKind::Unsupported,
                     authentication: None,

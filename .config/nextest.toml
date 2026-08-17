@@ -2,3 +2,17 @@
 # 限制 nextest 的测试进程并发度，避免开发机被测试进程占满。
 [profile.default]
 test-threads = 4
+
+# Shared provider manifests, process registries, and loopback ports must not race across test processes.
+# 共享供应商清单、进程注册表与回环端口不得在测试进程之间并发争用。
+[test-groups.shared-runtime-resources]
+max-threads = 1
+
+# Keep only resource-sensitive tests in the serial group; all remaining tests retain bounded parallelism.
+# 仅把资源敏感测试放入串行组；其余测试继续使用受限并行。
+[[profile.default.overrides]]
+filter = '''
+test(/provider_manifest|bundled_manifest|bind_ports|loopback|websocket|tcp_listener|service_registry/)
+| (package(vulcan-service-kernel) & test(registry))
+'''
+test-group = "shared-runtime-resources"

@@ -10204,6 +10204,44 @@ mod tests {
         assert_eq!(enabled.body["output_config"]["effort"], "max");
     }
 
+    /// Verifies CommandCode preserves native reasoning controls on each model-family endpoint.
+    /// 验证 CommandCode 在各模型系列端点保留原生思考控制字段。
+    #[test]
+    fn commandcode_projects_native_chat_and_anthropic_reasoning() {
+        let client = ProviderExecutionClient::new(
+            reqwest::Client::new(),
+            Arc::new(ProtocolRegistry::first_batch().expect("profiles should register")),
+        );
+        let mut chat_request = minimal_request();
+        chat_request.model_id = String::from("gpt-5.6-luna");
+        chat_request.reasoning_effort = Some(ReasoningEffort::Max);
+        let chat = client
+            .encode_request(
+                &bundled_manifest_route("commandcode", "provider-api", OPENAI_CHAT_PROFILE_ID),
+                &chat_request,
+            )
+            .expect("CommandCode Chat request should encode");
+        assert_eq!(chat.body["reasoning_effort"], "max");
+
+        let mut anthropic_request = minimal_request();
+        anthropic_request.model_id = String::from("claude-sonnet-5");
+        anthropic_request.reasoning_effort = Some(ReasoningEffort::XHigh);
+        anthropic_request.output_token_limit = Some(32_768);
+        let anthropic = client
+            .encode_request(
+                &bundled_manifest_route(
+                    "commandcode",
+                    "provider-api",
+                    ANTHROPIC_MESSAGES_PROFILE_ID,
+                ),
+                &anthropic_request,
+            )
+            .expect("CommandCode Anthropic request should encode");
+        assert_eq!(anthropic.body["thinking"]["type"], "enabled");
+        assert_eq!(anthropic.body["thinking"]["budget_tokens"], 16_384);
+        assert!(anthropic.body.get("reasoning_effort").is_none());
+    }
+
     /// Verifies DeepSeek Anthropic conversion keeps native web search instead of rejecting it.
     /// 验证 DeepSeek Anthropic 转换保留原生 web search，而不是拒绝该工具。
     #[test]

@@ -3,6 +3,7 @@ name = "vulcan-main-session"
 description = "Main-session private routing and persistence policy boundaries."
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 

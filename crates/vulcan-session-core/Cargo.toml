@@ -3,6 +3,7 @@ name = "vulcan-session-core"
 description = "Shared session protocol models for main sessions and task sessions."
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 
@@ -10,7 +11,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-futures-core = "0.3.34"
+futures-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true

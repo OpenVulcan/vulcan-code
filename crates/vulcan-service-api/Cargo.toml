@@ -3,6 +3,7 @@ name = "vulcan-service-api"
 description = "Shared API types for the Vulcan Core Service and clients."
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 
@@ -10,12 +11,12 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-base64 = "0.23.1"
-http-range = "0.1.5"
+base64.workspace = true
+http-range.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-time = { version = "0.3.55", features = ["formatting", "local-offset", "macros", "serde"] }
+time = { workspace = true, features = ["formatting", "local-offset", "macros", "serde"] }
 vulcan-ai-contract.workspace = true
 vulcan-luaskills-config.workspace = true
 vulcan-runtime-assets.workspace = true

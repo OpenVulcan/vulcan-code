@@ -222,8 +222,174 @@
                     "token"
                   ]
                 },
-                "oauth_provider": {
-                  "type": "string"
+                "authorization": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "kind",
+                        "provider"
+                      ],
+                      "properties": {
+                        "kind": {
+                          "const": "registered_oauth"
+                        },
+                        "provider": {
+                          "enum": [
+                            "open_ai_codex",
+                            "claude_code",
+                            "google_code_assist",
+                            "google_gemini",
+                            "mini_max_global_token_plan",
+                            "mini_max_china_token_plan",
+                            "kimi_coding_plan"
+                          ]
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "kind",
+                        "profile"
+                      ],
+                      "properties": {
+                        "kind": {
+                          "const": "browser_callback"
+                        },
+                        "profile": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "authorization_url",
+                            "callback_query_parameter",
+                            "state_query_parameter",
+                            "listener",
+                            "response"
+                          ],
+                          "properties": {
+                            "authorization_url": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 2048
+                            },
+                            "callback_query_parameter": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 128
+                            },
+                            "state_query_parameter": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 128
+                            },
+                            "listener": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "url_host",
+                                "path",
+                                "port_start",
+                                "port_end",
+                                "timeout_seconds",
+                                "max_body_bytes"
+                              ],
+                              "properties": {
+                                "url_host": {
+                                  "enum": [
+                                    "localhost",
+                                    "loopback_ipv4"
+                                  ]
+                                },
+                                "path": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 256
+                                },
+                                "port_start": {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 65535
+                                },
+                                "port_end": {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 65535
+                                },
+                                "timeout_seconds": {
+                                  "type": "integer",
+                                  "minimum": 30,
+                                  "maximum": 1800
+                                },
+                                "max_body_bytes": {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 65536
+                                }
+                              }
+                            },
+                            "response": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "secret_json_pointer",
+                                "state_json_pointer",
+                                "subject_json_pointer",
+                                "username_json_pointer",
+                                "credential_label_json_pointer",
+                                "secret_projection"
+                              ],
+                              "properties": {
+                                "secret_json_pointer": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 256
+                                },
+                                "state_json_pointer": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 256
+                                },
+                                "subject_json_pointer": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 256
+                                },
+                                "username_json_pointer": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 256
+                                },
+                                "credential_label_json_pointer": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 256
+                                },
+                                "error_json_pointer": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 256
+                                },
+                                "error_description_json_pointer": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 256
+                                },
+                                "secret_projection": {
+                                  "enum": [
+                                    "api_key",
+                                    "bearer"
+                                  ]
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
                 },
                 "billing_kind": {
                   "enum": [
@@ -234,6 +400,62 @@
                 },
                 "account_usage_query": {
                   "type": "string"
+                },
+                "account_model_access": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "plan_identity_field": {
+                      "enum": [
+                        "plan_name",
+                        "plan_id"
+                      ]
+                    },
+                    "plan_rules": {
+                      "type": "object",
+                      "maxProperties": 64,
+                      "propertyNames": {
+                        "minLength": 1,
+                        "maxLength": 256
+                      },
+                      "additionalProperties": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                          "allowed_model_groups": {
+                            "type": "array",
+                            "maxItems": 32,
+                            "uniqueItems": true,
+                            "items": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 128
+                            }
+                          },
+                          "blocked_model_ids": {
+                            "type": "array",
+                            "maxItems": 128,
+                            "uniqueItems": true,
+                            "items": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 512
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "unrestricted_when_quota_remaining": {
+                      "type": "array",
+                      "maxItems": 32,
+                      "uniqueItems": true,
+                      "items": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128
+                      }
+                    }
+                  }
                 },
                 "authentication": {
                   "type": "string"
@@ -700,6 +922,16 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 256
+            }
+          },
+          "account_access_groups": {
+            "type": "array",
+            "maxItems": 32,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
             }
           },
           "default_enabled": {

@@ -355,9 +355,10 @@ impl CustomProviderDefinition {
                     id: String::from("api-key"),
                     display_name: String::from("API Key"),
                     credential_mode: CredentialMode::Token,
-                    oauth_provider: None,
+                    authorization: None,
                     billing_kind: CredentialBillingKind::ProviderManaged,
                     account_usage_query: AccountUsageQueryKind::Unsupported,
+                    account_model_access: None,
                     authentication: None,
                     key_prefix: None,
                     credential_role: None,
@@ -636,7 +637,7 @@ fn validate_persisted_custom_provider_service_entry(
         ));
     };
     if profile.credential_mode != CredentialMode::Token
-        || profile.oauth_provider.is_some()
+        || profile.authorization.is_some()
         || profile.billing_kind != CredentialBillingKind::ProviderManaged
         || profile.account_usage_query != AccountUsageQueryKind::Unsupported
         || profile.authentication.is_some()

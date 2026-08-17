@@ -3,6 +3,7 @@ name = "vulcan-hooks"
 description = "Shared hook registration, dispatch, context, and result primitives for Vulcan extensions."
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 

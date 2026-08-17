@@ -1,7 +1,7 @@
 //! Versioned credential-secret contracts.
 //! 版本化凭据秘密契约。
 
-use crate::CredentialMode;
+use crate::{BrowserCallbackSecretProjection, CredentialMode};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
@@ -123,6 +123,25 @@ pub enum CredentialSecretMaterial {
         /// Stable provider-visible identity required by refresh and usage requests.
         /// 刷新与用量请求所需的稳定供应商可见身份。
         device_id: String,
+    },
+    /// Host-managed credential delivered by a reviewed browser loopback callback.
+    /// 由已审核浏览器回环回调交付并由宿主管理的凭据。
+    BrowserCallbackAuthorization {
+        /// Delivered secret retained only in the secure credential store.
+        /// 仅保留在安全凭据仓库中的交付秘密。
+        secret: String,
+        /// Request-authentication projection declared by the source Manifest.
+        /// 源 Manifest 声明的请求鉴权投影。
+        projection: BrowserCallbackSecretProjection,
+        /// Stable provider subject returned by the authorization page.
+        /// 授权页面返回的稳定供应商主体。
+        provider_subject: String,
+        /// Provider-visible user name returned by the authorization page.
+        /// 授权页面返回的供应商可见用户名。
+        provider_username: String,
+        /// Provider-owned credential label returned by the authorization page.
+        /// 授权页面返回的供应商凭据标签。
+        credential_label: String,
     },
 }
 
@@ -321,8 +340,8 @@ impl CredentialSecretEnvelope {
     ///
     /// # Returns
     /// 返回值
-    /// `Token` for user-managed material and `Auth` for renewable authorization.
-    /// 用户管理材料返回 `Token`，可续期授权返回 `Auth`。
+    /// `Token` for user-managed material and `Auth` for host-managed authorization.
+    /// 用户管理材料返回 `Token`，宿主管理授权返回 `Auth`。
     pub fn credential_mode(&self) -> CredentialMode {
         match &self.material {
             CredentialSecretMaterial::ApiKey { .. }
@@ -331,7 +350,8 @@ impl CredentialSecretEnvelope {
             | CredentialSecretMaterial::ClaudeCodeOAuth { .. }
             | CredentialSecretMaterial::GoogleOAuth { .. }
             | CredentialSecretMaterial::MiniMaxOAuth { .. }
-            | CredentialSecretMaterial::KimiCodingPlanOAuth { .. } => CredentialMode::Auth,
+            | CredentialSecretMaterial::KimiCodingPlanOAuth { .. }
+            | CredentialSecretMaterial::BrowserCallbackAuthorization { .. } => CredentialMode::Auth,
         }
     }
 
@@ -409,6 +429,25 @@ impl CredentialSecretEnvelope {
                     None,
                     Some(device_id.clone()),
                 ),
+                CredentialSecretMaterial::BrowserCallbackAuthorization {
+                    secret,
+                    projection,
+                    ..
+                } => (
+                    match projection {
+                        BrowserCallbackSecretProjection::ApiKey => {
+                            CredentialExecutionSecretKind::ApiKey
+                        }
+                        BrowserCallbackSecretProjection::Bearer => {
+                            CredentialExecutionSecretKind::Bearer
+                        }
+                    },
+                    secret.clone(),
+                    None,
+                    None,
+                    None,
+                    None,
+                ),
             };
         Ok(CredentialExecutionSecret {
             revision: self.revision,
@@ -445,7 +484,8 @@ impl CredentialSecretEnvelope {
                 tokens.expires_at_unix_ms
             }
             CredentialSecretMaterial::ApiKey { .. }
-            | CredentialSecretMaterial::StaticBearer { .. } => return false,
+            | CredentialSecretMaterial::StaticBearer { .. }
+            | CredentialSecretMaterial::BrowserCallbackAuthorization { .. } => return false,
         };
         expires_at_unix_ms <= now_unix_ms.saturating_add(refresh_skew_ms)
     }
@@ -505,8 +545,41 @@ impl CredentialSecretEnvelope {
                 tokens.validate()?;
                 validate_kimi_device_id(device_id)
             }
+            CredentialSecretMaterial::BrowserCallbackAuthorization {
+                secret,
+                provider_subject,
+                provider_username,
+                credential_label,
+                ..
+            } => {
+                validate_non_empty_secret("browser callback credential", secret)?;
+                validate_bounded_identity("provider subject", provider_subject)?;
+                validate_bounded_identity("provider user name", provider_username)?;
+                validate_bounded_identity("credential label", credential_label)
+            }
         }
     }
+}
+
+/// Validates one non-secret identity returned by a browser authorization callback.
+/// 校验浏览器授权回调返回的一个非秘密身份值。
+///
+/// # Parameters
+/// 参数
+/// `label` identifies the field in diagnostics and `value` is the exact provider value.
+/// `label` 在诊断中标识字段，`value` 是精确供应商值。
+///
+/// # Returns
+/// 返回值
+/// Success only for a non-empty value no longer than 2048 UTF-8 bytes.
+/// 仅非空且不超过 2048 个 UTF-8 字节的值返回成功。
+fn validate_bounded_identity(label: &str, value: &str) -> Result<(), String> {
+    if value.trim().is_empty() || value.len() > 2048 {
+        return Err(format!(
+            "Browser callback {label} must contain between 1 and 2048 UTF-8 bytes."
+        ));
+    }
+    Ok(())
 }
 
 /// Validates the persisted RFC 4122-shaped Kimi device identifier.
@@ -733,5 +806,26 @@ mod tests {
         let api_key = CredentialSecretEnvelope::new_api_key(String::from("key"))
             .expect("API key should validate");
         assert!(!api_key.requires_refresh(u64::MAX, u64::MAX));
+    }
+
+    /// Verifies generic browser credentials do not impersonate protocol-specific account fields.
+    /// 验证通用浏览器凭据不会冒充协议专用账号字段。
+    #[test]
+    fn browser_callback_identity_is_not_projected_as_codex_account_id() {
+        let envelope =
+            CredentialSecretEnvelope::new(CredentialSecretMaterial::BrowserCallbackAuthorization {
+                secret: String::from("user_secret"),
+                projection: BrowserCallbackSecretProjection::Bearer,
+                provider_subject: String::from("provider-subject"),
+                provider_username: String::from("provider-user"),
+                credential_label: String::from("CLI Login"),
+            })
+            .expect("browser callback material should validate");
+
+        let secret = envelope
+            .execution_secret()
+            .expect("browser callback execution secret");
+        assert_eq!(secret.kind(), CredentialExecutionSecretKind::Bearer);
+        assert!(secret.account_id().is_none());
     }
 }

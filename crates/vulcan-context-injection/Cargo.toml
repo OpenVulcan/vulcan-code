@@ -3,6 +3,7 @@ name = "vulcan-context-injection"
 description = "Shared context-injection primitives for hook-driven hidden and transient user context."
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 

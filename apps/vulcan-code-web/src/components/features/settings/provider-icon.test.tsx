@@ -19,6 +19,7 @@ describe("provider icon library", () => {
     expect(resolveProviderIconKey({ providerId: "qiniu" })).toBe("qiniu")
     expect(resolveProviderIconKey({ providerId: "fennoai" })).toBe("fennoai")
     expect(resolveProviderIconKey({ providerId: "code0" })).toBe("code0")
+    expect(resolveProviderIconKey({ providerId: "commandcode" })).toBe("commandcode")
     expect(resolveProviderIconKey({ providerId: "opencode-go" })).toBe("opencode-go")
   })
 

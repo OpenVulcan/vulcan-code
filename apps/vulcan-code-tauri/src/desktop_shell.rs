@@ -176,6 +176,45 @@ fn open_path_in_system_file_manager(path: &str) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
+/// Builds one platform browser command without routing URL metacharacters through a shell.
+/// 构建平台浏览器命令，避免 URL 元字符再次经过命令行 Shell 解析。
+///
+/// # Parameters
+/// 参数
+/// `url` is the complete validated external URL that must remain one process argument.
+/// `url` 是必须作为单个进程参数保留的完整已校验外部 URL。
+///
+/// # Returns
+/// 返回值
+/// A platform command ready for the common release-window and spawn policies.
+/// 返回可应用公共 Release 窗口策略并启动的平台命令。
+fn system_browser_command(url: &str) -> Command {
+    #[cfg(target_os = "windows")]
+    let command = {
+        // rundll32 invokes the registered URL protocol handler directly, so `&` remains URL data.
+        // rundll32 直接调用已注册的 URL 协议处理器，因此 `&` 保持为 URL 数据。
+        let mut command = Command::new("rundll32.exe");
+        command.arg("url.dll,FileProtocolHandler").arg(url);
+        command
+    };
+
+    #[cfg(target_os = "macos")]
+    let command = {
+        let mut command = Command::new("open");
+        command.arg(url);
+        command
+    };
+
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    let command = {
+        let mut command = Command::new("xdg-open");
+        command.arg(url);
+        command
+    };
+
+    command
+}
+
 /// Opens one URL with the host default browser.
 /// 使用宿主默认浏览器打开单个 URL。
 ///
@@ -189,30 +228,36 @@ fn open_path_in_system_file_manager(path: &str) -> Result<(), String> {
 /// `Ok(())` when the operating system accepted the open request.
 /// 当操作系统接受打开请求时返回 `Ok(())`。
 fn open_url_in_system_browser(url: &str) -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    let mut command = {
-        let mut command = Command::new("cmd");
-        command.args(["/C", "start", "", url]);
-        command
-    };
-
-    #[cfg(target_os = "macos")]
-    let mut command = {
-        let mut command = Command::new("open");
-        command.arg(url);
-        command
-    };
-
-    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
-    let mut command = {
-        let mut command = Command::new("xdg-open");
-        command.arg(url);
-        command
-    };
-
+    let mut command = system_browser_command(url);
     apply_windows_release_no_window_to_std_command(&mut command);
     command
         .spawn()
         .map(|_| ())
         .map_err(|error| error.to_string())
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod tests {
+    use super::system_browser_command;
+    use std::ffi::OsStr;
+
+    /// Verifies Windows preserves a multi-parameter authorization URL as one process argument.
+    /// 验证 Windows 将包含多个参数的授权 URL 完整保留为单个进程参数。
+    #[test]
+    fn windows_browser_command_preserves_complete_authorization_url() {
+        // authorizationUrl reproduces the CommandCode callback and state separator that cmd.exe split.
+        // authorizationUrl 复现曾被 cmd.exe 拆分的 CommandCode 回调与 state 分隔符。
+        let authorization_url = "https://commandcode.ai/studio/auth/cli?callback=http%3A%2F%2Flocalhost%3A5959%2Fcallback&state=test-state-value";
+        let command = system_browser_command(authorization_url);
+        let arguments = command.get_args().collect::<Vec<_>>();
+
+        assert_eq!(command.get_program(), OsStr::new("rundll32.exe"));
+        assert_eq!(
+            arguments,
+            vec![
+                OsStr::new("url.dll,FileProtocolHandler"),
+                OsStr::new(authorization_url),
+            ]
+        );
+    }
 }

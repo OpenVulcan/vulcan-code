@@ -41,7 +41,7 @@ static SYSTEM_STATISTICS_SQLITE_BINDING_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 /// Shared schema version stored in the application metadata table.
 /// 存储在应用元数据表中的共享结构版本号。
-pub const APP_SCHEMA_VERSION: i64 = 16;
+pub const APP_SCHEMA_VERSION: i64 = 17;
 
 /// Long-lived controller handle kept by the host runtime after startup succeeds.
 /// 启动成功后由宿主运行时持有的长生命周期控制器句柄。
@@ -432,6 +432,9 @@ CREATE TABLE IF NOT EXISTS ai_credential_secrets (
     expires_at_unix_ms INTEGER,
     scope_text TEXT NOT NULL DEFAULT '',
     account_subject TEXT,
+    authorization_kind TEXT CHECK(authorization_kind IN ('browser_callback')),
+    provider_username TEXT,
+    credential_label TEXT,
     email TEXT,
     id_token TEXT,
     account_id TEXT,
@@ -481,11 +484,33 @@ CREATE TABLE IF NOT EXISTS ai_credential_secrets (
     CHECK(
         material_kind != 'kimi_coding_plan_oauth'
         OR (provider_device_id IS NOT NULL AND length(trim(provider_device_id)) > 0)
+    ),
+    CHECK(
+        authorization_kind IS NULL
+        OR (
+            material_kind IN ('api_key', 'static_bearer')
+            AND authorization_kind = 'browser_callback'
+            AND account_subject IS NOT NULL
+            AND length(trim(account_subject)) > 0
+            AND provider_username IS NOT NULL
+            AND length(trim(provider_username)) > 0
+            AND credential_label IS NOT NULL
+            AND length(trim(credential_label)) > 0
+        )
     )
 );
 "#,
     )
     .await?;
+    // browserAuthorizationColumns extend the unreleased credential schema additively.
+    // browserAuthorizationColumns 以增量方式扩展尚未发布的凭据结构。
+    for statement in [
+        "ALTER TABLE ai_credential_secrets ADD COLUMN authorization_kind TEXT CHECK(authorization_kind IN ('browser_callback'));",
+        "ALTER TABLE ai_credential_secrets ADD COLUMN provider_username TEXT;",
+        "ALTER TABLE ai_credential_secrets ADD COLUMN credential_label TEXT;",
+    ] {
+        ensure_optional_schema_column(client, sqlite_binding_id, statement).await?;
+    }
     ensure_optional_schema_statement(
         client,
         sqlite_binding_id,
@@ -892,6 +917,9 @@ CREATE TABLE IF NOT EXISTS ai_credential_secrets (
     expires_at_unix_ms INTEGER,
     scope_text TEXT NOT NULL DEFAULT '',
     account_subject TEXT,
+    authorization_kind TEXT CHECK(authorization_kind IN ('browser_callback')),
+    provider_username TEXT,
+    credential_label TEXT,
     email TEXT,
     id_token TEXT,
     account_id TEXT,
@@ -941,6 +969,19 @@ CREATE TABLE IF NOT EXISTS ai_credential_secrets (
     CHECK(
         material_kind != 'kimi_coding_plan_oauth'
         OR (provider_device_id IS NOT NULL AND length(trim(provider_device_id)) > 0)
+    ),
+    CHECK(
+        authorization_kind IS NULL
+        OR (
+            material_kind IN ('api_key', 'static_bearer')
+            AND authorization_kind = 'browser_callback'
+            AND account_subject IS NOT NULL
+            AND length(trim(account_subject)) > 0
+            AND provider_username IS NOT NULL
+            AND length(trim(provider_username)) > 0
+            AND credential_label IS NOT NULL
+            AND length(trim(credential_label)) > 0
+        )
     )
 );
 "#,
@@ -1028,9 +1069,16 @@ mod tests {
     fn base_schema_includes_relational_ai_credential_storage() {
         let schema = build_application_schema_script();
 
-        assert_eq!(APP_SCHEMA_VERSION, 16);
+        assert_eq!(APP_SCHEMA_VERSION, 17);
         assert!(schema.contains("CREATE TABLE IF NOT EXISTS ai_credential_secrets"));
         assert!(schema.contains("provider_device_id TEXT"));
+        assert!(
+            schema.contains(
+                "authorization_kind TEXT CHECK(authorization_kind IN ('browser_callback'))"
+            )
+        );
+        assert!(schema.contains("provider_username TEXT"));
+        assert!(schema.contains("credential_label TEXT"));
         assert!(schema.contains("scope_text TEXT NOT NULL DEFAULT ''"));
         assert!(!schema.contains("credential_json"));
     }

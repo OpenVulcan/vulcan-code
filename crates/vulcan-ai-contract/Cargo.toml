@@ -2,6 +2,7 @@
 name = "vulcan-ai-contract"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 description = "Provider-neutral AI request, event, capability, usage, and configuration contracts for Vulcan Code."

@@ -41,6 +41,10 @@ if ($PSVersionTable.PSEdition -ne "Core") {
 # ProjectDir 保存仓库根目录，确保输出路径稳定。
 $ProjectDir = Split-Path $PSScriptRoot -Parent
 
+# ControllerProfileScriptPath points at the runtime-profile-aware generated Controller configuration updater.
+# ControllerProfileScriptPath 指向按运行模式更新 Controller 生成配置的脚本。
+$ControllerProfileScriptPath = Join-Path $PSScriptRoot "configure_controller_profile.ps1"
+
 # IsWindowsPlatform records whether the launched artifact requires the Windows executable suffix.
 # IsWindowsPlatform 记录启动制品是否需要 Windows 可执行文件后缀。
 $IsWindowsPlatform = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)
@@ -65,6 +69,19 @@ if (-not (Test-Path -LiteralPath $OutputBinaryPath -PathType Leaf)) {
     # BuildCommand 告知用户应使用哪种构建模式产出缺失的可执行文件。
     $BuildCommand = if ($Release) { "./make.ps1 build release" } else { "./make.ps1 build" }
     throw "Missing built Tauri binary: $OutputBinaryPath. Run $BuildCommand first."
+}
+
+if (-not (Test-Path -LiteralPath $ControllerProfileScriptPath -PathType Leaf)) {
+    throw "Missing Controller profile configuration script: $ControllerProfileScriptPath"
+}
+if ($Release) {
+    & $ControllerProfileScriptPath -Release
+}
+else {
+    & $ControllerProfileScriptPath
+}
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
 }
 
 # ProfileName describes the selected runtime profile in command output.

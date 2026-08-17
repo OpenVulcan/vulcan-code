@@ -3,6 +3,7 @@ name = "vulcan-context"
 description = "Shared context-management primitives reused by host runtime and workspace UI."
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 

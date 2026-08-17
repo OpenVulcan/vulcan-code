@@ -4,9 +4,11 @@ import type { TranslationKey } from "@/i18n"
 import type { PublicAiAccountUsageWindow, PublicAiCredentialProfile } from "@/types"
 
 import {
+  commandCodeUsageWindowLabel,
   formatCurrencyAmount,
   credentialUsageIsNonPlanAccount,
   kimiUsageWindowLabel,
+  usageWindowValue,
   usageCapabilityRequiresManagementKey,
   usageCapabilitySupportsQuotaWindows,
 } from "./credential-usage-overview"
@@ -47,13 +49,18 @@ function kimiUsageWindow(id: string, displayName = id): PublicAiAccountUsageWind
   }
 }
 
-// testTranslation resolves only the Kimi usage strings exercised by this module.
-// testTranslation 仅解析本模块验证的 Kimi 用量文案。
+// testTranslation resolves the provider usage strings exercised by this module.
+// testTranslation 解析本模块验证的供应商用量文案。
 function testTranslation(key: TranslationKey): string {
   const messages: Partial<Record<TranslationKey, string>> = {
     "composer.accountCard.kimiWeeklyUsage": "周用量",
     "composer.accountCard.kimiFiveHourUsage": "5 小时用量",
     "composer.accountCard.kimiLimit": "额度",
+    "composer.accountCard.commandCodeMonthlyCredits": "每月额度",
+    "composer.accountCard.commandCodePurchasedCredits": "购买额度",
+    "composer.accountCard.commandCodeFreeCredits": "赠送额度",
+    "composer.accountCard.commandCodeFiveHourRequests": "5 小时请求",
+    "composer.accountCard.commandCodeWeeklyRequests": "每周请求",
   }
   return messages[key] ?? key
 }
@@ -82,6 +89,7 @@ describe("usageCapabilitySupportsQuotaWindows", () => {
     expect(usageCapabilitySupportsQuotaWindows("mini_max_token_plan")).toBe(true)
     expect(usageCapabilitySupportsQuotaWindows("tavily_credits")).toBe(true)
     expect(usageCapabilitySupportsQuotaWindows("kimi_coding_plan")).toBe(true)
+    expect(usageCapabilitySupportsQuotaWindows("command_code_usage")).toBe(true)
     expect(usageCapabilitySupportsQuotaWindows("open_router_credits")).toBe(false)
     expect(usageCapabilitySupportsQuotaWindows("deep_seek_balance")).toBe(false)
     expect(usageCapabilitySupportsQuotaWindows("unsupported")).toBe(false)
@@ -117,5 +125,28 @@ describe("kimiUsageWindowLabel", () => {
         testTranslation,
       ),
     ).toBe("Custom provider pool")
+  })
+})
+
+describe("CommandCode usage presentation", () => {
+  // Verifies stable credit-window identifiers are localized independently from provider wire text.
+  // 验证稳定额度窗口标识独立于供应商 Wire 文案完成本地化。
+  it("localizes known credit and request windows", () => {
+    expect(commandCodeUsageWindowLabel(kimiUsageWindow("monthly-credits"), testTranslation)).toBe("每月额度")
+    expect(commandCodeUsageWindowLabel(kimiUsageWindow("purchased-credits"), testTranslation)).toBe("购买额度")
+    expect(commandCodeUsageWindowLabel(kimiUsageWindow("free-credits"), testTranslation)).toBe("赠送额度")
+    expect(commandCodeUsageWindowLabel(kimiUsageWindow("five-hour-requests"), testTranslation)).toBe("5 小时请求")
+    expect(commandCodeUsageWindowLabel(kimiUsageWindow("weekly-requests"), testTranslation)).toBe("每周请求")
+  })
+
+  // Verifies monetary quota windows use the same bounded decimal presentation as account balance.
+  // 验证货币额度窗口使用与账号余额一致的有界小数展示。
+  it("formats remaining and total credits as currency", () => {
+    expect(usageWindowValue({
+      ...kimiUsageWindow("monthly-credits"),
+      remaining: "69.761368264",
+      total: "70",
+      unit: "USD",
+    }, testTranslation)).toBe("69.76 / 70.00 USD")
   })
 })

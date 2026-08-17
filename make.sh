@@ -180,10 +180,11 @@ show_usage() {
     echo "  ./make.sh br release  # build and run Tauri/WebUI release"
     echo "  ./make.sh release     # Tauri/WebUI release build"
     echo "  ./make.sh licenses    # generate Rust third-party notices for the About page"
+    echo "  ./make.sh check-deps  # verify Rust dependency policy without changing manifests or the lockfile"
     echo "  ./make.sh run         # run Tauri/WebUI debug build; Vite is managed separately"
     echo "  ./make.sh run release # run Tauri/WebUI release build"
     echo "  ./make.sh deps        # install host + official LuaSkills runtime dependencies"
-    echo "  ./make.sh deps rust-tools # install cargo-hakari and cargo-nextest"
+    echo "  ./make.sh deps rust-tools # install cargo-hakari, cargo-nextest, and cargo-deny"
     echo "  ./make.sh init-system # bootstrap Rust tools and all repository dependencies"
     echo "  ./make.sh deps host   # install host native dependencies only"
     echo "  ./make.sh deps tools  # install the latest bundled sg and rg tools"
@@ -256,6 +257,14 @@ case "$NormalizedMode" in
             exit 1
         fi
         invoke_powershell_route licenses
+        ;;
+    check-deps)
+        if [ "$NormalizedVariant" != "" ]; then
+            echo "Unsupported check-deps command: '$CommandVariant'" >&2
+            show_usage
+            exit 1
+        fi
+        invoke_powershell_route check-deps
         ;;
     run)
         if [ "$NormalizedVariant" = "" ]; then

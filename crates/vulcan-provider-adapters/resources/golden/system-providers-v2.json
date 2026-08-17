@@ -2511,7 +2511,10 @@
             "id": "claude-code-oauth",
             "display_name": "Claude Code Login",
             "credential_mode": "auth",
-            "oauth_provider": "claude_code",
+            "authorization": {
+              "kind": "registered_oauth",
+              "provider": "claude_code"
+            },
             "billing_kind": "provider_managed",
             "account_usage_query": "unsupported",
             "default_usage_scopes": [
@@ -2727,6 +2730,249 @@
           "interactive_agent",
           "internal_background",
           "external_service"
+        ]
+      }
+    ]
+  },
+  "commandcode": {
+    "id": "commandcode",
+    "display_name": "CommandCode",
+    "kind": "system",
+    "category": "relay",
+    "credential_directory_visibility": "pinned_onboarding",
+    "credential_registration": "direct",
+    "service_entries": [
+      {
+        "id": "provider-api",
+        "display_name": "CommandCode Provider API",
+        "kind": "conversation",
+        "base_url": "https://api.commandcode.ai/provider/v1",
+        "credential_profiles": [
+          {
+            "id": "user-api-key",
+            "display_name": "User API Key",
+            "credential_mode": "token",
+            "billing_kind": "provider_managed",
+            "account_usage_query": "command_code_usage",
+            "account_model_access": {
+              "plan_identity_field": "plan_id",
+              "plan_rules": {
+                "individual-go": {
+                  "allowed_model_groups": [
+                    "opensource"
+                  ],
+                  "blocked_model_ids": [
+                    "google/gemini-3.7-flash",
+                    "meta/muse-spark-1.2",
+                    "xai/grok-4.6"
+                  ]
+                },
+                "individual-goat": {
+                  "allowed_model_groups": [
+                    "opensource"
+                  ]
+                },
+                "individual-max": {
+                  "allowed_model_groups": [
+                    "opensource",
+                    "premium"
+                  ]
+                },
+                "individual-pro": {
+                  "allowed_model_groups": [
+                    "opensource",
+                    "premium"
+                  ],
+                  "blocked_model_ids": [
+                    "claude-fable-5",
+                    "claude-opus-4-5-20251101",
+                    "claude-opus-4-6",
+                    "claude-opus-4-7",
+                    "claude-opus-4-8",
+                    "claude-opus-5",
+                    "sakana/fugu-ultra"
+                  ]
+                },
+                "individual-pro-v1": {
+                  "allowed_model_groups": [
+                    "opensource",
+                    "premium"
+                  ],
+                  "blocked_model_ids": [
+                    "claude-fable-5",
+                    "claude-opus-4-5-20251101",
+                    "claude-opus-4-6",
+                    "claude-opus-4-7",
+                    "claude-opus-4-8",
+                    "claude-opus-5",
+                    "sakana/fugu-ultra"
+                  ]
+                },
+                "individual-provider": {
+                  "allowed_model_groups": [
+                    "opensource",
+                    "premium"
+                  ]
+                },
+                "individual-ultra": {
+                  "allowed_model_groups": [
+                    "opensource",
+                    "premium"
+                  ]
+                },
+                "teams-pro": {
+                  "allowed_model_groups": [
+                    "opensource",
+                    "premium"
+                  ]
+                }
+              },
+              "unrestricted_when_quota_remaining": [
+                "free-credits",
+                "purchased-credits"
+              ]
+            },
+            "key_prefix": "user_",
+            "default_usage_scopes": [
+              "interactive_agent"
+            ]
+          },
+          {
+            "id": "commandcode-login",
+            "display_name": "CommandCode Login",
+            "credential_mode": "auth",
+            "authorization": {
+              "kind": "browser_callback",
+              "profile": {
+                "authorization_url": "https://commandcode.ai/studio/auth/cli",
+                "callback_query_parameter": "callback",
+                "state_query_parameter": "state",
+                "listener": {
+                  "url_host": "localhost",
+                  "path": "/callback",
+                  "port_start": 5959,
+                  "port_end": 5968,
+                  "timeout_seconds": 300,
+                  "max_body_bytes": 10240
+                },
+                "response": {
+                  "secret_json_pointer": "/apiKey",
+                  "state_json_pointer": "/state",
+                  "subject_json_pointer": "/userId",
+                  "username_json_pointer": "/userName",
+                  "credential_label_json_pointer": "/keyName",
+                  "error_json_pointer": "/error",
+                  "error_description_json_pointer": "/error_description",
+                  "secret_projection": "bearer"
+                }
+              }
+            },
+            "billing_kind": "provider_managed",
+            "account_usage_query": "command_code_usage",
+            "account_model_access": {
+              "plan_identity_field": "plan_id",
+              "plan_rules": {
+                "individual-go": {
+                  "allowed_model_groups": [
+                    "opensource"
+                  ],
+                  "blocked_model_ids": [
+                    "google/gemini-3.7-flash",
+                    "meta/muse-spark-1.2",
+                    "xai/grok-4.6"
+                  ]
+                },
+                "individual-goat": {
+                  "allowed_model_groups": [
+                    "opensource"
+                  ]
+                },
+                "individual-max": {
+                  "allowed_model_groups": [
+                    "opensource",
+                    "premium"
+                  ]
+                },
+                "individual-pro": {
+                  "allowed_model_groups": [
+                    "opensource",
+                    "premium"
+                  ],
+                  "blocked_model_ids": [
+                    "claude-fable-5",
+                    "claude-opus-4-5-20251101",
+                    "claude-opus-4-6",
+                    "claude-opus-4-7",
+                    "claude-opus-4-8",
+                    "claude-opus-5",
+                    "sakana/fugu-ultra"
+                  ]
+                },
+                "individual-pro-v1": {
+                  "allowed_model_groups": [
+                    "opensource",
+                    "premium"
+                  ],
+                  "blocked_model_ids": [
+                    "claude-fable-5",
+                    "claude-opus-4-5-20251101",
+                    "claude-opus-4-6",
+                    "claude-opus-4-7",
+                    "claude-opus-4-8",
+                    "claude-opus-5",
+                    "sakana/fugu-ultra"
+                  ]
+                },
+                "individual-provider": {
+                  "allowed_model_groups": [
+                    "opensource",
+                    "premium"
+                  ]
+                },
+                "individual-ultra": {
+                  "allowed_model_groups": [
+                    "opensource",
+                    "premium"
+                  ]
+                },
+                "teams-pro": {
+                  "allowed_model_groups": [
+                    "opensource",
+                    "premium"
+                  ]
+                }
+              },
+              "unrestricted_when_quota_remaining": [
+                "free-credits",
+                "purchased-credits"
+              ]
+            },
+            "key_prefix": "user_",
+            "default_usage_scopes": [
+              "interactive_agent"
+            ]
+          }
+        ],
+        "authentication": "bearer_authorization",
+        "model_discovery": "open_ai",
+        "request_projector": "direct",
+        "protocol_routes": [
+          {
+            "protocol_profile_id": "anthropic-messages.v1",
+            "endpoint_path": "/messages",
+            "request_headers": {
+              "anthropic-version": "2023-06-01"
+            },
+            "verified": true
+          },
+          {
+            "protocol_profile_id": "openai-chat-completions.v1",
+            "endpoint_path": "/chat/completions",
+            "verified": true
+          }
+        ],
+        "default_usage_scopes": [
+          "interactive_agent"
         ]
       }
     ]
@@ -3153,7 +3399,10 @@
             "id": "gemini-oauth",
             "display_name": "Gemini Login",
             "credential_mode": "auth",
-            "oauth_provider": "google_gemini",
+            "authorization": {
+              "kind": "registered_oauth",
+              "provider": "google_gemini"
+            },
             "billing_kind": "provider_managed",
             "account_usage_query": "unsupported",
             "default_usage_scopes": [
@@ -3188,7 +3437,10 @@
             "id": "code-assist-oauth",
             "display_name": "Code Assist Login",
             "credential_mode": "auth",
-            "oauth_provider": "google_code_assist",
+            "authorization": {
+              "kind": "registered_oauth",
+              "provider": "google_code_assist"
+            },
             "billing_kind": "provider_managed",
             "account_usage_query": "unsupported",
             "default_usage_scopes": [
@@ -3353,6 +3605,9 @@
             "credential_mode": "token",
             "billing_kind": "token_plan",
             "account_usage_query": "kimi_coding_plan",
+            "account_model_access": {
+              "plan_identity_field": "plan_name"
+            },
             "default_usage_scopes": [
               "interactive_agent"
             ]
@@ -3361,9 +3616,15 @@
             "id": "coding-plan-login",
             "display_name": "Coding Plan Login",
             "credential_mode": "auth",
-            "oauth_provider": "kimi_coding_plan",
+            "authorization": {
+              "kind": "registered_oauth",
+              "provider": "kimi_coding_plan"
+            },
             "billing_kind": "token_plan",
             "account_usage_query": "kimi_coding_plan",
+            "account_model_access": {
+              "plan_identity_field": "plan_name"
+            },
             "authentication": "coding_device_bearer",
             "default_usage_scopes": [
               "interactive_agent"
@@ -3481,7 +3742,10 @@
             "id": "token-plan-oauth",
             "display_name": "Token Plan Login",
             "credential_mode": "auth",
-            "oauth_provider": "mini_max_global_token_plan",
+            "authorization": {
+              "kind": "registered_oauth",
+              "provider": "mini_max_global_token_plan"
+            },
             "billing_kind": "token_plan",
             "account_usage_query": "mini_max_token_plan",
             "authentication": "bearer_authorization",
@@ -3638,7 +3902,10 @@
             "id": "token-plan-oauth",
             "display_name": "Token Plan Login",
             "credential_mode": "auth",
-            "oauth_provider": "mini_max_china_token_plan",
+            "authorization": {
+              "kind": "registered_oauth",
+              "provider": "mini_max_china_token_plan"
+            },
             "billing_kind": "token_plan",
             "account_usage_query": "mini_max_token_plan",
             "authentication": "bearer_authorization",
@@ -3829,7 +4096,10 @@
             "id": "codex-oauth",
             "display_name": "Codex Login",
             "credential_mode": "auth",
-            "oauth_provider": "open_ai_codex",
+            "authorization": {
+              "kind": "registered_oauth",
+              "provider": "open_ai_codex"
+            },
             "billing_kind": "provider_managed",
             "account_usage_query": "unsupported",
             "default_usage_scopes": [

@@ -87,6 +87,10 @@ $RustDevToolsScriptPath = Join-Path $ScriptDir "scripts\install_rust_dev_tools.p
 # RustNoticesScriptPath 用于指向关于页面专用的 Rust 许可证声明生成脚本。
 $RustNoticesScriptPath = Join-Path $ScriptDir "scripts\generate_rust_third_party_notices.ps1"
 
+# RustDependencyCheckScriptPath points at the read-only Rust dependency-governance verifier.
+# RustDependencyCheckScriptPath 指向只读的 Rust 依赖治理验证脚本。
+$RustDependencyCheckScriptPath = Join-Path $ScriptDir "scripts\check_rust_dependency_policy.ps1"
+
 # Normalize-Command converts nullable command text into a trimmed lower-case token so dispatch rules remain predictable.
 # Normalize-Command 用于把可空命令文本转换成去空白的小写标记，确保分发规则稳定可预测。
 # Value is the raw command-line token to normalize before dispatch.
@@ -279,6 +283,19 @@ function Invoke-RustThirdPartyNoticeGeneration {
     }
 }
 
+# Invoke-RustDependencyCheck delegates the complete read-only dependency-governance verification.
+# Invoke-RustDependencyCheck 用于委托完整的只读依赖治理验证。
+function Invoke-RustDependencyCheck {
+    if (-not (Test-Path -LiteralPath $RustDependencyCheckScriptPath)) {
+        throw "Missing Rust dependency check script: $RustDependencyCheckScriptPath"
+    }
+
+    & $RustDependencyCheckScriptPath
+    if ($LASTEXITCODE -ne 0) {
+        exit $LASTEXITCODE
+    }
+}
+
 # Show-Usage prints the supported command forms so contributors can quickly recover from invalid input.
 # Show-Usage 用于输出支持的命令形式，方便贡献者在输入无效参数后快速恢复。
 function Show-Usage {
@@ -293,10 +310,11 @@ function Show-Usage {
     Write-Host "  ./make br release  # build and run Tauri/WebUI release"
     Write-Host "  ./make release     # Tauri/WebUI release build"
     Write-Host "  ./make licenses    # generate Rust third-party notices for the About page"
+    Write-Host "  ./make check-deps  # verify Rust dependency policy without changing manifests or the lockfile"
     Write-Host "  ./make run         # run Tauri/WebUI debug build; Vite is managed separately"
     Write-Host "  ./make run release # run Tauri/WebUI release build"
     Write-Host "  ./make deps        # install host + LuaSkills + Codebase Memory + VMM runtime dependencies"
-    Write-Host "  ./make deps rust-tools # install cargo-hakari and cargo-nextest"
+    Write-Host "  ./make deps rust-tools # install cargo-hakari, cargo-nextest, and cargo-deny"
     Write-Host "  ./make init-system # bootstrap Rust tools and all repository dependencies"
     Write-Host "  ./make deps host   # install host native dependencies only"
     Write-Host "  ./make deps vldb   # install vldb-controller host dependency only"
@@ -373,6 +391,14 @@ switch ($NormalizedMode) {
             exit 1
         }
         Invoke-RustThirdPartyNoticeGeneration
+    }
+    "check-deps" {
+        if (-not [string]::IsNullOrWhiteSpace($NormalizedVariant)) {
+            Write-Error "Unsupported check-deps command: '$CommandVariant'"
+            Show-Usage
+            exit 1
+        }
+        Invoke-RustDependencyCheck
     }
     "run" {
         if ($NormalizedVariant -eq "" -or $NormalizedVariant -eq "release") {

@@ -231,6 +231,26 @@ fn rust_service_entry_fields() -> BTreeSet<&'static str> {
     .collect()
 }
 
+/// Returns the exact serialized field set of the Rust credential-profile DTO.
+/// 返回 Rust 凭据配置档 DTO 的精确序列化字段集合。
+fn rust_credential_profile_fields() -> BTreeSet<&'static str> {
+    [
+        "credential_profile_id",
+        "display_name",
+        "credential_mode",
+        "authorization",
+        "billing_kind",
+        "account_usage_query",
+        "account_model_access",
+        "authentication",
+        "key_prefix",
+        "credential_role",
+        "default_usage_scopes",
+    ]
+    .into_iter()
+    .collect()
+}
+
 /// Returns the exact serialized field set of the Rust model-rule DTO.
 /// 返回 Rust 模型规则 DTO 的精确序列化字段集合。
 fn rust_model_rule_fields() -> BTreeSet<&'static str> {
@@ -250,6 +270,7 @@ fn rust_model_rule_fields() -> BTreeSet<&'static str> {
         "model_parameters",
         "operation_refs",
         "allowed_account_plan_names",
+        "account_access_groups",
         "default_enabled",
         "provenance_ref",
     ]
@@ -335,6 +356,18 @@ fn manifest_schema_service_contract_is_consistent() {
         catalog_fields,
         rust_model_catalog_fields(),
         "model-catalog JSON Schema fields must exactly match the Rust DTO"
+    );
+    let credential_fields: BTreeSet<&str> =
+        properties["credential_profiles"]["items"]["properties"]
+            .as_object()
+            .expect("credential profiles must declare properties")
+            .keys()
+            .map(String::as_str)
+            .collect();
+    assert_eq!(
+        credential_fields,
+        rust_credential_profile_fields(),
+        "credential-profile JSON Schema fields must exactly match the Rust DTO"
     );
 }
 

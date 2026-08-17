@@ -48,8 +48,8 @@ function Get-CargoDevToolSemanticVersion {
 
 # Install-CargoDevTool installs or upgrades one Cargo subcommand and validates its resulting version.
 # Install-CargoDevTool 安装或升级一个 Cargo 子命令，并验证最终版本。
-# PackageName and BinaryName identify the crates.io package and executable; MinimumVersion and VersionRequirement define an optional compatibility floor.
-# PackageName 与 BinaryName 标识 crates.io 包和可执行文件；MinimumVersion 与 VersionRequirement 定义可选的兼容版本下限。
+# PackageName and BinaryName identify the crates.io package and executable; MinimumVersion, VersionRequirement, and Features define its repository contract.
+# PackageName 与 BinaryName 标识 crates.io 包和可执行文件；MinimumVersion、VersionRequirement 与 Features 定义其仓库契约。
 # Returns after the executable exists, runs successfully, and satisfies the declared minimum version.
 # 在可执行文件存在、运行成功并满足声明的最低版本后返回。
 function Install-CargoDevTool {
@@ -59,7 +59,8 @@ function Install-CargoDevTool {
         [Parameter(Mandatory = $true)]
         [string]$BinaryName,
         [System.Version]$MinimumVersion,
-        [string]$VersionRequirement
+        [string]$VersionRequirement,
+        [string]$Features
     )
 
     # ExistingCommand resolves a previously installed executable from PATH.
@@ -84,11 +85,17 @@ function Install-CargoDevTool {
     }
 
     Write-Host ("==> Installing Rust developer tool: {0} (Cargo jobs: 2)" -f $PackageName)
-    if ([string]::IsNullOrWhiteSpace($VersionRequirement)) {
-        & $CargoCommand.Source install --locked --jobs 2 $PackageName
-    } else {
-        & $CargoCommand.Source install --locked --jobs 2 --version $VersionRequirement $PackageName
+    # InstallArguments stores the exact reproducible Cargo install contract for this tool.
+    # InstallArguments 保存当前工具准确且可复现的 Cargo 安装契约。
+    $InstallArguments = @("install", "--locked", "--jobs", "2")
+    if (-not [string]::IsNullOrWhiteSpace($VersionRequirement)) {
+        $InstallArguments += @("--version", $VersionRequirement)
     }
+    if (-not [string]::IsNullOrWhiteSpace($Features)) {
+        $InstallArguments += @("--features", $Features)
+    }
+    $InstallArguments += $PackageName
+    & $CargoCommand.Source @InstallArguments
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
     # InstalledCommand resolves the executable again after Cargo completes installation.
@@ -108,5 +115,7 @@ function Install-CargoDevTool {
 
 Install-CargoDevTool -PackageName "cargo-hakari" -BinaryName "cargo-hakari" -MinimumVersion ([System.Version]"0.9.22") -VersionRequirement ">=0.9.22"
 Install-CargoDevTool -PackageName "cargo-nextest" -BinaryName "cargo-nextest"
+Install-CargoDevTool -PackageName "cargo-deny" -BinaryName "cargo-deny" -MinimumVersion ([System.Version]"0.20.2") -VersionRequirement "=0.20.2"
+Install-CargoDevTool -PackageName "cargo-about" -BinaryName "cargo-about" -MinimumVersion ([System.Version]"0.9.1") -VersionRequirement "=0.9.1" -Features "cli"
 
 Write-Host "==> Rust developer tools are ready."

@@ -239,6 +239,9 @@ pub struct ResolvedRuleInstance {
     /// Rule-owned account-plan allowlist; empty means no plan-based filtering.
     /// 规则持有的账号套餐白名单；为空表示不按套餐过滤。
     pub allowed_account_plan_names: Vec<String>,
+    /// Rule-owned account-access groups consumed by credential plan rules.
+    /// 由凭据套餐规则消费的规则自有账号访问分组。
+    pub account_access_groups: Vec<String>,
     /// Inherited model-specific parameter definitions.
     /// 继承后的模型独立参数定义。
     pub model_parameters: Vec<ModelParameterDefinition>,
@@ -552,6 +555,9 @@ fn resolve_rule_for_entry(
             rule_provenance(),
         );
     }
+    if !rule.account_access_groups.is_empty() {
+        field_provenance.insert(String::from("account_access_groups"), rule_provenance());
+    }
     if rule.display_name.is_some() {
         field_provenance.insert(String::from("display_name"), rule_provenance());
     }
@@ -577,6 +583,7 @@ fn resolve_rule_for_entry(
         response_profile_refs,
         operation_refs,
         allowed_account_plan_names: rule.allowed_account_plan_names.clone(),
+        account_access_groups: rule.account_access_groups.clone(),
         model_parameters: rule.model_parameters.clone(),
         provenance: ResolvedRuleProvenance {
             source,

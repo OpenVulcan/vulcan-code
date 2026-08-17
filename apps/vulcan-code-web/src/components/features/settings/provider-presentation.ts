@@ -29,6 +29,7 @@ const providerDescriptionKeys: Readonly<Record<string, TranslationKey>> = {
   qiniu: "settings.providerDescription.qiniu",
   fennoai: "settings.providerDescription.fennoai",
   code0: "settings.providerDescription.code0",
+  commandcode: "settings.providerDescription.commandcode",
   tavily: "settings.providerDescription.tavily",
   openai: "settings.providerDescription.openai",
   anthropic: "settings.providerDescription.anthropic",

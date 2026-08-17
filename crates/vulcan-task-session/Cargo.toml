@@ -3,6 +3,7 @@ name = "vulcan-task-session"
 description = "File-backed task-session routing and scheduling boundaries."
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 
@@ -12,7 +13,7 @@ workspace = true
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
-serde_yaml = "0.9"
+serde_yaml.workspace = true
 vulcan-context.workspace = true
 vulcan-context-compaction.workspace = true
 vulcan-runtime-assets.workspace = true
@@ -20,4 +21,4 @@ vulcan-session-core.workspace = true
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 
 [dev-dependencies]
-encoding_rs = "0.8.35"
+encoding_rs.workspace = true

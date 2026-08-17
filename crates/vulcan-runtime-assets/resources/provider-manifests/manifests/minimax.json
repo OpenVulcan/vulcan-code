@@ -1,7 +1,7 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "minimax",
-  "revision": 10,
+  "revision": 11,
   "published_at": "2026-08-09T00:00:00Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
@@ -68,7 +68,10 @@
           "credential_profile_id": "token-plan-oauth",
           "display_name": "Token Plan Login",
           "credential_mode": "auth",
-          "oauth_provider": "mini_max_global_token_plan",
+          "authorization": {
+            "kind": "registered_oauth",
+            "provider": "mini_max_global_token_plan"
+          },
           "billing_kind": "token_plan",
           "account_usage_query": "mini_max_token_plan",
           "authentication": "bearer_authorization",
@@ -166,7 +169,10 @@
           "credential_profile_id": "token-plan-oauth",
           "display_name": "Token Plan Login",
           "credential_mode": "auth",
-          "oauth_provider": "mini_max_china_token_plan",
+          "authorization": {
+            "kind": "registered_oauth",
+            "provider": "mini_max_china_token_plan"
+          },
           "billing_kind": "token_plan",
           "account_usage_query": "mini_max_token_plan",
           "authentication": "bearer_authorization",

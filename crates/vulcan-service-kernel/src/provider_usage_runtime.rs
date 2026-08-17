@@ -112,7 +112,9 @@ fn account_usage_snapshot_kind(query: AccountUsageQueryKind) -> &'static str {
         AccountUsageQueryKind::MiniMaxTokenPlan | AccountUsageQueryKind::KimiCodingPlan => {
             "token_plan"
         }
-        AccountUsageQueryKind::OpenRouterCredits | AccountUsageQueryKind::TavilyCredits => "quota",
+        AccountUsageQueryKind::OpenRouterCredits
+        | AccountUsageQueryKind::TavilyCredits
+        | AccountUsageQueryKind::CommandCodeUsage => "quota",
         AccountUsageQueryKind::DeepSeekBalance => "balance",
         AccountUsageQueryKind::Unsupported => "unsupported",
     }

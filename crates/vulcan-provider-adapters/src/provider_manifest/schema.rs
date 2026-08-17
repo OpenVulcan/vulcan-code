@@ -3,7 +3,7 @@
 
 use crate::{
     AccountUsageQueryKind, AuthenticationProjection, CredentialBillingKind, CredentialMode,
-    InputResourceConstraint, ModelDiscoveryKind, OAuthProviderKind, ProviderPartnershipKind,
+    InputResourceConstraint, ModelDiscoveryKind, ProviderPartnershipKind,
     ProviderPromotionDisclosureKey, ProviderToolCapabilityKind, ProviderToolExecutionContract,
     ProviderToolOutputContract, ProviderToolResourceEncoding, ResponsesRouteFeatures,
 };
@@ -289,10 +289,10 @@ pub struct ManifestCredentialProfile {
     /// 精确凭据获取方式。
     #[serde(default)]
     pub credential_mode: CredentialMode,
-    /// Optional OAuth flow for renewable credentials.
-    /// 可续期凭据使用的可选 OAuth 流程。
+    /// Optional authorization flow for host-managed credentials.
+    /// 宿主管理凭据使用的可选授权流程。
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub oauth_provider: Option<OAuthProviderKind>,
+    pub authorization: Option<crate::CredentialAuthorization>,
     /// Exact billing semantics for this credential.
     /// 当前凭据的精确计费语义。
     #[serde(default)]
@@ -301,6 +301,10 @@ pub struct ManifestCredentialProfile {
     /// 凭据作用域的账号用量查询类别。
     #[serde(default)]
     pub account_usage_query: AccountUsageQueryKind,
+    /// Optional account-driven model-catalog access projection.
+    /// 可选的账号驱动模型目录访问投影。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_model_access: Option<crate::AccountModelAccessPolicy>,
     /// Optional credential-specific authentication override.
     /// 可选的凭据专属鉴权覆盖。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -794,6 +798,10 @@ pub struct ModelRule {
     /// 允许暴露此已匹配模型的可选账号套餐名称。
     #[serde(default)]
     pub allowed_account_plan_names: Vec<String>,
+    /// Optional account-access groups used by credential plan rules.
+    /// 凭据套餐规则使用的可选账号访问分组。
+    #[serde(default)]
+    pub account_access_groups: Vec<String>,
     /// Default-enabled override for this rule.
     /// 此规则的默认启用覆盖。
     #[serde(default, skip_serializing_if = "Option::is_none")]

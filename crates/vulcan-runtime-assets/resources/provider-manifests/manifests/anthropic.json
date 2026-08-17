@@ -1,7 +1,7 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "anthropic",
-  "revision": 6,
+  "revision": 7,
   "published_at": "2026-08-06T00:00:00Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
@@ -69,7 +69,10 @@
           "credential_profile_id": "claude-code-oauth",
           "display_name": "Claude Code Login",
           "credential_mode": "auth",
-          "oauth_provider": "claude_code",
+          "authorization": {
+            "kind": "registered_oauth",
+            "provider": "claude_code"
+          },
           "billing_kind": "provider_managed",
           "account_usage_query": "unsupported",
           "default_usage_scopes": [

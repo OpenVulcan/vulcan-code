@@ -16,8 +16,8 @@ use vulcan_llm_core::UsageExtractionProfile;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CredentialMode {
-    /// Renewable account authorization.
-    /// 可续期账号授权。
+    /// Host-managed account authorization.
+    /// 宿主管理的账号授权。
     Auth,
     /// User-managed API token.
     /// 用户管理的 API Token。
@@ -42,6 +42,181 @@ pub enum CredentialBillingKind {
     ProviderManaged,
 }
 
+/// Selects the stable account-plan identity consumed by model-access rules.
+/// 选择模型访问规则消费的稳定账号套餐身份。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountPlanIdentityField {
+    /// Match rules against the provider-neutral user-visible plan name.
+    /// 使用供应商无关、面向用户的套餐名称匹配规则。
+    #[default]
+    PlanName,
+    /// Match rules against the provider-owned stable plan identifier.
+    /// 使用供应商持有的稳定套餐标识匹配规则。
+    PlanId,
+}
+
+/// Declares the model groups and exact exclusions allowed by one account plan.
+/// 声明一个账号套餐允许的模型分组与精确排除项。
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AccountPlanModelAccessRule {
+    /// Model-access groups admitted by this plan.
+    /// 此套餐允许的模型访问分组。
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub allowed_model_groups: BTreeSet<String>,
+    /// Exact model identifiers denied after group admission.
+    /// 分组放行后仍被拒绝的精确模型标识。
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub blocked_model_ids: BTreeSet<String>,
+}
+
+/// Configures credential-scoped account evidence used to project the effective model catalog.
+/// 配置用于投影生效模型目录的凭据作用域账号证据。
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AccountModelAccessPolicy {
+    /// Account-plan field used to select one configured plan rule.
+    /// 用于选择一条已配置套餐规则的账号套餐字段。
+    #[serde(default)]
+    pub plan_identity_field: AccountPlanIdentityField,
+    /// Plan rules keyed by the exact selected plan identity.
+    /// 以精确套餐身份为键的套餐规则。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub plan_rules: BTreeMap<String, AccountPlanModelAccessRule>,
+    /// Quota-window identifiers whose positive remaining value unlocks all declared models.
+    /// 剩余额度为正时解锁全部已声明模型的额度窗口标识。
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub unrestricted_when_quota_remaining: BTreeSet<String>,
+}
+
+/// Declares one credential authorization flow without binding the connection to provider code.
+/// 声明一种凭据授权流程，且不把连接绑定到供应商代码。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum CredentialAuthorization {
+    /// Selects one reviewed host authorization primitive.
+    /// 选择一个已审核的宿主授权原语。
+    RegisteredOauth {
+        /// Exact registered authorization primitive.
+        /// 精确的已注册授权原语。
+        provider: OAuthProviderKind,
+    },
+    /// Receives a provider-issued credential through a bounded browser loopback callback.
+    /// 通过有界浏览器回环回调接收供应商签发的凭据。
+    BrowserCallback {
+        /// Complete declarative browser-callback contract.
+        /// 完整的声明式浏览器回调契约。
+        profile: BrowserCallbackAuthorization,
+    },
+}
+
+/// Selects the host name embedded in a browser callback URL while binding only IPv4 loopback.
+/// 选择浏览器回调 URL 中的主机名，同时监听仅绑定 IPv4 回环地址。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BrowserCallbackUrlHost {
+    /// Uses `localhost` in the callback URL.
+    /// 在回调 URL 中使用 `localhost`。
+    Localhost,
+    /// Uses `127.0.0.1` in the callback URL.
+    /// 在回调 URL 中使用 `127.0.0.1`。
+    LoopbackIpv4,
+}
+
+/// Selects how one browser-delivered secret enters request authentication.
+/// 选择浏览器交付的秘密如何进入请求鉴权。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BrowserCallbackSecretProjection {
+    /// Projects the delivered value as API-key material.
+    /// 将交付值投影为 API Key 材料。
+    ApiKey,
+    /// Projects the delivered value as Bearer material.
+    /// 将交付值投影为 Bearer 材料。
+    Bearer,
+}
+
+/// Declares the bounded loopback listener used by one browser authorization flow.
+/// 声明一个浏览器授权流程使用的有界回环监听器。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserCallbackListener {
+    /// Host name embedded in the callback URL.
+    /// 嵌入回调 URL 的主机名。
+    pub url_host: BrowserCallbackUrlHost,
+    /// Exact callback path beginning with `/`.
+    /// 以 `/` 开头的精确回调路径。
+    pub path: String,
+    /// First inclusive loopback port to try.
+    /// 首个尝试的回环端口（包含）。
+    pub port_start: u16,
+    /// Last inclusive loopback port to try.
+    /// 最后尝试的回环端口（包含）。
+    pub port_end: u16,
+    /// Complete authorization timeout in seconds.
+    /// 完整授权超时秒数。
+    pub timeout_seconds: u64,
+    /// Maximum accepted JSON callback body bytes.
+    /// 接受的 JSON 回调正文最大字节数。
+    pub max_body_bytes: usize,
+}
+
+/// Maps an authorization page and its callback JSON into a validated secure credential.
+/// 将授权页面及其回调 JSON 映射为经过校验的安全凭据。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserCallbackAuthorization {
+    /// HTTPS authorization page opened by the host.
+    /// 宿主打开的 HTTPS 授权页面。
+    pub authorization_url: String,
+    /// Query parameter that receives the absolute callback URL.
+    /// 接收绝对回调 URL 的查询参数。
+    pub callback_query_parameter: String,
+    /// Query parameter that receives the transaction State value.
+    /// 接收事务 State 值的查询参数。
+    pub state_query_parameter: String,
+    /// Bounded loopback listener contract.
+    /// 有界回环监听器契约。
+    pub listener: BrowserCallbackListener,
+    /// Closed JSON response mapping.
+    /// 封闭的 JSON 响应映射。
+    pub response: BrowserCallbackResponseMapping,
+}
+
+/// Declares exact JSON Pointers consumed from one browser callback document.
+/// 声明从浏览器回调文档消费的精确 JSON Pointer。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserCallbackResponseMapping {
+    /// JSON Pointer selecting the delivered secret.
+    /// 选择交付秘密的 JSON Pointer。
+    pub secret_json_pointer: String,
+    /// JSON Pointer selecting the returned State value.
+    /// 选择返回 State 值的 JSON Pointer。
+    pub state_json_pointer: String,
+    /// JSON Pointer selecting the stable provider subject.
+    /// 选择稳定供应商主体的 JSON Pointer。
+    pub subject_json_pointer: String,
+    /// JSON Pointer selecting the provider user name.
+    /// 选择供应商用户名的 JSON Pointer。
+    pub username_json_pointer: String,
+    /// JSON Pointer selecting the provider credential label.
+    /// 选择供应商凭据标签的 JSON Pointer。
+    pub credential_label_json_pointer: String,
+    /// Optional JSON Pointer selecting a provider rejection code.
+    /// 选择供应商拒绝代码的可选 JSON Pointer。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_json_pointer: Option<String>,
+    /// Optional JSON Pointer selecting a provider rejection description.
+    /// 选择供应商拒绝说明的可选 JSON Pointer。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_description_json_pointer: Option<String>,
+    /// Authentication projection applied to the delivered secret.
+    /// 应用于交付秘密的鉴权投影。
+    pub secret_projection: BrowserCallbackSecretProjection,
+}
+
 /// Describes one exact credential acquisition and billing profile.
 /// 描述一种精确的凭据获取及计费配置档。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -55,16 +230,20 @@ pub struct CredentialProfile {
     /// Exact credential acquisition mode.
     /// 精确的凭据获取方式。
     pub credential_mode: CredentialMode,
-    /// Exact OAuth flow for renewable credentials.
-    /// 可续期凭据使用的精确 OAuth 流程。
+    /// Exact authorization flow for host-managed credentials.
+    /// 宿主管理凭据使用的精确授权流程。
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub oauth_provider: Option<OAuthProviderKind>,
+    pub authorization: Option<CredentialAuthorization>,
     /// Exact billing semantics for this credential.
     /// 当前凭据的精确计费语义。
     pub billing_kind: CredentialBillingKind,
     /// Credential-scoped account usage query kind.
     /// 凭据作用域的账号用量查询类别。
     pub account_usage_query: AccountUsageQueryKind,
+    /// Optional account-driven model-catalog access projection.
+    /// 可选的账号驱动模型目录访问投影。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_model_access: Option<AccountModelAccessPolicy>,
     /// Optional credential-specific authentication override.
     /// 可选的凭据专属鉴权覆盖。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -370,6 +549,9 @@ pub enum AccountUsageQueryKind {
     /// Kimi Coding Plan membership and rolling usage endpoint.
     /// Kimi Coding Plan 会员与滚动用量端点。
     KimiCodingPlan,
+    /// CommandCode account identity, credits, subscription, and usage-summary endpoints.
+    /// CommandCode 账号身份、额度、订阅与用量汇总端点。
+    CommandCodeUsage,
 }
 
 impl AccountUsageQueryKind {
@@ -1655,6 +1837,7 @@ mod tests {
     fn account_usage_primitive_declares_management_credential_requirement() {
         assert!(AccountUsageQueryKind::OpenRouterCredits.requires_management_credential());
         assert!(!AccountUsageQueryKind::MiniMaxTokenPlan.requires_management_credential());
+        assert!(!AccountUsageQueryKind::CommandCodeUsage.requires_management_credential());
         assert!(!AccountUsageQueryKind::Unsupported.requires_management_credential());
     }
 

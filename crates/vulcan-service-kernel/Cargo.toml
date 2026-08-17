@@ -3,6 +3,7 @@ name = "vulcan-service-kernel"
 description = "Core service kernel for Vulcan Code WebUI hosts."
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 
@@ -11,16 +12,16 @@ workspace = true
 
 [dependencies]
 async-trait.workspace = true
-base64 = "0.23.1"
+base64.workspace = true
 dirs.workspace = true
-encoding_rs = "0.8.35"
-futures-util = "0.3.34"
+encoding_rs.workspace = true
+futures-util.workspace = true
 ignore.workspace = true
 jsonschema.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-time = { version = "0.3.55", features = ["formatting", "local-offset", "macros", "serde"] }
+time = { workspace = true, features = ["formatting", "local-offset", "macros", "serde"] }
 tokio = { workspace = true, features = ["process", "rt-multi-thread"] }
 uuid.workspace = true
 vldb-controller-client.workspace = true
@@ -59,10 +60,10 @@ vulcan-workspace-store.workspace = true
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 
 [target.'cfg(windows)'.dependencies]
-vulcan-process-lifecycle = { path = "../vulcan-process-lifecycle" }
+vulcan-process-lifecycle.workspace = true
 
 [dev-dependencies]
-tempfile = "3.27.0"
+tempfile.workspace = true
 # Enables deterministic task-runtime registry seeding only while compiling service-kernel tests.
 # 仅在编译 service-kernel 测试时启用确定性的任务运行时注册表播种能力。
 vulcan-agent-runtime = { workspace = true, features = ["test-support"] }
@@ -71,5 +72,5 @@ vulcan-agent-runtime = { workspace = true, features = ["test-support"] }
 vulcan-provider-adapters = { workspace = true, features = ["test-support"] }
 # HTTPS loopback server for the local signing-server E2E (plan §R7.14).
 # 供本地签名服务器 E2E 使用的 HTTPS 回环服务器（方案 §R7.14）。
-rcgen = "0.14"
-tokio-rustls = "0.26"
+rcgen.workspace = true
+tokio-rustls.workspace = true

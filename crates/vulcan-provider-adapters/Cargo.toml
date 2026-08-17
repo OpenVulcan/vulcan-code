@@ -2,6 +2,7 @@
 name = "vulcan-provider-adapters"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 description = "Strongly typed provider connection graphs and request projectors for Vulcan AI."
@@ -13,9 +14,9 @@ test-support = []
 
 [dependencies]
 async-trait.workspace = true
-async-stream = "0.3.6"
+async-stream.workspace = true
 base64.workspace = true
-futures-util = "0.3.34"
+futures-util.workspace = true
 reqwest = { workspace = true, features = ["stream", "multipart", "gzip", "brotli", "deflate", "zstd"] }
 rustls.workspace = true
 httpdate.workspace = true
@@ -26,7 +27,7 @@ sha2.workspace = true
 hex.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
-time = { version = "0.3.55", features = ["parsing"] }
+time = { workspace = true, features = ["parsing"] }
 uuid.workspace = true
 vulcan-ai-contract.workspace = true
 vulcan-context.workspace = true
@@ -35,7 +36,7 @@ vulcan-runtime-assets.workspace = true
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 
 [dev-dependencies]
-tempfile = "3.27.0"
+tempfile.workspace = true
 tokio-tungstenite.workspace = true
 vulcan-llm-core = { workspace = true, features = ["provider-migration-oracles"] }
 

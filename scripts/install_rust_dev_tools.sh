@@ -48,8 +48,8 @@ semantic_version_at_least() {
 
 # install_cargo_dev_tool installs or upgrades one Cargo subcommand and validates its resulting version.
 # install_cargo_dev_tool 安装或升级一个 Cargo 子命令，并验证最终版本。
-# PackageName and BinaryName identify the package and executable; MinimumVersion and VersionRequirement define an optional compatibility floor.
-# PackageName 与 BinaryName 标识包和可执行文件；MinimumVersion 与 VersionRequirement 定义可选的兼容版本下限。
+# PackageName and BinaryName identify the package and executable; MinimumVersion, VersionRequirement, and Features define its repository contract.
+# PackageName 与 BinaryName 标识包和可执行文件；MinimumVersion、VersionRequirement 与 Features 定义其仓库契约。
 # Returns after the executable exists, runs successfully, and satisfies the declared minimum version.
 # 在可执行文件存在、运行成功并满足声明的最低版本后返回。
 install_cargo_dev_tool() {
@@ -65,6 +65,9 @@ install_cargo_dev_tool() {
     # VersionRequirement stores the optional Cargo installation requirement.
     # VersionRequirement 保存可选的 Cargo 安装版本要求。
     VersionRequirement=${4:-}
+    # Features stores the optional comma-separated Cargo feature contract required by the binary.
+    # Features 保存二进制所需的可选 Cargo 逗号分隔 Feature 契约。
+    Features=${5:-}
 
     if command -v "$BinaryName" >/dev/null 2>&1; then
         # ExistingVersionText stores the exact output used for diagnostics and parsing.
@@ -95,8 +98,12 @@ install_cargo_dev_tool() {
     fi
 
     echo "==> Installing Rust developer tool: $PackageName (Cargo jobs: 2)"
-    if [ -n "$VersionRequirement" ]; then
+    if [ -n "$VersionRequirement" ] && [ -n "$Features" ]; then
+        cargo install --locked --jobs 2 --version "$VersionRequirement" --features "$Features" "$PackageName"
+    elif [ -n "$VersionRequirement" ]; then
         cargo install --locked --jobs 2 --version "$VersionRequirement" "$PackageName"
+    elif [ -n "$Features" ]; then
+        cargo install --locked --jobs 2 --features "$Features" "$PackageName"
     else
         cargo install --locked --jobs 2 "$PackageName"
     fi
@@ -127,5 +134,7 @@ install_cargo_dev_tool() {
 
 install_cargo_dev_tool "cargo-hakari" "cargo-hakari" "0.9.22" ">=0.9.22"
 install_cargo_dev_tool "cargo-nextest" "cargo-nextest"
+install_cargo_dev_tool "cargo-deny" "cargo-deny" "0.20.2" "=0.20.2"
+install_cargo_dev_tool "cargo-about" "cargo-about" "0.9.1" "=0.9.1" "cli"
 
 echo "==> Rust developer tools are ready."

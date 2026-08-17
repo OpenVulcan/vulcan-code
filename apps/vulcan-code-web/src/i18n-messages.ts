@@ -588,6 +588,11 @@ export type TranslationKey =
   | "composer.accountCard.kimiWeeklyUsage"
   | "composer.accountCard.kimiFiveHourUsage"
   | "composer.accountCard.kimiLimit"
+  | "composer.accountCard.commandCodeMonthlyCredits"
+  | "composer.accountCard.commandCodePurchasedCredits"
+  | "composer.accountCard.commandCodeFreeCredits"
+  | "composer.accountCard.commandCodeFiveHourRequests"
+  | "composer.accountCard.commandCodeWeeklyRequests"
   | "composer.accountCard.reset"
   | "composer.accountCard.notIncluded"
   | "composer.accountCard.unlimited"
@@ -1780,6 +1785,7 @@ export type TranslationKey =
   | "settings.providerDescription.qiniu"
   | "settings.providerDescription.fennoai"
   | "settings.providerDescription.code0"
+  | "settings.providerDescription.commandcode"
   | "settings.providerDescription.tavily"
   | "settings.providerDescription.openai"
   | "settings.providerDescription.anthropic"
@@ -3219,6 +3225,11 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.accountCard.kimiWeeklyUsage": "周用量",
     "composer.accountCard.kimiFiveHourUsage": "5 小时用量",
     "composer.accountCard.kimiLimit": "额度",
+    "composer.accountCard.commandCodeMonthlyCredits": "每月额度",
+    "composer.accountCard.commandCodePurchasedCredits": "购买额度",
+    "composer.accountCard.commandCodeFreeCredits": "赠送额度",
+    "composer.accountCard.commandCodeFiveHourRequests": "5 小时请求",
+    "composer.accountCard.commandCodeWeeklyRequests": "每周请求",
     "composer.accountCard.reset": "重置",
     "composer.accountCard.notIncluded": "不包含",
     "composer.accountCard.unlimited": "无限",
@@ -4411,6 +4422,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.providerDescription.qiniu": "七牛云提供的模型推理与兼容协议服务。",
     "settings.providerDescription.fennoai": "提供多种兼容协议的第三方模型中转服务。",
     "settings.providerDescription.code0": "提供 OpenAI 与 Anthropic 兼容协议的第三方模型中转服务。",
+    "settings.providerDescription.commandcode": "提供 OpenAI 与 Anthropic 兼容协议、动态模型目录和账号用量查询的第三方模型中转服务。",
     "settings.providerDescription.tavily": "面向 AI 应用的网页搜索与内容抓取服务。",
     "settings.providerDescription.openai": "OpenAI 官方模型与 Codex 账号服务。",
     "settings.providerDescription.anthropic": "Anthropic 官方 Claude 模型与 Claude Code 账号服务。",
@@ -5847,6 +5859,11 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.accountCard.kimiWeeklyUsage": "Weekly usage",
     "composer.accountCard.kimiFiveHourUsage": "5-hour usage",
     "composer.accountCard.kimiLimit": "Limit",
+    "composer.accountCard.commandCodeMonthlyCredits": "Monthly credits",
+    "composer.accountCard.commandCodePurchasedCredits": "Purchased credits",
+    "composer.accountCard.commandCodeFreeCredits": "Free credits",
+    "composer.accountCard.commandCodeFiveHourRequests": "5-hour requests",
+    "composer.accountCard.commandCodeWeeklyRequests": "Weekly requests",
     "composer.accountCard.reset": "Reset",
     "composer.accountCard.notIncluded": "Not included",
     "composer.accountCard.unlimited": "Unlimited",
@@ -7039,6 +7056,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.providerDescription.qiniu": "Model inference and compatible protocol services from Qiniu Cloud.",
     "settings.providerDescription.fennoai": "A third-party model relay supporting multiple compatible protocols.",
     "settings.providerDescription.code0": "A third-party model relay supporting OpenAI- and Anthropic-compatible protocols.",
+    "settings.providerDescription.commandcode": "A third-party model relay with OpenAI- and Anthropic-compatible protocols, dynamic discovery, and account usage queries.",
     "settings.providerDescription.tavily": "Web search and content extraction services designed for AI applications.",
     "settings.providerDescription.openai": "Official OpenAI models and Codex account services.",
     "settings.providerDescription.anthropic": "Official Anthropic Claude models and Claude Code account services.",

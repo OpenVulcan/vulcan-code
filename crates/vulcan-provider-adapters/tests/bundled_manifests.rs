@@ -107,6 +107,66 @@ const OPENCODE_GO_MODELS: &[&str] = &[
     "qwen3.8-max",
 ];
 
+/// Every CommandCode model declared by CLI 1.26.0 and currently returned by the Provider API.
+/// CommandCode CLI 1.26.0 声明且当前 Provider API 返回的全部模型。
+const COMMANDCODE_MODELS: &[&str] = &[
+    "claude-sonnet-5",
+    "claude-sonnet-4-6",
+    "claude-fable-5",
+    "claude-opus-5",
+    "claude-opus-4-8",
+    "claude-opus-4-7",
+    "claude-haiku-4-5-20251001",
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+    "gpt-5.5",
+    "gpt-5.4",
+    "gpt-5.3-codex",
+    "gpt-5.4-mini",
+    "deepseek/deepseek-v4-pro",
+    "deepseek/deepseek-v4-flash",
+    "moonshotai/Kimi-K3",
+    "moonshotai/Kimi-K2.7-Code",
+    "moonshotai/Kimi-K2.7-Code-Highspeed",
+    "moonshotai/Kimi-K2.6",
+    "moonshotai/Kimi-K2.5",
+    "zai-org/GLM-5.3",
+    "zai-org/GLM-5.2",
+    "zai-org/GLM-5.2-Fast",
+    "zai-org/GLM-5.1",
+    "zai-org/GLM-5",
+    "MiniMaxAI/MiniMax-M3",
+    "MiniMaxAI/MiniMax-M2.7",
+    "MiniMaxAI/MiniMax-M2.5",
+    "xiaomi/mimo-v2.5-pro",
+    "xiaomi/mimo-v2.5",
+    "Qwen/Qwen3.8-Max",
+    "Qwen/Qwen3.7-Max",
+    "Qwen/Qwen3.7-Plus",
+    "Qwen/Qwen3.7-Flash",
+    "Qwen/Qwen3.6-Max-Preview",
+    "Qwen/Qwen3.6-Plus",
+    "stepfun/Step-3.7-Flash",
+    "stepfun/Step-3.5-Flash",
+    "tencent/hy3-paid",
+    "google/gemini-3.7-flash",
+    "google/gemini-3.6-flash",
+    "google/gemini-3.5-flash",
+    "google/gemini-3.5-flash-lite",
+    "google/gemini-3.1-flash-lite",
+    "sakana/fugu-ultra",
+    "nvidia/nemotron-3-ultra-550b-a55b",
+    "thinkingmachines/inkling",
+    "thinkingmachines/inkling-small",
+    "poolside/laguna-s-2.1-free",
+    "meta/muse-spark-1.1",
+    "meta/muse-spark-1.2",
+    "meta/muse-spark-1.2-contributor",
+    "xai/grok-4.5",
+    "xai/grok-4.6",
+];
+
 /// Verifies the packaged integrity index binds the complete bundled manifest generation.
 /// 验证打包完整性 Index 绑定完整的内置 Manifest 代际。
 #[test]
@@ -117,7 +177,7 @@ fn bundled_integrity_index_binds_the_complete_manifest_generation() {
     // 源资源代际后才会返回。
     let provider_count = vulcan_provider_adapters::verify_source_bundled_manifest_integrity_index()
         .expect("source bundled integrity generation should verify");
-    assert_eq!(provider_count, 15);
+    assert_eq!(provider_count, 16);
 }
 
 /// Verifies model-access defaults are fully owned by every bundled manifest.
@@ -589,8 +649,298 @@ fn opencode_go_manifest_matches_source_derived_model_contracts() {
     );
 }
 
-/// Verifies APIKEY.FUN exposes only the reviewed credential-scoped model union and media routes.
-/// 验证 APIKEY.FUN 仅暴露已审核的凭据作用域模型并集与媒体路由。
+/// Verifies CommandCode freezes exact online identities, multimodality, routing, and usage.
+/// 验证 CommandCode 固化精确在线身份、多模态、路由与用量契约。
+#[test]
+fn commandcode_manifest_freezes_the_verified_provider_contract() {
+    // path identifies the single authoritative CommandCode bundled manifest.
+    // path 标识唯一权威的 CommandCode 内置清单。
+    let path = bundled_manifests_directory().join("commandcode.json");
+    // text preserves the exact packaged document consumed by production.
+    // text 保留生产环境消费的精确打包文档。
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|_| panic!("read bundled manifest {}", path.display()));
+    // document exposes exact wire paths and matcher kinds.
+    // document 公开精确 Wire 路径与匹配器种类。
+    let document: Value = serde_json::from_str(&text).expect("parse CommandCode manifest JSON");
+    assert_eq!(
+        document.pointer("/services/0/base_url"),
+        Some(&Value::String(String::from(
+            "https://api.commandcode.ai/provider/v1"
+        )))
+    );
+    assert_eq!(
+        document.pointer("/services/0/request_projector"),
+        Some(&Value::String(String::from("direct")))
+    );
+    assert_eq!(
+        document.pointer("/services/0/credential_profiles/0/key_prefix"),
+        None,
+        "CommandCode 1.26.0 validates API keys remotely instead of enforcing a local prefix"
+    );
+    assert_eq!(
+        document.pointer("/services/0/credential_profiles/1/key_prefix"),
+        None,
+        "browser-delivered CommandCode keys must not be rejected by an obsolete prefix rule"
+    );
+    assert_eq!(
+        document.pointer("/services/0/credential_profiles/0/account_usage_query"),
+        Some(&Value::String(String::from("command_code_usage")))
+    );
+    let routes = document
+        .pointer("/services/0/protocol_routes")
+        .and_then(Value::as_array)
+        .expect("CommandCode protocol routes must exist");
+    assert_eq!(
+        routes.len(),
+        2,
+        "CommandCode must expose its two model-family endpoints"
+    );
+    // routeByProtocol freezes each wire endpoint instead of relying on array order.
+    // routeByProtocol 按协议冻结每个 Wire 端点，而不是依赖数组顺序。
+    let route_by_protocol = |protocol_id: &str| {
+        routes
+            .iter()
+            .find(|route| route["protocol_profile_id"] == protocol_id)
+            .unwrap_or_else(|| panic!("missing CommandCode route `{protocol_id}`"))
+    };
+    let anthropic_route = route_by_protocol("anthropic-messages.v1");
+    assert_eq!(anthropic_route["endpoint_path"], "/messages");
+    assert_eq!(
+        anthropic_route["request_headers"]["anthropic-version"],
+        "2023-06-01"
+    );
+    let chat_route = route_by_protocol("openai-chat-completions.v1");
+    assert_eq!(chat_route["endpoint_path"], "/chat/completions");
+    assert!(
+        document["model_rules"]
+            .as_array()
+            .expect("CommandCode model rules")
+            .iter()
+            .all(|rule| rule["matcher"]["kind"] == "exact"),
+        "CommandCode must not admit future models through prefix matching"
+    );
+
+    // compiled is the production authority used by discovery and execution.
+    // compiled 是发现与执行使用的生产权威。
+    let compiled =
+        vulcan_provider_adapters::compile_manifest_text(&text, ManifestOwnership::System)
+            .expect("bundled CommandCode manifest must compile");
+    assert!(
+        compiled.descriptor.service_entries[0]
+            .credential_profiles
+            .iter()
+            .all(|profile| profile.key_prefix.is_none()),
+        "compiled CommandCode credential profiles must defer key validity to the account API"
+    );
+    assert_eq!(
+        compiled
+            .model_source_policy("provider-api")
+            .expect("CommandCode source policy"),
+        vulcan_provider_adapters::ModelSourcePolicy::DiscoveryOnly
+    );
+    assert_eq!(
+        compiled.catalog_membership_policy,
+        vulcan_provider_adapters::CatalogMembershipPolicy::DeclaredOnly
+    );
+    assert_eq!(
+        compiled.unknown_model_policy,
+        vulcan_provider_adapters::UnknownModelPolicy::DeclaredRuleRequired
+    );
+    let declared_model_ids = compiled
+        .rule_instances
+        .iter()
+        .map(|rule| rule.matcher.value.as_str())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        declared_model_ids,
+        COMMANDCODE_MODELS.iter().copied().collect::<BTreeSet<_>>()
+    );
+    assert!(
+        compiled
+            .rule_for_model("provider-api", None, "MiniMaxAI/MiniMax-M3-Free")
+            .is_none(),
+        "a CLI-only model absent from the Provider API must remain unavailable"
+    );
+
+    // textOnlyModels is the exact current-online subset of the CLI 1.26.0 text-only registry.
+    // textOnlyModels 是 CLI 1.26.0 纯文本注册表中当前在线的精确子集。
+    let text_only_models = BTreeSet::from([
+        "deepseek/deepseek-v4-pro",
+        "deepseek/deepseek-v4-flash",
+        "zai-org/GLM-5.3",
+        "zai-org/GLM-5.2",
+        "zai-org/GLM-5.2-Fast",
+        "zai-org/GLM-5.1",
+        "zai-org/GLM-5",
+        "MiniMaxAI/MiniMax-M2.7",
+        "MiniMaxAI/MiniMax-M2.5",
+        "xiaomi/mimo-v2.5-pro",
+        "Qwen/Qwen3.6-Max-Preview",
+        "Qwen/Qwen3.7-Max",
+        "stepfun/Step-3.5-Flash",
+        "tencent/hy3-paid",
+        "nvidia/nemotron-3-ultra-550b-a55b",
+        "poolside/laguna-s-2.1-free",
+        "xai/grok-4.6",
+    ]);
+    for model_id in COMMANDCODE_MODELS {
+        let rule = compiled
+            .rule_for_model("provider-api", None, model_id)
+            .unwrap_or_else(|| panic!("missing CommandCode model rule `{model_id}`"));
+        let capabilities = rule
+            .capabilities
+            .as_ref()
+            .unwrap_or_else(|| panic!("missing CommandCode capabilities `{model_id}`"));
+        // expectedReasoningEfforts freezes explicit CLI hints while defaulting unlisted thinking models to the gateway's five accepted levels.
+        // expectedReasoningEfforts 冻结 CLI 明确提示；未列出的思考模型则采用网关接受的完整五档。
+        let expected_reasoning_efforts = match *model_id {
+            "gpt-5.5" | "gpt-5.4" | "gpt-5.3-codex" => vec![
+                vulcan_ai_contract::ReasoningEffort::Low,
+                vulcan_ai_contract::ReasoningEffort::Medium,
+                vulcan_ai_contract::ReasoningEffort::High,
+                vulcan_ai_contract::ReasoningEffort::XHigh,
+            ],
+            "gpt-5.4-mini"
+            | "google/gemini-3.7-flash"
+            | "google/gemini-3.6-flash"
+            | "google/gemini-3.5-flash"
+            | "google/gemini-3.5-flash-lite"
+            | "google/gemini-3.1-flash-lite"
+            | "xai/grok-4.5" => vec![
+                vulcan_ai_contract::ReasoningEffort::Low,
+                vulcan_ai_contract::ReasoningEffort::Medium,
+                vulcan_ai_contract::ReasoningEffort::High,
+            ],
+            "deepseek/deepseek-v4-pro" | "deepseek/deepseek-v4-flash" | "zai-org/GLM-5.2" => vec![
+                vulcan_ai_contract::ReasoningEffort::High,
+                vulcan_ai_contract::ReasoningEffort::Max,
+            ],
+            "zai-org/GLM-5.3" => vec![
+                vulcan_ai_contract::ReasoningEffort::Low,
+                vulcan_ai_contract::ReasoningEffort::High,
+                vulcan_ai_contract::ReasoningEffort::Max,
+            ],
+            "Qwen/Qwen3.8-Max" => vec![
+                vulcan_ai_contract::ReasoningEffort::Low,
+                vulcan_ai_contract::ReasoningEffort::Medium,
+                vulcan_ai_contract::ReasoningEffort::XHigh,
+            ],
+            "sakana/fugu-ultra" => vec![
+                vulcan_ai_contract::ReasoningEffort::High,
+                vulcan_ai_contract::ReasoningEffort::XHigh,
+            ],
+            "xai/grok-4.6" => vec![
+                vulcan_ai_contract::ReasoningEffort::Low,
+                vulcan_ai_contract::ReasoningEffort::Medium,
+                vulcan_ai_contract::ReasoningEffort::High,
+                vulcan_ai_contract::ReasoningEffort::XHigh,
+            ],
+            "moonshotai/Kimi-K2.5" | "nvidia/nemotron-3-ultra-550b-a55b" => Vec::new(),
+            _ => vec![
+                vulcan_ai_contract::ReasoningEffort::Low,
+                vulcan_ai_contract::ReasoningEffort::Medium,
+                vulcan_ai_contract::ReasoningEffort::High,
+                vulcan_ai_contract::ReasoningEffort::XHigh,
+                vulcan_ai_contract::ReasoningEffort::Max,
+            ],
+        };
+        if expected_reasoning_efforts.is_empty() {
+            assert_eq!(
+                capabilities.reasoning,
+                vulcan_ai_contract::CapabilitySupport::Unsupported,
+                "only the two verified no-mode models may disable reasoning for `{model_id}`"
+            );
+            assert_eq!(
+                capabilities.reasoning_control,
+                vulcan_ai_contract::ReasoningControlMode::FixedOff,
+                "no-mode model reasoning control drifted for `{model_id}`"
+            );
+        } else {
+            assert_eq!(
+                capabilities.reasoning,
+                vulcan_ai_contract::CapabilitySupport::Native,
+                "CommandCode reasoning support drifted for `{model_id}`"
+            );
+            assert_eq!(
+                capabilities.reasoning_control,
+                vulcan_ai_contract::ReasoningControlMode::EffortSelection,
+                "CommandCode reasoning control drifted for `{model_id}`"
+            );
+        }
+        assert_eq!(
+            capabilities.reasoning_efforts, expected_reasoning_efforts,
+            "CommandCode reasoning effort matrix drifted for `{model_id}`"
+        );
+        assert!(
+            !capabilities
+                .reasoning_efforts
+                .contains(&vulcan_ai_contract::ReasoningEffort::None)
+                && !capabilities
+                    .reasoning_efforts
+                    .contains(&vulcan_ai_contract::ReasoningEffort::Minimal),
+            "CommandCode must never expose rejected none/minimal efforts for `{model_id}`"
+        );
+        let supports_image = capabilities
+            .input_resources
+            .contains(&vulcan_ai_contract::ResourceKind::Image);
+        assert_eq!(
+            supports_image,
+            !text_only_models.contains(model_id),
+            "CommandCode image-input declaration drifted for `{model_id}`"
+        );
+        // expectedProtocol enforces CommandCode's provider-side model-family routing rule.
+        // expectedProtocol 强制执行 CommandCode 服务端的模型系列路由规则。
+        let expected_protocol = if model_id.starts_with("claude-") {
+            "anthropic-messages.v1"
+        } else {
+            "openai-chat-completions.v1"
+        };
+        assert_eq!(
+            rule.selected_protocol.as_deref(),
+            Some(expected_protocol),
+            "CommandCode protocol binding drifted for `{model_id}`"
+        );
+        assert_eq!(
+            rule.supported_protocols,
+            vec![String::from(expected_protocol)],
+            "CommandCode must never expose a cross-family fallback for `{model_id}`"
+        );
+    }
+    let deepseek = compiled
+        .rule_for_model("provider-api", None, "deepseek/deepseek-v4-flash")
+        .expect("CommandCode DeepSeek V4 Flash rule");
+    let deepseek_capabilities = deepseek
+        .capabilities
+        .as_ref()
+        .expect("CommandCode DeepSeek V4 Flash capabilities");
+    assert_eq!(
+        deepseek_capabilities.reasoning_control,
+        vulcan_ai_contract::ReasoningControlMode::EffortSelection
+    );
+    assert_eq!(
+        deepseek_capabilities.reasoning_efforts,
+        vec![
+            vulcan_ai_contract::ReasoningEffort::High,
+            vulcan_ai_contract::ReasoningEffort::Max,
+        ]
+    );
+    assert_eq!(deepseek_capabilities.context_limit, Some(1_000_000));
+    assert_eq!(
+        compiled
+            .rule_for_model("provider-api", None, "claude-haiku-4-5-20251001")
+            .and_then(|rule| rule.capabilities.as_ref())
+            .and_then(|capabilities| capabilities.context_limit),
+        Some(200_000)
+    );
+    assert_eq!(
+        compiled.descriptor.service_entries[0].credential_profiles[0].account_usage_query,
+        vulcan_provider_adapters::AccountUsageQueryKind::CommandCodeUsage
+    );
+}
+
+/// Verifies APIKEY.FUN remains a strict intersection of group-visible models and local rules.
+/// 验证 APIKEY.FUN 仍是分组可见模型与本地规则的严格交集。
 #[test]
 fn apikeyfun_manifest_is_a_closed_group_intersection() {
     // text is the exact bundled APIKEY.FUN authority read by production tests.

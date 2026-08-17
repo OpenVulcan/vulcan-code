@@ -1,7 +1,7 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "openai",
-  "revision": 7,
+  "revision": 8,
   "published_at": "2026-08-15T10:59:11Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
@@ -82,7 +82,10 @@
           "credential_profile_id": "codex-oauth",
           "display_name": "Codex Login",
           "credential_mode": "auth",
-          "oauth_provider": "open_ai_codex",
+          "authorization": {
+            "kind": "registered_oauth",
+            "provider": "open_ai_codex"
+          },
           "billing_kind": "provider_managed",
           "account_usage_query": "unsupported",
           "default_usage_scopes": [

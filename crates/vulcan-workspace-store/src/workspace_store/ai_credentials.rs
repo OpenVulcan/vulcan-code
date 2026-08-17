@@ -37,9 +37,18 @@ pub struct AiCredentialSecretRecord {
     /// Canonical space-separated OAuth scope field.
     /// 规范空格分隔 OAuth Scope 字段。
     pub scope_text: String,
-    /// Optional stable OAuth account subject.
-    /// 可选稳定 OAuth 账号 Subject。
+    /// Optional stable provider account subject.
+    /// 可选稳定供应商账号 Subject。
     pub account_subject: Option<String>,
+    /// Optional closed host-authorization discriminator.
+    /// 可选封闭宿主授权类型标识。
+    pub authorization_kind: Option<String>,
+    /// Optional provider-visible account user name.
+    /// 可选供应商可见账号用户名。
+    pub provider_username: Option<String>,
+    /// Optional provider-visible credential label.
+    /// 可选供应商可见凭据标签。
+    pub credential_label: Option<String>,
     /// Optional verified account email.
     /// 可选已验证账号邮箱。
     pub email: Option<String>,
@@ -113,7 +122,8 @@ pub async fn load_ai_credential_secret_record(
 SELECT
     secret_reference, format_version, revision, material_kind, secret_value,
     access_token, refresh_token, issued_at_unix_ms, expires_at_unix_ms, scope_text,
-    account_subject, email, id_token, account_id, oauth_client_id, oauth_client_secret,
+    account_subject, authorization_kind, provider_username, credential_label, email, id_token, account_id,
+    oauth_client_id, oauth_client_secret,
     project_id, quota_project_id, provider_region, resource_url, provider_device_id,
     created_at_unix_ms, updated_at_unix_ms
 FROM ai_credential_secrets
@@ -216,18 +226,21 @@ SET format_version = ?1,
     expires_at_unix_ms = ?8,
     scope_text = ?9,
     account_subject = ?10,
-    email = ?11,
-    id_token = ?12,
-    account_id = ?13,
-    oauth_client_id = ?14,
-    oauth_client_secret = ?15,
-    project_id = ?16,
-    quota_project_id = ?17,
-    provider_region = ?18,
-    resource_url = ?19,
-    provider_device_id = ?20,
-    updated_at_unix_ms = ?21
-WHERE secret_reference = ?22 AND revision = ?23
+    authorization_kind = ?11,
+    provider_username = ?12,
+    credential_label = ?13,
+    email = ?14,
+    id_token = ?15,
+    account_id = ?16,
+    oauth_client_id = ?17,
+    oauth_client_secret = ?18,
+    project_id = ?19,
+    quota_project_id = ?20,
+    provider_region = ?21,
+    resource_url = ?22,
+    provider_device_id = ?23,
+    updated_at_unix_ms = ?24
+WHERE secret_reference = ?25 AND revision = ?26
 RETURNING secret_reference;
 "#,
             update_params(record, expected_revision),
@@ -285,15 +298,16 @@ async fn insert_ai_credential_secret_record(
 INSERT INTO ai_credential_secrets (
     secret_reference, format_version, revision, material_kind, secret_value,
     access_token, refresh_token, issued_at_unix_ms, expires_at_unix_ms, scope_text,
-    account_subject, email, id_token, account_id, oauth_client_id, oauth_client_secret,
-    project_id, quota_project_id, provider_region, resource_url, provider_device_id,
+    account_subject, authorization_kind, provider_username, credential_label, email, id_token, account_id,
+    oauth_client_id, oauth_client_secret, project_id, quota_project_id, provider_region,
+    resource_url, provider_device_id,
     created_at_unix_ms, updated_at_unix_ms
 ) VALUES (
     ?1, ?2, ?3, ?4, ?5,
     ?6, ?7, ?8, ?9, ?10,
     ?11, ?12, ?13, ?14, ?15, ?16,
-    ?17, ?18, ?19, ?20, ?21,
-    ?22, ?23
+    ?17, ?18, ?19, ?20, ?21, ?22, ?23,
+    ?24, ?25, ?26
 )
 RETURNING secret_reference;
 "#,
@@ -323,6 +337,9 @@ fn insert_params(record: &AiCredentialSecretRecord) -> Vec<ControllerSqliteValue
         optional_sqlite_i64(record.expires_at_unix_ms),
         ControllerSqliteValue::String(record.scope_text.clone()),
         optional_sqlite_string(&record.account_subject),
+        optional_sqlite_string(&record.authorization_kind),
+        optional_sqlite_string(&record.provider_username),
+        optional_sqlite_string(&record.credential_label),
         optional_sqlite_string(&record.email),
         optional_sqlite_string(&record.id_token),
         optional_sqlite_string(&record.account_id),
@@ -346,7 +363,7 @@ fn update_params(
 ) -> Vec<ControllerSqliteValue> {
     let mut params = insert_params(record);
     params.remove(0);
-    params.remove(20);
+    params.remove(23);
     params.push(ControllerSqliteValue::String(
         record.secret_reference.clone(),
     ));
@@ -436,6 +453,9 @@ mod tests {
             expires_at_unix_ms: None,
             scope_text: String::new(),
             account_subject: None,
+            authorization_kind: None,
+            provider_username: None,
+            credential_label: None,
             email: None,
             id_token: None,
             account_id: None,
@@ -452,12 +472,12 @@ mod tests {
 
         let params = update_params(&record, 1);
 
-        assert_eq!(params.len(), 23);
-        assert_eq!(params[20], ControllerSqliteValue::Int64(20));
+        assert_eq!(params.len(), 26);
+        assert_eq!(params[23], ControllerSqliteValue::Int64(20));
         assert_eq!(
-            params[21],
+            params[24],
             ControllerSqliteValue::String(String::from("secret-1"))
         );
-        assert_eq!(params[22], ControllerSqliteValue::Int64(1));
+        assert_eq!(params[25], ControllerSqliteValue::Int64(1));
     }
 }

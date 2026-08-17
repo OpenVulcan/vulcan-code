@@ -1,7 +1,7 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "google",
-  "revision": 7,
+  "revision": 8,
   "published_at": "2026-08-06T00:00:00Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
@@ -74,7 +74,10 @@
           "credential_profile_id": "gemini-oauth",
           "display_name": "Gemini Login",
           "credential_mode": "auth",
-          "oauth_provider": "google_gemini",
+          "authorization": {
+            "kind": "registered_oauth",
+            "provider": "google_gemini"
+          },
           "billing_kind": "provider_managed",
           "account_usage_query": "unsupported",
           "default_usage_scopes": [
@@ -117,7 +120,10 @@
           "credential_profile_id": "code-assist-oauth",
           "display_name": "Code Assist Login",
           "credential_mode": "auth",
-          "oauth_provider": "google_code_assist",
+          "authorization": {
+            "kind": "registered_oauth",
+            "provider": "google_code_assist"
+          },
           "billing_kind": "provider_managed",
           "account_usage_query": "unsupported",
           "default_usage_scopes": [

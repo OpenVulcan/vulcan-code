@@ -155,6 +155,7 @@ export function usageCapabilitySupportsQuotaWindows(
   return capability === "mini_max_token_plan"
     || capability === "tavily_credits"
     || capability === "kimi_coding_plan"
+    || capability === "command_code_usage"
 }
 
 // usageCapabilityRequiresManagementKey returns whether one registered usage primitive needs a separate credential.
@@ -239,7 +240,9 @@ function CredentialUsageSummary(props: {
           key={window.id}
           label={props.credentialProfile?.account_usage_query === "kimi_coding_plan"
             ? kimiUsageWindowLabel(window, t)
-            : window.display_name}
+            : props.credentialProfile?.account_usage_query === "command_code_usage"
+              ? commandCodeUsageWindowLabel(window, t)
+              : window.display_name}
           window={window}
         />
       ))}
@@ -264,6 +267,33 @@ export function kimiUsageWindowLabel(
     return `${t("composer.accountCard.kimiLimit")} ${fallbackMatch[1]}`
   }
   return window.display_name
+}
+
+// commandCodeUsageWindowLabel localizes stable CommandCode quota-window identities.
+// commandCodeUsageWindowLabel 本地化稳定的 CommandCode 额度窗口身份。
+//
+// Parameters
+// 参数
+// `window` is one normalized CommandCode credit or request window and `t` resolves active-locale text.
+// `window` 是一个规范化的 CommandCode 额度或请求窗口，`t` 解析当前语言文案。
+//
+// Returns
+// 返回值
+// A localized known label or the provider-owned display name for future unknown windows.
+// 返回已知窗口的本地化标签；未来未知窗口则返回供应商拥有的显示名称。
+export function commandCodeUsageWindowLabel(
+  window: PublicAiAccountUsageWindow,
+  t: (key: TranslationKey) => string,
+): string {
+  const labels: Partial<Record<string, TranslationKey>> = {
+    "monthly-credits": "composer.accountCard.commandCodeMonthlyCredits",
+    "purchased-credits": "composer.accountCard.commandCodePurchasedCredits",
+    "free-credits": "composer.accountCard.commandCodeFreeCredits",
+    "five-hour-requests": "composer.accountCard.commandCodeFiveHourRequests",
+    "weekly-requests": "composer.accountCard.commandCodeWeeklyRequests",
+  }
+  const label = labels[window.id]
+  return label ? t(label) : window.display_name
 }
 
 // TavilyUsageSummary renders only provider-reported account-plan consumption.
@@ -458,7 +488,7 @@ function usageWindowPercentage(window?: PublicAiAccountUsageWindow): number {
 
 // usageWindowValue renders exact counts, percentage, unlimited, or unavailable state.
 // usageWindowValue 渲染精确次数、百分比、无限或不可用状态。
-function usageWindowValue(
+export function usageWindowValue(
   window: PublicAiAccountUsageWindow | undefined,
   t: (key: TranslationKey) => string,
 ): string {
@@ -475,6 +505,9 @@ function usageWindowValue(
   // total 决定是否存在精确的剩余数/总数。
   const total = Number(window.total)
   if (Number.isFinite(total) && total > 0) {
+    if (window.unit === "USD") {
+      return `${formatCurrencyAmount(window.remaining ?? "0")} / ${formatCurrencyAmount(window.total ?? "0")} USD`
+    }
     return `${window.remaining ?? "0"} / ${window.total}`
   }
   return window.remaining_percent !== undefined

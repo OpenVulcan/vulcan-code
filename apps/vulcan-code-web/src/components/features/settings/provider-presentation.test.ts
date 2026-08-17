@@ -60,6 +60,8 @@ describe("localizedProviderDescription", () => {
   it("resolves registered and fallback descriptions", () => {
     expect(localizedProviderDescription("alibaba", translationFixture))
       .toBe("settings.providerDescription.alibaba")
+    expect(localizedProviderDescription("commandcode", translationFixture))
+      .toBe("settings.providerDescription.commandcode")
     expect(localizedProviderDescription("future-provider", translationFixture))
       .toBe("settings.providerDescription.default")
   })

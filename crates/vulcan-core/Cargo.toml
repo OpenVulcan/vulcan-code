@@ -2,12 +2,13 @@
 name = "vulcan-core"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 
 [dependencies]
 async-trait = { workspace = true }
-futures-util = "0.3.34"
+futures-util.workspace = true
 hex.workspace = true
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -17,4 +18,4 @@ vulcan-ai-contract = { workspace = true }
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 
 [dev-dependencies]
-tokio = { version = "1.53.1", features = ["rt-multi-thread", "time"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "time"] }

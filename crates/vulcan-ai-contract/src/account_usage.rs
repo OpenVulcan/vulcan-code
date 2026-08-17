@@ -95,6 +95,10 @@ pub struct AccountUsageSnapshot {
     /// 可选套餐名称。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan_name: Option<String>,
+    /// Optional provider-owned stable plan identifier.
+    /// 可选的供应商持有稳定套餐标识。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_id: Option<String>,
     /// Optional decimal used amount.
     /// 可选十进制已用金额。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -138,6 +142,7 @@ mod tests {
             credential_id: "credential-openrouter".to_string(),
             availability: AccountUsageAvailability::Supported,
             plan_name: None,
+            plan_id: None,
             used_amount: None,
             remaining_amount: None,
             currency: None,

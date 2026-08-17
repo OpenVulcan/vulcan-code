@@ -3,6 +3,7 @@ name = "vulcan-mcp-runtime"
 description = "Host-owned Model Context Protocol runtime for VulcanCode."
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 
@@ -11,10 +12,10 @@ workspace = true
 
 [dependencies]
 async-trait.workspace = true
-futures = "0.3"
-http = "1.5"
-reqwest = { version = "0.13", default-features = true, features = ["json", "stream"] }
-rmcp = { version = "3.1", default-features = false, features = [
+futures.workspace = true
+http.workspace = true
+reqwest = { workspace = true, features = ["charset", "default-tls", "http2", "stream", "system-proxy"] }
+rmcp = { workspace = true, features = [
     "client",
     "auth",
     "macros",
@@ -24,9 +25,9 @@ rmcp = { version = "3.1", default-features = false, features = [
 ] }
 serde.workspace = true
 serde_json.workspace = true
-sse-stream = "0.2"
-tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "sync", "process", "io-util", "io-std", "time"] }
-tokio-util = "0.7"
+sse-stream.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "process", "io-util", "io-std", "time"] }
+tokio-util.workspace = true
 vulcan-host-tools.workspace = true
 vulcan-runtime-assets.workspace = true
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }

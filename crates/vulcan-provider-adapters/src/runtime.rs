@@ -1809,9 +1809,9 @@ fn merge_manifest_identity_catalog(
 /// # Parameters
 /// 参数
 /// `configuration` owns user policy; provider and service identifiers select the exact rule
-/// scope; `account_plan_name` is frozen account evidence; `generation` owns the matching Manifest;
+/// scope; `account_usage` is frozen account evidence; `generation` owns the matching Manifest;
 /// and `catalog` is rebuilt in place.
-/// `configuration` 持有用户策略；供应商与服务标识选择精确规则作用域；`account_plan_name`
+/// `configuration` 持有用户策略；供应商与服务标识选择精确规则作用域；`account_usage`
 /// 是冻结账号证据；`generation` 持有匹配 Manifest；`catalog` 会被原位重建。
 ///
 /// # Returns
@@ -1822,18 +1822,18 @@ fn apply_model_catalog_overlays_from_generation(
     configuration: &PersistedAiConfiguration,
     provider_id: &str,
     service_entry_id: &str,
-    account_plan_name: Option<&str>,
+    account_usage: Option<&AccountUsageSnapshot>,
     generation: &ResolvedProviderGeneration,
     catalog: &mut ConnectionModelCatalog,
 ) -> Result<(), String> {
     let manifest = generation.manifests.manifest(provider_id);
     let source_policy =
         resolved_model_source_policy(configuration, provider_id, service_entry_id, manifest)?;
-    apply_model_catalog_overlays_with_account_plan(
+    apply_model_catalog_overlays_with_account_access(
         configuration,
         provider_id,
         service_entry_id,
-        account_plan_name,
+        account_usage,
         source_policy,
         manifest,
         catalog,
@@ -1909,16 +1909,14 @@ fn resolve_model_catalog_overlays_from_inputs(
             }
             None => continue,
         };
-        // account_plan_name is the plan observation frozen with the same source generation.
-        // account_plan_name 是与同一来源代际共同冻结的套餐观测。
-        let account_plan_name = usage_cache
-            .get(connection.id.as_str())
-            .and_then(|usage| usage.plan_name.as_deref());
-        apply_model_catalog_overlays_with_account_plan(
+        // account_usage is frozen with the same source generation as every catalog source.
+        // account_usage 与所有目录来源冻结在同一个来源代际中。
+        let account_usage = usage_cache.get(connection.id.as_str());
+        apply_model_catalog_overlays_with_account_access(
             configuration,
             connection.provider_id.as_str(),
             connection.service_entry_id.as_str(),
-            account_plan_name,
+            account_usage,
             source_policy,
             manifest,
             &mut catalog,
@@ -4522,14 +4520,15 @@ impl PublicAiRuntime {
             .map_err(|_| String::from("The AI model catalog lock is poisoned."))?
             .get(connection_id)
             .map_or(1, |catalog| catalog.generation.saturating_add(1));
-        let account_plan_filter_enabled = entry
+        let credential_profile = entry
             .credential_profile(connection.credential_profile_id.as_str())
-            .is_some_and(|profile| {
-                matches!(
-                    profile.account_usage_query,
-                    crate::AccountUsageQueryKind::KimiCodingPlan
+            .ok_or_else(|| {
+                format!(
+                    "Credential profile `{}` is not registered for service entry `{}`.",
+                    connection.credential_profile_id, entry.id
                 )
-            });
+            })?;
+        let account_model_access_enabled = credential_profile.account_model_access.is_some();
         // remoteDiscoveryEnabled requires a remote implementation authorized by the source policy
         // and the active Manifest route set. Credential records never own protocol authority.
         // remoteDiscoveryEnabled 要求远端实现同时获得来源策略与活动 Manifest 路由集合授权；
@@ -4551,11 +4550,10 @@ impl PublicAiRuntime {
                 provider.id, entry.id
             ));
         }
-        // secret is loaded only when a declared network operation needs it. Manifest-only and
-        // manual-only catalogs never depend on a credential lookup merely to enumerate models.
-        // secret 仅在已声明网络操作需要时加载；Manifest-only 与 manual-only 目录不会仅为枚举模型
-        // 而依赖凭据读取。
-        let secret = if remote_discovery_enabled || account_plan_filter_enabled {
+        // discoverySecret is loaded only for remote model discovery. Account usage may declare a
+        // different credential role and therefore resolves independently below.
+        // discoverySecret 仅为远端模型发现加载。账号用量可能声明不同的凭据角色，因此在下方独立解析。
+        let discovery_secret = if remote_discovery_enabled {
             Some(
                 self.resolve_fresh_execution_secret(
                     connection.id.as_str(),
@@ -4575,7 +4573,7 @@ impl PublicAiRuntime {
                     &provider,
                     &entry,
                     &connection,
-                    secret
+                    discovery_secret
                         .as_ref()
                         .expect("remote discovery must load an execution secret"),
                     manifest.clone(),
@@ -4631,25 +4629,24 @@ impl PublicAiRuntime {
         };
         let source_model_count = source_catalog.models.len();
         let mut catalog = source_catalog.clone();
-        if account_plan_filter_enabled {
+        if account_model_access_enabled {
+            let usage_secret_reference =
+                account_usage_secret_reference(&connection, credential_profile)?;
+            let usage_secret = self
+                .resolve_fresh_execution_secret(connection.id.as_str(), usage_secret_reference)
+                .await?;
             let usage = self
                 .metadata_client
-                .query_account_usage(
-                    &entry,
-                    &connection,
-                    secret
-                        .as_ref()
-                        .expect("account-plan discovery must load an execution secret"),
-                )
+                .query_account_usage(&entry, &connection, &usage_secret)
                 .await;
             self.cache_usage_snapshot(connection_id, usage, true)?;
         }
-        let account_plan_name = self.cached_account_plan_name(connection_id)?;
-        if let Err(error) = apply_model_catalog_overlays_with_account_plan(
+        let account_usage = self.cached_account_usage(connection_id)?;
+        if let Err(error) = apply_model_catalog_overlays_with_account_access(
             configuration,
             provider.id.as_str(),
             entry.id.as_str(),
-            account_plan_name.as_deref(),
+            account_usage.as_ref(),
             source_policy,
             manifest.as_deref(),
             &mut catalog,
@@ -4736,12 +4733,12 @@ impl PublicAiRuntime {
         let Some(mut catalog) = source_catalog else {
             return Ok(());
         };
-        let account_plan_name = self.cached_account_plan_name(connection_id)?;
-        self.apply_model_catalog_overlays_with_account_plan(
+        let account_usage = self.cached_account_usage(connection_id)?;
+        self.apply_model_catalog_overlays_with_account_access(
             configuration,
             provider.id.as_str(),
             entry.id.as_str(),
-            account_plan_name.as_deref(),
+            account_usage.as_ref(),
             &mut catalog,
         )?;
         validate_resolved_catalog_limits(&catalog)?;
@@ -4750,27 +4747,27 @@ impl PublicAiRuntime {
         Ok(())
     }
 
-    /// Applies user overlays and manifest-owned account-plan access to one connection catalog.
-    /// 对一个连接目录应用用户覆盖与 Manifest 持有的账号套餐访问规则。
+    /// Applies user overlays and manifest-owned account model access to one connection catalog.
+    /// 对一个连接目录应用用户覆盖与 Manifest 持有的账号模型访问规则。
     ///
     /// # Parameters
     /// 参数
     /// `configuration` owns user layers; `provider_id` and `service_entry_id` identify the
-    /// exact manifest scope; `account_plan_name` is confirmed provider evidence; `catalog`
+    /// exact manifest scope; `account_usage` is confirmed provider evidence; `catalog`
     /// is rebuilt in place.
     /// `configuration` 持有用户层；`provider_id` 与 `service_entry_id` 标识精确 Manifest 作用域；
-    /// `account_plan_name` 是已确认供应商证据；`catalog` 会被原位重建。
+    /// `account_usage` 是已确认供应商证据；`catalog` 会被原位重建。
     ///
     /// # Returns
     /// 返回值
     /// Success after the staged manifest and user layers produce one valid effective catalog.
     /// 暂存 Manifest 与用户层生成一份有效生效目录后返回成功。
-    fn apply_model_catalog_overlays_with_account_plan(
+    fn apply_model_catalog_overlays_with_account_access(
         &self,
         configuration: &PersistedAiConfiguration,
         provider_id: &str,
         service_entry_id: &str,
-        account_plan_name: Option<&str>,
+        account_usage: Option<&AccountUsageSnapshot>,
         catalog: &mut ConnectionModelCatalog,
     ) -> Result<(), String> {
         let generation = self.selection_catalog_snapshot()?;
@@ -4778,7 +4775,7 @@ impl PublicAiRuntime {
             configuration,
             provider_id,
             service_entry_id,
-            account_plan_name,
+            account_usage,
             generation.as_ref(),
             catalog,
         )
@@ -5198,7 +5195,7 @@ impl PublicAiRuntime {
         // an internally mixed image.
         // 候选校验刻意读取暂存发现证据，但会在同一变更锁下捕获来源、套餐与已发布 Manifest
         // 规则，因此激活不会暴露内部混合镜像。
-        let (source_catalog, account_plan_name, generation) = {
+        let (source_catalog, account_usage, generation) = {
             let _mutation_guard = self
                 .catalog_mutation_lock
                 .lock()
@@ -5209,15 +5206,15 @@ impl PublicAiRuntime {
                 .map_err(|_| String::from("The source AI model catalog lock is poisoned."))?
                 .get(connection_id)
                 .cloned();
-            let account_plan_name = self
+            let account_usage = self
                 .usage_cache
                 .read()
                 .map_err(|_| String::from("The AI account-usage cache lock is poisoned."))?
                 .get(connection.id.as_str())
-                .and_then(|usage| usage.plan_name.clone());
+                .cloned();
             (
                 source_catalog,
-                account_plan_name,
+                account_usage,
                 self.selection_catalog_snapshot()?,
             )
         };
@@ -5230,7 +5227,7 @@ impl PublicAiRuntime {
             configuration,
             connection.provider_id.as_str(),
             connection.service_entry_id.as_str(),
-            account_plan_name.as_deref(),
+            account_usage.as_ref(),
             generation.as_ref(),
             &mut catalog,
         )?;
@@ -5319,14 +5316,12 @@ impl PublicAiRuntime {
             else {
                 continue;
             };
-            let account_plan_name = usage_cache
-                .get(connection.id.as_str())
-                .and_then(|usage| usage.plan_name.as_deref());
+            let account_usage = usage_cache.get(connection.id.as_str());
             apply_model_catalog_overlays_from_generation(
                 &candidate_configuration,
                 provider_id,
                 connection.service_entry_id.as_str(),
-                account_plan_name,
+                account_usage,
                 generation.as_ref(),
                 &mut catalog,
             )?;
@@ -5536,12 +5531,12 @@ impl PublicAiRuntime {
         let Some(mut catalog) = manual_custom_catalog(configuration, connection, generation) else {
             return Ok(());
         };
-        let account_plan_name = self.cached_account_plan_name(connection.id.as_str())?;
-        self.apply_model_catalog_overlays_with_account_plan(
+        let account_usage = self.cached_account_usage(connection.id.as_str())?;
+        self.apply_model_catalog_overlays_with_account_access(
             configuration,
             connection.provider_id.as_str(),
             connection.service_entry_id.as_str(),
-            account_plan_name.as_deref(),
+            account_usage.as_ref(),
             &mut catalog,
         )?;
         self.replace_catalog_locked(catalog)?;
@@ -5577,21 +5572,7 @@ impl PublicAiRuntime {
                     connection.credential_profile_id, entry.id
                 )
             })?;
-        let secret_reference = match credential_profile.account_usage_query {
-            crate::AccountUsageQueryKind::OpenRouterCredits => connection
-                .management_secret_reference
-                .as_deref()
-                .ok_or_else(|| {
-                    String::from(
-                        "Add an optional OpenRouter management key to query account credits.",
-                    )
-                })?,
-            crate::AccountUsageQueryKind::Unsupported
-            | crate::AccountUsageQueryKind::MiniMaxTokenPlan
-            | crate::AccountUsageQueryKind::TavilyCredits
-            | crate::AccountUsageQueryKind::DeepSeekBalance
-            | crate::AccountUsageQueryKind::KimiCodingPlan => connection.secret_reference.as_str(),
-        };
+        let secret_reference = account_usage_secret_reference(&connection, credential_profile)?;
         let secret = self
             .resolve_fresh_execution_secret(connection.id.as_str(), secret_reference)
             .await?;
@@ -5599,26 +5580,24 @@ impl PublicAiRuntime {
             .metadata_client
             .query_account_usage(&entry, &connection, &secret)
             .await;
-        let account_plan_filter_enabled = matches!(
-            credential_profile.account_usage_query,
-            crate::AccountUsageQueryKind::KimiCodingPlan
-        );
+        let account_model_access_enabled = credential_profile.account_model_access.is_some();
         let snapshot =
-            self.cache_usage_snapshot(connection_id, snapshot, account_plan_filter_enabled)?;
-        if account_plan_filter_enabled {
+            self.cache_usage_snapshot(connection_id, snapshot, account_model_access_enabled)?;
+        if account_model_access_enabled {
             self.rebuild_catalog_after_usage(configuration, connection_id)?;
         }
         Ok(snapshot)
     }
 
-    /// Caches one usage observation while retaining a confirmed Kimi plan through transient refresh failures.
-    /// 缓存一次用量观测，并在暂时刷新失败时保留已确认的 Kimi 套餐。
+    /// Caches one usage observation while retaining confirmed access evidence through transient failures.
+    /// 缓存一次用量观测，并在暂时失败时保留已确认的访问证据。
     ///
     /// # Parameters
     /// 参数
     /// `connection_id` identifies the exact credential, `snapshot` is the provider observation,
-    /// and `preserve_plan_name` enables the Kimi-specific stale-plan rule.
-    /// `connection_id` 标识精确凭据，`snapshot` 是供应商观测，`preserve_plan_name` 启用 Kimi 专用旧套餐规则。
+    /// and `preserve_access_evidence` protects the last confirmed plan and quota evidence.
+    /// `connection_id` 标识精确凭据，`snapshot` 是供应商观测，`preserve_access_evidence`
+    /// 保护最后一次确认的套餐与额度证据。
     ///
     /// # Returns
     /// 返回值
@@ -5628,7 +5607,7 @@ impl PublicAiRuntime {
         &self,
         connection_id: &str,
         mut snapshot: AccountUsageSnapshot,
-        preserve_plan_name: bool,
+        preserve_access_evidence: bool,
     ) -> Result<AccountUsageSnapshot, String> {
         // mutation_guard serializes plan facts with every immutable catalog generation publication.
         // mutation_guard 把套餐事实与每次不可变目录代际发布串行化。
@@ -5640,10 +5619,22 @@ impl PublicAiRuntime {
             .usage_cache
             .write()
             .map_err(|_| String::from("The AI account-usage cache lock is poisoned."))?;
-        if preserve_plan_name && snapshot.plan_name.is_none() {
-            snapshot.plan_name = cache
-                .get(connection_id)
-                .and_then(|previous| previous.plan_name.clone());
+        if preserve_access_evidence
+            && !matches!(
+                snapshot.availability,
+                vulcan_ai_contract::AccountUsageAvailability::Supported
+            )
+            && let Some(previous) = cache.get(connection_id)
+        {
+            if snapshot.plan_name.is_none() {
+                snapshot.plan_name = previous.plan_name.clone();
+            }
+            if snapshot.plan_id.is_none() {
+                snapshot.plan_id = previous.plan_id.clone();
+            }
+            if snapshot.quota_windows.is_empty() {
+                snapshot.quota_windows = previous.quota_windows.clone();
+            }
         }
         cache.insert(connection_id.to_string(), snapshot.clone());
         drop(cache);
@@ -5651,8 +5642,8 @@ impl PublicAiRuntime {
         Ok(snapshot)
     }
 
-    /// Reads the normalized plan name associated with one exact credential.
-    /// 读取一个精确凭据关联的规范化套餐名称。
+    /// Reads the normalized account-usage evidence associated with one exact credential.
+    /// 读取一个精确凭据关联的归一化账号用量证据。
     ///
     /// # Parameters
     /// 参数
@@ -5661,17 +5652,16 @@ impl PublicAiRuntime {
     ///
     /// # Returns
     /// 返回值
-    /// The confirmed plan name when the usage cache contains one.
-    /// 当用量缓存包含已确认套餐时返回其名称。
-    fn cached_account_plan_name(&self, connection_id: &str) -> Result<Option<String>, String> {
+    /// The frozen usage snapshot when the cache contains one.
+    /// 当缓存包含观测时返回冻结用量快照。
+    fn cached_account_usage(
+        &self,
+        connection_id: &str,
+    ) -> Result<Option<AccountUsageSnapshot>, String> {
         self.usage_cache
             .read()
             .map_err(|_| String::from("The AI account-usage cache lock is poisoned."))
-            .map(|cache| {
-                cache
-                    .get(connection_id)
-                    .and_then(|usage| usage.plan_name.clone())
-            })
+            .map(|cache| cache.get(connection_id).cloned())
     }
 
     /// Returns the complete process-local account-usage cache.
@@ -5748,6 +5738,7 @@ impl PublicAiRuntime {
                 crate::AccountUsageQueryKind::TavilyCredits => true,
                 crate::AccountUsageQueryKind::DeepSeekBalance => true,
                 crate::AccountUsageQueryKind::KimiCodingPlan => true,
+                crate::AccountUsageQueryKind::CommandCodeUsage => true,
                 crate::AccountUsageQueryKind::OpenRouterCredits => {
                     connection.management_secret_reference.is_some()
                 }
@@ -9176,7 +9167,7 @@ fn apply_model_catalog_overlays(
     } else {
         String::new()
     };
-    apply_model_catalog_overlays_with_account_plan(
+    apply_model_catalog_overlays_with_account_access(
         &fixture_configuration,
         provider_id,
         service_entry_id.as_str(),
@@ -9312,11 +9303,207 @@ fn custom_provider_system_baseline_for_protocol(
     baseline
 }
 
-fn apply_model_catalog_overlays_with_account_plan(
+/// Selects the credential reference declared by one account-usage query kind.
+/// 选择一个账号用量查询类型声明的凭据引用。
+///
+/// # Parameters
+/// 参数
+/// `connection` owns the available credential roles and `credential_profile` declares which role
+/// the normalized usage implementation requires.
+/// `connection` 持有可用凭据角色，`credential_profile` 声明归一化用量实现需要的角色。
+///
+/// # Returns
+/// 返回值
+/// The exact secret reference, or an actionable error when the declared role is absent.
+/// 返回精确密钥引用；声明的角色缺失时返回可操作错误。
+fn account_usage_secret_reference<'a>(
+    connection: &'a crate::CredentialConnection,
+    credential_profile: &crate::CredentialProfile,
+) -> Result<&'a str, String> {
+    match credential_profile.account_usage_query {
+        crate::AccountUsageQueryKind::OpenRouterCredits => connection
+            .management_secret_reference
+            .as_deref()
+            .ok_or_else(|| {
+                String::from("Add an optional OpenRouter management key to query account credits.")
+            }),
+        crate::AccountUsageQueryKind::Unsupported
+        | crate::AccountUsageQueryKind::MiniMaxTokenPlan
+        | crate::AccountUsageQueryKind::TavilyCredits
+        | crate::AccountUsageQueryKind::DeepSeekBalance
+        | crate::AccountUsageQueryKind::KimiCodingPlan
+        | crate::AccountUsageQueryKind::CommandCodeUsage => {
+            Ok(connection.secret_reference.as_str())
+        }
+    }
+}
+
+/// Reports whether one normalized non-negative decimal string is greater than zero.
+/// 判断一个已归一化非负十进制字符串是否大于零。
+///
+/// # Parameters
+/// 参数
+/// `value` is provider-normalized account-usage evidence.
+/// `value` 是供应商归一化后的账号用量证据。
+///
+/// # Returns
+/// 返回值
+/// `true` when the decimal mantissa contains a non-zero digit and is not negative.
+/// 当十进制尾数包含非零数字且不是负数时返回 `true`。
+fn normalized_usage_decimal_is_positive(value: &str) -> bool {
+    let value = value.trim();
+    if value.is_empty() || value.starts_with('-') {
+        return false;
+    }
+    let (mantissa, exponent) = value
+        .split_once(['e', 'E'])
+        .map_or((value, None), |(mantissa, exponent)| {
+            (mantissa, Some(exponent))
+        });
+    if exponent.is_some_and(|exponent| {
+        let digits = exponent.strip_prefix(['+', '-']).unwrap_or(exponent);
+        digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit())
+    }) {
+        return false;
+    }
+    let mantissa = mantissa.strip_prefix('+').unwrap_or(mantissa);
+    let mut decimal_points = 0_u8;
+    let mut digit_count = 0_usize;
+    let mut positive = false;
+    for byte in mantissa.bytes() {
+        match byte {
+            b'.' => decimal_points = decimal_points.saturating_add(1),
+            b'0' => digit_count = digit_count.saturating_add(1),
+            b'1'..=b'9' => {
+                digit_count = digit_count.saturating_add(1);
+                positive = true;
+            }
+            _ => return false,
+        }
+    }
+    decimal_points <= 1 && digit_count > 0 && positive
+}
+
+/// Reports whether configured positive quota evidence unlocks the complete declared catalog.
+/// 判断已配置的正数额度证据是否解锁完整已声明目录。
+///
+/// # Parameters
+/// 参数
+/// `policy` declares quota-window identities and `usage` is one credential-scoped observation.
+/// `policy` 声明额度窗口身份，`usage` 是一次凭据作用域观测。
+///
+/// # Returns
+/// 返回值
+/// `true` when at least one configured, available window has positive remaining quota.
+/// 当至少一个已配置且可用的窗口具有正数剩余额度时返回 `true`。
+fn account_usage_unlocks_catalog(
+    policy: &crate::AccountModelAccessPolicy,
+    usage: &AccountUsageSnapshot,
+) -> bool {
+    policy
+        .unrestricted_when_quota_remaining
+        .iter()
+        .any(|window_id| {
+            usage.quota_windows.iter().any(|window| {
+                window.available
+                    && window.id == *window_id
+                    && window
+                        .remaining
+                        .as_deref()
+                        .is_some_and(normalized_usage_decimal_is_positive)
+            })
+        })
+}
+
+/// Resolves the exact configured plan identity from one account-usage observation.
+/// 从一次账号用量观测中解析精确配置的套餐身份。
+///
+/// # Parameters
+/// 参数
+/// `policy` selects the identity field and `usage` owns provider evidence.
+/// `policy` 选择身份字段，`usage` 持有供应商证据。
+///
+/// # Returns
+/// 返回值
+/// The selected non-empty plan identity, or `None` when the provider supplied no evidence.
+/// 返回选中的非空套餐身份；供应商未提供证据时返回 `None`。
+fn account_plan_identity<'a>(
+    policy: &crate::AccountModelAccessPolicy,
+    usage: &'a AccountUsageSnapshot,
+) -> Option<&'a str> {
+    let identity = match policy.plan_identity_field {
+        crate::AccountPlanIdentityField::PlanName => usage.plan_name.as_deref(),
+        crate::AccountPlanIdentityField::PlanId => usage.plan_id.as_deref(),
+    };
+    identity.map(str::trim).filter(|value| !value.is_empty())
+}
+
+/// Applies one Manifest rule's account-plan allowlist and account-access groups.
+/// 应用一条 Manifest 规则的账号套餐白名单与账号访问分组。
+///
+/// # Parameters
+/// 参数
+/// `rule` owns model access metadata, `policy` owns credential plan rules, `usage` supplies
+/// account evidence, and `model_id` is the exact effective-catalog identity.
+/// `rule` 持有模型访问元数据，`policy` 持有凭据套餐规则，`usage` 提供账号证据，`model_id`
+/// 是精确生效目录身份。
+///
+/// # Returns
+/// 返回值
+/// `true` when every configured access dimension admits the model.
+/// 当所有已配置访问维度均允许该模型时返回 `true`。
+fn model_rule_allows_account_access(
+    rule: &crate::provider_manifest::ResolvedRuleInstance,
+    policy: &crate::AccountModelAccessPolicy,
+    usage: &AccountUsageSnapshot,
+    model_id: &str,
+) -> bool {
+    let plan_name_allowed = usage.plan_name.as_deref().is_none_or(|plan_name| {
+        rule.allowed_account_plan_names.is_empty()
+            || rule
+                .allowed_account_plan_names
+                .iter()
+                .any(|allowed| allowed == plan_name)
+    });
+    if !plan_name_allowed {
+        return false;
+    }
+    let Some(plan_identity) = account_plan_identity(policy, usage) else {
+        return true;
+    };
+    let Some(plan_rule) = policy.plan_rules.get(plan_identity) else {
+        return true;
+    };
+    if plan_rule.blocked_model_ids.contains(model_id) {
+        return false;
+    }
+    rule.account_access_groups.is_empty()
+        || rule
+            .account_access_groups
+            .iter()
+            .any(|group| plan_rule.allowed_model_groups.contains(group))
+}
+
+/// Resolves one source catalog through membership, capabilities, user state, and account access.
+/// 通过成员关系、能力、用户状态与账号访问规则解析一个来源目录。
+///
+/// # Parameters
+/// 参数
+/// `configuration` owns user state; provider and service identifiers select the exact Manifest
+/// scope; `account_usage` supplies credential evidence; `source_policy` and `manifest` freeze
+/// system authority; `catalog` is replaced in place.
+/// `configuration` 持有用户状态；供应商与服务标识选择精确 Manifest 作用域；`account_usage`
+/// 提供凭据证据；`source_policy` 与 `manifest` 冻结系统权威；`catalog` 会被原位替换。
+///
+/// # Returns
+/// 返回值
+/// Success after the complete effective catalog is projected, or an exact validation failure.
+/// 完整生效目录投影完成后返回成功，否则返回精确校验错误。
+fn apply_model_catalog_overlays_with_account_access(
     configuration: &PersistedAiConfiguration,
     provider_id: &str,
     service_entry_id: &str,
-    account_plan_name: Option<&str>,
+    account_usage: Option<&AccountUsageSnapshot>,
     source_policy: ModelSourcePolicy,
     manifest: Option<&ResolvedProviderManifest>,
     catalog: &mut ConnectionModelCatalog,
@@ -9790,22 +9977,39 @@ fn apply_model_catalog_overlays_with_account_plan(
     models.retain(|model_id, _| {
         configuration.connection_model_is_enabled(catalog.connection_id.as_str(), model_id)
     });
-    if let (Some(account_plan_name), Some(manifest)) = (account_plan_name, manifest) {
-        // Account-plan access is a model-rule fact. A transient lookup failure supplies no plan
-        // and therefore cannot invent a tier or hide a model; unknown models remain visible.
-        // 账号套餐访问属于模型规则事实。暂时查询失败不会提供套餐，因此无法臆造等级或隐藏模型；
-        // 未知模型保持可见。
-        models.retain(|model_id, _| {
-            manifest
-                .rule_for_model(service_entry_id, None, model_id)
-                .is_none_or(|rule| {
-                    rule.allowed_account_plan_names.is_empty()
-                        || rule
-                            .allowed_account_plan_names
-                            .iter()
-                            .any(|allowed| allowed == account_plan_name)
-                })
-        });
+    if let (Some(account_usage), Some(manifest), Some(connection)) = (
+        account_usage,
+        manifest,
+        configuration
+            .connection_graph
+            .connections
+            .get(catalog.connection_id.as_str()),
+    ) {
+        let account_model_access = manifest
+            .descriptor
+            .service_entries
+            .iter()
+            .find(|entry| entry.id == service_entry_id)
+            .and_then(|entry| entry.credential_profile(connection.credential_profile_id.as_str()))
+            .and_then(|profile| profile.account_model_access.as_ref());
+        if let Some(policy) = account_model_access
+            && !account_usage_unlocks_catalog(policy, account_usage)
+        {
+            // Missing or unknown account evidence cannot invent a tier. Exact declared rules are
+            // filtered only by configured dimensions; unmatched discovered models remain visible.
+            // 缺失或未知账号证据不能臆造套餐。精确声明规则只按已配置维度过滤；未匹配发现模型保持可见。
+            models.retain(|model_id, _| {
+                manifest
+                    .rule_for_model(
+                        service_entry_id,
+                        Some(connection.credential_profile_id.as_str()),
+                        model_id,
+                    )
+                    .is_none_or(|rule| {
+                        model_rule_allows_account_access(rule, policy, account_usage, model_id)
+                    })
+            });
+        }
     }
     catalog.models = models.into_values().collect();
     // Custom-provider protocol bindings freeze at this catalog activation boundary so
@@ -11863,6 +12067,41 @@ mod tests {
         }
     }
 
+    /// Builds one deterministic credential-scoped account-usage observation.
+    /// 构建一份确定性的凭据作用域账号用量观测。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `credential_id` identifies the account, `plan_name` and `plan_id` provide the two explicit
+    /// identity channels, and `quota_windows` carries exact access-relevant balances.
+    /// `credential_id` 标识账号，`plan_name` 与 `plan_id` 提供两条显式身份通道，
+    /// `quota_windows` 承载精确的访问相关余额。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A supported normalized usage snapshot.
+    /// 返回一份受支持的归一化用量快照。
+    fn account_usage(
+        credential_id: &str,
+        plan_name: Option<&str>,
+        plan_id: Option<&str>,
+        quota_windows: Vec<vulcan_ai_contract::AccountUsageWindow>,
+    ) -> AccountUsageSnapshot {
+        AccountUsageSnapshot {
+            credential_id: credential_id.to_string(),
+            availability: vulcan_ai_contract::AccountUsageAvailability::Supported,
+            plan_name: plan_name.map(str::to_string),
+            plan_id: plan_id.map(str::to_string),
+            used_amount: None,
+            remaining_amount: None,
+            currency: None,
+            balance_amount: None,
+            quota_windows,
+            observed_at: None,
+            refresh_message: None,
+        }
+    }
+
     /// Builds one deterministic credential-scoped catalog.
     /// 构建一个确定性的凭据作用域目录。
     /// Adds one protocol variant per protocol id to every model of one catalog.
@@ -12077,6 +12316,7 @@ mod tests {
             credential_id: String::from("credential-compensation"),
             availability: vulcan_ai_contract::AccountUsageAvailability::Supported,
             plan_name: Some(plan_name.to_string()),
+            plan_id: None,
             used_amount: None,
             remaining_amount: None,
             currency: None,
@@ -12118,6 +12358,51 @@ mod tests {
                 .contains("compensation refused"),
             "a stale before-image must never overwrite newer runtime state"
         );
+    }
+
+    /// Verifies transient usage failures retain the last confirmed plan and quota access evidence.
+    /// 验证暂时用量失败会保留最后一次确认的套餐与额度访问证据。
+    #[test]
+    fn transient_usage_failure_preserves_account_access_evidence() {
+        let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
+        let quota = vulcan_ai_contract::AccountUsageWindow {
+            id: String::from("purchased-credits"),
+            display_name: String::from("Purchased credits"),
+            bucket_name: None,
+            used: Some(String::from("0")),
+            remaining: Some(String::from("1.5")),
+            total: Some(String::from("1.5")),
+            remaining_percent: None,
+            unit: String::from("USD"),
+            starts_at: None,
+            resets_at: None,
+            unlimited: false,
+            available: true,
+        };
+        let confirmed = account_usage(
+            "credential-access-account",
+            Some("Go"),
+            Some("individual-go"),
+            vec![quota.clone()],
+        );
+        runtime
+            .cache_usage_snapshot("access-account", confirmed, true)
+            .expect("confirmed usage should cache");
+
+        let mut transient = account_usage("credential-access-account", None, None, Vec::new());
+        transient.availability =
+            vulcan_ai_contract::AccountUsageAvailability::TemporarilyUnavailable;
+        let retained = runtime
+            .cache_usage_snapshot("access-account", transient, true)
+            .expect("transient usage should preserve access evidence");
+
+        assert_eq!(retained.plan_name.as_deref(), Some("Go"));
+        assert_eq!(retained.plan_id.as_deref(), Some("individual-go"));
+        assert_eq!(retained.quota_windows, vec![quota]);
+        assert!(matches!(
+            retained.availability,
+            vulcan_ai_contract::AccountUsageAvailability::TemporarilyUnavailable
+        ));
     }
 
     /// Verifies every client-side failure category maps without message parsing.
@@ -16317,12 +16602,27 @@ mod tests {
                 ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID,
             ],
         );
+        // moderato_usage is the exact provider evidence consumed by Kimi's configured plan-name policy.
+        // moderato_usage 是 Kimi 已配置套餐名称策略消费的精确供应商证据。
+        let moderato_usage = AccountUsageSnapshot {
+            credential_id: String::from("kimi-plan-account"),
+            availability: vulcan_ai_contract::AccountUsageAvailability::Supported,
+            plan_name: Some(String::from("Moderato")),
+            plan_id: None,
+            used_amount: None,
+            remaining_amount: None,
+            currency: None,
+            balance_amount: None,
+            quota_windows: Vec::new(),
+            observed_at: None,
+            refresh_message: None,
+        };
         let mut moderato = source.clone();
-        apply_model_catalog_overlays_with_account_plan(
+        apply_model_catalog_overlays_with_account_access(
             &configuration,
             "kimi",
             "coding-plan",
-            Some("Moderato"),
+            Some(&moderato_usage),
             manifest
                 .model_source_policy("coding-plan")
                 .expect("Kimi coding-plan source policy must compile"),
@@ -16342,7 +16642,7 @@ mod tests {
         assert!(!visible.contains("k3"));
 
         let mut unknown_plan = source;
-        apply_model_catalog_overlays_with_account_plan(
+        apply_model_catalog_overlays_with_account_access(
             &configuration,
             "kimi",
             "coding-plan",
@@ -16355,6 +16655,235 @@ mod tests {
         )
         .expect("missing plan evidence must not hide models");
         assert_eq!(unknown_plan.models.len(), 5);
+    }
+
+    /// Verifies CommandCode plan groups, exact exclusions, and quota unlocks are Manifest-driven.
+    /// 验证 CommandCode 套餐分组、精确排除项与额度解锁均由 Manifest 驱动。
+    #[test]
+    fn manifest_account_model_access_projects_commandcode_catalog() {
+        let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
+        let manifest = runtime
+            .system_manifest("commandcode")
+            .expect("CommandCode manifest must exist");
+        let mut configuration = PersistedAiConfiguration::default();
+        let mut plan_connection = connection("commandcode-plan-account");
+        plan_connection.provider_id = String::from("commandcode");
+        plan_connection.service_entry_id = String::from("provider-api");
+        plan_connection.credential_profile_id = String::from("user-api-key");
+        configuration
+            .connection_graph
+            .connections
+            .insert(plan_connection.id.clone(), plan_connection);
+        let source = with_protocol_variants(
+            parse_openai_model_catalog(
+                "commandcode-plan-account",
+                1,
+                r#"{"data":[{"id":"gpt-5.5"},{"id":"deepseek/deepseek-v4-flash"},{"id":"meta/muse-spark-1.2"},{"id":"google/gemini-3.6-flash"},{"id":"claude-fable-5"}]}"#,
+            )
+            .expect("fixture catalog should parse"),
+            &[OPENAI_CHAT_PROFILE_ID, ANTHROPIC_MESSAGES_PROFILE_ID],
+        );
+        let source_policy = manifest
+            .model_source_policy("provider-api")
+            .expect("CommandCode source policy must compile");
+
+        let go_usage = account_usage(
+            "credential-commandcode-plan-account",
+            Some("Go"),
+            Some("individual-go"),
+            Vec::new(),
+        );
+        let mut go_catalog = source.clone();
+        apply_model_catalog_overlays_with_account_access(
+            &configuration,
+            "commandcode",
+            "provider-api",
+            Some(&go_usage),
+            source_policy,
+            Some(manifest.as_ref()),
+            &mut go_catalog,
+        )
+        .expect("Go plan access should apply");
+        let go_models = go_catalog
+            .models
+            .iter()
+            .map(|model| model.id.as_str())
+            .collect::<BTreeSet<_>>();
+        assert!(go_models.contains("deepseek/deepseek-v4-flash"));
+        assert!(go_models.contains("google/gemini-3.6-flash"));
+        assert!(!go_models.contains("gpt-5.5"));
+        assert!(!go_models.contains("meta/muse-spark-1.2"));
+        assert!(!go_models.contains("claude-fable-5"));
+
+        let pro_usage = account_usage(
+            "credential-commandcode-plan-account",
+            Some("Pro"),
+            Some("individual-pro"),
+            Vec::new(),
+        );
+        let mut pro_catalog = source.clone();
+        apply_model_catalog_overlays_with_account_access(
+            &configuration,
+            "commandcode",
+            "provider-api",
+            Some(&pro_usage),
+            source_policy,
+            Some(manifest.as_ref()),
+            &mut pro_catalog,
+        )
+        .expect("Pro plan access should apply");
+        let pro_models = pro_catalog
+            .models
+            .iter()
+            .map(|model| model.id.as_str())
+            .collect::<BTreeSet<_>>();
+        assert!(pro_models.contains("gpt-5.5"));
+        assert!(pro_models.contains("deepseek/deepseek-v4-flash"));
+        assert!(!pro_models.contains("claude-fable-5"));
+
+        let unknown_usage = account_usage(
+            "credential-commandcode-plan-account",
+            Some("Future"),
+            Some("future-plan"),
+            Vec::new(),
+        );
+        let mut unknown_catalog = source.clone();
+        apply_model_catalog_overlays_with_account_access(
+            &configuration,
+            "commandcode",
+            "provider-api",
+            Some(&unknown_usage),
+            source_policy,
+            Some(manifest.as_ref()),
+            &mut unknown_catalog,
+        )
+        .expect("an unknown plan must retain CommandCode's upstream allow behavior");
+        assert_eq!(unknown_catalog.models.len(), 5);
+
+        let purchased_credit = vulcan_ai_contract::AccountUsageWindow {
+            id: String::from("purchased-credits"),
+            display_name: String::from("Purchased credits"),
+            bucket_name: None,
+            used: Some(String::from("0")),
+            remaining: Some(String::from("0.25")),
+            total: Some(String::from("0.25")),
+            remaining_percent: None,
+            unit: String::from("USD"),
+            starts_at: None,
+            resets_at: None,
+            unlimited: false,
+            available: true,
+        };
+        let mut zero_credit = purchased_credit.clone();
+        zero_credit.remaining = Some(String::from("0"));
+        let zero_credit_usage = account_usage(
+            "credential-commandcode-plan-account",
+            Some("Go"),
+            Some("individual-go"),
+            vec![zero_credit],
+        );
+        let mut zero_credit_catalog = source.clone();
+        apply_model_catalog_overlays_with_account_access(
+            &configuration,
+            "commandcode",
+            "provider-api",
+            Some(&zero_credit_usage),
+            source_policy,
+            Some(manifest.as_ref()),
+            &mut zero_credit_catalog,
+        )
+        .expect("zero purchased credits must retain plan filtering");
+        let zero_credit_models = zero_credit_catalog
+            .models
+            .iter()
+            .map(|model| model.id.as_str())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(zero_credit_models, go_models);
+
+        let unlocked_usage = account_usage(
+            "credential-commandcode-plan-account",
+            Some("Go"),
+            Some("individual-go"),
+            vec![purchased_credit],
+        );
+        let mut unlocked_catalog = source;
+        apply_model_catalog_overlays_with_account_access(
+            &configuration,
+            "commandcode",
+            "provider-api",
+            Some(&unlocked_usage),
+            source_policy,
+            Some(manifest.as_ref()),
+            &mut unlocked_catalog,
+        )
+        .expect("positive purchased credits should unlock the declared catalog");
+        assert_eq!(unlocked_catalog.models.len(), 5);
+    }
+
+    /// Verifies quota unlock comparisons accept exact decimal forms and reject malformed evidence.
+    /// 验证额度解锁比较接受精确十进制形式并拒绝格式错误的证据。
+    #[test]
+    fn normalized_usage_decimal_positive_check_is_strict() {
+        for value in ["1", "+0.25", ".5", "1e-3"] {
+            assert!(normalized_usage_decimal_is_positive(value), "{value}");
+        }
+        for value in ["0", "0.0", "0e10", "-1", "1e", "abc1", "1.2.3"] {
+            assert!(!normalized_usage_decimal_is_positive(value), "{value}");
+        }
+    }
+
+    /// Verifies providers without an account-model-access declaration keep their own catalog logic.
+    /// 验证未声明账号模型访问投影的供应商保持其自身目录逻辑。
+    #[test]
+    fn apikeyfun_catalog_does_not_inherit_account_plan_filtering() {
+        let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
+        let manifest = runtime
+            .system_manifest("apikeyfun")
+            .expect("APIKEY.FUN manifest must exist");
+        let mut configuration = PersistedAiConfiguration::default();
+        let mut apikeyfun_connection = connection("apikeyfun-group-account");
+        apikeyfun_connection.provider_id = String::from("apikeyfun");
+        apikeyfun_connection.service_entry_id = String::from("public-api");
+        apikeyfun_connection.credential_profile_id = String::from("api-key");
+        configuration
+            .connection_graph
+            .connections
+            .insert(apikeyfun_connection.id.clone(), apikeyfun_connection);
+        let mut catalog = with_protocol_variants(
+            parse_openai_model_catalog(
+                "apikeyfun-group-account",
+                1,
+                r#"{"data":[{"id":"deepseek-v4-flash"}]}"#,
+            )
+            .expect("fixture catalog should parse"),
+            &[OPENAI_RESPONSES_PROFILE_ID],
+        );
+        let unrelated_usage = account_usage(
+            "credential-apikeyfun-group-account",
+            Some("Go"),
+            Some("individual-go"),
+            Vec::new(),
+        );
+        apply_model_catalog_overlays_with_account_access(
+            &configuration,
+            "apikeyfun",
+            "public-api",
+            Some(&unrelated_usage),
+            manifest
+                .model_source_policy("public-api")
+                .expect("APIKEY.FUN source policy must compile"),
+            Some(manifest.as_ref()),
+            &mut catalog,
+        )
+        .expect("APIKEY.FUN catalog projection should remain independent");
+        assert_eq!(
+            catalog
+                .models
+                .iter()
+                .map(|model| model.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["deepseek-v4-flash"]
+        );
     }
 
     /// Verifies template-only media models stay manageable while disabled and cannot resolve.
@@ -18308,7 +18837,7 @@ mod tests {
                     page_count: 1,
                     discovery_schema_revision: String::from("openai-compatible.models.v1"),
                 };
-                apply_model_catalog_overlays_with_account_plan(
+                apply_model_catalog_overlays_with_account_access(
                     &configuration,
                     "source-policy-probe",
                     "public-api",

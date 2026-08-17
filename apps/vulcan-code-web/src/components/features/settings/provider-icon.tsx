@@ -6,6 +6,7 @@ import claudeIcon from "@/assets/provider-icons/provider-claude.svg"
 import claudeApiIcon from "@/assets/provider-icons/provider-claudeapi.svg"
 import code0Icon from "@/assets/provider-icons/provider-code0.svg"
 import codexIcon from "@/assets/provider-icons/provider-codex.svg"
+import commandCodeIcon from "@/assets/provider-icons/provider-commandcode.svg"
 import deepSeekIcon from "@/assets/provider-icons/provider-deepseek.svg"
 import fennoAiIcon from "@/assets/provider-icons/provider-fennoai.svg"
 import geminiIcon from "@/assets/provider-icons/provider-gemini.svg"
@@ -35,6 +36,7 @@ export type ProviderIconKey =
   | "claudeapi"
   | "code0"
   | "codex"
+  | "commandcode"
   | "compatibility"
   | "deepseek"
   | "fennoai"
@@ -79,6 +81,7 @@ const providerIconLibrary: Readonly<Record<ProviderIconKey, ProviderIconAsset>> 
   claudeapi: { light: claudeApiIcon, transparent: true },
   code0: { light: code0Icon, transparent: true },
   codex: { light: codexIcon },
+  commandcode: { light: commandCodeIcon, monochrome: true, transparent: true },
   compatibility: {
     light: openAICompatibilityLightIcon,
     dark: openAICompatibilityDarkIcon,
@@ -113,6 +116,7 @@ const providerIconMap: Readonly<Record<string, ProviderIconKey>> = {
   claude: "claude",
   claudeapi: "claudeapi",
   code0: "code0",
+  commandcode: "commandcode",
   deepseek: "deepseek",
   fennoai: "fennoai",
   google: "gemini",

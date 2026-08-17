@@ -257,6 +257,77 @@ OpenRouter 应用归因由其随包 Manifest 的固定非秘密请求头声明�
 仅添加模型身份不足以证明协议。`declared_rule_required` 下，未命中规则的模型必须保持不可执行；
 `default_binding_allowed` 也必须有显式默认协议，运行时不会试发请求探测。
 
+### 3.2 账号套餐与额度驱动的模型访问
+
+供应商客户端需要根据在线套餐和额度在本地过滤模型时，禁止在 Rust 中按供应商 ID、套餐名称或
+模型 ID 编写条件分支。凭据配置档必须显式声明 `account_model_access`，模型规则按需声明
+`account_access_groups`：
+
+```json
+{
+  "account_usage_query": "provider_usage_primitive",
+  "account_model_access": {
+    "plan_identity_field": "plan_id",
+    "plan_rules": {
+      "provider-plan-id": {
+        "allowed_model_groups": ["standard"],
+        "blocked_model_ids": ["model-with-plan-exclusion"]
+      }
+    },
+    "unrestricted_when_quota_remaining": ["purchased-credits"]
+  }
+}
+```
+
+- `plan_identity_field` 明确选择用量快照中的 `plan_id` 或 `plan_name`，不能在运行时猜测；
+- `plan_rules` 的键是供应商确认的精确套餐身份，值声明允许分组和精确模型排除项；
+- 模型没有 `account_access_groups` 时不臆造类别，保持供应商原生的未分类模型行为；
+- 任一 `unrestricted_when_quota_remaining` 窗口剩余额度大于零时跳过套餐分组过滤；
+- 套餐或额度刷新后重建对应凭据的生效目录；暂时查询失败保留最后一次确认的访问证据；
+- 未声明 `account_model_access` 的供应商完全不进入该链。APIKEY.FUN 的 Key 分组继续只使用
+  `/models ∩ 精确本地规则`，不得与套餐投影混用。
+
+### 3.3 凭据授权声明
+
+凭据获取能力由 `credential_profiles[].authorization` 声明，不再使用供应商专属的
+`oauth_provider` 字段。模式与声明必须精确配对：
+
+- `credential_mode: "token"`：不得包含 `authorization`；
+- `credential_mode: "auth"`：必须包含一个 `authorization`；
+- 自定义供应商不得声明任何宿主管理授权。
+
+已审核的 OAuth 与 Device Flow 使用注册原语：
+
+```json
+{
+  "credential_mode": "auth",
+  "authorization": {
+    "kind": "registered_oauth",
+    "provider": "kimi_coding_plan"
+  }
+}
+```
+
+Kimi 与 MiniMax 虽然共享这一声明形状，但仍分别走宿主中已审核的 Device Code、PKCE、轮询、刷新、
+设备身份和区域资源 URL 校验。作者不能把这些协议改写成未经验证的通用字段映射。
+
+供应商网页把凭据直接 POST 到本地回调时，可使用声明式 `browser_callback`。该 Profile 必须同时固定：
+
+- 无 query、fragment、用户信息和非默认端口的 HTTPS 授权 URL；
+- callback 与 State 查询参数名；
+- `localhost` 或 `127.0.0.1` 回环 URL、精确路径、最多 32 个候选端口；
+- 30 至 1800 秒超时、最多 65536 字节 JSON 正文；
+- 秘密、State、账号主体、用户名、凭据标签和可选拒绝字段的精确 RFC 6901 JSON Pointer；
+- `api_key` 或 `bearer` 秘密投影。
+
+回调凭据只接受精确路径上的 `POST application/json`、单一 `Content-Length`，拒绝
+`Transfer-Encoding`；跨域授权页可以先对精确路径发送 `OPTIONS` 预检，宿主返回精确 Origin 的 CORS
+`204` 后必须继续等待真正的 `POST`。State 不匹配返回 403，供应商主动拒绝可以被浏览器确认，但授权
+事务必须失败。
+宿主把事务绑定到 provider/service/profile 三元组及完整授权声明指纹，提交时根据当前 Manifest
+重新计算并校验；任一身份、URL、监听约束或响应映射变化都会使旧事务失效，禁止跨凭据档或跨声明
+复用成功事务。
+
 ## 4. 模型规则、作用域与 presence 继承
 
 `model_rules` 支持 Exact 和 Prefix matcher。确定性优先级为：
@@ -293,6 +364,8 @@ OpenRouter 应用归因由其随包 Manifest 的固定非秘密请求头声明�
 - 命中规则时必须得到一个 `selected_protocol`；
 - 未命中规则时，只有 `default_binding_allowed` 和显式默认协议才能绑定；
 - 旧连接上的 `selected_protocol` 不参与系统模型绑定；
+- 一个服务可以同时声明多个协议 route，但当上游按模型系列分配入口时，每条 Exact 模型规则仍只能
+  声明该系列真实支持的单一协议；服务级 route 集合不是模型级可任选协议集合；
 - 请求开始后冻结 `provider_id + service_entry_id + credential_profile_id + model_id +
   protocol_profile_id + manifest_revision`；
 - retry 只允许使用冻结身份，协议或清单修订变化直接报错；

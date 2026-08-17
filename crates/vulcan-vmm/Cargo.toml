@@ -3,6 +3,7 @@ name = "vulcan-vmm"
 description = "VulcanMemoryMesh gRPC configuration, protocol, and hook adapter primitives."
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 
@@ -23,6 +24,6 @@ vulcan-context-injection.workspace = true
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 
 [build-dependencies]
-prost-build = "0.14.4"
+prost-build.workspace = true
 tonic-prost-build.workspace = true
 protoc-bin-vendored.workspace = true

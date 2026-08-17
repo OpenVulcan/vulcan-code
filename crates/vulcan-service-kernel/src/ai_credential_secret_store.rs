@@ -5,8 +5,8 @@ use async_trait::async_trait;
 use std::collections::BTreeSet;
 use std::time::{SystemTime, UNIX_EPOCH};
 use vulcan_provider_adapters::{
-    CredentialSecretEnvelope, CredentialSecretMaterial, CredentialSecretResolver,
-    CredentialSecretStore, MiniMaxRegion, OAuthTokenSet,
+    BrowserCallbackSecretProjection, CredentialSecretEnvelope, CredentialSecretMaterial,
+    CredentialSecretResolver, CredentialSecretStore, MiniMaxRegion, OAuthTokenSet,
 };
 use vulcan_workspace_store::{
     data_plane::ControllerRuntimeHandle,
@@ -130,6 +130,9 @@ fn credential_record_from_envelope(
         expires_at_unix_ms: None,
         scope_text: String::new(),
         account_subject: None,
+        authorization_kind: None,
+        provider_username: None,
+        credential_label: None,
         email: None,
         id_token: None,
         account_id: None,
@@ -198,6 +201,28 @@ fn credential_record_from_envelope(
             apply_oauth_tokens(&mut record, tokens)?;
             record.provider_device_id = Some(device_id.clone());
         }
+        CredentialSecretMaterial::BrowserCallbackAuthorization {
+            secret,
+            projection,
+            provider_subject,
+            provider_username,
+            credential_label,
+        } => {
+            match projection {
+                BrowserCallbackSecretProjection::ApiKey => {
+                    record.material_kind = String::from("api_key");
+                    record.secret_value = Some(secret.clone());
+                }
+                BrowserCallbackSecretProjection::Bearer => {
+                    record.material_kind = String::from("static_bearer");
+                    record.access_token = Some(secret.clone());
+                }
+            }
+            record.authorization_kind = Some(String::from("browser_callback"));
+            record.account_subject = Some(provider_subject.clone());
+            record.provider_username = Some(provider_username.clone());
+            record.credential_label = Some(credential_label.clone());
+        }
     }
     Ok(record)
 }
@@ -211,29 +236,71 @@ fn credential_envelope_from_record(
         .map_err(|_| String::from("Stored AI credential format version is invalid."))?;
     let revision = u64::try_from(record.revision)
         .map_err(|_| String::from("Stored AI credential revision is invalid."))?;
-    let material = match record.material_kind.as_str() {
-        "api_key" => CredentialSecretMaterial::ApiKey {
+    let material = match (
+        record.material_kind.as_str(),
+        record.authorization_kind.as_deref(),
+    ) {
+        ("api_key", Some("browser_callback")) => {
+            CredentialSecretMaterial::BrowserCallbackAuthorization {
+                secret: required_record_text(&record.secret_value, "browser callback API key")?,
+                projection: BrowserCallbackSecretProjection::ApiKey,
+                provider_subject: required_record_text(
+                    &record.account_subject,
+                    "browser callback provider subject",
+                )?,
+                provider_username: required_record_text(
+                    &record.provider_username,
+                    "browser callback provider user name",
+                )?,
+                credential_label: required_record_text(
+                    &record.credential_label,
+                    "browser callback credential label",
+                )?,
+            }
+        }
+        ("static_bearer", Some("browser_callback")) => {
+            CredentialSecretMaterial::BrowserCallbackAuthorization {
+                secret: required_record_text(
+                    &record.access_token,
+                    "browser callback bearer token",
+                )?,
+                projection: BrowserCallbackSecretProjection::Bearer,
+                provider_subject: required_record_text(
+                    &record.account_subject,
+                    "browser callback provider subject",
+                )?,
+                provider_username: required_record_text(
+                    &record.provider_username,
+                    "browser callback provider user name",
+                )?,
+                credential_label: required_record_text(
+                    &record.credential_label,
+                    "browser callback credential label",
+                )?,
+            }
+        }
+        ("api_key", None) => CredentialSecretMaterial::ApiKey {
             value: required_record_text(&record.secret_value, "API key")?,
         },
-        "static_bearer" => CredentialSecretMaterial::StaticBearer {
+        ("static_bearer", None) => CredentialSecretMaterial::StaticBearer {
             access_token: required_record_text(&record.access_token, "static bearer token")?,
         },
-        "open_ai_codex_oauth" => CredentialSecretMaterial::OpenAiCodexOAuth {
+        ("open_ai_codex_oauth", None) => CredentialSecretMaterial::OpenAiCodexOAuth {
             tokens: oauth_tokens_from_record(&record)?,
             id_token: record.id_token.clone(),
             account_id: record.account_id.clone(),
         },
-        "claude_code_oauth" => CredentialSecretMaterial::ClaudeCodeOAuth {
+        ("claude_code_oauth", None) => CredentialSecretMaterial::ClaudeCodeOAuth {
             tokens: oauth_tokens_from_record(&record)?,
         },
-        "google_oauth" => CredentialSecretMaterial::GoogleOAuth {
+        ("google_oauth", None) => CredentialSecretMaterial::GoogleOAuth {
             tokens: oauth_tokens_from_record(&record)?,
             client_id: required_record_text(&record.oauth_client_id, "Google OAuth client id")?,
             client_secret: record.oauth_client_secret.clone(),
             project_id: record.project_id.clone(),
             quota_project_id: record.quota_project_id.clone(),
         },
-        "mini_max_oauth" => CredentialSecretMaterial::MiniMaxOAuth {
+        ("mini_max_oauth", None) => CredentialSecretMaterial::MiniMaxOAuth {
             tokens: oauth_tokens_from_record(&record)?,
             region: match required_record_text(&record.provider_region, "MiniMax region")?.as_str()
             {
@@ -243,7 +310,7 @@ fn credential_envelope_from_record(
             },
             resource_url: required_record_text(&record.resource_url, "MiniMax resource URL")?,
         },
-        "kimi_coding_plan_oauth" => CredentialSecretMaterial::KimiCodingPlanOAuth {
+        ("kimi_coding_plan_oauth", None) => CredentialSecretMaterial::KimiCodingPlanOAuth {
             tokens: oauth_tokens_from_record(&record)?,
             device_id: required_record_text(&record.provider_device_id, "Kimi device id")?,
         },
@@ -460,6 +527,22 @@ mod tests {
                 device_id: String::from("12345678-1234-1234-1234-123456789abc"),
             })
             .expect("Kimi fixture should be valid"),
+            CredentialSecretEnvelope::new(CredentialSecretMaterial::BrowserCallbackAuthorization {
+                secret: String::from("user_api-key"),
+                projection: BrowserCallbackSecretProjection::ApiKey,
+                provider_subject: String::from("provider-user-1"),
+                provider_username: String::from("Tester"),
+                credential_label: String::from("CommandCode CLI"),
+            })
+            .expect("browser API-key fixture should be valid"),
+            CredentialSecretEnvelope::new(CredentialSecretMaterial::BrowserCallbackAuthorization {
+                secret: String::from("user_bearer-token"),
+                projection: BrowserCallbackSecretProjection::Bearer,
+                provider_subject: String::from("provider-user-2"),
+                provider_username: String::from("Tester Two"),
+                credential_label: String::from("CommandCode Desktop"),
+            })
+            .expect("browser Bearer fixture should be valid"),
         ];
 
         for (index, secret) in secrets.into_iter().enumerate() {

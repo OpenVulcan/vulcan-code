@@ -199,8 +199,17 @@ impl OpenAiChatStreamDecoder {
             .get("reasoning_details")
             .and_then(Value::as_array)?
             .iter()
-            .filter_map(|detail| detail.get("text").and_then(Value::as_str))
+            .filter_map(|detail| match detail.get("type").and_then(Value::as_str) {
+                Some("reasoning.summary") => detail.get("summary").and_then(Value::as_str),
+                Some("reasoning.text") | None => detail.get("text").and_then(Value::as_str),
+                // Opaque encrypted, signature-only, and unknown detail types never enter semantic output.
+                // 不透明加密、仅签名及未知明细类型绝不进入语义输出。
+                Some(_) => None,
+            })
             .collect::<String>();
+        if cumulative.is_empty() {
+            return None;
+        }
         if cumulative.starts_with(self.reasoning_details_text.as_str()) {
             let suffix = cumulative[self.reasoning_details_text.len()..].to_string();
             self.reasoning_details_text = cumulative;
@@ -1987,6 +1996,47 @@ mod tests {
         assert!(second.iter().any(|event| matches!(
             event,
             AiStreamEvent::ReasoningDelta { delta, .. } if delta == "，再验证"
+        )));
+    }
+
+    /// Verifies Chat reasoning summaries enter the reasoning channel while opaque payloads stay hidden.
+    /// 验证 Chat 思考总结进入思考通道，而不透明载荷保持隐藏。
+    #[test]
+    fn chat_reasoning_details_map_summaries_and_drop_opaque_payloads() {
+        let mut decoder = OpenAiChatStreamDecoder::with_registered_tools(
+            String::from("execution"),
+            BTreeSet::new(),
+        );
+        let summary = decoder
+            .push_sse(
+                None,
+                r#"{"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.summary","summary":"先拆分问题"}]} ,"finish_reason":null}]}"#,
+            )
+            .expect("reasoning summary should decode");
+        let encrypted = decoder
+            .push_sse(
+                None,
+                r#"{"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.encrypted","data":"ciphertext","text":"must-not-leak"}]} ,"finish_reason":null}]}"#,
+            )
+            .expect("encrypted reasoning should be ignored safely");
+        let signature_only = decoder
+            .push_sse(
+                None,
+                r#"{"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.text","signature":"opaque-signature"}]} ,"finish_reason":null}]}"#,
+            )
+            .expect("signature-only reasoning should be ignored safely");
+
+        assert!(summary.iter().any(|event| matches!(
+            event,
+            AiStreamEvent::ReasoningDelta { delta, .. } if delta == "先拆分问题"
+        )));
+        assert!(!encrypted.iter().any(|event| matches!(
+            event,
+            AiStreamEvent::ReasoningStarted { .. } | AiStreamEvent::ReasoningDelta { .. }
+        )));
+        assert!(!signature_only.iter().any(|event| matches!(
+            event,
+            AiStreamEvent::ReasoningStarted { .. } | AiStreamEvent::ReasoningDelta { .. }
         )));
     }
 

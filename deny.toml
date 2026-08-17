@@ -1,0 +1,90 @@
+# Evaluate the dependency graph for every platform shipped by Vulcan Code.
+# 对 Vulcan Code 实际发布的全部平台评估依赖图。
+[graph]
+targets = [
+    "x86_64-pc-windows-msvc",
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+]
+all-features = false
+no-default-features = false
+
+# Reject known vulnerabilities and yanked crates unless an exception has an explicit reason.
+# 拒绝已知漏洞和被撤回的包；任何例外都必须显式说明原因。
+[advisories]
+ignore = [
+    # Tauri 2 still uses GTK3 on Linux and the advisory provides no safe upgrade path.
+    # Tauri 2 在 Linux 上仍使用 GTK3，且该公告没有可用的安全升级路径。
+    { id = "RUSTSEC-2024-0411", reason = "Tauri 2 Linux GTK3 transitive dependency; no safe upgrade is available" },
+    { id = "RUSTSEC-2024-0412", reason = "Tauri 2 Linux GTK3 transitive dependency; no safe upgrade is available" },
+    { id = "RUSTSEC-2024-0413", reason = "Tauri 2 Linux GTK3 transitive dependency; no safe upgrade is available" },
+    { id = "RUSTSEC-2024-0414", reason = "Tauri 2 Linux GTK3 transitive dependency; no safe upgrade is available" },
+    { id = "RUSTSEC-2024-0415", reason = "Tauri 2 Linux GTK3 transitive dependency; no safe upgrade is available" },
+    { id = "RUSTSEC-2024-0416", reason = "Tauri 2 Linux GTK3 transitive dependency; no safe upgrade is available" },
+    { id = "RUSTSEC-2024-0417", reason = "Tauri 2 Linux GTK3 transitive dependency; no safe upgrade is available" },
+    { id = "RUSTSEC-2024-0418", reason = "Tauri 2 Linux GTK3 transitive dependency; no safe upgrade is available" },
+    { id = "RUSTSEC-2024-0419", reason = "Tauri 2 Linux GTK3 transitive dependency; no safe upgrade is available" },
+    { id = "RUSTSEC-2024-0420", reason = "Tauri 2 Linux GTK3 transitive dependency; no safe upgrade is available" },
+    # Current transitive proc-macro users have no safe upgrade path.
+    # 当前连锁依赖中的过程宏使用方没有可用的安全升级路径。
+    { id = "RUSTSEC-2024-0370", reason = "Transitive proc-macro dependency; no safe upgrade is available" },
+    # Tauri urlpattern transitively uses rust-unic and has no safe upgrade path.
+    # Tauri 的 urlpattern 连锁使用 rust-unic，当前没有可用的安全升级路径。
+    { id = "RUSTSEC-2025-0075", reason = "Tauri urlpattern transitive dependency; no safe upgrade is available" },
+    { id = "RUSTSEC-2025-0080", reason = "Tauri urlpattern transitive dependency; no safe upgrade is available" },
+    { id = "RUSTSEC-2025-0081", reason = "Tauri urlpattern transitive dependency; no safe upgrade is available" },
+    { id = "RUSTSEC-2025-0098", reason = "Tauri urlpattern transitive dependency; no safe upgrade is available" },
+    { id = "RUSTSEC-2025-0100", reason = "Tauri urlpattern transitive dependency; no safe upgrade is available" },
+]
+
+# Keep the allowlist intentionally conservative and extend it only after legal review.
+# 许可证白名单保持审慎，新增许可证必须经过明确审查。
+[licenses]
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "MIT-0",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+confidence-threshold = 0.8
+
+# Workspace crates are first-party code and are governed by repository policy.
+# 工作区包属于第一方代码，由仓库自身策略管理。
+[licenses.private]
+ignore = true
+
+# Report transitive duplicates without turning historical dependency divergence into a hard failure.
+# 报告连锁依赖中的重复版本，但不把历史依赖分歧直接升级为阻断错误。
+[bans]
+multiple-versions = "warn"
+# Workspace inheritance and local path dependencies are represented as wildcard requirements by cargo-deny.
+# cargo-deny 会把工作区继承与本地路径依赖表示为通配版本；外部版本完整性由仓库策略脚本单独阻断。
+wildcards = "allow"
+highlight = "all"
+workspace-default-features = "allow"
+external-default-features = "allow"
+allow = []
+deny = []
+skip = []
+skip-tree = []
+
+# Only crates.io packages are accepted; Git dependencies require an explicit reviewed exception.
+# 仅允许 crates.io 包；Git 依赖必须经过显式审查并加入例外。
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

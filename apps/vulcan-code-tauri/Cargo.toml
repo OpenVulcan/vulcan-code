@@ -3,15 +3,16 @@ name = "vulcan-code-tauri"
 description = "Tauri based Vulcan Code desktop shell."
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 
 [build-dependencies]
-tauri-build = { version = "=2.6.3", features = [] }
+tauri-build = { workspace = true, features = [] }
 
 [dependencies]
-tauri = { version = "=2.11.5", features = [] }
-tauri-plugin-notification = "=2.3.3"
+tauri = { workspace = true, features = [] }
+tauri-plugin-notification.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "sync"] }
 vulcan-host-tools.workspace = true
 vulcan-provider-adapters.workspace = true
@@ -19,7 +20,6 @@ vulcan-runtime-assets.workspace = true
 vulcan-service-api.workspace = true
 vulcan-service-host.workspace = true
 vulcan-service-kernel.workspace = true
-workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]

@@ -943,6 +943,9 @@ function PublicAiConnectionDialog(props: {
   const entry = provider?.service_entries.find((item) => item.id === entryId) ?? provider?.service_entries[0]
   const credentialProfile = entry?.credential_profiles.find((item) => item.id === credentialProfileId)
     ?? entry?.credential_profiles[0]
+  const registeredOauthProvider = credentialProfile?.authorization?.kind === "registered_oauth"
+    ? credentialProfile.authorization.provider
+    : null
   const isProviderToolEntry = entry?.kind === "provider_tools"
   const supportsServiceOriginOverride = entry?.service_origin_override_policy !== undefined
 
@@ -1066,16 +1069,16 @@ function PublicAiConnectionDialog(props: {
     setError(null)
     try {
       if (credentialMode === "auth") {
-        if (!credentialProfile.oauth_provider) {
-          throw new Error("The selected credential profile does not declare an OAuth flow.")
+        if (!credentialProfile.authorization) {
+          throw new Error("The selected credential profile does not declare an authorization flow.")
         }
         if (
-          (credentialProfile.oauth_provider === "google_code_assist" || credentialProfile.oauth_provider === "google_gemini")
+          (registeredOauthProvider === "google_code_assist" || registeredOauthProvider === "google_gemini")
           && !oauthClientId.trim()
         ) {
           throw new Error("Google OAuth requires a desktop OAuth client id.")
         }
-        if (credentialProfile.oauth_provider === "google_gemini" && !oauthProjectId.trim()) {
+        if (registeredOauthProvider === "google_gemini" && !oauthProjectId.trim()) {
           throw new Error("Public Gemini OAuth requires a Google Cloud project id.")
         }
         const challenge = await startPublicAiOAuth({
@@ -1145,6 +1148,7 @@ function PublicAiConnectionDialog(props: {
     provider,
     managementKey,
     removeManagementKey,
+    registeredOauthProvider,
     secret,
     serviceOriginOverride,
     supportsServiceOriginOverride,
@@ -1298,7 +1302,7 @@ function PublicAiConnectionDialog(props: {
             </div>
           ) : null}
           {credentialMode === "auth"
-            && (credentialProfile?.oauth_provider === "google_code_assist" || credentialProfile?.oauth_provider === "google_gemini") ? (
+            && (registeredOauthProvider === "google_code_assist" || registeredOauthProvider === "google_gemini") ? (
             <>
               <label className="settings-form-field">
                 <span>Google OAuth Client ID</span>
@@ -1313,7 +1317,7 @@ function PublicAiConnectionDialog(props: {
                   value={oauthClientSecret}
                 />
               </label>
-              {credentialProfile.oauth_provider === "google_gemini" ? (
+              {registeredOauthProvider === "google_gemini" ? (
                 <label className="settings-form-field">
                   <span>Google Cloud Project ID</span>
                   <Input
@@ -1407,7 +1411,7 @@ function oauthPhaseDisplayName(phase: PublicAiOAuthTransaction["phase"]): string
   const labels: Record<PublicAiOAuthTransaction["phase"], string> = {
     waiting_for_user_authorization: "等待用户确认授权",
     waiting_for_callback: "等待浏览器回调",
-    exchanging_token: "正在交换授权令牌",
+    finalizing_credential: "正在完成凭据保存",
     succeeded: "授权成功",
     failed: "授权失败",
     cancelled: "已取消",

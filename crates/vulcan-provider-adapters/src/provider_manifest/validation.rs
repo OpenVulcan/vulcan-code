@@ -24,6 +24,7 @@ use crate::ModelDiscoveryKind;
 use crate::provider_manifest::schema::{
     ManifestEntryKind, ManifestProtocolRoute, ModelRule, ModelSourcePolicy,
 };
+use crate::{CredentialAuthorization, CredentialMode};
 
 /// Hard maximum bytes accepted by one declared upload channel.
 /// 单条声明上传通道允许接受的最大字节数硬上限。
@@ -748,6 +749,93 @@ fn validate_provenance_reference(
     }
 }
 
+/// Validates one credential-scoped account model-access policy.
+/// 验证一份凭据作用域的账号模型访问策略。
+///
+/// # Parameters
+/// 参数
+/// `policy` owns declarative plan rules, `usage_query` identifies the evidence source, `path`
+/// owns the diagnostic location, and `errors` collects validation failures.
+/// `policy` 持有声明式套餐规则，`usage_query` 标识证据来源，`path` 持有诊断位置，`errors`
+/// 收集校验失败。
+fn validate_account_model_access_policy(
+    policy: &crate::AccountModelAccessPolicy,
+    usage_query: crate::AccountUsageQueryKind,
+    path: &str,
+    errors: &mut Vec<ManifestValidationError>,
+) {
+    if matches!(usage_query, crate::AccountUsageQueryKind::Unsupported) {
+        errors.push(ManifestValidationError::new(
+            "account_model_access_without_usage_query",
+            path,
+            "account model access requires a supported account-usage query",
+        ));
+    }
+    if policy.plan_rules.len() > 64 {
+        errors.push(ManifestValidationError::new(
+            "too_many_account_plan_rules",
+            format!("{path}.plan_rules"),
+            "account model-access policy exceeds 64 plan rules",
+        ));
+    }
+    for (plan_identity, rule) in &policy.plan_rules {
+        let rule_path = format!("{path}.plan_rules.{plan_identity}");
+        if plan_identity.trim().is_empty() || plan_identity.len() > 256 {
+            errors.push(ManifestValidationError::new(
+                "invalid_account_plan_identity",
+                format!("{path}.plan_rules"),
+                "account plan identities must contain between 1 and 256 UTF-8 bytes",
+            ));
+        }
+        if rule.allowed_model_groups.len() > 32 {
+            errors.push(ManifestValidationError::new(
+                "too_many_allowed_model_groups",
+                format!("{rule_path}.allowed_model_groups"),
+                "one account plan cannot admit more than 32 model groups",
+            ));
+        }
+        for group in &rule.allowed_model_groups {
+            validate_identifier(
+                group,
+                &format!("{rule_path}.allowed_model_groups"),
+                errors,
+                "allowed_model_group",
+            );
+        }
+        if rule.blocked_model_ids.len() > 128 {
+            errors.push(ManifestValidationError::new(
+                "too_many_blocked_model_ids",
+                format!("{rule_path}.blocked_model_ids"),
+                "one account plan cannot block more than 128 model identifiers",
+            ));
+        }
+        for model_id in &rule.blocked_model_ids {
+            if model_id.trim().is_empty() || model_id.len() > 512 {
+                errors.push(ManifestValidationError::new(
+                    "invalid_blocked_model_id",
+                    format!("{rule_path}.blocked_model_ids"),
+                    "blocked model identifiers must contain between 1 and 512 UTF-8 bytes",
+                ));
+            }
+        }
+    }
+    if policy.unrestricted_when_quota_remaining.len() > 32 {
+        errors.push(ManifestValidationError::new(
+            "too_many_unrestricted_quota_windows",
+            format!("{path}.unrestricted_when_quota_remaining"),
+            "account model-access policy cannot inspect more than 32 quota windows",
+        ));
+    }
+    for window_id in &policy.unrestricted_when_quota_remaining {
+        validate_identifier(
+            window_id,
+            &format!("{path}.unrestricted_when_quota_remaining"),
+            errors,
+            "quota_window_id",
+        );
+    }
+}
+
 /// Validates one service entry and its routes.
 /// 验证单个服务入口及其路由。
 #[allow(clippy::too_many_arguments)]
@@ -813,6 +901,23 @@ fn validate_service_entry(
                 ),
                 errors,
                 "credential_role",
+            );
+        }
+        validate_credential_authorization(
+            profile.credential_mode,
+            profile.authorization.as_ref(),
+            ownership,
+            &format!("$.services[{index}].credential_profiles[{profile_index}].authorization"),
+            errors,
+        );
+        if let Some(policy) = profile.account_model_access.as_ref() {
+            validate_account_model_access_policy(
+                policy,
+                profile.account_usage_query,
+                &format!(
+                    "$.services[{index}].credential_profiles[{profile_index}].account_model_access"
+                ),
+                errors,
             );
         }
     }
@@ -1062,6 +1167,295 @@ fn validate_service_entry(
                 registry,
             );
         }
+    }
+}
+
+/// Validates the acquisition declaration attached to one credential profile.
+/// 校验附加到一个凭据配置档的获取声明。
+///
+/// # Parameters
+/// 参数
+/// `credential_mode` is the declared acquisition mode, `authorization` is its exact optional
+/// host flow, `ownership` constrains trusted declarations, and `path` identifies the field.
+/// `credential_mode` 是声明的获取模式，`authorization` 是其精确可选宿主流程，`ownership`
+/// 约束可信声明，`path` 标识字段。
+///
+/// # Returns
+/// 返回值
+/// Appends every detected validation failure to `errors`.
+/// 将检测到的每个校验失败追加到 `errors`。
+fn validate_credential_authorization(
+    credential_mode: CredentialMode,
+    authorization: Option<&CredentialAuthorization>,
+    ownership: ManifestOwnership,
+    path: &str,
+    errors: &mut Vec<ManifestValidationError>,
+) {
+    match (credential_mode, authorization) {
+        (CredentialMode::Auth, None) => errors.push(ManifestValidationError::new(
+            "missing_credential_authorization",
+            path,
+            "auth credential profiles must declare one authorization flow",
+        )),
+        (CredentialMode::Token, Some(_)) => errors.push(ManifestValidationError::new(
+            "unexpected_credential_authorization",
+            path,
+            "token credential profiles must not declare an authorization flow",
+        )),
+        (_, None) => {}
+        (_, Some(_)) if matches!(ownership, ManifestOwnership::Custom) => {
+            errors.push(ManifestValidationError::new(
+                "custom_credential_authorization_forbidden",
+                path,
+                "custom provider manifests cannot declare host-managed authorization flows",
+            ));
+        }
+        (_, Some(CredentialAuthorization::RegisteredOauth { .. })) => {}
+        (_, Some(CredentialAuthorization::BrowserCallback { profile })) => {
+            validate_browser_callback_authorization(profile, path, errors);
+        }
+    }
+}
+
+/// Validates one bounded declarative browser-callback authorization contract.
+/// 校验一个有界声明式浏览器回调授权契约。
+///
+/// # Parameters
+/// 参数
+/// `profile` is the exact callback contract and `path` identifies its manifest location.
+/// `profile` 是精确回调契约，`path` 标识其 Manifest 位置。
+///
+/// # Returns
+/// 返回值
+/// Appends every detected validation failure to `errors`.
+/// 将检测到的每个校验失败追加到 `errors`。
+fn validate_browser_callback_authorization(
+    profile: &crate::BrowserCallbackAuthorization,
+    path: &str,
+    errors: &mut Vec<ManifestValidationError>,
+) {
+    let profile_path = format!("{path}.profile");
+    validate_http_url(
+        &profile.authorization_url,
+        &format!("{profile_path}.authorization_url"),
+        errors,
+        true,
+    );
+    if reqwest::Url::parse(profile.authorization_url.as_str())
+        .ok()
+        .and_then(|url| url.port())
+        .is_some()
+    {
+        errors.push(ManifestValidationError::new(
+            "browser_authorization_non_default_port",
+            format!("{profile_path}.authorization_url"),
+            "browser authorization URLs must not use a non-default port",
+        ));
+    }
+    validate_browser_callback_query_parameter(
+        &profile.callback_query_parameter,
+        &format!("{profile_path}.callback_query_parameter"),
+        errors,
+    );
+    validate_browser_callback_query_parameter(
+        &profile.state_query_parameter,
+        &format!("{profile_path}.state_query_parameter"),
+        errors,
+    );
+    if profile.callback_query_parameter == profile.state_query_parameter {
+        errors.push(ManifestValidationError::new(
+            "duplicate_browser_callback_query_parameter",
+            profile_path.clone(),
+            "callback and State query parameters must be distinct",
+        ));
+    }
+
+    let listener_path = format!("{profile_path}.listener");
+    if profile.listener.path.is_empty()
+        || profile.listener.path.len() > 256
+        || !profile.listener.path.starts_with('/')
+        || profile.listener.path.contains(['?', '#', '\\', '\n', '\r'])
+    {
+        errors.push(ManifestValidationError::new(
+            "invalid_browser_callback_path",
+            format!("{listener_path}.path"),
+            "browser callback path must be an absolute path of at most 256 bytes without query, fragment, backslash, or control characters",
+        ));
+    }
+    let port_count = profile
+        .listener
+        .port_end
+        .checked_sub(profile.listener.port_start)
+        .map_or(0_u32, |difference| u32::from(difference) + 1);
+    if profile.listener.port_start == 0 || port_count == 0 || port_count > 32 {
+        errors.push(ManifestValidationError::new(
+            "invalid_browser_callback_port_range",
+            listener_path.clone(),
+            "browser callback port range must contain between 1 and 32 nonzero inclusive ports",
+        ));
+    }
+    if !(30..=1_800).contains(&profile.listener.timeout_seconds) {
+        errors.push(ManifestValidationError::new(
+            "invalid_browser_callback_timeout",
+            format!("{listener_path}.timeout_seconds"),
+            "browser callback timeout must be between 30 and 1800 seconds",
+        ));
+    }
+    if !(1..=65_536).contains(&profile.listener.max_body_bytes) {
+        errors.push(ManifestValidationError::new(
+            "invalid_browser_callback_body_limit",
+            format!("{listener_path}.max_body_bytes"),
+            "browser callback body limit must be between 1 and 65536 bytes",
+        ));
+    }
+
+    let response_path = format!("{profile_path}.response");
+    let mut pointers = BTreeSet::new();
+    for (field_name, pointer) in [
+        (
+            "secret_json_pointer",
+            profile.response.secret_json_pointer.as_str(),
+        ),
+        (
+            "state_json_pointer",
+            profile.response.state_json_pointer.as_str(),
+        ),
+        (
+            "subject_json_pointer",
+            profile.response.subject_json_pointer.as_str(),
+        ),
+        (
+            "username_json_pointer",
+            profile.response.username_json_pointer.as_str(),
+        ),
+        (
+            "credential_label_json_pointer",
+            profile.response.credential_label_json_pointer.as_str(),
+        ),
+    ] {
+        validate_browser_callback_json_pointer(
+            pointer,
+            &format!("{response_path}.{field_name}"),
+            errors,
+        );
+        if !pointers.insert(pointer) {
+            errors.push(ManifestValidationError::new(
+                "duplicate_browser_callback_json_pointer",
+                response_path.clone(),
+                "required browser callback JSON Pointers must be distinct",
+            ));
+        }
+    }
+    for (field_name, pointer) in [
+        (
+            "error_json_pointer",
+            profile.response.error_json_pointer.as_deref(),
+        ),
+        (
+            "error_description_json_pointer",
+            profile.response.error_description_json_pointer.as_deref(),
+        ),
+    ] {
+        if let Some(pointer) = pointer {
+            validate_browser_callback_json_pointer(
+                pointer,
+                &format!("{response_path}.{field_name}"),
+                errors,
+            );
+            if !pointers.insert(pointer) {
+                errors.push(ManifestValidationError::new(
+                    "duplicate_browser_callback_json_pointer",
+                    response_path.clone(),
+                    "browser callback JSON Pointers must be distinct",
+                ));
+            }
+        }
+    }
+    if profile.response.error_description_json_pointer.is_some()
+        && profile.response.error_json_pointer.is_none()
+    {
+        errors.push(ManifestValidationError::new(
+            "orphan_browser_callback_error_description",
+            response_path,
+            "browser callback error description requires an error-code JSON Pointer",
+        ));
+    }
+}
+
+/// Validates one authorization-page query parameter name.
+/// 校验一个授权页面查询参数名。
+///
+/// # Parameters
+/// 参数
+/// `value` is the exact parameter name and `path` identifies its field.
+/// `value` 是精确参数名，`path` 标识其字段。
+///
+/// # Returns
+/// 返回值
+/// Appends a validation failure when the name is outside the closed grammar.
+/// 当名称超出封闭语法时追加一个校验失败。
+fn validate_browser_callback_query_parameter(
+    value: &str,
+    path: &str,
+    errors: &mut Vec<ManifestValidationError>,
+) {
+    if value.is_empty()
+        || value.len() > 128
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
+    {
+        errors.push(ManifestValidationError::new(
+            "invalid_browser_callback_query_parameter",
+            path,
+            "browser callback query parameter must contain 1 to 128 ASCII letters, digits, `_`, `-`, or `.`",
+        ));
+    }
+}
+
+/// Validates one RFC 6901 JSON Pointer used by the browser callback mapper.
+/// 校验浏览器回调映射器使用的一个 RFC 6901 JSON Pointer。
+///
+/// # Parameters
+/// 参数
+/// `pointer` is the exact pointer and `path` identifies its field.
+/// `pointer` 是精确指针，`path` 标识其字段。
+///
+/// # Returns
+/// 返回值
+/// Appends a validation failure when the pointer is empty, oversized, or improperly escaped.
+/// 当指针为空、超长或转义不正确时追加一个校验失败。
+fn validate_browser_callback_json_pointer(
+    pointer: &str,
+    path: &str,
+    errors: &mut Vec<ManifestValidationError>,
+) {
+    let bytes = pointer.as_bytes();
+    let mut index = 0_usize;
+    let mut valid_escape = true;
+    while index < bytes.len() {
+        if bytes[index] == b'~' {
+            valid_escape = bytes
+                .get(index + 1)
+                .is_some_and(|next| matches!(next, b'0' | b'1'));
+            if !valid_escape {
+                break;
+            }
+            index += 1;
+        }
+        index += 1;
+    }
+    if pointer.is_empty()
+        || pointer.len() > 256
+        || !pointer.starts_with('/')
+        || pointer.chars().any(char::is_control)
+        || !valid_escape
+    {
+        errors.push(ManifestValidationError::new(
+            "invalid_browser_callback_json_pointer",
+            path,
+            "browser callback JSON Pointer must be a nonempty RFC 6901 pointer of at most 256 bytes",
+        ));
     }
 }
 
@@ -1938,6 +2332,30 @@ fn validate_model_rule(
                 "duplicate_account_plan_name",
                 path(".allowed_account_plan_names"),
                 format!("duplicate account-plan name `{plan_name}`"),
+            ));
+        }
+    }
+
+    if rule.account_access_groups.len() > 32 {
+        errors.push(ManifestValidationError::new(
+            "too_many_account_access_groups",
+            path(".account_access_groups"),
+            "rule account-access group list exceeds 32 entries",
+        ));
+    }
+    let mut account_access_groups = BTreeSet::new();
+    for group in &rule.account_access_groups {
+        validate_identifier(
+            group,
+            &path(".account_access_groups"),
+            errors,
+            "account_access_group",
+        );
+        if !account_access_groups.insert(group.as_str()) {
+            errors.push(ManifestValidationError::new(
+                "duplicate_account_access_group",
+                path(".account_access_groups"),
+                format!("duplicate account-access group `{group}`"),
             ));
         }
     }
@@ -6449,9 +6867,10 @@ mod tests {
                         credential_profile_id: String::from("api-key"),
                         display_name: String::from("API Key"),
                         credential_mode: CredentialMode::Token,
-                        oauth_provider: None,
+                        authorization: None,
                         billing_kind: CredentialBillingKind::ProviderManaged,
                         account_usage_query: AccountUsageQueryKind::Unsupported,
+                        account_model_access: None,
                         authentication: None,
                         key_prefix: None,
                         credential_role: None,
@@ -6998,6 +7417,7 @@ mod tests {
                 model_parameters: Vec::new(),
                 operation_refs: None,
                 allowed_account_plan_names: Vec::new(),
+                account_access_groups: Vec::new(),
                 default_enabled: None,
                 provenance_ref: None,
             },
@@ -7020,6 +7440,7 @@ mod tests {
                 model_parameters: Vec::new(),
                 operation_refs: None,
                 allowed_account_plan_names: Vec::new(),
+                account_access_groups: Vec::new(),
                 default_enabled: None,
                 provenance_ref: None,
             },
@@ -7048,9 +7469,10 @@ mod tests {
                 credential_profile_id: String::from("admin-key"),
                 display_name: String::from("Admin Key"),
                 credential_mode: CredentialMode::Token,
-                oauth_provider: None,
+                authorization: None,
                 billing_kind: CredentialBillingKind::ProviderManaged,
                 account_usage_query: AccountUsageQueryKind::Unsupported,
+                account_model_access: None,
                 authentication: None,
                 key_prefix: None,
                 credential_role: None,
@@ -7069,9 +7491,10 @@ mod tests {
                         credential_profile_id: String::from("api-key"),
                         display_name: String::from("API Key"),
                         credential_mode: CredentialMode::Token,
-                        oauth_provider: None,
+                        authorization: None,
                         billing_kind: CredentialBillingKind::ProviderManaged,
                         account_usage_query: AccountUsageQueryKind::Unsupported,
+                        account_model_access: None,
                         authentication: None,
                         key_prefix: None,
                         credential_role: None,
@@ -7110,6 +7533,7 @@ mod tests {
                 model_parameters: Vec::new(),
                 operation_refs: None,
                 allowed_account_plan_names: Vec::new(),
+                account_access_groups: Vec::new(),
                 default_enabled: None,
                 provenance_ref: None,
             },
@@ -7135,6 +7559,7 @@ mod tests {
                 model_parameters: Vec::new(),
                 operation_refs: None,
                 allowed_account_plan_names: Vec::new(),
+                account_access_groups: Vec::new(),
                 default_enabled: None,
                 provenance_ref: None,
             },
@@ -7171,6 +7596,7 @@ mod tests {
             model_parameters: Vec::new(),
             operation_refs: None,
             allowed_account_plan_names: Vec::new(),
+            account_access_groups: Vec::new(),
             default_enabled: None,
             provenance_ref: None,
         }];
@@ -8662,6 +9088,143 @@ mod tests {
             errors
                 .iter()
                 .any(|error| error.code == "manifest_only_requires_catalog_models")
+        );
+    }
+
+    /// Verifies credential modes and authorization declarations remain a closed pairing.
+    /// 验证凭据模式与授权声明保持封闭配对关系。
+    #[test]
+    fn credential_authorization_must_match_credential_mode() {
+        let mut missing = minimal_manifest();
+        missing.services[0].credential_profiles[0].credential_mode = CredentialMode::Auth;
+        let errors = validate_manifest(&missing, ManifestOwnership::System, &registry())
+            .expect_err("auth profile without authorization must fail");
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.code == "missing_credential_authorization")
+        );
+
+        let mut unexpected = minimal_manifest();
+        unexpected.services[0].credential_profiles[0].authorization =
+            Some(CredentialAuthorization::RegisteredOauth {
+                provider: crate::OAuthProviderKind::OpenAiCodex,
+            });
+        let errors = validate_manifest(&unexpected, ManifestOwnership::System, &registry())
+            .expect_err("token profile with authorization must fail");
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.code == "unexpected_credential_authorization")
+        );
+    }
+
+    /// Verifies browser callbacks are system-only and enforce listener and mapping bounds.
+    /// 验证浏览器回调仅限系统供应商并强制监听器与映射边界。
+    #[test]
+    fn browser_callback_authorization_is_bounded_and_system_only() {
+        let mut manifest = minimal_manifest();
+        let profile = &mut manifest.services[0].credential_profiles[0];
+        profile.credential_mode = CredentialMode::Auth;
+        profile.authorization = Some(CredentialAuthorization::BrowserCallback {
+            profile: crate::BrowserCallbackAuthorization {
+                authorization_url: String::from("https://commandcode.ai/studio/auth/cli"),
+                callback_query_parameter: String::from("callback"),
+                state_query_parameter: String::from("state"),
+                listener: crate::BrowserCallbackListener {
+                    url_host: crate::BrowserCallbackUrlHost::Localhost,
+                    path: String::from("/callback"),
+                    port_start: 5959,
+                    port_end: 5968,
+                    timeout_seconds: 300,
+                    max_body_bytes: 10 * 1024,
+                },
+                response: crate::BrowserCallbackResponseMapping {
+                    secret_json_pointer: String::from("/apiKey"),
+                    state_json_pointer: String::from("/state"),
+                    subject_json_pointer: String::from("/userId"),
+                    username_json_pointer: String::from("/userName"),
+                    credential_label_json_pointer: String::from("/keyName"),
+                    error_json_pointer: Some(String::from("/error")),
+                    error_description_json_pointer: Some(String::from("/error_description")),
+                    secret_projection: crate::BrowserCallbackSecretProjection::Bearer,
+                },
+            },
+        });
+        validate_manifest(&manifest, ManifestOwnership::System, &registry())
+            .expect("reviewed system callback should validate");
+
+        if let Some(CredentialAuthorization::BrowserCallback { profile }) = manifest.services[0]
+            .credential_profiles[0]
+            .authorization
+            .as_mut()
+        {
+            profile.authorization_url = String::from("https://commandcode.ai:8443/studio/auth/cli");
+        }
+        let errors = validate_manifest(&manifest, ManifestOwnership::System, &registry())
+            .expect_err("browser authorization on a non-default port must fail");
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.code == "browser_authorization_non_default_port")
+        );
+        if let Some(CredentialAuthorization::BrowserCallback { profile }) = manifest.services[0]
+            .credential_profiles[0]
+            .authorization
+            .as_mut()
+        {
+            profile.authorization_url = String::from("https://commandcode.ai/studio/auth/cli");
+        }
+
+        if let Some(CredentialAuthorization::BrowserCallback { profile }) = manifest.services[0]
+            .credential_profiles[0]
+            .authorization
+            .as_mut()
+        {
+            profile.response.error_json_pointer = Some(String::from("/state"));
+        }
+        let errors = validate_manifest(&manifest, ManifestOwnership::System, &registry())
+            .expect_err("duplicate callback pointers must fail");
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.code == "duplicate_browser_callback_json_pointer")
+        );
+        if let Some(CredentialAuthorization::BrowserCallback { profile }) = manifest.services[0]
+            .credential_profiles[0]
+            .authorization
+            .as_mut()
+        {
+            profile.response.error_json_pointer = Some(String::from("/error"));
+        }
+
+        let errors = validate_manifest(&manifest, ManifestOwnership::Custom, &registry())
+            .expect_err("custom callback must fail");
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.code == "custom_credential_authorization_forbidden")
+        );
+
+        if let Some(CredentialAuthorization::BrowserCallback { profile }) = manifest.services[0]
+            .credential_profiles[0]
+            .authorization
+            .as_mut()
+        {
+            profile.listener.port_end = 6000;
+            profile.response.state_json_pointer = String::from("invalid");
+        }
+        let errors = validate_manifest(&manifest, ManifestOwnership::System, &registry())
+            .expect_err("oversized range and invalid pointer must fail");
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.code == "invalid_browser_callback_port_range")
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.code == "invalid_browser_callback_json_pointer")
         );
     }
 

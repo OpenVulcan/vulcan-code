@@ -13,6 +13,40 @@ export type OAuthProviderKind =
   | "mini_max_china_token_plan"
   | "kimi_coding_plan";
 
+// PublicAiCredentialAuthorization declares a registered OAuth primitive or a Manifest browser callback.
+// PublicAiCredentialAuthorization 声明已注册 OAuth 原语或 Manifest 浏览器回调。
+export type PublicAiCredentialAuthorization =
+  | {
+      kind: "registered_oauth";
+      provider: OAuthProviderKind;
+    }
+  | {
+      kind: "browser_callback";
+      profile: {
+        authorization_url: string;
+        callback_query_parameter: string;
+        state_query_parameter: string;
+        listener: {
+          url_host: "localhost" | "loopback_ipv4";
+          path: string;
+          port_start: number;
+          port_end: number;
+          timeout_seconds: number;
+          max_body_bytes: number;
+        };
+        response: {
+          secret_json_pointer: string;
+          state_json_pointer: string;
+          subject_json_pointer: string;
+          username_json_pointer: string;
+          credential_label_json_pointer: string;
+          error_json_pointer?: string;
+          error_description_json_pointer?: string;
+          secret_projection: "api_key" | "bearer";
+        };
+      };
+    };
+
 // CredentialBillingKind identifies the exact billing semantics of one credential profile.
 // CredentialBillingKind 标识一个凭据配置档的精确计费语义。
 export type CredentialBillingKind = "pay_as_you_go" | "token_plan" | "provider_managed";
@@ -23,7 +57,7 @@ export interface PublicAiCredentialProfile {
   id: string;
   display_name: string;
   credential_mode: CredentialMode;
-  oauth_provider?: OAuthProviderKind;
+  authorization?: PublicAiCredentialAuthorization;
   billing_kind: CredentialBillingKind;
   account_usage_query:
     | "unsupported"
@@ -31,7 +65,8 @@ export interface PublicAiCredentialProfile {
     | "open_router_credits"
     | "tavily_credits"
     | "deep_seek_balance"
-    | "kimi_coding_plan";
+    | "kimi_coding_plan"
+    | "command_code_usage";
   authentication?: string;
   key_prefix?: string;
 }
@@ -419,7 +454,8 @@ export interface PublicAiConnection {
     | "open_router_credits"
     | "tavily_credits"
     | "deep_seek_balance"
-    | "kimi_coding_plan";
+    | "kimi_coding_plan"
+    | "command_code_usage";
   // Whether usage refresh needs a separate provider-management credential.
   // 用量刷新是否需要独立的供应商管理凭据。
   usage_requires_management_key: boolean;
@@ -1244,11 +1280,11 @@ export interface PublicAiOAuthStartRequest {
 // PublicAiOAuthTransaction 描述一个浏览器安全的内存授权状态。
 export interface PublicAiOAuthTransaction {
   transactionId: string;
-  providerKind: OAuthProviderKind;
+  authorizationBinding: string;
   phase:
     | "waiting_for_user_authorization"
     | "waiting_for_callback"
-    | "exchanging_token"
+    | "finalizing_credential"
     | "succeeded"
     | "failed"
     | "cancelled";

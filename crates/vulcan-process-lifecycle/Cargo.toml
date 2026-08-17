@@ -3,6 +3,7 @@ name = "vulcan-process-lifecycle"
 description = "Platform process-lifecycle guards shared by Vulcan service runtimes."
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 
@@ -16,7 +17,7 @@ todo = "warn"
 unwrap_used = "warn"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61.2", features = [
+windows-sys = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_System_JobObjects",
     "Win32_System_Threading",

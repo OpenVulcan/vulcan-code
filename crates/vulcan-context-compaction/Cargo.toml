@@ -3,6 +3,7 @@ name = "vulcan-context-compaction"
 description = "Shared context-compaction planning and rewrite helpers reused by the host runtime and workspace UI."
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 

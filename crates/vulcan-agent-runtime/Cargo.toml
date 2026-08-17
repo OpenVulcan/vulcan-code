@@ -3,6 +3,7 @@ name = "vulcan-agent-runtime"
 description = "Shared agent execution runtime extracted from the desktop workbench."
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 
@@ -15,26 +16,26 @@ workspace = true
 test-support = []
 
 [dependencies]
-async-stream = "0.3.6"
+async-stream.workspace = true
 async-trait.workspace = true
-base64 = "0.23.1"
+base64.workspace = true
 dirs.workspace = true
-encoding_rs = "0.8.35"
-filetime = "0.2.29"
-futures-channel = "0.3.34"
-futures-util = "0.3.34"
+encoding_rs.workspace = true
+filetime.workspace = true
+futures-channel.workspace = true
+futures-util.workspace = true
 jsonschema.workspace = true
 luaskills.workspace = true
-png = "0.18.1"
+png.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-serde_yaml = "0.9"
+serde_yaml.workspace = true
 hex.workspace = true
 sha2.workspace = true
-tempfile = "3.27.0"
-time = { version = "0.3.55", features = ["formatting", "local-offset", "macros", "parsing"] }
-tokio = { version = "1.53.1", features = ["rt", "sync", "time", "net", "io-util", "fs"] }
+tempfile.workspace = true
+time = { workspace = true, features = ["formatting", "local-offset", "macros", "parsing"] }
+tokio = { workspace = true, features = ["rt", "sync", "time", "net", "io-util", "fs"] }
 uuid.workspace = true
 vldb-controller-client.workspace = true
 vulcan-context.workspace = true

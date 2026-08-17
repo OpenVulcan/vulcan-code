@@ -3,6 +3,7 @@ name = "vulcan-change-set"
 description = "Shared host-side helpers for structured change_set tool results."
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 

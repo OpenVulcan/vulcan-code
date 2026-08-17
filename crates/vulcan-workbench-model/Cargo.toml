@@ -3,6 +3,7 @@ name = "vulcan-workbench-model"
 description = "Shared workbench-facing domain models for sessions, projects, and turn summaries."
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 
@@ -25,4 +26,4 @@ vulcan-vmm.workspace = true
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 
 [dev-dependencies]
-tempfile = "3.27.0"
+tempfile.workspace = true
