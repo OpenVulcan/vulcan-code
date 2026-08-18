@@ -27,12 +27,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use vulcan_ai_contract::{
-    AiContinuation, AiExecutionRequest, AiMessage, AiOperation, AiStreamEvent, ContentItem,
-    MessageRole, ModelParameterValue, NativeToolKind, ParallelToolCallPolicy, PromptCachePolicy,
-    ProviderReplayEnvelope, ReasoningEffort, ReasoningOutputPolicy, RequestUsage, ResourceKind,
-    ResourceReference, StructuredOutputPolicy, ToolCall as PublicToolCall, ToolChoicePolicy,
-    ToolDefinition, ToolResult, UsageValue, canonicalize_codex_responses_replay_items,
-    is_replayable_codex_responses_item,
+    AiContinuation, AiExecutionError, AiExecutionRequest, AiMessage, AiOperation, AiStreamEvent,
+    ContentItem, MessageRole, ModelParameterValue, NativeToolKind, ParallelToolCallPolicy,
+    PromptCachePolicy, ProviderReplayEnvelope, ReasoningEffort, ReasoningOutputPolicy,
+    RequestUsage, ResourceKind, ResourceReference, StructuredOutputPolicy,
+    ToolCall as PublicToolCall, ToolChoicePolicy, ToolDefinition, ToolResult, UsageValue,
+    canonicalize_codex_responses_replay_items, is_replayable_codex_responses_item,
 };
 use vulcan_context::{SessionConversationState, SessionMessageEntry};
 use vulcan_core::provider::{
@@ -48,7 +48,7 @@ use vulcan_core::types::{
     ProviderTurnResponse as CoreProviderTurnResponse, ProviderUsageSnapshot,
 };
 use vulcan_provider_adapters::{
-    CredentialExecutionSecret, InputResourceConstraint, ProviderExecutionClient,
+    InputResourceConstraint, ProviderExecutionClient, ProviderExecutionCredentialLease,
     ProviderExecutionRoute, ProviderWireRequestCapture, ResolvedPublicAiExecution,
     ResourceReferencePolicy, ResponseProjectionProfile, ToolSchemaProjectionMode,
     TransientReasoningStatusMode,
@@ -61,6 +61,9 @@ const DEFAULT_PUBLIC_OUTPUT_TOKEN_LIMIT: u64 = 32_000;
 /// Versioned on-disk contract for complete provider request traces.
 /// 完整 Provider 请求追踪使用的版本化磁盘契约。
 const PROVIDER_REQUEST_TRACE_SCHEMA_VERSION: &str = "vulcan.provider-request-trace.v2";
+/// Structured subcategory emitted only after the exact OAuth account secret was refreshed.
+/// 仅在精确 OAuth 账号秘密已经刷新后发出的结构化子类别。
+pub(crate) const OAUTH_CREDENTIAL_REFRESHED_SUBCATEGORY: &str = "oauth_credential_refreshed";
 /// Process-local monotonic tie breaker used when multiple requests start within one millisecond.
 /// 多个请求在同一毫秒启动时使用的进程本地单调消歧序号。
 static PROVIDER_REQUEST_TRACE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -268,7 +271,7 @@ pub(crate) fn execute_vulcan_public_stream(
                 resolved.route.clone(),
                 resolved.model.id.clone(),
                 cache_scope_id.clone(),
-                resolved.secret.clone(),
+                resolved.credential.clone(),
                 resolved.client.clone(),
                 adapter_inputs.provider_tool_definitions,
                 resolved.model.capabilities.provider_native_tools.clone(),
@@ -325,7 +328,7 @@ pub(crate) fn capture_vulcan_public_stream(
             resolved.route.clone(),
             resolved.model.id.clone(),
             cache_scope_id,
-            resolved.secret,
+            resolved.credential.clone(),
             resolved.client.clone(),
             provider_tool_definitions,
             resolved.model.capabilities.provider_native_tools,
@@ -343,12 +346,19 @@ pub(crate) fn capture_vulcan_public_stream(
             .build_request(&prepared.core_snapshot, &controller_config)
             .await
             .map_err(|error| error.to_string())?;
+        // secret is resolved at capture time so previews observe the same latest-revision boundary as execution.
+        // secret 在捕获时解析，使预览与执行观察到相同的最新修订版边界。
+        let secret = resolved
+            .credential
+            .resolve_for_request()
+            .await
+            .map_err(|error| error.to_string())?;
         let encoded = resolved
             .client
             .encode_effective_request_with_credential(
                 &resolved.route,
                 &public_request.public,
-                &adapter.secret,
+                &secret,
             )
             .await
             .map_err(|failure| failure.to_string())?;
@@ -372,9 +382,9 @@ pub(crate) struct VulcanPublicContractAdapter {
     /// Stable session cache scope shared by every physical request in this controller run.
     /// 本次控制器运行中每个物理请求共享的稳定会话缓存作用域。
     cache_scope_id: String,
-    /// Exact credential secret loaded by the host.
-    /// 宿主加载的精确凭据秘钥。
-    secret: CredentialExecutionSecret,
+    /// Exact account lease that resolves the latest secret before every physical request.
+    /// 在每次真实请求前解析最新秘密的精确账号租约。
+    credential: ProviderExecutionCredentialLease,
     /// Shared public-contract execution client.
     /// 共享公共契约执行客户端。
     client: ProviderExecutionClient,
@@ -445,10 +455,10 @@ impl VulcanPublicContractAdapter {
     /// # Parameters
     /// 参数
     /// `provider_request_trace_enabled` freezes the persisted diagnostic switch; `route`,
-    /// `secret`, and `client` identify the exact execution path; `tools` are host definitions;
+    /// `credential`, and `client` identify the exact execution path; `tools` are host definitions;
     /// `output_token_limit`, `prompt_cache`, and `model_parameters` are resolved before dispatch;
     /// `live_sender` projects tool construction to the WebUI.
-    /// `provider_request_trace_enabled` 冻结持久化诊断开关；`route`、`secret` 与 `client`
+    /// `provider_request_trace_enabled` 冻结持久化诊断开关；`route`、`credential` 与 `client`
     /// 标识精确执行路径；`tools` 是宿主工具定义；`output_token_limit`、`prompt_cache` 与
     /// `model_parameters` 在分派前解析；`live_sender` 将工具构造投影到 WebUI。
     ///
@@ -461,7 +471,7 @@ impl VulcanPublicContractAdapter {
         route: ProviderExecutionRoute,
         model_id: String,
         cache_scope_id: String,
-        secret: CredentialExecutionSecret,
+        credential: ProviderExecutionCredentialLease,
         client: ProviderExecutionClient,
         tools: Vec<ProviderToolDefinition>,
         provider_native_tools: Vec<NativeToolKind>,
@@ -489,7 +499,7 @@ impl VulcanPublicContractAdapter {
             route,
             model_id,
             cache_scope_id,
-            secret,
+            credential,
             client,
             tools: public_tools,
             tool_sources,
@@ -968,6 +978,46 @@ fn public_stream_event_is_terminal(event: &AiStreamEvent) -> bool {
     )
 }
 
+/// Refreshes one exact renewable credential after a replay-safe upstream 401 response.
+/// 在收到可安全重放的上游 401 响应后刷新一份精确可续期凭据。
+///
+/// # Parameters
+/// 参数
+///
+/// `credential` owns the frozen account reference, `rejected_revision` identifies the token
+/// used by this physical request, and `error` is the normalized upstream failure.
+/// `credential` 持有冻结账号引用，`rejected_revision` 标识当前真实请求使用的 Token，
+/// `error` 是归一化上游失败。
+async fn recover_rejected_oauth_credential(
+    credential: &ProviderExecutionCredentialLease,
+    rejected_revision: u64,
+    error: &mut AiExecutionError,
+) {
+    if error.http_status != Some(401)
+        || error.semantic_output_observed
+        || error.side_effect_observed
+    {
+        return;
+    }
+    match credential
+        .refresh_after_unauthorized(rejected_revision)
+        .await
+    {
+        Ok(true) => {
+            error.subcategory = Some(String::from(OAUTH_CREDENTIAL_REFRESHED_SUBCATEGORY));
+            error.retryable = true;
+        }
+        Ok(false) => {}
+        Err(refresh_error) => {
+            error.retryable = false;
+            error.message = format!(
+                "{} Host OAuth credential refresh failed after the upstream 401 response: {refresh_error}",
+                error.message
+            );
+        }
+    }
+}
+
 #[async_trait]
 impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
     async fn execute_request_streaming<S>(
@@ -1034,6 +1084,23 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
                     ),
                 )
             })?;
+        // secret is re-read after the durable start boundary and immediately before this physical dispatch.
+        // secret 在可靠起始边界之后、当前真实分派之前立即重新读取。
+        let secret = self
+            .credential
+            .resolve_for_request()
+            .await
+            .map_err(|error| {
+                provider_failure(
+                    self.provider_id(),
+                    &format!(
+                        "The Provider credential could not be resolved before dispatch: {error}"
+                    ),
+                )
+            })?;
+        // rejectedSecretRevision binds any later 401 recovery to the exact token used on the wire.
+        // rejectedSecretRevision 将后续任何 401 恢复绑定到线上实际使用的精确 Token 修订版。
+        let rejected_secret_revision = secret.revision();
         let execution_id = uuid::Uuid::new_v4().to_string();
         // requestTraceTask waits for the exact object produced inside the selected transport.
         // requestTraceTask 等待所选传输内部产生的精确对象。
@@ -1078,17 +1145,13 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
             self.client.execute_with_wire_request_capture(
                 self.route.clone(),
                 public.clone(),
-                self.secret.clone(),
+                secret.clone(),
                 execution_id,
                 capture_sender,
             )
         } else {
-            self.client.execute(
-                self.route.clone(),
-                public.clone(),
-                self.secret.clone(),
-                execution_id,
-            )
+            self.client
+                .execute(self.route.clone(), public.clone(), secret, execution_id)
         };
         // routeFingerprint binds replay signatures to the exact resolved endpoint used by this request.
         // routeFingerprint 将重放签名绑定到本次请求使用的精确已解析端点。
@@ -1106,15 +1169,26 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
             transient_reasoning_kind,
         );
         while let Some(item) = stream.next().await {
-            let event = item.map_err(|mut failure| {
-                attach_execution_route_context(
-                    &mut failure.error,
-                    self.provider_id(),
-                    self.route.entry.id.as_str(),
-                    self.model_id(),
-                );
-                public_execution_failure(self.provider_id(), *failure.error)
-            })?;
+            // event preserves the normalized provider item after credential recovery annotates failures.
+            // event 在凭据恢复标注失败后保留归一化供应商事件。
+            let event = match item {
+                Ok(event) => event,
+                Err(mut failure) => {
+                    attach_execution_route_context(
+                        &mut failure.error,
+                        self.provider_id(),
+                        self.route.entry.id.as_str(),
+                        self.model_id(),
+                    );
+                    recover_rejected_oauth_credential(
+                        &self.credential,
+                        rejected_secret_revision,
+                        &mut failure.error,
+                    )
+                    .await;
+                    return Err(public_execution_failure(self.provider_id(), *failure.error));
+                }
+            };
             let mut event = materialize_provider_resource_event(
                 self.provider_id(),
                 self.workspace_path.as_str(),
@@ -1128,6 +1202,12 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
                     self.route.entry.id.as_str(),
                     self.model_id(),
                 );
+                recover_rejected_oauth_credential(
+                    &self.credential,
+                    rejected_secret_revision,
+                    error,
+                )
+                .await;
             }
             let event = match event {
                 AiStreamEvent::TransportObserved {
@@ -1228,6 +1308,7 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
                     ),
                 )
             })?;
+        self.credential.mark_request_succeeded();
         Ok(final_response)
     }
 }

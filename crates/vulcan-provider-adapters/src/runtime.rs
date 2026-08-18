@@ -28,7 +28,7 @@ use std::future::Future;
 use std::path::Path;
 use std::sync::{
     Arc, Mutex as StdMutex, RwLock,
-    atomic::{AtomicU64, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
 };
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex as AsyncMutex;
@@ -74,6 +74,230 @@ const PROVIDER_TOOL_ERROR_DIAGNOSTIC_MAX_CHARACTERS: usize = 6_000;
 /// Maximum characters retained from one immutable provider-tool route context.
 /// 单个不可变供应商工具路由上下文允许保留的最大字符数。
 const PROVIDER_TOOL_ROUTE_DIAGNOSTIC_MAX_CHARACTERS: usize = 2_000;
+
+/// Resolves the latest secret revision for one frozen account without changing its route.
+/// 在不改变冻结账号路由的前提下，为该账号解析最新秘密修订版。
+#[derive(Clone)]
+pub struct ProviderExecutionCredentialLease {
+    /// Exact connection whose refresh operations share one single-flight lock.
+    /// 刷新操作共享同一个单飞锁的精确连接。
+    connection_id: String,
+    /// Exact secure-store reference frozen with the selected account.
+    /// 随所选账号冻结的精确安全仓库引用。
+    secret_reference: String,
+    /// Shared provider OAuth runtime used only for renewable credentials.
+    /// 仅为可续期凭据使用的共享供应商 OAuth 运行时。
+    oauth: Arc<OAuthAuthorizationRuntime>,
+    /// Connection-scoped locks shared with every runtime credential operation.
+    /// 与全部运行时凭据操作共享的连接作用域锁。
+    refresh_locks: Arc<StdMutex<BTreeMap<String, Arc<AsyncMutex<()>>>>>,
+    /// Host-owned secure secret store.
+    /// 宿主持有的安全秘密仓库。
+    secrets: Arc<dyn CredentialSecretStore>,
+    /// One-shot 401 recovery guard reset only after a physical Provider request succeeds.
+    /// 仅在一次真实 Provider 请求成功后重置的单次 401 恢复护栏。
+    unauthorized_refresh_used: Arc<AtomicBool>,
+}
+
+impl ProviderExecutionCredentialLease {
+    /// Creates one credential lease for an already selected account.
+    /// 为已经选定的账号创建一份凭据租约。
+    ///
+    /// # Parameters
+    /// 参数
+    ///
+    /// `connection_id` and `secret_reference` freeze account identity; the remaining values
+    /// share the host-owned refresh and storage boundaries.
+    /// `connection_id` 与 `secret_reference` 冻结账号身份；其余值共享宿主持有的刷新与存储边界。
+    ///
+    /// # Returns
+    /// 返回值
+    ///
+    /// A reusable lease that re-reads only the exact frozen secret reference.
+    /// 返回仅重读精确冻结秘密引用的可复用租约。
+    fn new(
+        connection_id: String,
+        secret_reference: String,
+        oauth: Arc<OAuthAuthorizationRuntime>,
+        refresh_locks: Arc<StdMutex<BTreeMap<String, Arc<AsyncMutex<()>>>>>,
+        secrets: Arc<dyn CredentialSecretStore>,
+    ) -> Self {
+        Self {
+            connection_id,
+            secret_reference,
+            oauth,
+            refresh_locks,
+            secrets,
+            unauthorized_refresh_used: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// Resolves the latest valid secret immediately before one physical Provider request.
+    /// 在一次真实 Provider 请求之前解析最新有效秘密。
+    ///
+    /// # Returns
+    /// 返回值
+    ///
+    /// The newest stored revision, refreshing an expiring OAuth credential under one lock.
+    /// 返回最新存储修订版，并在单飞锁内刷新即将过期的 OAuth 凭据。
+    pub async fn resolve_for_request(&self) -> Result<CredentialExecutionSecret, String> {
+        // current is re-read for every physical request so concurrent account refreshes become visible immediately.
+        // current 会在每次真实请求前重新读取，使并发账号刷新立即可见。
+        let current = self
+            .secrets
+            .read_secret(self.secret_reference.as_str())
+            .await?;
+        if !current.requires_refresh(current_unix_millis()?, OAUTH_REFRESH_SKEW_MS) {
+            return current.execution_secret();
+        }
+        self.refresh_expiring_secret().await
+    }
+
+    /// Forces one renewable credential recovery after an exact upstream 401 response.
+    /// 在收到精确上游 401 响应后强制恢复一次可续期凭据。
+    ///
+    /// # Parameters
+    /// 参数
+    ///
+    /// `rejected_revision` is the exact secret-store revision rejected by the upstream request.
+    /// `rejected_revision` 是上游请求拒绝的精确秘密仓库修订号。
+    ///
+    /// # Returns
+    /// 返回值
+    ///
+    /// `true` after a newer revision is observed or one forced OAuth refresh succeeds; static
+    /// credentials and repeated recovery within the same physical request return `false`.
+    /// 观察到更新修订版或一次强制 OAuth 刷新成功后返回 `true`；静态凭据以及同一真实请求内
+    /// 的重复恢复返回 `false`。
+    pub async fn refresh_after_unauthorized(&self, rejected_revision: u64) -> Result<bool, String> {
+        // current determines whether the exact frozen credential is renewable before claiming recovery.
+        // current 在占用恢复机会前判断精确冻结凭据是否可续期。
+        let current = self
+            .secrets
+            .read_secret(self.secret_reference.as_str())
+            .await?;
+        if !current.is_renewable_oauth() {
+            return Ok(false);
+        }
+        if self.unauthorized_refresh_used.swap(true, Ordering::AcqRel) {
+            return Ok(false);
+        }
+        // refreshLock serializes forced 401 recovery with expiry-driven refreshes for this account.
+        // refreshLock 将强制 401 恢复与该账号的到期刷新串行化。
+        let refresh_lock = self.refresh_lock()?;
+        let _guard = refresh_lock.lock().await;
+        // current is re-read after the lock because another request may already have replaced the rejected revision.
+        // current 在获得锁后重新读取，因为另一个请求可能已经替换了被拒绝的修订版。
+        let current = self
+            .secrets
+            .read_secret(self.secret_reference.as_str())
+            .await?;
+        if current.revision > rejected_revision
+            && !current.requires_refresh(current_unix_millis()?, OAUTH_REFRESH_SKEW_MS)
+        {
+            current.execution_secret()?;
+            return Ok(true);
+        }
+        if !current.is_renewable_oauth() {
+            return Ok(false);
+        }
+        self.refresh_locked_secret(&current).await?;
+        Ok(true)
+    }
+
+    /// Resets the one-shot unauthorized recovery guard after one physical request succeeds.
+    /// 在一次真实请求成功后重置单次未授权恢复护栏。
+    pub fn mark_request_succeeded(&self) {
+        self.unauthorized_refresh_used
+            .store(false, Ordering::Release);
+    }
+
+    /// Refreshes one expiring credential after re-checking it under the account lock.
+    /// 在账号锁内重新检查并刷新一份即将过期的凭据。
+    async fn refresh_expiring_secret(&self) -> Result<CredentialExecutionSecret, String> {
+        // refreshLock shares expiry refresh ordering with forced 401 recovery.
+        // refreshLock 让到期刷新与强制 401 恢复共享顺序。
+        let refresh_lock = self.refresh_lock()?;
+        let _guard = refresh_lock.lock().await;
+        // current is authoritative only after the single-flight lock is held.
+        // current 仅在持有单飞锁后才是权威值。
+        let current = self
+            .secrets
+            .read_secret(self.secret_reference.as_str())
+            .await?;
+        if !current.requires_refresh(current_unix_millis()?, OAUTH_REFRESH_SKEW_MS) {
+            return current.execution_secret();
+        }
+        self.refresh_locked_secret(&current).await
+    }
+
+    /// Returns the connection-scoped single-flight lock for this frozen account.
+    /// 返回当前冻结账号的连接作用域单飞锁。
+    ///
+    /// # Returns
+    /// 返回值
+    ///
+    /// The shared asynchronous lock, or a controlled poisoned-lock error.
+    /// 返回共享异步锁，或受控的锁中毒错误。
+    fn refresh_lock(&self) -> Result<Arc<AsyncMutex<()>>, String> {
+        // locks is the process-local map that owns every connection refresh lock.
+        // locks 是持有每个连接刷新锁的进程本地映射。
+        let mut locks = self
+            .refresh_locks
+            .lock()
+            .map_err(|_| String::from("The AI credential refresh lock is poisoned."))?;
+        Ok(Arc::clone(
+            locks
+                .entry(self.connection_id.clone())
+                .or_insert_with(|| Arc::new(AsyncMutex::new(()))),
+        ))
+    }
+
+    /// Refreshes and compare-and-replaces one credential while its connection lock is held.
+    /// 在持有连接锁时刷新并比较替换一份凭据。
+    ///
+    /// # Parameters
+    /// 参数
+    ///
+    /// `current` is the exact authoritative revision read under the refresh lock.
+    /// `current` 是在刷新锁内读取的精确权威修订版。
+    ///
+    /// # Returns
+    /// 返回值
+    ///
+    /// The refreshed execution secret or a newer valid concurrent winner.
+    /// 返回刷新后的执行秘密，或更新且有效的并发获胜修订版。
+    async fn refresh_locked_secret(
+        &self,
+        current: &CredentialSecretEnvelope,
+    ) -> Result<CredentialExecutionSecret, String> {
+        // material is the provider-specific refreshed credential returned by the OAuth runtime.
+        // material 是 OAuth 运行时返回的供应商专属刷新凭据。
+        let material = self.oauth.refresh(&current.material).await?;
+        // refreshed advances the secure-store revision exactly once for this material.
+        // refreshed 为该凭据材料精确推进一次安全仓库修订号。
+        let refreshed = current.advance_with_material(material)?;
+        if let Err(replace_error) = self
+            .secrets
+            .replace_secret(self.secret_reference.as_str(), current.revision, &refreshed)
+            .await
+        {
+            // concurrent is accepted only when another writer published a newer non-expiring revision.
+            // concurrent 仅在另一个写入者发布更新且未临近过期的修订版时被接受。
+            let concurrent = self
+                .secrets
+                .read_secret(self.secret_reference.as_str())
+                .await?;
+            if concurrent.revision > current.revision
+                && !concurrent.requires_refresh(current_unix_millis()?, OAUTH_REFRESH_SKEW_MS)
+            {
+                return concurrent.execution_secret();
+            }
+            return Err(replace_error);
+        }
+        refreshed.execution_secret()
+    }
+}
 
 /// Observes one durable task batch with a fixed cross-provider concurrency ceiling.
 /// 以固定的跨供应商并发上限观测一批持久任务。
@@ -7615,16 +7839,19 @@ impl PublicAiRuntime {
         &self,
         selection: ResolvedPublicAiSelection,
     ) -> Result<ResolvedPublicAiExecution, String> {
-        let secret = self
-            .resolve_fresh_execution_secret(
-                selection.route.connection.id.as_str(),
-                selection.route.connection.secret_reference.as_str(),
-            )
-            .await?;
+        // credential freezes account identity while keeping the access token live per physical request.
+        // credential 冻结账号身份，同时让 Access Token 在每次真实请求前保持实时。
+        let credential = self.execution_credential_lease(
+            selection.route.connection.id.as_str(),
+            selection.route.connection.secret_reference.as_str(),
+        );
+        // The initial resolution preserves the pre-dispatch credential failure boundary without freezing this value for execution.
+        // 初始解析保留分派前凭据失败边界，但不会把该值冻结给后续执行。
+        credential.resolve_for_request().await?;
         Ok(ResolvedPublicAiExecution {
             route: selection.route,
             model: selection.model,
-            secret,
+            credential,
             overrides: selection.overrides,
             protocol_binding: selection.protocol_binding,
             client: self.execution_client.clone(),
@@ -7678,42 +7905,37 @@ impl PublicAiRuntime {
         connection_id: &str,
         secret_reference: &str,
     ) -> Result<CredentialExecutionSecret, String> {
-        let current = self.secrets.read_secret(secret_reference).await?;
-        if !current.requires_refresh(current_unix_millis()?, OAUTH_REFRESH_SKEW_MS) {
-            return current.execution_secret();
-        }
-        let refresh_lock = {
-            let mut locks = self
-                .refresh_locks
-                .lock()
-                .map_err(|_| String::from("The AI credential refresh lock is poisoned."))?;
-            Arc::clone(
-                locks
-                    .entry(connection_id.to_string())
-                    .or_insert_with(|| Arc::new(AsyncMutex::new(()))),
-            )
-        };
-        let _guard = refresh_lock.lock().await;
-        let current = self.secrets.read_secret(secret_reference).await?;
-        if !current.requires_refresh(current_unix_millis()?, OAUTH_REFRESH_SKEW_MS) {
-            return current.execution_secret();
-        }
-        let material = self.oauth.refresh(&current.material).await?;
-        let refreshed = current.advance_with_material(material)?;
-        if let Err(replace_error) = self
-            .secrets
-            .replace_secret(secret_reference, current.revision, &refreshed)
+        self.execution_credential_lease(connection_id, secret_reference)
+            .resolve_for_request()
             .await
-        {
-            let concurrent = self.secrets.read_secret(secret_reference).await?;
-            if concurrent.revision > current.revision
-                && !concurrent.requires_refresh(current_unix_millis()?, OAUTH_REFRESH_SKEW_MS)
-            {
-                return concurrent.execution_secret();
-            }
-            return Err(replace_error);
-        }
-        refreshed.execution_secret()
+    }
+
+    /// Creates one live credential lease for an exact frozen connection and secret reference.
+    /// 为一个精确冻结连接与秘密引用创建实时凭据租约。
+    ///
+    /// # Parameters
+    /// 参数
+    ///
+    /// `connection_id` scopes refresh serialization and `secret_reference` fixes account identity.
+    /// `connection_id` 限定刷新串行化范围，`secret_reference` 固定账号身份。
+    ///
+    /// # Returns
+    /// 返回值
+    ///
+    /// A lease that can observe later revisions without changing account or route.
+    /// 返回能够观察后续修订版且不会改变账号或路由的租约。
+    fn execution_credential_lease(
+        &self,
+        connection_id: &str,
+        secret_reference: &str,
+    ) -> ProviderExecutionCredentialLease {
+        ProviderExecutionCredentialLease::new(
+            connection_id.to_string(),
+            secret_reference.to_string(),
+            Arc::clone(&self.oauth),
+            Arc::clone(&self.refresh_locks),
+            Arc::clone(&self.secrets),
+        )
     }
 
     /// Resolves public model and route metadata without reading secret material.
@@ -8288,10 +8510,63 @@ impl PublicAiRuntime {
         let connection_id = execution.route.connection.id.clone();
         let protocol_profile_id = execution.route.protocol_route.protocol_profile_id.clone();
         let model_id = execution.model.id.clone();
-        let result = execution
-            .client
-            .execute_responses_compact(execution.route.clone(), request, execution.secret)
-            .await?;
+        // secret is resolved immediately before the first physical compaction attempt.
+        // secret 在第一次真实压缩尝试之前立即解析。
+        let mut secret = execution
+            .credential
+            .resolve_for_request()
+            .await
+            .map_err(crate::execution::pre_dispatch_failure)?;
+        // oauthReplayUsed limits this unary operation to one safe same-account 401 replay.
+        // oauthReplayUsed 将该一元操作限制为一次安全的同账号 401 重放。
+        let mut oauth_replay_used = false;
+        // result retries only after the exact renewable credential has been refreshed successfully.
+        // result 仅在精确可续期凭据成功刷新后才进行重试。
+        let result = loop {
+            // rejectedRevision binds recovery to the credential sent by this exact physical attempt.
+            // rejectedRevision 将恢复绑定到本次真实尝试发送的凭据。
+            let rejected_revision = secret.revision();
+            match execution
+                .client
+                .execute_responses_compact(execution.route.clone(), request.clone(), secret.clone())
+                .await
+            {
+                Ok(result) => {
+                    execution.credential.mark_request_succeeded();
+                    break result;
+                }
+                Err(mut failure)
+                    if !oauth_replay_used
+                        && failure.error.http_status == Some(401)
+                        && !failure.error.semantic_output_observed
+                        && !failure.error.side_effect_observed =>
+                {
+                    match execution
+                        .credential
+                        .refresh_after_unauthorized(rejected_revision)
+                        .await
+                    {
+                        Ok(true) => {
+                            oauth_replay_used = true;
+                            secret = execution
+                                .credential
+                                .resolve_for_request()
+                                .await
+                                .map_err(crate::execution::pre_dispatch_failure)?;
+                        }
+                        Ok(false) => return Err(failure),
+                        Err(refresh_error) => {
+                            failure.error.message = format!(
+                                "{} Host OAuth credential refresh failed after the upstream 401 response: {refresh_error}",
+                                failure.error.message
+                            );
+                            return Err(failure);
+                        }
+                    }
+                }
+                Err(failure) => return Err(failure),
+            }
+        };
         Ok(ResponsesCompactExecution {
             result,
             provider_id,
@@ -10832,8 +11107,8 @@ pub struct ResolvedPublicAiSelection {
     pub route_revision: String,
 }
 
-/// Carries all immutable public execution inputs resolved before controller dispatch.
-/// 承载控制器分派前解析完成的全部不可变公共执行输入。
+/// Carries frozen route inputs and one live credential lease resolved before controller dispatch.
+/// 承载控制器分派前解析完成的冻结路由输入与一份实时凭据租约。
 pub struct ResolvedPublicAiExecution {
     /// Exact provider execution route.
     /// 精确供应商执行路由。
@@ -10841,9 +11116,9 @@ pub struct ResolvedPublicAiExecution {
     /// Exact credential-scoped model snapshot.
     /// 精确凭据作用域模型快照。
     pub model: crate::ConnectionModel,
-    /// Exact credential secret and frozen secure-store revision.
-    /// 精确凭据秘密及冻结的安全存储修订号。
-    pub secret: CredentialExecutionSecret,
+    /// Exact account lease that resolves the latest secret revision for every physical request.
+    /// 为每次真实请求解析最新秘密修订版的精确账号租约。
+    pub credential: ProviderExecutionCredentialLease,
     /// Local model execution overrides.
     /// 本地模型执行覆盖。
     pub overrides: crate::ModelExecutionOverrides,
@@ -11699,6 +11974,128 @@ mod tests {
         );
     }
 
+    /// Builds one valid Kimi OAuth envelope for live credential-lease tests.
+    /// 为实时凭据租约测试构建一份有效 Kimi OAuth 封装。
+    ///
+    /// # Parameters
+    /// 参数
+    ///
+    /// `revision` is the secure-store revision and `access_token` is the observable test value.
+    /// `revision` 是安全仓库修订号，`access_token` 是可观测测试值。
+    ///
+    /// # Returns
+    /// 返回值
+    ///
+    /// A non-expiring renewable credential whose refresh endpoint is never contacted by these tests.
+    /// 返回一份不会过期的可续期凭据；这些测试不会访问其刷新端点。
+    fn test_kimi_oauth_secret(revision: u64, access_token: &str) -> CredentialSecretEnvelope {
+        // now anchors a valid issue and expiration interval for the credential invariant.
+        // now 为凭据不变量提供有效的签发与过期时间区间。
+        let now = current_unix_millis().expect("test clock should be available");
+        CredentialSecretEnvelope {
+            version: 1,
+            revision,
+            material: crate::CredentialSecretMaterial::KimiCodingPlanOAuth {
+                tokens: crate::OAuthTokenSet {
+                    access_token: access_token.to_string(),
+                    refresh_token: String::from("refresh-token"),
+                    issued_at_unix_ms: now,
+                    expires_at_unix_ms: now.saturating_add(60 * 60 * 1_000),
+                    scopes: BTreeSet::new(),
+                    account_subject: Some(String::from("account-subject")),
+                    email: Some(String::from("account@example.com")),
+                },
+                device_id: String::from("00000000-0000-4000-8000-000000000001"),
+            },
+        }
+    }
+
+    /// Verifies the next physical request observes a concurrently refreshed OAuth revision.
+    /// 验证下一次真实请求会观察到并发刷新的 OAuth 修订版。
+    #[tokio::test]
+    async fn execution_credential_lease_observes_latest_revision_after_refresh() {
+        // initial is the exact token revision used by the rejected physical request.
+        // initial 是被拒绝真实请求使用的精确 Token 修订版。
+        let initial = test_kimi_oauth_secret(1, "token-a");
+        // store provides a mutable isolated secure-store boundary without durable writes.
+        // store 提供不产生持久写入的可变隔离安全仓库边界。
+        let store = Arc::new(IsolatedCredentialSecretStore {
+            delegate: Arc::new(UnavailableCredentialSecretResolver),
+            secret_reference: String::from("oauth-secret"),
+            secret: StdMutex::new(Some(initial.clone())),
+        });
+        // secrets erases the concrete fixture behind the production credential-store contract.
+        // secrets 通过生产凭据仓库契约抹除具体夹具类型。
+        let secrets: Arc<dyn CredentialSecretStore> = store.clone();
+        // lease freezes the account reference while resolving its token revision per request.
+        // lease 冻结账号引用，同时按请求解析其 Token 修订版。
+        let lease = ProviderExecutionCredentialLease::new(
+            String::from("oauth-connection"),
+            String::from("oauth-secret"),
+            Arc::new(OAuthAuthorizationRuntime::new(reqwest::Client::new())),
+            Arc::new(StdMutex::new(BTreeMap::new())),
+            secrets,
+        );
+        // rejected is the first physical request's immutable credential snapshot.
+        // rejected 是第一次真实请求的不可变凭据快照。
+        let rejected = lease
+            .resolve_for_request()
+            .await
+            .expect("initial credential should resolve");
+        assert_eq!(rejected.revision(), 1);
+        assert_eq!(rejected.expose_value(), "token-a");
+
+        // refreshed simulates another request completing OAuth refresh while this execution remains active.
+        // refreshed 模拟当前执行仍活动时另一个请求完成 OAuth 刷新。
+        let refreshed = test_kimi_oauth_secret(2, "token-b");
+        store
+            .replace_secret("oauth-secret", 1, &refreshed)
+            .await
+            .expect("concurrent refresh should replace revision one");
+        assert!(
+            lease
+                .refresh_after_unauthorized(rejected.revision())
+                .await
+                .expect("newer revision should satisfy unauthorized recovery")
+        );
+        // current is the credential that the immediately following physical request will send.
+        // current 是紧接着的真实请求将要发送的凭据。
+        let current = lease
+            .resolve_for_request()
+            .await
+            .expect("latest credential should resolve");
+        assert_eq!(current.revision(), 2);
+        assert_eq!(current.expose_value(), "token-b");
+        assert!(
+            !lease
+                .refresh_after_unauthorized(rejected.revision())
+                .await
+                .expect("same physical request must not refresh twice")
+        );
+        lease.mark_request_succeeded();
+        // later simulates a subsequent physical request observing another concurrent OAuth refresh.
+        // later 模拟后续真实请求观察到另一次并发 OAuth 刷新。
+        let later = test_kimi_oauth_secret(3, "token-c");
+        store
+            .replace_secret("oauth-secret", current.revision(), &later)
+            .await
+            .expect("later refresh should replace revision two");
+        assert!(
+            lease
+                .refresh_after_unauthorized(current.revision())
+                .await
+                .expect("successful request should restore one recovery opportunity")
+        );
+        // latest is the token resolved for the physical request after the second recovery.
+        // latest 是第二次恢复后真实请求解析到的 Token。
+        let latest = lease
+            .resolve_for_request()
+            .await
+            .expect("latest credential should resolve after guard reset");
+        assert_eq!(latest.revision(), 3);
+        assert_eq!(latest.expose_value(), "token-c");
+    }
+
     /// Supplies one immutable API key to catalog-refresh tests.
     /// 为目录刷新测试提供一个不可变 API Key。
     #[derive(Clone)]
@@ -11779,6 +12176,36 @@ mod tests {
         ) -> Result<(), String> {
             Err(String::from("The test secret store is immutable."))
         }
+    }
+
+    /// Verifies static API keys remain terminal when an upstream request returns 401.
+    /// 验证上游请求返回 401 时静态 API Key 仍保持终态。
+    #[tokio::test]
+    async fn execution_credential_lease_does_not_refresh_static_api_key() {
+        // store owns one immutable user-managed API key.
+        // store 持有一份不可变的用户管理 API Key。
+        let store: Arc<dyn CredentialSecretStore> = Arc::new(TestStaticSecretStore::api_key());
+        // lease uses the same production boundary as renewable credentials.
+        // lease 使用与可续期凭据相同的生产边界。
+        let lease = ProviderExecutionCredentialLease::new(
+            String::from("api-key-connection"),
+            String::from("api-key-secret"),
+            Arc::new(OAuthAuthorizationRuntime::new(reqwest::Client::new())),
+            Arc::new(StdMutex::new(BTreeMap::new())),
+            store,
+        );
+        // secret proves the static key remains readable for ordinary dispatch.
+        // secret 证明静态 Key 仍可供普通分派读取。
+        let secret = lease
+            .resolve_for_request()
+            .await
+            .expect("static API key should resolve");
+        assert!(
+            !lease
+                .refresh_after_unauthorized(secret.revision())
+                .await
+                .expect("static API key recovery should be a controlled no-op")
+        );
     }
 
     /// Counts every call that reaches the durable-store side of an isolated credential overlay.

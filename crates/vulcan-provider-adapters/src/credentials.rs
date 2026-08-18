@@ -355,6 +355,25 @@ impl CredentialSecretEnvelope {
         }
     }
 
+    /// Reports whether this credential owns a renewable OAuth token set.
+    /// 判断当前凭据是否持有可续期 OAuth Token 集合。
+    ///
+    /// # Returns
+    /// 返回值
+    ///
+    /// `true` only for credentials whose access token can be renewed by the OAuth runtime.
+    /// 仅当 OAuth 运行时能够续期该凭据的 Access Token 时返回 `true`。
+    pub fn is_renewable_oauth(&self) -> bool {
+        matches!(
+            self.material,
+            CredentialSecretMaterial::OpenAiCodexOAuth { .. }
+                | CredentialSecretMaterial::ClaudeCodeOAuth { .. }
+                | CredentialSecretMaterial::GoogleOAuth { .. }
+                | CredentialSecretMaterial::MiniMaxOAuth { .. }
+                | CredentialSecretMaterial::KimiCodingPlanOAuth { .. }
+        )
+    }
+
     /// Resolves the current access material for one immutable execution.
     /// 为一次不可变执行解析当前访问材料。
     ///

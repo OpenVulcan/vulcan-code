@@ -311,6 +311,12 @@ OpenRouter 应用归因由其随包 Manifest 的固定非秘密请求头声明�
 Kimi 与 MiniMax 虽然共享这一声明形状，但仍分别走宿主中已审核的 Device Code、PKCE、轮询、刷新、
 设备身份和区域资源 URL 校验。作者不能把这些协议改写成未经验证的通用字段映射。
 
+LLM 运行时只冻结连接、秘密引用、模型、协议和路由，不把可续期 Access Token 冻结到完整智能体执行结束。
+每次真实 LLM Provider 请求前，宿主必须为同一个 `secret_reference` 重读最新修订版；其他请求完成 OAuth
+刷新后，当前长任务的下一次请求必须立即使用新 Token。上游对可安全重放且尚未产生语义输出或副作用
+的请求返回 401 时，宿主允许为同一账号强制刷新并立即重放一次；静态 API Key、浏览器回调静态秘密、
+第二次 401、跨账号切换和协议降级均不进入该恢复链。
+
 供应商网页把凭据直接 POST 到本地回调时，可使用声明式 `browser_callback`。该 Profile 必须同时固定：
 
 - 无 query、fragment、用户信息和非默认端口的 HTTPS 授权 URL；
@@ -690,6 +696,7 @@ Operation/Tool declaration 来源和选择 snapshot。UI 不得再实现第二�
 - [ ] 未写宿主保护请求根，未引入脚本/表达式/候选字段 fallback；
 - [ ] 网络宿主、路径、MIME、字节数、数量、轮询与取消均有界；
 - [ ] 特殊 request/response/error/usage 有可执行 fixture；
+- [ ] 注册 OAuth 凭据已验证后续真实请求读取最新秘密修订版，401 恢复不切换账号、模型或协议；
 - [ ] 图片/视频/文件模型的 upload 和 operation 绑定可在 JSON 中解释；
 - [ ] `validate-all`、`fixture-check`、目标 crate 测试和 release gate 通过；
 - [ ] 修改随包 Manifest 后已同步提升/重建 `bundled-index.json`，文件集合、字节数、摘要、修订和引擎契约一致；

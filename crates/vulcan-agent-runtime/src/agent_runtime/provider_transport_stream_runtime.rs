@@ -16,10 +16,11 @@ use crate::agent_runtime::provider_transport_request_budget::{
     BudgetCheckedStreamingAdapter, ProviderBudgetRequest, ProviderRequestBudgetGuard,
 };
 use crate::agent_runtime::provider_transport_retry::{
-    ProviderRetryPolicy, provider_delta_makes_retry_unsafe,
+    ProviderRetryDecision, ProviderRetryPolicy, provider_delta_makes_retry_unsafe,
 };
 use crate::agent_runtime::provider_transport_stream_executor::StreamingRuntimeToolExecutor;
 use crate::agent_runtime::provider_transport_tool_context::PreparedHostToolRuntimeContext;
+use crate::agent_runtime::provider_transport_vulcan::OAUTH_CREDENTIAL_REFRESHED_SUBCATEGORY;
 use crate::agent_runtime::runtime_stream_intervention::RuntimePromptIntervention;
 use crate::agent_runtime::task_runtime::{TaskRuntime, build_task_execution_handler};
 use crate::agent_runtime::tool_request_stream::ToolRequestFragment;
@@ -29,6 +30,7 @@ use async_stream::stream;
 use serde_json::json;
 use std::collections::BTreeSet;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::task::AbortHandle;
 use vulcan_ai_contract::AiExecutionError;
@@ -199,12 +201,12 @@ where
             // retryResumesSeededInput 防止从已提交快照恢复后再次追加原始用户提示词。
             let mut retry_resumes_seeded_input = false;
             // retryRouteKey is captured once from the already-resolved execution. The concrete
-            // adapter factory is also fixed outside this loop, so retries replay the same protocol,
-            // endpoint, request projection, manifest revision, and route revision without invoking
-            // any resolver again (plan §13.5.1/§13.5.2).
-            // retryRouteKey 从已解析执行中仅捕获一次。具体适配器工厂同样固定在循环之外，
-            // 因而重试会重放相同协议、端点、请求投影、清单修订号与路由修订号，且不会再次
-            // 调用任何解析器（方案 §13.5.1/§13.5.2）。
+            // adapter factory is fixed outside this loop, so retries replay the same protocol,
+            // endpoint, request projection, manifest revision, route revision, and account
+            // reference; only the credential lease may re-read a newer secret revision.
+            // retryRouteKey 从已解析执行中仅捕获一次。具体适配器工厂固定在循环之外，
+            // 因而重试会重放相同协议、端点、请求投影、清单修订号、路由修订号与账号引用；
+            // 仅凭据租约可以重新读取更新的秘密修订版。
             let retry_route_key = route_identity;
             loop {
                 let (attempt_sender, mut attempt_receiver) =
@@ -501,10 +503,20 @@ where
                             }
                             break;
                         }
-                        // retryDecision is computed before request cleanup so superseded cards receive the exact retry terminal state.
-                        // retryDecision 会在请求清理前计算，使被替换卡片获得精确的重试终态。
-                        let retry_decision =
-                            retry_policy.next_retry(&error, completed_retries, unsafe_delta_seen);
+                        // retryDecision gives a completed OAuth refresh one mandatory same-route replay before consulting generic retry policy.
+                        // retryDecision 先为已完成的 OAuth 刷新提供一次强制同路由重放，再查询通用重试策略。
+                        let retry_decision = refreshed_oauth_credential_retry_decision(
+                            &error,
+                            completed_retries,
+                            unsafe_delta_seen,
+                        )
+                        .or_else(|| {
+                            retry_policy.next_retry(
+                                &error,
+                                completed_retries,
+                                unsafe_delta_seen,
+                            )
+                        });
                         abort_active_tool_request_streams(
                             &task_sender,
                             &mut active_tool_request_streams,
@@ -690,6 +702,55 @@ fn structured_provider_failure(
         | CoreError::ContextCompactionRequired { .. }
         | CoreError::ToolFailure { .. } => None,
     }
+}
+
+/// Builds one immediate retry only after the exact renewable account credential was refreshed.
+/// 仅在精确可续期账号凭据已经刷新后构建一次立即重试。
+///
+/// # Parameters
+/// 参数
+///
+/// `error` is the controller failure, `completed_retries` is the durable retry count before this
+/// decision, and `unsafe_delta_seen` reports whether replay could repeat visible semantic output
+/// or side effects.
+/// `error` 是控制器失败，`completed_retries` 是本次决策前的持久重试计数，
+/// `unsafe_delta_seen` 表示重放是否可能重复可见语义输出或副作用。
+///
+/// # Returns
+/// 返回值
+///
+/// A one-shot zero-delay decision independent of generic transport retry settings, or `None`.
+/// 返回独立于通用传输重试设置的单次零延迟决策，否则返回 `None`。
+fn refreshed_oauth_credential_retry_decision(
+    error: &CoreError,
+    completed_retries: u32,
+    unsafe_delta_seen: bool,
+) -> Option<ProviderRetryDecision> {
+    if unsafe_delta_seen {
+        return None;
+    }
+    // structured is the exact normalized error annotated after the OAuth refresh succeeds.
+    // structured 是 OAuth 刷新成功后标注的精确归一化错误。
+    let structured = structured_provider_failure(error)?;
+    if structured.http_status != Some(401)
+        || structured.subcategory.as_deref() != Some(OAUTH_CREDENTIAL_REFRESHED_SUBCATEGORY)
+        || !structured.retryable
+        || structured.semantic_output_observed
+        || structured.side_effect_observed
+        || structured.dispatch_outcome != vulcan_ai_contract::DispatchOutcome::Dispatched
+    {
+        return None;
+    }
+    // retryNumber follows the durable host retry sequence even when generic retries happened first.
+    // retryNumber 即使在通用重试已经发生后，也继续沿用宿主持久重试序列。
+    let retry_number = completed_retries.saturating_add(1);
+    Some(ProviderRetryDecision {
+        retry_number,
+        max_retries: retry_number,
+        unbounded: false,
+        delay: Duration::ZERO,
+        reason: String::from("OAuth credential refreshed after Provider HTTP 401"),
+    })
 }
 
 /// Reports whether one typed provider rejection permits a single compensating compaction.
@@ -965,6 +1026,54 @@ mod tests {
                 retry_after: None,
             })),
         }
+    }
+
+    /// Builds one typed 401 failure after the exact OAuth credential was refreshed.
+    /// 构建一个精确 OAuth 凭据已经刷新后的强类型 401 失败。
+    ///
+    /// # Returns
+    /// 返回值
+    ///
+    /// A dispatched replay-safe authentication failure carrying the host refresh marker.
+    /// 返回一个带宿主刷新标记、已分派且可安全重放的鉴权失败。
+    fn refreshed_oauth_failure() -> CoreError {
+        // failure reuses the complete structured fixture before replacing only authoritative facts.
+        // failure 复用完整结构化夹具，再仅替换权威事实。
+        let mut failure = context_window_failure();
+        let CoreError::ProviderFailure {
+            details: Some(details),
+            ..
+        } = &mut failure
+        else {
+            panic!("context-window fixture must retain structured provider details");
+        };
+        details.category = vulcan_ai_contract::AiErrorCategory::Authentication;
+        details.subcategory = Some(String::from(OAUTH_CREDENTIAL_REFRESHED_SUBCATEGORY));
+        details.http_status = Some(401);
+        details.retryable = true;
+        details.semantic_output_observed = false;
+        details.side_effect_observed = false;
+        failure
+    }
+
+    /// Verifies refreshed OAuth credentials receive one mandatory zero-delay same-route replay.
+    /// 验证已刷新的 OAuth 凭据会获得一次强制零延迟同路由重放。
+    #[test]
+    fn refreshed_oauth_credential_retry_is_independent_of_generic_policy() {
+        // failure is the exact adapter marker produced only after refresh succeeds.
+        // failure 是仅在刷新成功后由适配器产生的精确标记。
+        let failure = refreshed_oauth_failure();
+        // decision proves credential recovery does not depend on user transport retry settings.
+        // decision 证明凭据恢复不依赖用户传输重试设置。
+        let decision = refreshed_oauth_credential_retry_decision(&failure, 3, false)
+            .expect("refreshed OAuth credential should replay once");
+        assert_eq!(decision.retry_number, 4);
+        assert_eq!(decision.max_retries, 4);
+        assert_eq!(decision.delay, Duration::ZERO);
+        assert!(
+            refreshed_oauth_credential_retry_decision(&failure, 3, true).is_none(),
+            "visible semantic output must still block replay"
+        );
     }
 
     /// Verifies compensation requires typed overflow plus replay-safe stream facts.
