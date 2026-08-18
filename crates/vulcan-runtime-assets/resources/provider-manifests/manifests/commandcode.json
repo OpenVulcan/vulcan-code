@@ -1,7 +1,7 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "commandcode",
-  "revision": 7,
+  "revision": 8,
   "published_at": "2026-08-18T00:00:00Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
@@ -11,7 +11,9 @@
     ],
     "required_execution_primitives": [],
     "required_upload_primitives": [],
-    "required_transformers": []
+    "required_transformers": [
+      "delete_json_pointer"
+    ]
   },
   "display": {
     "name": "CommandCode",
@@ -645,6 +647,9 @@
       },
       "account_access_groups": [
         "opensource"
+      ],
+      "response_profile_refs": [
+        "commandcode.chat.reasoning-summary.v1"
       ]
     },
     {
@@ -2070,6 +2075,9 @@
       },
       "account_access_groups": [
         "opensource"
+      ],
+      "response_profile_refs": [
+        "commandcode.chat.encrypted-reasoning.v1"
       ]
     },
     {
@@ -2106,6 +2114,9 @@
       },
       "account_access_groups": [
         "opensource"
+      ],
+      "response_profile_refs": [
+        "commandcode.chat.encrypted-reasoning.v1"
       ]
     },
     {
@@ -2140,6 +2151,9 @@
       },
       "account_access_groups": [
         "opensource"
+      ],
+      "response_profile_refs": [
+        "commandcode.chat.reasoning-summary.v1"
       ]
     },
     {
@@ -2173,12 +2187,41 @@
       },
       "account_access_groups": [
         "opensource"
+      ],
+      "response_profile_refs": [
+        "commandcode.chat.reasoning-summary.v1"
       ]
     }
   ],
   "usage_profiles": [],
   "request_profiles": [],
-  "response_profiles": [],
+  "response_profiles": [
+    {
+      "profile_id": "commandcode.chat.reasoning-summary.v1",
+      "description": "Treat CommandCode Chat reasoning.summary fields as a replace-in-place transient status instead of durable reasoning.",
+      "payload": {
+        "profile_id": "commandcode.chat.reasoning-summary.v1",
+        "revision": 1,
+        "steps": [
+          {
+            "op": "delete_json_pointer",
+            "path": "/choices/0/delta/reasoning"
+          }
+        ],
+        "transient_reasoning_status": "summary"
+      }
+    },
+    {
+      "profile_id": "commandcode.chat.encrypted-reasoning.v1",
+      "description": "Expose opaque CommandCode reasoning only as a transient token progress status.",
+      "payload": {
+        "profile_id": "commandcode.chat.encrypted-reasoning.v1",
+        "revision": 1,
+        "steps": [],
+        "transient_reasoning_status": "encrypted"
+      }
+    }
+  ],
   "upload_channels": [],
   "operations": [],
   "tool_targets": [],

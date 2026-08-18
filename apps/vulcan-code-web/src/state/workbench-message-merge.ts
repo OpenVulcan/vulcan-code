@@ -64,6 +64,8 @@ export function workbenchDeltaConversationId(envelope: WorkbenchDeltaEnvelope): 
       return null;
     case "mediaUploadProgressChanged":
       return envelope.delta.payload.conversationId ?? null;
+    case "transientReasoningStatusChanged":
+      return envelope.delta.payload.conversationId;
   }
 }
 

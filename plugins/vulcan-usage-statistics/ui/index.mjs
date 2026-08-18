@@ -10,6 +10,18 @@ const MAX_DAILY_ROWS = 100;
 // MAX_RECENT_ATTEMPTS 限制单次面板渲染的物理请求证据数量。
 const MAX_RECENT_ATTEMPTS = 50;
 
+// CHART_COLORS maps stable model identities onto the inherited chart palette.
+// CHART_COLORS 将稳定模型身份映射到继承的图表调色板。
+const CHART_COLORS = ["var(--chart-1)", "var(--chart-2)", "var(--chart-3)", "var(--chart-4)", "var(--chart-5)", "var(--muted-foreground)"];
+
+// CHART_RANGE_DAYS keeps the restored daily trend aligned with the runtime projection window.
+// CHART_RANGE_DAYS 让恢复的每日趋势与运行时投影窗口保持一致。
+const CHART_RANGE_DAYS = 30;
+
+// TOOLTIP_DELAY_MS keeps chart details intentional instead of appearing during pointer transit.
+// TOOLTIP_DELAY_MS 让图表详情只在明确悬停后出现，避免指针经过时立即弹出。
+const TOOLTIP_DELAY_MS = 500;
+
 // DECIMAL_PRICE_PATTERN mirrors the host-validated plugin configuration contract.
 // DECIMAL_PRICE_PATTERN 镜像由宿主校验的插件配置契约。
 const DECIMAL_PRICE_PATTERN = /^(0|[1-9][0-9]*)(\.[0-9]+)?$/;
@@ -61,6 +73,18 @@ export function createPluginPanel(sdk) {
   // SelectControl is the shared host-themed combobox component.
   // SelectControl 是共享宿主主题下拉选择组件。
   const SelectControl = sdk.components.SelectControl;
+  // ActivityHeatmap is the shared host calendar activity heatmap.
+  // ActivityHeatmap 是共享宿主日历活动热力图。
+  const ActivityHeatmap = sdk.components.ActivityHeatmap;
+  // ActivityHeatmapLegend is the shared host activity intensity legend.
+  // ActivityHeatmapLegend 是共享宿主活动强度图例。
+  const ActivityHeatmapLegend = sdk.components.ActivityHeatmapLegend;
+  // TimeSeriesLineChart is the shared host responsive daily line chart.
+  // TimeSeriesLineChart 是共享宿主响应式每日折线图。
+  const TimeSeriesLineChart = sdk.components.TimeSeriesLineChart;
+  // ChartLegend is the shared host interactive model-line legend.
+  // ChartLegend 是共享宿主交互式模型折线图例。
+  const ChartLegend = sdk.components.ChartLegend;
   // EmptyState is the shared host empty-state component.
   // EmptyState 是共享宿主空状态组件。
   const EmptyState = sdk.components.EmptyState;
@@ -131,6 +155,158 @@ export function createPluginPanel(sdk) {
       return text("pricing.incomplete", "Incomplete Token facts");
     }
     return "—";
+  }
+
+  // interpolate replaces exact named locale placeholders without evaluating arbitrary templates.
+  // interpolate 替换精确命名的语言占位符，不执行任意模板。
+  function interpolate(value, fields) {
+    // output accumulates deterministic literal replacements.
+    // output 累积确定性的字面量替换。
+    let output = value;
+    for (const [key, fieldValue] of Object.entries(fields)) {
+      output = output.replaceAll(`{{${key}}}`, String(fieldValue));
+    }
+    return output;
+  }
+
+  // colorForSeries assigns one stable chart token to a series key.
+  // colorForSeries 为一个序列键分配稳定的图表 Token。
+  function colorForSeries(value) {
+    // hash is a deterministic unsigned FNV-1a projection of the series key.
+    // hash 是序列键的确定性无符号 FNV-1a 投影。
+    let hash = 2166136261;
+    // index advances over UTF-16 code units without locale-sensitive normalization.
+    // index 按 UTF-16 代码单元前进，不执行依赖语言环境的规范化。
+    for (let index = 0; index < value.length; index += 1) {
+      hash = Math.imul(hash ^ value.charCodeAt(index), 16777619);
+    }
+    return CHART_COLORS[(hash >>> 0) % CHART_COLORS.length];
+  }
+
+  // formatLocalDateKey converts one local Date into an ISO calendar key without UTC drift.
+  // formatLocalDateKey 将一个本地 Date 转换为无 UTC 偏移的 ISO 自然日键。
+  function formatLocalDateKey(date) {
+    // year is the local calendar year.
+    // year 是本地日历年。
+    const year = date.getFullYear();
+    // month is the zero-padded local calendar month.
+    // month 是补零后的本地日历月。
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    // day is the zero-padded local calendar day.
+    // day 是补零后的本地自然日。
+    const day = String(date.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  }
+
+  // localCalendarDates returns an inclusive ordered local-date range ending today.
+  // localCalendarDates 返回截至今天的有序本地自然日闭区间。
+  function localCalendarDates(days) {
+    // today is normalized to local midnight before date arithmetic.
+    // today 在日期运算前规范化到本地午夜。
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    // start is the first requested local calendar date.
+    // start 是请求的首个本地自然日。
+    const start = new Date(today);
+    start.setDate(start.getDate() - days + 1);
+    // dates accumulates every local date exactly once.
+    // dates 恰好一次累积每个本地日期。
+    const dates = [];
+    for (const cursor = new Date(start); cursor <= today; cursor.setDate(cursor.getDate() + 1)) {
+      dates.push(formatLocalDateKey(cursor));
+    }
+    return dates;
+  }
+
+  // buildHeatmapCells fills the shared calendar grid and derives five non-zero intensity bands.
+  // buildHeatmapCells 填充共享日历点阵并派生五级非零强度区间。
+  function buildHeatmapCells(rows) {
+    // rowsByDate maps exact ISO keys to complete daily activity facts.
+    // rowsByDate 将精确 ISO 键映射到完整每日活动事实。
+    const rowsByDate = new Map(rows.map((row) => [row.date, row]));
+    // nonZeroValues is the ordered population used for five quantile bands.
+    // nonZeroValues 是用于五个分位区间的有序非零总体。
+    const nonZeroValues = rows
+      .map((row) => numeric(row.value))
+      .filter((value) => value > 0)
+      .sort((left, right) => left - right);
+    // thresholds contains the inclusive 20%, 40%, 60%, 80%, and 100% cutoffs.
+    // thresholds 包含闭区间的 20%、40%、60%、80% 与 100% 阈值。
+    const thresholds = nonZeroValues.length === 0
+      ? []
+      : [1, 2, 3, 4, 5].map((level) => nonZeroValues[Math.ceil((nonZeroValues.length * level) / 5) - 1]);
+    return localCalendarDates(365).map((date) => {
+      // row is the complete aggregate for this date when activity exists.
+      // row 是存在活动时当前日期的完整聚合。
+      const row = rowsByDate.get(date);
+      // value is the exact daily total or zero for a missing aggregate row.
+      // value 是精确每日总量；缺失聚合行时为零。
+      const value = numeric(row?.value);
+      // intensity is the first inclusive quantile band containing the non-zero value.
+      // intensity 是包含该非零值的首个闭区间分位等级。
+      const thresholdIndex = value === 0 ? -1 : thresholds.findIndex((threshold) => value <= threshold);
+      const intensity = value === 0 ? 0 : thresholdIndex < 0 ? 5 : thresholdIndex + 1;
+      // requests is the exact physical request count used by the tooltip.
+      // requests 是提示中使用的精确真实请求数。
+      const requests = numeric(row?.requests);
+      // successes is the exact successful request count used by the tooltip.
+      // successes 是提示中使用的精确成功请求数。
+      const successes = numeric(row?.successes);
+      // successRate preserves the empty-day zero semantics without division by zero.
+      // successRate 保留空日期为零的语义，并避免除零。
+      const successRate = requests === 0 ? 0 : successes * 100 / requests;
+      // topModel is the provider/model pair returned by the authoritative daily projection.
+      // topModel 是权威每日投影返回的供应商/模型组合。
+      const topModel = row?.topModelName
+        ? `${row.topProviderName} / ${row.topModelName}`
+        : text("heatmap.noModel", "No model");
+      return {
+        date,
+        intensity,
+        label: interpolate(
+          text("heatmap.tooltip", "{{date}}: {{value}} tokens · {{requests}} requests · {{successRate}} success · {{model}}"),
+          {
+            date: new Intl.DateTimeFormat(sdk.locale, { month: "long", day: "numeric" }).format(new Date(`${date}T00:00:00`)),
+            model: topModel,
+            requests: formatInteger(requests),
+            successRate: `${successRate.toFixed(1)}%`,
+            value: formatInteger(value),
+          },
+        ),
+      };
+    });
+  }
+
+  // formatMonthLabel renders one ISO calendar date as a locale-aware short month.
+  // formatMonthLabel 将一个 ISO 自然日渲染为本地化短月份名称。
+  function formatMonthLabel(date) {
+    return new Intl.DateTimeFormat(sdk.locale, { month: "short" }).format(new Date(`${date}T00:00:00`));
+  }
+
+  // buildLineSeries aligns sparse model rows onto one shared 30-day local-date axis.
+  // buildLineSeries 将稀疏模型行对齐到共享的 30 天本地自然日横轴。
+  function buildLineSeries(rows) {
+    // dates is the complete fixed chart x-axis.
+    // dates 是完整的固定图表横轴。
+    const dates = localCalendarDates(CHART_RANGE_DAYS);
+    // groups accumulates exact values by stable series key and date.
+    // groups 按稳定序列键与日期累积精确数值。
+    const groups = new Map();
+    for (const row of rows) {
+      if (!groups.has(row.seriesKey)) {
+        groups.set(row.seriesKey, { label: row.label, values: new Map() });
+      }
+      // group is the exact series accumulator for one stable model identity.
+      // group 是一个稳定模型身份对应的精确序列累加器。
+      const group = groups.get(row.seriesKey);
+      group.values.set(row.date, numeric(row.value));
+    }
+    return Array.from(groups.entries()).map(([id, group]) => ({
+      id,
+      label: id === "other" ? text("other", "Other") : group.label,
+      color: colorForSeries(id),
+      points: dates.map((date) => ({ key: date, value: group.values.get(date) ?? 0 })),
+    }));
   }
 
   // summarizeDaily derives display-only KPIs from host-owned daily facts.
@@ -225,6 +401,9 @@ export function createPluginPanel(sdk) {
     // notice stores the latest successful maintenance result.
     // notice 保存最近一次维护成功结果。
     const [notice, setNotice] = React.useState("");
+    // hiddenSeries stores user-hidden model lines without changing persisted statistics.
+    // hiddenSeries 保存用户隐藏的模型折线，且不修改持久化统计。
+    const [hiddenSeries, setHiddenSeries] = React.useState(() => new Set());
     // mountedRef prevents a completed host action from mutating an unmounted plugin node.
     // mountedRef 防止已完成宿主 Action 修改已经卸载的插件节点。
     const mountedRef = React.useRef(true);
@@ -344,6 +523,18 @@ export function createPluginPanel(sdk) {
       }
     }, [clearBusy, clearPreview]);
 
+    // toggleSeries changes only local chart visibility and never reloads statistics.
+    // toggleSeries 仅改变本地图表可见性，绝不重新加载统计。
+    const toggleSeries = React.useCallback((id) => {
+      setHiddenSeries((current) => {
+        // next is an immutable visibility-set update.
+        // next 是不可变的可见性集合更新。
+        const next = new Set(current);
+        if (next.has(id)) next.delete(id); else next.add(id);
+        return next;
+      });
+    }, []);
+
     React.useEffect(() => {
       mountedRef.current = true;
       // The initial read bypasses the overlap guard because loading starts true.
@@ -411,6 +602,18 @@ export function createPluginPanel(sdk) {
     // summary is a display-only projection over already persisted host facts.
     // summary 是对已持久化宿主事实的纯展示投影。
     const summary = summarizeDaily(filteredDaily);
+    // heatmapCells contains the complete aligned 365-day activity grid.
+    // heatmapCells 包含完整对齐的 365 天活动点阵。
+    const heatmapCells = buildHeatmapCells(dashboard?.heatmap ?? []);
+    // allSeries contains every runtime-projected model line.
+    // allSeries 包含运行时投影的全部模型折线。
+    const allSeries = buildLineSeries(dashboard?.series ?? []);
+    // visibleSeries excludes locally hidden lines without changing the action result.
+    // visibleSeries 排除本地隐藏折线，但不改变 Action 结果。
+    const visibleSeries = allSeries.filter((series) => !hiddenSeries.has(series.id));
+    // legendItems projects every line into the shared visibility control model.
+    // legendItems 将全部折线投影为共享可见性控件模型。
+    const legendItems = allSeries.map((series) => ({ ...series, visible: !hiddenSeries.has(series.id) }));
 
     return h("section", { className: "full-height settings-detail-panel plugin-statistics-layout" },
       h("div", { className: "plugin-statistics-header" },
@@ -542,6 +745,40 @@ export function createPluginPanel(sdk) {
             value: summary.usageCoverage === null ? "—" : `${summary.usageCoverage.toFixed(1)}%`,
             detail: text("summary.usageCoverageDetail", "Directly Provider-reported"),
           }),
+        ),
+        h("article", { className: "plugin-statistics-card" },
+          h("div", { className: "plugin-statistics-section-header" },
+            h("strong", null, text("heatmap.title", "Activity heatmap")),
+            h(ActivityHeatmapLegend, {
+              lowLabel: text("heatmap.less", "Less"),
+              highLabel: text("heatmap.more", "More"),
+            }),
+          ),
+          h("div", { className: "plugin-statistics-chart-wrap" },
+            h(ActivityHeatmap, {
+              ariaLabel: text("heatmap.aria", "Token activity heatmap for the last 365 days"),
+              cells: heatmapCells,
+              emptyLabel: text("heatmap.empty", "No token activity yet"),
+              formatMonth: formatMonthLabel,
+              tooltipDelayMs: TOOLTIP_DELAY_MS,
+            }),
+          ),
+        ),
+        h("article", { className: "plugin-statistics-card" },
+          h("div", { className: "plugin-statistics-section-header" },
+            h("strong", null, text("trend.title", "Daily token usage")),
+            h(Badge, { variant: "outline" }, text("trend.range", "Last 30 days")),
+          ),
+          h("div", { className: "plugin-statistics-chart-wrap" },
+            h(TimeSeriesLineChart, {
+              ariaLabel: text("trend.aria", "Daily token usage line chart grouped by model"),
+              emptyLabel: text("trend.empty", "No trend data in this range"),
+              formatValue: formatInteger,
+              series: visibleSeries,
+              tooltipDelayMs: TOOLTIP_DELAY_MS,
+            }),
+          ),
+          h(ChartLegend, { items: legendItems, onToggle: toggleSeries }),
         ),
         h("article", { className: "plugin-statistics-card" },
           h("div", { className: "plugin-statistics-section-header" },

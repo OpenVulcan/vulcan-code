@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "opencode-go",
-  "revision": 1,
-  "published_at": "2026-08-13T00:00:00Z",
+  "revision": 2,
+  "published_at": "2026-08-18T00:00:00Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -55,6 +55,7 @@
           { "model_id": "glm-5", "display_name": "GLM-5" },
           { "model_id": "glm-5.1", "display_name": "GLM-5.1" },
           { "model_id": "glm-5.2", "display_name": "GLM-5.2" },
+          { "model_id": "glm-5.3", "display_name": "GLM-5.3" },
           { "model_id": "gpt-5.6-luna", "display_name": "GPT-5.6 Luna" },
           { "model_id": "grok-4.5", "display_name": "Grok 4.5" },
           { "model_id": "hy3", "display_name": "Hy3" },
@@ -158,6 +159,7 @@
             "glm-5",
             "glm-5.1",
             "glm-5.2",
+            "glm-5.3",
             "hy3",
             "kimi-k2.5",
             "kimi-k2.6",
@@ -276,6 +278,21 @@
         "context_limit": 1000000,
         "output_limit": 131072,
         "evidence_revision": "models.dev.opencode-go.2026-08-13"
+      }
+    },
+    {
+      "rule_id": "glm-5-3",
+      "display_name": "GLM-5.3",
+      "scope": { "service_entry_ids": [], "credential_profile_ids": [] },
+      "matcher": { "kind": "exact", "value": "glm-5.3" },
+      "supported_protocols": ["openai-chat-completions.v1"],
+      "selected_protocol": "openai-chat-completions.v1",
+      "capabilities": {
+        "reasoning_control": "effort_selection",
+        "reasoning_efforts": ["high", "max"],
+        "context_limit": 1000000,
+        "output_limit": 131072,
+        "evidence_revision": "opencode-go.glm-5.3.user-confirmed.2026-08-18"
       }
     },
     {

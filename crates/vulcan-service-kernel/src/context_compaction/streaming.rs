@@ -4,7 +4,8 @@
 use super::*;
 use crate::{
     ActiveStreamTaskRegistrationMode, ProviderTelemetryHookGuard, Uuid,
-    seal_stream_content_records, spawn_registered_active_stream_task_with_mode,
+    emit_transient_reasoning_status, seal_stream_content_records,
+    spawn_registered_active_stream_task_with_mode,
 };
 
 /// Streams one prompt-compaction request and mirrors provider deltas into WebUI state.
@@ -401,6 +402,9 @@ pub(crate) async fn apply_webui_context_compaction_stream_event(
             StreamContentKind::Thinking,
             &delta,
         ),
+        ExecutionStreamEvent::TransientReasoningStatusChanged { status, .. } => {
+            emit_transient_reasoning_status(app, state, session_id, status)
+        }
         ExecutionStreamEvent::ThinkingCompleted { .. } => {
             complete_streaming_thinking_phase(app, state, session_id, record_ids)
         }

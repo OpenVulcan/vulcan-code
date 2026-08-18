@@ -4,6 +4,7 @@ import type { TranslationKey } from "@/i18n"
 import type { PublicAiAccountUsageWindow, PublicAiCredentialProfile } from "@/types"
 
 import {
+  commandCodeUsageRows,
   commandCodeUsageWindowLabel,
   formatCurrencyAmount,
   credentialUsageIsNonPlanAccount,
@@ -129,6 +130,27 @@ describe("kimiUsageWindowLabel", () => {
 })
 
 describe("CommandCode usage presentation", () => {
+  // Verifies stable credit windows are separated from provider response ordering for the compact layout.
+  // 验证稳定额度窗口与供应商响应顺序分离，以支持紧凑布局。
+  it("groups monthly, purchased, and free credits into fixed display positions", () => {
+    const rows = commandCodeUsageRows([
+      kimiUsageWindow("free-credits"),
+      kimiUsageWindow("weekly-requests"),
+      kimiUsageWindow("monthly-credits"),
+      kimiUsageWindow("purchased-credits"),
+    ])
+
+    expect(rows?.monthly?.id).toBe("monthly-credits")
+    expect(rows?.purchased?.id).toBe("purchased-credits")
+    expect(rows?.free?.id).toBe("free-credits")
+  })
+
+  // Verifies unsupported or request-only windows do not create an invented credit row.
+  // 验证不支持或仅请求类窗口不会创建虚构的额度行。
+  it("returns no credit layout when no credit windows are present", () => {
+    expect(commandCodeUsageRows([kimiUsageWindow("weekly-requests")])).toBeNull()
+  })
+
   // Verifies stable credit-window identifiers are localized independently from provider wire text.
   // 验证稳定额度窗口标识独立于供应商 Wire 文案完成本地化。
   it("localizes known credit and request windows", () => {

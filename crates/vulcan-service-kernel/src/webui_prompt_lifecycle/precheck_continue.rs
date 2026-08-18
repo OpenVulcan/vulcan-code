@@ -846,7 +846,7 @@ pub(crate) fn spawn_webui_prompt_prepare_continue_task(
                 eprintln!(
                     "[webui-service] continue WebUI prompt after preparation failed: {error}"
                 );
-                if let Err(cleanup_error) = mark_webui_prompt_preparation_failed(
+                let cleanup_succeeded = match mark_webui_prompt_preparation_failed(
                     &app,
                     &state,
                     &controller_runtime,
@@ -857,9 +857,49 @@ pub(crate) fn spawn_webui_prompt_prepare_continue_task(
                 )
                 .await
                 {
-                    eprintln!(
-                        "[webui-service] cleanup failed WebUI prompt preparation failed: {cleanup_error}"
-                    );
+                    Ok(()) => true,
+                    Err(cleanup_error) => {
+                        eprintln!(
+                            "[webui-service] cleanup failed WebUI prompt preparation failed: {cleanup_error}"
+                        );
+                        false
+                    }
+                };
+                if cleanup_succeeded {
+                    // Failure cleanup closes the former turn; explicitly guided queued work must receive a new dispatch chance.
+                    // 失败清理会闭合旧回合；已显式引导的排队工作必须获得新的分发机会。
+                    let started_mailbox_turn = match maybe_start_webui_mailbox_turn_if_ready(
+                        &app,
+                        &state,
+                        &controller_runtime,
+                        &agent_runtime,
+                        session_id,
+                    )
+                    .await
+                    {
+                        Ok(started) => started,
+                        Err(dispatch_error) => {
+                            eprintln!(
+                                "[webui-service] resume mailbox after preparation failure failed: {dispatch_error}"
+                            );
+                            false
+                        }
+                    };
+                    if !started_mailbox_turn
+                        && let Err(dispatch_error) = maybe_prepare_next_webui_pending_prompt(
+                            &app,
+                            &state,
+                            &controller_runtime,
+                            &agent_runtime,
+                            session_id,
+                            true,
+                        )
+                        .await
+                    {
+                        eprintln!(
+                            "[webui-service] resume guided prompt after preparation failure failed: {dispatch_error}"
+                        );
+                    }
                 }
             }
         }

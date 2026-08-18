@@ -162,6 +162,49 @@ fn loaded_runtime_state_drops_process_scoped_precheck_latch() {
     assert!(runtime_state.active_precheck_turn_id.is_none());
 }
 
+/// Verifies restart sanitization turns stale guided rows back into user-controlled ready rows.
+/// 验证重启清理会把陈旧引导行恢复为用户可控的就绪行。
+#[test]
+fn loaded_runtime_state_restores_process_scoped_guided_prompt_latches() {
+    let panel_entry = crate::model::PendingPromptPanelEntry {
+        id: String::from("panel-guided"),
+        prompt: String::from("continue"),
+        hidden_model_guidance: None,
+        preview: String::from("continue"),
+        attachments: Vec::new(),
+        model_reference: None,
+        runtime_options: crate::model::PendingPromptRuntimeOptions::default(),
+        state: crate::model::PendingPromptPanelEntryState::Inserted,
+        created_at: String::from("100"),
+    };
+    let linked_internal_entry = crate::model::PendingSessionPromptEntry {
+        id: String::from("internal-guided"),
+        prompt: String::from("continue"),
+        hidden_model_guidance: None,
+        preview: String::from("continue"),
+        attachments: Vec::new(),
+        model_reference: None,
+        runtime_options: crate::model::PendingPromptRuntimeOptions::default(),
+        source: crate::model::PendingSessionPromptSource::UserInterrupt,
+        task_id: None,
+        panel_entry_id: Some(String::from("panel-guided")),
+        created_at: String::from("101"),
+    };
+    let mut runtime_state = SessionRuntimeStateEntry::default();
+    runtime_state.ui_state.pending_prompt_panel_queue = vec![panel_entry];
+    runtime_state.ui_state.pending_prompt_queue = vec![linked_internal_entry];
+
+    let changed = sanitize_loaded_runtime_state_for_fresh_process(&mut runtime_state)
+        .expect("runtime state guided-prompt sanitization should succeed");
+
+    assert!(changed);
+    assert!(runtime_state.ui_state.pending_prompt_queue.is_empty());
+    assert_eq!(
+        runtime_state.ui_state.pending_prompt_panel_queue[0].state,
+        crate::model::PendingPromptPanelEntryState::Ready
+    );
+}
+
 /// Verifies legacy top-level usage becomes audit-only ledger evidence and is not written again.
 /// 验证旧版顶层用量会转为账本仅审计证据且不会再次写出。
 #[test]

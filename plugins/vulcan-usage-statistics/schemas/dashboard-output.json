@@ -12,6 +12,14 @@
       "maxItems": 500,
       "items": { "$ref": "#/$defs/dailySummary" }
     },
+    "heatmap": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/heatmapCell" }
+    },
+    "series": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/seriesPoint" }
+    },
     "recentAttempts": {
       "type": "array",
       "maxItems": 200,
@@ -30,6 +38,8 @@
     "healthStatus",
     "pricingCatalog",
     "daily",
+    "heatmap",
+    "series",
     "recentAttempts",
     "accounts"
   ],
@@ -112,6 +122,30 @@
         "pricingSourceId",
         "aggregateRevision"
       ],
+      "additionalProperties": false
+    },
+    "heatmapCell": {
+      "type": "object",
+      "properties": {
+        "date": { "type": "string", "format": "date" },
+        "value": { "type": "integer", "minimum": 0 },
+        "requests": { "type": "integer", "minimum": 0 },
+        "successes": { "type": "integer", "minimum": 0 },
+        "topProviderName": { "$ref": "#/$defs/nullableString" },
+        "topModelName": { "$ref": "#/$defs/nullableString" }
+      },
+      "required": ["date", "value", "requests", "successes", "topProviderName", "topModelName"],
+      "additionalProperties": false
+    },
+    "seriesPoint": {
+      "type": "object",
+      "properties": {
+        "date": { "type": "string", "format": "date" },
+        "seriesKey": { "type": "string", "minLength": 1 },
+        "label": { "type": "string", "minLength": 1 },
+        "value": { "type": "integer", "minimum": 0 }
+      },
+      "required": ["date", "seriesKey", "label", "value"],
       "additionalProperties": false
     },
     "billingDetail": {

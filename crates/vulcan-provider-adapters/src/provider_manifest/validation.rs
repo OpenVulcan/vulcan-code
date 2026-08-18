@@ -8323,6 +8323,7 @@ mod tests {
                                 field: String::from("model_id"),
                             },
                         ],
+                        transient_reasoning_status: None,
                     },
                 ),
             },

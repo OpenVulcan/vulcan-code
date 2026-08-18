@@ -852,6 +852,9 @@ pub(super) fn sanitize_loaded_runtime_state_for_fresh_process(
 ) -> Result<bool, String> {
     let mut changed = runtime_state.migrate_legacy_provider_usage_summaries()?;
     changed |= runtime_state.active_precheck_turn_id.take().is_some();
+    // Guided queue ownership is process-local; restart restores visible rows instead of retaining a dead inserted latch.
+    // 引导队列所有权属于进程级状态；重启时恢复可见行，不能保留失效的已插入闩锁。
+    changed |= restore_guided_pending_prompts_for_fresh_process(&mut runtime_state.ui_state);
     let completed_at_ms = current_unix_millis_text()
         .parse::<i64>()
         .map_err(|error| format!("解析宿主生成的 Unix 毫秒时间失败：{error}"))?;

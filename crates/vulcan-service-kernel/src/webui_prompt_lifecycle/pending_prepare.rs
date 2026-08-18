@@ -5,7 +5,8 @@ use super::*;
 use crate::{
     conversation_submission::effective_pending_prompt_reasoning_effort,
     ensure_webui_goal_session_kernel_turn_start_allowed, prepare_submission_media,
-    start_webui_goal_session_kernel_turn,
+    project_conversation_services::try_begin_pending_prompt_dispatch_exclusion,
+    start_reserved_webui_session_kernel_user_turn, start_webui_goal_session_kernel_turn,
 };
 
 /// Prepares and dispatches the next queued WebUI pending prompt when the session is idle.
@@ -156,6 +157,24 @@ pub(crate) async fn maybe_prepare_next_webui_pending_prompt(
             } => break (source, goal_dispatch_version),
         }
     };
+    // User-authored queued work needs one process-local admission owner across media preparation and Hook setup.
+    // 用户编写的排队工作在媒体准备与 Hook 设置期间必须只有一个进程内准入所有者。
+    let pending_prompt_dispatch_guard = if next_source.persists_canonical_user_message() {
+        let Some(guard) = try_begin_pending_prompt_dispatch_exclusion(state, session_id)? else {
+            webui_trace(
+                "pending_prompt_prepare_admission_busy",
+                format!("session={session_id} next_source={next_source:?}"),
+            );
+            return Ok(false);
+        };
+        Some(guard)
+    } else {
+        None
+    };
+    let pending_prompt_dispatch_authorization = pending_prompt_dispatch_guard
+        .as_ref()
+        .map(|guard| guard.existing_submission_authorization(session_id))
+        .transpose()?;
     let Some(session_title) = workspace_snapshot
         .sessions
         .iter()
@@ -168,7 +187,7 @@ pub(crate) async fn maybe_prepare_next_webui_pending_prompt(
         );
         return Ok(false);
     };
-    let Some(entry) =
+    let Some(mut entry) =
         take_next_webui_pending_prompt(&mut workspace_snapshot, session_id, priority_override)
     else {
         webui_trace(
@@ -179,6 +198,9 @@ pub(crate) async fn maybe_prepare_next_webui_pending_prompt(
         );
         return Ok(false);
     };
+    // A queued interrupt reaches this path only after no active run remains, so it now owns a new user turn.
+    // 排队插队消息只有在活动运行已结束后才会进入此路径，因此此时应拥有新的用户回合。
+    entry.source = entry.source.for_idle_dispatch();
     webui_trace(
         "pending_prompt_prepare_start",
         format!(
@@ -320,12 +342,21 @@ pub(crate) async fn maybe_prepare_next_webui_pending_prompt(
             &mut hook_runtime,
             prompt_turn_begin_input,
         )?;
-        start_webui_session_kernel_turn(
-            &mut guard,
-            session_id,
-            &precheck_start.preparation_turn_id,
-            ActiveTurnKind::UserPrompt,
-        )?;
+        if let Some(authorization) = pending_prompt_dispatch_authorization {
+            start_reserved_webui_session_kernel_user_turn(
+                &mut guard,
+                session_id,
+                &precheck_start.preparation_turn_id,
+                authorization.reservation_id,
+            )?;
+        } else {
+            start_webui_session_kernel_turn(
+                &mut guard,
+                session_id,
+                &precheck_start.preparation_turn_id,
+                ActiveTurnKind::UserPrompt,
+            )?;
+        }
         precheck_start
     };
     apply_webui_prompt_begin_outer_steps(

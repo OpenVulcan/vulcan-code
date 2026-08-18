@@ -439,6 +439,30 @@ mod tests {
             ),
             Err("ERR_CONVERSATION_CONTINUE_SESSION_BUSY")
         );
+
+        let mut staged_state = eligible_runtime_state();
+        staged_state.ui_state.pending_prompt_panel_queue.push(
+            vulcan_workbench_model::PendingPromptPanelEntry {
+                id: String::from("staged-1"),
+                prompt: String::from("user-controlled draft"),
+                hidden_model_guidance: None,
+                preview: String::from("user-controlled draft"),
+                attachments: Vec::new(),
+                model_reference: None,
+                runtime_options: Default::default(),
+                state: vulcan_workbench_model::PendingPromptPanelEntryState::Ready,
+                created_at: String::from("1002"),
+            },
+        );
+        assert_eq!(
+            resolve_session_continuation_eligibility(
+                &staged_state,
+                SessionRunPhase::Failed,
+                SessionContinuationRuntimeBlockers::default(),
+                None,
+            ),
+            Ok(())
+        );
     }
 
     /// Verifies client revisions and the persisted canonical tail cannot drift independently.

@@ -2832,7 +2832,6 @@
                 "purchased-credits"
               ]
             },
-            "key_prefix": "user_",
             "default_usage_scopes": [
               "interactive_agent"
             ]
@@ -2947,7 +2946,6 @@
                 "purchased-credits"
               ]
             },
-            "key_prefix": "user_",
             "default_usage_scopes": [
               "interactive_agent"
             ]

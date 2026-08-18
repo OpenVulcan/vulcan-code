@@ -2,7 +2,9 @@ import React from "react";
 import {
   ConversationLiveStreamStore,
   type ConversationLiveStreamRevision,
+  transientReasoningStatusKey,
 } from "./conversation-live-stream-store";
+import type { TransientReasoningStatus } from "@/types";
 
 // ConversationLiveStreamContext carries one stable Store identity through the Workbench tree.
 // ConversationLiveStreamContext 在 Workbench 树中传递单个稳定 Store 身份。
@@ -66,6 +68,36 @@ export function useConversationLiveStreamRevision(
   const getSnapshot = React.useCallback(
     () => (key ? store.getRevision(key) : null),
     [key, store],
+  );
+  return React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+}
+
+// useConversationTransientReasoningStatus subscribes to one ephemeral reasoning status line.
+// useConversationTransientReasoningStatus 订阅单条瞬态推理状态行。
+// Parameters: conversationId is the exact conversation identity, or null to disable the subscription.
+// 参数：conversationId 是精确会话身份；为 null 时禁用订阅。
+// Returns: the latest replace-in-place status, or null after it is cleared.
+// 返回值：最新原地替换式状态；清除后返回 null。
+export function useConversationTransientReasoningStatus(
+  conversationId: string | null,
+): TransientReasoningStatus | null {
+  // store owns the request-local value outside the global React snapshot.
+  // store 在全局 React 快照之外持有请求局部值。
+  const store = useConversationLiveStreamStore();
+  // key isolates the exact conversation status subscription.
+  // key 隔离精确的会话状态订阅。
+  const key = conversationId ? transientReasoningStatusKey(conversationId) : null;
+  // subscribe attaches React only to this request-local status key.
+  // subscribe 仅将 React 连接到当前请求局部状态键。
+  const subscribe = React.useCallback(
+    (listener: () => void) => (key ? store.subscribe(key, listener) : () => {}),
+    [key, store],
+  );
+  // getSnapshot reads the latest replacement value synchronously.
+  // getSnapshot 同步读取最新替换值。
+  const getSnapshot = React.useCallback(
+    () => (conversationId ? store.getTransientReasoningStatus(conversationId) : null),
+    [conversationId, store],
   );
   return React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }

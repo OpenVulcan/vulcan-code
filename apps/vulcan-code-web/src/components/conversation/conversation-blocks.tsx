@@ -39,6 +39,7 @@ import {
 } from "@/components/conversation/conversation-metadata";
 import { formatWorkProcessDuration } from "@/components/conversation/conversation-timeline";
 import { TurnStatsTooltipCard } from "@/components/conversation/conversation-turn-stats-card";
+import type { TransientReasoningStatus } from "@/types";
 
 // ConversationDisplayBlock contains the transcript fields needed by extracted display blocks.
 // ConversationDisplayBlock 包含已拆分展示块所需的转录字段。
@@ -543,6 +544,46 @@ export function TurnStatsBlock(props: {
         />
       </TooltipContent>
     </Tooltip>
+  );
+}
+
+// TransientReasoningStatusLine renders one non-persistent timeline-tail status with the shared shimmer effect.
+// TransientReasoningStatusLine 使用共享闪字效果渲染单条非持久化时间线尾部状态。
+// Parameters: status is the latest replace-in-place summary or encrypted reasoning progress.
+// 参数：status 是最新原地替换式摘要或加密推理进度。
+// Returns: one polite live-region line that disappears when its Store value is cleared.
+// 返回值：一条在 Store 值清除后消失的礼貌实时区域状态行。
+export function TransientReasoningStatusLine(props: {
+  // Latest request-local transient status.
+  // 最新请求局部瞬态状态。
+  status: TransientReasoningStatus;
+}) {
+  // locale and t format the status through the active interface language.
+  // locale 与 t 使用当前界面语言格式化状态。
+  const { locale, t } = useI18n();
+  // summary is readable only for the explicit summary presentation mode.
+  // summary 仅在显式摘要展示模式下可读。
+  const summary = props.status.kind === "summary" ? props.status.text?.trim() : null;
+  // label falls back to the generic thinking state until readable text arrives.
+  // label 在可读文本到达前回退为通用思考状态。
+  const label = summary || t("runtime.thinking");
+  // tokenSuffix is omitted when the provider exposes no dynamic reasoning count.
+  // tokenSuffix 在供应商未公开动态推理计数时省略。
+  const tokenSuffix = typeof props.status.reasoningTokens === "number"
+    ? t("runtime.thinkingTokenCount").replace(
+        "{count}",
+        new Intl.NumberFormat(locale).format(props.status.reasoningTokens),
+      )
+    : "";
+  return (
+    <div
+      aria-busy="true"
+      aria-live="polite"
+      className="tool-execution-row transient-reasoning-status-line"
+      data-reasoning-status-kind={props.status.kind}
+    >
+      <span className="shimmer">{label}{tokenSuffix}</span>
+    </div>
   );
 }
 

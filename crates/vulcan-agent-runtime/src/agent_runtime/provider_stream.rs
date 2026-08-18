@@ -1,8 +1,9 @@
 //! Shared provider-stream channel types reused by the executor, transport adapters, and protocol bridge helpers.
 //! 供执行器、传输适配器与协议桥接辅助逻辑复用的共享 Provider 流式通道类型。
 
-use crate::agent_runtime::events::ProviderRequestDurabilityCompletion;
-use crate::agent_runtime::events::RuntimeEvent;
+use crate::agent_runtime::events::{
+    ProviderRequestDurabilityCompletion, RuntimeEvent, TransientReasoningStatus,
+};
 use crate::agent_runtime::tool_request_stream::ToolRequestFragment;
 use crate::conversation_protocol::SessionConversationState;
 use futures_util::Stream;
@@ -79,6 +80,9 @@ pub(crate) enum ProviderStreamDelta {
     /// Assistant thinking delta returned by the provider stream.
     /// Provider 流返回的助手思考增量。
     Thinking(String),
+    /// Replace-in-place reasoning status that must never become transcript content.
+    /// 必须绝不成为转录正文的原地替换式推理状态。
+    TransientReasoningStatusChanged(Option<TransientReasoningStatus>),
     /// Assistant final-output delta returned by the provider stream.
     /// Provider 流返回的助手正式输出增量。
     Output(String),

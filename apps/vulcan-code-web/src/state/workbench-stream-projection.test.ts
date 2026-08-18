@@ -62,4 +62,20 @@ describe("workbench stream projection", () => {
       streamState: "active",
     }))).toBe(true);
   });
+
+  it("keeps transient reasoning status out of global React workbench state", () => {
+    expect(workbenchEnvelopeRequiresReactProjection({
+      generation: 5,
+      delta: {
+        kind: "transientReasoningStatusChanged",
+        payload: {
+          conversationId: "conversation",
+          status: {
+            kind: "encrypted",
+            reasoningTokens: 144,
+          },
+        },
+      },
+    })).toBe(false);
+  });
 });

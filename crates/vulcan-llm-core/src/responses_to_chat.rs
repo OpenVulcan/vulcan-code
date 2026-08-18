@@ -193,11 +193,7 @@ fn append_input_item(item: &Value, messages: &mut Vec<Value>) -> Result<(), LlmC
                 .ok_or_else(|| LlmCoreError::new("Responses function_call is missing name."))?;
             let arguments =
                 json_string(item.get("arguments").unwrap_or(&Value::Object(Map::new())));
-            messages.push(json!({
-                "role": "assistant",
-                "content": null,
-                "tool_calls": [{"id": call_id, "type": "function", "function": {"name": name, "arguments": arguments}}]
-            }));
+            append_chat_function_call(messages, call_id, name, arguments)?;
         }
         "function_call_output" => {
             let call_id = item.get("call_id").and_then(Value::as_str).ok_or_else(|| {
@@ -237,6 +233,63 @@ fn append_input_item(item: &Value, messages: &mut Vec<Value>) -> Result<(), LlmC
             )));
         }
     }
+    Ok(())
+}
+
+/// Appends one Responses function call to the current Chat assistant turn.
+/// 将一个 Responses 函数调用追加到当前 Chat assistant 回合。
+///
+/// Adjacent Responses function-call items belong to one assistant turn. OpenAI Chat requires all
+/// parallel calls to remain in that single assistant message before their tool-result messages.
+/// 相邻的 Responses 函数调用条目属于同一个 assistant 回合。OpenAI Chat 要求所有并行调用在
+/// 对应工具结果消息之前保留于同一条 assistant 消息中。
+///
+/// # Parameters
+/// # 参数
+/// - `messages`: Chat messages already projected from the ordered Responses input.
+/// - `messages`：已经从有序 Responses 输入投影出的 Chat 消息。
+/// - `call_id`: Stable tool-call identity returned by the model.
+/// - `call_id`：模型返回的稳定工具调用标识。
+/// - `name`: Registered function name.
+/// - `name`：已注册的函数名称。
+/// - `arguments`: JSON-encoded function arguments.
+/// - `arguments`：JSON 编码后的函数参数。
+///
+/// # Returns
+/// # 返回值
+/// Returns success after appending to the adjacent assistant message, or an error when the existing
+/// `tool_calls` field has an invalid shape.
+/// 成功追加到相邻 assistant 消息后返回成功；既有 `tool_calls` 字段结构无效时返回错误。
+fn append_chat_function_call(
+    messages: &mut Vec<Value>,
+    call_id: &str,
+    name: &str,
+    arguments: String,
+) -> Result<(), LlmCoreError> {
+    let tool_call = json!({
+        "id": call_id,
+        "type": "function",
+        "function": {"name": name, "arguments": arguments}
+    });
+    if let Some(message) = messages.last_mut()
+        && message.get("role").and_then(Value::as_str) == Some("assistant")
+    {
+        let message = message
+            .as_object_mut()
+            .ok_or_else(|| LlmCoreError::new("Chat assistant message must be an object."))?;
+        let tool_calls = message
+            .entry("tool_calls")
+            .or_insert_with(|| Value::Array(Vec::new()))
+            .as_array_mut()
+            .ok_or_else(|| LlmCoreError::new("Chat assistant tool_calls must be an array."))?;
+        tool_calls.push(tool_call);
+        return Ok(());
+    }
+    messages.push(json!({
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [tool_call]
+    }));
     Ok(())
 }
 

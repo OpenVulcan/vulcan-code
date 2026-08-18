@@ -292,3 +292,32 @@ pub fn clear_internal_pending_prompt_queue_and_restore_panel(
     }
     changed
 }
+
+/// Restores process-scoped guided prompt rows while preserving host-owned hidden queue entries.
+/// 恢复进程级引导提示词行，同时保留宿主持有的隐藏队列项。
+///
+/// # Parameters
+/// 参数
+/// `ui_state` owns the persisted visible panel and internal pending queues.
+/// `ui_state` 持有持久化的可见面板队列与内部待发送队列。
+///
+/// # Returns
+/// 返回值
+/// Whether any linked internal entry or stale inserted marker was repaired.
+/// 是否修复了任何关联内部项或陈旧的已插入标记。
+pub fn restore_guided_pending_prompts_for_fresh_process(
+    ui_state: &mut SessionTranscriptUiState,
+) -> bool {
+    let internal_len_before = ui_state.pending_prompt_queue.len();
+    ui_state
+        .pending_prompt_queue
+        .retain(|entry| entry.panel_entry_id.is_none());
+    let mut changed = ui_state.pending_prompt_queue.len() != internal_len_before;
+    for panel_entry in &mut ui_state.pending_prompt_panel_queue {
+        if panel_entry.state == PendingPromptPanelEntryState::Inserted {
+            panel_entry.state = PendingPromptPanelEntryState::Ready;
+            changed = true;
+        }
+    }
+    changed
+}

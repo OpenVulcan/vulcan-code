@@ -878,6 +878,7 @@ pub(crate) fn execution_stream_event_session_id(event: &ExecutionStreamEvent) ->
         | ExecutionStreamEvent::ProviderLoweringRepair { session_id, .. }
         | ExecutionStreamEvent::RequestStarted { session_id }
         | ExecutionStreamEvent::ThinkingDelta { session_id, .. }
+        | ExecutionStreamEvent::TransientReasoningStatusChanged { session_id, .. }
         | ExecutionStreamEvent::ThinkingCompleted { session_id }
         | ExecutionStreamEvent::OutputDelta { session_id, .. }
         | ExecutionStreamEvent::RuntimeEvent { session_id, .. }

@@ -113,6 +113,67 @@ impl StreamContentKind {
     }
 }
 
+/// Emits one transient reasoning status without mutating transcript or retry state.
+/// 发送一条瞬态推理状态，且不修改转录或重试状态。
+///
+/// # Parameters
+/// 参数
+/// `app` emits the lightweight event, `state` owns generation ordering, `session_id` selects the
+/// conversation, and `status` replaces or clears the current line.
+/// `app` 发送轻量事件，`state` 持有代际顺序，`session_id` 选择会话，`status` 替换或清除当前行。
+///
+/// # Returns
+/// 返回值
+/// Success after the ordered event is emitted, or an explicit lock failure.
+/// 有序事件发送后返回成功，否则返回明确的加锁失败。
+pub(crate) fn emit_transient_reasoning_status(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    status: Option<RuntimeTransientReasoningStatus>,
+) -> Result<(), String> {
+    // event is assembled under the generation lock but intentionally leaves snapshot data untouched.
+    // event 在代际锁内组装，但刻意不修改快照数据。
+    let event = {
+        // guard owns only the ordered workbench generation for this ephemeral emission.
+        // guard 仅持有当前瞬态发送所需的有序工作台代际。
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+        // generation orders the live event against every other Workbench delta.
+        // generation 将实时事件与其他全部 Workbench 增量排序。
+        let generation = guard.workbench_generation;
+        guard.workbench.revision = generation;
+        WorkbenchDeltaEnvelope {
+            generation,
+            delta: WorkbenchDelta::TransientReasoningStatusChanged(
+                TransientReasoningStatusChangedDelta {
+                    conversation_id: session_id.to_string(),
+                    status: status.map(|status| TransientReasoningStatusSnapshot {
+                        kind: match status.kind {
+                            RuntimeTransientReasoningStatusKind::Summary => {
+                                TransientReasoningStatusKind::Summary
+                            }
+                            RuntimeTransientReasoningStatusKind::Encrypted => {
+                                TransientReasoningStatusKind::Encrypted
+                            }
+                        },
+                        text: status.text,
+                        reasoning_tokens: status.reasoning_tokens,
+                    }),
+                },
+            ),
+        }
+    };
+    emit_service_event_with_trace(
+        app,
+        "workbench_transient_reasoning_status_emit",
+        ServiceEvent::WorkbenchDelta(Box::new(event)),
+    );
+    Ok(())
+}
+
 /// Appends one typed provider content delta to its exact streaming transcript record.
 /// 将单个强类型 Provider 内容增量追加到其精确流式转录记录。
 ///

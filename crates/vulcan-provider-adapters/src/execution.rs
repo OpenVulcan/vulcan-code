@@ -11349,6 +11349,7 @@ connection: close
                 from: String::from("/vendor_usage"),
                 to: String::from("/usage"),
             }],
+            transient_reasoning_status: None,
         };
 
         let projected = project_response_record_text(
@@ -11374,6 +11375,7 @@ connection: close
                 from: String::from("/vendor_error"),
                 to: String::from("/error"),
             }],
+            transient_reasoning_status: None,
         };
 
         let projected = project_response_record_text(
@@ -11397,6 +11399,7 @@ connection: close
                 path: String::from("/error/code"),
                 value: Value::String(String::from("mapped")),
             }],
+            transient_reasoning_status: None,
         };
 
         let error = project_response_record_text(&[profile], r#"{"error":"plain"}"#)

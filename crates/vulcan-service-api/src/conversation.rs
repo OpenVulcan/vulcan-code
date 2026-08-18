@@ -373,6 +373,53 @@ pub enum WorkbenchDelta {
     /// Ephemeral media upload progress for a submission that has not been materialized yet.
     /// 尚未物化提交的临时媒体上传进度增量。
     MediaUploadProgressChanged(MediaUploadProgressChangedDelta),
+    /// Ephemeral replace-in-place reasoning status for one active conversation.
+    /// 单个活动会话使用的瞬态原地替换式推理状态。
+    TransientReasoningStatusChanged(TransientReasoningStatusChangedDelta),
+}
+
+/// Classifies the visible form of one transient reasoning status.
+/// 对单条瞬态推理状态的可见形式进行分类。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum TransientReasoningStatusKind {
+    /// Readable provider-generated reasoning summary.
+    /// 供应商生成的可读推理摘要。
+    Summary,
+    /// Opaque encrypted reasoning represented by progress only.
+    /// 仅通过进度表示的不透明加密推理。
+    Encrypted,
+}
+
+/// Carries one transient reasoning status value displayed outside the transcript.
+/// 携带一条显示在转录之外的瞬态推理状态值。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TransientReasoningStatusSnapshot {
+    /// Presentation kind selected by the response profile.
+    /// 由响应 Profile 选择的展示类型。
+    pub kind: TransientReasoningStatusKind,
+    /// Latest readable summary when available.
+    /// 可用时的最新可读摘要。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    /// Latest cumulative reasoning-token count when available.
+    /// 可用时的最新累计推理 Token 数。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_tokens: Option<u64>,
+}
+
+/// Replaces or clears one conversation's non-persistent reasoning status.
+/// 替换或清除单个会话的非持久化推理状态。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TransientReasoningStatusChangedDelta {
+    /// Stable conversation identifier owning the active request.
+    /// 拥有当前活动请求的稳定会话标识。
+    pub conversation_id: String,
+    /// Latest transient status, or `None` to clear it immediately.
+    /// 最新瞬态状态；为 `None` 时立即清除。
+    pub status: Option<TransientReasoningStatusSnapshot>,
 }
 
 /// Replaces the Agent Skills domain without resending the full workbench snapshot.
@@ -1058,4 +1105,48 @@ pub struct SubmitConversationPromptAck {
     /// Latest accepted workbench revision after the submit-side update.
     /// 提交侧更新后的最新已接收工作台版本。
     pub revision: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies transient reasoning status uses the exact camel-case Web transport contract.
+    /// 验证瞬态推理状态使用精确的 Web 驼峰传输契约。
+    #[test]
+    fn transient_reasoning_status_serializes_for_the_live_store() {
+        // envelope mirrors one backend event consumed by the external Web status Store.
+        // envelope 镜像一条由 Web 外部状态 Store 消费的后端事件。
+        let envelope = WorkbenchDeltaEnvelope {
+            generation: 9,
+            delta: WorkbenchDelta::TransientReasoningStatusChanged(
+                TransientReasoningStatusChangedDelta {
+                    conversation_id: String::from("conversation"),
+                    status: Some(TransientReasoningStatusSnapshot {
+                        kind: TransientReasoningStatusKind::Summary,
+                        text: Some(String::from("正在核对清单")),
+                        reasoning_tokens: Some(321),
+                    }),
+                },
+            ),
+        };
+
+        assert_eq!(
+            serde_json::to_value(envelope).expect("transient status should serialize"),
+            serde_json::json!({
+                "generation": 9,
+                "delta": {
+                    "kind": "transientReasoningStatusChanged",
+                    "payload": {
+                        "conversationId": "conversation",
+                        "status": {
+                            "kind": "summary",
+                            "text": "正在核对清单",
+                            "reasoningTokens": 321
+                        }
+                    }
+                }
+            })
+        );
+    }
 }

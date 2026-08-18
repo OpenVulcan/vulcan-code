@@ -561,6 +561,7 @@ fn prompt_compaction_progress_for_runtime_event(
         | ExecutionStreamEvent::ConversationCheckpoint { .. }
         | ExecutionStreamEvent::ContextCompactionRequired { .. }
         | ExecutionStreamEvent::ThinkingCompleted { .. }
+        | ExecutionStreamEvent::TransientReasoningStatusChanged { .. }
         | ExecutionStreamEvent::Finished(_) => None,
     }
 }

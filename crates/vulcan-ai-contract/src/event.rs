@@ -91,6 +91,13 @@ pub enum AiStreamEvent {
         /// 解码后的推理增量。
         delta: String,
     },
+    /// A complete readable reasoning summary update that must remain transient.
+    /// 必须保持瞬态的完整可读推理摘要更新。
+    ReasoningSummaryUpdated {
+        /// Latest complete summary assembled or decoded from the provider stream.
+        /// 从供应商流组装或解码出的最新完整摘要。
+        text: String,
+    },
     /// Reasoning content has completed.
     /// 推理内容已经完成。
     ReasoningCompleted {
@@ -373,6 +380,7 @@ impl AiStreamStateMachine {
             AiStreamEvent::ResourceProgress { .. }
             | AiStreamEvent::ImageGenerationPartial { .. }
             | AiStreamEvent::ProviderContextItemCaptured { .. }
+            | AiStreamEvent::ReasoningSummaryUpdated { .. }
             | AiStreamEvent::UsageUpdated { .. } => {}
         }
         Ok(())
@@ -425,6 +433,7 @@ impl AiStreamEvent {
             Self::ResponseTextDelta { .. } => "response_text_delta",
             Self::ReasoningStarted { .. } => "reasoning_started",
             Self::ReasoningDelta { .. } => "reasoning_delta",
+            Self::ReasoningSummaryUpdated { .. } => "reasoning_summary_updated",
             Self::ReasoningCompleted { .. } => "reasoning_completed",
             Self::ToolCallStarted { .. } => "tool_call_started",
             Self::ToolCallArgumentsDelta { .. } => "tool_call_arguments_delta",

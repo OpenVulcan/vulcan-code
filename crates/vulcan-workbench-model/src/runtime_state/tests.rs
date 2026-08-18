@@ -34,6 +34,32 @@ fn test_internal_prompt_entry(id: &str, panel_entry_id: Option<&str>) -> Pending
     }
 }
 
+/// Verifies fresh-process repair restores guided rows without deleting host-owned hidden work.
+/// 验证新进程修复会恢复引导行，同时不会删除宿主持有的隐藏工作。
+#[test]
+fn fresh_process_guided_prompt_repair_preserves_hidden_internal_entries() {
+    let mut guided_panel = test_panel_entry("guided");
+    guided_panel.state = PendingPromptPanelEntryState::Inserted;
+    let mut ui_state = SessionTranscriptUiState {
+        pending_prompt_panel_queue: vec![guided_panel],
+        pending_prompt_queue: vec![
+            test_internal_prompt_entry("guided-internal", Some("guided")),
+            test_internal_prompt_entry("host-hidden", None),
+        ],
+        ..SessionTranscriptUiState::default()
+    };
+
+    assert!(restore_guided_pending_prompts_for_fresh_process(
+        &mut ui_state
+    ));
+    assert_eq!(
+        ui_state.pending_prompt_panel_queue[0].state,
+        PendingPromptPanelEntryState::Ready
+    );
+    assert_eq!(ui_state.pending_prompt_queue.len(), 1);
+    assert_eq!(ui_state.pending_prompt_queue[0].id, "host-hidden");
+}
+
 /// Returns the visible pending-prompt panel queue ids in order.
 /// 按顺序返回可见待发送提示词面板队列标识。
 fn panel_entry_ids(ui_state: &SessionTranscriptUiState) -> Vec<String> {
@@ -611,6 +637,14 @@ fn prompt_source_semantics_separate_followup_and_interrupt_turns() {
     assert!(PendingSessionPromptSource::UserInterrupt.persists_canonical_user_message());
     assert!(PendingSessionPromptSource::UserInterrupt.appends_visible_user_prompt_record());
     assert!(PendingSessionPromptSource::UserInterrupt.folds_into_active_turn_process());
+    assert_eq!(
+        PendingSessionPromptSource::UserInterrupt.for_idle_dispatch(),
+        PendingSessionPromptSource::UserFollowup
+    );
+    assert_eq!(
+        PendingSessionPromptSource::GoalContinuation.for_idle_dispatch(),
+        PendingSessionPromptSource::GoalContinuation
+    );
 }
 
 /// Verifies internal pending prompts preserve provider reasoning defaults unless explicitly set.

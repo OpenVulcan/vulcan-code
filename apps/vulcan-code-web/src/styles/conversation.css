@@ -39,6 +39,10 @@
   pointer-events: none;
 }
 
+.transient-reasoning-status-line {
+  pointer-events: none;
+}
+
 .conversation-continue-button {
   min-height: 36px;
   padding: 0 16px;

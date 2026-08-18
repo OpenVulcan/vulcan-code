@@ -241,9 +241,26 @@ pub(crate) fn validate_execution_retry_snapshot_for_claim(
     let canonical_bytes = serde_json::to_vec(&canonical_snapshot)
         .map_err(|error| format!("Failed to serialize current retry-claim Core state: {error}"))?;
     if execution_retry_sha256_hex(&canonical_bytes) != snapshot.canonical_digest {
-        return Err(String::from(
-            "ERR_CONVERSATION_CONTINUE_RETRY_CANONICAL_STATE_CHANGED",
-        ));
+        // Terminal projection appends transcript-only records after the exact provider request is
+        // frozen. Those records are merged back by checkpoint application and must not invalidate
+        // a retry whose provider-visible messages and continuation cursor remain unchanged.
+        // 精确 Provider 请求冻结后，终态投影会追加仅供转录使用的记录。这些记录会由检查点
+        // 应用重新合并，因此在 Provider 可见消息和 continuation 游标未变化时不能使重试失效。
+        let current_dispatch_state = serde_json::to_vec(&(
+            &canonical_snapshot.messages,
+            &canonical_snapshot.continuation,
+        ))
+        .map_err(|error| format!("Failed to serialize current retry dispatch state: {error}"))?;
+        let frozen_dispatch_state = serde_json::to_vec(&(
+            &snapshot.controller_snapshot.messages,
+            &snapshot.controller_snapshot.continuation,
+        ))
+        .map_err(|error| format!("Failed to serialize frozen retry dispatch state: {error}"))?;
+        if current_dispatch_state != frozen_dispatch_state {
+            return Err(String::from(
+                "ERR_CONVERSATION_CONTINUE_RETRY_CANONICAL_STATE_CHANGED",
+            ));
+        }
     }
     Ok(())
 }

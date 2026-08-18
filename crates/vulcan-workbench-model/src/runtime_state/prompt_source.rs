@@ -64,6 +64,20 @@ impl PendingSessionPromptSource {
         matches!(self, Self::UserInterrupt)
     }
 
+    /// Returns the source semantics to use when a queued prompt starts from an idle session.
+    /// 返回排队提示词从空闲会话启动时应使用的来源语义。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A missed interrupt becomes a regular follow-up because no active turn remains to fold into.
+    /// 错过活动回合的插队消息会转为常规跟进，因为此时已无可折叠的活动回合。
+    pub fn for_idle_dispatch(self) -> Self {
+        match self {
+            Self::UserInterrupt => Self::UserFollowup,
+            source => source,
+        }
+    }
+
     /// Returns whether this source allows destructive user-prompt editing.
     /// 返回该来源是否允许破坏性用户提示词编辑。
     pub fn allows_user_prompt_edit(self) -> bool {

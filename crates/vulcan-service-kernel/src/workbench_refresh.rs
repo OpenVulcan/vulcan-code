@@ -754,6 +754,9 @@ pub(crate) fn detached_task_event_label(event: &DetachedTaskRuntimeEvent) -> &'s
         DetachedTaskRuntimeEvent::ChildExecution(ExecutionStreamEvent::ThinkingDelta {
             ..
         }) => "child.thinking_delta",
+        DetachedTaskRuntimeEvent::ChildExecution(
+            ExecutionStreamEvent::TransientReasoningStatusChanged { .. },
+        ) => "child.transient_reasoning_status_changed",
         DetachedTaskRuntimeEvent::ChildExecution(ExecutionStreamEvent::ThinkingCompleted {
             ..
         }) => "child.thinking_completed",

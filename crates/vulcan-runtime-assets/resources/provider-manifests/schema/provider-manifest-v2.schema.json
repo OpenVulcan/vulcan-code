@@ -1007,7 +1007,7 @@
             "type": "string"
           },
           "payload": {
-            "$ref": "#/$defs/projection_profile"
+            "$ref": "#/$defs/response_projection_profile"
           }
         }
       }
@@ -1930,6 +1930,22 @@
         "steps": {
           "type": "array",
           "items": {"$ref": "#/$defs/mapping_step"}
+        }
+      }
+    },
+    "response_projection_profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile_id", "revision"],
+      "properties": {
+        "profile_id": {"type": "string"},
+        "revision": {"type": "integer", "minimum": 0},
+        "steps": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/mapping_step"}
+        },
+        "transient_reasoning_status": {
+          "enum": ["summary", "encrypted"]
         }
       }
     },

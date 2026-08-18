@@ -266,6 +266,33 @@ fn existing_submission_admission_blocks_competitor_and_authorizes_owner() {
     assert!(webui_session_kernel_has_active_turn(&guard, session_id));
 }
 
+/// Verifies concurrent queued-prompt preparation receives one admission owner and can retry after release.
+/// 验证并发排队提示词准备只会获得一个准入所有者，并可在释放后重新领取。
+#[test]
+fn pending_prompt_dispatch_admission_is_single_owner_and_reusable() {
+    let session_id = SessionId::new_v4();
+    let state: SharedServiceBridgeState = Arc::new(Mutex::new(
+        test_service_state_with_parent_session(session_id),
+    ));
+
+    let first = try_begin_pending_prompt_dispatch_exclusion(&state, session_id)
+        .expect("first pending dispatch admission should be readable")
+        .expect("first pending dispatch should own admission");
+    assert!(
+        try_begin_pending_prompt_dispatch_exclusion(&state, session_id)
+            .expect("competing pending dispatch admission should be readable")
+            .is_none()
+    );
+
+    drop(first);
+
+    assert!(
+        try_begin_pending_prompt_dispatch_exclusion(&state, session_id)
+            .expect("released pending dispatch admission should be readable")
+            .is_some()
+    );
+}
+
 /// Verifies an outer destructive transaction can authorize only its nested prompt replay.
 /// 验证外层破坏性事务只能授权其自身的嵌套提示词重放。
 ///

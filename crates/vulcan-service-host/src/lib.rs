@@ -1176,6 +1176,10 @@ impl ResponsesSseState {
                     }),
                 ));
             }
+            // Transient summary updates belong only to the local live-status channel and must not
+            // become public Responses output items.
+            // 瞬态摘要更新只属于本地实时状态通道，不得成为公共 Responses 输出项目。
+            AiStreamEvent::ReasoningSummaryUpdated { .. } => {}
             AiStreamEvent::ToolCallStarted {
                 item_id,
                 call_id,

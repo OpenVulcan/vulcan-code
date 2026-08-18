@@ -610,6 +610,73 @@ SELECT calendar_date AS calendarDate, provider_id AS providerId,
  ORDER BY calendar_date DESC, provider_id, service_entry_id, consumer_id, operation, model_id
 LIMIT 500;
 ]])
+    -- heatmap contains one exact aggregate per local calendar date for the shared 365-day grid.
+    -- heatmap 包含共享 365 天点阵所需的每个本地自然日精确聚合。
+    local heatmap = sqlite_query([[
+WITH filtered AS (
+    SELECT calendar_date, provider_id, model_id,
+           COALESCE(total_tokens, 0) AS total_tokens,
+           attempt_count, successful_attempt_count
+    FROM provider_usage_daily_v3
+    WHERE calendar_date >= date('now', 'localtime', '-364 days')
+), daily AS (
+    SELECT calendar_date, SUM(total_tokens) AS value,
+           SUM(attempt_count) AS requests,
+           SUM(successful_attempt_count) AS successes
+    FROM filtered
+    GROUP BY calendar_date
+), ranked_models AS (
+    SELECT calendar_date, provider_id, model_id,
+           SUM(total_tokens) AS model_tokens,
+           ROW_NUMBER() OVER (
+               PARTITION BY calendar_date
+               ORDER BY SUM(total_tokens) DESC, provider_id, model_id
+           ) AS model_rank
+    FROM filtered
+    GROUP BY calendar_date, provider_id, model_id
+)
+SELECT d.calendar_date AS date,
+       d.value AS value,
+       d.requests AS requests,
+       d.successes AS successes,
+       r.provider_id AS topProviderName,
+       r.model_id AS topModelName
+FROM daily d
+LEFT JOIN ranked_models r
+    ON r.calendar_date = d.calendar_date AND r.model_rank = 1
+ORDER BY d.calendar_date;
+]])
+    -- series contains the top five model lines plus one stable Other line for the last 30 days.
+    -- series 包含最近 30 天前五个模型折线及一个稳定的其他折线。
+    local series = sqlite_query([[
+WITH ranked_models AS (
+    SELECT provider_id, model_id,
+           SUM(COALESCE(total_tokens, 0)) AS metric_value
+    FROM provider_usage_daily_v3
+    WHERE calendar_date >= date('now', 'localtime', '-29 days')
+    GROUP BY provider_id, model_id
+    ORDER BY metric_value DESC, provider_id, model_id
+    LIMIT 5
+), classified AS (
+    SELECT d.calendar_date,
+           CASE WHEN r.provider_id IS NULL THEN 'other'
+                ELSE r.provider_id || '/' || r.model_id END AS seriesKey,
+           CASE WHEN r.provider_id IS NULL THEN 'Other'
+                ELSE r.provider_id || ' / ' || r.model_id END AS label,
+           COALESCE(d.total_tokens, 0) AS total_tokens
+    FROM provider_usage_daily_v3 d
+    LEFT JOIN ranked_models r
+        ON r.provider_id = d.provider_id AND r.model_id = d.model_id
+    WHERE d.calendar_date >= date('now', 'localtime', '-29 days')
+), projected AS (
+    SELECT calendar_date, seriesKey, label, SUM(total_tokens) AS value
+    FROM classified
+    GROUP BY calendar_date, seriesKey, label
+)
+SELECT calendar_date AS date, seriesKey, label, value
+FROM projected
+ORDER BY date, seriesKey;
+]])
     local recent_attempts = sqlite_query([[
 SELECT attempts.attempt_id AS attemptId, attempts.consumer_id AS consumerId,
        attempts.operation, attempts.provider_id AS providerId,
@@ -699,6 +766,8 @@ FROM provider_usage_meta;
             matchingStrategy = DEFAULT_PRICING_CATALOG.matching_strategy,
         },
         daily = daily,
+        heatmap = heatmap,
+        series = series,
         recentAttempts = recent_attempts,
         accounts = accounts,
     }

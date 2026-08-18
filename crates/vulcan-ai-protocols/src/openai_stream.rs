@@ -41,6 +41,68 @@ struct OpenAiToolState {
     terminal: bool,
 }
 
+/// Returns the newly observed suffix of one cumulative provider text field.
+/// 返回单个供应商累计文本字段中新观测到的后缀。
+///
+/// # Parameters
+/// 参数
+/// `previous` stores the last cumulative value and `current` is the newly decoded value.
+/// `previous` 保存上次累计值，`current` 是本次解码值。
+///
+/// # Returns
+/// 返回值
+/// The new suffix, a standalone non-cumulative fragment, or `None` for empty input.
+/// 返回新增后缀、独立的非累计片段，或在输入为空时返回 `None`。
+fn cumulative_suffix(previous: &mut String, current: String) -> Option<String> {
+    if current.is_empty() {
+        return None;
+    }
+    if current.starts_with(previous.as_str()) {
+        // suffix excludes the cumulative prefix already projected to semantic output.
+        // suffix 排除已经投影到语义输出的累计前缀。
+        let suffix = current[previous.len()..].to_string();
+        *previous = current;
+        return Some(suffix);
+    }
+    // A non-prefix value is a standalone provider fragment, not a replacement snapshot.
+    // 非前缀值是供应商独立片段，而不是替换式快照。
+    previous.push_str(current.as_str());
+    Some(current)
+}
+
+/// Builds a replay-safe provider context item without transient reasoning fields.
+/// 构建不含瞬态推理字段且可安全重放的供应商上下文项目。
+///
+/// # Parameters
+/// 参数
+/// `item` is one completed provider-owned Responses output item.
+/// `item` 是一个已完成且由供应商持有的 Responses 输出项目。
+///
+/// # Returns
+/// 返回值
+/// A cloned replay item, or `None` when the item contains only summary or encrypted reasoning.
+/// 返回克隆后的重放项目；项目仅含摘要或加密推理时返回 `None`。
+fn replayable_provider_context_item(item: &Value) -> Option<Value> {
+    if item.get("type").and_then(Value::as_str) != Some("reasoning") {
+        return Some(item.clone());
+    }
+    // replay_item is scrubbed independently so the original diagnostic event remains intact.
+    // replay_item 独立清理，使原始诊断事件保持不变。
+    let mut replay_item = item.clone();
+    // object owns the only accepted Responses reasoning object shape.
+    // object 持有唯一接受的 Responses 推理对象结构。
+    let object = replay_item.as_object_mut()?;
+    object.remove("summary");
+    object.remove("encrypted_content");
+    // has_full_reasoning admits only provider content that can reconstruct durable reasoning.
+    // has_full_reasoning 只允许能够重建持久化完整思考的供应商正文。
+    let has_full_reasoning = object
+        .get("content")
+        .and_then(Value::as_array)
+        .is_some_and(|content| !content.is_empty());
+    has_full_reasoning.then_some(replay_item)
+}
+
 /// Decodes OpenAI-compatible Chat Completions SSE chunks.
 /// 解码 OpenAI 兼容 Chat Completions SSE 分片。
 #[derive(Debug)]
@@ -66,6 +128,9 @@ pub(crate) struct OpenAiChatStreamDecoder {
     /// Last cumulative MiniMax `reasoning_details` text.
     /// 最近一次累计的 MiniMax `reasoning_details` 文本。
     reasoning_details_text: String,
+    /// Last cumulative transient `reasoning.summary` text.
+    /// 最近一次累计的瞬态 `reasoning.summary` 文本。
+    reasoning_summary_text: String,
     /// Tool calls keyed by stable parallel index.
     /// 按稳定并行索引保存的工具调用。
     tools: BTreeMap<u32, OpenAiToolState>,
@@ -101,6 +166,7 @@ impl OpenAiChatStreamDecoder {
             text_open: false,
             reasoning_open: false,
             reasoning_details_text: String::new(),
+            reasoning_summary_text: String::new(),
             tools: BTreeMap::new(),
             registered_tools,
         }
@@ -148,9 +214,12 @@ impl OpenAiChatStreamDecoder {
             .get("reasoning_content")
             .and_then(Value::as_str)
             .or_else(|| delta.get("reasoning").and_then(Value::as_str));
-        let reasoning = direct_reasoning
-            .map(str::to_string)
-            .or_else(|| self.decode_reasoning_details_delta(delta));
+        // detail_reasoning and summary keep durable thinking separate from replacement status.
+        // detail_reasoning 与 summary 将持久化思考和替换式状态分离。
+        let (detail_reasoning, summary) = self.decode_reasoning_details_delta(delta);
+        // reasoning prefers the protocol's direct durable field when both representations exist.
+        // reasoning 在两种表示同时存在时优先采用协议直接持久化字段。
+        let reasoning = direct_reasoning.map(str::to_string).or(detail_reasoning);
         if let Some(reasoning) = reasoning {
             let item_id = format!("openai:{}:reasoning", self.execution_id);
             if !self.reasoning_open {
@@ -166,6 +235,9 @@ impl OpenAiChatStreamDecoder {
                 });
             }
         }
+        if let Some(summary) = summary {
+            events.push(AiStreamEvent::ReasoningSummaryUpdated { text: summary });
+        }
         if let Some(tool_calls) = delta.get("tool_calls").and_then(Value::as_array) {
             for tool_delta in tool_calls {
                 events.extend(self.decode_tool_delta(tool_delta)?);
@@ -175,9 +247,9 @@ impl OpenAiChatStreamDecoder {
             .get("finish_reason")
             .is_some_and(|value| !value.is_null())
         {
+            // A choice finish reason proves semantic completion but is not the transport boundary.
+            // 选择结束原因只证明语义完成，并不是传输边界。
             self.finish_signal_seen = true;
-            events.extend(self.close_open_items());
-            events.extend(self.complete_tools());
         }
         Ok(events)
     }
@@ -192,31 +264,48 @@ impl OpenAiChatStreamDecoder {
     ///
     /// # Returns
     /// 返回值
-    /// A newly observed reasoning suffix, or `None` when the field is absent.
-    /// 返回新观测到的推理后缀；字段缺失时返回 `None`。
-    fn decode_reasoning_details_delta(&mut self, delta: &Value) -> Option<String> {
-        let cumulative = delta
-            .get("reasoning_details")
-            .and_then(Value::as_array)?
+    /// Newly observed full-reasoning suffix and complete transient-summary replacement.
+    /// 返回新观测到的完整推理后缀与完整瞬态摘要替换值。
+    fn decode_reasoning_details_delta(
+        &mut self,
+        delta: &Value,
+    ) -> (Option<String>, Option<String>) {
+        // details is the exact provider-owned typed reasoning array for this chunk.
+        // details 是当前分片中由供应商持有的精确类型化推理数组。
+        let Some(details) = delta.get("reasoning_details").and_then(Value::as_array) else {
+            return (None, None);
+        };
+        // reasoning concatenates only durable text parts from the current array snapshot.
+        // reasoning 只拼接当前数组快照中的持久化文本部分。
+        let reasoning = details
             .iter()
             .filter_map(|detail| match detail.get("type").and_then(Value::as_str) {
-                Some("reasoning.summary") => detail.get("summary").and_then(Value::as_str),
                 Some("reasoning.text") | None => detail.get("text").and_then(Value::as_str),
-                // Opaque encrypted, signature-only, and unknown detail types never enter semantic output.
-                // 不透明加密、仅签名及未知明细类型绝不进入语义输出。
                 Some(_) => None,
             })
             .collect::<String>();
-        if cumulative.is_empty() {
-            return None;
-        }
-        if cumulative.starts_with(self.reasoning_details_text.as_str()) {
-            let suffix = cumulative[self.reasoning_details_text.len()..].to_string();
-            self.reasoning_details_text = cumulative;
-            return Some(suffix);
-        }
-        self.reasoning_details_text.push_str(cumulative.as_str());
-        Some(cumulative)
+        // summary concatenates only readable replacement-summary parts.
+        // summary 只拼接可读的替换式摘要部分。
+        let summary = details
+            .iter()
+            .filter_map(|detail| {
+                (detail.get("type").and_then(Value::as_str) == Some("reasoning.summary"))
+                    .then(|| detail.get("summary").and_then(Value::as_str))
+                    .flatten()
+            })
+            .collect::<String>();
+        // Chat summary values are wire deltas; the public event always replaces with accumulated text.
+        // Chat 摘要值是线路增量；公共事件始终使用累计完整文本进行替换。
+        let summary_update = if summary.is_empty() {
+            None
+        } else {
+            self.reasoning_summary_text.push_str(summary.as_str());
+            Some(self.reasoning_summary_text.clone())
+        };
+        (
+            cumulative_suffix(&mut self.reasoning_details_text, reasoning),
+            summary_update,
+        )
     }
 
     /// Decodes one indexed Chat Completions tool-call delta.
@@ -375,8 +464,13 @@ impl ProtocolStreamDecoder for OpenAiChatStreamDecoder {
             return Ok(Vec::new());
         }
         if self.finish_signal_seen {
+            // EOF after a finish reason is the registered terminal substitute for a missing `[DONE]`.
+            // 带结束原因的 EOF 是缺失 `[DONE]` 时已注册的终态替代边界。
+            let mut events = self.close_open_items();
+            events.extend(self.complete_tools());
             self.terminal = true;
-            return Ok(vec![AiStreamEvent::ResponseCompleted]);
+            events.push(AiStreamEvent::ResponseCompleted);
+            return Ok(events);
         }
         Err(ProtocolConversionError::new(
             "OpenAI Chat stream ended before the [DONE] terminal record.",
@@ -427,9 +521,6 @@ pub(crate) struct OpenAiResponsesStreamDecoder {
     /// Reasoning keys that already received their dedicated text completion event.
     /// 已收到专用文本完成事件的推理键。
     completed_reasoning_items: BTreeSet<String>,
-    /// Encrypted replay content keyed by the exact upstream reasoning item scope.
-    /// 按精确上游推理项目作用域保存的加密重放内容。
-    reasoning_signatures: BTreeMap<String, String>,
     /// Tool calls keyed by output index.
     /// 按输出索引保存的工具调用。
     tools: BTreeMap<u32, OpenAiToolState>,
@@ -472,7 +563,6 @@ impl OpenAiResponsesStreamDecoder {
             reasoning_scopes: BTreeMap::new(),
             reasoning_text: BTreeMap::new(),
             completed_reasoning_items: BTreeSet::new(),
-            reasoning_signatures: BTreeMap::new(),
             tools: BTreeMap::new(),
             image_items: BTreeMap::new(),
             completed_images: BTreeSet::new(),
@@ -1041,6 +1131,7 @@ impl OpenAiResponsesStreamDecoder {
         item_id: &str,
         full_text: &str,
         is_new: bool,
+        transient_summary: bool,
         events: &mut Vec<AiStreamEvent>,
     ) -> Result<(), ProtocolConversionError> {
         // currentText is the exact prefix already emitted for this semantic block.
@@ -1063,7 +1154,7 @@ impl OpenAiResponsesStreamDecoder {
                 "OpenAI Responses reasoning completion for `{reasoning_key}` does not extend its streamed prefix."
             )));
         }
-        if is_new {
+        if is_new && !transient_summary {
             events.push(AiStreamEvent::ReasoningStarted {
                 item_id: item_id.to_string(),
             });
@@ -1072,44 +1163,21 @@ impl OpenAiResponsesStreamDecoder {
         // suffix 是前序增量事件尚未发送的部分。
         let suffix = &full_text[current_text.len()..];
         if !suffix.is_empty() {
-            events.push(AiStreamEvent::ReasoningDelta {
-                item_id: item_id.to_string(),
-                delta: suffix.to_string(),
-            });
+            if !transient_summary {
+                events.push(AiStreamEvent::ReasoningDelta {
+                    item_id: item_id.to_string(),
+                    delta: suffix.to_string(),
+                });
+            }
             current_text.push_str(suffix);
+            if transient_summary {
+                events.push(AiStreamEvent::ReasoningSummaryUpdated {
+                    text: current_text.clone(),
+                });
+            }
         }
         self.completed_reasoning_items
             .insert(reasoning_key.to_string());
-        Ok(())
-    }
-
-    /// Captures one immutable encrypted reasoning value for its exact upstream item.
-    /// 为精确上游项目捕获一个不可变加密推理值。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `wire_scope` identifies the upstream reasoning item and `signature` is opaque provider data.
-    /// `wire_scope` 标识上游推理项目，`signature` 是不透明供应商数据。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Success for the first or identical value, otherwise a protocol error for mutation.
-    /// 首次值或相同值返回成功，值发生变化时返回协议错误。
-    fn capture_reasoning_signature(
-        &mut self,
-        wire_scope: &str,
-        signature: &str,
-    ) -> Result<(), ProtocolConversionError> {
-        if let Some(existing) = self.reasoning_signatures.get(wire_scope) {
-            if existing == signature {
-                return Ok(());
-            }
-            return Err(ProtocolConversionError::new(format!(
-                "OpenAI Responses changed encrypted reasoning content for `{wire_scope}`."
-            )));
-        }
-        self.reasoning_signatures
-            .insert(wire_scope.to_string(), signature.to_string());
         Ok(())
     }
 
@@ -1137,21 +1205,9 @@ impl OpenAiResponsesStreamDecoder {
         // wireScope binds full-item fallback to the same identities used by deltas.
         // wireScope 将完整项回退绑定到增量使用的相同身份。
         let wire_scope = Self::reasoning_wire_scope(value);
-        // signature remains opaque and is never displayed as reasoning text.
-        // signature 保持不透明，绝不会作为推理文本显示。
-        let signature = item
-            .get("encrypted_content")
-            .and_then(Value::as_str)
-            .filter(|signature| !signature.is_empty());
-        if let Some(signature) = signature {
-            self.capture_reasoning_signature(wire_scope.as_str(), signature)?;
-        }
         // events preserves the provider's summary-before-content item order.
         // events 保留供应商摘要先于正文的项目顺序。
         let mut events = Vec::new();
-        // sawPart distinguishes an encrypted-only reasoning item from a malformed empty item.
-        // sawPart 区分仅含加密内容的推理项与格式错误的空项。
-        let mut saw_part = false;
         for (event_family, field_name, content_type) in [
             ("summary", "summary", "summary_text"),
             ("text", "content", "reasoning_text"),
@@ -1187,65 +1243,33 @@ impl OpenAiResponsesStreamDecoder {
                     item_id.as_str(),
                     text,
                     is_new,
+                    event_family == "summary",
                     &mut events,
                 )?;
-                saw_part = true;
             }
         }
-        if !saw_part
-            && signature.is_some()
-            && !self
-                .reasoning_scopes
-                .values()
-                .any(|scope| scope == &wire_scope)
-        {
-            // encryptedOnlyKey creates a non-visible replay carrier for hidden reasoning.
-            // encryptedOnlyKey 为隐藏推理创建不可见的重放载体。
-            let (reasoning_key, item_id, is_new) =
-                self.register_reasoning_item(wire_scope.as_str(), "summary", 0);
-            self.complete_reasoning_text(
-                reasoning_key.as_str(),
-                item_id.as_str(),
-                "",
-                is_new,
-                &mut events,
-            )?;
-        }
+        // Encrypted-only items intentionally produce no semantic or replay state.
+        // 仅加密项目被刻意排除在语义状态与重放状态之外。
         Ok(events)
     }
 
     /// Closes any remaining semantic items before terminal response events.
     /// 在响应终态事件前关闭所有剩余语义项。
     fn close_semantic_items(&mut self) -> Vec<AiStreamEvent> {
-        // lastReasoningKeyByScope ensures each opaque signature is attached exactly once to its owner.
-        // lastReasoningKeyByScope 确保每个不透明签名只附加一次且归属于正确项目。
-        let mut last_reasoning_key_by_scope = BTreeMap::new();
-        for reasoning_key in &self.reasoning_order {
-            if let Some(wire_scope) = self.reasoning_scopes.get(reasoning_key) {
-                last_reasoning_key_by_scope.insert(wire_scope.clone(), reasoning_key.clone());
-            }
-        }
         // events follows first-observed provider order instead of map lexical order.
         // events 遵循供应商首次出现顺序，而不是映射字典序。
         let mut events = self
             .reasoning_order
             .iter()
             .filter_map(|reasoning_key| {
+                if reasoning_key.starts_with("summary:") {
+                    return None;
+                }
                 let item_id = self.reasoning_items.get(reasoning_key)?.clone();
-                let signature = self
-                    .reasoning_scopes
-                    .get(reasoning_key)
-                    .filter(|wire_scope| {
-                        last_reasoning_key_by_scope.get(*wire_scope) == Some(reasoning_key)
-                    })
-                    .and_then(|wire_scope| self.reasoning_signatures.get(wire_scope))
-                    .and_then(|signature| {
-                        crate::wrap_provider_signature(
-                            crate::SIGNATURE_PROVIDER_OPENAI,
-                            signature.as_str(),
-                        )
-                    });
-                Some(AiStreamEvent::ReasoningCompleted { item_id, signature })
+                Some(AiStreamEvent::ReasoningCompleted {
+                    item_id,
+                    signature: None,
+                })
             })
             .collect::<Vec<_>>();
         events.extend(
@@ -1261,7 +1285,6 @@ impl OpenAiResponsesStreamDecoder {
         self.reasoning_scopes.clear();
         self.reasoning_text.clear();
         self.completed_reasoning_items.clear();
-        self.reasoning_signatures.clear();
         self.text_items.clear();
         self.text_provider_ids.clear();
         self.text_content.clear();
@@ -1506,7 +1529,8 @@ impl ProtocolStreamDecoder for OpenAiResponsesStreamDecoder {
                         "OpenAI Responses reasoning item `{reasoning_key}` emitted a delta after completion."
                     )));
                 }
-                if is_new {
+                let transient_summary = wire_type == "response.reasoning_summary_text.delta";
+                if is_new && !transient_summary {
                     events.push(AiStreamEvent::ReasoningStarted {
                         item_id: item_id.clone(),
                     });
@@ -1516,14 +1540,24 @@ impl ProtocolStreamDecoder for OpenAiResponsesStreamDecoder {
                 })?;
                 // accumulatedText makes the later full-text completion authoritative without duplication.
                 // accumulatedText 让后续完整文本完成事件可作为权威值且不会重复输出。
-                self.reasoning_text
-                    .get_mut(reasoning_key.as_str())
-                    .expect("registered reasoning key must own accumulated text")
-                    .push_str(delta);
-                events.push(AiStreamEvent::ReasoningDelta {
-                    item_id,
-                    delta: delta.to_string(),
-                });
+                let summary_text = {
+                    let accumulated_text = self
+                        .reasoning_text
+                        .get_mut(reasoning_key.as_str())
+                        .expect("registered reasoning key must own accumulated text");
+                    accumulated_text.push_str(delta);
+                    transient_summary.then(|| accumulated_text.clone())
+                };
+                if transient_summary {
+                    events.push(AiStreamEvent::ReasoningSummaryUpdated {
+                        text: summary_text.expect("transient summary text should be assembled"),
+                    });
+                } else {
+                    events.push(AiStreamEvent::ReasoningDelta {
+                        item_id,
+                        delta: delta.to_string(),
+                    });
+                }
             }
             "response.reasoning_summary_text.done" | "response.reasoning_text.done" => {
                 // identity binds the completion to the same semantic block used by preceding deltas.
@@ -1542,6 +1576,7 @@ impl ProtocolStreamDecoder for OpenAiResponsesStreamDecoder {
                     item_id.as_str(),
                     text,
                     is_new,
+                    wire_type == "response.reasoning_summary_text.done",
                     &mut events,
                 )?;
             }
@@ -1636,14 +1671,13 @@ impl ProtocolStreamDecoder for OpenAiResponsesStreamDecoder {
                     ProtocolConversionError::new("OpenAI Responses item is missing.")
                 })?;
                 let provider_item_scope = Self::reasoning_wire_scope(&value);
-                if is_replayable_codex_responses_item(provider_item)
+                if let Some(replay_item) = replayable_provider_context_item(provider_item)
+                    && is_replayable_codex_responses_item(&replay_item)
                     && self
                         .captured_provider_context_scopes
                         .insert(provider_item_scope)
                 {
-                    events.push(AiStreamEvent::ProviderContextItemCaptured {
-                        item: provider_item.clone(),
-                    });
+                    events.push(AiStreamEvent::ProviderContextItemCaptured { item: replay_item });
                 }
             }
             "response.image_generation_call.partial_image" => {
@@ -1999,8 +2033,8 @@ mod tests {
         )));
     }
 
-    /// Verifies Chat reasoning summaries enter the reasoning channel while opaque payloads stay hidden.
-    /// 验证 Chat 思考总结进入思考通道，而不透明载荷保持隐藏。
+    /// Verifies Chat reasoning summaries stay transient while opaque payloads remain hidden.
+    /// 验证 Chat 思考总结保持临时状态，而不透明载荷继续隐藏。
     #[test]
     fn chat_reasoning_details_map_summaries_and_drop_opaque_payloads() {
         let mut decoder = OpenAiChatStreamDecoder::with_registered_tools(
@@ -2013,6 +2047,12 @@ mod tests {
                 r#"{"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.summary","summary":"先拆分问题"}]} ,"finish_reason":null}]}"#,
             )
             .expect("reasoning summary should decode");
+        let revised_summary = decoder
+            .push_sse(
+                None,
+                r#"{"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.summary","summary":"，再核对协议"}]} ,"finish_reason":null}]}"#,
+            )
+            .expect("the next reasoning summary fragment should publish accumulated text");
         let encrypted = decoder
             .push_sse(
                 None,
@@ -2028,7 +2068,15 @@ mod tests {
 
         assert!(summary.iter().any(|event| matches!(
             event,
-            AiStreamEvent::ReasoningDelta { delta, .. } if delta == "先拆分问题"
+            AiStreamEvent::ReasoningSummaryUpdated { text } if text == "先拆分问题"
+        )));
+        assert!(!summary.iter().any(|event| matches!(
+            event,
+            AiStreamEvent::ReasoningStarted { .. } | AiStreamEvent::ReasoningDelta { .. }
+        )));
+        assert!(revised_summary.iter().any(|event| matches!(
+            event,
+            AiStreamEvent::ReasoningSummaryUpdated { text } if text == "先拆分问题，再核对协议"
         )));
         assert!(!encrypted.iter().any(|event| matches!(
             event,
@@ -2096,7 +2144,98 @@ mod tests {
         let terminal = decoder
             .finish()
             .expect("transport close after finish reason should complete");
-        assert_eq!(terminal, vec![AiStreamEvent::ResponseCompleted]);
+        assert!(matches!(
+            terminal.as_slice(),
+            [
+                AiStreamEvent::ResponseItemCompleted { .. },
+                AiStreamEvent::ResponseCompleted
+            ]
+        ));
+    }
+
+    /// Verifies a Luna-style summary stream cannot restart text after a choice finish reason.
+    /// 验证 Luna 风格的摘要流不会在选择结束原因后重新启动文本项。
+    #[test]
+    fn chat_reasoning_summary_trailing_text_keeps_one_item_lifecycle() {
+        let mut decoder = OpenAiChatStreamDecoder::with_registered_tools(
+            String::from("execution"),
+            BTreeSet::from([String::from("shell_command")]),
+        );
+        let first = decoder
+            .push_sse(
+                None,
+                r#"{"choices":[{"delta":{"content":"准备调用工具","reasoning_details":[{"type":"reasoning.summary","summary":"先检查文件"}]},"finish_reason":null}]}"#,
+            )
+            .expect("initial Luna summary and text should decode");
+        let finish = decoder
+            .push_sse(
+                None,
+                r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-shell","function":{"name":"shell_command","arguments":"{\"cmd\":\"dir\"}"}}]},"finish_reason":"tool_calls"}]}"#,
+            )
+            .expect("tool finish reason should remain non-terminal until transport completion");
+        assert!(
+            !finish
+                .iter()
+                .any(|event| matches!(event, AiStreamEvent::ToolCallCompleted { .. }))
+        );
+        let trailing = decoder
+            .push_sse(
+                None,
+                r#"{"choices":[{"delta":{"content":"，等待结果"},"finish_reason":null}]}"#,
+            )
+            .expect("trailing Luna text should extend the existing text item");
+        let terminal = decoder
+            .push_sse(None, "[DONE]")
+            .expect("transport terminal should close the text item once");
+        let events = first
+            .into_iter()
+            .chain(finish)
+            .chain(trailing)
+            .chain(terminal)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, AiStreamEvent::ResponseItemStarted { .. }))
+                .count(),
+            1
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, AiStreamEvent::ResponseItemCompleted { .. }))
+                .count(),
+            1
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, AiStreamEvent::ToolCallStarted { .. }))
+                .count(),
+            1
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, AiStreamEvent::ToolCallCompleted { .. }))
+                .count(),
+            1
+        );
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AiStreamEvent::ReasoningSummaryUpdated { text } if text == "先检查文件"
+        )));
+        assert_eq!(
+            events
+                .iter()
+                .filter_map(|event| match event {
+                    AiStreamEvent::ResponseTextDelta { delta, .. } => Some(delta.as_str()),
+                    _ => None,
+                })
+                .collect::<String>(),
+            "准备调用工具，等待结果"
+        );
     }
 
     /// Verifies arguments received before identity are published after the tool card can start.
@@ -2299,10 +2438,10 @@ mod tests {
         )));
     }
 
-    /// Verifies unsigned Responses reasoning keeps the exact provider item for later replay.
-    /// 验证无签名 Responses 推理会保留原始供应商项以供后续重放。
+    /// Verifies summary-only Responses reasoning stays transient and never enters replay.
+    /// 验证仅含摘要的 Responses 推理保持临时状态且绝不进入重放。
     #[test]
-    fn responses_unsigned_reasoning_captures_exact_provider_context_item() {
+    fn responses_unsigned_summary_stays_out_of_provider_context() {
         // decoder receives the completed reasoning shape currently returned by DeepSeek Responses.
         // decoder 接收 DeepSeek Responses 当前返回的已完成推理结构。
         let mut decoder = OpenAiResponsesStreamDecoder::new(String::from("execution"));
@@ -2327,7 +2466,13 @@ mod tests {
 
         assert!(events.iter().any(|event| matches!(
             event,
-            AiStreamEvent::ProviderContextItemCaptured { item } if item == &provider_item
+            AiStreamEvent::ReasoningSummaryUpdated { text } if text == "inspect the workspace"
+        )));
+        assert!(!events.iter().any(|event| matches!(
+            event,
+            AiStreamEvent::ProviderContextItemCaptured { .. }
+                | AiStreamEvent::ReasoningStarted { .. }
+                | AiStreamEvent::ReasoningDelta { .. }
         )));
     }
 
@@ -2715,13 +2860,11 @@ mod tests {
 
         assert!(events.iter().any(|event| matches!(
             event,
-            AiStreamEvent::ReasoningStarted { item_id }
-                if item_id == "responses:execution:reasoning:0"
+            AiStreamEvent::ReasoningSummaryUpdated { text } if text == "buffered reasoning"
         )));
-        assert!(events.iter().any(|event| matches!(
+        assert!(!events.iter().any(|event| matches!(
             event,
-            AiStreamEvent::ReasoningDelta { item_id, delta }
-                if item_id == "responses:execution:reasoning:0" && delta == "buffered reasoning"
+            AiStreamEvent::ReasoningStarted { .. } | AiStreamEvent::ReasoningDelta { .. }
         )));
     }
 
@@ -2812,8 +2955,8 @@ mod tests {
                 .expect("reasoning summary should decode"),
         );
 
-        // started_item_ids proves every wire identity created one distinct public semantic block.
-        // started_item_ids 证明每个线上身份都创建了一个不同的公共语义块。
+        // started_item_ids proves only full reasoning creates persistent semantic blocks.
+        // started_item_ids 证明只有完整思考会创建持久化语义块。
         let started_item_ids = events
             .iter()
             .filter_map(|event| match event {
@@ -2826,7 +2969,6 @@ mod tests {
             vec![
                 "responses:execution:reasoning:0",
                 "responses:execution:reasoning:1",
-                "responses:execution:reasoning:2",
             ]
         );
         assert!(events.iter().any(|event| matches!(
@@ -2841,15 +2983,14 @@ mod tests {
         )));
         assert!(events.iter().any(|event| matches!(
             event,
-            AiStreamEvent::ReasoningDelta { item_id, delta }
-                if item_id == "responses:execution:reasoning:2" && delta == "summary"
+            AiStreamEvent::ReasoningSummaryUpdated { text } if text == "summary"
         )));
     }
 
-    /// Verifies encrypted Responses reasoning is attached to the completed public reasoning item.
-    /// 验证 Responses 加密推理内容会附加到已完成的公共推理项。
+    /// Verifies encrypted Responses reasoning never enters semantic or replay state.
+    /// 验证 Responses 加密推理绝不进入语义状态或重放状态。
     #[test]
-    fn responses_preserves_encrypted_reasoning_for_replay() {
+    fn responses_discards_encrypted_reasoning_from_replay() {
         let mut decoder = OpenAiResponsesStreamDecoder::new(String::from("execution"));
         decoder
             .push_sse(
@@ -2869,17 +3010,17 @@ mod tests {
                 r#"{"type":"response.completed","response":{"usage":{}}}"#,
             )
             .expect("response should complete");
-        assert!(events.iter().any(|event| matches!(
+        assert!(!events.iter().any(|event| matches!(
             event,
             AiStreamEvent::ReasoningCompleted {
-                signature: Some(signature),
+                signature: Some(_),
                 ..
-            } if signature == "openai#encrypted-replay"
+            } | AiStreamEvent::ProviderContextItemCaptured { .. }
         )));
     }
 
-    /// Verifies output-item completion supplies buffered reasoning text and its replay signature.
-    /// 验证输出项完成事件会补充缓冲推理文本及其重放签名。
+    /// Verifies output-item completion separates transient summaries from full reasoning.
+    /// 验证输出项完成事件会分离临时摘要与完整思考。
     #[test]
     fn responses_output_item_done_emits_buffered_reasoning() {
         // decoder owns one reasoning item delivered without any preceding delta event.
@@ -2895,17 +3036,31 @@ mod tests {
             .expect("buffered reasoning item should decode");
         assert!(buffered.iter().any(|event| matches!(
             event,
-            AiStreamEvent::ReasoningDelta { item_id, delta }
-                if item_id == "responses:execution:reasoning:0" && delta == "summary"
+            AiStreamEvent::ReasoningSummaryUpdated { text } if text == "summary"
         )));
         assert!(buffered.iter().any(|event| matches!(
             event,
             AiStreamEvent::ReasoningDelta { item_id, delta }
                 if item_id == "responses:execution:reasoning:1" && delta == "raw"
         )));
+        // captured_context is the replay-safe full-reasoning item after transient fields are scrubbed.
+        // captured_context 是清除瞬态字段后的可安全重放完整思考项目。
+        let captured_context = buffered.iter().find_map(|event| match event {
+            AiStreamEvent::ProviderContextItemCaptured { item } => Some(item),
+            _ => None,
+        });
+        assert_eq!(
+            captured_context
+                .and_then(|item| item.pointer("/content/0/text"))
+                .and_then(Value::as_str),
+            Some("raw")
+        );
+        assert!(captured_context.is_some_and(|item| {
+            item.get("summary").is_none() && item.get("encrypted_content").is_none()
+        }));
 
-        // terminal carries the encrypted value only on the final public block owned by this item.
-        // terminal 仅在该项目持有的最后一个公共块上携带加密值。
+        // terminal completes only the full reasoning block without carrying encrypted payloads.
+        // terminal 只完成完整思考块，且不会携带加密载荷。
         let terminal = decoder
             .push_sse(
                 Some("response.completed"),
@@ -2921,16 +3076,7 @@ mod tests {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        assert_eq!(
-            signatures,
-            vec![
-                ("responses:execution:reasoning:0", None),
-                (
-                    "responses:execution:reasoning:1",
-                    Some("openai#opaque-buffered")
-                ),
-            ]
-        );
+        assert_eq!(signatures, vec![("responses:execution:reasoning:1", None)]);
     }
 
     /// Verifies a full reasoning completion emits only the suffix missing from streamed deltas.
@@ -2940,12 +3086,16 @@ mod tests {
         // decoder owns one partial prefix followed by the provider's authoritative full value.
         // decoder 持有一个部分前缀及其后供应商提供的权威完整值。
         let mut decoder = OpenAiResponsesStreamDecoder::new(String::from("execution"));
-        decoder
+        let partial = decoder
             .push_sse(
                 Some("response.reasoning_summary_text.delta"),
                 r#"{"type":"response.reasoning_summary_text.delta","item_id":"rs_partial","summary_index":0,"delta":"part"}"#,
             )
             .expect("partial reasoning delta should decode");
+        assert!(partial.iter().any(|event| matches!(
+            event,
+            AiStreamEvent::ReasoningSummaryUpdated { text } if text == "part"
+        )));
         // completed contains only the missing suffix in its public delta projection.
         // completed 的公共增量投影只包含缺失后缀。
         let completed = decoder
@@ -2956,14 +3106,14 @@ mod tests {
             .expect("full reasoning value should extend the prefix");
         assert!(completed.iter().any(|event| matches!(
             event,
-            AiStreamEvent::ReasoningDelta { delta, .. } if delta == "ial"
+            AiStreamEvent::ReasoningSummaryUpdated { text } if text == "partial"
         )));
     }
 
-    /// Verifies encrypted reasoning remains bound to each exact upstream reasoning item.
-    /// 验证加密推理内容始终绑定到各自精确的上游推理项目。
+    /// Verifies encrypted reasoning from multiple upstream items never enters replay.
+    /// 验证多个上游项目的加密推理绝不进入重放。
     #[test]
-    fn responses_reasoning_signatures_are_item_scoped() {
+    fn responses_encrypted_reasoning_items_stay_out_of_replay() {
         // decoder owns two upstream reasoning items whose local indexes intentionally collide.
         // decoder 持有两个局部索引刻意冲突的上游推理项目。
         let mut decoder = OpenAiResponsesStreamDecoder::new(String::from("execution"));
@@ -2990,8 +3140,8 @@ mod tests {
                 )
                 .expect("scoped reasoning completion should decode");
         }
-        // completedByItem proves neither signature was overwritten by the later output item.
-        // completedByItem 证明两个签名都没有被后续输出项覆盖。
+        // completed_by_item proves summary and encrypted payloads created no persistent blocks.
+        // completed_by_item 证明摘要与加密载荷没有创建持久化块。
         let completed_by_item = decoder
             .push_sse(
                 Some("response.completed"),
@@ -3006,19 +3156,7 @@ mod tests {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        assert_eq!(
-            completed_by_item,
-            vec![
-                (
-                    String::from("responses:execution:reasoning:0"),
-                    Some(String::from("openai#opaque-one"))
-                ),
-                (
-                    String::from("responses:execution:reasoning:1"),
-                    Some(String::from("openai#opaque-two"))
-                ),
-            ]
-        );
+        assert!(completed_by_item.is_empty());
     }
 
     /// Verifies Responses image output becomes a resource and never a visible Base64 text delta.

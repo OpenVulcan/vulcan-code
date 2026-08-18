@@ -257,7 +257,7 @@ pub(crate) fn refreeze_claimed_execution_retry_snapshot(
     session_id: SessionId,
     message: &str,
 ) -> Result<(), String> {
-    let reference = {
+    let retry_state = {
         let guard = task_state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -265,7 +265,15 @@ pub(crate) fn refreeze_claimed_execution_retry_snapshot(
             .workspace_snapshot
             .as_ref()
             .and_then(|workspace| workspace.session_runtime_state.get(&session_id))
-            .and_then(|runtime_state| runtime_state.execution_retry_snapshot.clone())
+            .map(|runtime_state| {
+                (
+                    runtime_state.execution_retry_snapshot.clone(),
+                    runtime_state.conversation_state.clone(),
+                )
+            })
+    };
+    let Some((reference, conversation_state)) = retry_state else {
+        return Ok(());
     };
     let Some(reference) = reference else {
         return Ok(());
@@ -281,6 +289,12 @@ pub(crate) fn refreeze_claimed_execution_retry_snapshot(
         session_id,
         &reference,
     )?;
+    // Terminal projection may append canonical records after the provider request checkpoint was
+    // frozen. Refresh both the controller snapshot and its digest atomically so Continue validates
+    // the current canonical state while retaining the exact frozen provider request.
+    // Provider 请求检查点冻结后，终态投影可能继续追加规范记录。这里原子刷新控制器快照及其
+    // 摘要，使 Continue 校验当前规范状态，同时保留精确冻结的 Provider 请求。
+    refresh_execution_retry_canonical_state(&mut snapshot, &conversation_state)?;
     snapshot.state = ExecutionRetrySnapshotState::Frozen;
     snapshot.claimed_attempt_id = None;
     snapshot.updated_at = current_unix_millis_text();
@@ -332,6 +346,34 @@ pub(crate) fn refreeze_claimed_execution_retry_snapshot(
             String::from("Execution retry runtime state disappeared while refreezing.")
         })?;
     runtime_state.execution_retry_snapshot = Some(updated_reference);
+    Ok(())
+}
+
+/// Refreshes the retry sidecar's controller state and digest from the retained canonical state.
+/// 从保留的规范状态刷新重试 sidecar 的控制器状态与摘要。
+///
+/// # Parameters
+/// # 参数
+/// - `snapshot`: Frozen or claimed retry snapshot that retains the exact pending action.
+/// - `snapshot`：保留精确待执行动作的冻结或已领取重试快照。
+/// - `conversation_state`: Latest retained canonical state after terminal projection.
+/// - `conversation_state`：终态投影完成后的最新保留规范状态。
+///
+/// # Returns
+/// # 返回值
+/// Returns success after both fields are refreshed, or a bridge/serialization error.
+/// 在两个字段均刷新后返回成功；桥接或序列化失败时返回错误。
+pub(crate) fn refresh_execution_retry_canonical_state(
+    snapshot: &mut ExecutionRetrySnapshot,
+    conversation_state: &SessionConversationState,
+) -> Result<(), String> {
+    let controller_snapshot = vulcan_agent_runtime::agent_runtime::provider_request_bridge_conversation::build_core_conversation_snapshot(
+        conversation_state,
+    )?;
+    let canonical_bytes = serde_json::to_vec(&controller_snapshot)
+        .map_err(|error| format!("Failed to serialize refrozen retry Core state: {error}"))?;
+    snapshot.controller_snapshot = controller_snapshot;
+    snapshot.canonical_digest = sha256_hex(&canonical_bytes);
     Ok(())
 }
 

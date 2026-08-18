@@ -9,6 +9,7 @@ use crate::model::{
     SessionAddonState, SessionCompactionEntry, SessionId, SessionMessageEntry,
     SessionMessageRecordKind, SessionRunPhase, SessionRuntimeStateEntry, SessionState,
     SessionSummary, SessionTitleSource, TaskProjectSummary,
+    restore_guided_pending_prompts_for_fresh_process,
 };
 use serde::Deserialize;
 use serde_json::Value;

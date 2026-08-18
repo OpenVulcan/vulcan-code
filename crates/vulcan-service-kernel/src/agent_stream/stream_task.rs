@@ -238,6 +238,9 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
         // This request-local state machine keeps latency markers consistent across every stream event kind.
         // 该请求局部状态机用于确保所有流事件类型的延迟标记保持一致。
         let mut request_trace_state = StreamRequestTraceState::new(stream_task_started_at);
+        // transientReasoningStatusActive avoids redundant clear events while preserving every exit path.
+        // transientReasoningStatusActive 避免冗余清除事件，同时覆盖所有退出路径。
+        let mut transient_reasoning_status_active = false;
         // stream_exit_reason makes every polling-loop terminal path explicit without a shadow completion boolean.
         // stream_exit_reason 显式表达每条轮询循环终止路径，不再使用影子完成布尔值。
         let stream_exit_reason = loop {
@@ -430,6 +433,16 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                         StreamContentKind::Thinking,
                         delta,
                     );
+                }
+                ExecutionStreamEvent::TransientReasoningStatusChanged { session_id, status } => {
+                    transient_reasoning_status_active = status.is_some();
+                    if let Err(error) =
+                        emit_transient_reasoning_status(&app, &task_state, session_id, status)
+                    {
+                        eprintln!(
+                            "[webui-service] transient reasoning status emit failed: {error}"
+                        );
+                    }
                 }
                 ExecutionStreamEvent::ThinkingCompleted { session_id } => {
                     if let Err(error) = complete_streaming_thinking_phase(
@@ -637,6 +650,11 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
             .await
         {
             eprintln!("[webui-service] provider cancellation usage state update failed: {error}");
+        }
+        if transient_reasoning_status_active
+            && let Err(error) = emit_transient_reasoning_status(&app, &task_state, session_id, None)
+        {
+            eprintln!("[webui-service] transient reasoning status clear failed: {error}");
         }
         // Remaining identities belong to non-Finished exits such as exhaustion or stale ownership and must not remain active.
         // 剩余身份属于流耗尽或旧所有权等非 Finished 退出路径，不能继续保持活跃状态。

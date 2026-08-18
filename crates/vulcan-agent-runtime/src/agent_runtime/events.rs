@@ -20,6 +20,33 @@ use vulcan_core::types::{
 type SharedProviderRequestDurabilitySender =
     Arc<Mutex<Option<oneshot::Sender<Result<(), String>>>>>;
 
+/// Classifies one non-persistent reasoning status line.
+/// 对单条非持久化推理状态行进行分类。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransientReasoningStatusKind {
+    /// Readable provider summary that replaces the same transient line.
+    /// 替换同一瞬态状态行的可读供应商摘要。
+    Summary,
+    /// Opaque encrypted reasoning represented only by progress metadata.
+    /// 仅通过进度元数据表示的不透明加密推理。
+    Encrypted,
+}
+
+/// Represents one replace-in-place reasoning status that never enters transcript state.
+/// 表示一条原地替换且绝不进入转录状态的推理状态。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransientReasoningStatus {
+    /// Presentation kind selected by the frozen response profile.
+    /// 由冻结响应 Profile 选择的展示类型。
+    pub kind: TransientReasoningStatusKind,
+    /// Latest readable summary when the provider exposes one.
+    /// 供应商公开可读摘要时的最新摘要。
+    pub text: Option<String>,
+    /// Latest cumulative reasoning-token count when reported.
+    /// 供应商报告时的最新累计推理 Token 数。
+    pub reasoning_tokens: Option<u64>,
+}
+
 /// Cloneable completion half of one Provider-call durable persistence barrier.
 /// 单次 Provider 调用可靠持久化屏障的可克隆完成端。
 #[derive(Debug, Clone)]
@@ -235,6 +262,16 @@ pub enum ExecutionStreamEvent {
         /// Incremental thinking text emitted by the provider.
         /// Provider 发出的增量思考文本。
         delta: String,
+    },
+    /// Replaces or clears the non-persistent reasoning status line.
+    /// 替换或清除非持久化推理状态行。
+    TransientReasoningStatusChanged {
+        /// Session identifier owning the transient status.
+        /// 拥有瞬态状态的会话标识。
+        session_id: SessionId,
+        /// Latest status, or `None` to remove the line immediately.
+        /// 最新状态；为 `None` 时立即移除该状态行。
+        status: Option<TransientReasoningStatus>,
     },
     /// Visible assistant thinking phase completed and should dock back into the main transcript immediately.
     /// 可见助手思考阶段已完成，并应立即收回主转录正文中。

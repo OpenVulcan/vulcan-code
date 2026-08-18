@@ -221,6 +221,52 @@ pub(super) fn begin_existing_prompt_submission_exclusion(
     })
 }
 
+/// Tries to reserve one idle session for exactly one queued user-prompt preparation.
+/// 尝试为一次排队用户提示词准备预留一个空闲会话。
+///
+/// # Parameters
+/// 参数
+/// `state` owns runtime activity and typed turn-admission reservations.
+/// `state` 持有运行活动与类型化回合准入预留。
+/// `session_id` identifies the exact session whose queue is being prepared.
+/// `session_id` 标识正在准备队列的精确会话。
+///
+/// # Returns
+/// 返回值
+/// A guard for the sole accepted preparer, `None` for a concurrent or active owner, or a lock error.
+/// 返回唯一获准准备者的守卫；并发或活动所有者存在时返回 `None`，加锁失败时返回错误。
+pub(super) fn try_begin_pending_prompt_dispatch_exclusion(
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+) -> Result<Option<SessionTurnAdmissionGuard>, String> {
+    let reservation_id = Uuid::new_v4();
+    let mut guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    if webui_session_kernel_has_active_turn(&guard, session_id)
+        || webui_session_has_active_run(&guard, session_id)
+        || guard
+            .session_turn_admission_reservations
+            .contains_key(&session_id)
+    {
+        return Ok(None);
+    }
+    reserve_session_turn_admission(
+        &mut guard,
+        &BTreeSet::from([session_id]),
+        reservation_id,
+        SessionTurnAdmissionReservationKind::PromptSubmission,
+        "分发排队提示词",
+    )?;
+    drop(guard);
+    Ok(Some(SessionTurnAdmissionGuard {
+        state: state.clone(),
+        reservation_id,
+        session_ids: BTreeSet::from([session_id]),
+        project_scopes: BTreeSet::new(),
+    }))
+}
+
 /// Atomically reserves one project and its current children for a lifecycle transition.
 /// 原子预留一个项目及其当前子会话以执行生命周期转换。
 ///

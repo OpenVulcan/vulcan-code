@@ -11,7 +11,10 @@ import {
   EmptyConversationPrompt,
 } from "@/components/conversation/conversation-chrome";
 import { ConversationWorkspace } from "@/components/conversation/conversation-workspace";
-import { StreamingThinkingOverlay } from "@/components/conversation/conversation-blocks";
+import {
+  StreamingThinkingOverlay,
+  TransientReasoningStatusLine,
+} from "@/components/conversation/conversation-blocks";
 import {
   activeStreamingThinkingBlock,
   conversationIsRunning,
@@ -33,6 +36,7 @@ import type { ConversationPlanArtifact } from "@/components/conversation/convers
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n";
 import { projectForConversation } from "@/state/workbench-selectors";
+import { useConversationTransientReasoningStatus } from "@/state/conversation-live-stream-context";
 import { toast } from "sonner";
 import type {
   ComposerAttachmentSummary,
@@ -226,6 +230,14 @@ export function ChatArea(props: ChatAreaProps) {
   const visualSurfaceKey = activeSurfaceConversationId
     ?? `draft:${props.selectedDraftConversation?.projectId ?? "workspace"}`;
   const streamingThinkingBlock = activeStreamingThinkingBlock(surfaceConversation, renderItems);
+  // transientReasoningStatus is request-local and never enters the stable Workbench snapshot.
+  // transientReasoningStatus 仅属于当前请求，绝不进入稳定 Workbench 快照。
+  const transientReasoningStatus = useConversationTransientReasoningStatus(
+    activeSurfaceConversationId,
+  );
+  // transientReasoningStatusVisible tracks only geometry changes; replace-in-place text updates stay one line.
+  // transientReasoningStatusVisible 仅跟踪几何变化；原地替换的文本更新始终保持单行。
+  const transientReasoningStatusVisible = transientReasoningStatus !== null;
   const displayedStreamingThinkingBlock = activeThinkingOverlayBlock(thinkingDisplayMode, streamingThinkingBlock);
   // Visual transitions retain empty/overlay surfaces only within the current conversation scope.
   // 视觉过渡仅在当前会话作用域内保留空状态与浮层。
@@ -335,6 +347,12 @@ export function ChatArea(props: ChatAreaProps) {
   React.useLayoutEffect(() => {
     conversationScrollController.scheduleStoredRestore();
   }, [conversationScrollController, conversationStreamSignature]);
+
+  // Adding or removing the timeline-tail status follows the current semantic scroll ownership.
+  // 在时间线尾部增删状态行时遵循当前语义滚动所有权。
+  React.useLayoutEffect(() => {
+    conversationScrollController.scheduleStoredRestore();
+  }, [conversationScrollController, transientReasoningStatusVisible]);
 
   // A thinking-filter or external layout key change is restored from the latest pre-change semantic snapshot.
   // 思考过滤或外部布局键变化会从最近一次变化前语义快照恢复。
@@ -452,6 +470,9 @@ export function ChatArea(props: ChatAreaProps) {
         scrollRef={workspaceRef}
         initialExpandedState={activeSurfaceLayoutState?.expandedState ?? null}
         onExpandedStateChange={handleExpandedStateChange}
+        transientReasoningStatus={transientReasoningStatus ? (
+          <TransientReasoningStatusLine status={transientReasoningStatus} />
+        ) : null}
         footer={selectedConversation
           && continuation?.eligible
           && !conversationIsRunning(selectedConversation)

@@ -93,6 +93,55 @@ fn execution_retry_claim_accepts_exact_frozen_snapshot() {
     .expect("exact frozen retry snapshot should be claimable");
 }
 
+/// Verifies terminal canonical changes are adopted when a retry snapshot is refrozen.
+/// 验证重试快照重新冻结时会接纳终态规范状态变化。
+#[test]
+fn execution_retry_refreeze_refreshes_canonical_state_and_digest() {
+    let session_id = Uuid::new_v4();
+    let mut runtime_state = retry_runtime_state();
+    let mut snapshot = retry_snapshot(session_id);
+    runtime_state.conversation_state.continuation.updated_at = Some(String::from("2000"));
+
+    let drift_error =
+        validate_execution_retry_snapshot_for_claim(&runtime_state, session_id, &snapshot)
+            .expect_err("terminal canonical state should differ before refreeze refresh");
+    assert_eq!(
+        drift_error,
+        "ERR_CONVERSATION_CONTINUE_RETRY_CANONICAL_STATE_CHANGED"
+    );
+
+    refresh_execution_retry_canonical_state(&mut snapshot, &runtime_state.conversation_state)
+        .expect("refreeze should refresh canonical state and digest together");
+
+    validate_execution_retry_snapshot_for_claim(&runtime_state, session_id, &snapshot)
+        .expect("refreshed retry snapshot should match the retained canonical state");
+}
+
+/// Verifies transcript-only terminal records do not invalidate the frozen provider dispatch.
+/// 验证仅供转录使用的终态记录不会使冻结的 Provider 分发失效。
+#[test]
+fn execution_retry_claim_accepts_transcript_only_record_drift() {
+    let session_id = Uuid::new_v4();
+    let runtime_state = retry_runtime_state();
+    let mut snapshot = retry_snapshot(session_id);
+    snapshot
+        .controller_snapshot
+        .records
+        .push(vulcan_core::types::ConversationRecord {
+            id: String::from("terminal-error-a"),
+            role: vulcan_core::types::TranscriptRole::System,
+            record_kind: vulcan_core::types::TranscriptRecordKind::Visible,
+            visible: true,
+            title: String::from("Execution failed"),
+            body: String::from("Provider request failed."),
+            metadata: None,
+            created_at: String::from("2000"),
+        });
+
+    validate_execution_retry_snapshot_for_claim(&runtime_state, session_id, &snapshot)
+        .expect("transcript-only record drift should preserve the frozen provider dispatch");
+}
+
 /// Verifies an accepted submission can be claimed before its first Provider request exists.
 /// 验证已接纳提交能够在首个 Provider 请求形成前被领取。
 #[test]

@@ -7673,7 +7673,31 @@ mod tests {
                     "Recording VLDB fixture accepts query and execute operations only.",
                 ));
             }
-            let rows = if sql.contains("FROM provider_usage_daily_v3") {
+            let rows = if sql.contains("AS topProviderName") {
+                json!([{
+                    "date": "2026-08-15",
+                    "value": 37,
+                    "requests": 3,
+                    "successes": 3,
+                    "topProviderName": "provider-1",
+                    "topModelName": "gpt-5"
+                }])
+            } else if sql.contains("AS seriesKey") {
+                json!([
+                    {
+                        "date": "2026-08-15",
+                        "seriesKey": "provider-1/gpt-5",
+                        "label": "provider-1 / gpt-5",
+                        "value": 35
+                    },
+                    {
+                        "date": "2026-08-15",
+                        "seriesKey": "provider-1/private-model",
+                        "label": "provider-1 / private-model",
+                        "value": 2
+                    }
+                ])
+            } else if sql.contains("FROM provider_usage_daily_v3") {
                 json!([
                     {
                         "calendarDate": "2026-08-15",
@@ -8423,6 +8447,10 @@ return M
             "incomplete_usage"
         );
         assert!(dashboard["daily"][2]["estimatedCost"].is_null());
+        assert_eq!(dashboard["heatmap"][0]["value"], 37);
+        assert_eq!(dashboard["heatmap"][0]["topModelName"], "gpt-5");
+        assert_eq!(dashboard["series"][0]["seriesKey"], "provider-1/gpt-5");
+        assert_eq!(dashboard["series"][0]["value"], 35);
         assert_eq!(dashboard["pricingCatalog"]["entryCount"], 189);
         assert_eq!(dashboard["recentAttempts"][0]["attemptId"], "attempt-1");
         assert_eq!(
@@ -8522,17 +8550,17 @@ return M
         assert_eq!(clear_result["clearedTokenCount"], 35);
         assert_eq!(clear_result["aggregateRevision"], 8);
         let calls = vldb.calls.lock().expect("lock recorded VLDB calls");
-        assert_eq!(calls.len(), 11);
-        assert!(calls[..10].iter().all(|call| {
+        assert_eq!(calls.len(), 15);
+        assert!(calls[..14].iter().all(|call| {
             call.plugin_id == "vulcan-usage-statistics"
                 && call.operation == VulcanPluginVldbOperation::SqliteQuery
                 && call.payload["binding"] == "system.statistics"
         }));
         assert_eq!(
-            calls[10].operation,
+            calls[14].operation,
             VulcanPluginVldbOperation::SqliteExecute
         );
-        assert_eq!(calls[10].payload["binding"], "system.statistics");
+        assert_eq!(calls[14].payload["binding"], "system.statistics");
         drop(calls);
         // unauthorizedSnapshot removes only the VLDB capability while preserving the enabled runtime lease.
         // unauthorizedSnapshot 仅移除 VLDB 能力，同时保留已启用的运行时租约。

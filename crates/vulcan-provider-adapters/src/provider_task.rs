@@ -1472,6 +1472,7 @@ mod tests {
                         profile_id: String::from("operation.response.v1"),
                         revision: 4,
                         steps: Vec::new(),
+                        transient_reasoning_status: None,
                     },
                 ],
             },

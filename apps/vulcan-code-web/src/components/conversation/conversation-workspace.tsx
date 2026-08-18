@@ -119,6 +119,9 @@ export function ConversationWorkspace(props: {
   // Persists process, user-prompt, and tool-presentation expansion state for this surface.
   // 持久保存当前界面的处理过程、用户提示词与工具展示展开状态。
   onExpandedStateChange: (surfaceId: string, state: ConversationSurfaceExpandedState) => void;
+  // Request-local reasoning status rendered at the end of the conversation timeline.
+  // 渲染在会话时间线末尾的请求局部思考状态。
+  transientReasoningStatus?: React.ReactNode;
   // Sticky footer rendered inside the transcript scroll container.
   // 渲染在转录滚动容器内部的粘性底部插槽。
   footer?: React.ReactNode;
@@ -655,6 +658,7 @@ export function ConversationWorkspace(props: {
                   onSuggest={props.onPlanArtifactSuggest ?? (() => undefined)}
                 />
               ) : null}
+              {props.transientReasoningStatus ?? null}
             </div>
             {props.footer ? (
               <div className="conversation-footer" data-conversation-scroll-footer="true">

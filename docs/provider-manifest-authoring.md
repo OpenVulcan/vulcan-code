@@ -395,6 +395,17 @@ Profile 是供应商通用规则与模型覆盖的主要承载方式：
 删除、显式枚举映射、单元素数组包裹/解包、受限模板、受限宿主字段复制、条件写入/删除、空容器
 清理和显式拒绝。禁止 JavaScript、Lua、表达式求值、反射字段轮询和任意 deep merge。
 
+`response_profiles[].payload.transient_reasoning_status` 用于声明非持久化思考状态，当前只接受：
+
+- `summary`：协议或响应映射产出可读思考摘要；宿主在当前回合底部原地更新一行状态；
+- `encrypted`：上游只提供不透明思考块或思考 Token；宿主只显示通用“正在思考”状态。
+
+这两类状态都不得进入 assistant reasoning、转录记录、Provider replay、重试快照或下一轮上下文，
+并在成功、失败、取消或流结束时清除。若协议本身已有原生 summary 事件，解码器可以直接规范化；若
+供应商使用 Chat 等不具备原生 summary 事件的协议，则必须通过 Response Profile 的精确字段映射和
+模型级 `response_profile_refs` 声明，禁止在运行时按供应商 ID 或模型 ID 写判断。同一冻结请求链最多
+只能解析出一种临时状态模式；多个 Profile 同时声明时必须失败关闭。
+
 请求 Profile 不得写宿主保护根：`model`、`messages`、`input`、`tools`、`stream`。如真实供应商
 需要改变协议核心形状，应新增并审核协议/请求 projector，而不是用 Profile 越权重写。
 

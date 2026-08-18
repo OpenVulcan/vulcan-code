@@ -1753,6 +1753,7 @@ export type TranslationKey =
   | "runtime.requesting"
   | "runtime.toolCalling"
   | "runtime.thinking"
+  | "runtime.thinkingTokenCount"
   | "runtime.thinkingOverlayDockRight"
   | "runtime.thinkingOverlayRestoreCentered"
   | "settings.general"
@@ -4390,6 +4391,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "runtime.requesting": "✨ 正在请求",
     "runtime.toolCalling": "🔧 正在构造工具请求",
     "runtime.thinking": "✨ 正在思考",
+    "runtime.thinkingTokenCount": "（{count} tokens）",
     "runtime.thinkingOverlayDockRight": "切换到右侧紧凑思考面板",
     "runtime.thinkingOverlayRestoreCentered": "恢复底部居中思考面板",
     "settings.general": "通用设置",
@@ -7024,6 +7026,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "runtime.requesting": "✨ Requesting",
     "runtime.toolCalling": "🔧 Building tool request",
     "runtime.thinking": "✨ Thinking",
+    "runtime.thinkingTokenCount": " ({count} tokens)",
     "runtime.thinkingOverlayDockRight": "Switch to the compact right thinking panel",
     "runtime.thinkingOverlayRestoreCentered": "Restore the bottom-centered thinking panel",
     "settings.general": "General",

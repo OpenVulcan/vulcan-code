@@ -2,6 +2,7 @@ import type {
   AppendMessageBodyDelta,
   ConversationMessage,
   ConversationMessageStreamState,
+  TransientReasoningStatus,
   WorkbenchDeltaEnvelope,
   WorkbenchSnapshot,
 } from "@/types";
@@ -68,6 +69,16 @@ export interface ConversationLiveStreamDelta {
 // ConversationLiveStreamListener 接收单条细粒度流版本通知。
 export type ConversationLiveStreamListener = () => void;
 
+// transientReasoningStatusKey builds the subscription identity for one conversation status line.
+// transientReasoningStatusKey 构建单个会话状态行的订阅身份。
+// Parameters: conversationId is the exact owning conversation identity.
+// 参数：conversationId 是精确所属会话身份。
+// Returns: a namespace-isolated Store subscription key.
+// 返回值：一个命名空间隔离的 Store 订阅键。
+export function transientReasoningStatusKey(conversationId: string): string {
+  return `transient-reasoning-status:${conversationId}`;
+}
+
 // LiveStreamFragmentNode stores append history as a reverse linked list for constant-time ingestion.
 // LiveStreamFragmentNode 使用反向链表保存追加历史，以实现常量时间写入。
 interface LiveStreamFragmentNode {
@@ -116,6 +127,9 @@ export class ConversationLiveStreamStore {
   // records stores canonical Web replicas by conversation and message identity.
   // records 按会话与消息身份保存规范 Web 副本。
   readonly #records = new Map<string, ConversationLiveStreamRecord>();
+  // transientReasoningStatuses stores replace-in-place request status outside transcript replicas.
+  // transientReasoningStatuses 在转录副本之外保存原地替换式请求状态。
+  readonly #transientReasoningStatuses = new Map<string, TransientReasoningStatus>();
   // listeners stores fine-grained subscribers for one exact stream.
   // listeners 保存单条精确流的细粒度订阅者。
   readonly #listeners = new Map<string, Set<ConversationLiveStreamListener>>();
@@ -130,6 +144,21 @@ export class ConversationLiveStreamStore {
   // Returns: true when the event changed one live stream replica.
   // 返回值：事件改变某条实时流副本时返回 true。
   applyEnvelope(envelope: WorkbenchDeltaEnvelope): boolean {
+    if (envelope.delta.kind === "transientReasoningStatusChanged") {
+      // conversationId and status are the complete replacement contract for one request.
+      // conversationId 与 status 构成单个请求的完整替换契约。
+      const { conversationId, status } = envelope.delta.payload;
+      // key routes notifications without admitting the status into transcript records.
+      // key 路由通知，且不会让状态进入转录记录。
+      const key = transientReasoningStatusKey(conversationId);
+      if (status) {
+        this.#transientReasoningStatuses.set(conversationId, { ...status });
+      } else {
+        this.#transientReasoningStatuses.delete(conversationId);
+      }
+      this.#dirtyKeys.add(key);
+      return true;
+    }
     if (envelope.delta.kind !== "appendMessageBody") {
       return false;
     }
@@ -243,6 +272,16 @@ export class ConversationLiveStreamStore {
   // 返回值：对应不可变 revision；副本不存在时返回 null。
   getRevision(key: string): ConversationLiveStreamRevision | null {
     return this.#records.get(key)?.revision ?? null;
+  }
+
+  // getTransientReasoningStatus returns the current request-local status for one conversation.
+  // getTransientReasoningStatus 返回单个会话当前请求局部状态。
+  // Parameters: conversationId is the exact owning conversation identity.
+  // 参数：conversationId 是精确所属会话身份。
+  // Returns: the immutable latest status, or null after completion or clearing.
+  // 返回值：最新不可变状态；请求完成或清除后返回 null。
+  getTransientReasoningStatus(conversationId: string): TransientReasoningStatus | null {
+    return this.#transientReasoningStatuses.get(conversationId) ?? null;
   }
 
   // readBody materializes one full stream body for cold mount or authoritative reconciliation.

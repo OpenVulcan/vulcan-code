@@ -46,6 +46,17 @@ messages:
   summary.tokensDetail: Unknown usage remains absent
   summary.usageCoverage: Usage coverage
   summary.usageCoverageDetail: Directly Provider-reported
+  heatmap.title: Activity heatmap
+  heatmap.aria: Token activity heatmap for the last 365 days
+  heatmap.empty: No token activity yet
+  heatmap.tooltip: "{{date}}: {{value}} tokens · {{requests}} requests · {{successRate}} success · {{model}}"
+  heatmap.noModel: No model
+  heatmap.less: Less
+  heatmap.more: More
+  trend.title: Daily token usage
+  trend.range: Last 30 days
+  trend.aria: Daily token usage line chart grouped by model
+  trend.empty: No trend data in this range
   daily.title: Daily model usage
   daily.empty: No daily usage facts
   daily.date: Date

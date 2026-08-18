@@ -939,6 +939,23 @@ pub struct ResponseProjectionProfile {
     /// 顺序应用于解码响应值的封闭映射步骤。
     #[serde(default)]
     pub steps: Vec<MappingStep>,
+    /// Optional transient reasoning presentation selected after response normalization.
+    /// 响应规范化后选择的可选瞬态推理展示方式。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transient_reasoning_status: Option<TransientReasoningStatusMode>,
+}
+
+/// Selects how non-persistent reasoning progress is presented for one response profile.
+/// 选择单个响应 Profile 如何展示非持久化推理进度。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransientReasoningStatusMode {
+    /// Provider emits readable reasoning summaries that replace one transient line.
+    /// 供应商发出可读推理摘要，并替换同一条瞬态状态行。
+    Summary,
+    /// Provider emits opaque encrypted reasoning and only exposes token progress.
+    /// 供应商发出不透明加密推理，仅公开 Token 进度。
+    Encrypted,
 }
 
 /// One closed projection mapping step (plan §6.6).

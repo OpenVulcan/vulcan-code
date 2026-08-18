@@ -72,7 +72,7 @@ pub mod vmm_hooks;
 pub mod vulcan_plugin_hooks;
 
 pub use config::{RuntimeSkillKind, ensure_runtime_defaults};
-pub use events::ExecutionStreamEvent;
+pub use events::{ExecutionStreamEvent, TransientReasoningStatus, TransientReasoningStatusKind};
 pub use execution_models::{
     ExecutionKnowledgeAccessContext, ExecutionPreparation, ExecutionPreparationRequest,
     ExecutionPromptPurpose, ExecutionProviderVisibleAgentMessage, ExecutionRunReport,

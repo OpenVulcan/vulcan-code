@@ -7217,15 +7217,16 @@ pub(super) async fn service_select_public_ai_model(
                         model_id: request.model_id.clone(),
                         connection_id: request.connection_id.clone(),
                     });
-                    runtime.resolve_active_selection(configuration)?;
-                } else {
-                    runtime.resolve_connection_model_selection(
-                        configuration,
-                        request.connection_id.as_str(),
-                        request.provider_id.as_str(),
-                        request.model_id.as_str(),
-                    )?;
                 }
+                // Validate the exact target against the published generation; the draft active
+                // selection cannot be resolved until this transaction is committed.
+                // 使用已发布代际校验精确目标；事务提交前不能解析草稿中的活动选择。
+                runtime.resolve_connection_model_selection(
+                    configuration,
+                    request.connection_id.as_str(),
+                    request.provider_id.as_str(),
+                    request.model_id.as_str(),
+                )?;
                 Ok(())
             },
             |configuration| build_public_ai_settings_snapshot(runtime.as_ref(), configuration),

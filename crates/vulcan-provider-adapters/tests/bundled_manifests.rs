@@ -86,6 +86,7 @@ const OPENCODE_GO_MODELS: &[&str] = &[
     "glm-5",
     "glm-5.1",
     "glm-5.2",
+    "glm-5.3",
     "gpt-5.6-luna",
     "grok-4.5",
     "hy3",
@@ -578,6 +579,28 @@ fn opencode_go_manifest_matches_source_derived_model_contracts() {
         ]
     );
 
+    // glm53 must remain execution-equivalent to the user-confirmed GLM-5.2 contract.
+    // glm53 必须与用户确认的 GLM-5.2 契约保持执行等价。
+    let glm53 = compiled
+        .rule_for_model("go-api", None, "glm-5.3")
+        .expect("OpenCode Go GLM-5.3 rule must exist");
+    assert_eq!(&glm53.supported_protocols, &glm.supported_protocols);
+    assert_eq!(&glm53.selected_protocol, &glm.selected_protocol);
+    // glm53_capabilities normalizes only provenance before comparing every executable field.
+    // glm53_capabilities 仅规范化证据来源，再比较全部可执行字段。
+    let mut glm53_capabilities = glm53
+        .capabilities
+        .clone()
+        .expect("GLM-5.3 capabilities must exist");
+    let glm_capabilities = glm
+        .capabilities
+        .as_ref()
+        .expect("GLM-5.2 capabilities must exist");
+    glm53_capabilities.evidence_revision = glm_capabilities.evidence_revision.clone();
+    assert_eq!(&glm53_capabilities, glm_capabilities);
+    assert_eq!(&glm53.model_parameters, &glm.model_parameters);
+    assert_eq!(&glm53.protocol_capabilities, &glm.protocol_capabilities);
+
     // qwen is the Anthropic source mapping with budget-derived high/max choices.
     // qwen 是带预算派生 high/max 档位的 Anthropic 源码映射。
     let qwen = compiled
@@ -712,6 +735,61 @@ fn commandcode_manifest_freezes_the_verified_provider_contract() {
     );
     let chat_route = route_by_protocol("openai-chat-completions.v1");
     assert_eq!(chat_route["endpoint_path"], "/chat/completions");
+    // transientProfiles prove Chat-only gateway fields are mapped by manifest configuration.
+    // transientProfiles 证明仅 Chat 网关字段通过 Manifest 配置完成映射。
+    let transient_profiles = document["response_profiles"]
+        .as_array()
+        .expect("CommandCode response profiles must exist")
+        .iter()
+        .map(|profile| {
+            (
+                profile["profile_id"].as_str().expect("response profile id"),
+                profile["payload"]["transient_reasoning_status"]
+                    .as_str()
+                    .expect("transient reasoning status mode"),
+            )
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        transient_profiles,
+        BTreeSet::from([
+            ("commandcode.chat.reasoning-summary.v1", "summary"),
+            ("commandcode.chat.encrypted-reasoning.v1", "encrypted"),
+        ])
+    );
+    // mappedModels freezes the verified model-to-response-profile assignment without runtime model checks.
+    // mappedModels 冻结已验证的模型到响应 Profile 分配，且无需运行时模型判断。
+    let mapped_models = document["model_rules"]
+        .as_array()
+        .expect("CommandCode model rules")
+        .iter()
+        .filter_map(|rule| {
+            let refs = rule["response_profile_refs"].as_array()?;
+            if refs.is_empty() {
+                return None;
+            }
+            Some((
+                rule["matcher"]["value"].as_str().expect("mapped model id"),
+                refs[0].as_str().expect("mapped response profile id"),
+            ))
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        mapped_models,
+        BTreeSet::from([
+            ("gpt-5.6-luna", "commandcode.chat.reasoning-summary.v1"),
+            (
+                "meta/muse-spark-1.2",
+                "commandcode.chat.encrypted-reasoning.v1"
+            ),
+            (
+                "meta/muse-spark-1.2-contributor",
+                "commandcode.chat.encrypted-reasoning.v1"
+            ),
+            ("xai/grok-4.5", "commandcode.chat.reasoning-summary.v1"),
+            ("xai/grok-4.6", "commandcode.chat.reasoning-summary.v1"),
+        ])
+    );
     assert!(
         document["model_rules"]
             .as_array()

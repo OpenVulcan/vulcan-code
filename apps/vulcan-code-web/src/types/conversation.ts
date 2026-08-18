@@ -203,6 +203,31 @@ export interface AppendMessageBodyDelta {
   streamState?: ConversationMessageStreamState | null;
 }
 
+// TransientReasoningStatus is one replace-in-place status excluded from transcript persistence.
+// TransientReasoningStatus 是一条排除在转录持久化之外的原地替换式状态。
+export interface TransientReasoningStatus {
+  // Presentation kind selected by the response profile.
+  // 由响应 Profile 选择的展示类型。
+  kind: "summary" | "encrypted";
+  // Latest readable provider summary when available.
+  // 可用时的最新供应商可读摘要。
+  text?: string | null;
+  // Latest cumulative reasoning-token count when available.
+  // 可用时的最新累计推理 Token 数。
+  reasoningTokens?: number | null;
+}
+
+// TransientReasoningStatusChangedDelta replaces or clears one conversation status line.
+// TransientReasoningStatusChangedDelta 替换或清除单个会话状态行。
+export interface TransientReasoningStatusChangedDelta {
+  // Stable conversation identifier owning the active request.
+  // 拥有当前活动请求的稳定会话标识。
+  conversationId: string;
+  // Latest status, or null to clear the line.
+  // 最新状态；为 null 时清除该状态行。
+  status?: TransientReasoningStatus | null;
+}
+
 // UpdateConversationRunPhaseDelta updates a conversation phase without transcript rows.
 // UpdateConversationRunPhaseDelta 在不携带转录行的情况下更新会话阶段。
 export interface UpdateConversationRunPhaseDelta {
@@ -630,7 +655,11 @@ export type WorkbenchDelta =
     kind: "luaSkillsManagedRuntimeProgressChanged";
     payload: LuaSkillsManagedRuntimeProgressChangedDelta;
   }
-  | { kind: "mediaUploadProgressChanged"; payload: MediaUploadProgressChangedDelta };
+  | { kind: "mediaUploadProgressChanged"; payload: MediaUploadProgressChangedDelta }
+  | {
+    kind: "transientReasoningStatusChanged";
+    payload: TransientReasoningStatusChangedDelta;
+  };
 
 // AgentSkillsCatalogChangedDelta replaces only the Agent Skills workbench domain.
 // AgentSkillsCatalogChangedDelta 仅替换工作台中的 Agent Skills 领域。

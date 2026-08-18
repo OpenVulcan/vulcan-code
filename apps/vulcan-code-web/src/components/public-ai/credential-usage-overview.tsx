@@ -222,6 +222,14 @@ function CredentialUsageSummary(props: {
   if (rows.length > 0) {
     return <MiniMaxUsageSummary rows={rows} />
   }
+  // commandCodeRows selects the three stable credit windows for the compact CommandCode layout.
+  // commandCodeRows 为紧凑 CommandCode 布局选择三个稳定的额度窗口。
+  const commandCodeRows = props.credentialProfile?.account_usage_query === "command_code_usage"
+    ? commandCodeUsageRows(props.usage.quota_windows)
+    : null
+  if (commandCodeRows) {
+    return <CommandCodeUsageSummary rows={commandCodeRows} />
+  }
   // tavilyPlanWindow selects only the account-plan allowance used by the compact Tavily card.
   // tavilyPlanWindow 仅选择 Tavily 紧凑卡片使用的账号套餐额度。
   const tavilyPlanWindow = props.credentialProfile?.account_usage_query === "tavily_credits"
@@ -294,6 +302,82 @@ export function commandCodeUsageWindowLabel(
   }
   const label = labels[window.id]
   return label ? t(label) : window.display_name
+}
+
+// CommandCodeUsageRows contains the exact credit windows used by the compact CommandCode card.
+// CommandCodeUsageRows 包含紧凑 CommandCode 卡片使用的精确额度窗口。
+interface CommandCodeUsageRows {
+  // monthly is the full-width monthly credit window.
+  // monthly 是占满整行的每月额度窗口。
+  monthly?: PublicAiAccountUsageWindow
+  // purchased is the first compact window on the second row.
+  // purchased 是第二行的第一个紧凑窗口。
+  purchased?: PublicAiAccountUsageWindow
+  // free is the second compact window on the second row.
+  // free 是第二行的第二个紧凑窗口。
+  free?: PublicAiAccountUsageWindow
+}
+
+// commandCodeUsageRows selects only the stable CommandCode credit windows without inventing missing data.
+// commandCodeUsageRows 仅选择稳定的 CommandCode 额度窗口，不虚构缺失数据。
+//
+// Parameters
+// 参数
+// `windows` is the normalized account-usage window list returned by the provider adapter.
+// `windows` 是供应商适配器返回的规范化账号用量窗口列表。
+//
+// Returns
+// 返回值
+// The recognized credit windows, or null when this response contains no CommandCode credit window.
+// 已识别的额度窗口；当响应不包含 CommandCode 额度窗口时返回 null。
+export function commandCodeUsageRows(
+  windows: PublicAiAccountUsageWindow[],
+): CommandCodeUsageRows | null {
+  // windowsById indexes provider windows by their stable contract identifiers.
+  // windowsById 按稳定契约标识为供应商窗口建立索引。
+  const windowsById = new Map(windows.map((window) => [window.id, window]))
+  // rows keeps the three display positions separate from provider response order.
+  // rows 将三个展示位置与供应商响应顺序分离。
+  const rows: CommandCodeUsageRows = {
+    monthly: windowsById.get("monthly-credits"),
+    purchased: windowsById.get("purchased-credits"),
+    free: windowsById.get("free-credits"),
+  }
+  return rows.monthly || rows.purchased || rows.free ? rows : null
+}
+
+// CommandCodeUsageSummary renders monthly credits on one row and the other credit buckets side by side.
+// CommandCodeUsageSummary 将每月额度单独占一行，并将其余额度桶并列展示。
+function CommandCodeUsageSummary(props: { rows: CommandCodeUsageRows }) {
+  // t resolves the stable CommandCode credit labels in the active locale.
+  // t 使用当前语言解析稳定的 CommandCode 额度标签。
+  const { t } = useI18n()
+  return (
+    <div className="w-full space-y-1.5 text-[11px]">
+      {props.rows.monthly ? (
+        <UsageWindowMetric
+          label={commandCodeUsageWindowLabel(props.rows.monthly, t)}
+          window={props.rows.monthly}
+        />
+      ) : null}
+      {props.rows.purchased || props.rows.free ? (
+        <div className="grid grid-cols-2 gap-1">
+          {props.rows.purchased ? (
+            <UsageWindowMetric
+              label={commandCodeUsageWindowLabel(props.rows.purchased, t)}
+              window={props.rows.purchased}
+            />
+          ) : null}
+          {props.rows.free ? (
+            <UsageWindowMetric
+              label={commandCodeUsageWindowLabel(props.rows.free, t)}
+              window={props.rows.free}
+            />
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  )
 }
 
 // TavilyUsageSummary renders only provider-reported account-plan consumption.

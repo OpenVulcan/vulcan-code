@@ -1,7 +1,9 @@
 //! Vulcan public-contract adapter for the existing host tool controller.
 //! 面向现有宿主工具控制器的 Vulcan 公共契约适配器。
 
-use crate::agent_runtime::events::provider_request_durability_barrier;
+use crate::agent_runtime::events::{
+    TransientReasoningStatus, TransientReasoningStatusKind, provider_request_durability_barrier,
+};
 use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
 use crate::agent_runtime::provider_request_bridge_conversation::build_core_conversation_snapshot;
 use crate::agent_runtime::provider_stream::ProviderDeltaStream;
@@ -47,7 +49,7 @@ use vulcan_core::types::{
 use vulcan_provider_adapters::{
     CredentialExecutionSecret, InputResourceConstraint, ProviderExecutionClient,
     ProviderExecutionRoute, ProviderWireRequestCapture, ResolvedPublicAiExecution,
-    ResourceReferencePolicy,
+    ResourceReferencePolicy, ResponseProjectionProfile, TransientReasoningStatusMode,
 };
 use vulcan_tools_manager::{
     VulcanToolSchemaProjectionContext, project_tool_parameters_schema,
@@ -63,6 +65,44 @@ const PROVIDER_REQUEST_TRACE_SCHEMA_VERSION: &str = "vulcan.provider-request-tra
 /// Process-local monotonic tie breaker used when multiple requests start within one millisecond.
 /// 多个请求在同一毫秒启动时使用的进程本地单调消歧序号。
 static PROVIDER_REQUEST_TRACE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+/// Resolves the single transient reasoning mode frozen into one response-profile chain.
+/// 解析冻结在单条响应 Profile 链中的唯一瞬态推理模式。
+///
+/// # Parameters
+/// 参数
+/// `provider_id` identifies controlled failures and `profiles` is the exact frozen chain.
+/// `provider_id` 标识受控失败，`profiles` 是精确冻结的 Profile 链。
+///
+/// # Returns
+/// 返回值
+/// The configured runtime status kind, or an error when multiple profiles claim the channel.
+/// 返回已配置的运行时状态类型；多个 Profile 同时声明该通道时返回错误。
+fn transient_reasoning_status_kind(
+    provider_id: &str,
+    profiles: &[ResponseProjectionProfile],
+) -> Result<Option<TransientReasoningStatusKind>, VulcanCoreError> {
+    // configured iterates only profiles that explicitly claim the transient status channel.
+    // configured 只遍历显式声明瞬态状态通道的 Profile。
+    let mut configured = profiles
+        .iter()
+        .filter_map(|profile| profile.transient_reasoning_status);
+    // mode is the sole frozen presentation kind accepted for this request.
+    // mode 是当前请求唯一接受的冻结展示类型。
+    let Some(mode) = configured.next() else {
+        return Ok(None);
+    };
+    if configured.next().is_some() {
+        return Err(provider_failure(
+            provider_id,
+            "Multiple response profiles declared the transient reasoning status channel.",
+        ));
+    }
+    Ok(Some(match mode {
+        TransientReasoningStatusMode::Summary => TransientReasoningStatusKind::Summary,
+        TransientReasoningStatusMode::Encrypted => TransientReasoningStatusKind::Encrypted,
+    }))
+}
 
 /// Returns the current Unix timestamp in milliseconds for an ordered trace identity.
 /// 返回用于有序追踪标识的当前 Unix 毫秒时间戳。
@@ -1068,12 +1108,17 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
         // routeFingerprint binds replay signatures to the exact resolved endpoint used by this request.
         // routeFingerprint 将重放签名绑定到本次请求使用的精确已解析端点。
         let route_fingerprint = self.route.request_url("/responses");
+        let transient_reasoning_kind = transient_reasoning_status_kind(
+            self.provider_id(),
+            self.route.response_projection_profiles.as_slice(),
+        )?;
         let mut response = PublicTurnAccumulator::new(
             self.provider_id(),
             self.route.connection.id.as_str(),
             route_fingerprint.as_str(),
             self.route.protocol_route.protocol_profile_id.as_str(),
             self.model_id(),
+            transient_reasoning_kind,
         );
         while let Some(item) = stream.next().await {
             let event = item.map_err(|mut failure| {
@@ -1297,6 +1342,9 @@ struct PublicTurnAccumulator {
     /// Whether a successful terminal response event was observed.
     /// 是否已经观察到成功响应终态事件。
     completed: bool,
+    /// Replace-in-place reasoning status excluded from every durable response field.
+    /// 排除在全部持久化响应字段之外的原地替换式推理状态。
+    transient_reasoning_status: Option<TransientReasoningStatus>,
 }
 
 /// Stores one in-progress assistant item for deterministic replay assembly.
@@ -1440,6 +1488,7 @@ impl PublicTurnAccumulator {
         route_fingerprint: &str,
         protocol_profile_id: &str,
         model_id: &str,
+        transient_reasoning_kind: Option<TransientReasoningStatusKind>,
     ) -> Self {
         Self {
             provider_id: provider_id.to_string(),
@@ -1456,6 +1505,41 @@ impl PublicTurnAccumulator {
             replay_items: Vec::new(),
             provider_context_items: Vec::new(),
             completed: false,
+            transient_reasoning_status: transient_reasoning_kind.map(|kind| {
+                TransientReasoningStatus {
+                    kind,
+                    text: None,
+                    reasoning_tokens: None,
+                }
+            }),
+        }
+    }
+
+    /// Emits the latest transient reasoning status without touching semantic state.
+    /// 发送最新瞬态推理状态，且不触碰任何语义状态。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `live_sender` is the request-local WebUI delta channel.
+    /// `live_sender` 是当前请求局部的 WebUI 增量通道。
+    fn emit_transient_reasoning_status(&self, live_sender: &ProviderLiveDeltaSender) {
+        let _ = live_sender.send(Ok(ProviderStreamDelta::TransientReasoningStatusChanged(
+            self.transient_reasoning_status.clone(),
+        )));
+    }
+
+    /// Clears the transient reasoning line without recording a transcript delta.
+    /// 清除瞬态推理状态行，且不记录转录增量。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `live_sender` is the request-local WebUI delta channel.
+    /// `live_sender` 是当前请求局部的 WebUI 增量通道。
+    fn clear_transient_reasoning_status(&mut self, live_sender: &ProviderLiveDeltaSender) {
+        if self.transient_reasoning_status.take().is_some() {
+            let _ = live_sender.send(Ok(ProviderStreamDelta::TransientReasoningStatusChanged(
+                None,
+            )));
         }
     }
 
@@ -1671,6 +1755,34 @@ impl PublicTurnAccumulator {
                 sink.push_delta(ProviderTurnDelta::Thinking { delta });
                 let _ = live_sender.send(Ok(ProviderStreamDelta::Thinking(live_delta)));
             }
+            AiStreamEvent::ReasoningSummaryUpdated { text } => {
+                // The frozen encrypted mode cannot be reinterpreted as readable summary output.
+                // 冻结的加密模式不得被重新解释为可读摘要输出。
+                if self
+                    .transient_reasoning_status
+                    .as_ref()
+                    .is_some_and(|status| status.kind == TransientReasoningStatusKind::Encrypted)
+                {
+                    return Err(provider_failure(
+                        provider_id,
+                        "A response configured as encrypted reasoning emitted a readable summary update.",
+                    ));
+                }
+                let reasoning_tokens = self
+                    .transient_reasoning_status
+                    .as_ref()
+                    .and_then(|status| status.reasoning_tokens);
+                let status = self.transient_reasoning_status.get_or_insert_with(|| {
+                    TransientReasoningStatus {
+                        kind: TransientReasoningStatusKind::Summary,
+                        text: None,
+                        reasoning_tokens,
+                    }
+                });
+                status.kind = TransientReasoningStatusKind::Summary;
+                status.text = Some(text);
+                self.emit_transient_reasoning_status(live_sender);
+            }
             AiStreamEvent::ReasoningCompleted { item_id, signature } => {
                 let ReplayAccumulatorItemState::Reasoning {
                     signature: current_signature,
@@ -1758,14 +1870,27 @@ impl PublicTurnAccumulator {
                 } else {
                     self.usage = Some(*usage);
                 }
+                if let Some(reasoning_tokens) = self
+                    .usage
+                    .as_ref()
+                    .and_then(|usage| known_usage_u64(&usage.reasoning_tokens))
+                    && let Some(status) = self.transient_reasoning_status.as_mut()
+                    && status.reasoning_tokens != Some(reasoning_tokens)
+                {
+                    status.reasoning_tokens = Some(reasoning_tokens);
+                    self.emit_transient_reasoning_status(live_sender);
+                }
             }
             AiStreamEvent::ResponseCompleted => {
+                self.clear_transient_reasoning_status(live_sender);
                 self.completed = true;
             }
             AiStreamEvent::ResponseFailed { error } => {
+                self.clear_transient_reasoning_status(live_sender);
                 return Err(public_execution_failure(provider_id, error));
             }
             AiStreamEvent::ResponseCancelled => {
+                self.clear_transient_reasoning_status(live_sender);
                 return Err(provider_failure(
                     provider_id,
                     "Provider execution was cancelled.",
@@ -1780,8 +1905,12 @@ impl PublicTurnAccumulator {
                 }
                 self.provider_context_items.push(item);
             }
-            AiStreamEvent::ResponseStarted { .. }
-            | AiStreamEvent::ResourceProgress { .. }
+            AiStreamEvent::ResponseStarted { .. } => {
+                if self.transient_reasoning_status.is_some() {
+                    self.emit_transient_reasoning_status(live_sender);
+                }
+            }
+            AiStreamEvent::ResourceProgress { .. }
             | AiStreamEvent::ImageGenerationPartial { .. }
             | AiStreamEvent::ResponseItemCompleted { .. } => {}
         }
@@ -2817,6 +2946,25 @@ fn known_usage(value: &UsageValue) -> Option<usize> {
     }
 }
 
+/// Returns one known public usage value without platform-size truncation.
+/// 返回一个已知公共用量值，且不发生平台尺寸截断。
+///
+/// # Parameters
+/// 参数
+/// `value` is one normalized usage dimension.
+/// `value` 是一个规范化用量维度。
+///
+/// # Returns
+/// 返回值
+/// The exact count when known, otherwise `None`.
+/// 已知时返回精确计数，否则返回 `None`。
+fn known_usage_u64(value: &UsageValue) -> Option<u64> {
+    match value {
+        UsageValue::Unknown => None,
+        UsageValue::Known { value, .. } => Some(*value),
+    }
+}
+
 /// Creates one controller provider failure.
 /// 创建一个控制器供应商失败。
 fn provider_failure(provider_id: &str, message: &str) -> VulcanCoreError {
@@ -2974,6 +3122,40 @@ mod tests {
         assert_eq!(usage.cache_write_tokens, reported(120));
         assert_eq!(usage.output_tokens, reported(75));
         assert_eq!(usage.total_tokens, reported(1_075));
+    }
+
+    /// Verifies a frozen response-profile chain selects exactly one transient status mode.
+    /// 验证冻结响应 Profile 链只允许选择一种瞬态状态模式。
+    #[test]
+    fn transient_reasoning_mode_fails_closed_on_multiple_profile_claims() {
+        // profile builds one minimal response Profile with an explicit transient-mode claim.
+        // profile 构建一个带显式瞬态模式声明的最小响应 Profile。
+        let profile = |profile_id: &str, mode| ResponseProjectionProfile {
+            profile_id: profile_id.to_string(),
+            revision: 1,
+            steps: Vec::new(),
+            transient_reasoning_status: Some(mode),
+        };
+        assert_eq!(
+            transient_reasoning_status_kind(
+                "provider",
+                &[profile("summary", TransientReasoningStatusMode::Summary,)],
+            )
+            .expect("one transient profile should resolve"),
+            Some(TransientReasoningStatusKind::Summary)
+        );
+        assert!(
+            transient_reasoning_status_kind(
+                "provider",
+                &[
+                    profile("summary", TransientReasoningStatusMode::Summary),
+                    profile("encrypted", TransientReasoningStatusMode::Encrypted),
+                ],
+            )
+            .expect_err("multiple transient profiles must fail closed")
+            .to_string()
+            .contains("Multiple response profiles")
+        );
     }
 
     /// Verifies opaque compaction context requires the exact connection and resolved route.
@@ -3211,6 +3393,7 @@ mod tests {
             "https://api.deepseek.com/responses",
             "openai-responses.v1",
             "deepseek-v4-flash",
+            None,
         );
         // providerItem mirrors a completed assistant message emitted by Responses SSE.
         // providerItem 镜像 Responses SSE 发出的一条已完成助手消息。
@@ -3248,14 +3431,20 @@ mod tests {
 
         // responseState is the exact extension persisted into the assistant conversation node.
         // responseState 是持久化到助手会话节点中的精确扩展状态。
+        // response is the durable controller value after all transient state was cleared.
+        // response 是全部瞬态状态清除后的持久化控制器值。
         let response = accumulator
             .finish()
             .expect("completed Responses turn should finish");
+        // replay_value contains only the canonical durable replay envelope.
+        // replay_value 只包含规范持久化重放信封。
         let replay_value = response
             .provider_message_state
             .as_ref()
             .and_then(|state| state.pointer("/vulcan_ai/replay"))
             .expect("replay envelope should be persisted");
+        // replay proves no summary text or status metadata crossed the persistence boundary.
+        // replay 证明没有摘要文本或状态元数据越过持久化边界。
         let replay: ProviderReplayEnvelope = serde_json::from_value(replay_value.clone())
             .expect("replay envelope should deserialize");
         assert_eq!(
@@ -3309,6 +3498,7 @@ mod tests {
             "https://api.minimax.io/v1/messages",
             "anthropic-messages",
             "MiniMax-M3",
+            None,
         );
 
         accumulator
@@ -3374,6 +3564,104 @@ mod tests {
             live_receiver.try_recv(),
             Ok(Ok(ProviderStreamDelta::Thinking(reasoning))) if reasoning == "先分析"
         ));
+    }
+
+    /// Verifies summary status replacement and token updates never enter durable reasoning state.
+    /// 验证摘要状态替换与 Token 更新绝不进入持久化思考状态。
+    #[test]
+    fn transient_reasoning_summary_is_live_only_and_clears_at_terminal() {
+        // live_sender and live_receiver observe the request-local status stream.
+        // live_sender 与 live_receiver 观察请求局部状态流。
+        let (live_sender, mut live_receiver) = tokio::sync::mpsc::unbounded_channel();
+        // sink proves no transient content enters canonical Core deltas.
+        // sink 证明没有瞬态内容进入规范 Core 增量。
+        let mut sink = RecordingProviderDeltaSink::default();
+        // accumulator owns a profile-configured summary status for one physical request.
+        // accumulator 为单次物理请求持有 Profile 配置的摘要状态。
+        let mut accumulator = PublicTurnAccumulator::new(
+            "commandcode",
+            "connection-commandcode",
+            "https://api.commandcode.ai/provider/v1/chat/completions",
+            "openai-chat-completions.v1",
+            "gpt-5.6-luna",
+            Some(TransientReasoningStatusKind::Summary),
+        );
+
+        for event in [
+            AiStreamEvent::ResponseStarted {
+                execution_id: String::from("response-1"),
+            },
+            AiStreamEvent::ReasoningSummaryUpdated {
+                text: String::from("正在检查协议"),
+            },
+            AiStreamEvent::ReasoningSummaryUpdated {
+                text: String::from("正在核对清单"),
+            },
+            AiStreamEvent::UsageUpdated {
+                usage: Box::new(RequestUsage {
+                    reasoning_tokens: UsageValue::Known {
+                        value: 321,
+                        source: vulcan_ai_contract::UsageValueSource::Reported,
+                    },
+                    ..RequestUsage::default()
+                }),
+            },
+            AiStreamEvent::ResponseCompleted,
+        ] {
+            accumulator
+                .apply_event("commandcode", &live_sender, &mut sink, event)
+                .expect("transient summary lifecycle should accumulate");
+        }
+
+        assert!(sink.deltas.is_empty());
+        assert!(matches!(
+            live_receiver.try_recv(),
+            Ok(Ok(ProviderStreamDelta::TransientReasoningStatusChanged(Some(status))))
+                if status.kind == TransientReasoningStatusKind::Summary
+                    && status.text.is_none()
+                    && status.reasoning_tokens.is_none()
+        ));
+        assert!(matches!(
+            live_receiver.try_recv(),
+            Ok(Ok(ProviderStreamDelta::TransientReasoningStatusChanged(Some(status))))
+                if status.kind == TransientReasoningStatusKind::Summary
+                    && status.text.as_deref() == Some("正在检查协议")
+                    && status.reasoning_tokens.is_none()
+        ));
+        assert!(matches!(
+            live_receiver.try_recv(),
+            Ok(Ok(ProviderStreamDelta::TransientReasoningStatusChanged(Some(status))))
+                if status.kind == TransientReasoningStatusKind::Summary
+                    && status.text.as_deref() == Some("正在核对清单")
+                    && status.reasoning_tokens.is_none()
+        ));
+        assert!(matches!(
+            live_receiver.try_recv(),
+            Ok(Ok(ProviderStreamDelta::TransientReasoningStatusChanged(Some(status))))
+                if status.kind == TransientReasoningStatusKind::Summary
+                    && status.text.as_deref() == Some("正在核对清单")
+                    && status.reasoning_tokens == Some(321)
+        ));
+        assert!(matches!(
+            live_receiver.try_recv(),
+            Ok(Ok(ProviderStreamDelta::TransientReasoningStatusChanged(
+                None
+            )))
+        ));
+
+        let response = accumulator
+            .finish()
+            .expect("completed transient summary turn should finish");
+        assert!(response.assistant_reasoning.is_empty());
+        let replay_value = response
+            .provider_message_state
+            .as_ref()
+            .and_then(|state| state.pointer("/vulcan_ai/replay"))
+            .expect("replay envelope should exist without transient status");
+        let replay: ProviderReplayEnvelope = serde_json::from_value(replay_value.clone())
+            .expect("replay envelope should deserialize");
+        assert!(replay.content.is_empty());
+        assert!(replay.provider_context_items.is_empty());
     }
 
     /// Verifies generated image bytes enter managed attachment storage and the Data URL is discarded.

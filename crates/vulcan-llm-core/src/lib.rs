@@ -351,6 +351,35 @@ mod tests {
         assert_eq!(result["tools"][0]["function"]["name"], "exec_command");
     }
 
+    /// Verifies parallel Responses calls remain one Chat assistant tool-call batch.
+    /// 验证并行 Responses 调用会保留为同一批 Chat assistant 工具调用。
+    #[test]
+    fn parallel_function_calls_share_one_chat_assistant_message() {
+        let result = responses_to_chat_completions(json!({
+            "model": "deepseek/deepseek-v4-flash",
+            "input": [
+                {"type":"message","role":"assistant","content":[{"type":"output_text","text":"Fetching both pages."}]},
+                {"type":"function_call","call_id":"call-1","name":"vulcan_curl_get","arguments":"{\"url\":\"https://example.com/a\"}"},
+                {"type":"function_call","call_id":"call-2","name":"vulcan_curl_get","arguments":"{\"url\":\"https://example.com/b\"}"},
+                {"type":"function_call_output","call_id":"call-1","output":"page-a"},
+                {"type":"function_call_output","call_id":"call-2","output":"page-b"}
+            ],
+            "tools": [{"type":"function","name":"vulcan_curl_get","description":"fetch","parameters":{"type":"object"}}]
+        }))
+        .expect("parallel tool continuation should convert");
+
+        let messages = result["messages"]
+            .as_array()
+            .expect("Chat messages should be an array");
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[0]["role"], "assistant");
+        assert_eq!(messages[0]["tool_calls"].as_array().map(Vec::len), Some(2));
+        assert_eq!(messages[0]["tool_calls"][0]["id"], "call-1");
+        assert_eq!(messages[0]["tool_calls"][1]["id"], "call-2");
+        assert_eq!(messages[1]["tool_call_id"], "call-1");
+        assert_eq!(messages[2]["tool_call_id"], "call-2");
+    }
+
     /// Verifies Responses structured output keeps the exact Chat JSON Schema shape.
     /// 验证 Responses 结构化输出会保留精确的 Chat JSON Schema 结构。
     #[test]

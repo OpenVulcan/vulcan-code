@@ -557,6 +557,9 @@ pub(crate) fn process_provider_stream_delta(
             vec![ExecutionStreamEvent::WireRequestReady { session_id }]
         }
         Ok(ProviderStreamDelta::Thinking(delta)) => state.process_thinking_delta(session_id, delta),
+        Ok(ProviderStreamDelta::TransientReasoningStatusChanged(status)) => {
+            vec![ExecutionStreamEvent::TransientReasoningStatusChanged { session_id, status }]
+        }
         Ok(ProviderStreamDelta::Output(delta)) => state.process_output_delta(session_id, delta),
         Ok(ProviderStreamDelta::ToolRequestFragment(fragment)) => {
             state.observed_tool_request = true;

@@ -98,13 +98,14 @@ pub(super) fn dispatch_queued_pending_prompt_hook(
     Ok(())
 }
 
-/// Returns whether a runtime state has queued pending prompt work.
-/// 返回运行态是否存在已排队的待发送提示词工作。
+/// Returns whether a runtime state has internally scheduled pending prompt work.
+/// 返回运行态是否存在已经进入内部调度的待发送提示词工作。
 pub(super) fn runtime_state_has_queued_pending_prompt_work(
     runtime_state: &SessionRuntimeStateEntry,
 ) -> bool {
+    // Ready panel rows remain user-controlled staging data and must not block an exact Continue claim.
+    // 就绪面板行仍是用户控制的暂存数据，不能阻止精确的 Continue 领取。
     !runtime_state.ui_state.pending_prompt_queue.is_empty()
-        || !runtime_state.ui_state.pending_prompt_panel_queue.is_empty()
 }
 
 /// Returns whether a submitted prompt must enter the visible queue instead of starting immediately.

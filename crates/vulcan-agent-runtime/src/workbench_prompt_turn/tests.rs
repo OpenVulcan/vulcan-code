@@ -240,6 +240,60 @@ fn begin_user_prompt(runtime_state: &mut SessionRuntimeStateEntry) -> SharedProm
     .expect("user prompt should start")
 }
 
+/// Verifies an interrupt that missed the active boundary becomes a correlated user turn at idle dispatch.
+/// 验证错过活动边界的插队消息在空闲分发时会变为带关联标识的用户回合。
+#[test]
+fn idle_dispatched_interrupt_produces_conversation_hook_turn_id() {
+    let session_id = SessionId::from_u128(918);
+    let mut runtime_state = SessionRuntimeStateEntry::default();
+    let mut hook_runtime = ConversationHookRuntime::new();
+    let source = PendingSessionPromptSource::UserInterrupt.for_idle_dispatch();
+    let start = begin_shared_prompt_turn_with_runtime_state(
+        &mut runtime_state,
+        &mut hook_runtime,
+        SharedPromptTurnRuntimeBeginInput {
+            session_id,
+            session_title: "主会话",
+            workspace_path: "D:/workspace",
+            prompt_entry_id: String::from("late-interrupt-entry"),
+            prompt: "继续检查",
+            hidden_model_guidance: None,
+            provider_visible_agent_messages: Vec::new(),
+            attachments: Vec::new(),
+            append_canonical_user_message: true,
+            append_visible_user_prompt_record: true,
+            source,
+            execution_mode: String::from("Build"),
+            reasoning_effort: None,
+            owning_project_id: Some(String::from("project-a")),
+            prior_session_messages: None,
+        },
+    )
+    .expect("idle-dispatched interrupt should begin as a user follow-up");
+    let expected_turn_id = start.preparation_turn_id.clone();
+    let mut vmm_session_memory = test_vmm_session_memory(session_id);
+    let continuation = continue_shared_prompt_turn_after_preparation_with_runtime_state(
+        &mut runtime_state,
+        &mut vmm_session_memory,
+        SharedPromptTurnContinueInput {
+            precheck_outcome: start.precheck_request.clone().skip(),
+            profile_outcome: start.profile_request.clone().skip(),
+            start,
+            project_configuration: ProjectVulcanCodeConfigurationFile::default(),
+            runtime_reasoning_effort: None,
+            provider_reasoning_effort: None,
+            patch_visible_user_prompt_record: true,
+        },
+    )
+    .expect("idle-dispatched interrupt should build a provider request");
+
+    assert_eq!(source, PendingSessionPromptSource::UserFollowup);
+    assert_eq!(
+        continuation.request.conversation_hook_turn_id.as_deref(),
+        Some(expected_turn_id.as_str())
+    );
+}
+
 /// Verifies user prompt begins expose visible session user-input boundary events.
 /// 验证用户提示词开始时会暴露可见的 会话用户输入边界事件。
 #[test]

@@ -46,6 +46,17 @@ messages:
   summary.tokensDetail: 未知用量保持缺失
   summary.usageCoverage: 用量覆盖率
   summary.usageCoverageDetail: Provider 直接报告
+  heatmap.title: 活动热力图
+  heatmap.aria: 最近 365 天 Token 活动点阵图
+  heatmap.empty: 暂无 Token 活动
+  heatmap.tooltip: "{{date}}：{{value}} Token · {{requests}} 次请求 · 成功率 {{successRate}} · {{model}}"
+  heatmap.noModel: 无模型
+  heatmap.less: 较少
+  heatmap.more: 较多
+  trend.title: 每日 Token 用量
+  trend.range: 最近 30 天
+  trend.aria: 按模型分组的每日 Token 用量折线图
+  trend.empty: 当前范围暂无趋势数据
   daily.title: 每日模型用量
   daily.empty: 暂无每日用量事实
   daily.date: 日期

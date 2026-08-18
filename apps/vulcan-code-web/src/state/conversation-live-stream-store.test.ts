@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   ConversationLiveStreamStore,
   conversationLiveStreamKey,
+  transientReasoningStatusKey,
 } from "./conversation-live-stream-store";
 import type {
   AppendMessageBodyDelta,
@@ -332,5 +333,56 @@ describe("ConversationLiveStreamStore", () => {
     store.flushNotifications();
     expect(listener).toHaveBeenCalledTimes(1);
     expect(store.readDeltasAfter(key, 40)).toEqual([{ generation: 41, text: "b" }]);
+  });
+
+  it("replaces and clears transient reasoning status outside transcript streams", () => {
+    // store owns one request-local status subscription without creating a transcript row.
+    // store 持有一条请求局部状态订阅，且不会创建转录行。
+    const store = new ConversationLiveStreamStore();
+    // key isolates transient status notifications from persisted message streams.
+    // key 将临时状态通知与持久化消息流隔离。
+    const key = transientReasoningStatusKey(TEST_CONVERSATION_ID);
+    // listener proves replace and clear events share the same subscription identity.
+    // listener 证明替换与清除事件共享同一订阅身份。
+    const listener = vi.fn();
+    store.subscribe(key, listener);
+
+    expect(store.applyEnvelope({
+      generation: 70,
+      delta: {
+        kind: "transientReasoningStatusChanged",
+        payload: {
+          conversationId: TEST_CONVERSATION_ID,
+          status: {
+            kind: "summary",
+            text: "正在检查协议",
+            reasoningTokens: 321,
+          },
+        },
+      },
+    })).toBe(true);
+    expect(store.getTransientReasoningStatus(TEST_CONVERSATION_ID)).toEqual({
+      kind: "summary",
+      text: "正在检查协议",
+      reasoningTokens: 321,
+    });
+    expect(store.readBody(conversationLiveStreamKey(
+      TEST_CONVERSATION_ID,
+      TEST_MESSAGE_ID,
+    ))).toBeNull();
+
+    expect(store.applyEnvelope({
+      generation: 71,
+      delta: {
+        kind: "transientReasoningStatusChanged",
+        payload: {
+          conversationId: TEST_CONVERSATION_ID,
+          status: null,
+        },
+      },
+    })).toBe(true);
+    expect(store.getTransientReasoningStatus(TEST_CONVERSATION_ID)).toBeNull();
+    store.flushNotifications();
+    expect(listener).toHaveBeenCalledTimes(1);
   });
 });
