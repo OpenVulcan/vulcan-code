@@ -275,6 +275,79 @@ pub(crate) fn refreeze_claimed_execution_retry_snapshot(
     let Some((reference, conversation_state)) = retry_state else {
         return Ok(());
     };
+    refreeze_claimed_execution_retry_snapshot_from_canonical_state(
+        task_state,
+        controller_runtime,
+        session_id,
+        reference,
+        &conversation_state,
+        message,
+    )
+}
+
+/// Returns a claimed retry snapshot to frozen state using an exact caller-owned canonical state.
+/// 使用调用方持有的精确规范状态，将已认领重试快照退回冻结状态。
+///
+/// # Parameters
+/// 参数
+/// `task_state` owns the live retry reference, `controller_runtime` owns persistence, and `session_id` selects the session.
+/// `task_state` 持有实时重试引用，`controller_runtime` 持有持久化能力，`session_id` 选择会话。
+/// `conversation_state` is the authoritative post-mutation canonical state and `message` explains the interruption.
+/// `conversation_state` 是变更后的权威规范状态，`message` 说明中断原因。
+///
+/// # Returns
+/// 返回值
+/// Success after the sidecar and shared reference are updated, or an explicit persistence/state error.
+/// 在 sidecar 与共享引用更新后返回成功，否则返回明确的持久化或状态错误。
+pub(crate) fn refreeze_claimed_execution_retry_snapshot_with_canonical_state(
+    task_state: &SharedServiceBridgeState,
+    controller_runtime: &ControllerRuntimeHandle,
+    session_id: SessionId,
+    conversation_state: &SessionConversationState,
+    message: &str,
+) -> Result<(), String> {
+    // reference is read from the shared claim owner while canonical content comes from the caller.
+    // reference 从共享领取所有者读取，而规范内容来自调用方。
+    let reference = {
+        let guard = task_state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        guard
+            .workspace_snapshot
+            .as_ref()
+            .and_then(|workspace| workspace.session_runtime_state.get(&session_id))
+            .and_then(|runtime_state| runtime_state.execution_retry_snapshot.clone())
+    };
+    refreeze_claimed_execution_retry_snapshot_from_canonical_state(
+        task_state,
+        controller_runtime,
+        session_id,
+        reference,
+        conversation_state,
+        message,
+    )
+}
+
+/// Persists one refrozen sidecar from an exact retry reference and canonical conversation state.
+/// 根据精确重试引用与规范会话状态持久化一份重新冻结的 sidecar。
+///
+/// # Parameters
+/// 参数
+/// All parameters are authoritative values captured by the public refreeze entrypoints.
+/// 所有参数均为公共重冻入口捕获的权威值。
+///
+/// # Returns
+/// 返回值
+/// Success for an absent/ineligible reference or after atomically publishing the refreshed reference.
+/// 引用缺失或不符合条件时返回成功；否则在原子发布刷新引用后返回成功。
+fn refreeze_claimed_execution_retry_snapshot_from_canonical_state(
+    task_state: &SharedServiceBridgeState,
+    controller_runtime: &ControllerRuntimeHandle,
+    session_id: SessionId,
+    reference: Option<vulcan_workbench_model::ExecutionRetrySnapshotRef>,
+    conversation_state: &SessionConversationState,
+    message: &str,
+) -> Result<(), String> {
     let Some(reference) = reference else {
         return Ok(());
     };
@@ -294,7 +367,7 @@ pub(crate) fn refreeze_claimed_execution_retry_snapshot(
     // the current canonical state while retaining the exact frozen provider request.
     // Provider 请求检查点冻结后，终态投影可能继续追加规范记录。这里原子刷新控制器快照及其
     // 摘要，使 Continue 校验当前规范状态，同时保留精确冻结的 Provider 请求。
-    refresh_execution_retry_canonical_state(&mut snapshot, &conversation_state)?;
+    refresh_execution_retry_canonical_state(&mut snapshot, conversation_state)?;
     snapshot.state = ExecutionRetrySnapshotState::Frozen;
     snapshot.claimed_attempt_id = None;
     snapshot.updated_at = current_unix_millis_text();

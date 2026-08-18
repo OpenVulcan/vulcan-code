@@ -13,9 +13,12 @@ mod request_trace;
 mod runtime_event;
 mod stream_exit;
 
-pub(crate) use conversation_checkpoint::refreeze_claimed_execution_retry_snapshot;
 use conversation_checkpoint::{
     handle_conversation_checkpoint_stream_event, persist_prepared_execution_retry_checkpoint,
+};
+pub(crate) use conversation_checkpoint::{
+    refreeze_claimed_execution_retry_snapshot,
+    refreeze_claimed_execution_retry_snapshot_with_canonical_state,
 };
 use finished::{FinishedStreamEventOutcome, handle_finished_stream_event};
 pub(crate) use launch_failure::StreamTaskLaunchFailureCommit;

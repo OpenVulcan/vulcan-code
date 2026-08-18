@@ -249,8 +249,8 @@ pub enum VulcanToolSchemaProjectionProfile {
     /// Preserve the host schema exactly for an explicitly verified provider contract.
     /// 为经过明确验证的 Provider 契约原样保留宿主 Schema。
     PassThrough,
-    /// Preserve the host schema while normalizing only provider-facing object-root declarations.
-    /// 保留宿主 Schema，同时仅规范化 Provider 可见的对象根声明。
+    /// Project the host schema into the portable basic function-tool subset without composition keywords.
+    /// 将宿主 Schema 投影到不包含组合关键字的可移植基础函数工具子集。
     StandardObjectRoot,
     /// Project JSON Schema into the smaller Gemini function-declaration dialect.
     /// 将 JSON Schema 投影为更精简的 Gemini 函数声明方言。

@@ -203,15 +203,26 @@ export interface AppendMessageBodyDelta {
   streamState?: ConversationMessageStreamState | null;
 }
 
+// TransientReasoningSummaryItem is one provider-owned readable summary node.
+// TransientReasoningSummaryItem 是一个由供应商持有的可读摘要节点。
+export interface TransientReasoningSummaryItem {
+  // Stable summary identity used for in-place updates.
+  // 用于原地更新的稳定摘要标识。
+  itemId: string;
+  // Latest complete text for this exact summary node.
+  // 当前精确摘要节点的最新完整文本。
+  text: string;
+}
+
 // TransientReasoningStatus is one replace-in-place status excluded from transcript persistence.
 // TransientReasoningStatus 是一条排除在转录持久化之外的原地替换式状态。
 export interface TransientReasoningStatus {
   // Presentation kind selected by the response profile.
   // 由响应 Profile 选择的展示类型。
   kind: "summary" | "encrypted";
-  // Latest readable provider summary when available.
-  // 可用时的最新供应商可读摘要。
-  text?: string | null;
+  // Ordered readable provider summary nodes when available.
+  // 可用时的有序供应商可读摘要节点。
+  summaries?: TransientReasoningSummaryItem[];
   // Latest cumulative reasoning-token count when available.
   // 可用时的最新累计推理 Token 数。
   reasoningTokens?: number | null;

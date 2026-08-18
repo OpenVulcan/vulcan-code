@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "alibaba",
-  "revision": 7,
-  "published_at": "2026-08-08T00:00:00Z",
+  "revision": 8,
+  "published_at": "2026-08-18T00:00:00Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -6179,7 +6179,7 @@
       "output": {
         "kind": "text",
         "normalized_result_path": "text",
-        "source_path": "output.results[].transcription_url"
+        "source_path": "/output/results/0/transcription_url"
       },
       "service_entry_id": "model-studio-cn",
       "target_id": "model-studio-cn.fun-asr.speech-transcribe",
@@ -6270,7 +6270,7 @@
         ],
         "normalized_result_path": "resources",
         "resource_kind": "video",
-        "source_path": "output.video_url",
+        "source_path": "/output/video_url",
         "resource_decoders": [
           {
             "source_path": "/output/video_url",
@@ -6528,7 +6528,7 @@
         ],
         "normalized_result_path": "resources",
         "resource_kind": "video",
-        "source_path": "output.video_url",
+        "source_path": "/output/video_url",
         "resource_decoders": [
           {
             "source_path": "/output/video_url",
@@ -6622,7 +6622,7 @@
         ],
         "normalized_result_path": "resources",
         "resource_kind": "video",
-        "source_path": "output.video_url",
+        "source_path": "/output/video_url",
         "resource_decoders": [
           {
             "source_path": "/output/video_url",
@@ -6751,7 +6751,7 @@
         ],
         "normalized_result_path": "resources",
         "resource_kind": "video",
-        "source_path": "output.video_url",
+        "source_path": "/output/video_url",
         "resource_decoders": [
           {
             "source_path": "/output/video_url",
@@ -6861,7 +6861,7 @@
         ],
         "normalized_result_path": "resources",
         "resource_kind": "video",
-        "source_path": "output.video_url",
+        "source_path": "/output/video_url",
         "resource_decoders": [
           {
             "source_path": "/output/video_url",
@@ -8934,7 +8934,7 @@
         ],
         "normalized_result_path": "resources",
         "resource_kind": "video",
-        "source_path": "output.video_url",
+        "source_path": "/output/video_url",
         "resource_decoders": [
           {
             "source_path": "/output/video_url",
@@ -9028,7 +9028,7 @@
         ],
         "normalized_result_path": "resources",
         "resource_kind": "video",
-        "source_path": "output.video_url",
+        "source_path": "/output/video_url",
         "resource_decoders": [
           {
             "source_path": "/output/video_url",
@@ -9116,7 +9116,7 @@
         ],
         "normalized_result_path": "resources",
         "resource_kind": "video",
-        "source_path": "output.video_url",
+        "source_path": "/output/video_url",
         "resource_decoders": [
           {
             "source_path": "/output/video_url",
@@ -9210,7 +9210,7 @@
         ],
         "normalized_result_path": "resources",
         "resource_kind": "video",
-        "source_path": "output.video_url",
+        "source_path": "/output/video_url",
         "resource_decoders": [
           {
             "source_path": "/output/video_url",
@@ -9298,7 +9298,7 @@
         ],
         "normalized_result_path": "resources",
         "resource_kind": "video",
-        "source_path": "output.video_url",
+        "source_path": "/output/video_url",
         "resource_decoders": [
           {
             "source_path": "/output/video_url",
@@ -9392,7 +9392,7 @@
         ],
         "normalized_result_path": "resources",
         "resource_kind": "video",
-        "source_path": "output.video_url",
+        "source_path": "/output/video_url",
         "resource_decoders": [
           {
             "source_path": "/output/video_url",
@@ -9521,7 +9521,7 @@
         ],
         "normalized_result_path": "resources",
         "resource_kind": "video",
-        "source_path": "output.video_url",
+        "source_path": "/output/video_url",
         "resource_decoders": [
           {
             "source_path": "/output/video_url",
@@ -9726,7 +9726,7 @@
         ],
         "normalized_result_path": "resources",
         "resource_kind": "video",
-        "source_path": "output.video_url",
+        "source_path": "/output/video_url",
         "resource_decoders": [
           {
             "source_path": "/output/video_url",

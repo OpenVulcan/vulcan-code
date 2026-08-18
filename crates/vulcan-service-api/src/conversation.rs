@@ -391,6 +391,19 @@ pub enum TransientReasoningStatusKind {
     Encrypted,
 }
 
+/// Carries one readable transient reasoning summary node.
+/// 携带一个可读瞬态推理摘要节点。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TransientReasoningSummaryItemSnapshot {
+    /// Stable summary identity used for in-place updates.
+    /// 用于原地更新的稳定摘要标识。
+    pub item_id: String,
+    /// Latest complete text for this summary node.
+    /// 当前摘要节点的最新完整文本。
+    pub text: String,
+}
+
 /// Carries one transient reasoning status value displayed outside the transcript.
 /// 携带一条显示在转录之外的瞬态推理状态值。
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
@@ -399,10 +412,10 @@ pub struct TransientReasoningStatusSnapshot {
     /// Presentation kind selected by the response profile.
     /// 由响应 Profile 选择的展示类型。
     pub kind: TransientReasoningStatusKind,
-    /// Latest readable summary when available.
-    /// 可用时的最新可读摘要。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub text: Option<String>,
+    /// Ordered readable summary nodes when available.
+    /// 可用时的有序可读摘要节点。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub summaries: Vec<TransientReasoningSummaryItemSnapshot>,
     /// Latest cumulative reasoning-token count when available.
     /// 可用时的最新累计推理 Token 数。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1124,7 +1137,10 @@ mod tests {
                     conversation_id: String::from("conversation"),
                     status: Some(TransientReasoningStatusSnapshot {
                         kind: TransientReasoningStatusKind::Summary,
-                        text: Some(String::from("正在核对清单")),
+                        summaries: vec![TransientReasoningSummaryItemSnapshot {
+                            item_id: String::from("summary-0"),
+                            text: String::from("正在核对清单"),
+                        }],
                         reasoning_tokens: Some(321),
                     }),
                 },
@@ -1141,7 +1157,10 @@ mod tests {
                         "conversationId": "conversation",
                         "status": {
                             "kind": "summary",
-                            "text": "正在核对清单",
+                            "summaries": [{
+                                "itemId": "summary-0",
+                                "text": "正在核对清单"
+                            }],
                             "reasoningTokens": 321
                         }
                     }

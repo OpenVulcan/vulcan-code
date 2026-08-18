@@ -128,9 +128,9 @@ pub(crate) struct OpenAiChatStreamDecoder {
     /// Last cumulative MiniMax `reasoning_details` text.
     /// 最近一次累计的 MiniMax `reasoning_details` 文本。
     reasoning_details_text: String,
-    /// Last cumulative transient `reasoning.summary` text.
-    /// 最近一次累计的瞬态 `reasoning.summary` 文本。
-    reasoning_summary_text: String,
+    /// Cumulative transient `reasoning.summary` text keyed by provider-owned detail index.
+    /// 按供应商持有的详情索引保存的累计瞬态 `reasoning.summary` 文本。
+    reasoning_summary_text: BTreeMap<u32, String>,
     /// Tool calls keyed by stable parallel index.
     /// 按稳定并行索引保存的工具调用。
     tools: BTreeMap<u32, OpenAiToolState>,
@@ -166,7 +166,7 @@ impl OpenAiChatStreamDecoder {
             text_open: false,
             reasoning_open: false,
             reasoning_details_text: String::new(),
-            reasoning_summary_text: String::new(),
+            reasoning_summary_text: BTreeMap::new(),
             tools: BTreeMap::new(),
             registered_tools,
         }
@@ -210,16 +210,28 @@ impl OpenAiChatStreamDecoder {
                 });
             }
         }
-        let direct_reasoning = delta
+        // detailReasoning and summaries keep durable thinking separate from typed summary nodes.
+        // detailReasoning 与 summaries 将持久化思考和类型化摘要节点分离。
+        let (detail_reasoning, summaries, summary_delta) =
+            self.decode_reasoning_details_delta(delta)?;
+        // reasoningContent is an explicit durable field and therefore outranks every mirror.
+        // reasoningContent 是显式持久化字段，因此优先于任何镜像字段。
+        let reasoning_content = delta
             .get("reasoning_content")
             .and_then(Value::as_str)
-            .or_else(|| delta.get("reasoning").and_then(Value::as_str));
-        // detail_reasoning and summary keep durable thinking separate from replacement status.
-        // detail_reasoning 与 summary 将持久化思考和替换式状态分离。
-        let (detail_reasoning, summary) = self.decode_reasoning_details_delta(delta);
-        // reasoning prefers the protocol's direct durable field when both representations exist.
-        // reasoning 在两种表示同时存在时优先采用协议直接持久化字段。
-        let reasoning = direct_reasoning.map(str::to_string).or(detail_reasoning);
+            .map(str::to_string);
+        // mirroredReasoning is omitted only when the typed summary proves byte-identical content.
+        // mirroredReasoning 仅在类型化摘要证明内容逐字节相同时才被排除。
+        let mirrored_reasoning = delta
+            .get("reasoning")
+            .and_then(Value::as_str)
+            .filter(|reasoning| summary_delta.as_deref() != Some(*reasoning))
+            .map(str::to_string);
+        // reasoning prefers explicit direct durable fields while avoiding duplicate detail content.
+        // reasoning 优先采用显式直接持久化字段，同时避免重复详情内容。
+        let reasoning = reasoning_content
+            .or(mirrored_reasoning)
+            .or(detail_reasoning);
         if let Some(reasoning) = reasoning {
             let item_id = format!("openai:{}:reasoning", self.execution_id);
             if !self.reasoning_open {
@@ -235,8 +247,8 @@ impl OpenAiChatStreamDecoder {
                 });
             }
         }
-        if let Some(summary) = summary {
-            events.push(AiStreamEvent::ReasoningSummaryUpdated { text: summary });
+        for (item_id, text) in summaries {
+            events.push(AiStreamEvent::ReasoningSummaryUpdated { item_id, text });
         }
         if let Some(tool_calls) = delta.get("tool_calls").and_then(Value::as_array) {
             for tool_delta in tool_calls {
@@ -264,16 +276,17 @@ impl OpenAiChatStreamDecoder {
     ///
     /// # Returns
     /// 返回值
-    /// Newly observed full-reasoning suffix and complete transient-summary replacement.
-    /// 返回新观测到的完整推理后缀与完整瞬态摘要替换值。
+    /// Newly observed full-reasoning suffix, indexed summary replacements, and raw summary delta.
+    /// 返回新观测到的完整推理后缀、带索引的摘要替换值与原始摘要增量。
     fn decode_reasoning_details_delta(
         &mut self,
         delta: &Value,
-    ) -> (Option<String>, Option<String>) {
+    ) -> Result<(Option<String>, Vec<(String, String)>, Option<String>), ProtocolConversionError>
+    {
         // details is the exact provider-owned typed reasoning array for this chunk.
         // details 是当前分片中由供应商持有的精确类型化推理数组。
         let Some(details) = delta.get("reasoning_details").and_then(Value::as_array) else {
-            return (None, None);
+            return Ok((None, Vec::new(), None));
         };
         // reasoning concatenates only durable text parts from the current array snapshot.
         // reasoning 只拼接当前数组快照中的持久化文本部分。
@@ -284,28 +297,51 @@ impl OpenAiChatStreamDecoder {
                 Some(_) => None,
             })
             .collect::<String>();
-        // summary concatenates only readable replacement-summary parts.
-        // summary 只拼接可读的替换式摘要部分。
-        let summary = details
-            .iter()
-            .filter_map(|detail| {
-                (detail.get("type").and_then(Value::as_str) == Some("reasoning.summary"))
-                    .then(|| detail.get("summary").and_then(Value::as_str))
-                    .flatten()
-            })
-            .collect::<String>();
-        // Chat summary values are wire deltas; the public event always replaces with accumulated text.
-        // Chat 摘要值是线路增量；公共事件始终使用累计完整文本进行替换。
-        let summary_update = if summary.is_empty() {
-            None
-        } else {
-            self.reasoning_summary_text.push_str(summary.as_str());
-            Some(self.reasoning_summary_text.clone())
-        };
-        (
+        // summaryUpdates preserve every provider summary node instead of flattening unrelated indexes.
+        // summaryUpdates 保留每个供应商摘要节点，而不是压平无关索引。
+        let mut summary_updates = Vec::new();
+        // rawSummaryDelta proves whether an untyped top-level reasoning field mirrors this chunk.
+        // rawSummaryDelta 用于证明无类型顶层 reasoning 字段是否镜像当前分片。
+        let mut raw_summary_delta = String::new();
+        for (array_index, detail) in details.iter().enumerate() {
+            if detail.get("type").and_then(Value::as_str) != Some("reasoning.summary") {
+                continue;
+            }
+            let Some(summary) = detail.get("summary").and_then(Value::as_str) else {
+                continue;
+            };
+            let fallback_index = u32::try_from(array_index).map_err(|_| {
+                ProtocolConversionError::new("OpenAI Chat reasoning detail index exceeds u32.")
+            })?;
+            let index = match detail.get("index") {
+                Some(Value::Number(index)) => index
+                    .as_u64()
+                    .and_then(|index| u32::try_from(index).ok())
+                    .ok_or_else(|| {
+                        ProtocolConversionError::new(
+                            "OpenAI Chat reasoning detail index is invalid or exceeds u32.",
+                        )
+                    })?,
+                Some(_) => {
+                    return Err(ProtocolConversionError::new(
+                        "OpenAI Chat reasoning detail index is invalid.",
+                    ));
+                }
+                None => fallback_index,
+            };
+            raw_summary_delta.push_str(summary);
+            let accumulated = self.reasoning_summary_text.entry(index).or_default();
+            accumulated.push_str(summary);
+            summary_updates.push((
+                format!("openai:{}:reasoning-summary:{index}", self.execution_id),
+                accumulated.clone(),
+            ));
+        }
+        Ok((
             cumulative_suffix(&mut self.reasoning_details_text, reasoning),
-            summary_update,
-        )
+            summary_updates,
+            (!raw_summary_delta.is_empty()).then_some(raw_summary_delta),
+        ))
     }
 
     /// Decodes one indexed Chat Completions tool-call delta.
@@ -1172,6 +1208,7 @@ impl OpenAiResponsesStreamDecoder {
             current_text.push_str(suffix);
             if transient_summary {
                 events.push(AiStreamEvent::ReasoningSummaryUpdated {
+                    item_id: item_id.to_string(),
                     text: current_text.clone(),
                 });
             }
@@ -1550,6 +1587,7 @@ impl ProtocolStreamDecoder for OpenAiResponsesStreamDecoder {
                 };
                 if transient_summary {
                     events.push(AiStreamEvent::ReasoningSummaryUpdated {
+                        item_id,
                         text: summary_text.expect("transient summary text should be assembled"),
                     });
                 } else {
@@ -2044,15 +2082,21 @@ mod tests {
         let summary = decoder
             .push_sse(
                 None,
-                r#"{"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.summary","summary":"先拆分问题"}]} ,"finish_reason":null}]}"#,
+                r#"{"choices":[{"delta":{"reasoning":"先拆分问题","reasoning_details":[{"type":"reasoning.summary","index":0,"summary":"先拆分问题"}]} ,"finish_reason":null}]}"#,
             )
-            .expect("reasoning summary should decode");
+            .expect("mirrored reasoning summary should decode once");
         let revised_summary = decoder
             .push_sse(
                 None,
-                r#"{"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.summary","summary":"，再核对协议"}]} ,"finish_reason":null}]}"#,
+                r#"{"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.summary","index":0,"summary":"，再核对协议"}]} ,"finish_reason":null}]}"#,
             )
             .expect("the next reasoning summary fragment should publish accumulated text");
+        let next_summary = decoder
+            .push_sse(
+                None,
+                r#"{"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.summary","index":1,"summary":"检查工具结果"}]} ,"finish_reason":null}]}"#,
+            )
+            .expect("a new reasoning summary index should open an independent node");
         let encrypted = decoder
             .push_sse(
                 None,
@@ -2068,7 +2112,8 @@ mod tests {
 
         assert!(summary.iter().any(|event| matches!(
             event,
-            AiStreamEvent::ReasoningSummaryUpdated { text } if text == "先拆分问题"
+            AiStreamEvent::ReasoningSummaryUpdated { item_id, text }
+                if item_id == "openai:execution:reasoning-summary:0" && text == "先拆分问题"
         )));
         assert!(!summary.iter().any(|event| matches!(
             event,
@@ -2076,7 +2121,12 @@ mod tests {
         )));
         assert!(revised_summary.iter().any(|event| matches!(
             event,
-            AiStreamEvent::ReasoningSummaryUpdated { text } if text == "先拆分问题，再核对协议"
+            AiStreamEvent::ReasoningSummaryUpdated { text, .. } if text == "先拆分问题，再核对协议"
+        )));
+        assert!(next_summary.iter().any(|event| matches!(
+            event,
+            AiStreamEvent::ReasoningSummaryUpdated { item_id, text }
+                if item_id == "openai:execution:reasoning-summary:1" && text == "检查工具结果"
         )));
         assert!(!encrypted.iter().any(|event| matches!(
             event,
@@ -2224,7 +2274,7 @@ mod tests {
         );
         assert!(events.iter().any(|event| matches!(
             event,
-            AiStreamEvent::ReasoningSummaryUpdated { text } if text == "先检查文件"
+            AiStreamEvent::ReasoningSummaryUpdated { text, .. } if text == "先检查文件"
         )));
         assert_eq!(
             events
@@ -2466,7 +2516,7 @@ mod tests {
 
         assert!(events.iter().any(|event| matches!(
             event,
-            AiStreamEvent::ReasoningSummaryUpdated { text } if text == "inspect the workspace"
+            AiStreamEvent::ReasoningSummaryUpdated { text, .. } if text == "inspect the workspace"
         )));
         assert!(!events.iter().any(|event| matches!(
             event,
@@ -2860,7 +2910,7 @@ mod tests {
 
         assert!(events.iter().any(|event| matches!(
             event,
-            AiStreamEvent::ReasoningSummaryUpdated { text } if text == "buffered reasoning"
+            AiStreamEvent::ReasoningSummaryUpdated { text, .. } if text == "buffered reasoning"
         )));
         assert!(!events.iter().any(|event| matches!(
             event,
@@ -2927,8 +2977,8 @@ mod tests {
         // decoder owns the complete lifecycle needed to verify stable cross-event identities.
         // decoder 持有验证跨事件稳定身份所需的完整生命周期。
         let mut decoder = OpenAiResponsesStreamDecoder::new(String::from("execution"));
-        // events aggregates three deltas that intentionally reuse local index zero.
-        // events 汇总三个刻意复用局部零索引的增量。
+        // events aggregates four deltas that intentionally reuse local index zero.
+        // events 汇总四个刻意复用局部零索引的增量。
         let mut events = Vec::new();
         events.extend(
             decoder
@@ -2953,6 +3003,14 @@ mod tests {
                     r#"{"type":"response.reasoning_summary_text.delta","item_id":"rs_1","output_index":0,"summary_index":0,"delta":"summary"}"#,
                 )
                 .expect("reasoning summary should decode"),
+        );
+        events.extend(
+            decoder
+                .push_sse(
+                    Some("response.reasoning_summary_text.delta"),
+                    r#"{"type":"response.reasoning_summary_text.delta","item_id":"rs_2","output_index":1,"summary_index":0,"delta":"other summary"}"#,
+                )
+                .expect("second reasoning summary item should decode"),
         );
 
         // started_item_ids proves only full reasoning creates persistent semantic blocks.
@@ -2983,7 +3041,13 @@ mod tests {
         )));
         assert!(events.iter().any(|event| matches!(
             event,
-            AiStreamEvent::ReasoningSummaryUpdated { text } if text == "summary"
+            AiStreamEvent::ReasoningSummaryUpdated { item_id, text }
+                if item_id == "responses:execution:reasoning:2" && text == "summary"
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AiStreamEvent::ReasoningSummaryUpdated { item_id, text }
+                if item_id == "responses:execution:reasoning:3" && text == "other summary"
         )));
     }
 
@@ -3036,7 +3100,7 @@ mod tests {
             .expect("buffered reasoning item should decode");
         assert!(buffered.iter().any(|event| matches!(
             event,
-            AiStreamEvent::ReasoningSummaryUpdated { text } if text == "summary"
+            AiStreamEvent::ReasoningSummaryUpdated { text, .. } if text == "summary"
         )));
         assert!(buffered.iter().any(|event| matches!(
             event,
@@ -3094,7 +3158,7 @@ mod tests {
             .expect("partial reasoning delta should decode");
         assert!(partial.iter().any(|event| matches!(
             event,
-            AiStreamEvent::ReasoningSummaryUpdated { text } if text == "part"
+            AiStreamEvent::ReasoningSummaryUpdated { text, .. } if text == "part"
         )));
         // completed contains only the missing suffix in its public delta projection.
         // completed 的公共增量投影只包含缺失后缀。
@@ -3106,7 +3170,7 @@ mod tests {
             .expect("full reasoning value should extend the prefix");
         assert!(completed.iter().any(|event| matches!(
             event,
-            AiStreamEvent::ReasoningSummaryUpdated { text } if text == "partial"
+            AiStreamEvent::ReasoningSummaryUpdated { text, .. } if text == "partial"
         )));
     }
 

@@ -72,8 +72,8 @@ export function useConversationLiveStreamRevision(
   return React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 
-// useConversationTransientReasoningStatus subscribes to one ephemeral reasoning status line.
-// useConversationTransientReasoningStatus 订阅单条瞬态推理状态行。
+// useConversationTransientReasoningStatus subscribes to one ephemeral reasoning status collection.
+// useConversationTransientReasoningStatus 订阅单个瞬态推理状态集合。
 // Parameters: conversationId is the exact conversation identity, or null to disable the subscription.
 // 参数：conversationId 是精确会话身份；为 null 时禁用订阅。
 // Returns: the latest replace-in-place status, or null after it is cleared.

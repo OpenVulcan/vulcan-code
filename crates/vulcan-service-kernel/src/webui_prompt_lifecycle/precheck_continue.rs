@@ -7,7 +7,8 @@ use super::*;
 use crate::refreeze_claimed_execution_retry_snapshot;
 use crate::{
     apply_session_phase_to_state, emit_context_injection_changed_delta,
-    emit_service_event_with_trace, owning_project_id_for_session, persist_workspace_session_update,
+    emit_conversation_continuation_summary_changed, emit_service_event_with_trace,
+    owning_project_id_for_session, persist_workspace_session_update,
     retain_hydrated_conversation_windows_for_workspace,
 };
 
@@ -1147,6 +1148,13 @@ pub(crate) async fn mark_webui_prompt_preparation_failed(
         ServiceEvent::WorkbenchDelta(Box::new(event)),
     );
     refreeze_claimed_execution_retry_snapshot(state, controller_runtime, session_id, error)?;
+    if let Err(projection_error) =
+        emit_conversation_continuation_summary_changed(app, state, session_id)
+    {
+        eprintln!(
+            "[webui-service] continuation summary refresh after precheck failure failed: {projection_error}"
+        );
+    }
     let snapshot = current_workspace_snapshot_from_shared_state(state)?
         .ok_or_else(|| String::from("precheck failed persist snapshot is unavailable"))?;
     persist_workspace_session_update(

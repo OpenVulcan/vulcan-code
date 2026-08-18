@@ -29,7 +29,7 @@
     },
     "output": {
       "kind": "text",
-      "source_path": "output.results[].transcription_url",
+      "source_path": "/output/results/0/transcription_url",
       "normalized_result_path": "text"
     },
     "execution": {

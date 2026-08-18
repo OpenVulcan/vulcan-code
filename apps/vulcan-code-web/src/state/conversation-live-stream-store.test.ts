@@ -355,7 +355,10 @@ describe("ConversationLiveStreamStore", () => {
           conversationId: TEST_CONVERSATION_ID,
           status: {
             kind: "summary",
-            text: "正在检查协议",
+            summaries: [{
+              itemId: "summary-0",
+              text: "正在检查协议",
+            }],
             reasoningTokens: 321,
           },
         },
@@ -363,7 +366,10 @@ describe("ConversationLiveStreamStore", () => {
     })).toBe(true);
     expect(store.getTransientReasoningStatus(TEST_CONVERSATION_ID)).toEqual({
       kind: "summary",
-      text: "正在检查协议",
+      summaries: [{
+        itemId: "summary-0",
+        text: "正在检查协议",
+      }],
       reasoningTokens: 321,
     });
     expect(store.readBody(conversationLiveStreamKey(

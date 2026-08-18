@@ -12,6 +12,7 @@ use super::types::{
 use crate::transcript::{SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind};
 use serde_json::Value;
 use std::collections::BTreeSet;
+use vulcan_core::controller::INTERJECTED_PROMPT_ADMISSION_ID_KEY;
 use vulcan_core::types::{ConversationAttachment, ConversationPayload};
 
 /// Appends one fully structured canonical message after validating the active identity namespace.
@@ -819,7 +820,23 @@ pub fn merge_session_messages_with_conversation_state_records(
     if projected_messages.is_empty() {
         return existing_messages.to_vec();
     }
-    if existing_messages.is_empty() {
+    // projected_admission_ids bind immediate interrupt rows to their later canonical controller records.
+    // projected_admission_ids 将即时插队行绑定到其后续规范控制器记录。
+    let projected_admission_ids = projected_messages
+        .iter()
+        .filter_map(interjected_prompt_admission_id)
+        .collect::<BTreeSet<_>>();
+    // retained_existing_messages removes only an admission row whose exact canonical identity now exists.
+    // retained_existing_messages 仅移除已经出现精确规范身份的接纳阶段行。
+    let retained_existing_messages = existing_messages
+        .iter()
+        .filter(|message| {
+            interjected_prompt_admission_id(message)
+                .is_none_or(|admission_id| !projected_admission_ids.contains(admission_id))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if retained_existing_messages.is_empty() {
         return projected_messages;
     }
 
@@ -831,7 +848,7 @@ pub fn merge_session_messages_with_conversation_state_records(
         .collect::<BTreeSet<_>>();
     // first_shared_index anchors the runtime-owned segment inside the larger loaded transcript window.
     // first_shared_index 将运行态拥有的片段锚定在更大的已加载转录窗口中。
-    let Some(first_shared_index) = existing_messages
+    let Some(first_shared_index) = retained_existing_messages
         .iter()
         .position(|message| projected_ids.contains(message.id.as_str()))
     else {
@@ -839,7 +856,7 @@ pub fn merge_session_messages_with_conversation_state_records(
         // can place an older rebuilt record after newer display data during compaction recovery.
         // 没有共享锚点的运行态片段仍须在时间戳可用时排序；盲目追加会让压缩恢复中的旧记录跑到新显示数据之后。
         return merge_disjoint_session_messages_by_created_at(
-            existing_messages,
+            retained_existing_messages.as_slice(),
             projected_messages,
         );
     };
@@ -847,15 +864,15 @@ pub fn merge_session_messages_with_conversation_state_records(
     // merged_messages keeps history before the runtime anchor, then emits canonical runtime order.
     // merged_messages 保留运行态锚点之前的历史，然后写入规范运行态顺序。
     let mut merged_messages = Vec::with_capacity(
-        existing_messages
+        retained_existing_messages
             .len()
             .saturating_add(projected_messages.len()),
     );
-    merged_messages.extend_from_slice(&existing_messages[..first_shared_index]);
+    merged_messages.extend_from_slice(&retained_existing_messages[..first_shared_index]);
     // trailing_unowned_messages preserves display-only rows while allowing timestamped stale rows
     // to return to their chronological position instead of being appended after new canonical data.
     // trailing_unowned_messages 保留仅显示行，并让带时间戳的旧行回到时间顺序中，避免被追加到新的规范数据之后。
-    let trailing_unowned_messages = existing_messages[first_shared_index..]
+    let trailing_unowned_messages = retained_existing_messages[first_shared_index..]
         .iter()
         .filter(|message| !projected_ids.contains(message.id.as_str()))
         .cloned()
@@ -878,6 +895,28 @@ pub fn merge_session_messages_with_conversation_state_records(
     }
     merged_messages.extend(trailing_unowned_messages.into_iter().skip(trailing_index));
     merged_messages
+}
+
+/// Returns the stable interrupt admission identity carried by one display or canonical message.
+/// 返回单条显示消息或规范消息携带的稳定插队接纳身份。
+///
+/// # Parameters
+/// 参数
+/// `message` is the projected transcript entry whose protocol metadata is inspected.
+/// `message` 是需要检查协议元数据的投影转录条目。
+///
+/// # Returns
+/// 返回值
+/// The non-empty admission identity, or `None` when the message is unrelated to an interrupt admission.
+/// 返回非空接纳身份；消息与插队接纳无关时返回 `None`。
+fn interjected_prompt_admission_id(message: &SessionMessageEntry) -> Option<&str> {
+    message
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get(INTERJECTED_PROMPT_ADMISSION_ID_KEY))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
 }
 
 /// Merges disjoint runtime records using creation time while preserving deterministic source order.

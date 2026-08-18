@@ -4,8 +4,8 @@
 use vulcan_host_tools::command_session_runtime::CommandSessionStatus;
 use vulcan_service_api::ConversationContinuationSummary;
 use vulcan_workbench_model::{
-    SessionId, SessionMessageKind, SessionMessageRecordKind, SessionRunPhase,
-    SessionRuntimeStateEntry, SessionState,
+    ExecutionRetrySnapshotState, SessionId, SessionMessageKind, SessionMessageRecordKind,
+    SessionRunPhase, SessionRuntimeStateEntry, SessionState,
 };
 use vulcan_workspace_store::workspace_store::WorkspaceSnapshot;
 
@@ -119,6 +119,15 @@ pub(crate) fn resolve_session_continuation_eligibility(
             .is_some_and(|turn_id| !turn_id.trim().is_empty())
     {
         return Err("ERR_CONVERSATION_CONTINUE_SESSION_BUSY");
+    }
+    let retry_snapshot = runtime_state
+        .execution_retry_snapshot
+        .as_ref()
+        .ok_or("ERR_CONVERSATION_CONTINUE_RETRY_SNAPSHOT_MISSING")?;
+    if retry_snapshot.state != ExecutionRetrySnapshotState::Frozen
+        || retry_snapshot.claimed_attempt_id.is_some()
+    {
+        return Err("ERR_CONVERSATION_CONTINUE_RETRY_SNAPSHOT_NOT_FROZEN");
     }
     let ledger = &runtime_state.provider_call_ledger;
     let continuation = &ledger.continuation;
@@ -245,7 +254,27 @@ pub(crate) fn session_continuation_runtime_blockers(
 mod tests {
     use super::*;
     use vulcan_context::SessionConversationRecord;
-    use vulcan_workbench_model::SessionMessageEntry;
+    use vulcan_workbench_model::{
+        EXECUTION_RETRY_SNAPSHOT_SCHEMA_VERSION, ExecutionRetrySnapshotRef, SessionMessageEntry,
+    };
+
+    /// Builds one lightweight frozen retry reference for continuation eligibility tests.
+    /// 为 Continue 资格测试构建一个轻量冻结重试引用。
+    fn frozen_retry_snapshot_reference() -> ExecutionRetrySnapshotRef {
+        ExecutionRetrySnapshotRef {
+            schema_version: EXECUTION_RETRY_SNAPSHOT_SCHEMA_VERSION,
+            snapshot_id: String::from("snapshot-1"),
+            generation: 1,
+            state: ExecutionRetrySnapshotState::Frozen,
+            content_sha256: String::from("sha256"),
+            content_bytes: 1,
+            logical_execution_id: String::from("execution-1"),
+            pending_action_label: String::from("resume_preparation"),
+            claimed_attempt_id: None,
+            error_summary: Some(String::from("failed")),
+            updated_at: String::from("1000"),
+        }
+    }
 
     /// Converts one materialized message entry into the canonical record shape used by tests.
     /// 将一个已物化消息条目转换为测试所用的规范记录结构。
@@ -266,6 +295,7 @@ mod tests {
     /// 为解析器测试构建一个可 Continue 的失败终止边界。
     fn eligible_runtime_state() -> SessionRuntimeStateEntry {
         let mut runtime_state = SessionRuntimeStateEntry::default();
+        runtime_state.execution_retry_snapshot = Some(frozen_retry_snapshot_reference());
         runtime_state
             .conversation_state
             .records
@@ -311,6 +341,7 @@ mod tests {
     #[test]
     fn continuation_resolver_accepts_terminal_user_tail_until_new_submission() {
         let mut runtime_state = SessionRuntimeStateEntry::default();
+        runtime_state.execution_retry_snapshot = Some(frozen_retry_snapshot_reference());
         runtime_state
             .conversation_state
             .records
@@ -350,6 +381,49 @@ mod tests {
                 None,
             ),
             Err("ERR_CONVERSATION_CONTINUE_STALE")
+        );
+    }
+
+    /// Verifies continuation projection rejects a missing or actively claimed retry sidecar.
+    /// 验证 Continue 投影会拒绝缺失或正被领取的重试 sidecar。
+    #[test]
+    fn continuation_resolver_requires_frozen_unclaimed_retry_snapshot() {
+        let mut missing_snapshot = eligible_runtime_state();
+        missing_snapshot.execution_retry_snapshot = None;
+        assert_eq!(
+            resolve_session_continuation_eligibility(
+                &missing_snapshot,
+                SessionRunPhase::Failed,
+                SessionContinuationRuntimeBlockers::default(),
+                None,
+            ),
+            Err("ERR_CONVERSATION_CONTINUE_RETRY_SNAPSHOT_MISSING")
+        );
+
+        let mut claimed_snapshot = eligible_runtime_state();
+        let retry_snapshot = claimed_snapshot
+            .execution_retry_snapshot
+            .as_mut()
+            .expect("eligible fixture must retain a retry snapshot");
+        retry_snapshot.state = ExecutionRetrySnapshotState::Claimed;
+        retry_snapshot.claimed_attempt_id = Some(String::from("attempt-2"));
+        assert_eq!(
+            resolve_session_continuation_eligibility(
+                &claimed_snapshot,
+                SessionRunPhase::Failed,
+                SessionContinuationRuntimeBlockers::default(),
+                None,
+            ),
+            Err("ERR_CONVERSATION_CONTINUE_RETRY_SNAPSHOT_NOT_FROZEN")
+        );
+        assert_eq!(
+            conversation_continuation_summary(
+                &claimed_snapshot,
+                SessionRunPhase::Failed,
+                SessionContinuationRuntimeBlockers::default(),
+            )
+            .map(|summary| summary.eligible),
+            Some(false)
         );
     }
 

@@ -2,7 +2,8 @@
 //! 面向现有宿主工具控制器的 Vulcan 公共契约适配器。
 
 use crate::agent_runtime::events::{
-    TransientReasoningStatus, TransientReasoningStatusKind, provider_request_durability_barrier,
+    TransientReasoningStatus, TransientReasoningStatusKind, TransientReasoningSummaryItem,
+    provider_request_durability_barrier,
 };
 use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
 use crate::agent_runtime::provider_request_bridge_conversation::build_core_conversation_snapshot;
@@ -1329,6 +1330,9 @@ struct PublicTurnAccumulator {
     /// Replace-in-place reasoning status excluded from every durable response field.
     /// 排除在全部持久化响应字段之外的原地替换式推理状态。
     transient_reasoning_status: Option<TransientReasoningStatus>,
+    /// Whether non-empty durable reasoning has superseded every transient fallback.
+    /// 非空持久化思考是否已经取代全部瞬态回退状态。
+    durable_reasoning_observed: bool,
 }
 
 /// Stores one in-progress assistant item for deterministic replay assembly.
@@ -1489,10 +1493,11 @@ impl PublicTurnAccumulator {
             replay_items: Vec::new(),
             provider_context_items: Vec::new(),
             completed: false,
+            durable_reasoning_observed: false,
             transient_reasoning_status: transient_reasoning_kind.map(|kind| {
                 TransientReasoningStatus {
                     kind,
-                    text: None,
+                    summaries: Vec::new(),
                     reasoning_tokens: None,
                 }
             }),
@@ -1512,8 +1517,8 @@ impl PublicTurnAccumulator {
         )));
     }
 
-    /// Clears the transient reasoning line without recording a transcript delta.
-    /// 清除瞬态推理状态行，且不记录转录增量。
+    /// Clears the transient reasoning collection without recording a transcript delta.
+    /// 清除瞬态推理状态集合，且不记录转录增量。
     ///
     /// # Parameters
     /// 参数
@@ -1733,24 +1738,21 @@ impl PublicTurnAccumulator {
                 };
                 text.push_str(delta.as_str());
                 self.reasoning.push_str(delta.as_str());
+                if !delta.is_empty() && !self.durable_reasoning_observed {
+                    // Full readable reasoning is authoritative and removes every transient fallback.
+                    // 完整可读思考具有权威性，并会移除全部瞬态回退状态。
+                    self.durable_reasoning_observed = true;
+                    self.clear_transient_reasoning_status(live_sender);
+                }
                 // liveDelta projects provider reasoning without removing it from Core's canonical response.
                 // liveDelta 投影 Provider 推理内容，同时不从 Core 规范响应中移除该内容。
                 let live_delta = delta.clone();
                 sink.push_delta(ProviderTurnDelta::Thinking { delta });
                 let _ = live_sender.send(Ok(ProviderStreamDelta::Thinking(live_delta)));
             }
-            AiStreamEvent::ReasoningSummaryUpdated { text } => {
-                // The frozen encrypted mode cannot be reinterpreted as readable summary output.
-                // 冻结的加密模式不得被重新解释为可读摘要输出。
-                if self
-                    .transient_reasoning_status
-                    .as_ref()
-                    .is_some_and(|status| status.kind == TransientReasoningStatusKind::Encrypted)
-                {
-                    return Err(provider_failure(
-                        provider_id,
-                        "A response configured as encrypted reasoning emitted a readable summary update.",
-                    ));
+            AiStreamEvent::ReasoningSummaryUpdated { item_id, text } => {
+                if self.durable_reasoning_observed {
+                    return Ok(());
                 }
                 let reasoning_tokens = self
                     .transient_reasoning_status
@@ -1759,12 +1761,22 @@ impl PublicTurnAccumulator {
                 let status = self.transient_reasoning_status.get_or_insert_with(|| {
                     TransientReasoningStatus {
                         kind: TransientReasoningStatusKind::Summary,
-                        text: None,
+                        summaries: Vec::new(),
                         reasoning_tokens,
                     }
                 });
                 status.kind = TransientReasoningStatusKind::Summary;
-                status.text = Some(text);
+                if let Some(summary) = status
+                    .summaries
+                    .iter_mut()
+                    .find(|summary| summary.item_id == item_id)
+                {
+                    summary.text = text;
+                } else {
+                    status
+                        .summaries
+                        .push(TransientReasoningSummaryItem { item_id, text });
+                }
                 self.emit_transient_reasoning_status(live_sender);
             }
             AiStreamEvent::ReasoningCompleted { item_id, signature } => {
@@ -3582,9 +3594,15 @@ mod tests {
                 execution_id: String::from("response-1"),
             },
             AiStreamEvent::ReasoningSummaryUpdated {
+                item_id: String::from("summary-0"),
                 text: String::from("正在检查协议"),
             },
             AiStreamEvent::ReasoningSummaryUpdated {
+                item_id: String::from("summary-0"),
+                text: String::from("正在检查协议响应"),
+            },
+            AiStreamEvent::ReasoningSummaryUpdated {
+                item_id: String::from("summary-1"),
                 text: String::from("正在核对清单"),
             },
             AiStreamEvent::UsageUpdated {
@@ -3608,28 +3626,41 @@ mod tests {
             live_receiver.try_recv(),
             Ok(Ok(ProviderStreamDelta::TransientReasoningStatusChanged(Some(status))))
                 if status.kind == TransientReasoningStatusKind::Summary
-                    && status.text.is_none()
+                    && status.summaries.is_empty()
                     && status.reasoning_tokens.is_none()
         ));
         assert!(matches!(
             live_receiver.try_recv(),
             Ok(Ok(ProviderStreamDelta::TransientReasoningStatusChanged(Some(status))))
                 if status.kind == TransientReasoningStatusKind::Summary
-                    && status.text.as_deref() == Some("正在检查协议")
+                    && matches!(status.summaries.as_slice(), [summary]
+                        if summary.item_id == "summary-0" && summary.text == "正在检查协议")
                     && status.reasoning_tokens.is_none()
         ));
         assert!(matches!(
             live_receiver.try_recv(),
             Ok(Ok(ProviderStreamDelta::TransientReasoningStatusChanged(Some(status))))
                 if status.kind == TransientReasoningStatusKind::Summary
-                    && status.text.as_deref() == Some("正在核对清单")
+                    && matches!(status.summaries.as_slice(), [summary]
+                        if summary.item_id == "summary-0" && summary.text == "正在检查协议响应")
                     && status.reasoning_tokens.is_none()
         ));
         assert!(matches!(
             live_receiver.try_recv(),
             Ok(Ok(ProviderStreamDelta::TransientReasoningStatusChanged(Some(status))))
                 if status.kind == TransientReasoningStatusKind::Summary
-                    && status.text.as_deref() == Some("正在核对清单")
+                    && matches!(status.summaries.as_slice(), [first, second]
+                        if first.item_id == "summary-0"
+                            && first.text == "正在检查协议响应"
+                            && second.item_id == "summary-1"
+                            && second.text == "正在核对清单")
+                    && status.reasoning_tokens.is_none()
+        ));
+        assert!(matches!(
+            live_receiver.try_recv(),
+            Ok(Ok(ProviderStreamDelta::TransientReasoningStatusChanged(Some(status))))
+                if status.kind == TransientReasoningStatusKind::Summary
+                    && status.summaries.len() == 2
                     && status.reasoning_tokens == Some(321)
         ));
         assert!(matches!(
@@ -3652,6 +3683,91 @@ mod tests {
             .expect("replay envelope should deserialize");
         assert!(replay.content.is_empty());
         assert!(replay.provider_context_items.is_empty());
+    }
+
+    /// Verifies non-empty full reasoning permanently supersedes summary and encrypted fallbacks.
+    /// 验证非空完整思考会永久取代摘要与加密回退状态。
+    #[test]
+    fn durable_reasoning_supersedes_transient_fallbacks() {
+        // liveSender and liveReceiver observe the exact fallback-clear ordering.
+        // liveSender 与 liveReceiver 观察精确的回退清除顺序。
+        let (live_sender, mut live_receiver) = tokio::sync::mpsc::unbounded_channel();
+        // sink records only durable reasoning after arbitration.
+        // sink 仅记录仲裁后的持久化思考。
+        let mut sink = RecordingProviderDeltaSink::default();
+        // accumulator starts in encrypted fallback mode before readable summary arrives.
+        // accumulator 在可读摘要到达前以加密回退模式启动。
+        let mut accumulator = PublicTurnAccumulator::new(
+            "commandcode",
+            "connection-commandcode",
+            "https://api.commandcode.ai/provider/v1/chat/completions",
+            "openai-chat-completions.v1",
+            "gpt-5.6-luna",
+            Some(TransientReasoningStatusKind::Encrypted),
+        );
+        for event in [
+            AiStreamEvent::ResponseStarted {
+                execution_id: String::from("response-priority"),
+            },
+            AiStreamEvent::ReasoningSummaryUpdated {
+                item_id: String::from("summary-0"),
+                text: String::from("正在分析"),
+            },
+            AiStreamEvent::ReasoningStarted {
+                item_id: String::from("reasoning-0"),
+            },
+            AiStreamEvent::ReasoningDelta {
+                item_id: String::from("reasoning-0"),
+                delta: String::from("完整思考"),
+            },
+            AiStreamEvent::ReasoningSummaryUpdated {
+                item_id: String::from("summary-1"),
+                text: String::from("不得重新出现"),
+            },
+            AiStreamEvent::ReasoningCompleted {
+                item_id: String::from("reasoning-0"),
+                signature: None,
+            },
+            AiStreamEvent::ResponseCompleted,
+        ] {
+            accumulator
+                .apply_event("commandcode", &live_sender, &mut sink, event)
+                .expect("priority arbitration should remain valid");
+        }
+
+        assert!(matches!(
+            live_receiver.try_recv(),
+            Ok(Ok(ProviderStreamDelta::TransientReasoningStatusChanged(Some(status))))
+                if status.kind == TransientReasoningStatusKind::Encrypted
+        ));
+        assert!(matches!(
+            live_receiver.try_recv(),
+            Ok(Ok(ProviderStreamDelta::TransientReasoningStatusChanged(Some(status))))
+                if status.kind == TransientReasoningStatusKind::Summary
+                    && status.summaries.len() == 1
+        ));
+        assert!(matches!(
+            live_receiver.try_recv(),
+            Ok(Ok(ProviderStreamDelta::TransientReasoningStatusChanged(
+                None
+            )))
+        ));
+        assert!(matches!(
+            live_receiver.try_recv(),
+            Ok(Ok(ProviderStreamDelta::Thinking(reasoning))) if reasoning == "完整思考"
+        ));
+        assert!(live_receiver.try_recv().is_err());
+        assert!(matches!(
+            sink.deltas.as_slice(),
+            [ProviderTurnDelta::Thinking { delta }] if delta == "完整思考"
+        ));
+        assert_eq!(
+            accumulator
+                .finish()
+                .expect("completed priority turn should finish")
+                .assistant_reasoning,
+            "完整思考"
+        );
     }
 
     /// Verifies generated image bytes enter managed attachment storage and the Data URL is discarded.

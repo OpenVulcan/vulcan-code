@@ -410,8 +410,8 @@ fn pass_through_projection_preserves_canonical_schema_exactly() {
     assert_eq!(projected, schema);
 }
 
-/// Verifies standard protocols repair only required-only root object branches while preserving nested scalar unions.
-/// 验证标准协议仅修复根级仅含必填约束的对象分支，同时保留嵌套标量联合。
+/// Verifies lightweight projection recursively removes composition keywords from CodeKit-style schemas.
+/// 验证轻量投影会递归移除 CodeKit 风格 Schema 中的组合关键字。
 #[test]
 fn standard_object_root_projection_lightly_normalizes_codekit_style_schema() {
     let schema = json!({
@@ -454,15 +454,169 @@ fn standard_object_root_projection_lightly_normalizes_codekit_style_schema() {
     );
 
     assert_eq!(projected["type"], json!("object"));
-    assert_eq!(projected["oneOf"][0]["type"], json!("object"));
-    assert_eq!(projected["oneOf"][1]["type"], json!("object"));
+    assert!(projected.get("oneOf").is_none());
+    assert_eq!(projected["properties"]["file"]["type"], json!("string"));
     assert_eq!(
-        projected["properties"]["precondition"]["properties"]["range"]["anyOf"],
-        schema["properties"]["precondition"]["properties"]["range"]["anyOf"]
+        projected["properties"]["patches"]["items"]["type"],
+        json!("object")
     );
-    assert_eq!(projected["properties"], schema["properties"]);
     assert_eq!(
-        projected["additionalProperties"],
-        schema["additionalProperties"]
+        projected["properties"]["precondition"]["properties"]["range"]["type"],
+        json!("string")
     );
+    assert!(
+        projected["properties"]["precondition"]["properties"]["range"]
+            .get("anyOf")
+            .is_none()
+    );
+    assert_eq!(projected["additionalProperties"], json!(false));
+}
+
+/// Verifies Moonshot-compatible lightweight projection removes nested auth alternatives while retaining their basic fields.
+/// 验证 Moonshot 兼容的轻量投影会移除嵌套认证备选约束，同时保留基础字段。
+#[test]
+fn standard_object_root_projection_removes_nested_moonshot_anyof() {
+    let schema = json!({
+        "type": "object",
+        "properties": {
+            "basic": {
+                "type": "object",
+                "description": "Optional basic auth shortcut object.",
+                "properties": {
+                    "username": { "type": "string" },
+                    "password": { "type": "string" },
+                    "user": { "type": "string" },
+                    "pass": { "type": "string" }
+                },
+                "anyOf": [
+                    { "required": ["username", "password"] },
+                    { "required": ["username", "pass"] },
+                    { "required": ["user", "password"] },
+                    { "required": ["user", "pass"] }
+                ]
+            }
+        }
+    });
+
+    let projected = project_tool_parameters_schema(
+        &schema,
+        VulcanToolSchemaProjectionProfile::StandardObjectRoot,
+    );
+    let basic = &projected["properties"]["basic"];
+
+    assert_eq!(basic["type"], json!("object"));
+    assert_eq!(
+        basic["description"],
+        json!("Optional basic auth shortcut object.")
+    );
+    assert_eq!(basic["properties"]["username"]["type"], json!("string"));
+    assert_eq!(basic["properties"]["password"]["type"], json!("string"));
+    assert_eq!(basic["properties"]["user"]["type"], json!("string"));
+    assert_eq!(basic["properties"]["pass"]["type"], json!("string"));
+    assert!(basic.get("anyOf").is_none());
+    assert!(basic.get("required").is_none());
+}
+
+/// Verifies lightweight projection merges object alternatives into one provider-portable action schema.
+/// 验证轻量投影会把对象备选分支合并为单个 Provider 可移植操作 Schema。
+#[test]
+fn standard_object_root_projection_merges_object_alternatives() {
+    let schema = json!({
+        "type": "object",
+        "oneOf": [
+            {
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "const": "describe" }
+                },
+                "required": ["action"]
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "const": "validate" },
+                    "skill_id": { "type": "string" }
+                },
+                "required": ["action", "skill_id"]
+            }
+        ]
+    });
+
+    let projected = project_tool_parameters_schema(
+        &schema,
+        VulcanToolSchemaProjectionProfile::StandardObjectRoot,
+    );
+
+    assert_eq!(projected["type"], json!("object"));
+    assert!(projected.get("oneOf").is_none());
+    assert_eq!(
+        projected["properties"]["action"]["enum"],
+        json!(["describe", "validate"])
+    );
+    assert_eq!(projected["properties"]["skill_id"]["type"], json!("string"));
+    assert_eq!(projected["required"], json!(["action"]));
+}
+
+/// Verifies lightweight projection strips reference, conditional, and validation-only syntax at every depth.
+/// 验证轻量投影会在每一层移除引用、条件与仅校验语法。
+#[test]
+fn standard_object_root_projection_strips_advanced_keywords_recursively() {
+    let schema = json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "$defs": {
+            "named": { "type": "string" }
+        },
+        "properties": {
+            "value": {
+                "type": ["string", "null"],
+                "description": "Portable value.",
+                "pattern": "^[a-z]+$",
+                "not": { "enum": ["blocked"] },
+                "if": { "const": "special" },
+                "then": { "minLength": 3 },
+                "else": { "maxLength": 12 }
+            },
+            "reference_only": {
+                "$ref": "#/$defs/named"
+            },
+            "const_only": {
+                "const": "fixed"
+            },
+            "description_only": {
+                "description": "No portable structural declaration."
+            }
+        },
+        "dependentSchemas": {
+            "value": { "required": ["reference_only"] }
+        }
+    });
+
+    let projected = project_tool_parameters_schema(
+        &schema,
+        VulcanToolSchemaProjectionProfile::StandardObjectRoot,
+    );
+    let value = &projected["properties"]["value"];
+
+    assert_eq!(value["type"], json!("string"));
+    assert_eq!(value["description"], json!("Portable value."));
+    for keyword in [
+        "$schema",
+        "$defs",
+        "$ref",
+        "pattern",
+        "not",
+        "if",
+        "then",
+        "else",
+        "dependentSchemas",
+    ] {
+        assert!(!projected.to_string().contains(&format!("\"{keyword}\"")));
+    }
+    assert!(projected["properties"].get("reference_only").is_none());
+    assert_eq!(
+        projected["properties"]["const_only"],
+        json!({ "type": "string", "enum": ["fixed"] })
+    );
+    assert!(projected["properties"].get("description_only").is_none());
 }

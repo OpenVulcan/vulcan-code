@@ -24,12 +24,24 @@ type SharedProviderRequestDurabilitySender =
 /// 对单条非持久化推理状态行进行分类。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransientReasoningStatusKind {
-    /// Readable provider summary that replaces the same transient line.
-    /// 替换同一瞬态状态行的可读供应商摘要。
+    /// Readable provider summary whose nodes update within one transient collection.
+    /// 在单个瞬态集合内更新节点的可读供应商摘要。
     Summary,
     /// Opaque encrypted reasoning represented only by progress metadata.
     /// 仅通过进度元数据表示的不透明加密推理。
     Encrypted,
+}
+
+/// Represents one provider-owned readable summary node that never enters transcript state.
+/// 表示一个绝不进入转录状态的供应商可读摘要节点。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransientReasoningSummaryItem {
+    /// Stable provider-neutral summary identity used for in-place updates.
+    /// 用于原地更新的稳定供应商无关摘要标识。
+    pub item_id: String,
+    /// Latest complete text assembled for this exact summary node.
+    /// 为当前精确摘要节点组装出的最新完整文本。
+    pub text: String,
 }
 
 /// Represents one replace-in-place reasoning status that never enters transcript state.
@@ -39,9 +51,9 @@ pub struct TransientReasoningStatus {
     /// Presentation kind selected by the frozen response profile.
     /// 由冻结响应 Profile 选择的展示类型。
     pub kind: TransientReasoningStatusKind,
-    /// Latest readable summary when the provider exposes one.
-    /// 供应商公开可读摘要时的最新摘要。
-    pub text: Option<String>,
+    /// Ordered readable summary nodes emitted by the provider.
+    /// 供应商发出的有序可读摘要节点。
+    pub summaries: Vec<TransientReasoningSummaryItem>,
     /// Latest cumulative reasoning-token count when reported.
     /// 供应商报告时的最新累计推理 Token 数。
     pub reasoning_tokens: Option<u64>,

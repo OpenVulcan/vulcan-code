@@ -832,8 +832,8 @@ function WorkspaceSubagentPanel(args: {
   // transientReasoningStatus subscribes to request-local summary or encrypted reasoning for this exact child task.
   // transientReasoningStatus 订阅当前精确子任务的请求局部摘要或加密思考状态。
   const transientReasoningStatus = useConversationTransientReasoningStatus(taskId);
-  // transientReasoningStatusVisible tracks only insertion and removal of the child timeline-tail status row.
-  // transientReasoningStatusVisible 仅跟踪子会话时间线尾部状态行的插入与移除。
+  // transientReasoningStatusVisible tracks insertion and removal while shared resize handling owns node reflow.
+  // transientReasoningStatusVisible 跟踪插入与移除，共享尺寸处理负责节点重排。
   const transientReasoningStatusVisible = transientReasoningStatus !== null;
   // navigation stores the matching backend subagent projection for this parent conversation.
   // navigation 保存该父会话匹配的后端子代理投影。

@@ -117,6 +117,103 @@ fn execution_retry_refreeze_refreshes_canonical_state_and_digest() {
         .expect("refreshed retry snapshot should match the retained canonical state");
 }
 
+/// Verifies stop-time refreeze binds the caller's post-stop state instead of stale shared state.
+/// 验证停止时重冻会绑定调用方的停止后状态，而不是过期共享状态。
+#[test]
+fn execution_retry_stop_refreeze_uses_post_stop_canonical_state() {
+    // sessionId identifies the isolated retained session and retry sidecar.
+    // sessionId 标识隔离的保留会话与重试 sidecar。
+    let session_id = Uuid::new_v4();
+    // controllerRoot owns the exact temporary segmented session directory.
+    // controllerRoot 持有精确的临时分段会话目录。
+    let controller_root = TestControllerRuntimeRoot::new(session_id);
+    // controllerRuntime is the production-shaped persistence handle for the fixture.
+    // controllerRuntime 是测试夹具使用的生产形态持久化句柄。
+    let controller_runtime = controller_root.controller_runtime_handle();
+    // claimedSnapshot models a Continue execution already claimed before the user stops it.
+    // claimedSnapshot 模拟用户停止前已被 Continue 领取的执行。
+    let mut claimed_snapshot = retry_snapshot(session_id);
+    claimed_snapshot.state = ExecutionRetrySnapshotState::Claimed;
+    claimed_snapshot.claimed_attempt_id = Some(String::from("attempt-claimed"));
+    // claimedReference is the authoritative shared-state reference before stop projection.
+    // claimedReference 是停止投影前共享状态中的权威引用。
+    let claimed_reference =
+        vulcan_workspace_store::workspace_store::persist_execution_retry_snapshot(
+            &controller_runtime.data_root,
+            session_id,
+            &claimed_snapshot,
+        )
+        .expect("claimed retry sidecar should persist");
+    // staleRuntimeState deliberately retains the pre-stop canonical state in shared memory.
+    // staleRuntimeState 刻意在共享内存中保留停止前规范状态。
+    let mut stale_runtime_state = retry_runtime_state();
+    stale_runtime_state.execution_retry_snapshot = Some(claimed_reference);
+    // serviceState owns the stale shared snapshot observed before stop projection commits.
+    // serviceState 持有停止投影提交前观察到的过期共享快照。
+    let mut service_state = test_service_state_with_parent_session(session_id);
+    service_state
+        .workspace_snapshot
+        .as_mut()
+        .expect("test workspace should exist")
+        .session_runtime_state
+        .insert(session_id, stale_runtime_state.clone());
+    // sharedState matches the production mutex ownership used by refreeze helpers.
+    // sharedState 对应重冻辅助逻辑使用的生产互斥所有权。
+    let shared_state = Arc::new(Mutex::new(service_state));
+    // stoppedConversationState is the detached canonical state after the stop message was appended.
+    // stoppedConversationState 是追加停止消息后的分离规范状态。
+    let mut stopped_conversation_state = stale_runtime_state.conversation_state.clone();
+    stopped_conversation_state.continuation.updated_at = Some(String::from("3000"));
+
+    refreeze_claimed_execution_retry_snapshot_with_canonical_state(
+        &shared_state,
+        &controller_runtime,
+        session_id,
+        &stopped_conversation_state,
+        "test stop",
+    )
+    .expect("stop-time refreeze should use the supplied canonical state");
+
+    // refreshedReference points to the sidecar atomically rewritten by stop-time refreeze.
+    // refreshedReference 指向停止时重冻原子改写后的 sidecar。
+    let refreshed_reference = shared_state
+        .lock()
+        .expect("shared test state should lock")
+        .workspace_snapshot
+        .as_ref()
+        .expect("test workspace should remain available")
+        .session_runtime_state
+        .get(&session_id)
+        .and_then(|runtime_state| runtime_state.execution_retry_snapshot.clone())
+        .expect("refreshed retry reference should remain available");
+    // refreshedSnapshot is the durable sidecar validated against the post-stop state.
+    // refreshedSnapshot 是针对停止后状态校验的持久 sidecar。
+    let refreshed_snapshot =
+        vulcan_workspace_store::workspace_store::load_execution_retry_snapshot(
+            &controller_runtime.data_root,
+            session_id,
+            &refreshed_reference,
+        )
+        .expect("refreshed retry sidecar should load");
+    // expectedRuntimeState mirrors the workspace that the stop service publishes next.
+    // expectedRuntimeState 对应停止服务随后发布的工作区状态。
+    let mut expected_runtime_state = stale_runtime_state;
+    expected_runtime_state.conversation_state = stopped_conversation_state;
+    expected_runtime_state.execution_retry_snapshot = Some(refreshed_reference);
+
+    assert_eq!(
+        refreshed_snapshot.state,
+        ExecutionRetrySnapshotState::Frozen
+    );
+    assert!(refreshed_snapshot.claimed_attempt_id.is_none());
+    validate_execution_retry_snapshot_for_claim(
+        &expected_runtime_state,
+        session_id,
+        &refreshed_snapshot,
+    )
+    .expect("refrozen retry snapshot should match the published post-stop state");
+}
+
 /// Verifies transcript-only terminal records do not invalidate the frozen provider dispatch.
 /// 验证仅供转录使用的终态记录不会使冻结的 Provider 分发失效。
 #[test]

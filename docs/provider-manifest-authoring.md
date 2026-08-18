@@ -397,14 +397,17 @@ Profile 是供应商通用规则与模型覆盖的主要承载方式：
 
 `response_profiles[].payload.transient_reasoning_status` 用于声明非持久化思考状态，当前只接受：
 
-- `summary`：协议或响应映射产出可读思考摘要；宿主在当前回合底部原地更新一行状态；
+- `summary`：协议或响应映射产出可读思考摘要；宿主按协议提供的稳定摘要节点身份在当前回合底部逐项原地更新；
 - `encrypted`：上游只提供不透明思考块或思考 Token；宿主只显示通用“正在思考”状态。
 
 这两类状态都不得进入 assistant reasoning、转录记录、Provider replay、重试快照或下一轮上下文，
 并在成功、失败、取消或流结束时清除。若协议本身已有原生 summary 事件，解码器可以直接规范化；若
 供应商使用 Chat 等不具备原生 summary 事件的协议，则必须通过 Response Profile 的精确字段映射和
 模型级 `response_profile_refs` 声明，禁止在运行时按供应商 ID 或模型 ID 写判断。同一冻结请求链最多
-只能解析出一种临时状态模式；多个 Profile 同时声明时必须失败关闭。
+只能解析出一种临时状态模式；多个 Profile 同时声明时必须失败关闭。运行时展示优先级固定为“非空
+完整思考 > 可读 summary > 加密进度”：完整思考一旦出现，必须立即清除全部瞬态节点并屏蔽后续瞬态
+更新；可读 summary 可以取代尚未产生语义内容的加密进度。不得使用 Markdown 标题、正文文本模式或
+供应商/模型身份猜测 summary 节点边界，节点身份只能来自协议事件或精确响应映射。
 
 请求 Profile 不得写宿主保护根：`model`、`messages`、`input`、`tools`、`stream`。如真实供应商
 需要改变协议核心形状，应新增并审核协议/请求 projector，而不是用 Profile 越权重写。
@@ -510,9 +513,10 @@ query/fragment 的 HTTPS URL，endpoint path 必须保持同源；输入 JSON Sc
 解码、本地媒体转换或供应商特有二进制协议，则必须先实现并审核宿主原语，再允许 Manifest 引用。
 
 函数工具参数投影由冻结路由中的 `tool_schema_projection` 唯一决定，不得从协议或模型名称猜测。
-系统 Manifest 未声明该字段时即为 `lightweight`：仅为根级 `anyOf` / `oneOf` 中已经包含
-`required`、`properties` 等对象约束但缺少 `type` 的分支补充 `type: object`，嵌套联合、描述、
-扩展字段和其余约束保持不变。`passthrough` 只用于经过明确验证、必须完全原样传递的特殊契约；
+系统 Manifest 未声明该字段时即为 `lightweight`：递归消费但不向 Provider 输出
+`anyOf`、`oneOf`、`allOf`、`$ref` 等组合或引用语法，仅保留基础类型、属性、必填项、数组元素、
+枚举、描述和布尔形 `additionalProperties`。纯对象备选分支合并属性，互斥联合仅保留所有分支共同的
+必填项，`allOf` 保留必填项并集；宿主依然使用未投影的规范 Schema 校验实际工具调用。`passthrough` 只用于经过明确验证、必须完全原样传递的特殊契约；
 `strict` 使用递归 Gemini Slim 投影。当前内置清单只有 Gemini 模型规则显式声明 `strict`，其余系统
 模型一律省略字段并继承轻量模式。自定义模型只在高级设置中提供三档选择，默认同样为轻量模式。
 不得把 Gemini 的严格关键字过滤扩散到其他模型，也不得按供应商或模型名称硬编码单个工具修复。

@@ -5669,6 +5669,15 @@ fn validate_provider_tool_output_contract(
             ));
         }
     }
+    // The generic decoder always consumes the contract source through an absolute JSON pointer.
+    // 通用解码器始终通过绝对 JSON 指针消费契约来源。
+    if !is_valid_json_pointer_path(&output.source_path) {
+        errors.push(ManifestValidationError::new(
+            "invalid_provider_tool_output_source_pointer",
+            format!("{base_path}.source_path"),
+            "provider tool output source must be an absolute JSON pointer",
+        ));
+    }
     if output.resource_decoders.is_empty() {
         if output.kind == crate::ProviderToolOutputKind::Resources {
             errors.push(ManifestValidationError::new(
@@ -9257,7 +9266,7 @@ mod tests {
             extension_profile: None,
             output: crate::ProviderToolOutputContract {
                 kind: crate::ProviderToolOutputKind::Search,
-                source_path: String::from("results"),
+                source_path: String::from("/results"),
                 normalized_result_path: String::from("search"),
                 resource_kind: None,
                 mime_types: Vec::new(),

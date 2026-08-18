@@ -140,7 +140,9 @@ impl ProviderRetryPolicy {
         completed_retries: u32,
         unsafe_delta_seen: bool,
     ) -> Option<ProviderRetryDecision> {
-        if !self.enabled || unsafe_delta_seen {
+        if !self.enabled
+            || (unsafe_delta_seen && !core_error_is_replayable_stream_idle_timeout(error))
+        {
             return None;
         }
 
@@ -397,8 +399,11 @@ fn classify_structured_retry_reason(
     // accidentally leaves the generic retryable bit unset.
     // 旧适配器误将通用 retryable 标志置空时，官方 Codex 过载代码和消息仍是权威依据。
     let known_overload = structured_error_is_known_overload(error);
+    // replayableStreamIdleTimeout is the sole subtype allowed to replace discarded partial output.
+    // replayableStreamIdleTimeout 是唯一允许替换已丢弃局部输出的子类型。
+    let replayable_stream_idle_timeout = structured_error_is_replayable_stream_idle_timeout(error);
     if (!error.retryable && !known_overload)
-        || error.semantic_output_observed
+        || (error.semantic_output_observed && !replayable_stream_idle_timeout)
         || error.side_effect_observed
         || error.dispatch_outcome == DispatchOutcome::Unknown
     {
@@ -423,6 +428,12 @@ fn classify_structured_retry_reason(
             category: ProviderRetryCategory::Transient,
             reason: String::from("Provider unavailable"),
         }),
+        AiErrorCategory::Timeout if replayable_stream_idle_timeout => {
+            Some(ProviderRetryClassification {
+                category: ProviderRetryCategory::Transient,
+                reason: String::from("Provider stream idle timeout"),
+            })
+        }
         AiErrorCategory::Timeout => Some(ProviderRetryClassification {
             category: ProviderRetryCategory::Transient,
             reason: String::from("Provider timeout"),
@@ -432,6 +443,49 @@ fn classify_structured_retry_reason(
         }
         _ => None,
     }
+}
+
+/// Reports whether a Core provider failure carries the exact replayable stream-idle timeout subtype.
+/// 报告 Core Provider 失败是否携带精确的可重放流空闲超时子类型。
+///
+/// # Parameters
+/// 参数
+/// `error` is the controller failure retaining optional structured Provider details.
+/// `error` 是保留可选强类型 Provider 详情的控制器失败。
+///
+/// # Returns
+/// 返回值
+/// `true` only when the typed failure proves a dispatched, side-effect-free stream-idle timeout.
+/// 仅当强类型失败证明其为已分派且无副作用的流空闲超时时返回 `true`。
+fn core_error_is_replayable_stream_idle_timeout(error: &VulcanCoreError) -> bool {
+    matches!(
+        error,
+        VulcanCoreError::ProviderFailure {
+            details: Some(details),
+            ..
+        } if structured_error_is_replayable_stream_idle_timeout(details)
+    )
+}
+
+/// Reports whether typed facts authorize replacing one stalled stream from the retained checkpoint.
+/// 报告强类型事实是否允许从保留检查点替换一次停滞流。
+///
+/// # Parameters
+/// 参数
+/// `error` is the normalized public Provider failure.
+/// `error` 是归一化公共 Provider 失败。
+///
+/// # Returns
+/// 返回值
+/// `true` only for the registered response-stream idle timeout with no observed side effect.
+/// 仅对已注册且未观察到副作用的响应流空闲超时返回 `true`。
+fn structured_error_is_replayable_stream_idle_timeout(error: &AiExecutionError) -> bool {
+    error.category == AiErrorCategory::Timeout
+        && error.subcategory.as_deref() == Some("stream_idle_timeout")
+        && error.stage == "response_stream"
+        && error.dispatch_outcome == DispatchOutcome::Dispatched
+        && error.retryable
+        && !error.side_effect_observed
 }
 
 /// Reports whether typed category/subcategory facts prove a deterministic terminal failure.
@@ -915,6 +969,42 @@ mod tests {
         };
         details.side_effect_observed = true;
         assert!(policy().next_retry(&side_effect, 0, false).is_none());
+    }
+
+    /// Verifies only the exact side-effect-free stream-idle timeout may replace discarded partial output.
+    /// 验证只有精确且无副作用的流空闲超时可以替换已丢弃的局部输出。
+    #[test]
+    fn stream_idle_timeout_retries_after_semantic_output_but_not_side_effects() {
+        // idleTimeout mirrors the typed adapter failure after one stalled partial response.
+        // idleTimeout 对应局部响应停滞后适配器生成的强类型失败。
+        let mut idle_timeout = structured_provider_error(AiErrorCategory::Timeout, true);
+        let VulcanCoreError::ProviderFailure {
+            details: Some(details),
+            ..
+        } = &mut idle_timeout
+        else {
+            panic!("structured error expected");
+        };
+        details.subcategory = Some(String::from("stream_idle_timeout"));
+        details.stage = String::from("response_stream");
+        details.semantic_output_observed = true;
+
+        // decision proves the exact subtype bypasses only the semantic-output replay guard.
+        // decision 证明精确子类型只绕过语义输出重放守卫。
+        let decision = policy()
+            .next_retry(&idle_timeout, 0, true)
+            .expect("an exact stream-idle timeout should replace partial output");
+        assert_eq!(decision.reason, "Provider stream idle timeout");
+
+        let VulcanCoreError::ProviderFailure {
+            details: Some(details),
+            ..
+        } = &mut idle_timeout
+        else {
+            panic!("structured error expected");
+        };
+        details.side_effect_observed = true;
+        assert!(policy().next_retry(&idle_timeout, 0, true).is_none());
     }
 
     /// Verifies configured inference uses only typed safe dispatch facts for retry.

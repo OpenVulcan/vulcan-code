@@ -10,10 +10,14 @@ use crate::session_hydration::capture_preserved_workspace_run_state_for_session_
 fn preserve_active_session_run_state_keeps_new_precheck_runtime_state() {
     let session_id = SessionId::new_v4();
     let project_id = String::from("project-a");
-    let runtime_state = SessionRuntimeStateEntry {
+    let mut runtime_state = SessionRuntimeStateEntry {
         active_precheck_turn_id: Some(String::from("turn-1")),
         ..SessionRuntimeStateEntry::default()
     };
+    // provider_call_id represents a Started boundary committed while a workspace refresh is in flight.
+    // provider_call_id 表示工作区刷新进行期间提交的 Started 边界。
+    let provider_call_id =
+        record_started_test_provider_call(&mut runtime_state, "main_session", "refresh-race");
     let previous_snapshot = WorkspaceSnapshot {
         task_projects: vec![TaskProjectSummary::new(
             project_id.clone(),
@@ -108,6 +112,14 @@ fn preserve_active_session_run_state_keeps_new_precheck_runtime_state() {
     assert_eq!(
         refreshed_snapshot.session_run_phases.get(&session_id),
         Some(&SessionRunPhase::MemoryRecall)
+    );
+    assert_eq!(
+        refreshed_snapshot
+            .session_runtime_state
+            .get(&session_id)
+            .and_then(|state| state.provider_call_ledger.calls.get(&provider_call_id))
+            .map(|call| call.status),
+        Some(vulcan_workbench_model::SessionProviderCallStatus::Prepared)
     );
 }
 

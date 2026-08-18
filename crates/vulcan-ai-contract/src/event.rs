@@ -94,6 +94,9 @@ pub enum AiStreamEvent {
     /// A complete readable reasoning summary update that must remain transient.
     /// 必须保持瞬态的完整可读推理摘要更新。
     ReasoningSummaryUpdated {
+        /// Stable summary-part identifier preserved across updates for the same provider node.
+        /// 同一供应商摘要节点的多次更新之间保持稳定的摘要部分标识。
+        item_id: String,
         /// Latest complete summary assembled or decoded from the provider stream.
         /// 从供应商流组装或解码出的最新完整摘要。
         text: String,

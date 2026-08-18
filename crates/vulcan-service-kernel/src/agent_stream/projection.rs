@@ -160,7 +160,14 @@ pub(crate) fn emit_transient_reasoning_status(
                                 TransientReasoningStatusKind::Encrypted
                             }
                         },
-                        text: status.text,
+                        summaries: status
+                            .summaries
+                            .into_iter()
+                            .map(|summary| TransientReasoningSummaryItemSnapshot {
+                                item_id: summary.item_id,
+                                text: summary.text,
+                            })
+                            .collect(),
                         reasoning_tokens: status.reasoning_tokens,
                     }),
                 },

@@ -129,8 +129,9 @@ use vulcan_service_api::{
     SubagentDefinitionSummary, SubagentNavigationChangedDelta, SubagentNavigationSnapshot,
     SubagentPanelRouteResponse, TerminalDisplayChunk, ToolCallSummary,
     TransientReasoningStatusChangedDelta, TransientReasoningStatusKind,
-    TransientReasoningStatusSnapshot, UpdateConversationRunPhaseDelta, UserPromptEditDraftSummary,
-    VmmMemorySnapshot, WEBUI_SERVICE_DISCOVERY_STATUS_FAILED, WEBUI_SERVICE_DISCOVERY_STATUS_READY,
+    TransientReasoningStatusSnapshot, TransientReasoningSummaryItemSnapshot,
+    UpdateConversationRunPhaseDelta, UserPromptEditDraftSummary, VmmMemorySnapshot,
+    WEBUI_SERVICE_DISCOVERY_STATUS_FAILED, WEBUI_SERVICE_DISCOVERY_STATUS_READY,
     WEBUI_SERVICE_DISCOVERY_STATUS_STARTING, WEBUI_SERVICE_PORT_ENV, WEBUI_STATIC_DIR_ENV,
     WorkbenchDelta, WorkbenchDeltaEnvelope, WorkbenchSnapshot, WorkspaceGitChangedEvent,
     webui_service_discovery_snapshot_with_status, webui_service_starting_discovery_snapshot,
@@ -314,7 +315,7 @@ use execution_report_memory::apply_task_session_execution_report_to_memory;
 use execution_report_memory::{
     apply_conversation_checkpoint, apply_execution_report_to_memory,
     apply_task_session_execution_report_to_memory_in_place,
-    spawn_conversation_completion_hook_task,
+    emit_conversation_continuation_summary_changed, spawn_conversation_completion_hook_task,
 };
 use fallback_workbench_projection::*;
 use git::{

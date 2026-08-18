@@ -2,6 +2,125 @@
 //! stop task mirror tests。
 
 use super::*;
+use crate::conversation_run_services::terminate_active_conversation_hook_turn_after_stop;
+
+/// Verifies stopping an execution closes the retained Hook turn idempotently before Continue.
+/// 验证停止执行会在 Continue 前幂等关闭保留的 Hook 回合。
+#[test]
+fn stop_closes_retained_conversation_hook_turn_idempotently() {
+    // sessionId identifies the exact stopped logical conversation.
+    // sessionId 标识精确的已停止逻辑会话。
+    let session_id = SessionId::new_v4();
+    // agentRuntime owns the real Hook runtime used by the stop service.
+    // agentRuntime 持有停止服务使用的真实 Hook 运行时。
+    let agent_runtime = test_agent_runtime_bridge();
+    // retainedTurnId freezes the owner that the stop operation is allowed to terminate.
+    // retainedTurnId 冻结停止操作获准终止的所有者。
+    let retained_turn_id = {
+        // hookRuntime seeds one active turn without starting Provider execution.
+        // hookRuntime 在不启动 Provider 执行的情况下播种一个活动回合。
+        let mut hook_runtime = agent_runtime
+            .conversation_hook_runtime
+            .lock()
+            .expect("Hook runtime fixture should lock");
+        hook_runtime.record_queued_user_prompt(
+            session_id,
+            "prompt-a",
+            Some(String::from("project-a")),
+            String::from("D:\\workspace"),
+            PendingSessionPromptSource::UserFollowup,
+            "continue this task",
+        );
+        hook_runtime
+            .active_turn_id(session_id)
+            .expect("queued prompt should open one Hook turn")
+            .to_string()
+    };
+
+    assert!(
+        terminate_active_conversation_hook_turn_after_stop(
+            &agent_runtime,
+            session_id,
+            Some(String::from("project-a")),
+            Some(retained_turn_id.as_str()),
+            "test stop",
+        )
+        .expect("first stop should close the Hook turn")
+    );
+    assert!(
+        !terminate_active_conversation_hook_turn_after_stop(
+            &agent_runtime,
+            session_id,
+            Some(String::from("project-a")),
+            Some(retained_turn_id.as_str()),
+            "test repeated stop",
+        )
+        .expect("repeated stop should remain idempotent")
+    );
+    assert!(
+        !agent_runtime
+            .conversation_hook_runtime
+            .lock()
+            .expect("Hook runtime should remain readable")
+            .has_active_turn(session_id)
+    );
+}
+
+/// Verifies stop cleanup never terminates a replacement Hook turn with a different owner id.
+/// 验证停止清理绝不会终止具有不同所有者标识的替代 Hook 回合。
+#[test]
+fn stop_preserves_replacement_conversation_hook_turn() {
+    // sessionId identifies the conversation whose Hook owner changes during stop.
+    // sessionId 标识停止期间 Hook 所有者发生变化的会话。
+    let session_id = SessionId::new_v4();
+    // agentRuntime owns the real Hook owner map used by the stop helper.
+    // agentRuntime 持有停止辅助逻辑使用的真实 Hook 所有者映射。
+    let agent_runtime = test_agent_runtime_bridge();
+    // staleTurnId represents the owner captured by the earlier stop request.
+    // staleTurnId 表示较早停止请求捕获的所有者。
+    let stale_turn_id = String::from("stale-turn-id");
+    // replacementTurnId is the current owner established after the stale capture.
+    // replacementTurnId 是过期捕获后建立的当前所有者。
+    let replacement_turn_id = {
+        // hookRuntime creates the replacement owner under the production mutex.
+        // hookRuntime 在生产互斥锁下创建替代所有者。
+        let mut hook_runtime = agent_runtime
+            .conversation_hook_runtime
+            .lock()
+            .expect("Hook runtime fixture should lock");
+        hook_runtime.record_queued_user_prompt(
+            session_id,
+            "prompt-replacement",
+            Some(String::from("project-a")),
+            String::from("D:\\workspace"),
+            PendingSessionPromptSource::UserFollowup,
+            "replacement prompt",
+        );
+        hook_runtime
+            .active_turn_id(session_id)
+            .expect("replacement prompt should own one Hook turn")
+            .to_string()
+    };
+
+    assert!(
+        !terminate_active_conversation_hook_turn_after_stop(
+            &agent_runtime,
+            session_id,
+            Some(String::from("project-a")),
+            Some(stale_turn_id.as_str()),
+            "stale stop",
+        )
+        .expect("stale stop should be rejected without mutation")
+    );
+    assert_eq!(
+        agent_runtime
+            .conversation_hook_runtime
+            .lock()
+            .expect("Hook runtime should remain readable")
+            .active_turn_id(session_id),
+        Some(replacement_turn_id.as_str())
+    );
+}
 
 /// Seeds terminal physical Provider calls into the v2 ledger for stop-projection tests.
 /// 为停止投影测试向 v2 账本播种终态物理 Provider 调用。

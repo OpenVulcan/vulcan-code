@@ -1138,6 +1138,85 @@ fn emit_terminal_execution_report_workbench_deltas(
     Ok(())
 }
 
+/// Reprojects only the continuation summary after its durable retry sidecar changes lifecycle state.
+/// 在可靠重试 sidecar 生命周期状态变化后，仅重新投影 Continue 摘要。
+///
+/// # Parameters
+/// 参数
+/// `app` emits the exact conversation-summary delta after the retained state is updated.
+/// `app` 在保留状态更新后发送精确的会话摘要增量。
+/// `state` owns the lock-consistent workspace, live blockers, and Workbench projection.
+/// `state` 持有锁一致的工作区、实时阻断条件与 Workbench 投影。
+/// `session_id` selects the exact conversation whose retry eligibility changed.
+/// `session_id` 选择重试资格发生变化的精确会话。
+///
+/// # Returns
+/// 返回值
+/// Success after the retained Workbench state and optional visible delta share one generation.
+/// 保留工作台状态与可选可见增量共享同一代际后返回成功。
+pub(crate) fn emit_conversation_continuation_summary_changed(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+) -> Result<(), String> {
+    let conversation_id = session_id.to_string();
+    let event = {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let workspace = guard.workspace_snapshot.as_ref().ok_or_else(|| {
+            String::from("service is still starting; workspace snapshot is not ready")
+        })?;
+        let run_phase = workspace
+            .session_run_phases
+            .get(&session_id)
+            .copied()
+            .ok_or_else(|| {
+                format!("Session `{session_id}` has no retained run phase for Continue projection.")
+            })?;
+        let continuation_blockers =
+            session_continuation_runtime_blockers(&guard, workspace, session_id)?;
+        let continuation =
+            workspace
+                .session_runtime_state
+                .get(&session_id)
+                .and_then(|runtime_state| {
+                    conversation_continuation_summary(
+                        runtime_state,
+                        run_phase,
+                        continuation_blockers,
+                    )
+                });
+        let selected_conversation_id = guard.workbench.selected_conversation_id.clone();
+        let changed_conversation = guard
+            .workbench
+            .conversations
+            .iter_mut()
+            .find(|conversation| conversation.id == conversation_id)
+            .map(|conversation| {
+                conversation.continuation = continuation;
+                conversation.clone()
+            });
+        changed_conversation.map(|conversation| {
+            terminal_report_workbench_delta_envelope(
+                &mut guard,
+                WorkbenchDelta::ConversationSummaryChanged(ConversationSummaryChangedDelta {
+                    conversation,
+                    selected_conversation_id,
+                }),
+            )
+        })
+    };
+    if let Some(event) = event {
+        emit_service_event_with_trace(
+            app,
+            "workbench_continuation_summary_delta_emit",
+            ServiceEvent::WorkbenchDelta(Box::new(event)),
+        );
+    }
+    Ok(())
+}
+
 /// Builds a terminal-report workbench delta envelope and advances the retained revision.
 /// 构建终态报告工作台增量信封，并推进保留的工作台版本。
 ///

@@ -267,6 +267,13 @@ pub(super) async fn handle_finished_stream_event(
             );
         }
     }
+    if let Err(error) =
+        emit_conversation_continuation_summary_changed(app, task_state, finished_session_id)
+    {
+        eprintln!(
+            "[webui-service] continuation summary refresh after retry transition failed: {error}"
+        );
+    }
 
     if let Some(workspace_snapshot) = terminal_projection_fallback_snapshot
         && let Err(error) = persist_workspace_session_update(

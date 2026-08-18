@@ -2593,7 +2593,7 @@ impl ProviderExecutionClient {
                 )
                 .await
                 .map_err(|_| {
-                    stream_transport_failure(
+                    stream_idle_timeout_failure(
                         format!(
                             "Provider stream from `{url}` exceeded the registered {} ms idle timeout.",
                             transport.stream_idle_timeout_ms
@@ -7111,6 +7111,33 @@ fn stream_transport_failure(
     )
 }
 
+/// Creates one dispatched HTTP stream-idle timeout that the host may replay from its clean checkpoint.
+/// 创建一项已分派的 HTTP 流空闲超时，允许宿主从干净检查点重放。
+///
+/// # Parameters
+/// 参数
+/// `message` is controlled diagnostic text and `semantic_output_observed` records discarded partial output.
+/// `message` 是受控诊断文本，`semantic_output_observed` 记录已丢弃的局部输出。
+///
+/// # Returns
+/// 返回值
+/// A typed timeout whose exact subcategory authorizes bounded host retry without hiding semantic-output evidence.
+/// 返回一项强类型超时；其精确子类别允许有界宿主重试，同时不隐藏语义输出证据。
+fn stream_idle_timeout_failure(
+    message: impl Into<String>,
+    semantic_output_observed: bool,
+) -> ProviderExecutionFailure {
+    dispatched_stream_failure(
+        message,
+        semantic_output_observed,
+        AiTransportKind::Http,
+        None,
+        AiErrorCategory::Timeout,
+        "stream_idle_timeout",
+        true,
+    )
+}
+
 /// Creates one dispatched transport failure with an optional exact WebSocket close code.
 /// 创建一项已分派传输失败，并可携带精确 WebSocket 关闭码。
 fn stream_transport_failure_with_websocket_close_code(
@@ -7144,10 +7171,42 @@ fn dispatched_stream_transport_failure(
     transport: AiTransportKind,
     websocket_close_code: Option<u16>,
 ) -> ProviderExecutionFailure {
+    dispatched_stream_failure(
+        message,
+        semantic_output_observed,
+        transport,
+        websocket_close_code,
+        AiErrorCategory::ProviderUnavailable,
+        "transport",
+        false,
+    )
+}
+
+/// Creates one dispatched stream failure with explicit retry semantics for its stable subtype.
+/// 创建一项已分派流失败，并为其稳定子类型声明明确的重试语义。
+///
+/// # Parameters
+/// 参数
+/// `message` is controlled text; the remaining fields retain exact transport, category, subtype, and replay facts.
+/// `message` 是受控文本；其余字段保留精确传输、类别、子类型与重放事实。
+///
+/// # Returns
+/// 返回值
+/// A typed terminal stream failure suitable for host retry classification.
+/// 返回一项可供宿主重试分类使用的强类型终态流失败。
+fn dispatched_stream_failure(
+    message: impl Into<String>,
+    semantic_output_observed: bool,
+    transport: AiTransportKind,
+    websocket_close_code: Option<u16>,
+    category: AiErrorCategory,
+    subcategory: &str,
+    retry_after_semantic_output: bool,
+) -> ProviderExecutionFailure {
     ProviderExecutionFailure {
         error: Box::new(AiExecutionError {
-            category: AiErrorCategory::ProviderUnavailable,
-            subcategory: Some(String::from("transport")),
+            category,
+            subcategory: Some(String::from(subcategory)),
             stage: String::from("response_stream"),
             http_status: None,
             transport: Some(transport),
@@ -7165,7 +7224,7 @@ fn dispatched_stream_transport_failure(
             semantic_output_observed,
             side_effect_observed: false,
             terminal: true,
-            retryable: !semantic_output_observed,
+            retryable: retry_after_semantic_output || !semantic_output_observed,
             retry_after: None,
         }),
     }
@@ -8334,6 +8393,25 @@ mod tests {
         let failure = stream_transport_failure("stream lost", observed);
         assert!(failure.error.semantic_output_observed);
         assert!(!failure.error.retryable);
+    }
+
+    /// Verifies an HTTP stream-idle timeout stays explicitly retryable after discarded partial output.
+    /// 验证 HTTP 流空闲超时在丢弃局部输出后仍显式保持可重试。
+    #[test]
+    fn stream_idle_timeout_remains_retryable_after_semantic_output() {
+        // failure carries the typed idle-timeout subtype while retaining partial-output evidence.
+        // failure 携带强类型空闲超时子类型，同时保留局部输出证据。
+        let failure = stream_idle_timeout_failure("stream idle timeout", true);
+
+        assert_eq!(failure.error.category, AiErrorCategory::Timeout);
+        assert_eq!(
+            failure.error.subcategory.as_deref(),
+            Some("stream_idle_timeout")
+        );
+        assert_eq!(failure.error.stage, "response_stream");
+        assert!(failure.error.semantic_output_observed);
+        assert!(!failure.error.side_effect_observed);
+        assert!(failure.error.retryable);
     }
 
     /// Verifies an exact upstream context code is distinct from generic invalid requests.

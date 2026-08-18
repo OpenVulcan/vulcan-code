@@ -235,8 +235,8 @@ export function ChatArea(props: ChatAreaProps) {
   const transientReasoningStatus = useConversationTransientReasoningStatus(
     activeSurfaceConversationId,
   );
-  // transientReasoningStatusVisible tracks only geometry changes; replace-in-place text updates stay one line.
-  // transientReasoningStatusVisible 仅跟踪几何变化；原地替换的文本更新始终保持单行。
+  // transientReasoningStatusVisible tracks insertion and removal; the shared ResizeObserver owns node reflow.
+  // transientReasoningStatusVisible 跟踪插入与移除；共享 ResizeObserver 负责节点重排。
   const transientReasoningStatusVisible = transientReasoningStatus !== null;
   const displayedStreamingThinkingBlock = activeThinkingOverlayBlock(thinkingDisplayMode, streamingThinkingBlock);
   // Visual transitions retain empty/overlay surfaces only within the current conversation scope.

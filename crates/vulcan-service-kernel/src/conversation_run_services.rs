@@ -57,6 +57,47 @@ pub(crate) struct StopConversationRunSubagentSummary {
     pub(crate) label: String,
 }
 
+/// Terminates the exact active conversation Hook turn retained by a stopped execution.
+/// 终止已停止执行所保留的精确活动会话 Hook 回合。
+///
+/// # Parameters
+/// 参数
+/// `agent_runtime` owns Hook state, `session_id` selects the conversation, and `project_id` retains ownership metadata.
+/// `agent_runtime` 持有 Hook 状态，`session_id` 选择会话，`project_id` 保留归属元数据。
+/// `expected_turn_id` is the exact Hook owner captured when stop began.
+/// `expected_turn_id` 是停止开始时捕获的精确 Hook 所有者。
+/// `reason` is the stable termination explanation emitted to Hook observers.
+/// `reason` 是发送给 Hook 观察者的稳定终止说明。
+///
+/// # Returns
+/// 返回值
+/// `true` when an active turn was terminated, `false` when already closed, or a lock error.
+/// 活动回合被终止时返回 `true`，已经关闭时返回 `false`，否则返回锁错误。
+pub(crate) fn terminate_active_conversation_hook_turn_after_stop(
+    agent_runtime: &AgentRuntimeBridge,
+    session_id: SessionId,
+    project_id: Option<String>,
+    expected_turn_id: Option<&str>,
+    reason: &str,
+) -> Result<bool, String> {
+    // hookRuntime is the unique in-memory owner of logical conversation Hook turns.
+    // hookRuntime 是逻辑会话 Hook 回合的唯一内存所有者。
+    let mut hook_runtime = agent_runtime
+        .conversation_hook_runtime
+        .lock()
+        .map_err(|error| format!("会话 hook runtime 加锁失败：{error}"))?;
+    // expectedTurnId must exist before stop may mutate the retained Hook owner.
+    // expectedTurnId 必须存在，停止操作才可以变更保留的 Hook 所有者。
+    let Some(expected_turn_id) = expected_turn_id else {
+        return Ok(false);
+    };
+    if hook_runtime.active_turn_id(session_id) != Some(expected_turn_id) {
+        return Ok(false);
+    }
+    hook_runtime.terminate_turn(session_id, project_id, reason, 0);
+    Ok(true)
+}
+
 /// Starts prompt-based compaction for the selected WebUI conversation.
 /// 为当前选中的 WebUI 会话启动提示词式上下文压缩。
 pub(crate) async fn service_compact_selected_conversation_context(
@@ -251,6 +292,14 @@ pub(crate) async fn service_stop_conversation_run(
             ),
         });
     }
+    // stoppedHookTurnId freezes the exact logical Hook owner before any stop teardown can race a replacement turn.
+    // stoppedHookTurnId 在停止清理可能与替代回合竞争前冻结精确逻辑 Hook 所有者。
+    let stopped_hook_turn_id = agent_runtime
+        .conversation_hook_runtime
+        .lock()
+        .map_err(|error| format!("会话 hook runtime 加锁失败：{error}"))?
+        .active_turn_id(target_session_id)
+        .map(str::to_string);
     let stop_running_subagents = mode == StopConversationRunMode::MainAndSubagents;
     let active_task = {
         let mut guard = state
@@ -334,10 +383,32 @@ pub(crate) async fn service_stop_conversation_run(
         !running_subagent_task_states.is_empty(),
     )?;
     if did_stop_work {
-        refreeze_claimed_execution_retry_snapshot(
+        // owningProjectId is resolved from the stopped workspace rather than inferred from a path.
+        // owningProjectId 从已停止工作区解析，而不是从路径推断。
+        let owning_project_id =
+            owning_project_id_for_session(&workspace_snapshot, target_session_id);
+        // A stop closes the retained Hook turn before a later Continue restores the same logical input.
+        // 停止操作会在后续 Continue 恢复同一逻辑输入前关闭保留的 Hook 回合。
+        terminate_active_conversation_hook_turn_after_stop(
+            &agent_runtime,
+            target_session_id,
+            owning_project_id,
+            stopped_hook_turn_id.as_deref(),
+            "The user stopped the active conversation execution.",
+        )?;
+        // stoppedConversationState is the post-stop canonical state that the retry digest must bind.
+        // stoppedConversationState 是重试摘要必须绑定的停止后规范状态。
+        let stopped_conversation_state = workspace_snapshot
+            .session_runtime_state
+            .get(&target_session_id)
+            .ok_or_else(|| String::from("停止后未找到会话运行时状态。"))?
+            .conversation_state
+            .clone();
+        refreeze_claimed_execution_retry_snapshot_with_canonical_state(
             &state,
             &controller_runtime,
             target_session_id,
+            &stopped_conversation_state,
             "The user stopped the claimed retry execution.",
         )?;
         let refreshed_retry_reference = state

@@ -15,8 +15,8 @@ pub fn project_tool_parameters_schema(
     }
 }
 
-/// Applies only the object-root compatibility required by standard function-tool protocols.
-/// 仅应用标准函数工具协议所需的对象根兼容处理。
+/// Projects one canonical tool schema into the portable lightweight function-tool subset.
+/// 将单个规范工具 Schema 投影到可移植的轻量函数工具子集。
 ///
 /// # Parameters
 /// 参数
@@ -25,73 +25,581 @@ pub fn project_tool_parameters_schema(
 ///
 /// # Returns
 /// 返回值
-/// Returns the original schema with missing object types added only to root union branches that already declare object constraints.
-/// 返回仅为根联合中已声明对象约束的分支补充缺失对象类型后的 Schema。
+/// Returns an object-root schema containing only basic scalar, object, array, enum, and description declarations.
+/// 返回仅包含基础标量、对象、数组、枚举与描述声明的对象根 Schema。
 fn project_standard_object_root_schema(schema: &Value) -> Value {
-    let Value::Object(root) = schema else {
-        return schema.clone();
-    };
-    let mut projected = root.clone();
-    for keyword in ["anyOf", "oneOf"] {
-        normalize_standard_root_union_branches(&mut projected, keyword);
-    }
+    let mut projected = project_lightweight_schema_node(schema)
+        .and_then(|schema| schema.as_object().cloned())
+        .unwrap_or_default();
+
+    // Function-tool protocols require an object root even when the canonical schema is malformed or union-only.
+    // 即使规范 Schema 异常或仅含联合分支，函数工具协议仍要求对象根。
+    projected.insert(String::from("type"), Value::String(String::from("object")));
+    projected.remove("items");
+    projected.remove("enum");
     Value::Object(projected)
 }
 
-/// Marks required-only object branches without recursively slimming their nested schemas.
-/// 标记仅含必填约束的对象分支，同时不递归压缩其嵌套 Schema。
+/// Recursively projects one schema node into the lightweight provider subset.
+/// 递归将单个 Schema 节点投影到轻量 Provider 子集。
 ///
 /// # Parameters
 /// 参数
-/// `root` is the provider-facing root schema object and `keyword` selects one root union array.
-/// `root` 是 Provider 可见的根 Schema 对象，`keyword` 选择一个根联合数组。
+/// `schema` is one canonical JSON Schema node owned by the host.
+/// `schema` 是一个由宿主拥有的规范 JSON Schema 节点。
 ///
 /// # Returns
 /// 返回值
-/// This function mutates only untyped root branches whose keywords already prove object semantics.
-/// 此函数仅修改其关键字已证明对象语义但尚未声明类型的根分支。
-fn normalize_standard_root_union_branches(root: &mut Map<String, Value>, keyword: &str) {
-    let Some(Value::Array(branches)) = root.get_mut(keyword) else {
-        return;
-    };
-    for branch in branches {
-        let Value::Object(object) = branch else {
-            continue;
-        };
-        if object.contains_key("type") || !schema_branch_declares_object_constraints(object) {
-            continue;
+/// Returns `None` when the node has no portable structural meaning.
+/// 当节点不包含可移植的结构语义时返回 `None`。
+fn project_lightweight_schema_node(schema: &Value) -> Option<Value> {
+    let source = schema.as_object()?;
+    let mut projected = Map::new();
+
+    insert_optional_clone(&mut projected, source, "description");
+    insert_lightweight_type(&mut projected, source);
+    insert_lightweight_enum(&mut projected, source);
+    insert_lightweight_properties(&mut projected, source);
+    insert_lightweight_items(&mut projected, source);
+    insert_lightweight_additional_properties(&mut projected, source);
+
+    // Composition keywords are consumed here and never copied to the provider-facing schema.
+    // 组合关键字仅在此处用于降级，绝不复制到 Provider 可见 Schema。
+    for (keyword, conjunctive) in [("allOf", true), ("anyOf", false), ("oneOf", false)] {
+        merge_lightweight_combinator(&mut projected, source, keyword, conjunctive);
+    }
+
+    infer_lightweight_container_type(&mut projected);
+    insert_lightweight_required(&mut projected, source);
+    ensure_lightweight_array_items(&mut projected);
+    lightweight_node_has_shape(&projected).then_some(Value::Object(projected))
+}
+
+/// Inserts one portable single-valued JSON Schema type.
+/// 插入单个可移植的 JSON Schema 类型。
+///
+/// # Parameters
+/// 参数
+/// `target` receives the projected field and `source` is the canonical schema object.
+/// `target` 接收投影字段，`source` 是规范 Schema 对象。
+///
+/// # Returns
+/// 返回值
+/// This function has no return value and ignores unsupported or null-only type declarations.
+/// 此函数无返回值，并忽略不支持或仅为 null 的类型声明。
+fn insert_lightweight_type(target: &mut Map<String, Value>, source: &Map<String, Value>) {
+    let type_name = match source.get("type") {
+        Some(Value::String(type_name)) if lightweight_type_name_is_portable(type_name) => {
+            Some(type_name.clone())
         }
-        object.insert(String::from("type"), Value::String(String::from("object")));
+        Some(Value::Array(type_names)) => type_names
+            .iter()
+            .filter_map(Value::as_str)
+            .find(|type_name| lightweight_type_name_is_portable(type_name))
+            .map(str::to_owned),
+        _ => None,
+    };
+    if let Some(type_name) = type_name {
+        target.insert(String::from("type"), Value::String(type_name));
     }
 }
 
-/// Reports whether an untyped union branch already contains object-only JSON Schema constraints.
-/// 报告一个未声明类型的联合分支是否已经包含对象专属 JSON Schema 约束。
+/// Reports whether one JSON Schema type name belongs to the portable lightweight subset.
+/// 报告单个 JSON Schema 类型名是否属于可移植轻量子集。
 ///
 /// # Parameters
 /// 参数
-/// `branch` is one object-valued entry from a root `anyOf` or `oneOf` array.
-/// `branch` 是根级 `anyOf` 或 `oneOf` 数组中的一个对象值分支。
+/// `type_name` is one canonical JSON Schema type string.
+/// `type_name` 是单个规范 JSON Schema 类型字符串。
 ///
 /// # Returns
 /// 返回值
-/// Returns `true` only for branches whose existing keywords unambiguously constrain an object instance.
-/// 仅当分支现有关键字明确约束对象实例时返回 `true`。
-fn schema_branch_declares_object_constraints(branch: &Map<String, Value>) -> bool {
-    [
-        "properties",
-        "patternProperties",
-        "additionalProperties",
-        "unevaluatedProperties",
-        "propertyNames",
-        "required",
-        "dependentRequired",
-        "dependentSchemas",
-        "minProperties",
-        "maxProperties",
-    ]
-    .iter()
-    .any(|keyword| branch.contains_key(*keyword))
+/// Returns `true` only for the six non-null JSON value categories accepted by basic function schemas.
+/// 仅对基础函数 Schema 接受的六种非 null JSON 值类别返回 `true`。
+fn lightweight_type_name_is_portable(type_name: &str) -> bool {
+    matches!(
+        type_name,
+        "object" | "array" | "string" | "number" | "integer" | "boolean"
+    )
+}
+
+/// Inserts a portable enum and converts a canonical `const` into a one-item enum.
+/// 插入可移植的枚举，并将规范 `const` 转换为单项枚举。
+///
+/// # Parameters
+/// 参数
+/// `target` receives the projected field and `source` is the canonical schema object.
+/// `target` 接收投影字段，`source` 是规范 Schema 对象。
+///
+/// # Returns
+/// 返回值
+/// This function has no return value.
+/// 此函数无返回值。
+fn insert_lightweight_enum(target: &mut Map<String, Value>, source: &Map<String, Value>) {
+    let values = if let Some(Value::Array(values)) = source.get("enum") {
+        values
+            .iter()
+            .filter(|value| lightweight_enum_value_is_portable(value))
+            .cloned()
+            .collect::<Vec<_>>()
+    } else if let Some(value) = source.get("const")
+        && lightweight_enum_value_is_portable(value)
+    {
+        vec![value.clone()]
+    } else {
+        Vec::new()
+    };
+    if !values.is_empty() {
+        target.insert(String::from("enum"), Value::Array(values));
+    }
+}
+
+/// Reports whether one enum value is a portable non-null JSON scalar.
+/// 报告单个枚举值是否为可移植的非 null JSON 标量。
+///
+/// # Parameters
+/// 参数
+/// `value` is one canonical enum or const value.
+/// `value` 是单个规范枚举或 const 值。
+///
+/// # Returns
+/// 返回值
+/// Returns `true` for strings, numbers, and booleans.
+/// 对字符串、数字和布尔值返回 `true`。
+fn lightweight_enum_value_is_portable(value: &Value) -> bool {
+    matches!(value, Value::String(_) | Value::Number(_) | Value::Bool(_))
+}
+
+/// Recursively inserts declared object properties.
+/// 递归插入已声明的对象属性。
+///
+/// # Parameters
+/// 参数
+/// `target` receives the projected properties and `source` is the canonical schema object.
+/// `target` 接收投影属性，`source` 是规范 Schema 对象。
+///
+/// # Returns
+/// 返回值
+/// This function has no return value.
+/// 此函数无返回值。
+fn insert_lightweight_properties(target: &mut Map<String, Value>, source: &Map<String, Value>) {
+    let Some(Value::Object(properties)) = source.get("properties") else {
+        return;
+    };
+    let projected = properties
+        .iter()
+        .filter_map(|(name, schema)| {
+            project_lightweight_schema_node(schema).map(|schema| (name.clone(), schema))
+        })
+        .collect::<Map<_, _>>();
+    target.insert(String::from("properties"), Value::Object(projected));
+}
+
+/// Recursively inserts one homogeneous array item schema.
+/// 递归插入单个同构数组元素 Schema。
+///
+/// # Parameters
+/// 参数
+/// `target` receives the projected item schema and `source` is the canonical schema object.
+/// `target` 接收投影元素 Schema，`source` 是规范 Schema 对象。
+///
+/// # Returns
+/// 返回值
+/// This function has no return value.
+/// 此函数无返回值。
+fn insert_lightweight_items(target: &mut Map<String, Value>, source: &Map<String, Value>) {
+    let item_schema = match source.get("items") {
+        Some(Value::Array(items)) => items.first(),
+        item => item,
+    };
+    if let Some(projected) = item_schema.and_then(project_lightweight_schema_node) {
+        target.insert(String::from("items"), projected);
+    }
+}
+
+/// Preserves only the portable boolean form of `additionalProperties`.
+/// 仅保留 `additionalProperties` 的可移植布尔形式。
+///
+/// # Parameters
+/// 参数
+/// `target` receives the projected field and `source` is the canonical schema object.
+/// `target` 接收投影字段，`source` 是规范 Schema 对象。
+///
+/// # Returns
+/// 返回值
+/// This function has no return value.
+/// 此函数无返回值。
+fn insert_lightweight_additional_properties(
+    target: &mut Map<String, Value>,
+    source: &Map<String, Value>,
+) {
+    if let Some(Value::Bool(value)) = source.get("additionalProperties") {
+        target.insert(String::from("additionalProperties"), Value::Bool(*value));
+    }
+}
+
+/// Degrades one composition keyword into a single portable basic schema shape.
+/// 将单个组合关键字降级为单一可移植基础 Schema 形态。
+///
+/// # Parameters
+/// 参数
+/// `target` is the current basic node, `source` owns the branches, `keyword` selects them, and `conjunctive` distinguishes `allOf` from alternatives.
+/// `target` 是当前基础节点，`source` 拥有分支，`keyword` 选择分支，`conjunctive` 用于区分 `allOf` 与备选联合。
+///
+/// # Returns
+/// 返回值
+/// This function has no return value.
+/// 此函数无返回值。
+fn merge_lightweight_combinator(
+    target: &mut Map<String, Value>,
+    source: &Map<String, Value>,
+    keyword: &str,
+    conjunctive: bool,
+) {
+    let Some(Value::Array(branches)) = source.get(keyword) else {
+        return;
+    };
+    let projected_branches = branches
+        .iter()
+        .filter_map(project_lightweight_schema_node)
+        .filter_map(|branch| branch.as_object().cloned())
+        .collect::<Vec<_>>();
+    if projected_branches.is_empty() {
+        return;
+    }
+
+    if projected_branches
+        .iter()
+        .all(|branch| branch.get("type").and_then(Value::as_str) == Some("object"))
+    {
+        merge_lightweight_object_branches(target, &projected_branches, conjunctive);
+        return;
+    }
+
+    if !lightweight_node_has_shape(target) {
+        merge_lightweight_schema_fields(target, &projected_branches[0]);
+    }
+}
+
+/// Merges object alternatives without retaining their composition keyword.
+/// 在不保留组合关键字的前提下合并对象分支。
+///
+/// # Parameters
+/// 参数
+/// `target` receives merged properties, `branches` are portable object nodes, and `conjunctive` controls required-name union versus intersection.
+/// `target` 接收合并属性，`branches` 是可移植对象节点，`conjunctive` 控制必填名的并集或交集。
+///
+/// # Returns
+/// 返回值
+/// This function has no return value.
+/// 此函数无返回值。
+fn merge_lightweight_object_branches(
+    target: &mut Map<String, Value>,
+    branches: &[Map<String, Value>],
+    conjunctive: bool,
+) {
+    target
+        .entry(String::from("type"))
+        .or_insert_with(|| Value::String(String::from("object")));
+
+    let mut merged_properties = target
+        .get("properties")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    for properties in branches
+        .iter()
+        .filter_map(|branch| branch.get("properties").and_then(Value::as_object))
+    {
+        for (name, schema) in properties {
+            if let Some(existing) = merged_properties.get_mut(name) {
+                merge_lightweight_property_variants(existing, schema, conjunctive);
+            } else {
+                merged_properties.insert(name.clone(), schema.clone());
+            }
+        }
+    }
+    if !merged_properties.is_empty() {
+        target.insert(String::from("properties"), Value::Object(merged_properties));
+    }
+
+    let branch_required = branches
+        .iter()
+        .map(lightweight_required_names)
+        .collect::<Vec<_>>();
+    let derived_required = if conjunctive {
+        branch_required
+            .into_iter()
+            .flatten()
+            .collect::<BTreeSet<_>>()
+    } else {
+        intersect_lightweight_required_names(&branch_required)
+    };
+    merge_lightweight_required_names(target, derived_required);
+}
+
+/// Merges enum values for duplicate properties with the same portable type.
+/// 为具有相同可移植类型的重复属性合并枚举值。
+///
+/// # Parameters
+/// 参数
+/// `existing` is the retained property schema, `candidate` is one branch schema, and `conjunctive` selects intersection versus union semantics.
+/// `existing` 是已保留的属性 Schema，`candidate` 是一个分支 Schema，`conjunctive` 选择交集或并集语义。
+///
+/// # Returns
+/// 返回值
+/// This function has no return value.
+/// 此函数无返回值。
+fn merge_lightweight_property_variants(existing: &mut Value, candidate: &Value, conjunctive: bool) {
+    let (Some(existing), Some(candidate)) = (existing.as_object_mut(), candidate.as_object())
+    else {
+        return;
+    };
+    if existing.get("type") != candidate.get("type") {
+        return;
+    }
+    match (
+        existing.get("enum").and_then(Value::as_array).cloned(),
+        candidate.get("enum").and_then(Value::as_array),
+    ) {
+        (Some(mut values), Some(candidate_values)) => {
+            if conjunctive {
+                values.retain(|value| candidate_values.contains(value));
+            } else {
+                for value in candidate_values {
+                    if !values.contains(value) {
+                        values.push(value.clone());
+                    }
+                }
+            }
+            if values.is_empty() {
+                existing.remove("enum");
+            } else {
+                existing.insert(String::from("enum"), Value::Array(values));
+            }
+        }
+        (None, Some(candidate_values)) if conjunctive => {
+            existing.insert(String::from("enum"), Value::Array(candidate_values.clone()));
+        }
+        // One unrestricted alternative makes a union unrestricted, while an allOf keeps the other restriction.
+        // 任一备选分支不限制枚举时并集也不限制，而 allOf 仍保留另一个限制。
+        _ if !conjunctive => {
+            existing.remove("enum");
+        }
+        _ => {}
+    }
+}
+
+/// Inserts canonical required names after filtering them to projected properties.
+/// 在将规范必填名过滤到已投影属性后进行插入。
+///
+/// # Parameters
+/// 参数
+/// `target` receives required names and `source` is the canonical schema object.
+/// `target` 接收必填名，`source` 是规范 Schema 对象。
+///
+/// # Returns
+/// 返回值
+/// This function has no return value.
+/// 此函数无返回值。
+fn insert_lightweight_required(target: &mut Map<String, Value>, source: &Map<String, Value>) {
+    let Some(Value::Array(required)) = source.get("required") else {
+        return;
+    };
+    let declared = target
+        .get("properties")
+        .and_then(Value::as_object)
+        .map(|properties| properties.keys().cloned().collect::<BTreeSet<_>>())
+        .unwrap_or_default();
+    let required = required
+        .iter()
+        .filter_map(Value::as_str)
+        .filter(|name| declared.contains(*name))
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>();
+    merge_lightweight_required_names(target, required);
+}
+
+/// Returns the required-name set declared by one projected object branch.
+/// 返回单个已投影对象分支声明的必填名集合。
+///
+/// # Parameters
+/// 参数
+/// `branch` is one projected object branch.
+/// `branch` 是一个已投影对象分支。
+///
+/// # Returns
+/// 返回值
+/// Returns the deduplicated required names.
+/// 返回去重后的必填名。
+fn lightweight_required_names(branch: &Map<String, Value>) -> BTreeSet<String> {
+    branch
+        .get("required")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Intersects required-name sets across alternative branches.
+/// 对备选分支之间的必填名集合求交集。
+///
+/// # Parameters
+/// 参数
+/// `sets` contains one required-name set per alternative branch.
+/// `sets` 包含每个备选分支的一个必填名集合。
+///
+/// # Returns
+/// 返回值
+/// Returns only names required by every branch.
+/// 仅返回所有分支都必填的名称。
+fn intersect_lightweight_required_names(sets: &[BTreeSet<String>]) -> BTreeSet<String> {
+    let Some((first, rest)) = sets.split_first() else {
+        return BTreeSet::new();
+    };
+    rest.iter().fold(first.clone(), |intersection, names| {
+        intersection.intersection(names).cloned().collect()
+    })
+}
+
+/// Merges required names into the target while preserving deterministic ordering.
+/// 将必填名合并到目标中，同时保持确定性顺序。
+///
+/// # Parameters
+/// 参数
+/// `target` receives the merged array and `names` contains additional required property names.
+/// `target` 接收合并数组，`names` 包含额外必填属性名。
+///
+/// # Returns
+/// 返回值
+/// This function has no return value.
+/// 此函数无返回值。
+fn merge_lightweight_required_names(target: &mut Map<String, Value>, names: BTreeSet<String>) {
+    let mut merged = lightweight_required_names(target);
+    merged.extend(names);
+    if merged.is_empty() {
+        target.remove("required");
+    } else {
+        target.insert(
+            String::from("required"),
+            Value::Array(merged.into_iter().map(Value::String).collect()),
+        );
+    }
+}
+
+/// Merges missing portable fields from one selected fallback branch.
+/// 从一个选定的回退分支合并缺失的可移植字段。
+///
+/// # Parameters
+/// 参数
+/// `target` receives missing fields and `source` is the selected projected branch.
+/// `target` 接收缺失字段，`source` 是选定的已投影分支。
+///
+/// # Returns
+/// 返回值
+/// This function has no return value.
+/// 此函数无返回值。
+fn merge_lightweight_schema_fields(target: &mut Map<String, Value>, source: &Map<String, Value>) {
+    for (key, value) in source {
+        target.entry(key.clone()).or_insert_with(|| value.clone());
+    }
+}
+
+/// Infers a missing object or array type from portable structural fields.
+/// 根据可移植结构字段推断缺失的对象或数组类型。
+///
+/// # Parameters
+/// 参数
+/// `target` is the projected schema node to complete.
+/// `target` 是待补全的已投影 Schema 节点。
+///
+/// # Returns
+/// 返回值
+/// This function has no return value.
+/// 此函数无返回值。
+fn infer_lightweight_container_type(target: &mut Map<String, Value>) {
+    if target.contains_key("type") {
+        return;
+    }
+    if target.contains_key("properties") || target.contains_key("additionalProperties") {
+        target.insert(String::from("type"), Value::String(String::from("object")));
+    } else if target.contains_key("items") {
+        target.insert(String::from("type"), Value::String(String::from("array")));
+    } else if let Some(type_name) = target
+        .get("enum")
+        .and_then(Value::as_array)
+        .and_then(|values| values.first())
+        .and_then(lightweight_enum_value_type_name)
+    {
+        target.insert(String::from("type"), Value::String(String::from(type_name)));
+    }
+}
+
+/// Returns the portable JSON Schema type name for one enum scalar.
+/// 返回单个枚举标量对应的可移植 JSON Schema 类型名。
+///
+/// # Parameters
+/// 参数
+/// `value` is one already filtered enum scalar.
+/// `value` 是单个已过滤枚举标量。
+///
+/// # Returns
+/// 返回值
+/// Returns the matching string, number, or boolean type name.
+/// 返回匹配的字符串、数字或布尔类型名。
+fn lightweight_enum_value_type_name(value: &Value) -> Option<&'static str> {
+    match value {
+        Value::String(_) => Some("string"),
+        Value::Number(number) if number.is_i64() || number.is_u64() => Some("integer"),
+        Value::Number(_) => Some("number"),
+        Value::Bool(_) => Some("boolean"),
+        _ => None,
+    }
+}
+
+/// Ensures a projected array always exposes one basic item schema.
+/// 确保已投影数组始终公开一个基础元素 Schema。
+///
+/// # Parameters
+/// 参数
+/// `target` is the projected schema node to complete.
+/// `target` 是待补全的已投影 Schema 节点。
+///
+/// # Returns
+/// 返回值
+/// This function has no return value.
+/// 此函数无返回值。
+fn ensure_lightweight_array_items(target: &mut Map<String, Value>) {
+    if target.get("type").and_then(Value::as_str) == Some("array") && !target.contains_key("items")
+    {
+        target.insert(
+            String::from("items"),
+            Value::Object(Map::from_iter([(
+                String::from("type"),
+                Value::String(String::from("string")),
+            )])),
+        );
+    }
+}
+
+/// Reports whether a lightweight node already owns a concrete structural shape.
+/// 报告轻量节点是否已拥有具体结构形态。
+///
+/// # Parameters
+/// 参数
+/// `node` is one projected schema object.
+/// `node` 是一个已投影 Schema 对象。
+///
+/// # Returns
+/// 返回值
+/// Returns `true` for typed, object-property, or array-item nodes.
+/// 对已定型、包含对象属性或数组元素的节点返回 `true`。
+fn lightweight_node_has_shape(node: &Map<String, Value>) -> bool {
+    ["type", "properties", "items"]
+        .iter()
+        .any(|key| node.contains_key(*key))
 }
 
 /// Projects one schema into the compact Gemini tool-declaration dialect.

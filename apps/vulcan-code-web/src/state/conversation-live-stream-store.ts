@@ -152,7 +152,10 @@ export class ConversationLiveStreamStore {
       // key 路由通知，且不会让状态进入转录记录。
       const key = transientReasoningStatusKey(conversationId);
       if (status) {
-        this.#transientReasoningStatuses.set(conversationId, { ...status });
+        this.#transientReasoningStatuses.set(conversationId, {
+          ...status,
+          summaries: status.summaries?.map((summary) => ({ ...summary })),
+        });
       } else {
         this.#transientReasoningStatuses.delete(conversationId);
       }

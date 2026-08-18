@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "tavily",
-  "revision": 2,
-  "published_at": "2026-08-06T00:00:00Z",
+  "revision": 3,
+  "published_at": "2026-08-18T00:00:00Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [],
@@ -186,7 +186,7 @@
       },
       "output": {
         "kind": "search",
-        "source_path": "results",
+        "source_path": "/results",
         "normalized_result_path": "search",
         "resource_kind": null,
         "mime_types": []
@@ -285,7 +285,7 @@
       },
       "output": {
         "kind": "extract",
-        "source_path": "results",
+        "source_path": "/results",
         "normalized_result_path": "extract",
         "resource_kind": null,
         "mime_types": []

@@ -5,25 +5,25 @@ use super::*;
 
 use vulcan_agent_runtime::agent_runtime::task_runtime::TestSubagentRegistryEntrySeed;
 
-/// Records one completed physical Provider call in a service-kernel test runtime state.
-/// 在 Service Kernel 测试运行态中记录一次已经完成的 Provider 物理调用。
+/// Builds one deterministic Provider call identity shared by lifecycle test fixtures.
+/// 构建一个由生命周期测试夹具共享的确定性 Provider 调用身份。
 ///
 /// # Parameters
 /// 参数
-/// `runtime_state` owns the durable call ledger, `owner_kind` selects the execution category, and `execution_id` identifies one logical execution.
-/// `runtime_state` 持有可靠调用账本，`owner_kind` 选择执行类别，`execution_id` 标识一次逻辑执行。
+/// `owner_kind` identifies the logical runtime owner used by the fixture.
+/// `owner_kind` 标识夹具使用的逻辑运行时所有者。
+/// `execution_id` identifies the exact physical execution represented by the fixture.
+/// `execution_id` 标识夹具表示的精确物理执行。
 ///
 /// # Returns
 /// 返回值
-/// Returns no value and panics when the deterministic fixture violates ledger invariants.
-/// 不返回值；当确定性夹具违反账本约束时触发 panic。
-pub(super) fn record_completed_test_provider_call(
-    runtime_state: &mut SessionRuntimeStateEntry,
+/// A complete immutable Provider identity suitable for Started and Completed observations.
+/// 返回适用于 Started 与 Completed 观测的完整不可变 Provider 身份。
+fn test_provider_call_identity(
     owner_kind: &str,
     execution_id: &str,
-) {
-    let provider_call_id = format!("provider-call-{execution_id}");
-    let identity = vulcan_workbench_model::SessionProviderCallIdentity {
+) -> vulcan_workbench_model::SessionProviderCallIdentity {
+    vulcan_workbench_model::SessionProviderCallIdentity {
         logical_request_id: format!("logical-request-{execution_id}"),
         execution_id: execution_id.to_string(),
         turn_id: None,
@@ -47,7 +47,36 @@ pub(super) fn record_completed_test_provider_call(
         route_revision: String::from("sha256:test-route"),
         request_profiles: Vec::new(),
         response_profiles: Vec::new(),
-    };
+    }
+}
+
+/// Records one durable pre-dispatch Provider Started boundary for refresh-race tests.
+/// 为刷新竞态测试记录一个可靠的 Provider 分派前 Started 边界。
+///
+/// # Parameters
+/// 参数
+/// `runtime_state` is the authoritative in-memory session state receiving the call boundary.
+/// `runtime_state` 是接收调用边界的权威内存会话状态。
+/// `owner_kind` identifies the logical runtime owner used by the fixture.
+/// `owner_kind` 标识夹具使用的逻辑运行时所有者。
+/// `execution_id` identifies the exact physical execution represented by the fixture.
+/// `execution_id` 标识夹具表示的精确物理执行。
+///
+/// # Returns
+/// 返回值
+/// The stable physical Provider call identifier inserted into the ledger.
+/// 返回插入账本的稳定物理 Provider 调用标识。
+pub(super) fn record_started_test_provider_call(
+    runtime_state: &mut SessionRuntimeStateEntry,
+    owner_kind: &str,
+    execution_id: &str,
+) -> String {
+    // provider_call_id is the stable key checked after an overlapping refresh commits.
+    // provider_call_id 是重叠刷新提交后检查的稳定键。
+    let provider_call_id = format!("provider-call-{execution_id}");
+    // identity freezes the route and owner facts attached to this physical call.
+    // identity 冻结附着到本次物理调用的路由与所有者事实。
+    let identity = test_provider_call_identity(owner_kind, execution_id);
     assert!(runtime_state.provider_call_ledger.observe_started(
         vulcan_workbench_model::SessionProviderCallStarted {
             provider_call_id: provider_call_id.clone(),
@@ -63,6 +92,37 @@ pub(super) fn record_completed_test_provider_call(
             budget_accounting: None,
         }
     ));
+    provider_call_id
+}
+
+/// Records one complete successful Provider lifecycle for aggregate-usage tests.
+/// 为聚合用量测试记录一个完整成功的 Provider 生命周期。
+///
+/// # Parameters
+/// 参数
+/// `runtime_state` is the authoritative in-memory session state receiving the lifecycle.
+/// `runtime_state` 是接收生命周期的权威内存会话状态。
+/// `owner_kind` identifies the logical runtime owner used by the fixture.
+/// `owner_kind` 标识夹具使用的逻辑运行时所有者。
+/// `execution_id` identifies the exact physical execution represented by the fixture.
+/// `execution_id` 标识夹具表示的精确物理执行。
+///
+/// # Returns
+/// 返回值
+/// Returns no value and panics when the deterministic fixture violates ledger invariants.
+/// 不返回值；当确定性夹具违反账本约束时触发 panic。
+pub(super) fn record_completed_test_provider_call(
+    runtime_state: &mut SessionRuntimeStateEntry,
+    owner_kind: &str,
+    execution_id: &str,
+) {
+    // provider_call_id is created by the exact Started observation required before completion.
+    // provider_call_id 由完成前必须存在的精确 Started 观测创建。
+    let provider_call_id =
+        record_started_test_provider_call(runtime_state, owner_kind, execution_id);
+    // identity reproduces the immutable route identity required by the terminal observation.
+    // identity 重建终态观测要求的不可变路由身份。
+    let identity = test_provider_call_identity(owner_kind, execution_id);
     assert!(runtime_state.provider_call_ledger.observe_completed(
         vulcan_workbench_model::SessionProviderCallCompleted {
             provider_call_id,

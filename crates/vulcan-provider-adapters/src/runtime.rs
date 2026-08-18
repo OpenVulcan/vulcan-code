@@ -15427,7 +15427,7 @@ mod tests {
             },
             "output": {
                 "kind": "search",
-                "source_path": "results",
+                "source_path": "/results",
                 "normalized_result_path": "search",
                 "resource_kind": null,
                 "mime_types": []
@@ -17134,7 +17134,7 @@ mod tests {
                 "input_schema": search_schema,
                 "output": {
                     "kind": "search",
-                    "source_path": "results",
+                    "source_path": "/results",
                     "normalized_result_path": "search",
                     "resource_kind": null,
                     "mime_types": []
@@ -17165,7 +17165,7 @@ mod tests {
                 }),
                 "output": {
                     "kind": "extract",
-                    "source_path": "results",
+                    "source_path": "/results",
                     "normalized_result_path": "extract",
                     "resource_kind": null,
                     "mime_types": []
@@ -17263,7 +17263,7 @@ mod tests {
                 }),
                 "output": {
                     "kind": "search",
-                    "source_path": "results",
+                    "source_path": "/results",
                     "normalized_result_path": "search",
                     "resource_kind": null,
                     "mime_types": []

@@ -33,7 +33,7 @@
     },
     "output": {
       "kind": "resources",
-      "source_path": "output.video_url",
+      "source_path": "/output/video_url",
       "normalized_result_path": "resources",
       "resource_kind": "video",
       "mime_types": ["video/mp4"],

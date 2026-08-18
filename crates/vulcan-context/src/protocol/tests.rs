@@ -4,6 +4,7 @@
 use super::*;
 use crate::transcript::{SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind};
 use serde_json::{Value, json};
+use vulcan_core::controller::INTERJECTED_PROMPT_ADMISSION_ID_KEY;
 
 /// Builds one transcript entry for replay-normalization tests.
 /// 为重放归一化测试构建一条转录项。
@@ -237,6 +238,42 @@ fn merge_session_messages_with_conversation_state_records_preserves_loaded_histo
     assert_eq!(merged_messages[0].body, "之前的问题");
     assert_eq!(merged_messages[1].body, "之前的回答");
     assert_eq!(merged_messages[2].body, "继续提问");
+}
+
+/// Verifies a canonical interrupt record replaces its already visible admission row by stable identity.
+/// 验证规范插队记录会按稳定身份替换已经可见的接纳阶段行。
+#[test]
+fn merge_session_messages_replaces_interrupt_admission_projection() {
+    let admission_id = "webui-pending-internal-1";
+    let metadata = Some(json!({
+        (INTERJECTED_PROMPT_ADMISSION_ID_KEY): admission_id,
+        "source": "user_interrupt",
+    }));
+    let admission_message = transcript_entry(
+        "pending-prompt-admission-webui-pending-internal-1",
+        SessionMessageKind::User,
+        SessionMessageRecordKind::Transcript,
+        "立即显示的插队指令",
+        metadata.clone(),
+    );
+    let canonical_message = transcript_entry(
+        "runtime-user-2",
+        SessionMessageKind::User,
+        SessionMessageRecordKind::Transcript,
+        "立即显示的插队指令",
+        metadata,
+    );
+    let runtime_state = conversation_state_from_session_messages(&[canonical_message])
+        .expect("canonical interrupt record should have valid identities");
+
+    let merged_messages = merge_session_messages_with_conversation_state_records(
+        &[admission_message],
+        &runtime_state,
+    );
+
+    assert_eq!(merged_messages.len(), 1);
+    assert_eq!(merged_messages[0].id, "runtime-user-2");
+    assert_eq!(merged_messages[0].body, "立即显示的插队指令");
 }
 
 /// Verifies runtime records restore thinking/tool interleaving after tool rows reached the display layer first.

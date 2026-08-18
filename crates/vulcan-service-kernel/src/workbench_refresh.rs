@@ -280,6 +280,18 @@ async fn refresh_workbench_snapshot_with_selected_session(
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
+        // final_preserved_run_state closes the last async refresh window before the whole snapshot is replaced.
+        // final_preserved_run_state 在整份快照被替换前关闭最后一个异步刷新竞态窗口。
+        let active_run_sessions = active_kernel_session_ids(&guard);
+        let final_preserved_run_state = capture_preserved_workspace_run_state(
+            guard.workspace_snapshot.as_ref(),
+            &active_run_sessions,
+            None,
+        );
+        preserve_active_session_run_state(
+            final_preserved_run_state.as_ref(),
+            &mut refreshed_snapshot,
+        );
         preserve_focused_catalog_domains_after_concurrent_refresh(
             &mut workbench,
             &guard.workbench,
