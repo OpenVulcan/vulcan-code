@@ -44,13 +44,13 @@ use self::segmented_session_store::{
     SegmentedSessionEventKind, append_segmented_boundary_events, append_segmented_session_events,
     backup_runtime_log_before_compaction, core_vmm_rebuild_reason,
     create_segmented_session_in_location, find_segmented_session_directory,
-    find_segmented_session_directory_by_id, load_core_vmm_controller_state,
-    load_session_boundary_state, read_runtime_log_lines, read_segmented_session_event_window,
-    read_state, record_runtime_audit_event, record_runtime_injection_applied,
-    replace_session_boundary_state, reset_vmm_state_for_history_rewrite,
-    segmented_session_directory, segmented_session_directory_exists,
-    state_document_from_runtime_state, write_core_vmm_controller_state, write_file_bytes_atomic,
-    write_state,
+    find_segmented_session_directory_by_id, find_segmented_session_or_task_directory_by_id,
+    load_core_vmm_controller_state, load_session_boundary_state, read_runtime_log_lines,
+    read_segmented_session_event_window, read_state, record_runtime_audit_event,
+    record_runtime_injection_applied, replace_session_boundary_state,
+    reset_vmm_state_for_history_rewrite, segmented_session_directory,
+    segmented_session_directory_exists, state_document_from_runtime_state,
+    write_core_vmm_controller_state, write_file_bytes_atomic, write_state,
 };
 use self::session_addon_store::read_session_addon_state;
 pub use ai_credentials::{
@@ -226,7 +226,7 @@ pub fn persist_provider_request_trace(
             "Provider request trace file stem must contain only ASCII letters, digits, hyphens, or underscores.",
         ));
     }
-    let session_directory = find_segmented_session_directory_by_id(
+    let session_directory = find_segmented_session_or_task_directory_by_id(
         data_root,
         &session_id.to_string(),
     )?

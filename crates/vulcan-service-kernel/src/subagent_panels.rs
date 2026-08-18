@@ -477,10 +477,7 @@ pub(super) async fn service_close_subagent_task(
         .task_runtime
         .invoke_close_agent(
             resolved_parent_session_id,
-            json!({
-                "target": public_task_id,
-                "cascade": true,
-            }),
+            close_agent_request_arguments(public_task_id.as_str()),
         )
         .await?;
     let closed_task_ids = closed_subagent_task_ids_from_close_result(&close_result)?;
@@ -504,6 +501,22 @@ pub(super) async fn service_close_subagent_task(
     }?;
     emit_subagent_navigation_delta_from_route_response(&app, &response);
     Ok(response)
+}
+
+/// Builds the exact argument object accepted by the current close_agent tool contract.
+/// 构建当前 close_agent 工具契约接受的精确参数对象。
+///
+/// # Parameters
+/// 参数
+/// `public_task_id` is the child-agent id resolved from the open registry entry.
+/// `public_task_id` 是从开放注册表条目解析出的子代理标识。
+///
+/// # Returns
+/// 返回值
+/// Returns a target-only payload because close_agent always archives the selected subtree.
+/// 返回仅包含 target 的载荷，因为 close_agent 始终归档选中的子树。
+pub(super) fn close_agent_request_arguments(public_task_id: &str) -> Value {
+    json!({ "target": public_task_id })
 }
 
 /// Extracts closed task session ids from the close_agent host result contract.

@@ -337,55 +337,16 @@ fn merge_task_display_messages_with_existing_send_message_notes(
     let Some(existing_messages) = workspace_snapshot.session_messages.get(&session_id) else {
         return messages;
     };
-    let latest_runtime_message_created_at =
-        latest_session_message_created_at_millis(messages.as_slice());
     for existing_message in existing_messages
         .iter()
         .filter(|message| session_message_is_subagent_send_message_display_note(message))
-        .filter(|message| {
-            pending_send_message_note_created_after_runtime_window(
-                message,
-                latest_runtime_message_created_at,
-            )
-        })
     {
+        // A send_message note is durable user-visible history. The canonical task state may
+        // already contain the same delivery, and identity-based insertion removes that duplicate.
+        // send_message 记录是持久的用户可见历史；规范任务状态可能已含同一投递，基于身份的插入会去重。
         insert_display_session_message_by_created_at(&mut messages, existing_message.clone());
     }
     filter_display_session_messages(messages)
-}
-
-/// Returns whether one live send_message note is newer than the authoritative runtime window.
-/// 判断单条实时 send_message 记录是否晚于权威运行时窗口。
-///
-/// # Parameters
-/// 参数
-/// `message` is the retained child display row created from a parent send_message call.
-/// `message` 是从父级 send_message 调用创建的子显示行。
-/// `latest_runtime_message_created_at` is the newest timestamp in the rebuilt runtime display rows.
-/// `latest_runtime_message_created_at` 是重建后的运行时显示行中的最新时间戳。
-///
-/// # Returns
-/// 返回值
-/// `true` only for a pending note that the child runtime has not had a chance to own yet.
-/// 仅当该记录是子运行时尚未来得及接管的待处理记录时返回 `true`。
-fn pending_send_message_note_created_after_runtime_window(
-    message: &SessionMessageEntry,
-    latest_runtime_message_created_at: Option<i128>,
-) -> bool {
-    let Some(latest_runtime_message_created_at) = latest_runtime_message_created_at else {
-        return true;
-    };
-    session_message_created_at_millis(message)
-        .is_some_and(|created_at| created_at > latest_runtime_message_created_at)
-}
-
-/// Returns the newest creation timestamp among projected display rows.
-/// 返回投影显示行中的最新创建时间戳。
-fn latest_session_message_created_at_millis(messages: &[SessionMessageEntry]) -> Option<i128> {
-    messages
-        .iter()
-        .filter_map(session_message_created_at_millis)
-        .max()
 }
 
 /// Inserts one display row near its original creation timestamp while preserving de-duplication.

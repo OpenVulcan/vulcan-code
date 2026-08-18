@@ -47,6 +47,8 @@ use runtime_tail::{
 };
 #[cfg(test)]
 use snapshot::effective_session_messages_for_persistence;
+#[cfg(test)]
+pub(in crate::workspace_store) use snapshot::persist_single_session_transcript_messages_in_data_root;
 
 pub use edit_fork::*;
 pub use projects::*;

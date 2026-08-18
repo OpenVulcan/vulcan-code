@@ -37,6 +37,124 @@ fn create_session_writes_metadata_state_and_first_segment() {
     assert_eq!(lines[0].kind, SegmentedSessionEventKind::SessionMeta);
 }
 
+/// Verifies Provider request traces use the indexed TaskSession directory rather than requiring a main-session identity.
+/// 验证 Provider 请求追踪使用已索引 TaskSession 目录，而不是要求主会话标识。
+#[test]
+fn provider_request_trace_resolves_segmented_task_session_owner() {
+    // root isolates this provider-trace ownership test from every other segmented-store fixture.
+    // root 将本次 Provider 追踪归属测试与其他分段存储夹具隔离。
+    let root = test_root("provider_request_trace_resolves_segmented_task_session_owner");
+    // parent_directory establishes the root catalog entry that owns the child-task mirror.
+    // parent_directory 建立拥有子任务镜像的根目录索引条目。
+    let parent_directory = create_segmented_session_in_location(
+        &root,
+        false,
+        test_session_request(SegmentPolicy::default()),
+    )
+    .expect("create provider trace parent session");
+    // task_session_id is the exact cache scope used by a detached subagent Provider request.
+    // task_session_id 是分离子代理 Provider 请求使用的精确缓存作用域。
+    let task_session_id = Uuid::new_v4();
+    // task_directory mirrors the production task/<uuid> segmented layout and parent metadata index.
+    // task_directory 镜像生产环境 task/<uuid> 分段布局与父元数据索引。
+    let task_directory =
+        write_legacy_task_session_fixture(&parent_directory, &task_session_id.to_string());
+    // trace is the minimal serializable diagnostic payload required by the persistence boundary.
+    // trace 是持久化边界所需的最小可序列化诊断载荷。
+    let trace = json!({
+        "schema_version": "vulcan.provider-request-trace.v1",
+        "api_request": {"body": {"model": "task-model"}},
+    });
+
+    // trace_path must stay inside the child TaskSession temp directory.
+    // trace_path 必须保留在子 TaskSession 的临时目录内。
+    let trace_path = crate::workspace_store::persist_provider_request_trace(
+        &root,
+        task_session_id,
+        "task-trace-000001",
+        &trace,
+    )
+    .expect("persist TaskSession provider request trace");
+
+    assert_eq!(
+        trace_path,
+        task_directory
+            .join("temp")
+            .join("provider-request-trace")
+            .join("task-trace-000001.json")
+    );
+    assert_eq!(
+        serde_json::from_slice::<Value>(
+            &fs::read(&trace_path).expect("read TaskSession provider request trace")
+        )
+        .expect("decode TaskSession provider request trace"),
+        trace
+    );
+
+    fs::remove_dir_all(root).expect("remove TaskSession provider trace test root");
+}
+
+/// Verifies a child send-message display row survives through the durable TaskSession transcript path.
+/// 验证子任务 send-message 显示行通过持久化 TaskSession 转录路径保留。
+#[test]
+fn task_session_transcript_persistence_resolves_indexed_child_directory() {
+    // root isolates the parent catalog and child transcript from every other persistence test.
+    // root 将父级目录索引与子转录同其他持久化测试隔离。
+    let root = test_root("task_session_transcript_persistence_resolves_indexed_child_directory");
+    // parent_directory owns the child-task mirror used by the production resolver.
+    // parent_directory 持有生产解析器使用的子任务镜像。
+    let parent_directory = create_segmented_session_in_location(
+        &root,
+        false,
+        test_session_request(SegmentPolicy::default()),
+    )
+    .expect("create transcript parent session");
+    // task_session_id matches the child conversation identity carried by send_message metadata.
+    // task_session_id 对应 send_message 元数据携带的子会话身份。
+    let task_session_id = Uuid::new_v4();
+    // task_directory first establishes the exact parent mirror expected by discovery.
+    // task_directory 首先建立目录发现所要求的精确父级镜像。
+    let task_directory =
+        write_legacy_task_session_fixture(&parent_directory, &task_session_id.to_string());
+    // compatible_root creates the current main-compatible TaskSession metadata shape used in production.
+    // compatible_root 创建生产环境当前使用的主会话兼容 TaskSession 元数据形态。
+    let compatible_root = test_root("task_session_transcript_compatible_directory");
+    let mut compatible_request = test_session_request(SegmentPolicy::default());
+    compatible_request.session_id = task_session_id.to_string();
+    let compatible_directory =
+        create_segmented_session_in_location(&compatible_root, false, compatible_request)
+            .expect("create compatible task session directory");
+    fs::remove_dir_all(&task_directory).expect("remove legacy task fixture body");
+    fs::rename(&compatible_directory, &task_directory)
+        .expect("publish compatible task session directory");
+    // message is the non-Provider-visible user display note projected from one send_message completion.
+    // message 是一次 send_message 完成事件投影出的非 Provider 可见用户显示注记。
+    let message = test_message(
+        "subagent-guidance-message",
+        SessionMessageKind::User,
+        SessionMessageRecordKind::DisplayNote,
+        "请优先检查未提交差异",
+    );
+
+    crate::workspace_store::persistence::persist_single_session_transcript_messages_in_data_root(
+        &root,
+        task_session_id,
+        std::slice::from_ref(&message),
+    )
+    .expect("persist child transcript display note");
+
+    // persisted_window proves re-opening the child panel can rebuild the inserted message from disk.
+    // persisted_window 证明重新打开子面板时可以从磁盘重建该插入消息。
+    let persisted_window = read_segmented_session_event_window(&task_directory, None, 16)
+        .expect("read persisted child transcript window");
+    assert!(persisted_window.iter().any(|line| {
+        line.payload["message_id"] == message.id && line.payload["message"]["body"] == message.body
+    }));
+
+    fs::remove_dir_all(root).expect("remove TaskSession transcript test root");
+    fs::remove_dir_all(compatible_root).expect("remove compatible TaskSession fixture root");
+}
+
 /// Verifies explicit Core VMM deletion clears only VMM artifacts and preserves the session transcript.
 /// 验证明确定义的 Core VMM 删除仅清除 VMM 工件并保留会话转录。
 #[test]

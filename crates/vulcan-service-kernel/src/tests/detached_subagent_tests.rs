@@ -1673,7 +1673,7 @@ fn subagent_surface_conversation_state_uses_canonical_display_only_agent_message
 /// Verifies runtime refresh drops stale parent-to-child visible message notes.
 /// 验证运行态刷新会丢弃陈旧的父到子可见消息记录。
 #[test]
-fn subagent_surface_conversation_state_drops_stale_send_message_notes() {
+fn subagent_surface_conversation_state_preserves_send_message_history_after_later_output() {
     let parent_session_id = SessionId::new_v4();
     let task_session_id = SessionId::new_v4();
     let mut service_state = test_service_state_with_parent_session(parent_session_id);
@@ -1732,7 +1732,7 @@ fn subagent_surface_conversation_state_drops_stale_send_message_notes() {
             .iter()
             .map(|message| message.body.as_str())
             .collect::<Vec<_>>(),
-        vec!["我只输出过 abcd。"]
+        vec!["你之前做了什么？请回忆并列出。", "我只输出过 abcd。"]
     );
     assert!(
         !messages
@@ -1740,7 +1740,7 @@ fn subagent_surface_conversation_state_drops_stale_send_message_notes() {
             .any(|message| message.body == "stale output")
     );
     assert!(
-        !messages
+        messages
             .iter()
             .any(|message| message.body == "你之前做了什么？请回忆并列出。")
     );
@@ -2565,6 +2565,17 @@ fn close_agent_cleanup_removes_closed_webui_subagent_cache_entries() {
             .contains_key(&closed_task_id)
     );
     assert!(guard.active_subagent_panel.is_none());
+}
+
+/// Verifies the WebUI close path cannot reintroduce the removed cascade argument.
+/// 验证 WebUI 关闭路径不会重新引入已移除的 cascade 参数。
+#[test]
+fn close_agent_request_uses_target_only_runtime_contract() {
+    // arguments is the exact payload passed from the service boundary to TaskRuntime.
+    // arguments 是服务边界传递给 TaskRuntime 的精确载荷。
+    let arguments = close_agent_request_arguments("analysis-worker");
+
+    assert_eq!(arguments, json!({ "target": "analysis-worker" }));
 }
 
 /// Builds one completed subagent panel state for cache mutation tests.

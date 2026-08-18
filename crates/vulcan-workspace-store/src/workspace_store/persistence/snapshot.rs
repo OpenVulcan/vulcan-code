@@ -166,11 +166,39 @@ pub async fn persist_single_session_transcript_messages(
     session_id: SessionId,
     messages: &[SessionMessageEntry],
 ) -> Result<(), String> {
+    persist_single_session_transcript_messages_in_data_root(
+        &controller.data_root,
+        session_id,
+        messages,
+    )
+}
+
+/// Persists one complete transcript window into its main-session or TaskSession directory.
+/// 将一个完整转录窗口持久化到所属主会话或 TaskSession 目录。
+///
+/// # Parameters
+/// 参数
+/// `data_root` is the segmented workspace data root.
+/// `data_root` 是分段工作区数据根目录。
+/// `session_id` identifies the exact main session or child task.
+/// `session_id` 标识精确的主会话或子任务。
+/// `messages` is the authoritative visible transcript window.
+/// `messages` 是权威可见转录窗口。
+///
+/// # Returns
+/// 返回值
+/// Returns success after the resolved transcript directory is updated, or when no durable owner exists.
+/// 在已解析转录目录完成更新后返回成功；不存在持久化归属时也返回成功。
+pub(crate) fn persist_single_session_transcript_messages_in_data_root(
+    data_root: &Path,
+    session_id: SessionId,
+    messages: &[SessionMessageEntry],
+) -> Result<(), String> {
     if messages.is_empty() {
         return Ok(());
     }
     let Some(session_dir) =
-        find_segmented_session_directory_by_id(&controller.data_root, &session_id.to_string())?
+        find_segmented_session_or_task_directory_by_id(data_root, &session_id.to_string())?
     else {
         return Ok(());
     };

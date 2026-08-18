@@ -39,8 +39,90 @@
   pointer-events: none;
 }
 
-.transient-reasoning-status-line {
+.tool-execution-row.transient-reasoning-status-line {
+  width: min(100%, 760px);
+  min-width: 0;
+  align-items: stretch;
+  flex-direction: column;
+  gap: 4px;
+  overflow: hidden;
   pointer-events: none;
+}
+
+.transient-reasoning-status-viewport {
+  width: 100%;
+  min-width: 0;
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.transient-reasoning-status-track {
+  max-width: 100%;
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+}
+
+.transient-reasoning-status-copy {
+  min-width: 0;
+  flex: 0 0 auto;
+}
+
+.tool-execution-row .transient-reasoning-status-detail {
+  width: 100%;
+  min-width: 0;
+  display: block;
+  overflow: visible;
+  color: var(--muted-foreground);
+  text-overflow: clip;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.transient-reasoning-status-track[data-overflowing="false"]
+  .transient-reasoning-status-copy {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.transient-reasoning-status-track[data-overflowing="true"] {
+  max-width: none;
+  gap: 32px;
+  animation: transient-reasoning-status-marquee 18s linear infinite;
+  will-change: transform;
+}
+
+/* The duplicate starts at the viewport origin after one complete marquee cycle. */
+/* 一个完整跑马灯周期后，副本会回到视口起点。 */
+@keyframes transient-reasoning-status-marquee {
+  from {
+    transform: translateX(0);
+  }
+
+  to {
+    transform: translateX(calc(-50% - 16px));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .transient-reasoning-status-track[data-overflowing="true"] {
+    max-width: 100%;
+    animation: none;
+  }
+
+  .transient-reasoning-status-track[data-overflowing="true"]
+    .transient-reasoning-status-copy:first-child {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .transient-reasoning-status-track[data-overflowing="true"]
+    .transient-reasoning-status-copy[aria-hidden="true"] {
+    display: none;
+  }
 }
 
 .conversation-continue-button {

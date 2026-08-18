@@ -322,5 +322,63 @@ pub(super) fn find_segmented_session_directory_by_id(
     Ok(None)
 }
 
+/// Resolves one durable main-session or TaskSession segmented directory.
+/// 解析一个持久化主会话或 TaskSession 分段目录。
+///
+/// # Parameters
+/// 参数
+/// `data_root` is the application data root and `session_id` is either a main-session or TaskSession identifier.
+/// `data_root` 是应用数据根目录，`session_id` 是主会话或 TaskSession 标识。
+///
+/// # Returns
+/// 返回值
+/// Returns the exact main-session or indexed child-task directory without creating missing lifecycle state.
+/// 返回精确的主会话或已索引子任务目录，且不会创建缺失的生命周期状态。
+pub(super) fn find_segmented_session_or_task_directory_by_id(
+    data_root: &Path,
+    session_id: &str,
+) -> Result<Option<PathBuf>, String> {
+    // catalog is the authoritative main-session index and carries every durable child-task mirror.
+    // catalog 是主会话权威索引，并携带每个持久化子任务镜像。
+    let catalog = list_segmented_session_catalog(data_root)?;
+    for entry in catalog {
+        if entry.metadata.session_id == session_id {
+            return Ok(Some(entry.session_dir));
+        }
+        // mirrored_task proves this identifier belongs to the current root session tree.
+        // mirrored_task 证明该标识属于当前根会话树。
+        let Some(mirrored_task) = entry
+            .metadata
+            .tasks
+            .iter()
+            .find(|task| task.session_id == session_id)
+        else {
+            continue;
+        };
+        // task_component retains the canonical TaskSession directory identity.
+        // task_component 保留规范的 TaskSession 目录标识。
+        let task_component = sanitize_file_component(session_id);
+        // expected_relative_directory rejects corrupted mirror paths instead of following metadata outside the session root.
+        // expected_relative_directory 拒绝损坏的镜像路径，避免跟随元数据越出会话根目录。
+        let expected_relative_directory = Path::new(SEGMENTED_TASK_DIR).join(task_component);
+        if Path::new(&mirrored_task.dir) != expected_relative_directory {
+            return Err(format!(
+                "TaskSession `{session_id}` segmented mirror points to unexpected directory `{}`.",
+                mirrored_task.dir
+            ));
+        }
+        // task_directory is valid only after the TaskSession main-compatible metadata is durable.
+        // task_directory 仅在 TaskSession 主会话兼容元数据持久化后才有效。
+        let task_directory = entry.session_dir.join(expected_relative_directory);
+        if !task_directory.join(SEGMENTED_METADATA_FILE).is_file() {
+            return Err(format!(
+                "TaskSession `{session_id}` segmented directory has no durable metadata."
+            ));
+        }
+        return Ok(Some(task_directory));
+    }
+    Ok(None)
+}
+
 #[cfg(test)]
 mod tests;

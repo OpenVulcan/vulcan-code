@@ -24,6 +24,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { ConversationWorkspace } from "@/components/conversation/conversation-workspace";
+import { TransientReasoningStatusLine } from "@/components/conversation/conversation-blocks";
 import {
   generatedMediaAttachmentsFromToolDetailPayload,
   projectConversationRenderItems,
@@ -56,6 +57,7 @@ import type {
 } from "@/diff/types";
 import { cn } from "@/lib/utils";
 import { useI18n, type TranslationKey } from "@/i18n";
+import { useConversationTransientReasoningStatus } from "@/state/conversation-live-stream-context";
 import type { WorkspaceDiffFileDetailLoadOptions } from "@/service/workbench-snapshot-service";
 import type {
   ConversationMessage,
@@ -827,6 +829,12 @@ function WorkspaceSubagentPanel(args: {
   // taskId stores the subagent child conversation id represented by this tab.
   // taskId 保存该页签代表的子代理子会话标识。
   const taskId = args.tab.subagentTaskId ?? null;
+  // transientReasoningStatus subscribes to request-local summary or encrypted reasoning for this exact child task.
+  // transientReasoningStatus 订阅当前精确子任务的请求局部摘要或加密思考状态。
+  const transientReasoningStatus = useConversationTransientReasoningStatus(taskId);
+  // transientReasoningStatusVisible tracks only insertion and removal of the child timeline-tail status row.
+  // transientReasoningStatusVisible 仅跟踪子会话时间线尾部状态行的插入与移除。
+  const transientReasoningStatusVisible = transientReasoningStatus !== null;
   // navigation stores the matching backend subagent projection for this parent conversation.
   // navigation 保存该父会话匹配的后端子代理投影。
   const navigation = parentConversationId && args.props.workbench.subagentNavigation?.parentConversationId === parentConversationId
@@ -931,6 +939,11 @@ function WorkspaceSubagentPanel(args: {
     surfaceId: taskId,
     writeSnapshot: writeSubagentScrollSnapshot,
   });
+  // Adding or removing child transient reasoning follows the child transcript's semantic scroll ownership.
+  // 增删子智能体临时思考状态时遵循子转录自身的语义滚动所有权。
+  React.useLayoutEffect(() => {
+    subagentScrollController.scheduleStoredRestore();
+  }, [subagentScrollController, transientReasoningStatusVisible]);
   // handleSubagentExpandedStateChange stores expansion choices for the exact child transcript only.
   // handleSubagentExpandedStateChange 仅为精确子转录保存展开选择。
   const handleSubagentExpandedStateChange = React.useCallback((
@@ -1005,6 +1018,9 @@ function WorkspaceSubagentPanel(args: {
         scrollRef={scrollRef}
         sessionRunning={Boolean(task?.isRunning)}
         suppressEmptyPlaceholder={transcriptLoading && messages.length === 0}
+        transientReasoningStatus={transientReasoningStatus ? (
+          <TransientReasoningStatusLine status={transientReasoningStatus} />
+        ) : null}
         workspacePath={workspacePath}
         onCopyText={args.props.onCopyText}
         onExpandedStateChange={handleSubagentExpandedStateChange}

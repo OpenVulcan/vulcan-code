@@ -547,12 +547,88 @@ export function TurnStatsBlock(props: {
   );
 }
 
-// TransientReasoningStatusLine renders one non-persistent timeline-tail status with the shared shimmer effect.
-// TransientReasoningStatusLine 使用共享闪字效果渲染单条非持久化时间线尾部状态。
+// transientReasoningStatusOverflows applies one stable pixel tolerance to the measured marquee boundary.
+// transientReasoningStatusOverflows 对测量后的跑马灯边界应用稳定的像素容差。
+// Parameters: contentWidth is the rendered text width and viewportWidth is the clipped visible width.
+// 参数：contentWidth 是渲染文本宽度，viewportWidth 是裁剪后的可见宽度。
+// Returns: true only when the content exceeds the viewport beyond the layout tolerance.
+// 返回值：仅当内容超过视口及布局容差时返回 true。
+export function transientReasoningStatusOverflows(
+  contentWidth: number,
+  viewportWidth: number,
+): boolean {
+  return contentWidth > viewportWidth + 1;
+}
+
+// TransientReasoningSummaryStage separates the latest replacement heading from its streaming detail.
+// TransientReasoningSummaryStage 将最新替换式阶段标题与其流式正文分离。
+export interface TransientReasoningSummaryStage {
+  // Latest complete Markdown-bold stage heading, or legacy unstructured summary text.
+  // 最新完整 Markdown 粗体阶段标题，或旧式非结构化摘要文本。
+  title: string | null;
+  // Streaming text after the latest complete stage heading.
+  // 最新完整阶段标题之后的流式正文。
+  detail: string | null;
+}
+
+// transientReasoningSummaryStage projects cumulative Chat summary deltas into the latest visible stage.
+// transientReasoningSummaryStage 将累计 Chat 摘要增量投影为最新可见阶段。
+// Parameters: text is the current replacement-summary accumulator emitted by the protocol decoder.
+// 参数：text 是协议解码器发出的当前替换式摘要累计文本。
+// Returns: the latest complete bold heading and only the body that follows that heading.
+// 返回值：最新完整粗体标题，以及仅位于该标题之后的正文。
+export function transientReasoningSummaryStage(
+  text: string | null | undefined,
+): TransientReasoningSummaryStage {
+  // source removes transport-only edge whitespace while preserving internal streaming layout.
+  // source 移除仅属于传输边缘的空白，同时保留内部流式布局。
+  const source = text?.trim() ?? "";
+  if (!source) {
+    return { title: null, detail: null };
+  }
+  // stageHeadingPattern recognizes the explicit Markdown-bold phase boundary emitted by summary models.
+  // stageHeadingPattern 识别摘要模型发出的显式 Markdown 粗体阶段边界。
+  const stageHeadingPattern = /\*\*([^*\r\n]+)\*\*/g;
+  // latestHeading stores only the last complete phase boundary so earlier phases disappear immediately.
+  // latestHeading 仅保存最后一个完整阶段边界，使之前阶段立即从显示中消失。
+  let latestHeading: RegExpExecArray | null = null;
+  // headingMatch advances through complete boundaries without treating an unfinished trailing marker as a new phase.
+  // headingMatch 遍历完整边界，不会把末尾未完成标记视为新阶段。
+  let headingMatch: RegExpExecArray | null;
+  while ((headingMatch = stageHeadingPattern.exec(source)) !== null) {
+    latestHeading = headingMatch;
+  }
+  if (!latestHeading) {
+    // A split opening marker remains hidden until the closing marker proves the new stage title.
+    // 被分片的起始标记会保持隐藏，直到结束标记证明新的阶段标题。
+    return source.startsWith("**")
+      ? { title: null, detail: null }
+      : { title: source, detail: null };
+  }
+  // trailingText contains only data after the newest complete stage heading.
+  // trailingText 仅包含最新完整阶段标题之后的数据。
+  const trailingText = source.slice(latestHeading.index + latestHeading[0].length);
+  // pendingHeadingIndex hides a split next-stage marker from the current stage body.
+  // pendingHeadingIndex 从当前阶段正文中隐藏被分片的下一阶段标记。
+  const pendingHeadingIndex = trailingText.indexOf("**");
+  // detailSource ends before an unfinished next heading and therefore never appends its partial title.
+  // detailSource 在未完成的下一标题前结束，因此绝不会追加其残缺标题。
+  const detailSource = pendingHeadingIndex >= 0
+    ? trailingText.slice(0, pendingHeadingIndex)
+    : trailingText;
+  // title and detail expose only non-empty user-visible values.
+  // title 与 detail 仅暴露非空用户可见值。
+  const title = latestHeading[1].trim() || null;
+  const detail = detailSource.trim() || null;
+  return { title, detail };
+}
+
+// TransientReasoningStatusLine renders one non-persistent timeline-tail status with a marquee title and streaming detail.
+// TransientReasoningStatusLine 使用跑马灯标题与流式正文渲染非持久化时间线尾部状态。
 // Parameters: status is the latest replace-in-place summary or encrypted reasoning progress.
 // 参数：status 是最新原地替换式摘要或加密推理进度。
-// Returns: one polite live-region line that disappears when its Store value is cleared.
-// 返回值：一条在 Store 值清除后消失的礼貌实时区域状态行。
+// Returns: one polite live-region line that scrolls only when its rendered text exceeds the fixed viewport.
+// 返回值：一条仅在渲染文本超过固定视口时滚动的礼貌实时区域状态行。
 export function TransientReasoningStatusLine(props: {
   // Latest request-local transient status.
   // 最新请求局部瞬态状态。
@@ -561,12 +637,14 @@ export function TransientReasoningStatusLine(props: {
   // locale and t format the status through the active interface language.
   // locale 与 t 使用当前界面语言格式化状态。
   const { locale, t } = useI18n();
-  // summary is readable only for the explicit summary presentation mode.
-  // summary 仅在显式摘要展示模式下可读。
-  const summary = props.status.kind === "summary" ? props.status.text?.trim() : null;
-  // label falls back to the generic thinking state until readable text arrives.
-  // label 在可读文本到达前回退为通用思考状态。
-  const label = summary || t("runtime.thinking");
+  // summaryStage is readable only for the explicit summary presentation mode.
+  // summaryStage 仅在显式摘要展示模式下可读。
+  const summaryStage = props.status.kind === "summary"
+    ? transientReasoningSummaryStage(props.status.text)
+    : { title: null, detail: null };
+  // titleLabel falls back to the generic thinking state until one complete title arrives.
+  // titleLabel 在完整标题到达前回退为通用思考状态。
+  const titleLabel = summaryStage.title || t("runtime.thinking");
   // tokenSuffix is omitted when the provider exposes no dynamic reasoning count.
   // tokenSuffix 在供应商未公开动态推理计数时省略。
   const tokenSuffix = typeof props.status.reasoningTokens === "number"
@@ -575,6 +653,37 @@ export function TransientReasoningStatusLine(props: {
         new Intl.NumberFormat(locale).format(props.status.reasoningTokens),
       )
     : "";
+  // viewportRef owns the clipped one-line display width.
+  // viewportRef 持有被裁剪的单行展示宽度。
+  const viewportRef = React.useRef<HTMLSpanElement>(null);
+  // contentRef measures one canonical copy without counting the marquee duplicate.
+  // contentRef 测量单份规范文本，不计入跑马灯副本。
+  const contentRef = React.useRef<HTMLSpanElement>(null);
+  // overflowing controls duplication and animation only after real layout measurement.
+  // overflowing 仅在真实布局测量后控制文本复制与动画。
+  const [overflowing, setOverflowing] = React.useState(false);
+  React.useLayoutEffect(() => {
+    // viewport and content are the exact nodes participating in overflow measurement.
+    // viewport 与 content 是参与溢出测量的精确节点。
+    const viewport = viewportRef.current;
+    const content = contentRef.current;
+    if (!viewport || !content) return;
+    // measureOverflow compares rendered widths and replaces state only when the overflow result changes.
+    // measureOverflow 比较渲染宽度，并仅在溢出结果变化时替换状态。
+    const measureOverflow = () => {
+      setOverflowing(
+        transientReasoningStatusOverflows(content.scrollWidth, viewport.clientWidth),
+      );
+    };
+    measureOverflow();
+    if (typeof ResizeObserver === "undefined") return;
+    // resizeObserver keeps the decision aligned with window, split-pane, font, and text changes.
+    // resizeObserver 让判定与窗口、分栏、字体及文本变化保持一致。
+    const resizeObserver = new ResizeObserver(measureOverflow);
+    resizeObserver.observe(viewport);
+    resizeObserver.observe(content);
+    return () => resizeObserver.disconnect();
+  }, [titleLabel, tokenSuffix]);
   return (
     <div
       aria-busy="true"
@@ -582,7 +691,37 @@ export function TransientReasoningStatusLine(props: {
       className="tool-execution-row transient-reasoning-status-line"
       data-reasoning-status-kind={props.status.kind}
     >
-      <span className="shimmer">{label}{tokenSuffix}</span>
+      <span
+        className="transient-reasoning-status-viewport"
+        data-overflowing={overflowing}
+        ref={viewportRef}
+        title={overflowing ? `${titleLabel}${tokenSuffix}` : undefined}
+      >
+        <span
+          className="transient-reasoning-status-track"
+          data-overflowing={overflowing}
+        >
+          <span
+            className="shimmer transient-reasoning-status-copy"
+            ref={contentRef}
+          >
+            {titleLabel}{tokenSuffix}
+          </span>
+          {overflowing ? (
+            <span
+              aria-hidden="true"
+              className="shimmer transient-reasoning-status-copy"
+            >
+              {titleLabel}{tokenSuffix}
+            </span>
+          ) : null}
+        </span>
+      </span>
+      {summaryStage.detail ? (
+        <span className="shimmer transient-reasoning-status-detail">
+          {summaryStage.detail}
+        </span>
+      ) : null}
     </div>
   );
 }

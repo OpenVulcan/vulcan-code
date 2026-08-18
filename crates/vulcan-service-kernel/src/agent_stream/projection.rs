@@ -1867,6 +1867,7 @@ fn append_runtime_event_projection_with_authority(
         changed_plan_mode,
         transcript_changed,
         transcript_messages_for_persistence,
+        child_transcript_for_persistence,
         addon_task_projects,
         addon_session,
         message_window_deltas,
@@ -1930,6 +1931,12 @@ fn append_runtime_event_projection_with_authority(
                 child.projected_messages.clone(),
             )
         });
+        // child_transcript_for_persistence preserves the exact appended child display transcript beyond the live surface cache.
+        // child_transcript_for_persistence 将精确追加后的子会话显示转录持久化到实时界面缓存之外。
+        let child_transcript_for_persistence = workspace_draft
+            .child_projection
+            .as_ref()
+            .map(|child| (child.task_id, child.messages.clone()));
         // No fallible operation may follow this commit boundary while the service lock is held.
         // 持有服务锁时，该提交边界之后不允许再出现可失败操作。
         workspace_draft.commit(
@@ -2060,6 +2067,7 @@ fn append_runtime_event_projection_with_authority(
             changed_plan_mode,
             transcript_changed,
             transcript_messages_for_persistence,
+            child_transcript_for_persistence,
             addon_task_projects,
             addon_session,
             message_window_deltas,
@@ -2110,6 +2118,15 @@ fn append_runtime_event_projection_with_authority(
             session_id,
             messages,
             Some(String::from("runtime_event_projection")),
+        );
+    }
+    if let Some((child_task_id, messages)) = child_transcript_for_persistence {
+        spawn_session_transcript_messages_persist_task(
+            state.clone(),
+            controller_runtime.clone(),
+            child_task_id,
+            messages,
+            Some(String::from("subagent_send_message_projection")),
         );
     }
     if let Some(todolist) = changed_todolist
