@@ -49,12 +49,10 @@ use vulcan_core::types::{
 use vulcan_provider_adapters::{
     CredentialExecutionSecret, InputResourceConstraint, ProviderExecutionClient,
     ProviderExecutionRoute, ProviderWireRequestCapture, ResolvedPublicAiExecution,
-    ResourceReferencePolicy, ResponseProjectionProfile, TransientReasoningStatusMode,
+    ResourceReferencePolicy, ResponseProjectionProfile, ToolSchemaProjectionMode,
+    TransientReasoningStatusMode,
 };
-use vulcan_tools_manager::{
-    VulcanToolSchemaProjectionContext, project_tool_parameters_schema,
-    resolve_tool_schema_projection_profile,
-};
+use vulcan_tools_manager::{VulcanToolSchemaProjectionProfile, project_tool_parameters_schema};
 
 /// Vulcan-owned default output budget used when the provider reports no independent output limit.
 /// 当供应商未报告独立输出上限时使用的 Vulcan 本地默认输出预算。
@@ -484,7 +482,7 @@ impl VulcanPublicContractAdapter {
             .collect();
         // publicTools applies the same route-bound schema projection used by standalone remote compaction.
         // publicTools 应用与独立远端压缩相同的路由绑定 Schema 投影。
-        let public_tools = project_public_tool_definitions(&route, model_id.as_str(), tools);
+        let public_tools = project_public_tool_definitions(&route, tools);
         Self {
             provider_request_trace_enabled,
             route,
@@ -636,44 +634,38 @@ impl VulcanPublicContractAdapter {
     }
 }
 
-/// Maps one public protocol profile to the stable API-family key consumed by the shared tool-schema projector.
-/// 将一个公共协议配置映射为共享工具 Schema 投影器使用的稳定 API 族键。
+/// Maps one configured provider contract onto the shared tool-schema projection implementation.
+/// 将一项已配置 Provider 契约映射到共享工具 Schema 投影实现。
 ///
 /// # Parameters
 /// 参数
-/// `protocol_profile_id` is the immutable protocol profile selected for the execution route.
-/// `protocol_profile_id` 是执行路由选定的不可变协议配置标识。
+/// `mode` is the exact value frozen into the execution route.
+/// `mode` 是冻结进执行路由的精确值。
 ///
 /// # Returns
 /// 返回值
-/// The exact compatibility family key used by `vulcan-tools-manager`.
-/// 返回 `vulcan-tools-manager` 使用的精确兼容族键。
-fn tool_schema_api_family_key(protocol_profile_id: &str) -> &'static str {
-    match protocol_profile_id {
-        vulcan_ai_protocols::GEMINI_GENERATE_CONTENT_PROFILE_ID
-        | vulcan_ai_protocols::GOOGLE_CODE_ASSIST_PROFILE_ID
-        | vulcan_ai_protocols::GEMINI_INTERACTIONS_PROFILE_ID => {
-            "google-gemini-function-declarations"
+/// The corresponding shared projection profile without protocol or model-name inference.
+/// 返回对应共享投影配置，不进行协议或模型名推断。
+fn configured_tool_schema_projection_profile(
+    mode: ToolSchemaProjectionMode,
+) -> VulcanToolSchemaProjectionProfile {
+    match mode {
+        ToolSchemaProjectionMode::Lightweight => {
+            VulcanToolSchemaProjectionProfile::StandardObjectRoot
         }
-        vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID
-        | vulcan_ai_protocols::OPENAI_CODEX_RESPONSES_PROFILE_ID => "openai-responses-compatible",
-        vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID => "openai-chat-compatible",
-        vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID
-        | vulcan_ai_protocols::ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID
-        | vulcan_ai_protocols::CLAUDE_CODE_MESSAGES_PROFILE_ID => "anthropic-messages",
-        vulcan_ai_protocols::COHERE_CHAT_PROFILE_ID => "cohere-chat",
-        _ => "unknown",
+        ToolSchemaProjectionMode::Passthrough => VulcanToolSchemaProjectionProfile::PassThrough,
+        ToolSchemaProjectionMode::Strict => VulcanToolSchemaProjectionProfile::GeminiSlim,
     }
 }
 
-/// Projects host-owned provider tools through the exact route/model compatibility profile.
-/// 通过精确路由与模型兼容配置投影宿主持有的 Provider 工具。
+/// Projects host-owned provider tools through the exact route-bound compatibility profile.
+/// 通过精确路由绑定的兼容配置投影宿主持有的 Provider 工具。
 ///
 /// # Parameters
 /// 参数
-/// `route` and `model_id` freeze the public protocol target; `tools` contains the already resolved
+/// `route` freezes the configured schema contract; `tools` contains the already resolved
 /// provider-visible definitions.
-/// `route` 与 `model_id` 冻结公共协议目标；`tools` 包含已经解析的 Provider 可见定义。
+/// `route` 冻结已配置的 Schema 契约；`tools` 包含已经解析的 Provider 可见定义。
 ///
 /// # Returns
 /// 返回值
@@ -681,21 +673,13 @@ fn tool_schema_api_family_key(protocol_profile_id: &str) -> &'static str {
 /// 返回适用于普通 Responses 与远端压缩的路由正规化公共工具定义。
 pub(crate) fn project_public_tool_definitions(
     route: &ProviderExecutionRoute,
-    model_id: &str,
     tools: Vec<ProviderToolDefinition>,
 ) -> Vec<ToolDefinition> {
-    // schemaProjectionContext freezes the exact protocol family and model before projection.
-    // schemaProjectionContext 在投影前冻结精确协议族与模型。
-    let schema_projection_context = VulcanToolSchemaProjectionContext {
-        api_family_key: tool_schema_api_family_key(
-            route.protocol_route.protocol_profile_id.as_str(),
-        ),
-        model_id,
-    };
-    // schemaProjectionProfile reuses the host-owned compatibility policy for every request path.
-    // schemaProjectionProfile 为每条请求路径复用宿主自有兼容策略。
+    // schemaProjectionProfile maps only the route-frozen configuration; model names and protocol
+    // families never silently change the schema contract.
+    // schemaProjectionProfile 只映射路由冻结配置；模型名与协议族绝不会静默改变 Schema 契约。
     let schema_projection_profile =
-        resolve_tool_schema_projection_profile(&schema_projection_context);
+        configured_tool_schema_projection_profile(route.tool_schema_projection);
     tools
         .into_iter()
         .map(|tool| ToolDefinition {
@@ -3041,19 +3025,25 @@ mod tests {
         );
     }
 
-    /// Verifies every native Gemini protocol profile resolves to the shared function-declaration schema family.
-    /// 验证每个原生 Gemini 协议配置都会解析到共享函数声明 Schema 族。
+    /// Verifies the closed configuration enum maps directly onto the three shared projection profiles.
+    /// 验证封闭配置枚举直接映射到三项共享投影配置。
     #[test]
-    fn native_gemini_profiles_share_the_function_declaration_schema_family() {
-        for protocol_profile_id in [
-            vulcan_ai_protocols::GEMINI_GENERATE_CONTENT_PROFILE_ID,
-            vulcan_ai_protocols::GOOGLE_CODE_ASSIST_PROFILE_ID,
-            vulcan_ai_protocols::GEMINI_INTERACTIONS_PROFILE_ID,
+    fn configured_tool_schema_projection_modes_map_without_heuristics() {
+        for (mode, expected) in [
+            (
+                ToolSchemaProjectionMode::Lightweight,
+                VulcanToolSchemaProjectionProfile::StandardObjectRoot,
+            ),
+            (
+                ToolSchemaProjectionMode::Passthrough,
+                VulcanToolSchemaProjectionProfile::PassThrough,
+            ),
+            (
+                ToolSchemaProjectionMode::Strict,
+                VulcanToolSchemaProjectionProfile::GeminiSlim,
+            ),
         ] {
-            assert_eq!(
-                tool_schema_api_family_key(protocol_profile_id),
-                "google-gemini-function-declarations"
-            );
+            assert_eq!(configured_tool_schema_projection_profile(mode), expected);
         }
     }
 

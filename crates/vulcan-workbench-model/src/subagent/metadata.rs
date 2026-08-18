@@ -542,6 +542,7 @@ pub fn subagent_send_message_projection_from_tool_metadata(
         "delivery_mode": payload.get("delivery_mode").cloned(),
         "queued": payload.get("queued").cloned(),
         "interrupted": payload.get("interrupted").cloned(),
+        "continues_task_turn": payload.get("continues_task_turn").cloned(),
     });
     Ok(Some(SubagentSendMessageProjection {
         task_session_id,

@@ -2289,6 +2289,14 @@ fn append_task_context_turn_stats_record(
         conversation_state,
         summary_record_id.as_str(),
     );
+    let continued_turn_stats = if task_context_latest_delivery_continues_task_turn(
+        conversation_state,
+        summary_record_id.as_str(),
+    ) {
+        task_context_latest_prior_turn_stats(&stats_conversation_state, summary_record_id.as_str())?
+    } else {
+        None
+    };
     let turn_stats = if let Some(provider_call_ledger) = provider_call_ledger {
         // The task terminal record must own the exact calls used by its rebuildable Turn Stats node.
         // 子任务终态记录必须绑定其可重建 Turn Stats 节点实际使用的精确调用。
@@ -2342,6 +2350,9 @@ fn append_task_context_turn_stats_record(
     let Some(mut turn_stats) = turn_stats else {
         return Ok(());
     };
+    if let Some(continued_turn_stats) = continued_turn_stats.as_ref() {
+        merge_continued_task_turn_stats(&mut turn_stats, continued_turn_stats, now_ms)?;
+    }
     clamp_task_turn_stats_duration_to_initial_execution_start(
         &mut turn_stats,
         now_ms,
@@ -2423,26 +2434,26 @@ fn refresh_task_turn_stats_output_speed(stats: &mut SessionTurnStats) {
     };
 }
 
-/// Builds a statistics-only view scoped to the current child-agent execution.
-/// 构建仅用于统计的当前子智能体执行窗口视图。
+/// Builds a statistics-only view scoped to the current logical child-agent turn.
+/// 构建仅用于统计的当前子智能体逻辑轮次窗口视图。
 ///
 /// # Parameters
 /// 参数
 /// `conversation_state` is the persisted child-agent conversation state.
 /// `conversation_state` 是持久化的子智能体会话状态。
-/// `closing_record_id` is the summary record that closes the current execution.
-/// `closing_record_id` 是闭合当前执行的摘要记录。
+/// `closing_record_id` is the summary record that closes the current execution segment.
+/// `closing_record_id` 是闭合当前执行分段的摘要记录。
 ///
 /// # Returns
 /// 返回值
-/// A cloned state whose records start at the current execution trigger when one is identifiable.
-/// 返回记录从可识别当前执行触发点开始的克隆状态。
+/// A cloned state whose records start at the logical-turn boundary when one is identifiable.
+/// 返回记录从可识别逻辑轮次边界开始的克隆状态。
 fn task_context_conversation_state_for_turn_stats(
     conversation_state: &SessionConversationState,
     closing_record_id: &str,
 ) -> SessionConversationState {
     let Some(start_index) =
-        task_context_current_execution_record_start_index(conversation_state, closing_record_id)
+        task_context_logical_turn_record_start_index(conversation_state, closing_record_id)
     else {
         return conversation_state.clone();
     };
@@ -2454,8 +2465,8 @@ fn task_context_conversation_state_for_turn_stats(
     scoped_state
 }
 
-/// Resolves the display record that starts the current child-agent execution for statistics.
-/// 解析用于统计的当前子智能体执行起始显示记录。
+/// Resolves the display record that starts the current logical child-agent turn for statistics.
+/// 解析用于统计的当前子智能体逻辑轮次起始显示记录。
 ///
 /// # Parameters
 /// 参数
@@ -2466,9 +2477,9 @@ fn task_context_conversation_state_for_turn_stats(
 ///
 /// # Returns
 /// 返回值
-/// The index of the first parent-to-child delivery note in the current execution batch.
-/// 返回当前执行批次中第一条父到子投递记录的索引。
-fn task_context_current_execution_record_start_index(
+/// The logical-turn start index: a new-turn delivery, or the task-context origin for an active-turn continuation.
+/// 返回逻辑轮次起始索引：新轮次投递点，或活动轮次延续时的任务上下文起点。
+pub(super) fn task_context_logical_turn_record_start_index(
     conversation_state: &SessionConversationState,
     closing_record_id: &str,
 ) -> Option<usize> {
@@ -2479,15 +2490,18 @@ fn task_context_current_execution_record_start_index(
     let latest_delivery_index = conversation_state.records[..closing_index]
         .iter()
         .rposition(task_context_record_is_inter_agent_delivery_note)?;
-    let search_start = conversation_state.records[..latest_delivery_index]
+    if !task_context_delivery_continues_task_turn(
+        &conversation_state.records[latest_delivery_index],
+    ) {
+        return Some(latest_delivery_index);
+    }
+    conversation_state.records[..=latest_delivery_index]
         .iter()
-        .rposition(task_context_record_closes_delivery_stats_window)
-        .map(|index| index + 1)
-        .unwrap_or(0);
-    conversation_state.records[search_start..=latest_delivery_index]
-        .iter()
-        .position(task_context_record_is_inter_agent_delivery_note)
-        .map(|offset| search_start + offset)
+        .rposition(|record| {
+            task_context_record_is_inter_agent_delivery_note(record)
+                && !task_context_delivery_continues_task_turn(record)
+        })
+        .or(Some(0))
 }
 
 /// Returns whether one record is a parent-to-child message delivery note.
@@ -2497,16 +2511,196 @@ fn task_context_record_is_inter_agent_delivery_note(record: &SessionConversation
         && session_conversation_record_is_subagent_send_message_display_note(record)
 }
 
-/// Returns whether one record closes the previous child execution before a delivery note.
-/// 判断单条记录是否在投递记录之前闭合上一段子智能体执行。
-fn task_context_record_closes_delivery_stats_window(record: &SessionConversationRecord) -> bool {
-    matches!(
-        record.record_kind,
-        SessionMessageRecordKind::AssistantOutput
-            | SessionMessageRecordKind::SummaryOutput
-            | SessionMessageRecordKind::TurnStats
-            | SessionMessageRecordKind::TurnTerminated
-    )
+/// Returns whether one parent-to-child delivery continues the active logical task turn.
+/// 判断一条父到子投递是否延续活动的逻辑任务轮次。
+///
+/// # Parameters
+/// 参数
+/// `record` is the exact delivery display record whose frozen admission fact is inspected.
+/// `record` 是要检查冻结接纳事实的精确投递显示记录。
+///
+/// # Returns
+/// 返回值
+/// `true` only when admission occurred while the child still owned active work.
+/// 仅当接纳发生时子代理仍持有活动工作才返回 `true`。
+fn task_context_delivery_continues_task_turn(record: &SessionConversationRecord) -> bool {
+    record
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get(INTER_AGENT_CONTINUES_TASK_TURN_KEY))
+        .and_then(Value::as_bool)
+        == Some(true)
+}
+
+/// Returns whether the latest delivery before one closing record continues the logical task turn.
+/// 判断某个闭合记录之前的最新投递是否延续逻辑任务轮次。
+///
+/// # Parameters
+/// 参数
+/// `conversation_state` contains the task-owned transcript being closed.
+/// `conversation_state` 包含正在闭合的任务自有转录。
+/// `closing_record_id` identifies the exact summary closing the current execution segment.
+/// `closing_record_id` 标识闭合当前执行分段的精确摘要记录。
+///
+/// # Returns
+/// 返回值
+/// `true` when the frozen latest-delivery fact marks this as one continued logical turn.
+/// 当冻结的最新投递事实将其标记为同一逻辑轮次延续时返回 `true`。
+fn task_context_latest_delivery_continues_task_turn(
+    conversation_state: &SessionConversationState,
+    closing_record_id: &str,
+) -> bool {
+    let Some(closing_index) = conversation_state
+        .records
+        .iter()
+        .position(|record| record.id == closing_record_id)
+    else {
+        return false;
+    };
+    conversation_state.records[..closing_index]
+        .iter()
+        .rev()
+        .find(|record| task_context_record_is_inter_agent_delivery_note(record))
+        .is_some_and(task_context_delivery_continues_task_turn)
+}
+
+/// Loads the latest cumulative statistics row inside one continued logical child turn.
+/// 加载同一延续逻辑子代理轮次内最新的累计统计行。
+///
+/// # Parameters
+/// 参数
+/// `conversation_state` is already scoped to the current logical task turn.
+/// `conversation_state` 已经限定到当前逻辑任务轮次。
+/// `closing_record_id` identifies the new summary after the continued execution segment.
+/// `closing_record_id` 标识延续执行分段之后的新摘要。
+///
+/// # Returns
+/// 返回值
+/// The latest typed cumulative snapshot with its completion time, or clean absence before the first split.
+/// 返回带完成时间的最新强类型累计快照；首次分段之前则返回空值。
+fn task_context_latest_prior_turn_stats(
+    conversation_state: &SessionConversationState,
+    closing_record_id: &str,
+) -> Result<Option<PriorTaskTurnStats>, String> {
+    let closing_index = conversation_state
+        .records
+        .iter()
+        .position(|record| record.id == closing_record_id)
+        .ok_or_else(|| {
+            format!("Task statistics closing record `{closing_record_id}` is missing.")
+        })?;
+    conversation_state.records[..closing_index]
+        .iter()
+        .rev()
+        .find(|record| record.record_kind == SessionMessageRecordKind::TurnStats)
+        .map(|record| {
+            let payload = record
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("turn_stats"))
+                .ok_or_else(|| {
+                    format!(
+                        "Continued task Turn Stats record `{}` has no typed payload.",
+                        record.id
+                    )
+                })?;
+            let stats =
+                serde_json::from_value::<SessionTurnStats>(payload.clone()).map_err(|error| {
+                    format!(
+                        "Continued task Turn Stats record `{}` is invalid: {error}",
+                        record.id
+                    )
+                })?;
+            let finished_at_ms = record.created_at.parse::<u64>().map_err(|error| {
+                format!(
+                    "Continued task Turn Stats record `{}` has invalid timestamp `{}`: {error}",
+                    record.id, record.created_at
+                )
+            })?;
+            Ok(PriorTaskTurnStats {
+                stats,
+                finished_at_ms,
+            })
+        })
+        .transpose()
+}
+
+/// Previous cumulative child-turn statistics paired with their exact completion timestamp.
+/// 与精确完成时间戳配对的上一份累计子代理轮次统计。
+pub(super) struct PriorTaskTurnStats {
+    /// Cumulative accounting captured before the latest continued delivery.
+    /// 最新延续投递之前捕获的累计统计。
+    pub(super) stats: SessionTurnStats,
+    /// Unix-millis timestamp at which the cumulative snapshot closed.
+    /// 该累计快照闭合时的 Unix 毫秒时间戳。
+    pub(super) finished_at_ms: u64,
+}
+
+/// Merges the previous cumulative view into the latest continued execution view.
+/// 将上一份累计视图合并到最新的延续执行视图中。
+///
+/// # Parameters
+/// 参数
+/// `current` is the statistics delta materialized for the latest execution segment.
+/// `current` 是为最新执行分段物化的统计增量。
+/// `previous` is the prior cumulative logical-turn snapshot and its closing time.
+/// `previous` 是上一份逻辑轮次累计快照及其闭合时间。
+/// `current_finished_at_ms` is the new cumulative closing timestamp.
+/// `current_finished_at_ms` 是新的累计闭合时间戳。
+///
+/// # Returns
+/// 返回值
+/// Success after exact segment merging, or an explicit error for aggregate usage without source segments.
+/// 精确合并分段后返回成功；聚合用量缺少来源分段时返回明确错误。
+pub(super) fn merge_continued_task_turn_stats(
+    current: &mut SessionTurnStats,
+    previous: &PriorTaskTurnStats,
+    current_finished_at_ms: u64,
+) -> Result<(), String> {
+    if previous.stats.usage_segments.is_empty()
+        && (previous.stats.provider_call_count > 0
+            || previous.stats.unknown_usage_call_count > 0
+            || !previous.stats.usage_groups.is_empty()
+            || task_turn_stats_has_token_usage(&previous.stats))
+    {
+        return Err(String::from(
+            "Continued task Turn Stats contain aggregate Provider usage without usage segments.",
+        ));
+    }
+    let mut prior_segments = Vec::with_capacity(previous.stats.usage_segments.len());
+    for previous_segment in &previous.stats.usage_segments {
+        // Record-derived tool rows already cover the whole logical turn, so only Provider usage carries forward here.
+        // 记录派生的工具行已经覆盖完整逻辑轮次，因此这里只结转 Provider 用量。
+        let mut prior_segment = previous_segment.clone();
+        prior_segment.tool_call_count = 0;
+        current.merge_usage_segment(&prior_segment);
+        prior_segments.push(prior_segment);
+    }
+    prior_segments.append(&mut current.usage_segments);
+    current.usage_segments = prior_segments;
+    current.tool_call_count = current
+        .tool_call_count
+        .saturating_add(previous.stats.tool_call_count);
+    current.unknown_usage_call_count = current
+        .unknown_usage_call_count
+        .saturating_add(previous.stats.unknown_usage_call_count);
+    current.source_ledger_revision = current
+        .source_ledger_revision
+        .max(previous.stats.source_ledger_revision);
+    current.child_contribution_revision = current
+        .child_contribution_revision
+        .max(previous.stats.child_contribution_revision);
+    current.contains_estimated_budget |= previous.stats.contains_estimated_budget;
+    if let Some(previous_duration_ms) = previous.stats.duration_ms {
+        let logical_turn_started_at_ms =
+            previous.finished_at_ms.saturating_sub(previous_duration_ms);
+        if current_finished_at_ms >= logical_turn_started_at_ms {
+            current.duration_ms =
+                Some(current_finished_at_ms.saturating_sub(logical_turn_started_at_ms));
+        }
+    }
+    refresh_task_turn_stats_output_speed(current);
+    Ok(())
 }
 
 /// Returns whether one turn-statistics snapshot contains concrete token usage.
@@ -2523,6 +2717,7 @@ fn task_context_record_closes_delivery_stats_window(record: &SessionConversation
 /// 当任意聚合 Token 字段非零时返回 `true`。
 fn task_turn_stats_has_token_usage(stats: &SessionTurnStats) -> bool {
     stats.input_tokens > 0
+        || stats.uncached_input_tokens.is_some_and(|value| value > 0)
         || stats.output_tokens > 0
         || stats.reasoning_tokens > 0
         || stats.total_tokens > 0

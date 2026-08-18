@@ -600,6 +600,36 @@ pub struct ManifestCapabilityPatch {
     pub evidence_revision: Option<String>,
 }
 
+/// Selects the provider-facing tool-parameter schema contract for one model route.
+/// 为单条模型路由选择 Provider 可见的工具参数 Schema 契约。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolSchemaProjectionMode {
+    /// Repair only missing object types on object-constrained root union branches.
+    /// 仅修复根联合中对象约束分支缺失的对象类型。
+    #[default]
+    Lightweight,
+    /// Preserve the canonical host schema without projection.
+    /// 不做投影，原样保留宿主规范 Schema。
+    Passthrough,
+    /// Recursively project into the restrictive Gemini function-declaration dialect.
+    /// 递归投影为限制严格的 Gemini 函数声明方言。
+    Strict,
+}
+
+impl ToolSchemaProjectionMode {
+    /// Reports whether this value is the implicit lightweight system-provider default.
+    /// 判断当前值是否为系统供应商隐含的轻量默认值。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` only for the lightweight projection mode.
+    /// 仅轻量投影模式返回 `true`。
+    pub const fn is_lightweight(&self) -> bool {
+        matches!(self, Self::Lightweight)
+    }
+}
+
 /// Provider-level default capabilities and model policy.
 /// 供应商级默认能力与模型策略。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -629,6 +659,13 @@ pub struct ModelDefaults {
     /// 已命中规则继承的默认能力补丁；省略字段保持未知。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capabilities: Option<ManifestCapabilityPatch>,
+    /// Default tool-schema projection; omission intentionally means lightweight.
+    /// 默认工具 Schema 投影；省略时明确表示轻量模式。
+    #[serde(
+        default,
+        skip_serializing_if = "ToolSchemaProjectionMode::is_lightweight"
+    )]
+    pub tool_schema_projection: ToolSchemaProjectionMode,
     /// Default usage-extraction profile references.
     /// 默认 usage 提取 Profile 引用。
     #[serde(default)]
@@ -762,6 +799,10 @@ pub struct ModelRule {
     /// 协议无关能力补丁；省略字段继承。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capabilities: Option<ManifestCapabilityPatch>,
+    /// Optional tool-schema projection override inherited over the provider default.
+    /// 可选工具 Schema 投影覆盖，优先于供应商默认值。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_schema_projection: Option<ToolSchemaProjectionMode>,
     /// Protocol-scoped capability patches keyed by protocol profile id.
     /// 按协议 Profile 标识索引的协议作用域能力补丁。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]

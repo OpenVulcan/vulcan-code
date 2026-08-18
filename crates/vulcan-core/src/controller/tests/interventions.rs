@@ -233,6 +233,34 @@ fn interjected_user_turn_without_attachments_keeps_process_metadata() {
     ));
 }
 
+/// Verifies an admitted interjected turn carries the identity used to replace its immediate projection.
+/// 验证已接纳的插队回合携带用于替换立即投影的身份标识。
+#[test]
+fn admitted_interjected_user_turn_keeps_projection_identity() {
+    let mut controller =
+        VulcanCoreController::new(build_test_config(4), ConversationSnapshot::default())
+            .expect("valid core conversation snapshot");
+
+    controller
+        .append_admitted_interjected_user_turn_with_attachments(
+            "立即总结",
+            Vec::new(),
+            Some("pending-entry-1"),
+        )
+        .expect("admitted interjected message id");
+
+    assert!(matches!(
+        controller.snapshot().records.last(),
+        Some(ConversationRecord {
+            metadata: Some(metadata),
+            ..
+        }) if metadata
+            .get(INTERJECTED_PROMPT_ADMISSION_ID_KEY)
+            .and_then(Value::as_str)
+            == Some("pending-entry-1")
+    ));
+}
+
 /// Delays host guidance until every tool result in the current provider batch has been appended.
 /// 延迟宿主引导，直到当前 Provider 批次中的所有工具结果都已追加。
 #[test]

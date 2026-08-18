@@ -1,3 +1,7 @@
+use super::super::persistence_methods::{
+    PriorTaskTurnStats, merge_continued_task_turn_stats,
+    task_context_logical_turn_record_start_index,
+};
 use super::*;
 use std::fs;
 use std::io::BufReader;
@@ -2289,10 +2293,10 @@ fn store_task_outcome_scopes_cloned_display_records_to_task_prompt() {
     );
 }
 
-/// Verifies resumed child-agent stats start at the parent-to-child delivery record.
-/// 验证续跑子智能体统计会从父到子投递记录开始计算。
+/// Verifies an idle child follow-up starts a new logical statistics turn at delivery.
+/// 验证空闲子代理的跟进消息会在投递点开启新的逻辑统计轮次。
 #[test]
-fn store_task_outcome_scopes_resumed_stats_to_inter_agent_delivery() {
+fn store_task_outcome_resets_stats_for_idle_inter_agent_followup() {
     let temp_dir = tempfile::tempdir().expect("temp task-session root");
     let task_runtime = TaskRuntime::new();
     let root_session_id = Uuid::new_v4();
@@ -2341,6 +2345,7 @@ fn store_task_outcome_scopes_resumed_stats_to_inter_agent_delivery() {
         "parent_session_id": root_session_id.to_string(),
         (SUBAGENT_TASK_ID_KEY): task_id.to_string(),
         "created_at_ms": 5000_u64,
+        (INTER_AGENT_CONTINUES_TASK_TURN_KEY): false,
     });
     let agent_message_metadata = json!({
         "kind": "subagent_message",
@@ -2350,6 +2355,7 @@ fn store_task_outcome_scopes_resumed_stats_to_inter_agent_delivery() {
         (SUBAGENT_TASK_ID_KEY): task_id.to_string(),
         "target": "worker-a",
         "created_at_ms": 5000_u64,
+        (INTER_AGENT_CONTINUES_TASK_TURN_KEY): false,
     });
     let snapshot = CoreConversationSnapshot {
         messages: vec![
@@ -2506,6 +2512,149 @@ fn store_task_outcome_scopes_resumed_stats_to_inter_agent_delivery() {
     assert_eq!(
         turn_stats.duration_ms,
         Some(finished_at.saturating_sub(5000))
+    );
+    assert_eq!(turn_stats.total_tokens, 36);
+}
+
+/// Verifies an active-turn delivery keeps the prior cumulative Provider usage without duplicating tool rows.
+/// 验证活动轮次投递会保留此前累计 Provider 用量，同时不会重复统计工具行。
+#[test]
+fn continued_inter_agent_delivery_merges_logical_turn_usage() {
+    let previous_usage = vulcan_core::types::ProviderUsageSnapshot {
+        input_tokens: Some(70),
+        output_tokens: Some(20),
+        reasoning_tokens: Some(10),
+        total_tokens: Some(100),
+        ..vulcan_core::types::ProviderUsageSnapshot::default()
+    };
+    let current_usage = vulcan_core::types::ProviderUsageSnapshot {
+        input_tokens: Some(15),
+        output_tokens: Some(5),
+        reasoning_tokens: Some(0),
+        total_tokens: Some(20),
+        ..vulcan_core::types::ProviderUsageSnapshot::default()
+    };
+    let mut previous_segment = vulcan_workbench_model::SessionTurnUsageSegment::from_provider_usage(
+        SessionTurnUsageSegmentKind::AssistantResponse,
+        2,
+        Some(&previous_usage),
+    );
+    previous_segment.tool_call_count = 3;
+    let mut previous = SessionTurnStats {
+        provider_call_count: 2,
+        tool_call_count: 3,
+        input_tokens: 70,
+        output_tokens: 20,
+        reasoning_tokens: 10,
+        total_tokens: 100,
+        usage_segments: vec![previous_segment],
+        unknown_usage_call_count: 1,
+        source_ledger_revision: 4,
+        duration_ms: Some(400),
+        ..SessionTurnStats::default()
+    };
+    previous.merge_usage_segment_group(&previous.usage_segments[0].clone());
+    let current_segment = vulcan_workbench_model::SessionTurnUsageSegment::from_provider_usage(
+        SessionTurnUsageSegmentKind::AssistantResponse,
+        1,
+        Some(&current_usage),
+    );
+    let mut current = SessionTurnStats {
+        provider_call_count: 1,
+        tool_call_count: 5,
+        input_tokens: 15,
+        output_tokens: 5,
+        total_tokens: 20,
+        usage_segments: vec![current_segment.clone()],
+        source_ledger_revision: 7,
+        ..SessionTurnStats::default()
+    };
+    current.merge_usage_segment_group(&current_segment);
+
+    let previous_snapshot = PriorTaskTurnStats {
+        stats: previous.clone(),
+        finished_at_ms: 1_000,
+    };
+    merge_continued_task_turn_stats(&mut current, &previous_snapshot, 1_600)
+        .expect("continued usage should merge");
+
+    assert_eq!(current.provider_call_count, 3);
+    assert_eq!(current.tool_call_count, 8);
+    assert_eq!(current.input_tokens, 85);
+    assert_eq!(current.output_tokens, 25);
+    assert_eq!(current.reasoning_tokens, 10);
+    assert_eq!(current.total_tokens, 120);
+    assert_eq!(current.unknown_usage_call_count, 1);
+    assert_eq!(current.source_ledger_revision, 7);
+    assert_eq!(current.duration_ms, Some(1_000));
+    assert_eq!(current.usage_segments.len(), 2);
+    assert_eq!(current.usage_segments[0].tool_call_count, 0);
+    let mut invalid_previous = previous.clone();
+    invalid_previous.usage_segments.clear();
+    let invalid_error = merge_continued_task_turn_stats(
+        &mut current,
+        &PriorTaskTurnStats {
+            stats: invalid_previous,
+            finished_at_ms: 1_000,
+        },
+        1_600,
+    )
+    .expect_err("aggregate Provider usage without source segments must fail closed");
+    assert!(invalid_error.contains("without usage segments"));
+
+    let continued_state = SessionConversationState {
+        records: vec![
+            SessionConversationRecord {
+                id: String::from("initial-user"),
+                kind: SessionMessageKind::User,
+                record_kind: SessionMessageRecordKind::Transcript,
+                visible: true,
+                title: String::from("User"),
+                body: String::from("initial work"),
+                metadata: None,
+                created_at: String::from("100"),
+            },
+            SessionConversationRecord {
+                id: String::from("prior-stats"),
+                kind: SessionMessageKind::Assistant,
+                record_kind: SessionMessageRecordKind::TurnStats,
+                visible: true,
+                title: String::from("Turn Stats"),
+                body: String::from("prior"),
+                metadata: Some(json!({ "turn_stats": previous })),
+                created_at: String::from("400"),
+            },
+            SessionConversationRecord {
+                id: String::from("continued-delivery"),
+                kind: SessionMessageKind::User,
+                record_kind: SessionMessageRecordKind::DisplayNote,
+                visible: true,
+                title: String::from("智能体消息"),
+                body: String::from("return now"),
+                metadata: Some(json!({
+                    "display_note": true,
+                    "kind": "subagent_message",
+                    "tool": SEND_MESSAGE_TOOL,
+                    (INTER_AGENT_CONTINUES_TASK_TURN_KEY): true,
+                })),
+                created_at: String::from("500"),
+            },
+            SessionConversationRecord {
+                id: String::from("closing-summary"),
+                kind: SessionMessageKind::Assistant,
+                record_kind: SessionMessageRecordKind::SummaryOutput,
+                visible: false,
+                title: String::from("Summary"),
+                body: String::from("done"),
+                metadata: None,
+                created_at: String::from("800"),
+            },
+        ],
+        ..SessionConversationState::default()
+    };
+    assert_eq!(
+        task_context_logical_turn_record_start_index(&continued_state, "closing-summary"),
+        Some(0)
     );
 }
 

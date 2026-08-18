@@ -205,6 +205,92 @@ RETURNING id, archived;
     validate_session_archive_state_update_rows(session_id, archived, &rows)
 }
 
+/// Deletes exactly one archived session locator row after its directory is staged for permanent deletion.
+/// 在会话目录完成删除暂存后，精确删除一条归档会话定位索引行。
+///
+/// # Parameters
+/// 参数
+/// `controller` owns the authoritative SQLite binding.
+/// `controller` 持有权威 SQLite 绑定。
+/// `session_id` is the exact archived session identity being deleted.
+/// `session_id` 是正在删除的精确归档会话身份。
+/// `locator` is the complete archived locator captured before staging.
+/// `locator` 是暂存前捕获的完整归档定位信息。
+///
+/// # Returns
+/// 返回值
+/// Returns success only when SQLite deletes the exact expected archived row.
+/// 仅在 SQLite 删除精确预期归档行后返回成功。
+pub(super) async fn delete_archived_session_index_row(
+    controller: &ControllerRuntimeHandle,
+    session_id: SessionId,
+    locator: &PersistedSessionIndexLocator,
+) -> Result<(), String> {
+    delete_session_index_row_exact(controller, session_id, locator)
+        .await
+        .map_err(|error| format!("删除归档会话定位索引失败：{error}"))
+}
+
+/// Deletes one exact session locator row across either lifecycle tree.
+/// 删除活动或归档生命周期树中的一条精确会话定位行。
+///
+/// # Parameters
+/// 参数
+/// `controller` owns the authoritative SQLite binding.
+/// `controller` 持有权威 SQLite 绑定。
+/// `session_id` is the exact session identity being removed from the index.
+/// `session_id` 是要从索引中移除的精确会话身份。
+/// `locator` contains every persisted locator field used to prevent deleting a changed row.
+/// `locator` 包含用于防止误删已变化行的全部持久化定位字段。
+///
+/// # Returns
+/// 返回值
+/// Returns success only when SQLite returns exactly the expected row after the full identity predicate matches.
+/// 仅当 SQLite 在完整身份谓词匹配后返回精确预期行时成功。
+pub(super) async fn delete_session_index_row_exact(
+    controller: &ControllerRuntimeHandle,
+    session_id: SessionId,
+    locator: &PersistedSessionIndexLocator,
+) -> Result<(), String> {
+    let result = controller
+        .client
+        .query_sqlite_json_typed(
+            APP_SPACE_ID,
+            app_sqlite_binding_id(controller),
+            r#"
+DELETE FROM workspace_session_index
+WHERE id = ?1
+  AND project_id = ?2
+  AND project_tag = ?3
+  AND created_at = ?4
+  AND updated_at = ?5
+  AND archived = ?6
+RETURNING id;
+"#,
+            vec![
+                ControllerSqliteValue::String(session_id.to_string()),
+                ControllerSqliteValue::String(locator.project_id.clone()),
+                ControllerSqliteValue::String(locator.project_tag.clone()),
+                ControllerSqliteValue::String(locator.created_at.clone()),
+                ControllerSqliteValue::String(locator.updated_at.clone()),
+                ControllerSqliteValue::Int64(i64::from(locator.archived)),
+            ],
+        )
+        .await
+        .map_err(|error| format!("删除会话定位索引失败：{error}"))?;
+    let rows = decode_query_rows::<DeletedSessionIndexRow>(&result.json_data)?;
+    if rows.len() != 1 {
+        return Err(format!("会话 `{session_id}` 的定位索引在删除前已改变。"));
+    }
+    if rows[0].id != session_id.to_string() {
+        return Err(format!(
+            "会话索引删除返回了意外标识 `{}`，期望 `{session_id}`。",
+            rows[0].id
+        ));
+    }
+    Ok(())
+}
+
 /// Updates only the manual title fields of one active session locator row.
 /// 仅更新一条活动会话定位行的手动标题字段。
 ///
@@ -356,6 +442,15 @@ struct SessionLocatorRow {
     /// Session update timestamp captured before a lifecycle transition.
     /// 生命周期转换前捕获的会话更新时间戳。
     updated_at: String,
+}
+
+/// Row identity returned by an exact archived-session index deletion.
+/// 精确归档会话索引删除返回的行身份。
+#[derive(Debug, Clone, Deserialize)]
+struct DeletedSessionIndexRow {
+    /// Stable session identifier returned by SQLite.
+    /// SQLite 返回的稳定会话标识。
+    id: String,
 }
 
 /// Row identity returned by a guarded active-session title update.

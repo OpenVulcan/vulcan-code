@@ -142,6 +142,147 @@ pub(crate) async fn service_archive_conversation(
     Ok(workbench)
 }
 
+/// Identifies the authoritative lifecycle operation requested for archived conversations.
+/// 标识归档会话请求执行的权威生命周期操作。
+#[derive(Clone, Copy)]
+enum ArchivedConversationAction {
+    /// Move archived sessions back into the active lifecycle tree.
+    /// 将归档会话移回活动生命周期目录树。
+    Restore,
+    /// Remove archived sessions and their index rows permanently.
+    /// 永久移除归档会话及其索引行。
+    Delete,
+}
+
+/// Parses and deduplicates the exact archived conversation identities from one batch request.
+/// 解析并去重一次批量请求中的精确归档会话身份。
+fn parse_archived_conversation_ids(
+    conversation_ids: Vec<String>,
+) -> Result<Vec<SessionId>, String> {
+    if conversation_ids.is_empty() {
+        return Err(String::from("归档会话批量操作至少需要一个会话标识。"));
+    }
+    let mut unique_ids = BTreeSet::new();
+    for conversation_id in conversation_ids {
+        let session_id = conversation_id
+            .parse::<SessionId>()
+            .map_err(|error| format!("invalid session id '{conversation_id}': {error}"))?;
+        if !unique_ids.insert(session_id) {
+            return Err(format!("归档会话批量操作包含重复会话标识：{session_id}"));
+        }
+    }
+    Ok(unique_ids.into_iter().collect())
+}
+
+/// Applies one archived-conversation batch under shared lifecycle, persistence, and VMM fences.
+/// 在共享生命周期、持久化与 VMM 栅栏下应用一次归档会话批量操作。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the authoritative service runtime and retained workbench projection.
+/// `state` 持有权威服务运行时与保留工作台投影。
+/// `session_ids` are the exact unique archived conversation identities.
+/// `session_ids` 是精确且唯一的归档会话身份集合。
+/// `action` selects restore or permanent deletion.
+/// `action` 选择恢复或彻底删除。
+///
+/// # Returns
+/// 返回值
+/// Returns the refreshed authoritative workbench snapshot after every requested transition commits.
+/// 所有请求转换提交后返回刷新的权威工作台快照。
+async fn apply_archived_conversation_batch(
+    state: SharedServiceBridgeState,
+    session_ids: Vec<SessionId>,
+    action: ArchivedConversationAction,
+) -> Result<WorkbenchSnapshot, String> {
+    let action_label = match action {
+        ArchivedConversationAction::Restore => "恢复",
+        ArchivedConversationAction::Delete => "彻底删除",
+    };
+    let _lifecycle_guard =
+        begin_session_lifecycle_transition(&state, session_ids.iter().copied(), action_label)?;
+    let controller_runtime = controller_runtime_from_state(&state)?;
+    for session_id in &session_ids {
+        invalidate_webui_session_lifecycle_persist_versions(&state, *session_id)?;
+    }
+    let persist_lock = webui_workspace_persist_lock();
+    let persist_guard = persist_lock.lock().await;
+    let vmm_controller_registry = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?
+        .vmm_controller_registry
+        .clone();
+    let vmm_lifecycle_fence =
+        vmm_controller_registry.begin_lifecycle_transition(session_ids.iter().copied())?;
+    if matches!(action, ArchivedConversationAction::Delete) {
+        let plugin_cleanup_failures =
+            drain_vulcan_plugin_sessions_for_owners(&state, &session_ids).await;
+        if !plugin_cleanup_failures.is_empty() {
+            return Err(format!(
+                "彻底删除归档会话前无法清理插件运行时：{}",
+                plugin_cleanup_failures.join("; ")
+            ));
+        }
+        if let Some(runtime) = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?
+            .agent_runtime
+            .as_ref()
+            .map(|runtime| runtime.public_ai_runtime.clone())
+        {
+            for session_id in &session_ids {
+                runtime.clear_session_selection_leases(session_id.to_string().as_str())?;
+            }
+        }
+    }
+    for session_id in &session_ids {
+        match action {
+            ArchivedConversationAction::Restore => {
+                vulcan_workspace_store::workspace_store::restore_archived_session(
+                    controller_runtime.clone(),
+                    *session_id,
+                )
+                .await?;
+            }
+            ArchivedConversationAction::Delete => {
+                vulcan_workspace_store::workspace_store::delete_archived_session(
+                    controller_runtime.clone(),
+                    *session_id,
+                )
+                .await?;
+            }
+        }
+        invalidate_webui_session_lifecycle_persist_versions(&state, *session_id)?;
+    }
+    let workbench = refresh_workbench_snapshot(state.clone()).await?;
+    for session_id in &session_ids {
+        invalidate_webui_session_lifecycle_persist_versions(&state, *session_id)?;
+    }
+    vmm_lifecycle_fence.release()?;
+    drop(persist_guard);
+    Ok(workbench)
+}
+
+/// Restores every selected archived conversation in one authoritative batch.
+/// 在一次权威批量操作中恢复所有选中的归档会话。
+pub(crate) async fn service_restore_archived_conversations(
+    state: SharedServiceBridgeState,
+    conversation_ids: Vec<String>,
+) -> Result<WorkbenchSnapshot, String> {
+    let session_ids = parse_archived_conversation_ids(conversation_ids)?;
+    apply_archived_conversation_batch(state, session_ids, ArchivedConversationAction::Restore).await
+}
+
+/// Permanently deletes every selected archived conversation in one authoritative batch.
+/// 在一次权威批量操作中彻底删除所有选中的归档会话。
+pub(crate) async fn service_delete_archived_conversations(
+    state: SharedServiceBridgeState,
+    conversation_ids: Vec<String>,
+) -> Result<WorkbenchSnapshot, String> {
+    let session_ids = parse_archived_conversation_ids(conversation_ids)?;
+    apply_archived_conversation_batch(state, session_ids, ArchivedConversationAction::Delete).await
+}
+
 /// Builds the ordered lifecycle delta that represents one committed archive refresh.
 /// 构建表示单次已提交归档刷新的有序生命周期增量。
 ///
@@ -343,6 +484,35 @@ pub(crate) async fn service_select_conversation(
     let session_id = conversation_id
         .parse::<SessionId>()
         .map_err(|error| format!("invalid session id '{conversation_id}': {error}"))?;
+    // controller_runtime is optional only while the retained in-memory service fixture is not bootstrapped.
+    // controller_runtime 仅在保留内存服务夹具尚未启动时可选。
+    let controller_runtime = {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        guard.controller_runtime.clone()
+    };
+    let cleanup_result = if let Some(controller_runtime) = controller_runtime {
+        // persist_guard serializes this authoritative check and exact index deletion with execution writes.
+        // persist_guard 将本次权威检查与精确索引删除同执行写入串行化。
+        let persist_lock = webui_workspace_persist_lock();
+        let _persist_guard = persist_lock.lock().await;
+        // cleanup_result is true only when both lifecycle directories are absent and the exact stale index row is removed.
+        // cleanup_result 仅在两个生命周期目录均缺失且精确陈旧索引行已删除时为 true。
+        vulcan_workspace_store::workspace_store::cleanup_missing_session_index(
+            controller_runtime,
+            session_id,
+        )
+        .await?
+    } else {
+        false
+    };
+    if cleanup_result {
+        // Refresh the retained projection before returning the user-facing deletion notice.
+        // 返回面向用户的删除提示前先刷新保留的工作台投影。
+        refresh_workbench_snapshot(state.clone()).await?;
+        return Err(String::from("会话已被删除，已经清理。"));
+    }
     if let Some(workbench) =
         select_conversation_in_retained_state(&state, session_id, &conversation_id)?
     {
@@ -701,5 +871,29 @@ mod tests {
             delta.archived_conversations[1].conversation_id,
             second_session_id.to_string()
         );
+    }
+
+    /// Verifies archived batch parsing rejects empty and duplicate identity requests.
+    /// 验证归档批量解析会拒绝空请求与重复身份请求。
+    #[test]
+    fn archived_conversation_batch_parser_rejects_empty_and_duplicate_ids() {
+        assert!(parse_archived_conversation_ids(Vec::new()).is_err());
+        let session_id = SessionId::from_u128(0x71).to_string();
+        let error = parse_archived_conversation_ids(vec![session_id.clone(), session_id]);
+        assert!(error.is_err());
+    }
+
+    /// Verifies archived batch parsing preserves every unique stable session identity.
+    /// 验证归档批量解析保留每个唯一稳定会话身份。
+    #[test]
+    fn archived_conversation_batch_parser_returns_unique_ids() {
+        let first_session_id = SessionId::from_u128(0x72);
+        let second_session_id = SessionId::from_u128(0x73);
+        let parsed = parse_archived_conversation_ids(vec![
+            first_session_id.to_string(),
+            second_session_id.to_string(),
+        ])
+        .expect("unique archived conversation ids should parse");
+        assert_eq!(parsed, vec![first_session_id, second_session_id]);
     }
 }

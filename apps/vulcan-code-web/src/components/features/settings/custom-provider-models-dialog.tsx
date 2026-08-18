@@ -113,6 +113,7 @@ import type {
   PublicAiProviderDescriptor,
   PublicAiResourceKind,
   PublicAiSettingsSnapshot,
+  PublicAiToolSchemaProjectionMode,
 } from "@/types"
 
 // CustomProviderModelsDialogProps identifies the provider and immutable runtime snapshot being edited.
@@ -1626,7 +1627,33 @@ function AdvancedModelEditor(props: {
   return (
     <div className="space-y-4">
       <label className="grid gap-2 text-sm font-medium">{t("settings.customModels.displayName")}<Input onChange={(event) => props.onUpdate((current) => ({ ...current, display_name: event.target.value }))} value={model.display_name} /></label>
-      <Accordion collapsible type="single"><AccordionItem value="json"><AccordionTrigger>{t("settings.customModels.advanced")}</AccordionTrigger><AccordionContent className="space-y-4"><label className="grid gap-2 text-sm font-medium">{t("settings.customModels.parameters")}<Textarea className="min-h-32 font-mono text-xs" onChange={(event) => props.setParameterText(event.target.value)} spellCheck={false} value={props.parameterText} /></label><label className="grid gap-2 text-sm font-medium">{t("settings.customModels.projection")}<Textarea className="min-h-52 font-mono text-xs" onChange={(event) => props.setProjectionText(event.target.value)} spellCheck={false} value={props.projectionText} /></label></AccordionContent></AccordionItem></Accordion>
+      <Accordion collapsible type="single">
+        <AccordionItem value="json">
+          <AccordionTrigger>{t("settings.customModels.advanced")}</AccordionTrigger>
+          <AccordionContent className="space-y-4">
+            <label className="grid gap-2 text-sm font-medium">
+              {t("settings.customModels.toolSchemaProjection")}
+              <Select
+                onValueChange={(value) => props.onUpdate((current) => ({
+                  ...current,
+                  tool_schema_projection: value as PublicAiToolSchemaProjectionMode,
+                }))}
+                value={model.tool_schema_projection}
+              >
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="lightweight">{t("settings.customModels.toolSchemaProjectionLightweight")}</SelectItem>
+                  <SelectItem value="passthrough">{t("settings.customModels.toolSchemaProjectionPassthrough")}</SelectItem>
+                  <SelectItem value="strict">{t("settings.customModels.toolSchemaProjectionStrict")}</SelectItem>
+                </SelectContent>
+              </Select>
+              <span className="text-xs font-normal text-muted-foreground">{t("settings.customModels.toolSchemaProjectionHint")}</span>
+            </label>
+            <label className="grid gap-2 text-sm font-medium">{t("settings.customModels.parameters")}<Textarea className="min-h-32 font-mono text-xs" onChange={(event) => props.setParameterText(event.target.value)} spellCheck={false} value={props.parameterText} /></label>
+            <label className="grid gap-2 text-sm font-medium">{t("settings.customModels.projection")}<Textarea className="min-h-52 font-mono text-xs" onChange={(event) => props.setProjectionText(event.target.value)} spellCheck={false} value={props.projectionText} /></label>
+          </AccordionContent>
+        </AccordionItem>
+      </Accordion>
       <div className="flex flex-wrap justify-end gap-2">{props.customized ? <Button disabled={props.saving} onClick={props.onRestore} type="button" variant="outline"><Trash2 className="mr-2 size-4" />{t("settings.modelCapabilities.restore")}</Button> : null}<Button disabled={props.saving || !props.dirty} onClick={props.onSave} type="button">{t("settings.customModels.saveAdvanced")}</Button></div>
     </div>
   )
@@ -1782,7 +1809,7 @@ function ManualModelDialog(props: {
 // newManualModel creates identity and advanced behavior only; defaults and templates fill basic fields.
 // newManualModel 仅创建身份与高级行为；基础字段由默认值和模板填充。
 function newManualModel(modelId: string, displayName: string): PublicAiCustomModelDefinition {
-  return { id: modelId, display_name: displayName, enabled: true, capabilities: { operations: ["conversation_respond"], input_resources: [], output_resources: [], evidence_revision: "user.manual-model.v2", reasoning: "unknown", reasoning_control: "unknown", reasoning_efforts: [], prompt_cache: { provider_default_behavior: "Follow provider defaults without host-injected cache controls.", supports_managed_explicit: false, supported_ttl_options: [] }, model_parameters: [] }, request_projection: structuredClone(EMPTY_PROJECTION) }
+  return { id: modelId, display_name: displayName, enabled: true, capabilities: { operations: ["conversation_respond"], input_resources: [], output_resources: [], evidence_revision: "user.manual-model.v2", reasoning: "unknown", reasoning_control: "unknown", reasoning_efforts: [], prompt_cache: { provider_default_behavior: "Follow provider defaults without host-injected cache controls.", supports_managed_explicit: false, supported_ttl_options: [] }, model_parameters: [] }, request_projection: structuredClone(EMPTY_PROJECTION), tool_schema_projection: "lightweight" }
 }
 
 // capabilitySource resolves the strongest visible source for one account and capability field.

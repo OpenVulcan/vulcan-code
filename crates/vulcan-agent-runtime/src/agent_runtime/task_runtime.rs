@@ -473,6 +473,10 @@ pub enum DetachedTaskRuntimeEvent {
     },
 }
 
+/// Metadata key recording whether an inter-agent delivery continues the active logical task turn.
+/// 记录代理间投递是否延续当前逻辑任务轮次的元数据键。
+const INTER_AGENT_CONTINUES_TASK_TURN_KEY: &str = "continues_task_turn";
+
 impl TaskExecutionStatus {
     /// Returns the persisted lowercase text expected by task-session metadata and tool cards.
     /// 返回 task 会话元数据与工具卡片所需的持久化小写文本。
@@ -563,6 +567,9 @@ struct QueuedInterAgentMessage {
     /// Unix-millis enqueue timestamp.
     /// 入队时的 Unix 毫秒时间戳。
     created_at_ms: u64,
+    /// Whether this delivery was admitted while the child still owned an active logical turn.
+    /// 本次投递被接纳时子代理是否仍拥有活动逻辑轮次。
+    continues_task_turn: bool,
 }
 
 /// One generation-owned runtime registry value.

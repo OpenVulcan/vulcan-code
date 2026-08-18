@@ -1,7 +1,7 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "commandcode",
-  "revision": 8,
+"revision": 9,
   "published_at": "2026-08-18T00:00:00Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
@@ -1687,6 +1687,7 @@
         "kind": "exact",
         "value": "google/gemini-3.7-flash"
       },
+      "tool_schema_projection": "strict",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
@@ -1721,6 +1722,7 @@
         "kind": "exact",
         "value": "google/gemini-3.6-flash"
       },
+      "tool_schema_projection": "strict",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
@@ -1752,6 +1754,7 @@
         "kind": "exact",
         "value": "google/gemini-3.5-flash"
       },
+      "tool_schema_projection": "strict",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
@@ -1786,6 +1789,7 @@
         "kind": "exact",
         "value": "google/gemini-3.5-flash-lite"
       },
+      "tool_schema_projection": "strict",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
@@ -1817,6 +1821,7 @@
         "kind": "exact",
         "value": "google/gemini-3.1-flash-lite"
       },
+      "tool_schema_projection": "strict",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],

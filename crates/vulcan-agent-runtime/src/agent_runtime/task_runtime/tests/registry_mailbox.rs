@@ -531,6 +531,7 @@ async fn list_agents_prefers_native_subagent_registry_payload() {
                 target_agent_id: String::from("agent-review"),
                 content: String::from("root-scoped queued work"),
                 created_at_ms: current_unix_millis_u64(),
+                continues_task_turn: false,
             }]),
         );
 
@@ -1041,6 +1042,7 @@ async fn close_agent_archives_target_and_descendants_by_default() {
                 target_agent_id: String::from("parent-review"),
                 content: String::from("queued parent work"),
                 created_at_ms: current_unix_millis_u64(),
+                continues_task_turn: false,
             }]),
         );
         inboxes.insert(
@@ -1052,6 +1054,7 @@ async fn close_agent_archives_target_and_descendants_by_default() {
                 target_agent_id: String::from("child-review"),
                 content: String::from("queued child work"),
                 created_at_ms: current_unix_millis_u64(),
+                continues_task_turn: false,
             }]),
         );
     }
@@ -1246,6 +1249,7 @@ async fn close_agent_rejects_non_cascade_orphans_and_closes_active_subtree() {
                 target_agent_id: String::from("non-cascade-parent"),
                 content: String::from("parent message"),
                 created_at_ms: current_unix_millis_u64(),
+                continues_task_turn: false,
             }]),
         );
         inboxes.insert(
@@ -1257,6 +1261,7 @@ async fn close_agent_rejects_non_cascade_orphans_and_closes_active_subtree() {
                 target_agent_id: String::from("non-cascade-child"),
                 content: String::from("child message"),
                 created_at_ms: current_unix_millis_u64(),
+                continues_task_turn: false,
             }]),
         );
     }

@@ -86,6 +86,10 @@ mod transcript;
 
 pub use transcript::{AgentMessageAppendRequest, DisplayRecordAppendRequest};
 
+/// Stable metadata key that binds an admitted prompt projection to its later canonical record.
+/// 将已接纳提示词投影与后续规范记录绑定的稳定元数据键。
+pub const INTERJECTED_PROMPT_ADMISSION_ID_KEY: &str = "prompt_admission_id";
+
 use metadata::*;
 
 #[cfg(test)]

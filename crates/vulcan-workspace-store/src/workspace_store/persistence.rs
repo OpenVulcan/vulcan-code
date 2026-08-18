@@ -17,13 +17,16 @@ use super::segmented_session_store::{
     SegmentedSessionForkSource, SegmentedSessionReplayResult,
     append_segmented_session_message_update, archive_segmented_session_by_created_date,
     copy_segmented_directory_tree, create_segmented_session_in_location,
-    find_segmented_session_directory, find_segmented_session_directory_by_id,
+    finalize_staged_archived_session_deletion, find_segmented_session_directory,
+    find_segmented_session_directory_by_id,
     find_segmented_session_directory_for_task_store_created_at,
     fork_segmented_session_directory_from_source, read_session_metadata,
     rebuild_runtime_log_from_conversation_state, rename_segmented_session_by_created_date,
     repair_segmented_session_display_if_needed, replay_segmented_session_context,
     replay_segmented_session_context_without_repair, restore_segmented_session_by_created_date,
     rewrite_json_value_identity_tokens, rewrite_string_identity_tokens,
+    rollback_staged_archived_session_deletion, segmented_session_directory,
+    segmented_session_directory_exists, stage_archived_segmented_session_deletion,
     state_document_from_runtime_state, sync_runtime_log_from_compacted_conversation_state,
     sync_runtime_log_from_conversation_state, to_store_error,
     truncate_segmented_session_before_message, update_segmented_message_checkpoint, write_metadata,
@@ -53,8 +56,10 @@ pub(in crate::workspace_store) use snapshot::persist_single_session_transcript_m
 pub use edit_fork::*;
 pub use projects::*;
 pub use session_lifecycle::{
-    archive_project_sessions, archive_single_session, persist_single_session_addon_state_update,
-    remove_project_after_archiving_sessions, rename_single_session, restore_project,
+    archive_project_sessions, archive_single_session, cleanup_missing_session_index,
+    delete_archived_session, persist_single_session_addon_state_update,
+    remove_project_after_archiving_sessions, rename_single_session, restore_archived_session,
+    restore_project,
 };
 pub use snapshot::{
     persist_single_session_runtime_state_update, persist_single_session_transcript_messages,

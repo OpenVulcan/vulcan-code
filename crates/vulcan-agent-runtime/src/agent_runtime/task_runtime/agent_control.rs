@@ -51,32 +51,6 @@ impl InterAgentDeliveryMode {
     }
 }
 
-/// Result of immediately resuming a child agent for one delivered message.
-/// 单次消息投递后立即续跑子代理得到的结果。
-#[derive(Debug, Clone)]
-struct InterAgentImmediateResumeResult {
-    /// Concrete child execution id that processed the delivered message.
-    /// 处理本次投递消息的具体子执行标识。
-    execution_id: String,
-    /// Status produced by that resumed child execution.
-    /// 该次子执行产出的状态。
-    execution_status: TaskExecutionStatus,
-    /// Final or status text returned by the resumed child execution.
-    /// 该次子执行返回的最终文本或状态文本。
-    result_text: String,
-}
-
-impl InterAgentImmediateResumeResult {
-    /// Returns whether the resumed execution already reached a terminal status.
-    /// 返回本次续跑执行是否已经到达终态。
-    const fn is_terminal(&self) -> bool {
-        matches!(
-            self.execution_status,
-            TaskExecutionStatus::Completed | TaskExecutionStatus::Stopped
-        )
-    }
-}
-
 /// Structured failure produced after restoring messages drained from one child inbox.
 /// 恢复从子代理 inbox 取出的消息后产生的结构化失败。
 #[derive(Debug, Eq, PartialEq)]
@@ -159,6 +133,7 @@ impl TaskRuntime {
         }
         let target = self.resolve_inter_agent_message_target(current_session_id, &parsed.target)?;
         let target_session_id = SessionId::from(target.session_id);
+        let continues_task_turn = self.task_has_active_or_starting_run(target_session_id)?;
         let stopped_task_ids = if parsed.delivery_mode.interrupts_current_task() {
             self.stop_task_tree(target_session_id)?
         } else {
@@ -183,16 +158,18 @@ impl TaskRuntime {
             target_session_id,
             admitted_target.agent_id.clone(),
             parsed.message.clone(),
+            continues_task_turn,
         )?;
         let should_resume = !self.task_has_active_or_starting_run(target_session_id)?;
         drop(transaction_guard);
 
-        let immediate_resume = if should_resume {
-            self.resume_idle_agent_from_inbox(current_session_id, &admitted_target)
-                .await?
-        } else {
-            None
-        };
+        if should_resume {
+            self.spawn_idle_agent_resume_from_inbox(
+                current_session_id,
+                admitted_target.clone(),
+                delivery_id.clone(),
+            );
+        }
 
         Ok(build_inter_agent_message_tool_result(
             SEND_MESSAGE_TOOL,
@@ -202,7 +179,7 @@ impl TaskRuntime {
             &delivery_id,
             parsed.delivery_mode,
             &stopped_task_ids,
-            immediate_resume.as_ref(),
+            continues_task_turn,
         ))
     }
 
@@ -326,6 +303,7 @@ impl TaskRuntime {
         target_task_id: SessionId,
         target_agent_id: String,
         content: String,
+        continues_task_turn: bool,
     ) -> Result<String, String> {
         let created_at_ms = current_unix_millis_u64();
         let delivery_id = format!("subagent-message-{target_task_id}-{}", Uuid::new_v4());
@@ -336,6 +314,7 @@ impl TaskRuntime {
             target_agent_id,
             content,
             created_at_ms,
+            continues_task_turn,
         };
         self.agent_inboxes
             .write()
@@ -344,6 +323,95 @@ impl TaskRuntime {
             .or_default()
             .push_back(message);
         Ok(delivery_id)
+    }
+
+    /// Starts an accepted idle-child delivery without delaying the parent tool result.
+    /// 在不延迟父级工具结果的情况下启动已接纳的空闲子代理投递。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `current_session_id` identifies the parent session that owns the child backend.
+    /// `current_session_id` 标识拥有子代理后端的父会话。
+    /// `target` is the exact admitted child registry entry to resume.
+    /// `target` 是要续跑的精确已接纳子代理注册项。
+    /// `delivery_id` correlates any asynchronous resume failure with the accepted message.
+    /// `delivery_id` 将异步续跑失败与已接纳消息关联起来。
+    fn spawn_idle_agent_resume_from_inbox(
+        self: &Arc<Self>,
+        current_session_id: SessionId,
+        target: SubagentRegistryEntry,
+        delivery_id: String,
+    ) {
+        let task_runtime = Arc::clone(self);
+        tokio::spawn(async move {
+            if let Err(error) = task_runtime
+                .resume_idle_agent_from_inbox(current_session_id, &target)
+                .await
+            {
+                if let Err(publish_error) = task_runtime.publish_inter_agent_resume_failure(
+                    current_session_id,
+                    &target,
+                    delivery_id.as_str(),
+                    error.as_str(),
+                ) {
+                    eprintln!(
+                        "[task-runtime] accepted inter-agent message resume failed for task {}: {error}; parent feedback also failed: {publish_error}",
+                        target.session_id
+                    );
+                }
+            }
+        });
+    }
+
+    /// Publishes an asynchronous child-resume failure after the parent already received admission.
+    /// 在父级已经收到接纳结果后发布异步子代理续跑失败。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `current_session_id` is the parent mailbox that must receive the failure.
+    /// `current_session_id` 是必须接收失败反馈的父级 mailbox。
+    /// `target` identifies the exact child whose accepted message could not resume.
+    /// `target` 标识已接纳消息却无法续跑的精确子代理。
+    /// `delivery_id` correlates the failure with the accepted message row.
+    /// `delivery_id` 将失败与已接纳消息行关联起来。
+    /// `error` is the exact resume error retained for diagnostics and model feedback.
+    /// `error` 是为诊断和模型反馈保留的精确续跑错误。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success after mailbox publication and waiter notification, or the exact mailbox error.
+    /// mailbox 发布并通知等待方后返回成功，否则返回精确 mailbox 错误。
+    fn publish_inter_agent_resume_failure(
+        &self,
+        current_session_id: SessionId,
+        target: &SubagentRegistryEntry,
+        delivery_id: &str,
+        error: &str,
+    ) -> Result<(), String> {
+        let feedback = format!(
+            "Accepted message `{delivery_id}` could not start child-agent execution: {error}"
+        );
+        let event = SubagentMailboxEvent {
+            parent_thread_id: SessionNodeId::from(current_session_id),
+            parent_turn_id: None,
+            child_thread_id: target.session_id,
+            kind: SubagentMailboxEventKind::Message,
+            timestamp_ms: current_unix_millis_u64(),
+            payload: json!({
+                "child_thread_id": target.session_id.to_string(),
+                "public_id": target.agent_id,
+                "parent_thread_id": current_session_id.to_string(),
+                "status": "message",
+                "task_status": "message",
+                "delivery_id": delivery_id,
+                "delivery_status": "resume_failed",
+                "result_text": feedback,
+                "error_text": error,
+            }),
+        };
+        self.subagent_mailbox.push_event(event)?;
+        self.notify_subagent_mailbox_activity();
+        Ok(())
     }
 
     /// Takes every queued message for one child-agent inbox.
@@ -571,7 +639,7 @@ impl TaskRuntime {
         self: &Arc<Self>,
         current_session_id: SessionId,
         target: &SubagentRegistryEntry,
-    ) -> Result<Option<InterAgentImmediateResumeResult>, String> {
+    ) -> Result<bool, String> {
         // backend is the exact parent-session handler required to resume queued child work.
         // backend 是续跑排队子任务所需的精确父会话处理器。
         let backend = self
@@ -585,7 +653,7 @@ impl TaskRuntime {
         let target_task_id = SessionId::from(target.session_id);
         let messages = self.take_inter_agent_messages(target_task_id)?;
         if messages.is_empty() {
-            return Ok(None);
+            return Ok(false);
         }
         let prompt = format_inter_agent_messages_for_model(&messages);
         let parsed_args = match parse_task_tool_arguments(json!({
@@ -666,11 +734,7 @@ impl TaskRuntime {
         } else {
             self.store_task_outcome(current_session_id, &invocation, &outcome)?;
         }
-        Ok(Some(InterAgentImmediateResumeResult {
-            execution_id: invocation.execution_id,
-            execution_status: outcome.execution_status,
-            result_text: outcome.final_output_text,
-        }))
+        Ok(true)
     }
 
     /// Resumes a just-settled child agent when queue-mode messages arrived too late for in-turn injection.
@@ -716,8 +780,7 @@ impl TaskRuntime {
             return Ok(false);
         }
         self.resume_idle_agent_from_inbox(current_session_id, &target)
-            .await?;
-        Ok(true)
+            .await
     }
 }
 
@@ -1164,6 +1227,7 @@ fn inter_agent_agent_message_metadata(message: &QueuedInterAgentMessage) -> Valu
         (SUBAGENT_TASK_ID_KEY): message.target_task_id.to_string(),
         "target": message.target_agent_id.clone(),
         "created_at_ms": message.created_at_ms,
+        (INTER_AGENT_CONTINUES_TASK_TURN_KEY): message.continues_task_turn,
     })
 }
 
@@ -1265,6 +1329,7 @@ fn inter_agent_display_record_metadata(message: &QueuedInterAgentMessage) -> Val
         "parent_session_id": message.author_session_id.to_string(),
         (SUBAGENT_TASK_ID_KEY): message.target_task_id.to_string(),
         "created_at_ms": message.created_at_ms,
+        (INTER_AGENT_CONTINUES_TASK_TURN_KEY): message.continues_task_turn,
     })
 }
 
@@ -1287,8 +1352,8 @@ fn inter_agent_display_record_metadata(message: &QueuedInterAgentMessage) -> Val
 /// `delivery_mode` 记录本次投递是排队还是插队。
 /// `stopped_task_ids` lists active tasks stopped before interrupt delivery.
 /// `stopped_task_ids` 列出插队投递前停止的活动任务。
-/// `immediate_resume` reports a child turn that was synchronously resumed by this delivery.
-/// `immediate_resume` 描述本次投递同步续跑得到的子回合结果。
+/// `continues_task_turn` records whether this delivery belongs to the active logical child turn.
+/// `continues_task_turn` 记录本次投递是否属于活动的子代理逻辑轮次。
 ///
 /// # Returns
 /// 返回值
@@ -1302,11 +1367,8 @@ fn build_inter_agent_message_tool_result(
     delivery_id: &str,
     delivery_mode: InterAgentDeliveryMode,
     stopped_task_ids: &[SessionId],
-    immediate_resume: Option<&InterAgentImmediateResumeResult>,
+    continues_task_turn: bool,
 ) -> VulcanToolInvocationResult {
-    let delivery_status = immediate_resume
-        .map(|result| result.execution_status.as_str())
-        .unwrap_or("queued");
     let model_payload = json!({
         "ok": true,
         "target": target.agent_id,
@@ -1314,14 +1376,9 @@ fn build_inter_agent_message_tool_result(
         "queued": true,
         "delivery_mode": delivery_mode.as_str(),
         "interrupted": delivery_mode.interrupts_current_task(),
-        "delivery_status": delivery_status,
-        "message": inter_agent_message_delivery_model_hint(immediate_resume),
+        "delivery_status": "queued",
+        "message": "The message was accepted for the child agent. Do not report a final child result from assumptions; wait for child-agent feedback.",
     });
-    let model_payload = if let Some(immediate_resume) = immediate_resume {
-        inter_agent_message_tool_result_with_resume_model_payload(model_payload, immediate_resume)
-    } else {
-        model_payload
-    };
     let host_payload = json!({
         "tool": tool_name,
         "parent_session_id": current_session_id.to_string(),
@@ -1332,11 +1389,10 @@ fn build_inter_agent_message_tool_result(
         "queued": true,
         "delivery_mode": delivery_mode.as_str(),
         "interrupted": delivery_mode.interrupts_current_task(),
+        (INTER_AGENT_CONTINUES_TASK_TURN_KEY): continues_task_turn,
         (STOPPED_SUBAGENT_TASK_IDS_KEY): stopped_task_ids.iter().map(ToString::to_string).collect::<Vec<_>>(),
         "target_status_before_delivery": target.status,
-        "delivery_status": delivery_status,
-        "resumed_execution_id": immediate_resume.map(|result| result.execution_id.as_str()),
-        "resumed_execution_status": immediate_resume.map(|result| result.execution_status.as_str()),
+        "delivery_status": "queued",
     });
     VulcanToolInvocationResult::from_model_output(model_payload).with_host_result(
         VulcanToolHostResult {
@@ -1344,49 +1400,6 @@ fn build_inter_agent_message_tool_result(
             payload: host_payload,
         },
     )
-}
-
-/// Builds the model-facing delivery hint for a `send_message` result.
-/// 构建 `send_message` 结果中面向模型的投递提示。
-fn inter_agent_message_delivery_model_hint(
-    immediate_resume: Option<&InterAgentImmediateResumeResult>,
-) -> &'static str {
-    match immediate_resume {
-        Some(result) if result.is_terminal() => {
-            "The child agent processed this message immediately. Use `result`; do not wait for another mailbox turn for this delivery."
-        }
-        Some(_) => {
-            "The child agent accepted this message and is still running. Do not report a final child result from assumptions; wait for child-agent feedback."
-        }
-        None => {
-            "The message was queued for the child agent. Do not report a final child result from assumptions; wait for child-agent feedback."
-        }
-    }
-}
-
-/// Adds immediate child execution result fields to the model-facing payload.
-/// 将立即完成的子执行结果字段加入面向模型的载荷。
-fn inter_agent_message_tool_result_with_resume_model_payload(
-    mut model_payload: Value,
-    immediate_resume: &InterAgentImmediateResumeResult,
-) -> Value {
-    if let Some(object) = model_payload.as_object_mut() {
-        object.insert(
-            String::from("resumed_execution_id"),
-            Value::String(immediate_resume.execution_id.clone()),
-        );
-        object.insert(
-            String::from("execution_status"),
-            Value::String(immediate_resume.execution_status.as_str().to_string()),
-        );
-        if immediate_resume.is_terminal() {
-            object.insert(
-                String::from("result"),
-                Value::String(immediate_resume.result_text.clone()),
-            );
-        }
-    }
-    model_payload
 }
 
 /// Builds the structured tool result for a child-to-root message.

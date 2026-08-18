@@ -181,6 +181,38 @@ fn bundled_integrity_index_binds_the_complete_manifest_generation() {
     assert_eq!(provider_count, 16);
 }
 
+/// Verifies only Gemini model rules opt into strict tool-schema projection in system manifests.
+/// 验证系统清单中只有 Gemini 模型规则显式启用严格工具 Schema 投影。
+#[test]
+fn bundled_tool_schema_projection_is_strict_only_for_gemini_rules() {
+    for (provider_id, text) in load_bundled_manifests() {
+        let manifest: vulcan_provider_adapters::ProviderManifestV1 = serde_json::from_str(&text)
+            .unwrap_or_else(|error| panic!("parse bundled manifest `{provider_id}`: {error}"));
+        assert_eq!(
+            manifest.model_defaults.tool_schema_projection,
+            vulcan_provider_adapters::ToolSchemaProjectionMode::Lightweight,
+            "system provider `{provider_id}` must leave the provider default lightweight"
+        );
+        for rule in manifest.model_rules {
+            let is_gemini = rule.matcher.value.to_ascii_lowercase().contains("gemini");
+            if is_gemini {
+                assert_eq!(
+                    rule.tool_schema_projection,
+                    Some(vulcan_provider_adapters::ToolSchemaProjectionMode::Strict),
+                    "Gemini rule `{}` in `{provider_id}` must declare strict projection",
+                    rule.rule_id
+                );
+            } else {
+                assert_eq!(
+                    rule.tool_schema_projection, None,
+                    "non-Gemini rule `{}` in `{provider_id}` must inherit lightweight projection",
+                    rule.rule_id
+                );
+            }
+        }
+    }
+}
+
 /// Verifies model-access defaults are fully owned by every bundled manifest.
 /// 验证模型访问默认值完全由每份内置清单持有。
 #[test]

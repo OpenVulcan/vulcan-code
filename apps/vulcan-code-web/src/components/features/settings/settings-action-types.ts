@@ -154,4 +154,10 @@ export interface SettingsActionProps {
   // Removes one MCP server configuration.
   // 移除单个 MCP 服务器配置。
   onRemoveMcpServer: (serverId: string) => Promise<void>
+  // Restores the selected archived conversations in one authoritative batch.
+  // 一次权威批量恢复选中的归档会话。
+  onRestoreArchivedConversations: (conversationIds: string[]) => Promise<void>
+  // Permanently deletes the selected archived conversations in one authoritative batch.
+  // 一次权威批量彻底删除选中的归档会话。
+  onDeleteArchivedConversations: (conversationIds: string[]) => Promise<void>
 }

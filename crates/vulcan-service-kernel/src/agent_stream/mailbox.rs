@@ -90,7 +90,11 @@ fn apply_webui_prompt_intervention_transaction(
     for entry in &guided_entries {
         let (prompt, attachments) = normalize_webui_interjected_prompt(entry);
         guided_prompt_changed |= controller_draft
-            .append_interjected_user_turn_with_attachments(prompt.as_str(), attachments)
+            .append_admitted_interjected_user_turn_with_attachments(
+                prompt.as_str(),
+                attachments,
+                Some(entry.id.as_str()),
+            )
             .is_some();
     }
     if !guided_entries.is_empty()

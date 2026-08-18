@@ -1,9 +1,8 @@
 use super::{
     ResolvedToolSet, VulcanPlanToolPolicy, VulcanToolCandidate, VulcanToolDescriptor,
-    VulcanToolInvocationResult, VulcanToolMode, VulcanToolSchemaProjectionContext,
-    VulcanToolSchemaProjectionProfile, VulcanToolSourceKind, VulcanToolsManager,
-    project_tool_parameters_schema, public_tool_name_is_valid,
-    resolve_tool_schema_projection_profile,
+    VulcanToolInvocationResult, VulcanToolMode, VulcanToolSchemaProjectionProfile,
+    VulcanToolSourceKind, VulcanToolsManager, project_tool_parameters_schema,
+    public_tool_name_is_valid,
 };
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -187,74 +186,6 @@ fn manager_allows_command_line_tools_in_plan_mode() {
             .definitions
             .iter()
             .all(super::tool_is_allowed_in_plan)
-    );
-}
-
-/// Verifies standard non-Gemini protocol families preserve the canonical tool schema.
-/// 验证标准非 Gemini 协议族会保留规范工具 Schema。
-#[test]
-fn standard_protocol_families_select_pass_through_projection() {
-    for api_family_key in [
-        "openai-chat-compatible",
-        "openai-responses-compatible",
-        "anthropic-messages",
-        "cohere-chat",
-    ] {
-        let context = VulcanToolSchemaProjectionContext {
-            api_family_key,
-            model_id: "fixture-model",
-        };
-
-        assert_eq!(
-            resolve_tool_schema_projection_profile(&context),
-            VulcanToolSchemaProjectionProfile::PassThrough,
-            "unexpected projection for {api_family_key}"
-        );
-    }
-}
-
-/// Verifies native Gemini function-declaration protocols select the compact Gemini projection.
-/// 验证原生 Gemini 函数声明协议会选择紧凑 Gemini 投影。
-#[test]
-fn native_gemini_protocols_select_gemini_projection() {
-    let context = VulcanToolSchemaProjectionContext {
-        api_family_key: "google-gemini-function-declarations",
-        model_id: "deepseek-v4-flash",
-    };
-
-    assert_eq!(
-        resolve_tool_schema_projection_profile(&context),
-        VulcanToolSchemaProjectionProfile::GeminiSlim
-    );
-}
-
-/// Verifies Gemini-family models select the compact Gemini projection on an OpenAI-compatible wire API.
-/// 验证 Gemini 模型通过 OpenAI 兼容线协议调用时会选择紧凑 Gemini 投影。
-#[test]
-fn projection_profile_detects_openai_compatible_gemini_models() {
-    let context = VulcanToolSchemaProjectionContext {
-        api_family_key: "openai-chat-compatible",
-        model_id: "google/gemini-2.5-pro",
-    };
-
-    assert_eq!(
-        resolve_tool_schema_projection_profile(&context),
-        VulcanToolSchemaProjectionProfile::GeminiSlim
-    );
-}
-
-/// Verifies an OpenAI-compatible Responses envelope cannot bypass Gemini target projection.
-/// 验证 OpenAI 兼容 Responses 外层协议不能绕过 Gemini 目标投影。
-#[test]
-fn projection_profile_prioritizes_gemini_target_over_responses_envelope() {
-    let context = VulcanToolSchemaProjectionContext {
-        api_family_key: "openai-responses-compatible",
-        model_id: "google/gemini-2.5-pro",
-    };
-
-    assert_eq!(
-        resolve_tool_schema_projection_profile(&context),
-        VulcanToolSchemaProjectionProfile::GeminiSlim
     );
 }
 
@@ -451,8 +382,8 @@ fn gemini_slim_projection_preserves_combinator_only_root_objects() {
     );
 }
 
-/// Verifies pass-through projection preserves optional fields and unsupported-extension keywords exactly.
-/// 验证透传投影会精确保留可选字段和扩展关键字。
+/// Verifies explicit pass-through projection preserves every canonical schema field exactly.
+/// 验证显式原样投影会精确保留规范 Schema 的每个字段。
 #[test]
 fn pass_through_projection_preserves_canonical_schema_exactly() {
     let schema = json!({
@@ -477,4 +408,61 @@ fn pass_through_projection_preserves_canonical_schema_exactly() {
         project_tool_parameters_schema(&schema, VulcanToolSchemaProjectionProfile::PassThrough);
 
     assert_eq!(projected, schema);
+}
+
+/// Verifies standard protocols repair only required-only root object branches while preserving nested scalar unions.
+/// 验证标准协议仅修复根级仅含必填约束的对象分支，同时保留嵌套标量联合。
+#[test]
+fn standard_object_root_projection_lightly_normalizes_codekit_style_schema() {
+    let schema = json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "file": { "type": "string" },
+            "patches": {
+                "type": "array",
+                "items": { "type": "object" }
+            },
+            "precondition": {
+                "type": "object",
+                "properties": {
+                    "range": {
+                        "anyOf": [
+                            { "type": "string" },
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "start_line": { "type": "integer" },
+                                    "end_line": { "type": "integer" }
+                                },
+                                "required": ["start_line", "end_line"]
+                            }
+                        ]
+                    }
+                }
+            }
+        },
+        "oneOf": [
+            { "required": ["file"] },
+            { "required": ["patches"] }
+        ]
+    });
+
+    let projected = project_tool_parameters_schema(
+        &schema,
+        VulcanToolSchemaProjectionProfile::StandardObjectRoot,
+    );
+
+    assert_eq!(projected["type"], json!("object"));
+    assert_eq!(projected["oneOf"][0]["type"], json!("object"));
+    assert_eq!(projected["oneOf"][1]["type"], json!("object"));
+    assert_eq!(
+        projected["properties"]["precondition"]["properties"]["range"]["anyOf"],
+        schema["properties"]["precondition"]["properties"]["range"]["anyOf"]
+    );
+    assert_eq!(projected["properties"], schema["properties"]);
+    assert_eq!(
+        projected["additionalProperties"],
+        schema["additionalProperties"]
+    );
 }

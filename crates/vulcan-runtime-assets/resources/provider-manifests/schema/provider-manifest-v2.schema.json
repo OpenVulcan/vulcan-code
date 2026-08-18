@@ -772,6 +772,13 @@
         "capabilities": {
           "$ref": "#/$defs/capability_patch"
         },
+        "tool_schema_projection": {
+          "enum": [
+            "lightweight",
+            "passthrough",
+            "strict"
+          ]
+        },
         "default_usage_profile_refs": {
           "type": "array",
           "items": {
@@ -874,6 +881,13 @@
           },
           "capabilities": {
             "$ref": "#/$defs/capability_patch"
+          },
+          "tool_schema_projection": {
+            "enum": [
+              "lightweight",
+              "passthrough",
+              "strict"
+            ]
           },
           "protocol_capabilities": {
             "type": "object",

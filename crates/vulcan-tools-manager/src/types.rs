@@ -246,21 +246,13 @@ pub struct ResolvedToolSet {
 /// 针对单个具体请求选择的 Provider 可见工具 Schema 投影策略。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VulcanToolSchemaProjectionProfile {
-    /// Preserve the host schema exactly as it was resolved by the tool manager.
-    /// 原样保留工具管理器解析出的宿主 Schema。
+    /// Preserve the host schema exactly for an explicitly verified provider contract.
+    /// 为经过明确验证的 Provider 契约原样保留宿主 Schema。
     PassThrough,
+    /// Preserve the host schema while normalizing only provider-facing object-root declarations.
+    /// 保留宿主 Schema，同时仅规范化 Provider 可见的对象根声明。
+    StandardObjectRoot,
     /// Project JSON Schema into the smaller Gemini function-declaration dialect.
     /// 将 JSON Schema 投影为更精简的 Gemini 函数声明方言。
     GeminiSlim,
-}
-
-/// Request-scoped context used to choose the provider-facing tool-schema projection profile.
-/// 用于选择 Provider 可见工具 Schema 投影策略的请求级上下文。
-pub struct VulcanToolSchemaProjectionContext<'a> {
-    /// Stable API-family key such as `openai-chat-compatible`.
-    /// 稳定接口族键，例如 `openai-chat-compatible`。
-    pub api_family_key: &'a str,
-    /// Stable model identifier used by the concrete provider request.
-    /// 具体 Provider 请求使用的稳定模型标识。
-    pub model_id: &'a str,
 }

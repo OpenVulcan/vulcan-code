@@ -228,6 +228,8 @@ mod tests {
         assert!(methods.contains("workspace.git.catalog"));
         assert!(methods.contains("workspace.git.setMonitoring"));
         assert!(methods.contains("service_remove_project"));
+        assert!(methods.contains("service_restore_archived_conversations"));
+        assert!(methods.contains("service_delete_archived_conversations"));
         assert!(methods.contains("service_create_knowledge_library"));
         assert!(methods.contains("service_set_knowledge_library_settings"));
         assert!(methods.contains("service_list_knowledge_sources"));

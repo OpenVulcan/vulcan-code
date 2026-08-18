@@ -8,7 +8,9 @@ mod project_services;
 
 pub(super) use conversation_services::{
     refresh_selected_workbench_messages_from_runtime, service_archive_conversation,
-    service_mark_conversation_read, service_rename_conversation, service_select_conversation,
+    service_delete_archived_conversations, service_mark_conversation_read,
+    service_rename_conversation, service_restore_archived_conversations,
+    service_select_conversation,
 };
 pub use project_services::service_add_project_initial_directory;
 pub(super) use project_services::{

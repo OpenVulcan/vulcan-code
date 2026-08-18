@@ -2092,6 +2092,11 @@ export type TranslationKey =
   | "settings.customModels.parameters"
   | "settings.customModels.projection"
   | "settings.customModels.projectionInvalid"
+  | "settings.customModels.toolSchemaProjection"
+  | "settings.customModels.toolSchemaProjectionHint"
+  | "settings.customModels.toolSchemaProjectionLightweight"
+  | "settings.customModels.toolSchemaProjectionPassthrough"
+  | "settings.customModels.toolSchemaProjectionStrict"
   | "settings.customModels.remove"
   | "settings.customModels.selectHint"
   | "settings.customModels.save"
@@ -4730,6 +4735,11 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.customModels.parameters": "模型参数定义（JSON 数组）",
     "settings.customModels.projection": "请求投影（JSON 对象）",
     "settings.customModels.projectionInvalid": "请求投影必须是 JSON 对象。",
+    "settings.customModels.toolSchemaProjection": "工具 Schema 契约",
+    "settings.customModels.toolSchemaProjectionHint": "默认使用轻量处理。仅在供应商契约经过明确验证后选择原样；严格模式仅用于 Gemini 一类限制更强的工具声明接口。",
+    "settings.customModels.toolSchemaProjectionLightweight": "轻量（默认）",
+    "settings.customModels.toolSchemaProjectionPassthrough": "原样",
+    "settings.customModels.toolSchemaProjectionStrict": "严格",
     "settings.customModels.remove": "移除当前模型",
     "settings.customModels.selectHint": "从左侧选择模型，或从目录导入、手动添加一个模型。",
     "settings.customModels.save": "保存模型",
@@ -7365,6 +7375,11 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.customModels.parameters": "Model parameter definitions (JSON array)",
     "settings.customModels.projection": "Request projection (JSON object)",
     "settings.customModels.projectionInvalid": "The request projection must be a JSON object.",
+    "settings.customModels.toolSchemaProjection": "Tool schema contract",
+    "settings.customModels.toolSchemaProjectionHint": "Lightweight is the default. Use passthrough only for an explicitly verified provider contract; strict is intended for restrictive function-declaration APIs such as Gemini.",
+    "settings.customModels.toolSchemaProjectionLightweight": "Lightweight (default)",
+    "settings.customModels.toolSchemaProjectionPassthrough": "Passthrough",
+    "settings.customModels.toolSchemaProjectionStrict": "Strict",
     "settings.customModels.remove": "Remove current model",
     "settings.customModels.selectHint": "Select a model on the left, import from the catalog, or add one manually.",
     "settings.customModels.save": "Save models",

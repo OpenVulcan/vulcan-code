@@ -509,6 +509,14 @@ query/fragment 的 HTTPS URL，endpoint path 必须保持同源；输入 JSON Sc
 如果新模型只是复用上述原语和既有 Wire 契约，可仅更新 JSON。若它需要新的认证、签名、流式
 解码、本地媒体转换或供应商特有二进制协议，则必须先实现并审核宿主原语，再允许 Manifest 引用。
 
+函数工具参数投影由冻结路由中的 `tool_schema_projection` 唯一决定，不得从协议或模型名称猜测。
+系统 Manifest 未声明该字段时即为 `lightweight`：仅为根级 `anyOf` / `oneOf` 中已经包含
+`required`、`properties` 等对象约束但缺少 `type` 的分支补充 `type: object`，嵌套联合、描述、
+扩展字段和其余约束保持不变。`passthrough` 只用于经过明确验证、必须完全原样传递的特殊契约；
+`strict` 使用递归 Gemini Slim 投影。当前内置清单只有 Gemini 模型规则显式声明 `strict`，其余系统
+模型一律省略字段并继承轻量模式。自定义模型只在高级设置中提供三档选择，默认同样为轻量模式。
+不得把 Gemini 的严格关键字过滤扩散到其他模型，也不得按供应商或模型名称硬编码单个工具修复。
+
 ## 8. Fixtures 与测试证据
 
 fixtures 不是“JSON 能解析”的占位文件，而是走生产编译器与消费者的可执行证据。当前支持两类：

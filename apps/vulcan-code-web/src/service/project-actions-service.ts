@@ -142,6 +142,24 @@ export async function archiveConversation(conversationId: string): Promise<Workb
   return serviceClient.request<WorkbenchSnapshot>("service_archive_conversation", { conversationId });
 }
 
+// restoreArchivedConversations restores the selected archived conversations as one lifecycle transaction.
+// restoreArchivedConversations 将选中的归档会话作为一次生命周期事务恢复。
+export async function restoreArchivedConversations(conversationIds: string[]): Promise<WorkbenchSnapshot | null> {
+  if (!hasServiceRuntime()) {
+    return null;
+  }
+  return serviceClient.request<WorkbenchSnapshot>("service_restore_archived_conversations", { conversationIds });
+}
+
+// deleteArchivedConversations permanently deletes the selected archived conversations as one lifecycle transaction.
+// deleteArchivedConversations 将选中的归档会话作为一次生命周期事务彻底删除。
+export async function deleteArchivedConversations(conversationIds: string[]): Promise<WorkbenchSnapshot | null> {
+  if (!hasServiceRuntime()) {
+    return null;
+  }
+  return serviceClient.request<WorkbenchSnapshot>("service_delete_archived_conversations", { conversationIds });
+}
+
 // markConversationRead asks the desktop shell to persist one conversation as read.
 // markConversationRead 请求桌面壳将单个会话持久化标记为已读。
 export async function markConversationRead(conversationId: string): Promise<WorkbenchSnapshot | null> {

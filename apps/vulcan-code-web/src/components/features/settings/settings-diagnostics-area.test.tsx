@@ -16,6 +16,8 @@ const SETTINGS_ACTIONS = {
   onSaveProviderRequestTraceSettings: async () => undefined,
   onSaveMcpServer: async () => undefined,
   onRemoveMcpServer: async () => undefined,
+  onRestoreArchivedConversations: async () => undefined,
+  onDeleteArchivedConversations: async () => undefined,
 } satisfies SettingsActionProps;
 
 // STARTUP_SNAPSHOT contains the exact diagnostics fields rendered by LogsArea.

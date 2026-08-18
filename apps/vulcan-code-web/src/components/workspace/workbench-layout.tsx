@@ -110,6 +110,7 @@ import {
   archiveConversation,
   archiveProjectConversations,
   browseProjectDirectories,
+  deleteArchivedConversations,
   markConversationRead,
   openExternalUrl,
   openProjectDirectory,
@@ -118,6 +119,7 @@ import {
   renameConversation,
   renameProject,
   reorderProjects,
+  restoreArchivedConversations,
   resetProjectIcon,
   selectConversation,
   setExpandedTaskProjects,
@@ -1345,10 +1347,31 @@ export function WorkbenchLayout(props: {
           setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
         }
       })
-      .catch((error) => {
-        toast.error(error instanceof Error ? error.message : String(error));
+      .catch(async (error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        if (message === "会话已被删除，已经清理。") {
+          // Clear the deleted route before applying the refreshed authoritative snapshot.
+          // 应用刷新后的权威快照前先清理已删除会话的路由选择。
+          selectedConversationIdRef.current = null;
+          setSelectedConversationId(null);
+          try {
+            const snapshot = await loadWorkbenchSnapshot();
+            applyProjectActionSnapshot(snapshot);
+          } catch (refreshError) {
+            toast.error(`${message} 列表刷新失败：${refreshError instanceof Error ? refreshError.message : String(refreshError)}`);
+            return;
+          }
+        }
+        toast.error(message);
       });
-  }, [handleOpenWorkspaceChat, liveStreamStore, selectedConversationIdRef]);
+  }, [
+    applyProjectActionSnapshot,
+    handleOpenWorkspaceChat,
+    liveStreamStore,
+    loadWorkbenchSnapshot,
+    selectedConversationIdRef,
+    setSelectedConversationId,
+  ]);
 
   React.useEffect(() => {
     notificationCoordinator.setRouteHandler((route) => {
@@ -2072,6 +2095,8 @@ export function WorkbenchLayout(props: {
               onSaveProviderRetrySettings: (request) => applySkillWorkbenchAction(async () => (await saveProviderRetrySettings(request)) ?? workbenchStateRef.current),
               onSaveMcpServer: (request) => applySkillWorkbenchAction(async () => (await saveMcpServerConfiguration(request as unknown as Record<string, unknown>)) ?? workbenchStateRef.current),
               onRemoveMcpServer: (serverId) => applySkillWorkbenchAction(async () => (await removeMcpServerConfiguration(serverId)) ?? workbenchStateRef.current),
+              onRestoreArchivedConversations: (conversationIds) => applySkillWorkbenchAction(async () => (await restoreArchivedConversations(conversationIds)) ?? workbenchStateRef.current),
+              onDeleteArchivedConversations: (conversationIds) => applySkillWorkbenchAction(async () => (await deleteArchivedConversations(conversationIds)) ?? workbenchStateRef.current),
             }}
             startup={props.startup}
             workbench={workbenchState}

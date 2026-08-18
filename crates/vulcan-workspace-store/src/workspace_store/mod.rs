@@ -69,14 +69,15 @@ pub use goal_store::{
 };
 pub use persistence::{
     PersistedSessionForkResult, PersistedUserPromptEditDraft, PersistedUserPromptRollbackResult,
-    archive_project_sessions, archive_single_session, fork_persisted_session,
-    load_persisted_user_prompt_edit_draft, persist_collapsed_task_project_ids, persist_new_project,
+    archive_project_sessions, archive_single_session, cleanup_missing_session_index,
+    delete_archived_session, fork_persisted_session, load_persisted_user_prompt_edit_draft,
+    persist_collapsed_task_project_ids, persist_new_project,
     persist_project_codebase_memory_enabled, persist_project_icon_update,
     persist_project_order_update, persist_project_pinned_and_order_update,
     persist_single_session_addon_state_update, persist_single_session_runtime_state_update,
     persist_single_session_transcript_messages, persist_single_session_update,
     remove_project_after_archiving_sessions, rename_project, rename_single_session,
-    restore_project, rollback_persisted_session_before_user_prompt,
+    restore_archived_session, restore_project, rollback_persisted_session_before_user_prompt,
 };
 pub use provider_usage::{
     PROVIDER_USAGE_SCHEMA_REVISION, ProviderAccountUsageSnapshotRecord,

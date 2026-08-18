@@ -2,6 +2,7 @@
 //! 归档、恢复、删除与子任务会话管理。
 
 use super::*;
+use uuid::Uuid;
 
 /// Moves one session directory, patches its metadata, and rolls both changes back on commit failure.
 /// 移动一个会话目录并修补其元数据，在提交失败时回滚两项变更。
@@ -329,6 +330,97 @@ pub(in crate::workspace_store) fn restore_segmented_session_by_created_date(
             Ok(active_dir)
         }
     }
+}
+
+/// Moves one archived session directory into a same-parent deletion staging path.
+/// 将一个归档会话目录移动到同父级删除暂存路径。
+///
+/// # Parameters
+/// 参数
+/// `data_root` is the workspace persistence root containing the archived session tree.
+/// `data_root` 是包含归档会话树的工作区持久化根目录。
+/// `project_tag` is the exact persisted project directory tag.
+/// `project_tag` 是精确持久化的项目目录标签。
+/// `created_date` is the exact persisted session date component.
+/// `created_date` 是精确持久化的会话日期片段。
+/// `session_id` is the stable archived session directory identity.
+/// `session_id` 是稳定的归档会话目录身份。
+///
+/// # Returns
+/// 返回值
+/// Returns the staged directory path after validating that only the archived lifecycle directory exists.
+/// 仅在验证只有归档生命周期目录存在后返回删除暂存目录路径。
+pub(in crate::workspace_store) fn stage_archived_segmented_session_deletion(
+    data_root: &Path,
+    project_tag: &str,
+    created_date: &str,
+    session_id: &str,
+) -> Result<PathBuf, String> {
+    let archived_dir =
+        segmented_session_directory(data_root, true, project_tag, created_date, session_id);
+    let active_dir =
+        segmented_session_directory(data_root, false, project_tag, created_date, session_id);
+    let archived_exists = segmented_session_directory_exists(&archived_dir)?;
+    let active_exists = segmented_session_directory_exists(&active_dir)?;
+    if !archived_exists || active_exists {
+        return Err(format!(
+            "Segmented session permanent deletion requires only an archived directory: archived=`{}`, active=`{}`",
+            archived_dir.display(),
+            active_dir.display()
+        ));
+    }
+    let staged_dir =
+        archived_dir.with_file_name(format!(".{session_id}.deleting-{}", Uuid::new_v4()));
+    move_segmented_session_directory(&archived_dir, &staged_dir)?;
+    synchronize_segmented_session_directory_move(&archived_dir, &staged_dir)?;
+    Ok(staged_dir)
+}
+
+/// Restores one staged archived session directory after an index deletion failure.
+/// 在索引删除失败后恢复一个已暂存的归档会话目录。
+///
+/// # Parameters
+/// 参数
+/// `staged_dir` is the exact temporary directory returned by staging.
+/// `staged_dir` 是暂存阶段返回的精确临时目录。
+/// `archived_dir` is the original authoritative archived directory.
+/// `archived_dir` 是原始权威归档目录。
+///
+/// # Returns
+/// 返回值
+/// Returns success after moving the directory back and synchronizing its parent directory.
+/// 目录移回并同步父目录后返回成功。
+pub(in crate::workspace_store) fn rollback_staged_archived_session_deletion(
+    staged_dir: &Path,
+    archived_dir: &Path,
+) -> Result<(), String> {
+    move_segmented_session_directory(staged_dir, archived_dir)?;
+    synchronize_segmented_session_directory_move(staged_dir, archived_dir)
+}
+
+/// Permanently removes one staged archived session directory after its index row commits deletion.
+/// 在索引行提交删除后永久移除一个归档会话删除暂存目录。
+///
+/// # Parameters
+/// 参数
+/// `staged_dir` is the exact temporary directory whose contents are no longer indexed.
+/// `staged_dir` 是已不再被索引引用的精确临时目录。
+///
+/// # Returns
+/// 返回值
+/// Returns success only after the complete staged directory tree is removed.
+/// 仅在完整删除暂存目录树后返回成功。
+pub(in crate::workspace_store) fn finalize_staged_archived_session_deletion(
+    staged_dir: &Path,
+) -> Result<(), String> {
+    if !segmented_session_directory_exists(staged_dir)? {
+        return Err(format!(
+            "Segmented session deletion staging directory does not exist: {}",
+            staged_dir.display()
+        ));
+    }
+    fs::remove_dir_all(staged_dir).map_err(to_store_error)?;
+    synchronize_segmented_session_directory_move(staged_dir, staged_dir)
 }
 
 /// Returns whether one lifecycle participant is a real directory, rejecting links and non-directories.

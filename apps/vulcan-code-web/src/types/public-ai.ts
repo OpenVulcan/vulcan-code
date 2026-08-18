@@ -283,6 +283,10 @@ export interface PublicAiCustomModelRequestProjection {
   delete: string[];
 }
 
+// PublicAiToolSchemaProjectionMode selects the provider-facing function-tool schema contract.
+// PublicAiToolSchemaProjectionMode 选择 Provider 可见的函数工具 Schema 契约。
+export type PublicAiToolSchemaProjectionMode = "lightweight" | "passthrough" | "strict";
+
 // PublicAiCustomModelDefinition is one credential-independent user model overlay.
 // PublicAiCustomModelDefinition 是一个与凭据无关的用户模型覆盖定义。
 export interface PublicAiCustomModelDefinition {
@@ -291,6 +295,7 @@ export interface PublicAiCustomModelDefinition {
   enabled: boolean;
   capabilities: PublicAiModelCapabilities;
   request_projection: PublicAiCustomModelRequestProjection;
+  tool_schema_projection: PublicAiToolSchemaProjectionMode;
 }
 
 // PublicAiModelCapabilityOverrides stores only user differences from immutable capability data.

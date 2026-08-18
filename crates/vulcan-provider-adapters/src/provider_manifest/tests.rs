@@ -262,6 +262,7 @@ fn rust_model_rule_fields() -> BTreeSet<&'static str> {
         "supported_protocols",
         "selected_protocol",
         "capabilities",
+        "tool_schema_projection",
         "protocol_capabilities",
         "usage_profile_refs",
         "request_profile_refs",
@@ -384,6 +385,21 @@ fn manifest_schema_model_rule_contract_is_consistent() {
         schema_fields,
         rust_model_rule_fields(),
         "model-rule JSON Schema fields must exactly match the Rust DTO"
+    );
+}
+
+/// Verifies omitted system-provider schema projection resolves to the lightweight first-version default.
+/// 验证系统供应商省略 Schema 投影时解析为第一版轻量默认值。
+#[test]
+fn omitted_tool_schema_projection_defaults_to_lightweight() {
+    let defaults: super::ModelDefaults = serde_json::from_value(serde_json::json!({
+        "default_enabled": true
+    }))
+    .expect("omitted optional defaults must deserialize");
+
+    assert_eq!(
+        defaults.tool_schema_projection,
+        super::ToolSchemaProjectionMode::Lightweight
     );
 }
 
@@ -1034,6 +1050,7 @@ fn capability_templates_merge_with_presence_semantics() {
             "default_enabled": true,
             "catalog_membership_policy": "declared_only",
             "unknown_model_policy": "declared_rule_required",
+            "tool_schema_projection": "strict",
             "capabilities": {
               "operations": ["conversation_respond"],
               "provider_native_tools": ["web_search"],
@@ -1058,6 +1075,7 @@ fn capability_templates_merge_with_presence_semantics() {
               "rule_id": "tools-cleared",
               "matcher": { "kind": "exact", "value": "cleared/model" },
               "selected_protocol": "openai-chat-completions.v1",
+              "tool_schema_projection": "passthrough",
               "capabilities": {
                 "operations": [],
                 "provider_native_tools": [],
@@ -1081,6 +1099,11 @@ fn capability_templates_merge_with_presence_semantics() {
         .rule_for_model("official-api", Some("api-key"), "merge/model")
         .expect("partial overlay rule must match");
     let capabilities = partial.capabilities.as_ref().expect("merged capabilities");
+    assert_eq!(
+        partial.tool_schema_projection,
+        super::ToolSchemaProjectionMode::Strict,
+        "an omitted rule field must inherit the provider default"
+    );
     assert!(
         capabilities
             .operations
@@ -1103,6 +1126,11 @@ fn capability_templates_merge_with_presence_semantics() {
     let cleared = compiled
         .rule_for_model("official-api", Some("api-key"), "cleared/model")
         .expect("tools-cleared rule must match");
+    assert_eq!(
+        cleared.tool_schema_projection,
+        super::ToolSchemaProjectionMode::Passthrough,
+        "an explicit rule field must replace the provider default"
+    );
     assert!(
         cleared
             .capabilities

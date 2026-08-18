@@ -150,6 +150,7 @@ pub fn project_custom_descriptor_manifest(
             supported_protocols,
             selected_protocol,
             capabilities: default_capabilities,
+            tool_schema_projection: super::ToolSchemaProjectionMode::Lightweight,
             default_usage_profile_refs: Vec::new(),
             default_request_profile_refs: Vec::new(),
             default_response_profile_refs: Vec::new(),

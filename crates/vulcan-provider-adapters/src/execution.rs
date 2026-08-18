@@ -120,6 +120,9 @@ pub struct ProviderExecutionRoute {
     /// Optional user-owned safe projection for one exact custom model.
     /// 可选的单个精确自定义模型用户自有安全投影。
     pub custom_model_projection: Option<CustomModelRequestProjection>,
+    /// Provider-facing tool-schema projection frozen for this exact model route.
+    /// 为当前精确模型路由冻结的 Provider 可见工具 Schema 投影。
+    pub tool_schema_projection: crate::provider_manifest::ToolSchemaProjectionMode,
     /// Ordered request-projection profile chain effective for this exact model route; route
     /// defaults form the base and an explicitly present model-rule list replaces them, including
     /// an explicit empty list that clears the chain (plan §R8.4/§R8.5).
@@ -237,6 +240,7 @@ impl ProviderExecutionRoute {
             protocol_route,
             secondary_route,
             custom_model_projection: None,
+            tool_schema_projection: crate::provider_manifest::ToolSchemaProjectionMode::Lightweight,
             request_projection_profiles,
             response_projection_profiles,
             upload_channels: Vec::new(),

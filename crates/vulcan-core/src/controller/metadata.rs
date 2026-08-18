@@ -25,6 +25,8 @@ pub(super) fn user_turn_record_metadata(
 /// `prompt` 是存入 Provider 可见消息中的规范插队用户文本。
 /// `attachments` are the structured attachments attached to the same interjected user turn.
 /// `attachments` 是附着到同一插队用户回合的结构化附件。
+/// `admission_id` optionally binds this canonical row to an already-visible admission projection.
+/// `admission_id` 可选地将该规范行绑定到已经可见的接纳阶段投影。
 ///
 /// # Returns
 /// 返回值
@@ -33,6 +35,7 @@ pub(super) fn user_turn_record_metadata(
 pub(super) fn interjected_user_turn_record_metadata(
     prompt: &str,
     attachments: &[ConversationAttachment],
+    admission_id: Option<&str>,
 ) -> Option<Value> {
     let serialized_attachments = (!attachments.is_empty())
         .then(|| serde_json::to_value(attachments))
@@ -55,6 +58,14 @@ pub(super) fn interjected_user_turn_record_metadata(
         object.insert(
             String::from("transcript_attachments"),
             serialized_attachments,
+        );
+    }
+    if let Some(admission_id) = admission_id
+        && let Some(object) = metadata.as_object_mut()
+    {
+        object.insert(
+            String::from(INTERJECTED_PROMPT_ADMISSION_ID_KEY),
+            Value::String(admission_id.to_string()),
         );
     }
     Some(metadata)

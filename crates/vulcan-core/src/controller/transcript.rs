@@ -141,11 +141,37 @@ impl VulcanCoreController {
         prompt: &str,
         attachments: Vec<ConversationAttachment>,
     ) -> Option<String> {
+        self.append_admitted_interjected_user_turn_with_attachments(prompt, attachments, None)
+    }
+
+    /// Appends one interjected user turn and binds it to an optional admission projection.
+    /// 追加一条插队用户输入，并将其绑定到可选的接纳阶段投影。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `prompt` is the canonical model-visible user text.
+    /// `prompt` 是模型可见的规范用户文本。
+    /// `attachments` are the structured user attachments delivered with the text.
+    /// `attachments` 是随文本一同投递的结构化用户附件。
+    /// `admission_id` identifies the already-visible admission projection when present.
+    /// `admission_id` 在存在时标识已经可见的接纳阶段投影。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The appended provider-visible message id, or no value for empty input.
+    /// 返回追加后的 Provider 可见消息标识；输入为空时返回空值。
+    pub fn append_admitted_interjected_user_turn_with_attachments(
+        &mut self,
+        prompt: &str,
+        attachments: Vec<ConversationAttachment>,
+        admission_id: Option<&str>,
+    ) -> Option<String> {
         let trimmed_prompt = prompt.trim();
         if trimmed_prompt.is_empty() && attachments.is_empty() {
             return None;
         }
-        let metadata = interjected_user_turn_record_metadata(trimmed_prompt, &attachments);
+        let metadata =
+            interjected_user_turn_record_metadata(trimmed_prompt, &attachments, admission_id);
         Some(self.append_user_turn_with_metadata(trimmed_prompt, attachments, metadata))
     }
 

@@ -181,6 +181,147 @@ pub async fn archive_single_session(
     }
 }
 
+/// Restores one archived session after validating its authoritative archived locator.
+/// 在校验权威归档定位信息后恢复一个归档会话。
+///
+/// # Parameters
+/// 参数
+/// `controller` owns the authoritative SQLite index and workspace data root.
+/// `controller` 持有权威 SQLite 索引与工作区数据根目录。
+/// `session_id` is the exact archived session identity selected by the user.
+/// `session_id` 是用户选中的精确归档会话身份。
+///
+/// # Returns
+/// 返回值
+/// Returns success after the archived directory and index state are restored with rollback support.
+/// 归档目录与索引状态在支持回滚的流程中恢复后返回成功。
+pub async fn restore_archived_session(
+    controller: ControllerRuntimeHandle,
+    session_id: SessionId,
+) -> Result<(), String> {
+    let locator = query_session_index_locator(&controller, session_id, true)
+        .await?
+        .ok_or_else(|| format!("归档会话 `{session_id}` 不存在，拒绝恢复。"))?;
+    restore_segmented_session_directory_for_locator(&controller, session_id, &locator).await
+}
+
+/// Permanently deletes one archived session with a filesystem-first rollback boundary.
+/// 以文件系统优先且可回滚的边界彻底删除一个归档会话。
+///
+/// # Parameters
+/// 参数
+/// `controller` owns the authoritative SQLite index and workspace data root.
+/// `controller` 持有权威 SQLite 索引与工作区数据根目录。
+/// `session_id` is the exact archived session identity selected by the user.
+/// `session_id` 是用户选中的精确归档会话身份。
+///
+/// # Returns
+/// 返回值
+/// Returns success only after the exact archived directory and locator row are both permanently removed.
+/// 仅在精确归档目录与定位索引行均被彻底移除后返回成功。
+pub async fn delete_archived_session(
+    controller: ControllerRuntimeHandle,
+    session_id: SessionId,
+) -> Result<(), String> {
+    let locator = query_session_index_locator(&controller, session_id, true)
+        .await?
+        .ok_or_else(|| format!("归档会话 `{session_id}` 不存在，拒绝彻底删除。"))?;
+    let created_date = session_directory_date_from_unix_millis_text(&locator.created_at)?;
+    let archived_dir = segmented_session_directory(
+        &controller.data_root,
+        true,
+        &locator.project_tag,
+        &created_date,
+        &session_id.to_string(),
+    );
+    let staged_dir = stage_archived_segmented_session_deletion(
+        &controller.data_root,
+        &locator.project_tag,
+        &created_date,
+        &session_id.to_string(),
+    )?;
+    if let Err(index_error) =
+        delete_archived_session_index_row(&controller, session_id, &locator).await
+    {
+        let rollback_result = rollback_staged_archived_session_deletion(&staged_dir, &archived_dir);
+        return match rollback_result {
+            Ok(()) => Err(format!(
+                "会话 `{session_id}` 的彻底删除索引提交失败，目录已回滚：{index_error}"
+            )),
+            Err(rollback_error) => Err(format!(
+                "会话 `{session_id}` 的彻底删除索引提交失败：{index_error}；目录回滚也失败：{rollback_error}"
+            )),
+        };
+    }
+    finalize_staged_archived_session_deletion(&staged_dir)
+        .map_err(|error| format!("会话 `{session_id}` 的索引已删除，但归档目录清理失败：{error}"))
+}
+
+/// Removes one stale session locator when both lifecycle directories are physically absent.
+/// 当活动与归档生命周期目录均被物理删除时移除一条陈旧会话定位行。
+///
+/// # Parameters
+/// 参数
+/// `controller` owns the authoritative session index and workspace data root.
+/// `controller` 持有权威会话索引与工作区数据根目录。
+/// `session_id` is the exact session identity being checked.
+/// `session_id` 是正在检查的精确会话身份。
+///
+/// # Returns
+/// 返回值
+/// Returns `true` only when a physically missing session row was deleted, and `false` when the row is present and its directory is valid or no row remains.
+/// 仅当物理缺失会话的索引行被删除时返回 `true`；索引行有效或已不存在时返回 `false`。
+pub async fn cleanup_missing_session_index(
+    controller: ControllerRuntimeHandle,
+    session_id: SessionId,
+) -> Result<bool, String> {
+    let active_locator = query_session_index_locator(&controller, session_id, false).await?;
+    let archived_locator = query_session_index_locator(&controller, session_id, true).await?;
+    let locator = match (active_locator, archived_locator) {
+        (Some(_), Some(_)) => {
+            return Err(format!(
+                "会话 `{session_id}` 同时存在活动与归档定位索引，无法清理。"
+            ));
+        }
+        (Some(locator), None) | (None, Some(locator)) => locator,
+        (None, None) => return Ok(false),
+    };
+    let created_date = session_directory_date_from_unix_millis_text(&locator.created_at)?;
+    // expected_dir is the only directory consistent with the authoritative lifecycle flag.
+    // expected_dir 是唯一符合权威生命周期标记的目录。
+    let expected_dir = segmented_session_directory(
+        &controller.data_root,
+        locator.archived,
+        &locator.project_tag,
+        &created_date,
+        &session_id.to_string(),
+    );
+    // opposite_dir distinguishes a missing session from an interrupted lifecycle move.
+    // opposite_dir 用于区分物理缺失会话与生命周期移动中断。
+    let opposite_dir = segmented_session_directory(
+        &controller.data_root,
+        !locator.archived,
+        &locator.project_tag,
+        &created_date,
+        &session_id.to_string(),
+    );
+    let expected_exists = segmented_session_directory_exists(&expected_dir)?;
+    let opposite_exists = segmented_session_directory_exists(&opposite_dir)?;
+    match (expected_exists, opposite_exists) {
+        (true, false) => Ok(false),
+        (false, true) => Err(format!(
+            "会话 `{session_id}` 的权威索引与生命周期目录不一致，拒绝将中断移动视为物理删除。"
+        )),
+        (true, true) => Err(format!(
+            "会话 `{session_id}` 同时存在活动与归档目录，拒绝清理。"
+        )),
+        (false, false) => {
+            delete_session_index_row_exact(&controller, session_id, &locator).await?;
+            Ok(true)
+        }
+    }
+}
+
 /// Archives every active session locator owned by one project while keeping the project active.
 /// 归档单个项目拥有的全部活动会话定位行，同时保持项目为活动状态。
 ///

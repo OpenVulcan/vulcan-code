@@ -2,6 +2,7 @@
 //! 流式转录与运行时事件投影辅助函数。
 
 use super::*;
+use vulcan_core::controller::INTERJECTED_PROMPT_ADMISSION_ID_KEY;
 use vulcan_service_api::ConversationMessagesPatchedDelta;
 
 /// Semantic kind of one provider content delta projected into a streaming transcript record.
@@ -2327,11 +2328,41 @@ pub(crate) fn merge_session_messages_with_runtime_event_entries(
             .find(|message| message.id == entry.id)
         {
             *existing_entry = entry.clone();
+        } else if let Some(admission_id) = interjected_prompt_admission_id(entry)
+            && let Some(existing_entry) = merged_messages
+                .iter_mut()
+                .find(|message| interjected_prompt_admission_id(message) == Some(admission_id))
+        {
+            // The canonical controller row replaces the admission projection in place so the user never sees a duplicate.
+            // 规范控制器记录原位替换接纳阶段投影，避免用户看到重复消息。
+            *existing_entry = entry.clone();
         } else {
             merged_messages.push(entry.clone());
         }
     }
     merged_messages
+}
+
+/// Reads the stable admission identity shared by immediate and canonical prompt projections.
+/// 读取立即投影与规范提示词投影共享的稳定接纳标识。
+///
+/// # Parameters
+/// 参数
+/// `message` is one projected session message whose metadata may carry the identity.
+/// `message` 是元数据中可能携带该标识的一条会话投影消息。
+///
+/// # Returns
+/// 返回值
+/// The non-empty admission identity when this row belongs to an admitted interrupt prompt.
+/// 当该行属于已接纳的插队提示词时返回非空接纳标识。
+fn interjected_prompt_admission_id(message: &SessionMessageEntry) -> Option<&str> {
+    message
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get(INTERJECTED_PROMPT_ADMISSION_ID_KEY))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
 }
 
 /// Extracts closed subagent task ids from a structured `close_agent` host result.
@@ -3167,5 +3198,31 @@ mod tests {
         };
 
         assert!(local_context_tokens_after_latest_assistant(&state) > 0);
+    }
+
+    /// Verifies the canonical interrupt row replaces its already-visible admission projection.
+    /// 验证规范插队记录会替换已经可见的接纳阶段投影。
+    #[test]
+    fn canonical_interrupt_projection_replaces_admission_row() {
+        let admission_id = "internal-entry-1";
+        let mut admission =
+            SessionMessageEntry::new(SessionMessageKind::User, "用户指令", "立即返回")
+                .with_runtime_metadata("admission-row", "100");
+        admission.metadata = Some(json!({
+            (INTERJECTED_PROMPT_ADMISSION_ID_KEY): admission_id,
+            "turn_process": true,
+        }));
+        let mut canonical =
+            SessionMessageEntry::new(SessionMessageKind::User, "用户指令", "立即返回")
+                .with_runtime_metadata("canonical-row", "101");
+        canonical.metadata = Some(json!({
+            (INTERJECTED_PROMPT_ADMISSION_ID_KEY): admission_id,
+            "turn_process": true,
+        }));
+
+        let merged =
+            merge_session_messages_with_runtime_event_entries(&[admission], &[canonical.clone()]);
+
+        assert_eq!(merged, vec![canonical]);
     }
 }

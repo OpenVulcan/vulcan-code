@@ -204,6 +204,9 @@ pub struct ResolvedRuleInstance {
     /// Inherited selected protocol; may be `None` when no layer declares one.
     /// 继承后的生效协议；无任何层声明时可为 `None`。
     pub selected_protocol: Option<String>,
+    /// Inherited tool-schema projection contract.
+    /// 继承后的工具 Schema 投影契约。
+    pub tool_schema_projection: super::ToolSchemaProjectionMode,
     /// Inherited protocol-independent capability template.
     /// 继承后的协议无关能力模板。
     pub capabilities: Option<ModelCapabilities>,
@@ -302,6 +305,11 @@ fn resolve_rule_for_entry(
         .clone()
         .or_else(|| overlay.and_then(|o| o.selected_protocol.clone()))
         .or_else(|| defaults.selected_protocol.clone());
+    // toolSchemaProjection is configuration authority; omission inherits the lightweight default.
+    // toolSchemaProjection 是配置权威；省略时继承轻量默认值。
+    let tool_schema_projection = rule
+        .tool_schema_projection
+        .unwrap_or(defaults.tool_schema_projection);
 
     // Exact and longest-prefix provenance classification shared by every capability field
     // written by this rule.
@@ -522,6 +530,14 @@ fn resolve_rule_for_entry(
             provider_provenance()
         },
     );
+    field_provenance.insert(
+        String::from("tool_schema_projection"),
+        if rule.tool_schema_projection.is_some() {
+            provenance_with_overridden(rule_provenance(), vec![provider_provenance()])
+        } else {
+            provider_provenance()
+        },
+    );
     for (field, overridden) in [
         ("usage_profile_refs", rule.usage_profile_refs.is_some()),
         ("request_profile_refs", rule.request_profile_refs.is_some()),
@@ -572,6 +588,7 @@ fn resolve_rule_for_entry(
         normalized_scope: super::scope::NormalizedRuleTargets::default(),
         supported_protocols,
         selected_protocol,
+        tool_schema_projection,
         capabilities,
         capability_provenance,
         field_provenance,

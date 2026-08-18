@@ -508,6 +508,52 @@ fn archive_and_restore_by_created_date() {
     let _ = fs::remove_dir_all(&root);
 }
 
+/// Verifies permanent-deletion staging can roll back before finally removing the archived tree.
+/// 验证彻底删除暂存能够在最终移除归档树前回滚。
+#[test]
+fn archived_session_deletion_staging_rolls_back_and_finalizes() {
+    let root = test_root("archived_session_deletion_staging_rolls_back_and_finalizes");
+    let request = test_session_request(SegmentPolicy::default());
+    let active_dir = create_segmented_session_in_location(&root, false, request.clone())
+        .expect("create session");
+    let archived_dir = archive_segmented_session_by_created_date(
+        &root,
+        &request.project_tag,
+        &request.created_date,
+        &request.session_id,
+        "2026-06-06T12:00:00Z",
+    )
+    .expect("archive session");
+    assert!(!active_dir.exists());
+
+    let staged_dir = stage_archived_segmented_session_deletion(
+        &root,
+        &request.project_tag,
+        &request.created_date,
+        &request.session_id,
+    )
+    .expect("stage archived session deletion");
+    assert!(!archived_dir.exists());
+    assert!(staged_dir.exists());
+
+    rollback_staged_archived_session_deletion(&staged_dir, &archived_dir)
+        .expect("rollback staged archived session deletion");
+    assert!(archived_dir.exists());
+    assert!(!staged_dir.exists());
+
+    let final_staged_dir = stage_archived_segmented_session_deletion(
+        &root,
+        &request.project_tag,
+        &request.created_date,
+        &request.session_id,
+    )
+    .expect("stage archived session deletion for finalization");
+    finalize_staged_archived_session_deletion(&final_staged_dir)
+        .expect("finalize archived session deletion");
+    assert!(!final_staged_dir.exists());
+    let _ = fs::remove_dir_all(&root);
+}
+
 /// Verifies archive and restore resume directory moves that completed before metadata publication.
 /// 验证归档与恢复会续作目录已移动但元数据尚未发布的状态。
 #[test]

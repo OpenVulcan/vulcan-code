@@ -1,6 +1,8 @@
 import * as React from "react"
 import {
   Archive,
+  ChevronLeft,
+  ChevronRight,
   Cpu,
   FileText,
   GitCommitHorizontal,
@@ -11,11 +13,23 @@ import {
   Save,
   ScrollText,
   SlidersHorizontal,
+  Trash2,
 } from "lucide-react"
 
 import { ModelPickerControl, modelPickerChoiceKey } from "@/components/composer/model-picker-control"
 import { PanelTitle, StatusPill } from "@/components/shared/status"
 import { Badge } from "@/components/ui/badge"
+import { Checkbox } from "@/components/ui/checkbox"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
@@ -37,6 +51,10 @@ const DEFAULT_COMMIT_BRANCH_PREFIX = "vulcan/"
 // DEFAULT_COMMIT_SUMMARY_MODEL follows the owning conversation session model.
 // DEFAULT_COMMIT_SUMMARY_MODEL 跟随所属会话模型。
 const DEFAULT_COMMIT_SUMMARY_MODEL: GitCommitSummaryModelSelectionSaveRequest = { mode: "session" }
+
+// ARCHIVED_CONVERSATION_PAGE_SIZE keeps the archive recovery surface readable while selection spans pages.
+// ARCHIVED_CONVERSATION_PAGE_SIZE 在跨分页保留选择的同时保持归档恢复页面可读。
+const ARCHIVED_CONVERSATION_PAGE_SIZE = 20
 
 // GitCommitSettingsArea renders local Git commit dialog preferences.
 // GitCommitSettingsArea 渲染 Git 提交弹窗偏好。
@@ -325,6 +343,9 @@ export function AboutLicensesSettingsArea(props: {
 // ArchivedRestoreSettingsArea renders restorable archived conversations from service snapshots.
 // ArchivedRestoreSettingsArea 根据服务快照渲染可恢复的归档会话。
 export function ArchivedRestoreSettingsArea(props: {
+  // Service-backed archive lifecycle actions.
+  // 服务端支持的归档生命周期操作。
+  actions: SettingsActionProps
   // Archived conversation summaries.
   // 归档会话摘要。
   conversations: ConversationSummary[]
@@ -335,6 +356,78 @@ export function ArchivedRestoreSettingsArea(props: {
   const { locale } = useI18n()
   const text = React.useCallback((zh: string, en: string) => localizedLiteral(locale, zh, en), [locale])
   const archivedConversations = props.conversations
+  const [selectedConversationIds, setSelectedConversationIds] = React.useState<Set<string>>(new Set())
+  const [currentPage, setCurrentPage] = React.useState(1)
+  const [operation, setOperation] = React.useState<"idle" | "restoring" | "deleting">("idle")
+  const [actionError, setActionError] = React.useState<string | null>(null)
+  // deleteConfirmationOpen controls the component-based permanent-delete confirmation.
+  // deleteConfirmationOpen 控制基于组件的彻底删除确认框。
+  const [deleteConfirmationOpen, setDeleteConfirmationOpen] = React.useState(false)
+  const pageCount = Math.max(1, Math.ceil(archivedConversations.length / ARCHIVED_CONVERSATION_PAGE_SIZE))
+  const visibleConversations = archivedConversations.slice(
+    (currentPage - 1) * ARCHIVED_CONVERSATION_PAGE_SIZE,
+    currentPage * ARCHIVED_CONVERSATION_PAGE_SIZE,
+  )
+  const selectedCount = selectedConversationIds.size
+  const allConversationsSelected = archivedConversations.length > 0 && selectedCount === archivedConversations.length
+  const currentPageSelected = visibleConversations.length > 0 && visibleConversations.every((conversation) => selectedConversationIds.has(conversation.id))
+
+  // Reconciles selection and pagination with the latest authoritative workbench snapshot.
+  // 将选择与分页状态和最新权威工作台快照重新对齐。
+  React.useEffect(() => {
+    const availableIds = new Set(archivedConversations.map((conversation) => conversation.id))
+    setSelectedConversationIds((current) => {
+      const retained = new Set(Array.from(current).filter((conversationId) => availableIds.has(conversationId)))
+      return retained.size === current.size ? current : retained
+    })
+    setCurrentPage((current) => Math.min(current, pageCount))
+  }, [archivedConversations, pageCount])
+
+  // toggleConversationSelection changes one stable archived conversation identity.
+  // toggleConversationSelection 切换一个稳定的归档会话标识。
+  const toggleConversationSelection = React.useCallback((conversationId: string, checked: boolean) => {
+    setSelectedConversationIds((current) => {
+      const next = new Set(current)
+      if (checked) {
+        next.add(conversationId)
+      } else {
+        next.delete(conversationId)
+      }
+      return next
+    })
+  }, [])
+
+  // toggleAllConversationSelection selects or clears every archived conversation across all pages.
+  // toggleAllConversationSelection 跨所有分页全选或清空归档会话。
+  const toggleAllConversationSelection = React.useCallback((checked: boolean) => {
+    setSelectedConversationIds(checked
+      ? new Set(archivedConversations.map((conversation) => conversation.id))
+      : new Set())
+  }, [archivedConversations])
+
+  // runArchivedConversationAction executes one batch lifecycle operation after UI confirmation.
+  // runArchivedConversationAction 在界面确认后执行一次批量生命周期操作。
+  const runArchivedConversationAction = React.useCallback(async (kind: "restore" | "delete") => {
+    const conversationIds = Array.from(selectedConversationIds)
+    if (conversationIds.length === 0 || operation !== "idle") {
+      return
+    }
+    setActionError(null)
+    setOperation(kind === "restore" ? "restoring" : "deleting")
+    try {
+      if (kind === "restore") {
+        await props.actions.onRestoreArchivedConversations(conversationIds)
+      } else {
+        await props.actions.onDeleteArchivedConversations(conversationIds)
+      }
+      setSelectedConversationIds(new Set())
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setOperation("idle")
+    }
+  }, [operation, props.actions, selectedConversationIds])
+
   return (
     <section className="panel full-height settings-detail-panel">
       <PanelTitle icon={<Archive size={17} />} title={text("归档恢复", "Archived restore")} />
@@ -342,19 +435,103 @@ export function ArchivedRestoreSettingsArea(props: {
         <StatusPill status={archivedConversations.length > 0 ? "warning" : "ready"} label={`${archivedConversations.length}`} />
         <span>{text(`当前 WebUI snapshot 暴露 ${props.projects.length} 个活动项目与 ${archivedConversations.length} 个可恢复归档会话。`, `The current WebUI snapshot exposes ${props.projects.length} active projects and ${archivedConversations.length} restorable archived conversations.`)}</span>
       </div>
+      <div className="settings-card-actions">
+        <label className="settings-target-row-main">
+          <Checkbox
+            aria-label={text("全选归档会话", "Select all archived conversations")}
+            checked={allConversationsSelected ? true : selectedCount > 0 ? "indeterminate" : false}
+            disabled={archivedConversations.length === 0 || operation !== "idle"}
+            onCheckedChange={(checked) => toggleAllConversationSelection(checked === true)}
+          />
+          <span>{text("全选", "Select all")}</span>
+        </label>
+        <span className="settings-muted-line">{text(`已选择 ${selectedCount} 项`, `${selectedCount} selected`)}</span>
+        <button
+          className="skill-action-button"
+          disabled={selectedCount === 0 || operation !== "idle"}
+          onClick={() => void runArchivedConversationAction("restore")}
+          type="button"
+        >
+          <RotateCcw size={14} />
+          <span>{operation === "restoring" ? text("恢复中", "Restoring") : text("批量恢复", "Restore selected")}</span>
+        </button>
+        <button
+          className="skill-action-button secondary danger"
+          disabled={selectedCount === 0 || operation !== "idle"}
+          onClick={() => setDeleteConfirmationOpen(true)}
+          type="button"
+        >
+          <Trash2 size={14} />
+          <span>{operation === "deleting" ? text("删除中", "Deleting") : text("彻底删除", "Delete permanently")}</span>
+        </button>
+      </div>
+      {actionError ? <p className="settings-validation-error" role="alert">{actionError}</p> : null}
+      <AlertDialog onOpenChange={setDeleteConfirmationOpen} open={deleteConfirmationOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{text("彻底删除归档会话", "Permanently delete archived conversations")}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {text(
+                `确定彻底删除已选择的 ${selectedCount} 个归档会话吗？删除后无法恢复。`,
+                `Permanently delete ${selectedCount} selected archived conversations? This cannot be undone.`,
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{text("取消", "Cancel")}</AlertDialogCancel>
+            <AlertDialogAction onClick={() => void runArchivedConversationAction("delete")} variant="destructive">
+              {text("彻底删除", "Delete permanently")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       <div className="settings-target-list">
         {archivedConversations.length === 0 ? (
           <p className="settings-muted-line">{text("当前快照中没有可恢复的归档会话。", "No restorable archived conversations are exposed in the current snapshot.")}</p>
-        ) : archivedConversations.map((conversation) => (
+        ) : visibleConversations.map((conversation) => (
           <article className="settings-target-row" key={conversation.id}>
-            <div>
+            <div className="settings-target-row-main">
+              <Checkbox
+                aria-label={text(`选择会话 ${conversation.title}`, `Select conversation ${conversation.title}`)}
+                checked={selectedConversationIds.has(conversation.id)}
+                disabled={operation !== "idle"}
+                onCheckedChange={(checked) => toggleConversationSelection(conversation.id, checked === true)}
+              />
+              <div>
               <strong>{conversation.title}</strong>
               <span>{conversation.projectId ?? "standalone"} · {conversation.lastUpdatedLabel ?? ""}</span>
+              </div>
             </div>
             <StatusPill status="warning" label={conversation.status} />
           </article>
         ))}
       </div>
+      {archivedConversations.length > 0 ? (
+        <div className="settings-pagination">
+          <span className="settings-muted-line">{text(`第 ${currentPage} / ${pageCount} 页`, `Page ${currentPage} of ${pageCount}`)}</span>
+          <div className="settings-card-actions">
+            <span className="settings-muted-line">{currentPageSelected ? text("本页已全选", "Current page selected") : text("可跨页保留选择", "Selection is kept across pages")}</span>
+            <button
+              aria-label={text("上一页", "Previous page")}
+              className="skill-action-button secondary"
+              disabled={currentPage <= 1 || operation !== "idle"}
+              onClick={() => setCurrentPage((current) => Math.max(1, current - 1))}
+              type="button"
+            >
+              <ChevronLeft size={14} />
+            </button>
+            <button
+              aria-label={text("下一页", "Next page")}
+              className="skill-action-button secondary"
+              disabled={currentPage >= pageCount || operation !== "idle"}
+              onClick={() => setCurrentPage((current) => Math.min(pageCount, current + 1))}
+              type="button"
+            >
+              <ChevronRight size={14} />
+            </button>
+          </div>
+        </div>
+      ) : null}
     </section>
   )
 }

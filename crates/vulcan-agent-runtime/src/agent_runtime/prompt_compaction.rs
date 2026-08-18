@@ -682,11 +682,7 @@ async fn try_remote_responses_compaction(
         .collect();
     // tools uses the identical compatibility projector as ordinary Responses execution.
     // tools 使用与普通 Responses 执行完全相同的兼容投影器。
-    let tools = project_public_tool_definitions(
-        &prepared_execution.route,
-        prepared_execution.model.id.as_str(),
-        provider_tools,
-    );
+    let tools = project_public_tool_definitions(&prepared_execution.route, provider_tools);
     // nativeTools mirrors ordinary Codex native-tool capability projection, including image generation.
     // nativeTools 镜像普通 Codex 原生工具能力投影，包括图片生成。
     let native_tools = resolve_public_native_tools(

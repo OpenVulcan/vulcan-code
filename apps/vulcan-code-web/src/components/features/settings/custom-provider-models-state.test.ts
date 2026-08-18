@@ -86,6 +86,7 @@ function manualModelFixture(id: string): PublicAiCustomModelDefinition {
       overrides: {},
       delete: [],
     },
+    tool_schema_projection: "lightweight",
   }
 }
 

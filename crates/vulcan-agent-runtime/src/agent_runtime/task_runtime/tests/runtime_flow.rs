@@ -2049,6 +2049,7 @@ fn archived_task_session_rejects_stale_stop_and_execution_claim() {
                 target_agent_id: String::from("archived-worker"),
                 content: String::from("stale message"),
                 created_at_ms: current_unix_millis_u64(),
+                continues_task_turn: false,
             }],
             "prepare_task_execution_request",
             String::from("archived preparation rejected"),
@@ -2172,18 +2173,24 @@ async fn inter_agent_message_queue_resumes_idle_agent() {
     assert_eq!(send_result.model_output["queued"], true);
     assert_eq!(send_result.model_output["delivery_mode"], "queue");
     assert_eq!(send_result.model_output["interrupted"], false);
-    assert_eq!(send_result.model_output["delivery_status"], "running");
-    assert_eq!(send_result.model_output["execution_status"], "running");
+    assert_eq!(send_result.model_output["delivery_status"], "queued");
+    assert!(send_result.model_output.get("execution_status").is_none());
     assert!(send_result.model_output.get("status").is_none());
     assert!(send_result.model_output.get("result").is_none());
-    assert_eq!(
-        send_result
-            .host_result
-            .as_ref()
-            .expect("send_message host result")
-            .payload["message"],
-        "queue this context"
-    );
+    let host_payload = &send_result
+        .host_result
+        .as_ref()
+        .expect("send_message host result")
+        .payload;
+    assert_eq!(host_payload["message"], "queue this context");
+    assert_eq!(host_payload[INTER_AGENT_CONTINUES_TASK_TURN_KEY], false);
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while backend_calls.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("accepted idle child delivery should resume in the background");
     assert_eq!(backend_calls.load(Ordering::SeqCst), 1);
     let prompt = captured_prompt
         .lock()
@@ -2227,10 +2234,10 @@ async fn inter_agent_message_queue_resumes_idle_agent() {
     assert_eq!(resumed_entry.status, SubagentStatus::Running);
 }
 
-/// Verifies send_message returns a terminal child result when the idle child finishes synchronously.
-/// 验证空闲子代理同步完成时 send_message 会返回终态子结果。
+/// Verifies send_message acknowledges admission before an idle child finishes its resumed run.
+/// 验证 send_message 会在空闲子代理续跑完成前确认消息接纳。
 #[tokio::test]
-async fn inter_agent_message_queue_returns_immediate_terminal_result() {
+async fn inter_agent_message_queue_returns_before_background_resume_finishes() {
     let task_runtime = Arc::new(TaskRuntime::new());
     let parent_session_id = Uuid::new_v4();
     let task_id = Uuid::new_v4();
@@ -2268,11 +2275,19 @@ async fn inter_agent_message_queue_returns_immediate_terminal_result() {
         .store_task_outcome(parent_session_id, &invocation, &completed_outcome)
         .expect("completed task should store");
 
+    let backend_started = Arc::new(tokio::sync::Notify::new());
+    let backend_release = Arc::new(tokio::sync::Notify::new());
+    let backend_started_for_handler = Arc::clone(&backend_started);
+    let backend_release_for_handler = Arc::clone(&backend_release);
     let _guard = task_runtime
         .install_backend(
             parent_session_id,
             Arc::new(move |request: TaskExecutionRequest| {
+                let backend_started = Arc::clone(&backend_started_for_handler);
+                let backend_release = Arc::clone(&backend_release_for_handler);
                 Box::pin(async move {
+                    backend_started.notify_one();
+                    backend_release.notified().await;
                     let controller_config = build_test_controller_config("Followup prompt");
                     Ok(TaskExecutionOutcome {
                         task_id: request.task_id,
@@ -2305,24 +2320,139 @@ async fn inter_agent_message_queue_returns_immediate_terminal_result() {
         .await
         .expect("send_message should resume idle child");
 
-    assert_eq!(send_result.model_output["delivery_status"], "completed");
-    assert_eq!(send_result.model_output["execution_status"], "completed");
-    assert_eq!(send_result.model_output["result"], "1234");
-    assert!(
-        send_result.model_output["resumed_execution_id"]
-            .as_str()
-            .is_some_and(|value| !value.trim().is_empty())
-    );
+    assert_eq!(send_result.model_output["delivery_status"], "queued");
+    assert!(send_result.model_output.get("execution_status").is_none());
+    assert!(send_result.model_output.get("result").is_none());
     let host_payload = &send_result
         .host_result
         .as_ref()
         .expect("send_message host result")
         .payload;
-    assert_eq!(host_payload["delivery_status"], "completed");
-    assert_eq!(host_payload["resumed_execution_status"], "completed");
+    assert_eq!(host_payload["delivery_status"], "queued");
+    assert_eq!(host_payload[INTER_AGENT_CONTINUES_TASK_TURN_KEY], false);
+    assert!(host_payload.get("resumed_execution_status").is_none());
+    assert!(host_payload.get("resumed_execution_id").is_none());
+    tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        backend_started.notified(),
+    )
+    .await
+    .expect("background child resume should start");
+    backend_release.notify_one();
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            let registry = task_runtime
+                .subagent_registry_snapshot()
+                .expect("registry should remain readable");
+            let status = registry
+                .get_for_parent(parent_session_id.into(), "worker-a")
+                .expect("worker should remain registered")
+                .status;
+            if status == SubagentStatus::Completed {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("background child resume should finish after release");
+}
+
+/// Verifies a post-admission background resume failure wakes the parent with correlated feedback.
+/// 验证接纳后的后台续跑失败会通过关联反馈唤醒父级。
+#[tokio::test]
+async fn inter_agent_message_queue_reports_background_resume_failure() {
+    let task_runtime = Arc::new(TaskRuntime::new());
+    let parent_session_id = Uuid::new_v4();
+    let task_id = Uuid::new_v4();
+    let invocation = TaskExecutionRequest {
+        current_session_id: parent_session_id,
+        root_session_id: parent_session_id,
+        task_id,
+        execution_id: String::from("initial-execution"),
+        public_task_id: String::from("worker-a"),
+        prompt: String::from("initial work"),
+        description: Some(String::from("Worker A")),
+        subagent: None,
+        invocation_config: TaskInvocationConfig::main("initial work"),
+        display_title: String::from("Worker A"),
+        parent_task_id: None,
+        depth: 1,
+        snapshot: CoreConversationSnapshot::default(),
+        controller_config: None,
+        is_resumed: false,
+    };
+    let controller_config = build_test_controller_config("Base prompt");
+    task_runtime
+        .store_task_outcome(
+            parent_session_id,
+            &invocation,
+            &TaskExecutionOutcome {
+                task_id,
+                controller_config: controller_config.clone(),
+                resolved_config: test_resolved_config(
+                    &controller_config,
+                    &invocation.invocation_config,
+                ),
+                snapshot: CoreConversationSnapshot::default(),
+                provider_turns_executed: 1,
+                tool_calls_processed: 0,
+                final_assistant_message_id: Some(String::from("assistant-initial")),
+                final_output_text: String::from("initial result"),
+                execution_status: TaskExecutionStatus::Completed,
+                usage_segments: Vec::new(),
+            },
+        )
+        .expect("completed task should store");
+    task_runtime
+        .take_subagent_events_for_parent(SessionNodeId::from(parent_session_id))
+        .expect("initial completion event should drain");
+
+    let send_result = task_runtime
+        .invoke_send_message(
+            parent_session_id,
+            json!({
+                "target": "worker-a",
+                "message": "resume without an installed backend"
+            }),
+        )
+        .await
+        .expect("message admission should remain successful");
+    let delivery_id = send_result
+        .host_result
+        .as_ref()
+        .and_then(|result| result.payload.get("delivery_id"))
+        .and_then(Value::as_str)
+        .expect("accepted delivery should expose its stable id")
+        .to_string();
+
+    let feedback = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            let events = task_runtime
+                .take_subagent_events_for_parent(SessionNodeId::from(parent_session_id))
+                .expect("parent mailbox should remain readable");
+            if let Some(event) = events.into_iter().next() {
+                break event;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("background resume failure should wake the parent");
+
+    assert_eq!(feedback.kind, SubagentMailboxEventKind::Message);
+    assert_eq!(feedback.payload["delivery_id"], delivery_id);
+    assert_eq!(feedback.payload["delivery_status"], "resume_failed");
+    assert!(
+        feedback.payload["error_text"]
+            .as_str()
+            .is_some_and(|error| error.contains("does not have a task backend installed"))
+    );
     assert_eq!(
-        host_payload["resumed_execution_id"],
-        send_result.model_output["resumed_execution_id"]
+        task_runtime
+            .inter_agent_message_count_for_task(task_id)
+            .expect("failed delivery should remain queued"),
+        1
     );
 }
 
@@ -2415,6 +2545,14 @@ async fn inter_agent_message_queue_resumes_after_running_agent_settles() {
         .await
         .expect("send_message should enqueue while the child is running");
     assert_eq!(send_result.model_output["queued"], true);
+    assert_eq!(
+        send_result
+            .host_result
+            .as_ref()
+            .expect("send_message host result")
+            .payload[INTER_AGENT_CONTINUES_TASK_TURN_KEY],
+        true
+    );
     assert_eq!(backend_calls.load(Ordering::SeqCst), 0);
 
     drop(active_guard);
@@ -2563,6 +2701,7 @@ fn child_prompt_intervention_appends_display_record_separately_from_provider_inp
                 target_agent_id: String::from("worker-a"),
                 content: String::from("请用中文重新输出结论。"),
                 created_at_ms: 1_780_000_000_000,
+                continues_task_turn: true,
             }]),
         );
     let intervention = build_child_agent_prompt_intervention(Arc::clone(&task_runtime), task_id);
@@ -2645,6 +2784,7 @@ fn child_prompt_intervention_restores_inbox_on_display_identity_failure() {
         target_agent_id: String::from("worker-a"),
         content: String::from("conflicting delivery"),
         created_at_ms: 1_780_000_000_000,
+        continues_task_turn: true,
     };
     task_runtime
         .agent_inboxes
@@ -2711,6 +2851,7 @@ fn offline_inter_agent_snapshot_projection_is_atomic_on_identity_conflict() {
         target_agent_id: String::from("worker-a"),
         content: String::from("resume offline"),
         created_at_ms: 1_780_000_000_000,
+        continues_task_turn: false,
     };
     // conflicting_record occupies the stable display id with unrelated retained content.
     // conflicting_record 使用无关既有内容占用稳定显示标识。
@@ -2752,6 +2893,7 @@ fn offline_inter_agent_snapshot_projection_reuses_identical_delivery_owner() {
         target_agent_id: String::from("worker-idempotent"),
         content: String::from("resume exactly once"),
         created_at_ms: 1_780_000_000_100,
+        continues_task_turn: false,
     };
     let mut snapshot = CoreConversationSnapshot::default();
 

@@ -27,14 +27,12 @@ pub use request_streaming::{
     ToolRequestPreview, ToolRequestProgressPolicy, ToolRequestSensitivityPolicy,
     ToolRequestStagingPolicy, ToolRequestStagingStatus, ToolRequestStreamingCapability,
 };
-pub use schema_projection::{
-    project_tool_parameters_schema, resolve_tool_schema_projection_profile,
-};
+pub use schema_projection::project_tool_parameters_schema;
 pub use types::{
     ResolvedToolDefinition, ResolvedToolSet, VULCAN_TOOL_ERROR_DETAIL_KIND, VulcanPlanToolPolicy,
     VulcanToolCandidate, VulcanToolDescriptor, VulcanToolHostResult, VulcanToolInvocationResult,
     VulcanToolInvokeFuture, VulcanToolInvokeHandler, VulcanToolMode,
-    VulcanToolSchemaProjectionContext, VulcanToolSchemaProjectionProfile, VulcanToolSourceKind,
+    VulcanToolSchemaProjectionProfile, VulcanToolSourceKind,
 };
 
 #[cfg(test)]

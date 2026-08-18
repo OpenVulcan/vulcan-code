@@ -188,6 +188,29 @@
   padding: 10px;
 }
 
+/* Archived-row layout keeps selection controls, metadata, and lifecycle actions aligned. */
+/* 归档行布局确保选择控件、元数据与生命周期操作保持对齐。 */
+.settings-target-row-main,
+.settings-pagination {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 8px;
+}
+
+.settings-target-row-main {
+  flex: 1;
+}
+
+.settings-target-row-main > div {
+  min-width: 0;
+}
+
+.settings-pagination {
+  justify-content: space-between;
+  padding-top: 2px;
+}
+
 .settings-grid.compact {
   grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
 }

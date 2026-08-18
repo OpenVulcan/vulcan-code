@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "google",
-  "revision": 8,
-  "published_at": "2026-08-06T00:00:00Z",
+"revision": 9,
+"published_at": "2026-08-18T00:00:00Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -183,6 +183,7 @@
         "kind": "exact",
         "value": "gemini-3.1-flash-lite-image"
       },
+      "tool_schema_projection": "strict",
       "supported_protocols": [
         "google.gemini.generate_content",
         "gemini-interactions.v1"
@@ -217,6 +218,7 @@
         "kind": "prefix",
         "value": "gemini-3.1-pro"
       },
+      "tool_schema_projection": "strict",
       "supported_protocols": [
         "google.gemini.generate_content",
         "gemini-interactions.v1"
@@ -252,6 +254,7 @@
         "kind": "prefix",
         "value": "gemini-3-pro"
       },
+      "tool_schema_projection": "strict",
       "supported_protocols": [
         "google.gemini.generate_content",
         "gemini-interactions.v1"
@@ -286,6 +289,7 @@
         "kind": "prefix",
         "value": "gemini-3.6-flash"
       },
+      "tool_schema_projection": "strict",
       "supported_protocols": [
         "google.gemini.generate_content",
         "gemini-interactions.v1"
@@ -322,6 +326,7 @@
         "kind": "prefix",
         "value": "gemini-3.5-flash"
       },
+      "tool_schema_projection": "strict",
       "supported_protocols": [
         "google.gemini.generate_content",
         "gemini-interactions.v1"
@@ -358,6 +363,7 @@
         "kind": "prefix",
         "value": "gemini-3.1-flash-lite"
       },
+      "tool_schema_projection": "strict",
       "supported_protocols": [
         "google.gemini.generate_content",
         "gemini-interactions.v1"
@@ -394,6 +400,7 @@
         "kind": "prefix",
         "value": "gemini-3-flash"
       },
+      "tool_schema_projection": "strict",
       "supported_protocols": [
         "google.gemini.generate_content",
         "gemini-interactions.v1"
@@ -430,6 +437,7 @@
         "kind": "prefix",
         "value": "gemini-2.5-pro"
       },
+      "tool_schema_projection": "strict",
       "supported_protocols": [
         "google.gemini.generate_content",
         "gemini-interactions.v1"
@@ -465,6 +473,7 @@
         "kind": "prefix",
         "value": "gemini-2.5-flash"
       },
+      "tool_schema_projection": "strict",
       "supported_protocols": [
         "google.gemini.generate_content",
         "gemini-interactions.v1"

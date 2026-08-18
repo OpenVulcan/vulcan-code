@@ -112,6 +112,9 @@ pub struct ResolvedEntryModelDefaults {
     /// Unique default protocol for unmatched models when the manifest permits default binding.
     /// Manifest 允许默认绑定时未匹配模型使用的唯一默认协议。
     pub selected_protocol: Option<String>,
+    /// Effective tool-schema projection inherited by unmatched models and rules.
+    /// 未匹配模型与规则继承的生效工具 Schema 投影。
+    pub tool_schema_projection: super::ToolSchemaProjectionMode,
     /// Complete compiled provider capability snapshot inherited by unmatched models.
     /// 未匹配模型继承的完整已编译供应商能力快照。
     pub capabilities: Option<vulcan_ai_contract::ModelCapabilities>,
@@ -1164,6 +1167,7 @@ pub fn compile_manifest_with_layer(
                 ResolvedEntryModelDefaults {
                     supported_protocols,
                     selected_protocol,
+                    tool_schema_projection: manifest.model_defaults.tool_schema_projection,
                     capabilities: default_capabilities.clone(),
                     usage_profile_refs: manifest.model_defaults.default_usage_profile_refs.clone(),
                     request_profile_refs: manifest

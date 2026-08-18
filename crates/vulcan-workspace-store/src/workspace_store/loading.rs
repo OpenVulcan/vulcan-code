@@ -299,12 +299,12 @@ fn validate_session_index_row(
 ///
 /// # Returns
 /// 返回值
-/// Returns the expected real directory after reconciling one interrupted move to the SQLite lifecycle state.
-/// 将一次中断移动校正到 SQLite 生命周期状态后返回预期真实目录。
+/// Returns the expected real directory after reconciling one interrupted move, or `None` for a physically missing session.
+/// 将一次中断移动校正到 SQLite 生命周期状态后返回预期真实目录；会话物理缺失时返回 `None`。
 fn required_session_directory_for_index_row(
     data_root: &std::path::Path,
     row: &ValidatedSessionIndexRow,
-) -> Result<std::path::PathBuf, String> {
+) -> Result<Option<std::path::PathBuf>, String> {
     // expected_dir is the only path consistent with the persisted archive flag.
     // expected_dir 是唯一与持久化归档标记一致的路径。
     let expected_dir = segmented_session_directory(
@@ -328,7 +328,7 @@ fn required_session_directory_for_index_row(
     let expected_exists = segmented_session_directory_exists(&expected_dir)?;
     let opposite_exists = segmented_session_directory_exists(&opposite_dir)?;
     match (expected_exists, opposite_exists) {
-        (true, false) => Ok(expected_dir),
+        (true, false) => Ok(Some(expected_dir)),
         (false, true) => {
             eprintln!(
                 "[workspace-load] recovering interrupted session lifecycle: id={} archived={} source={} destination={}",
@@ -364,14 +364,9 @@ fn required_session_directory_for_index_row(
                     expected_dir.display()
                 ));
             }
-            Ok(recovered_dir)
+            Ok(Some(recovered_dir))
         }
-        (false, false) => Err(format!(
-            "会话索引 `{}` 的活动与归档目录均不存在：预期 `{}`，相反 `{}`。",
-            row.session_id,
-            expected_dir.display(),
-            opposite_dir.display()
-        )),
+        (false, false) => Ok(None),
         (true, true) => Err(format!(
             "会话索引 `{}` 同时存在活动与归档目录，无法确定权威副本：预期 `{}`，相反 `{}`。",
             row.session_id,
@@ -490,8 +485,21 @@ async fn load_workspace_snapshot_with_runtime_state(
         let project_name = project_row.stored.name.as_str();
         // session_dir must be the one real directory consistent with the exact archive flag.
         // session_dir 必须是与精确归档标记一致的唯一真实目录。
-        let session_dir =
-            required_session_directory_for_index_row(&controller.data_root, &validated_row)?;
+        let Some(session_dir) =
+            required_session_directory_for_index_row(&controller.data_root, &validated_row)?
+        else {
+            // cleanup_result removes only the exact row whose two lifecycle directories are both absent.
+            // cleanup_result 仅删除活动与归档目录均缺失的精确索引行。
+            let cleanup_result =
+                cleanup_missing_session_index(controller.clone(), session_id).await?;
+            if cleanup_result {
+                eprintln!(
+                    "[workspace-load] removed stale physically missing session index: id={session_id} archived={}",
+                    validated_row.archived
+                );
+            }
+            continue;
+        };
         if validated_row.archived {
             ensure_project_summary_for_session(
                 &mut archived_task_projects,
@@ -1236,7 +1244,7 @@ mod tests {
         assert_eq!(
             required_session_directory_for_index_row(&root, &validated_row)
                 .expect("expected-only directory should load"),
-            expected_dir
+            Some(expected_dir.clone())
         );
 
         std::fs::create_dir_all(&opposite_dir).expect("create ambiguous archived directory");
@@ -1256,7 +1264,8 @@ mod tests {
         // recovered_dir proves SQLite archived=false deterministically rolls the sole copy back to active.
         // recovered_dir 证明 SQLite archived=false 会确定性地把唯一副本回滚到活动树。
         let recovered_dir = required_session_directory_for_index_row(&root, &validated_row)
-            .expect("opposite-only directory should recover");
+            .expect("opposite-only directory should recover")
+            .expect("recovered directory should be present");
         let recovered_metadata =
             read_session_metadata(&recovered_dir).expect("read recovered active metadata");
         assert_eq!(recovered_dir, expected_dir);
@@ -1269,10 +1278,10 @@ mod tests {
         assert_eq!(recovered_metadata.archived_at, None);
 
         std::fs::remove_dir_all(&expected_dir).expect("remove expected directory");
-        // missing_error proves absent copies cannot disappear from the workspace silently.
-        // missing_error 证明两个副本缺失时不能从工作台静默消失。
-        let missing_error = required_session_directory_for_index_row(&root, &validated_row)
-            .expect_err("missing lifecycle directories should fail");
+        // missing_directory proves a physically deleted session is classified for index cleanup.
+        // missing_directory 证明物理删除的会话会被识别为需要清理索引。
+        let missing_directory = required_session_directory_for_index_row(&root, &validated_row)
+            .expect("missing lifecycle directories should be cleanable");
         // expected_parent is retained so a regular file can occupy the canonical locator path.
         // expected_parent 被保留以便普通文件占用规范定位路径。
         let expected_parent = expected_dir
@@ -1287,7 +1296,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
 
         assert!(ambiguous_error.contains("同时存在活动与归档目录"));
-        assert!(missing_error.contains("活动与归档目录均不存在"));
+        assert!(missing_directory.is_none());
         assert!(non_directory_error.contains("not a real directory"));
     }
 
@@ -1327,7 +1336,8 @@ mod tests {
         // recovered_dir is the exact archived directory selected by SQLite state.
         // recovered_dir 是 SQLite 状态选中的精确归档目录。
         let recovered_dir = required_session_directory_for_index_row(&root, &validated_row)
-            .expect("active-only directory should archive during recovery");
+            .expect("active-only directory should archive during recovery")
+            .expect("recovered archived directory should be present");
         let recovered_metadata =
             read_session_metadata(&recovered_dir).expect("read recovered archived metadata");
 
@@ -1341,6 +1351,11 @@ mod tests {
             recovered_metadata.archived_at.as_deref(),
             Some(validated_row.stored.updated_at.as_str())
         );
+        std::fs::remove_dir_all(&recovered_dir)
+            .expect("remove physically deleted archived directory");
+        let missing_directory = required_session_directory_for_index_row(&root, &validated_row)
+            .expect("missing archived directories should be cleanable");
+        assert!(missing_directory.is_none());
         let _ = std::fs::remove_dir_all(&root);
     }
 

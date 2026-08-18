@@ -35,6 +35,7 @@ function modelFixture(id: string): PublicAiCustomModelDefinition {
       overrides: {},
       delete: [],
     },
+    tool_schema_projection: "lightweight",
   }
 }
 

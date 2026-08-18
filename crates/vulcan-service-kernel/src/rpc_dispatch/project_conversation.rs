@@ -21,6 +21,8 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_remove_project",
     "service_rename_conversation",
     "service_archive_conversation",
+    "service_restore_archived_conversations",
+    "service_delete_archived_conversations",
     "service_mark_conversation_read",
     "service_select_conversation",
     "service_open_external_url",
@@ -116,6 +118,20 @@ pub(super) async fn dispatch(
         "service_archive_conversation" => rpc_json_result(
             service_archive_conversation(app, state, rpc_required_param(params, "conversationId")?)
                 .await,
+        ),
+        "service_restore_archived_conversations" => rpc_json_result(
+            service_restore_archived_conversations(
+                state,
+                rpc_required_param(params, "conversationIds")?,
+            )
+            .await,
+        ),
+        "service_delete_archived_conversations" => rpc_json_result(
+            service_delete_archived_conversations(
+                state,
+                rpc_required_param(params, "conversationIds")?,
+            )
+            .await,
         ),
         "service_mark_conversation_read" => rpc_json_result(
             service_mark_conversation_read(state, rpc_required_param(params, "conversationId")?)

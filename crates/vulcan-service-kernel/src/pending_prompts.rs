@@ -2,6 +2,8 @@
 //! WebUI 桥接层待发送提示词队列服务适配器。
 
 use vulcan_agent_runtime::provider_config::{ProviderConfigurationFile, ReasoningEffortLevel};
+use vulcan_context::{SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind};
+use vulcan_core::controller::INTERJECTED_PROMPT_ADMISSION_ID_KEY;
 use vulcan_core::types::ConversationAttachment;
 use vulcan_service_api::{
     PendingPromptSummary, PendingPromptsChangedDelta, ServiceEvent, ServiceEventEmitter,
@@ -44,6 +46,7 @@ pub(super) struct PendingPromptQueueStatus {
 
 /// Queued-prompt Hook facts dispatched only after the authoritative workspace commit.
 /// 仅在权威工作区提交后分发的排队提示词 Hook 事实。
+#[derive(Debug, Clone)]
 pub(super) struct QueuedPendingPromptHookEvent {
     /// Session whose logical turn receives the queued timeline item.
     /// 逻辑回合接收排队时间线条目的会话。
@@ -63,6 +66,18 @@ pub(super) struct QueuedPendingPromptHookEvent {
     /// User-visible queued prompt content.
     /// 用户可见的排队提示词内容。
     prompt: String,
+}
+
+/// Prompt admission committed atomically with its immediate transcript projection.
+/// 与立即转录投影原子提交的提示词接纳结果。
+#[derive(Debug, Clone)]
+pub(super) struct QueuedPendingPromptAdmission {
+    /// Hook event dispatched after the queue mutation becomes authoritative.
+    /// 队列变更成为权威状态后分发的 Hook 事件。
+    pub(super) hook_event: QueuedPendingPromptHookEvent,
+    /// Visible user row emitted immediately when queue admission succeeds.
+    /// 队列接纳成功时立即发出的可见用户行。
+    pub(super) message: SessionMessageEntry,
 }
 
 /// Records one queued prompt in the conversation Hook runtime after workspace commit.
@@ -624,14 +639,14 @@ pub(super) fn remove_dispatched_pending_prompt_panel_entry(
 ///
 /// # Returns
 /// 返回值
-/// Returns one post-commit Hook event for a new insertion, `None` for an idempotent route, or a routing error.
-/// 新插入时返回一条提交后 Hook 事件，幂等路由时返回 `None`，失败时返回路由错误。
+/// Returns one post-commit admission with Hook and visible-row facts, `None` for an idempotent route, or a routing error.
+/// 新插入时返回包含 Hook 与可见行事实的提交后接纳结果，幂等路由时返回 `None`，失败时返回路由错误。
 pub(super) fn insert_webui_pending_prompt_into_internal_queue(
     workspace_snapshot: &mut WorkspaceSnapshot,
     session_id: SessionId,
     workspace_path: &str,
     entry_id: &str,
-) -> Result<Option<QueuedPendingPromptHookEvent>, String> {
+) -> Result<Option<QueuedPendingPromptAdmission>, String> {
     let project_id = owning_project_id_for_session(workspace_snapshot, session_id);
     let runtime_state = workspace_snapshot
         .session_runtime_state
@@ -659,14 +674,68 @@ pub(super) fn insert_webui_pending_prompt_into_internal_queue(
         return Ok(None);
     };
     let internal_entry = *internal_entry;
-    Ok(Some(QueuedPendingPromptHookEvent {
-        session_id,
-        prompt_entry_id: entry_id.to_string(),
-        project_id,
-        workspace_path: workspace_path.to_string(),
-        source: PendingSessionPromptSource::UserInterrupt,
-        prompt: internal_entry.prompt,
+    let message = build_pending_prompt_admission_message(&internal_entry)?;
+    workspace_snapshot
+        .session_messages
+        .entry(session_id)
+        .or_default()
+        .push(message.clone());
+    Ok(Some(QueuedPendingPromptAdmission {
+        hook_event: QueuedPendingPromptHookEvent {
+            session_id,
+            prompt_entry_id: entry_id.to_string(),
+            project_id,
+            workspace_path: workspace_path.to_string(),
+            source: PendingSessionPromptSource::UserInterrupt,
+            prompt: internal_entry.prompt,
+        },
+        message,
     }))
+}
+
+/// Builds the immediate visible row for one accepted main-session interrupt prompt.
+/// 为一条已接纳的主会话插队提示词构建立即可见行。
+///
+/// # Parameters
+/// 参数
+/// `entry` is the authoritative internal queue entry accepted for dispatch.
+/// `entry` 是已接纳等待分发的权威内部队列项。
+///
+/// # Returns
+/// 返回值
+/// A process-scoped user row carrying the stable admission identity, or an explicit attachment serialization error.
+/// 返回携带稳定接纳标识的过程级用户行，或返回明确的附件序列化错误。
+fn build_pending_prompt_admission_message(
+    entry: &PendingSessionPromptEntry,
+) -> Result<SessionMessageEntry, String> {
+    let message_id = format!("pending-prompt-admission-{}", entry.id);
+    let mut metadata = serde_json::json!({
+        "canonical_text": entry.prompt,
+        "canonical_user_text": entry.prompt,
+        "source": "user_interrupt",
+        "starts_user_turn": false,
+        "turn_process": true,
+        "collapsed_by_default": true,
+        "editable": false,
+        (INTERJECTED_PROMPT_ADMISSION_ID_KEY): entry.id,
+    });
+    if !entry.attachments.is_empty()
+        && let Some(object) = metadata.as_object_mut()
+    {
+        let attachments = serde_json::to_value(&entry.attachments).map_err(|error| {
+            format!(
+                "Accepted pending prompt `{}` attachments are invalid: {error}",
+                entry.id
+            )
+        })?;
+        object.insert(String::from("attachments"), attachments.clone());
+        object.insert(String::from("transcript_attachments"), attachments);
+    }
+    let mut message = SessionMessageEntry::new(SessionMessageKind::User, "用户指令", &entry.prompt)
+        .with_runtime_metadata(message_id, entry.created_at.clone());
+    message.record_kind = SessionMessageRecordKind::Transcript;
+    message.metadata = Some(metadata);
+    Ok(message)
 }
 
 /// Clears stale session-mailbox entries from the old WebUI pending-prompt queue.
@@ -810,6 +879,102 @@ mod tests {
         assert_eq!(
             pending_prompt_preview_text("   ", &[preview_test_attachment()]),
             "1 个附件 · 附件消息"
+        );
+    }
+
+    /// Verifies an accepted interrupt prompt carries a stable immediate-projection identity.
+    /// 验证已接纳的插队提示词会携带稳定的立即投影标识。
+    #[test]
+    fn pending_prompt_admission_message_is_process_scoped_and_stable() {
+        let entry = PendingSessionPromptEntry {
+            id: String::from("internal-entry-1"),
+            prompt: String::from("立即返回结果"),
+            hidden_model_guidance: None,
+            preview: String::from("立即返回结果"),
+            attachments: Vec::new(),
+            model_reference: None,
+            runtime_options: PendingPromptRuntimeOptions::default(),
+            source: PendingSessionPromptSource::UserInterrupt,
+            task_id: None,
+            panel_entry_id: Some(String::from("panel-entry-1")),
+            created_at: String::from("1787000000000"),
+        };
+
+        let message =
+            build_pending_prompt_admission_message(&entry).expect("admission message should build");
+
+        assert_eq!(message.kind, SessionMessageKind::User);
+        assert_eq!(message.body, "立即返回结果");
+        assert_eq!(message.created_at, "1787000000000");
+        let metadata = message.metadata.expect("admission metadata should exist");
+        assert_eq!(metadata[INTERJECTED_PROMPT_ADMISSION_ID_KEY], entry.id);
+        assert_eq!(metadata["turn_process"], true);
+        assert_eq!(metadata["starts_user_turn"], false);
+    }
+
+    /// Verifies queue admission and its visible main-session row commit to the same workspace draft.
+    /// 验证队列接纳及其主会话可见行会提交到同一份工作区草稿。
+    #[test]
+    fn interrupt_queue_admission_appends_visible_message_atomically() {
+        let session_id = SessionId::new_v4();
+        let mut workspace = WorkspaceSnapshot {
+            task_projects: Vec::new(),
+            archived_task_projects: Vec::new(),
+            sessions: Vec::new(),
+            archived_sessions: Vec::new(),
+            session_messages: Default::default(),
+            archived_session_messages: Default::default(),
+            session_compactions: Default::default(),
+            archived_session_compactions: Default::default(),
+            session_runtime_state: Default::default(),
+            archived_session_runtime_state: Default::default(),
+            session_run_phases: Default::default(),
+            expanded_task_projects: Default::default(),
+            selected_session: session_id,
+            hydrated_session_ids: Default::default(),
+        };
+        let panel_entry = PendingPromptPanelEntry {
+            id: String::from("panel-entry-1"),
+            prompt: String::from("停止继续搜索，立即总结"),
+            hidden_model_guidance: None,
+            attachments: Vec::new(),
+            preview: String::from("停止继续搜索，立即总结"),
+            model_reference: None,
+            runtime_options: PendingPromptRuntimeOptions::default(),
+            state: PendingPromptPanelEntryState::Ready,
+            created_at: String::from("1787000000000"),
+        };
+        let mut runtime_state = SessionRuntimeStateEntry::default();
+        runtime_state
+            .ui_state
+            .pending_prompt_panel_queue
+            .push(panel_entry);
+        workspace
+            .session_runtime_state
+            .insert(session_id, runtime_state);
+
+        let admission = insert_webui_pending_prompt_into_internal_queue(
+            &mut workspace,
+            session_id,
+            "D:/workspace",
+            "panel-entry-1",
+        )
+        .expect("interrupt prompt should admit")
+        .expect("first admission should create a projection");
+
+        let stored_messages = workspace
+            .session_messages
+            .get(&session_id)
+            .expect("admission should materialize the user row");
+        assert_eq!(stored_messages, &[admission.message]);
+        let runtime_state = workspace
+            .session_runtime_state
+            .get(&session_id)
+            .expect("runtime state should remain available");
+        assert_eq!(runtime_state.ui_state.pending_prompt_queue.len(), 1);
+        assert_eq!(
+            runtime_state.ui_state.pending_prompt_panel_queue[0].state,
+            PendingPromptPanelEntryState::Inserted
         );
     }
 }

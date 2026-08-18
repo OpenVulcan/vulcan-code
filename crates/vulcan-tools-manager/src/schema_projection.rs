@@ -1,23 +1,5 @@
 use super::*;
 
-/// Resolves the schema projection profile required for the current provider request context.
-/// 解析当前 Provider 请求上下文所需的工具 schema 投影配置。
-pub fn resolve_tool_schema_projection_profile(
-    context: &VulcanToolSchemaProjectionContext<'_>,
-) -> VulcanToolSchemaProjectionProfile {
-    // targetDialect takes precedence over the outer OpenAI-compatible envelope because Gemini validates the final function declaration.
-    // targetDialect 优先于外层 OpenAI 兼容封装，因为 Gemini 校验的是最终函数声明。
-    if context
-        .api_family_key
-        .eq_ignore_ascii_case("google-gemini-function-declarations")
-        || openai_compatible_request_targets_gemini(context)
-    {
-        return VulcanToolSchemaProjectionProfile::GeminiSlim;
-    }
-
-    VulcanToolSchemaProjectionProfile::PassThrough
-}
-
 /// Projects one tool-parameter schema into the selected provider-facing dialect.
 /// 将单个工具参数 Schema 投影到选定的 Provider 可见方言。
 pub fn project_tool_parameters_schema(
@@ -26,44 +8,90 @@ pub fn project_tool_parameters_schema(
 ) -> Value {
     match profile {
         VulcanToolSchemaProjectionProfile::PassThrough => schema.clone(),
+        VulcanToolSchemaProjectionProfile::StandardObjectRoot => {
+            project_standard_object_root_schema(schema)
+        }
         VulcanToolSchemaProjectionProfile::GeminiSlim => project_gemini_slim_schema(schema),
     }
 }
 
-/// Returns whether one OpenAI-compatible request ends at a Gemini-family schema validator.
-/// 返回单个 OpenAI 兼容请求是否最终进入 Gemini 模型族的 Schema 校验器。
+/// Applies only the object-root compatibility required by standard function-tool protocols.
+/// 仅应用标准函数工具协议所需的对象根兼容处理。
 ///
 /// # Parameters
 /// 参数
-/// `context` contains the final API-family key and concrete model identifier for one request.
-/// `context` 包含单次请求最终使用的接口族键与具体模型标识。
+/// `schema` is the canonical host-owned tool parameter schema.
+/// `schema` 是宿主拥有的规范工具参数 Schema。
 ///
 /// # Returns
 /// 返回值
-/// Returns `true` only when both the OpenAI-compatible envelope and a Gemini-family model are explicit.
-/// 仅当 OpenAI 兼容外层协议与 Gemini 模型族均明确时返回 `true`。
-fn openai_compatible_request_targets_gemini(
-    context: &VulcanToolSchemaProjectionContext<'_>,
-) -> bool {
-    if !context
-        .api_family_key
-        .to_ascii_lowercase()
-        .contains("openai")
-    {
-        return false;
+/// Returns the original schema with missing object types added only to root union branches that already declare object constraints.
+/// 返回仅为根联合中已声明对象约束的分支补充缺失对象类型后的 Schema。
+fn project_standard_object_root_schema(schema: &Value) -> Value {
+    let Value::Object(root) = schema else {
+        return schema.clone();
+    };
+    let mut projected = root.clone();
+    for keyword in ["anyOf", "oneOf"] {
+        normalize_standard_root_union_branches(&mut projected, keyword);
     }
-
-    model_id_looks_like_gemini(context.model_id)
+    Value::Object(projected)
 }
 
-/// Returns whether one model identifier clearly belongs to the Gemini/Gemma family.
-/// 返回单个模型标识是否明确属于 Gemini/Gemma 模型族。
-fn model_id_looks_like_gemini(model_id: &str) -> bool {
-    let normalized = model_id.to_ascii_lowercase();
-    normalized.contains("gemini")
-        || normalized.contains("gemma")
-        || normalized.starts_with("google/")
-        || normalized.starts_with("google-")
+/// Marks required-only object branches without recursively slimming their nested schemas.
+/// 标记仅含必填约束的对象分支，同时不递归压缩其嵌套 Schema。
+///
+/// # Parameters
+/// 参数
+/// `root` is the provider-facing root schema object and `keyword` selects one root union array.
+/// `root` 是 Provider 可见的根 Schema 对象，`keyword` 选择一个根联合数组。
+///
+/// # Returns
+/// 返回值
+/// This function mutates only untyped root branches whose keywords already prove object semantics.
+/// 此函数仅修改其关键字已证明对象语义但尚未声明类型的根分支。
+fn normalize_standard_root_union_branches(root: &mut Map<String, Value>, keyword: &str) {
+    let Some(Value::Array(branches)) = root.get_mut(keyword) else {
+        return;
+    };
+    for branch in branches {
+        let Value::Object(object) = branch else {
+            continue;
+        };
+        if object.contains_key("type") || !schema_branch_declares_object_constraints(object) {
+            continue;
+        }
+        object.insert(String::from("type"), Value::String(String::from("object")));
+    }
+}
+
+/// Reports whether an untyped union branch already contains object-only JSON Schema constraints.
+/// 报告一个未声明类型的联合分支是否已经包含对象专属 JSON Schema 约束。
+///
+/// # Parameters
+/// 参数
+/// `branch` is one object-valued entry from a root `anyOf` or `oneOf` array.
+/// `branch` 是根级 `anyOf` 或 `oneOf` 数组中的一个对象值分支。
+///
+/// # Returns
+/// 返回值
+/// Returns `true` only for branches whose existing keywords unambiguously constrain an object instance.
+/// 仅当分支现有关键字明确约束对象实例时返回 `true`。
+fn schema_branch_declares_object_constraints(branch: &Map<String, Value>) -> bool {
+    [
+        "properties",
+        "patternProperties",
+        "additionalProperties",
+        "unevaluatedProperties",
+        "propertyNames",
+        "required",
+        "dependentRequired",
+        "dependentSchemas",
+        "minProperties",
+        "maxProperties",
+    ]
+    .iter()
+    .any(|keyword| branch.contains_key(*keyword))
 }
 
 /// Projects one schema into the compact Gemini tool-declaration dialect.

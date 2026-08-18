@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "openrouter",
-  "revision": 6,
-  "published_at": "2026-08-15T17:05:18Z",
+  "revision": 7,
+  "published_at": "2026-08-18T00:00:00Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -232,6 +232,7 @@
         "kind": "exact",
         "value": "google/gemini-3.1-pro-preview"
       },
+      "tool_schema_projection": "strict",
       "supported_protocols": [
         "openai-responses.v1",
         "anthropic-messages.v1",
@@ -251,6 +252,7 @@
         "kind": "exact",
         "value": "google/gemini-3.5-flash"
       },
+      "tool_schema_projection": "strict",
       "supported_protocols": [
         "openai-responses.v1",
         "anthropic-messages.v1",

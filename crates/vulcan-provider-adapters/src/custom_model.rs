@@ -9,6 +9,7 @@ use vulcan_ai_contract::{
 };
 use vulcan_context::ContextWindowPolicyOverrides;
 
+use crate::provider_manifest::ToolSchemaProjectionMode;
 use crate::{
     ModelCapabilityEvidence, PROVIDER_MODEL_DISPLAY_NAME_MAX_BYTES,
     PROVIDER_MODEL_IDENTIFIER_MAX_BYTES,
@@ -544,6 +545,10 @@ pub struct CustomModelDefinition {
     /// 可选的安全协议后请求投影。
     #[serde(default)]
     pub request_projection: CustomModelRequestProjection,
+    /// Provider-facing tool-schema projection selected in advanced settings.
+    /// 在高级设置中选择的 Provider 可见工具 Schema 投影。
+    #[serde(default)]
+    pub tool_schema_projection: ToolSchemaProjectionMode,
 }
 
 impl CustomModelDefinition {
@@ -948,6 +953,25 @@ mod tests {
     use super::*;
     use vulcan_ai_contract::ModelParameterDefault;
 
+    /// Verifies legacy-free custom model JSON still uses the declared lightweight default when the advanced field is absent.
+    /// 验证自定义模型 JSON 缺少高级字段时仍使用已声明的轻量默认值。
+    #[test]
+    fn custom_model_projection_defaults_to_lightweight() {
+        let definition: CustomModelDefinition = serde_json::from_value(serde_json::json!({
+            "id": "custom-model",
+            "display_name": "Custom Model",
+            "enabled": true,
+            "capabilities": ModelCapabilities::default(),
+            "request_projection": CustomModelRequestProjection::default()
+        }))
+        .expect("omitted advanced projection must deserialize");
+
+        assert_eq!(
+            definition.tool_schema_projection,
+            ToolSchemaProjectionMode::Lightweight
+        );
+    }
+
     /// Verifies provider defaults clamp output to a stronger effective context window.
     /// 验证供应商默认输出会收窄到更强来源给出的有效上下文窗口。
     #[test]
@@ -1032,6 +1056,7 @@ mod tests {
                 ..ModelCapabilities::default()
             },
             request_projection: CustomModelRequestProjection::default(),
+            tool_schema_projection: ToolSchemaProjectionMode::Lightweight,
         };
 
         let error = model
@@ -1055,6 +1080,7 @@ mod tests {
                 ..ModelCapabilities::default()
             },
             request_projection: CustomModelRequestProjection::default(),
+            tool_schema_projection: ToolSchemaProjectionMode::Lightweight,
         };
 
         let error = model
@@ -1074,6 +1100,7 @@ mod tests {
             enabled: true,
             capabilities: ModelCapabilities::default(),
             request_projection: CustomModelRequestProjection::default(),
+            tool_schema_projection: ToolSchemaProjectionMode::Lightweight,
         };
         assert!(oversized.validate().is_err());
 
@@ -1083,6 +1110,7 @@ mod tests {
             enabled: true,
             capabilities: ModelCapabilities::default(),
             request_projection: CustomModelRequestProjection::default(),
+            tool_schema_projection: ToolSchemaProjectionMode::Lightweight,
         };
         assert!(controlled.validate().is_err());
     }
@@ -1227,6 +1255,7 @@ mod tests {
                 ..ModelCapabilities::default()
             },
             request_projection: CustomModelRequestProjection::default(),
+            tool_schema_projection: ToolSchemaProjectionMode::Lightweight,
         };
 
         let error = model

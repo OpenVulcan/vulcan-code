@@ -130,7 +130,7 @@ export function SettingsFeatureContent(props: SettingsFeatureContentProps) {
     return <AboutLicensesSettingsArea appVersion={props.workbench.appVersion} />;
   }
   if (props.activeSettingsSubArea === "archived-restore") {
-    return <ArchivedRestoreSettingsArea conversations={props.workbench.archivedConversations ?? []} projects={props.workbench.projects} />;
+    return <ArchivedRestoreSettingsArea actions={props.actions} conversations={props.workbench.archivedConversations ?? []} projects={props.workbench.projects} />;
   }
   return (
     <ProviderManagementArea />

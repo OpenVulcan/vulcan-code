@@ -43,12 +43,17 @@ pub(crate) async fn service_insert_pending_prompt(
     let workspace_path = workspace_path_for_session(&workspace_snapshot, selected_session_id);
     // queued_hook_event is dispatched only after the routed internal queue becomes authoritative.
     // queued_hook_event 仅在路由后的内部队列成为权威状态后分发。
-    let queued_hook_event = insert_webui_pending_prompt_into_internal_queue(
+    let admission = insert_webui_pending_prompt_into_internal_queue(
         &mut workspace_snapshot,
         selected_session_id,
         &workspace_path,
         &entry_id,
     )?;
+    let admission_run_phase = workspace_snapshot
+        .session_run_phases
+        .get(&selected_session_id)
+        .copied()
+        .unwrap_or(SessionRunPhase::Idle);
     {
         let guard = state
             .lock()
@@ -64,15 +69,37 @@ pub(crate) async fn service_insert_pending_prompt(
         selected_session_id,
     );
     store_workspace_snapshot_without_workbench_rebuild(&state, workspace_snapshot)?;
-    if let Some(queued_hook_event) = queued_hook_event
-        && let Err(error) = dispatch_queued_pending_prompt_hook(&agent_runtime, queued_hook_event)
+    // Post-commit UI deltas are independent: one emitter failure must not hide the other accepted-state projection.
+    // 提交后的 UI 增量彼此独立：单个发送失败不能遮蔽另一份已接纳状态投影。
+    if let Err(error) = emit_pending_prompts_changed_delta(&app, &state, selected_session_id) {
+        webui_trace(
+            "guided_pending_prompt_queue_delta_failed_after_commit",
+            format!("session={selected_session_id} error={error}"),
+        );
+    }
+    if let Some(admission) = admission.as_ref()
+        && let Err(error) = emit_materialized_session_message_delta(
+            &app,
+            &state,
+            selected_session_id,
+            &admission.message,
+            admission_run_phase,
+        )
+    {
+        webui_trace(
+            "guided_pending_prompt_message_delta_failed_after_commit",
+            format!("session={selected_session_id} error={error}"),
+        );
+    }
+    if let Some(admission) = admission.as_ref()
+        && let Err(error) =
+            dispatch_queued_pending_prompt_hook(&agent_runtime, admission.hook_event.clone())
     {
         webui_trace(
             "guided_pending_prompt_hook_failed_after_commit",
             format!("session={selected_session_id} error={error}"),
         );
     }
-    emit_pending_prompts_changed_delta(&app, &state, selected_session_id)?;
     let snapshot_for_persist = current_workspace_snapshot_from_state(&state)?.ok_or_else(|| {
         String::from("service is still starting; workspace snapshot is not ready")
     })?;

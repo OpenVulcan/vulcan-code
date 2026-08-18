@@ -8595,6 +8595,35 @@ impl PublicAiRuntime {
         // 自定义模型与系统模型共用一条合并投影链，而不是替换掉已继承的上级层。
         route.custom_model_projection =
             resolve_request_projection(configuration, provider_id, model_id)?;
+        // toolSchemaProjection is resolved only from the active system Manifest or the exact
+        // custom-model advanced setting. Protocol and model-name heuristics are intentionally absent.
+        // toolSchemaProjection 只从活动系统 Manifest 或精确自定义模型高级设置解析。
+        // 此处刻意不存在协议或模型名猜测。
+        route.tool_schema_projection = match route.provider.kind {
+            crate::ProviderKind::System => {
+                let manifest = active_manifest.as_ref().ok_or_else(|| {
+                    format!(
+                        "Provider `{provider_id}` has no active system manifest for tool-schema projection."
+                    )
+                })?;
+                manifest
+                    .rule_for_model(
+                        entry.id.as_str(),
+                        Some(connection.credential_profile_id.as_str()),
+                        model_id,
+                    )
+                    .map(|rule| rule.tool_schema_projection)
+                    .unwrap_or(
+                        manifest
+                            .model_defaults_for_entry(entry.id.as_str())?
+                            .tool_schema_projection,
+                    )
+            }
+            crate::ProviderKind::Custom => configuration
+                .custom_model(provider_id, model_id)
+                .map(|definition| definition.tool_schema_projection)
+                .unwrap_or_default(),
+        };
         // A matching model rule's inherited profile refs replace the route default chain for
         // this exact model; every other model keeps the route default (plan §R8.4/§R8.5).
         // 命中模型规则的继承 Profile 引用替换该精确模型的路由默认链；其他模型保持
@@ -10760,6 +10789,7 @@ fn provider_execution_route_revision(
         &canonical_protocol_route,
         &route.secondary_route,
         &route.custom_model_projection,
+        route.tool_schema_projection,
         &route.request_projection_profiles,
         &route.response_projection_profiles,
         &route.upload_channels,
@@ -12924,6 +12954,7 @@ mod tests {
                         ..ModelCapabilities::default()
                     },
                     request_projection: crate::CustomModelRequestProjection::default(),
+                    tool_schema_projection: crate::ToolSchemaProjectionMode::Lightweight,
                 },
             )]),
         );
@@ -13047,6 +13078,7 @@ mod tests {
                         ..ModelCapabilities::default()
                     },
                     request_projection: crate::CustomModelRequestProjection::default(),
+                    tool_schema_projection: crate::ToolSchemaProjectionMode::Lightweight,
                 },
             );
 
@@ -13114,6 +13146,7 @@ mod tests {
                         ..ModelCapabilities::default()
                     },
                     request_projection: crate::CustomModelRequestProjection::default(),
+                    tool_schema_projection: crate::ToolSchemaProjectionMode::Lightweight,
                 },
             );
         // sourceCatalog contains only provider-observed identity evidence.
@@ -13197,6 +13230,7 @@ mod tests {
                         ..ModelCapabilities::default()
                     },
                     request_projection: crate::CustomModelRequestProjection::default(),
+                    tool_schema_projection: crate::ToolSchemaProjectionMode::Lightweight,
                 },
             );
 
@@ -13250,6 +13284,7 @@ mod tests {
                     enabled: true,
                     capabilities: ModelCapabilities::default(),
                     request_projection: crate::CustomModelRequestProjection::default(),
+                    tool_schema_projection: crate::ToolSchemaProjectionMode::Lightweight,
                 },
             );
 
@@ -13686,6 +13721,7 @@ mod tests {
                         ..ModelCapabilities::default()
                     },
                     request_projection: crate::CustomModelRequestProjection::default(),
+                    tool_schema_projection: crate::ToolSchemaProjectionMode::Lightweight,
                 },
             )]),
         );
@@ -13803,6 +13839,7 @@ mod tests {
                         )]),
                         ..crate::CustomModelRequestProjection::default()
                     },
+                    tool_schema_projection: crate::ToolSchemaProjectionMode::Lightweight,
                 },
             );
         let mut catalog = crate::parse_openai_model_catalog(
@@ -13916,6 +13953,7 @@ mod tests {
                         ..ModelCapabilities::default()
                     },
                     request_projection: crate::CustomModelRequestProjection::default(),
+                    tool_schema_projection: crate::ToolSchemaProjectionMode::Lightweight,
                 },
             );
         let source = crate::parse_openai_model_catalog(
@@ -13972,6 +14010,7 @@ mod tests {
                         ..ModelCapabilities::default()
                     },
                     request_projection: crate::CustomModelRequestProjection::default(),
+                    tool_schema_projection: crate::ToolSchemaProjectionMode::Lightweight,
                 },
             );
         let source = crate::parse_openai_model_catalog("custom-account", 1, r#"{"data":[]}"#)
@@ -14319,6 +14358,21 @@ mod tests {
             changed_revision, baseline_revision,
             "wire-semantic changes must invalidate route identity"
         );
+
+        // schemaRoute changes the provider-visible function contract and must invalidate the route.
+        // schemaRoute 修改 Provider 可见函数契约，因此必须使路由失效。
+        let mut schema_route = baseline_selection.route.clone();
+        schema_route.tool_schema_projection = crate::ToolSchemaProjectionMode::Passthrough;
+        let schema_revision = provider_execution_route_revision(
+            &schema_route,
+            &baseline_selection.model,
+            &baseline_selection.overrides,
+        )
+        .expect("tool-schema route revision should serialize");
+        assert_ne!(
+            schema_revision, baseline_revision,
+            "tool-schema projection changes must invalidate route identity"
+        );
     }
 
     /// Verifies cached secondary routes are account-scoped, expire after six hours, and may be bypassed explicitly.
@@ -14608,6 +14662,7 @@ mod tests {
                     enabled: true,
                     capabilities: ModelCapabilities::default(),
                     request_projection: crate::CustomModelRequestProjection::default(),
+                    tool_schema_projection: crate::ToolSchemaProjectionMode::Lightweight,
                 },
             )]),
         );
@@ -15228,6 +15283,7 @@ mod tests {
                         ..ModelCapabilities::default()
                     },
                     request_projection: crate::CustomModelRequestProjection::default(),
+                    tool_schema_projection: crate::ToolSchemaProjectionMode::Lightweight,
                 },
             )]),
         );
@@ -18803,6 +18859,7 @@ mod tests {
                                 ..ModelCapabilities::default()
                             },
                             request_projection: Default::default(),
+                            tool_schema_projection: crate::ToolSchemaProjectionMode::Lightweight,
                         },
                     )]),
                 );
@@ -19014,6 +19071,7 @@ mod tests {
                         ..ModelCapabilities::default()
                     },
                     request_projection: Default::default(),
+                    tool_schema_projection: crate::ToolSchemaProjectionMode::Lightweight,
                 },
             )]),
         );
