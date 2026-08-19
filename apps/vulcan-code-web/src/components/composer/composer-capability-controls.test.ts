@@ -12,6 +12,7 @@ import {
 function settingsFixture(): PublicAiSettingsSnapshot {
   return {
     usageRefreshIntervalSeconds: 300,
+    providerPriorities: {},
     usageCache: {},
     connections: [],
     providers: [],

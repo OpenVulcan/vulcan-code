@@ -83,12 +83,6 @@ export function FeatureContent(props: {
   // Service-backed settings page actions.
   // 服务端支持的设置页面动作。
   settingsActions: SettingsActionProps;
-  // Updates the add-provider picker open state.
-  // 更新添加模型供应商选择弹窗的打开状态。
-  onProviderPickerOpenChange: (open: boolean) => void;
-  // Whether the add-provider picker is open.
-  // 添加模型供应商选择弹窗是否打开。
-  providerPickerOpen: boolean;
   // Startup snapshot used by settings diagnostics.
   // 设置诊断页面使用的启动快照。
   startup: StartupSnapshot;
@@ -150,8 +144,6 @@ export function FeatureContent(props: {
         <FeatureLoadBoundary><LazySettingsFeatureContent
           activeSettingsSubArea={props.activeSettingsSubArea}
           actions={props.settingsActions}
-          onProviderPickerOpenChange={props.onProviderPickerOpenChange}
-          providerPickerOpen={props.providerPickerOpen}
           startup={props.startup}
           workbench={props.workbench}
         /></FeatureLoadBoundary>

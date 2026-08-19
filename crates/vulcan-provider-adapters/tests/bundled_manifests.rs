@@ -108,6 +108,30 @@ const OPENCODE_GO_MODELS: &[&str] = &[
     "qwen3.8-max",
 ];
 
+/// Every statically reviewed Token Rhythm conversation and image model.
+/// 全部经过静态审查的基元律动会话与图片模型。
+const TOKEN_RHYTHM_MODELS: &[&str] = &[
+    "deepseek-v4-flash",
+    "deepseek-v4-pro",
+    "deepseek-v4-flash-0731",
+    "deepseek-v4-pro-0813",
+    "glm-5",
+    "glm-5.1",
+    "glm-5.2",
+    "minimax-m2.5",
+    "minimax-m2.7",
+    "kimi-k2.5",
+    "kimi-k2.6",
+    "kimi-k2.7-code",
+    "mimo-v2.5-pro",
+    "qwen3.7-max",
+    "qwen3.8-max",
+    "seed-2.1-turbo",
+    "seed-2.1-pro",
+    "qwen-image-2.0",
+    "wan2.7-image",
+];
+
 /// Every CommandCode model declared by CLI 1.26.0 and currently returned by the Provider API.
 /// CommandCode CLI 1.26.0 声明且当前 Provider API 返回的全部模型。
 const COMMANDCODE_MODELS: &[&str] = &[
@@ -178,7 +202,7 @@ fn bundled_integrity_index_binds_the_complete_manifest_generation() {
     // 源资源代际后才会返回。
     let provider_count = vulcan_provider_adapters::verify_source_bundled_manifest_integrity_index()
         .expect("source bundled integrity generation should verify");
-    assert_eq!(provider_count, 16);
+    assert_eq!(provider_count, 17);
 }
 
 /// Verifies only Gemini model rules opt into strict tool-schema projection in system manifests.
@@ -702,6 +726,190 @@ fn opencode_go_manifest_matches_source_derived_model_contracts() {
         grok_temperature.protocol_ids,
         vec![String::from("openai-responses.v1")]
     );
+}
+
+/// Verifies Token Rhythm freezes its static catalog, Chat route, reasoning maps, headers, and image targets.
+/// 验证基元律动固化静态目录、Chat 路由、思考映射、请求头与图片目标。
+#[test]
+fn tokenrhythm_manifest_freezes_the_reviewed_provider_contract() {
+    // The source manifest is the only authority for this non-discovery system provider.
+    // 源清单是此无动态发现系统供应商的唯一权威。
+    let path = bundled_manifests_directory().join("tokenrhythm.json");
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|_| panic!("read bundled manifest {}", path.display()));
+    let document: Value = serde_json::from_str(&text).expect("parse Token Rhythm manifest JSON");
+
+    assert_eq!(
+        document.pointer("/services/0/base_url"),
+        Some(&Value::String(String::from(
+            "https://tokenrhythm.studio/v1"
+        )))
+    );
+    assert_eq!(
+        document.pointer("/services/0/request_headers/http-referer"),
+        Some(&Value::String(String::from("https://opensquilla.ai")))
+    );
+    assert_eq!(
+        document.pointer("/services/0/request_headers/x-title"),
+        Some(&Value::String(String::from("OpenSquilla")))
+    );
+    // request_headers freezes provider-owned headers without overriding the shared User-Agent.
+    // request_headers 冻结供应商自有请求头，且不覆盖共享 User-Agent。
+    let request_headers = document["services"][0]["request_headers"]
+        .as_object()
+        .expect("Token Rhythm fixed request headers must exist");
+    assert_eq!(
+        request_headers.len(),
+        2,
+        "Token Rhythm must leave User-Agent ownership to the shared runtime"
+    );
+    assert_eq!(
+        document.pointer("/services/0/model_catalog/source_policy"),
+        Some(&Value::String(String::from("manifest_only")))
+    );
+    assert_eq!(
+        document.pointer("/services/0/model_catalog/discovery_kind"),
+        Some(&Value::String(String::from("manifest_static")))
+    );
+    let routes = document["services"][0]["protocol_routes"]
+        .as_array()
+        .expect("Token Rhythm protocol routes must exist");
+    assert_eq!(routes.len(), 1, "Token Rhythm exposes Chat only");
+    assert_eq!(
+        routes[0]["protocol_profile_id"],
+        "openai-chat-completions.v1"
+    );
+    assert_eq!(routes[0]["endpoint_path"], "/chat/completions");
+
+    let compiled =
+        vulcan_provider_adapters::compile_manifest_text(&text, ManifestOwnership::System)
+            .expect("bundled Token Rhythm manifest must compile");
+    let declared_model_ids = compiled
+        .catalog_models
+        .get("public-api")
+        .expect("Token Rhythm must declare its complete static inventory")
+        .iter()
+        .map(|model| model.model_id.as_str())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        declared_model_ids,
+        TOKEN_RHYTHM_MODELS.iter().copied().collect::<BTreeSet<_>>()
+    );
+    assert!(
+        compiled
+            .rule_instances
+            .iter()
+            .all(|rule| rule.matcher.kind == vulcan_provider_adapters::MatcherKind::Exact)
+    );
+
+    // Required-thinking models intentionally omit none while retaining every enabled UI level.
+    // 强制思考模型有意省略 none，同时保留全部开启态 UI 档位。
+    let enabled_efforts = vec![
+        vulcan_ai_contract::ReasoningEffort::Minimal,
+        vulcan_ai_contract::ReasoningEffort::Low,
+        vulcan_ai_contract::ReasoningEffort::Medium,
+        vulcan_ai_contract::ReasoningEffort::High,
+        vulcan_ai_contract::ReasoningEffort::XHigh,
+        vulcan_ai_contract::ReasoningEffort::Max,
+    ];
+    for model_id in ["minimax-m2.5", "minimax-m2.7", "kimi-k2.7-code"] {
+        let rule = compiled
+            .rule_for_model("public-api", Some("api-key"), model_id)
+            .unwrap_or_else(|| panic!("missing Token Rhythm rule `{model_id}`"));
+        assert_eq!(
+            rule.capabilities
+                .as_ref()
+                .expect("required-thinking capabilities")
+                .reasoning_efforts,
+            enabled_efforts
+        );
+    }
+
+    // The two reviewed image models are opt-in generation-only extensions.
+    // 两个已审查图片模型都是默认关闭且仅用于生成的扩展。
+    for model_id in ["qwen-image-2.0", "wan2.7-image"] {
+        let rule = compiled
+            .rule_for_model("public-api", Some("api-key"), model_id)
+            .unwrap_or_else(|| panic!("missing Token Rhythm image rule `{model_id}`"));
+        assert!(!rule.default_enabled);
+        let capabilities = rule.capabilities.as_ref().expect("image capabilities");
+        assert_eq!(
+            capabilities.operations,
+            vec![vulcan_ai_contract::AiOperation::ImageGenerate]
+        );
+        assert_eq!(
+            capabilities.reasoning_control,
+            vulcan_ai_contract::ReasoningControlMode::FixedOff
+        );
+    }
+    assert_eq!(compiled.operations.len(), 1);
+    assert_eq!(compiled.tool_targets.len(), 2);
+    // expected_image_targets binds each public extension identity to its exact upstream model.
+    // expected_image_targets 把每个公共扩展身份绑定到精确的上游模型。
+    let expected_image_targets = [
+        ("qwen-image-2-0.generate", "qwen-image-2.0"),
+        ("wan2-7-image.generate", "wan2.7-image"),
+    ];
+    for (target_id, model_id) in expected_image_targets {
+        // target is the compiled production contract consumed by the generic executor.
+        // target 是通用执行器消费的已编译生产契约。
+        let target = compiled
+            .tool_targets
+            .iter()
+            .find(|candidate| candidate.target_id == target_id)
+            .unwrap_or_else(|| panic!("missing Token Rhythm image target `{target_id}`"));
+        assert_eq!(target.upstream_target_id, model_id);
+        assert_eq!(target.execution.endpoint_path, "/images/generations");
+        assert_eq!(
+            target.contract.input_schema["properties"]["model"]["const"],
+            model_id
+        );
+        assert_eq!(
+            target.contract.input_schema["properties"]["size"]["const"],
+            "1024x1024"
+        );
+        assert_eq!(target.contract.input_schema["properties"]["n"]["const"], 1);
+        // decoder freezes the reviewed response pointer, MIME, and exact OSS download authority.
+        // decoder 冻结已审查的响应指针、MIME 与精确 OSS 下载权限。
+        let [decoder] = target.contract.output.resource_decoders.as_slice() else {
+            panic!("Token Rhythm image target `{target_id}` must expose one decoder");
+        };
+        assert_eq!(decoder.source_path, "/data/0/url");
+        assert_eq!(
+            decoder.encoding,
+            vulcan_provider_adapters::ProviderToolResourceEncoding::HttpsUrl
+        );
+        assert_eq!(decoder.mime_type.as_deref(), Some("image/png"));
+        assert_eq!(
+            decoder.download_host_suffixes,
+            vec![String::from(
+                "tokenrhythm-prod-backup-oss.oss-cn-beijing.aliyuncs.com"
+            )]
+        );
+    }
+
+    // Standard and Flash profiles preserve the reviewed fixed effort projection.
+    // 标准与 Flash Profile 保留已审查的固定档位投影。
+    let reasoning_mapping = |profile_id: &str| {
+        document["request_profiles"]
+            .as_array()
+            .expect("Token Rhythm request profiles")
+            .iter()
+            .find(|profile| profile["profile_id"] == profile_id)
+            .expect("Token Rhythm reasoning profile")["payload"]["steps"]
+            .as_array()
+            .expect("Token Rhythm profile steps")
+            .iter()
+            .find(|step| step["op"] == "enum_map" && step["path"] == "/reasoning_effort")
+            .expect("Token Rhythm reasoning enum map")["mapping"]
+            .clone()
+    };
+    let standard_mapping = reasoning_mapping("tokenrhythm.chat.reasoning.standard.v1");
+    let flash_mapping = reasoning_mapping("tokenrhythm.chat.reasoning.flash.v1");
+    assert_eq!(standard_mapping["low"], "high");
+    assert_eq!(standard_mapping["xhigh"], "max");
+    assert_eq!(flash_mapping["low"], "low");
+    assert_eq!(flash_mapping["xhigh"], "max");
 }
 
 /// Verifies CommandCode freezes exact online identities, multimodality, routing, and usage.
@@ -1304,7 +1512,7 @@ fn bundled_system_tool_targets_use_only_generic_execution() {
         }
     }
     assert_eq!(
-        target_count, 92,
+        target_count, 94,
         "the complete production target inventory must remain covered"
     );
 }

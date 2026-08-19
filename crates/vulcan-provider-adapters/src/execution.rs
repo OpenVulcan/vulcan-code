@@ -3932,14 +3932,23 @@ fn wire_body_explicitly_disables_reasoning(route: &ProviderExecutionRoute, body:
 ///
 /// # Returns
 /// 返回值
-/// `true` only when a value derived from `reasoning_effort=none` survives at the exact path
-/// declared by the active profile chain; unrelated vendor dialects cannot satisfy the proof.
-/// 仅当由 `reasoning_effort=none` 派生的值保留在当前 Profile 链声明的精确路径时
-/// 返回 `true`；无关供应商方言无法满足该证明。
+/// `true` only when a value derived from `reasoning_effort=none` survives at the exact path,
+/// or the active profile explicitly declares that `none` deletes that path; unrelated vendor
+/// dialects cannot satisfy the proof.
+/// 仅当由 `reasoning_effort=none` 派生的值保留在精确路径，或当前 Profile 显式声明
+/// `none` 会删除该路径时返回 `true`；无关供应商方言无法满足该证明。
 fn chat_body_explicitly_disables_reasoning(route: &ProviderExecutionRoute, body: &Value) -> bool {
     use crate::provider_manifest::{MappingStep, MappingStepSource};
 
-    let mut declared_projection = false;
+    // A retained value declaration remains authoritative over cleanup-only deletion steps.
+    // 保留值声明优先于仅用于清理的删除步骤，避免把清理动作误判为关闭契约。
+    let mut declared_value_projection = false;
+    // A deletion can prove omission semantics only when no retained off value is declared.
+    // 仅在未声明保留式关闭值时，删除动作才能证明省略字段语义。
+    let mut declared_disabled_deletion = false;
+    // The deletion proof is satisfied only when its exact target is absent from the final body.
+    // 仅当精确删除目标未出现在最终请求体中时，删除证明才成立。
+    let mut matched_disabled_deletion = false;
     for step in route
         .request_projection_profiles
         .iter()
@@ -3971,18 +3980,33 @@ fn chat_body_explicitly_disables_reasoning(route: &ProviderExecutionRoute, body:
                 let value = if equals == "none" { then } else { otherwise };
                 (!value.is_null()).then(|| (path.as_str(), value.clone()))
             }
+            MappingStep::DeleteIfEquals {
+                path,
+                source: MappingStepSource::RequestField,
+                source_path,
+                equals,
+            } if source_path == "@reasoning_effort" && equals == "none" => {
+                declared_disabled_deletion = true;
+                matched_disabled_deletion |= body.pointer(path).is_none();
+                None
+            }
             _ => None,
         };
         let Some((path, expected)) = expected else {
             continue;
         };
-        declared_projection = true;
+        declared_value_projection = true;
         if body.pointer(path) == Some(&expected) {
             return true;
         }
     }
 
-    !declared_projection && json_pointer_is_disabled_label(body, "/reasoning_effort")
+    if declared_value_projection {
+        return false;
+    }
+    matched_disabled_deletion
+        || (!declared_disabled_deletion
+            && json_pointer_is_disabled_label(body, "/reasoning_effort"))
 }
 
 /// Reports whether a final JSON body contains a contradictory enabled-reasoning control.
@@ -10762,6 +10786,25 @@ mod tests {
             .encode_required_disabled_reasoning_request(&explicit_route, &request, false)
             .expect("explicit OpenRouter disabled projection should pass");
         assert_eq!(explicit.body["reasoning"]["effort"], "none");
+
+        // omissionRoute proves a provider may define none as deleting its exact Chat field.
+        // omissionRoute 证明供应商可以把删除其精确 Chat 字段定义为 none 的线路语义。
+        let mut omission_route = pinned_openrouter_route(OPENAI_CHAT_PROFILE_ID);
+        omission_route.request_projection_profiles =
+            vec![crate::provider_manifest::RequestProjectionProfile {
+                profile_id: String::from("vendor.chat.omit-disabled.v1"),
+                revision: 1,
+                steps: vec![crate::provider_manifest::MappingStep::DeleteIfEquals {
+                    path: String::from("/reasoning_effort"),
+                    source: crate::provider_manifest::MappingStepSource::RequestField,
+                    source_path: String::from("@reasoning_effort"),
+                    equals: String::from("none"),
+                }],
+            }];
+        let omission = client
+            .encode_required_disabled_reasoning_request(&omission_route, &request, false)
+            .expect("a profile-declared disabled omission should pass");
+        assert!(omission.body.get("reasoning_effort").is_none());
 
         // droppedRoute removes the only Chat provider profile; canonical Chat conversion omits
         // effort none, so a switchable model must be rejected rather than using provider default.

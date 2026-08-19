@@ -100,6 +100,7 @@ function snapshotFixture(): PublicAiSettingsSnapshot {
   const betaOnly = modelFixture("beta/chat", "Beta Only", 32_000)
   return {
     usageRefreshIntervalSeconds: 300,
+    providerPriorities: {},
     usageCache: {},
     providers: [],
     connections: [beta, alpha],

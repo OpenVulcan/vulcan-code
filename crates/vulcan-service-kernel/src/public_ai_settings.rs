@@ -66,6 +66,9 @@ pub(super) struct PublicAiSettingsSnapshot {
     /// Persisted background account-usage refresh interval.
     /// 持久化的后台账号用量刷新间隔。
     usage_refresh_interval_seconds: u64,
+    /// Persisted sparse provider priorities; missing providers inherit zero.
+    /// 持久化的稀疏供应商优先级；缺失供应商继承零。
+    provider_priorities: BTreeMap<String, i32>,
     /// Process-local account-usage observations.
     /// 进程内账号用量观测。
     usage_cache: BTreeMap<String, AccountUsageSnapshot>,
@@ -670,6 +673,19 @@ pub(super) struct PublicAiUsageRefreshSettingsRequest {
     /// Refresh interval in seconds.
     /// 刷新间隔秒数。
     interval_seconds: u64,
+}
+
+/// Saves one exact provider priority used by settings presentation order.
+/// 保存一个用于设置界面展示顺序的精确供应商优先级。
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct PublicAiProviderPrioritySaveRequest {
+    /// Exact registered provider identifier.
+    /// 精确的已注册供应商标识。
+    provider_id: String,
+    /// Signed priority sorted from high to low; zero restores the inherited default.
+    /// 从高到低排序的有符号优先级；零恢复继承默认值。
+    priority: i32,
 }
 
 /// Saves or clears the system-level Codex context-window policy.
@@ -7083,6 +7099,55 @@ pub(super) async fn service_save_public_ai_usage_refresh_settings(
     Ok(snapshot)
 }
 
+/// Saves one provider priority after validating its current registered identity.
+/// 校验当前已注册身份后保存一个供应商优先级。
+pub(super) async fn service_save_public_ai_provider_priority(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    request: PublicAiProviderPrioritySaveRequest,
+) -> Result<PublicAiSettingsSnapshot, String> {
+    // transaction keeps validation, persistence, and publication on one serialized generation.
+    // transaction 让校验、持久化和发布保持在同一个串行代际。
+    let transaction = begin_public_ai_configuration_transaction().await;
+    // currentConfiguration is the exact paired before-image for compensation.
+    // currentConfiguration 是用于补偿的精确配对前镜像。
+    let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
+    if runtime
+        .providers()?
+        .provider(request.provider_id.as_str())
+        .is_none()
+    {
+        return Err(format!(
+            "Provider `{}` is not registered in the current catalog.",
+            request.provider_id
+        ));
+    }
+    // snapshot is prepared before the atomic browser-visible state swap.
+    // snapshot 在浏览器可见状态原子交换前完成预备。
+    let (_configuration, snapshot) = mutate_public_ai_configuration_and_publish_in_transaction(
+        &app,
+        &state,
+        runtime.as_ref(),
+        &current_configuration,
+        "保存供应商优先级失败",
+        |configuration| {
+            if request.priority == 0 {
+                configuration
+                    .provider_priority_overrides
+                    .remove(request.provider_id.as_str());
+            } else {
+                configuration
+                    .provider_priority_overrides
+                    .insert(request.provider_id.clone(), request.priority);
+            }
+            Ok(())
+        },
+        |configuration| build_public_ai_settings_snapshot(runtime.as_ref(), configuration),
+    )?;
+    drop(transaction);
+    Ok(snapshot)
+}
+
 /// Saves the process-wide default Codex context-window policy.
 /// 保存进程级默认 Codex 上下文窗口策略。
 pub(super) async fn service_save_public_ai_context_window_policy_overrides(
@@ -10221,6 +10286,7 @@ fn build_public_ai_settings_snapshot(
             .provider_context_window_policy_overrides
             .clone(),
         usage_refresh_interval_seconds: configuration.usage_refresh_interval_seconds,
+        provider_priorities: configuration.provider_priority_overrides.clone(),
         usage_cache,
         providers: providers.providers().into_iter().cloned().collect(),
         connections: configuration

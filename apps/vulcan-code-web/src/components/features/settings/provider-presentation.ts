@@ -34,6 +34,13 @@ const providerDescriptionKeys: Readonly<Record<string, TranslationKey>> = {
   openai: "settings.providerDescription.openai",
   anthropic: "settings.providerDescription.anthropic",
   google: "settings.providerDescription.google",
+  tokenrhythm: "settings.providerDescription.tokenrhythm",
+}
+
+// providerNameKeys maps built-in provider identities whose product name is localized.
+// providerNameKeys 映射需要本地化产品名称的内置供应商身份。
+const providerNameKeys: Readonly<Record<string, TranslationKey>> = {
+  tokenrhythm: "settings.providerName.tokenrhythm",
 }
 
 // alibabaServiceEntryKeys defines the exact product and category composition for Alibaba entries.
@@ -93,6 +100,29 @@ export function localizedProviderDescription(
   t: TranslationResolver,
 ): string {
   return t(providerDescriptionKeys[providerId] ?? "settings.providerDescription.default")
+}
+
+// localizedProviderName returns a localized built-in name without rewriting custom provider labels.
+// localizedProviderName 返回本地化内置名称，同时不改写自定义供应商标签。
+//
+// Parameters
+// 参数
+// `providerId` is the exact registry identity, `fallback` is the manifest label, and `t` resolves translations.
+// `providerId` 是精确注册身份，`fallback` 是清单标签，`t` 用于解析翻译。
+//
+// Returns
+// 返回值
+// The registered localized name or the caller-provided fallback for providers without a name mapping.
+// 返回已注册的本地化名称；未配置名称映射的供应商返回调用方提供的回退值。
+export function localizedProviderName(
+  providerId: string,
+  fallback: string,
+  t: TranslationResolver,
+): string {
+  // key is the optional translation identity registered for this exact built-in provider.
+  // key 是为此精确内置供应商注册的可选翻译身份。
+  const key = providerNameKeys[providerId]
+  return key ? t(key) : fallback
 }
 
 // localizedServiceEntryPresentation returns a compact title and ordered tags for one entry.

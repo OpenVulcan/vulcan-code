@@ -1,0 +1,557 @@
+{
+  "schema_version": "vulcan.provider-manifest.v2",
+  "provider_id": "tokenrhythm",
+  "revision": 1,
+  "published_at": "2026-08-19T00:00:00Z",
+  "engine_contract": {
+    "minimum_manifest_engine": 1,
+    "required_protocol_profiles": ["openai-chat-completions.v1"],
+    "required_execution_primitives": ["http_json_sync"],
+    "required_upload_primitives": [],
+    "required_transformers": [
+      "conditional_set",
+      "delete_if_equals",
+      "enum_map",
+      "set_literal"
+    ]
+  },
+  "display": {
+    "name": "Token Rhythm",
+    "category": "relay",
+    "credential_directory_visibility": "pinned_onboarding"
+  },
+  "services": [
+    {
+      "service_entry_id": "public-api",
+      "display_name": "Token Rhythm Public API",
+      "kind": "conversation",
+      "base_url": "https://tokenrhythm.studio/v1",
+      "credential_profiles": [
+        {
+          "credential_profile_id": "api-key",
+          "display_name": "API Key",
+          "credential_mode": "token",
+          "billing_kind": "provider_managed",
+          "account_usage_query": "unsupported",
+          "key_prefix": "sk_",
+          "default_usage_scopes": [
+            "interactive_agent",
+            "internal_background",
+            "external_service"
+          ]
+        }
+      ],
+      "default_authentication": "bearer_authorization",
+      "request_headers": {
+        "http-referer": "https://opensquilla.ai",
+        "x-title": "OpenSquilla"
+      },
+      "request_projector": "compatible",
+      "model_catalog": {
+        "source_policy": "manifest_only",
+        "discovery_kind": "manifest_static",
+        "models": [
+          {"model_id": "deepseek-v4-flash", "display_name": "DeepSeek V4 Flash"},
+          {"model_id": "deepseek-v4-pro", "display_name": "DeepSeek V4 Pro"},
+          {"model_id": "deepseek-v4-flash-0731", "display_name": "DeepSeek V4 Flash 0731"},
+          {"model_id": "deepseek-v4-pro-0813", "display_name": "DeepSeek V4 Pro 0813"},
+          {"model_id": "glm-5", "display_name": "GLM-5"},
+          {"model_id": "glm-5.1", "display_name": "GLM-5.1"},
+          {"model_id": "glm-5.2", "display_name": "GLM-5.2"},
+          {"model_id": "minimax-m2.5", "display_name": "MiniMax M2.5"},
+          {"model_id": "minimax-m2.7", "display_name": "MiniMax M2.7"},
+          {"model_id": "kimi-k2.5", "display_name": "Kimi K2.5"},
+          {"model_id": "kimi-k2.6", "display_name": "Kimi K2.6"},
+          {"model_id": "kimi-k2.7-code", "display_name": "Kimi K2.7 Code"},
+          {"model_id": "mimo-v2.5-pro", "display_name": "MiMo V2.5 Pro"},
+          {"model_id": "qwen3.7-max", "display_name": "Qwen3.7 Max"},
+          {"model_id": "qwen3.8-max", "display_name": "Qwen3.8 Max"},
+          {"model_id": "seed-2.1-turbo", "display_name": "Seed 2.1 Turbo"},
+          {"model_id": "seed-2.1-pro", "display_name": "Seed 2.1 Pro"},
+          {"model_id": "qwen-image-2.0", "display_name": "Qwen Image 2.0"},
+          {"model_id": "wan2.7-image", "display_name": "Wan 2.7 Image"}
+        ]
+      },
+      "protocol_routes": [
+        {
+          "protocol_profile_id": "openai-chat-completions.v1",
+          "endpoint_path": "/chat/completions",
+          "usage_profile_refs": [
+            "tokenrhythm.chat.body.v1",
+            "tokenrhythm.chat.sse.usage.v1"
+          ],
+          "request_profile_refs": ["tokenrhythm.chat.reasoning.standard.v1"],
+          "response_profile_refs": [],
+          "provider_request_id_headers": [],
+          "verified": true
+        }
+      ]
+    }
+  ],
+  "model_defaults": {
+    "default_enabled": true,
+    "catalog_membership_policy": "declared_only",
+    "unknown_model_policy": "declared_rule_required",
+    "supported_protocols": ["openai-chat-completions.v1"],
+    "selected_protocol": "openai-chat-completions.v1",
+    "capabilities": {
+      "operations": ["conversation_respond"],
+      "input_resources": [],
+      "output_resources": [],
+      "reasoning": "native",
+      "provider_native_tools": [],
+      "reasoning_control": "effort_selection",
+      "reasoning_efforts": ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
+      "prompt_cache": {
+        "provider_default_behavior": "The provider may report cache reads without host-managed cache injection.",
+        "supports_managed_explicit": false,
+        "supported_ttl_options": []
+      },
+      "model_parameters": [],
+      "evidence_revision": "tokenrhythm.catalog.2026-08-19"
+    },
+    "default_usage_profile_refs": [],
+    "default_request_profile_refs": [],
+    "default_response_profile_refs": [],
+    "default_operation_refs": []
+  },
+  "model_rules": [
+    {
+      "rule_id": "deepseek-v4-flash",
+      "display_name": "DeepSeek V4 Flash",
+      "scope": {"service_entry_ids": ["public-api"], "credential_profile_ids": ["api-key"]},
+      "matcher": {"kind": "exact", "value": "deepseek-v4-flash"},
+      "supported_protocols": ["openai-chat-completions.v1"],
+      "selected_protocol": "openai-chat-completions.v1",
+      "capabilities": {"context_limit": 1000000, "output_limit": 384000, "evidence_revision": "tokenrhythm.catalog.2026-08-19"},
+      "request_profile_refs": ["tokenrhythm.chat.reasoning.flash.v1"]
+    },
+    {
+      "rule_id": "deepseek-v4-pro",
+      "display_name": "DeepSeek V4 Pro",
+      "scope": {"service_entry_ids": ["public-api"], "credential_profile_ids": ["api-key"]},
+      "matcher": {"kind": "exact", "value": "deepseek-v4-pro"},
+      "supported_protocols": ["openai-chat-completions.v1"],
+      "selected_protocol": "openai-chat-completions.v1",
+      "capabilities": {"context_limit": 1000000, "output_limit": 384000, "evidence_revision": "tokenrhythm.catalog.2026-08-19"}
+    },
+    {
+      "rule_id": "deepseek-v4-flash-0731",
+      "display_name": "DeepSeek V4 Flash 0731",
+      "scope": {"service_entry_ids": ["public-api"], "credential_profile_ids": ["api-key"]},
+      "matcher": {"kind": "exact", "value": "deepseek-v4-flash-0731"},
+      "supported_protocols": ["openai-chat-completions.v1"],
+      "selected_protocol": "openai-chat-completions.v1",
+      "capabilities": {"context_limit": 1000000, "output_limit": 384000, "evidence_revision": "tokenrhythm.catalog.testing.2026-08-19"},
+      "request_profile_refs": ["tokenrhythm.chat.reasoning.flash.v1"]
+    },
+    {
+      "rule_id": "deepseek-v4-pro-0813",
+      "display_name": "DeepSeek V4 Pro 0813",
+      "scope": {"service_entry_ids": ["public-api"], "credential_profile_ids": ["api-key"]},
+      "matcher": {"kind": "exact", "value": "deepseek-v4-pro-0813"},
+      "supported_protocols": ["openai-chat-completions.v1"],
+      "selected_protocol": "openai-chat-completions.v1",
+      "capabilities": {"context_limit": 1000000, "output_limit": 384000, "evidence_revision": "tokenrhythm.catalog.2026-08-19"}
+    },
+    {
+      "rule_id": "glm-5",
+      "display_name": "GLM-5",
+      "scope": {"service_entry_ids": ["public-api"], "credential_profile_ids": ["api-key"]},
+      "matcher": {"kind": "exact", "value": "glm-5"},
+      "supported_protocols": ["openai-chat-completions.v1"],
+      "selected_protocol": "openai-chat-completions.v1",
+      "capabilities": {"context_limit": 1000000, "output_limit": 128000, "evidence_revision": "tokenrhythm.catalog.2026-08-19"}
+    },
+    {
+      "rule_id": "glm-5-1",
+      "display_name": "GLM-5.1",
+      "scope": {"service_entry_ids": ["public-api"], "credential_profile_ids": ["api-key"]},
+      "matcher": {"kind": "exact", "value": "glm-5.1"},
+      "supported_protocols": ["openai-chat-completions.v1"],
+      "selected_protocol": "openai-chat-completions.v1",
+      "capabilities": {"context_limit": 200000, "output_limit": 128000, "evidence_revision": "tokenrhythm.catalog.2026-08-19"}
+    },
+    {
+      "rule_id": "glm-5-2",
+      "display_name": "GLM-5.2",
+      "scope": {"service_entry_ids": ["public-api"], "credential_profile_ids": ["api-key"]},
+      "matcher": {"kind": "exact", "value": "glm-5.2"},
+      "supported_protocols": ["openai-chat-completions.v1"],
+      "selected_protocol": "openai-chat-completions.v1",
+      "capabilities": {"context_limit": 1000000, "output_limit": 128000, "evidence_revision": "tokenrhythm.catalog.2026-08-19"}
+    },
+    {
+      "rule_id": "minimax-m2-5",
+      "display_name": "MiniMax M2.5",
+      "scope": {"service_entry_ids": ["public-api"], "credential_profile_ids": ["api-key"]},
+      "matcher": {"kind": "exact", "value": "minimax-m2.5"},
+      "supported_protocols": ["openai-chat-completions.v1"],
+      "selected_protocol": "openai-chat-completions.v1",
+      "capabilities": {
+        "reasoning_control": "effort_selection",
+        "reasoning_efforts": ["minimal", "low", "medium", "high", "xhigh", "max"],
+        "context_limit": 200000,
+        "output_limit": 200000,
+        "prompt_cache": {"provider_default_behavior": "This model does not expose cache-read capability.", "supports_managed_explicit": false, "supported_ttl_options": []},
+        "evidence_revision": "tokenrhythm.catalog.2026-08-19"
+      }
+    },
+    {
+      "rule_id": "minimax-m2-7",
+      "display_name": "MiniMax M2.7",
+      "scope": {"service_entry_ids": ["public-api"], "credential_profile_ids": ["api-key"]},
+      "matcher": {"kind": "exact", "value": "minimax-m2.7"},
+      "supported_protocols": ["openai-chat-completions.v1"],
+      "selected_protocol": "openai-chat-completions.v1",
+      "capabilities": {
+        "reasoning_control": "effort_selection",
+        "reasoning_efforts": ["minimal", "low", "medium", "high", "xhigh", "max"],
+        "context_limit": 200000,
+        "output_limit": 192000,
+        "prompt_cache": {"provider_default_behavior": "This model does not expose cache-read capability.", "supports_managed_explicit": false, "supported_ttl_options": []},
+        "evidence_revision": "tokenrhythm.catalog.2026-08-19"
+      }
+    },
+    {
+      "rule_id": "kimi-k2-5",
+      "display_name": "Kimi K2.5",
+      "scope": {"service_entry_ids": ["public-api"], "credential_profile_ids": ["api-key"]},
+      "matcher": {"kind": "exact", "value": "kimi-k2.5"},
+      "supported_protocols": ["openai-chat-completions.v1"],
+      "selected_protocol": "openai-chat-completions.v1",
+      "capabilities": {"input_resources": ["image"], "context_limit": 262144, "output_limit": 65536, "evidence_revision": "tokenrhythm.catalog.2026-08-19"}
+    },
+    {
+      "rule_id": "kimi-k2-6",
+      "display_name": "Kimi K2.6",
+      "scope": {"service_entry_ids": ["public-api"], "credential_profile_ids": ["api-key"]},
+      "matcher": {"kind": "exact", "value": "kimi-k2.6"},
+      "supported_protocols": ["openai-chat-completions.v1"],
+      "selected_protocol": "openai-chat-completions.v1",
+      "capabilities": {"input_resources": ["image"], "context_limit": 262144, "output_limit": 131072, "evidence_revision": "tokenrhythm.catalog.2026-08-19"}
+    },
+    {
+      "rule_id": "kimi-k2-7-code",
+      "display_name": "Kimi K2.7 Code",
+      "scope": {"service_entry_ids": ["public-api"], "credential_profile_ids": ["api-key"]},
+      "matcher": {"kind": "exact", "value": "kimi-k2.7-code"},
+      "supported_protocols": ["openai-chat-completions.v1"],
+      "selected_protocol": "openai-chat-completions.v1",
+      "capabilities": {
+        "input_resources": ["image"],
+        "reasoning_control": "effort_selection",
+        "reasoning_efforts": ["minimal", "low", "medium", "high", "xhigh", "max"],
+        "context_limit": 262144,
+        "output_limit": 16384,
+        "evidence_revision": "tokenrhythm.catalog.2026-08-19"
+      }
+    },
+    {
+      "rule_id": "mimo-v2-5-pro",
+      "display_name": "MiMo V2.5 Pro",
+      "scope": {"service_entry_ids": ["public-api"], "credential_profile_ids": ["api-key"]},
+      "matcher": {"kind": "exact", "value": "mimo-v2.5-pro"},
+      "supported_protocols": ["openai-chat-completions.v1"],
+      "selected_protocol": "openai-chat-completions.v1",
+      "capabilities": {"context_limit": 262144, "output_limit": 262144, "evidence_revision": "tokenrhythm.catalog.2026-08-19"}
+    },
+    {
+      "rule_id": "qwen3-7-max",
+      "display_name": "Qwen3.7 Max",
+      "scope": {"service_entry_ids": ["public-api"], "credential_profile_ids": ["api-key"]},
+      "matcher": {"kind": "exact", "value": "qwen3.7-max"},
+      "supported_protocols": ["openai-chat-completions.v1"],
+      "selected_protocol": "openai-chat-completions.v1",
+      "capabilities": {"context_limit": 1000000, "output_limit": 131072, "evidence_revision": "tokenrhythm.catalog.2026-08-19"}
+    },
+    {
+      "rule_id": "qwen3-8-max",
+      "display_name": "Qwen3.8 Max",
+      "scope": {"service_entry_ids": ["public-api"], "credential_profile_ids": ["api-key"]},
+      "matcher": {"kind": "exact", "value": "qwen3.8-max"},
+      "supported_protocols": ["openai-chat-completions.v1"],
+      "selected_protocol": "openai-chat-completions.v1",
+      "capabilities": {"input_resources": ["image"], "context_limit": 1000000, "output_limit": 131072, "evidence_revision": "tokenrhythm.catalog.testing.2026-08-19"}
+    },
+    {
+      "rule_id": "seed-2-1-turbo",
+      "display_name": "Seed 2.1 Turbo",
+      "scope": {"service_entry_ids": ["public-api"], "credential_profile_ids": ["api-key"]},
+      "matcher": {"kind": "exact", "value": "seed-2.1-turbo"},
+      "supported_protocols": ["openai-chat-completions.v1"],
+      "selected_protocol": "openai-chat-completions.v1",
+      "capabilities": {"input_resources": ["image", "video"], "context_limit": 262144, "output_limit": 131072, "evidence_revision": "tokenrhythm.catalog.testing.2026-08-19"}
+    },
+    {
+      "rule_id": "seed-2-1-pro",
+      "display_name": "Seed 2.1 Pro",
+      "scope": {"service_entry_ids": ["public-api"], "credential_profile_ids": ["api-key"]},
+      "matcher": {"kind": "exact", "value": "seed-2.1-pro"},
+      "supported_protocols": ["openai-chat-completions.v1"],
+      "selected_protocol": "openai-chat-completions.v1",
+      "capabilities": {"input_resources": ["image", "video"], "context_limit": 262144, "output_limit": 131072, "evidence_revision": "tokenrhythm.catalog.testing.2026-08-19"}
+    },
+    {
+      "rule_id": "qwen-image-2-0",
+      "display_name": "Qwen Image 2.0",
+      "scope": {"service_entry_ids": ["public-api"], "credential_profile_ids": ["api-key"]},
+      "matcher": {"kind": "exact", "value": "qwen-image-2.0"},
+      "supported_protocols": ["openai-chat-completions.v1"],
+      "selected_protocol": "openai-chat-completions.v1",
+      "default_enabled": false,
+      "capabilities": {
+        "operations": ["image_generate"],
+        "input_resources": [],
+        "output_resources": ["image"],
+        "reasoning": "unsupported",
+        "provider_native_tools": [],
+        "reasoning_control": "fixed_off",
+        "reasoning_efforts": [],
+        "model_parameters": [],
+        "evidence_revision": "tokenrhythm.image-generation.2026-08-19"
+      },
+      "request_profile_refs": []
+    },
+    {
+      "rule_id": "wan2-7-image",
+      "display_name": "Wan 2.7 Image",
+      "scope": {"service_entry_ids": ["public-api"], "credential_profile_ids": ["api-key"]},
+      "matcher": {"kind": "exact", "value": "wan2.7-image"},
+      "supported_protocols": ["openai-chat-completions.v1"],
+      "selected_protocol": "openai-chat-completions.v1",
+      "default_enabled": false,
+      "capabilities": {
+        "operations": ["image_generate"],
+        "input_resources": [],
+        "output_resources": ["image"],
+        "reasoning": "unsupported",
+        "provider_native_tools": [],
+        "reasoning_control": "fixed_off",
+        "reasoning_efforts": [],
+        "model_parameters": [],
+        "evidence_revision": "tokenrhythm.image-generation.wan-parity.2026-08-19"
+      },
+      "request_profile_refs": []
+    }
+  ],
+  "usage_profiles": [
+    {
+      "profile_id": "tokenrhythm.chat.body.v1",
+      "description": "Token Rhythm Chat JSON usage extraction",
+      "payload": {
+        "profile_id": "tokenrhythm.chat.body.v1",
+        "revision": 1,
+        "record_kind": "json_body",
+        "update_kind": "final",
+        "required_pointer": "/usage",
+        "bindings": [
+          {"field": "input_tokens", "pointers": ["/usage/prompt_tokens"], "encoding": "unsigned_integer"},
+          {"field": "cache_read_tokens", "pointers": ["/usage/prompt_tokens_details/cached_tokens"], "encoding": "unsigned_integer"},
+          {"field": "output_tokens", "pointers": ["/usage/completion_tokens"], "encoding": "unsigned_integer"},
+          {"field": "reasoning_tokens", "pointers": ["/usage/completion_tokens_details/reasoning_tokens"], "encoding": "unsigned_integer"},
+          {"field": "total_tokens", "pointers": ["/usage/total_tokens"], "encoding": "unsigned_integer"},
+          {"field": "response_model", "pointers": ["/model"], "encoding": "string"},
+          {"field": "response_id", "pointers": ["/id"], "encoding": "string"}
+        ],
+        "derivations": []
+      }
+    },
+    {
+      "profile_id": "tokenrhythm.chat.sse.usage.v1",
+      "description": "Token Rhythm Chat SSE usage extraction",
+      "payload": {
+        "profile_id": "tokenrhythm.chat.sse.usage.v1",
+        "revision": 1,
+        "record_kind": "sse_event",
+        "update_kind": "final",
+        "required_pointer": "/usage",
+        "bindings": [
+          {"field": "input_tokens", "pointers": ["/usage/prompt_tokens"], "encoding": "unsigned_integer"},
+          {"field": "cache_read_tokens", "pointers": ["/usage/prompt_tokens_details/cached_tokens"], "encoding": "unsigned_integer"},
+          {"field": "output_tokens", "pointers": ["/usage/completion_tokens"], "encoding": "unsigned_integer"},
+          {"field": "reasoning_tokens", "pointers": ["/usage/completion_tokens_details/reasoning_tokens"], "encoding": "unsigned_integer"},
+          {"field": "total_tokens", "pointers": ["/usage/total_tokens"], "encoding": "unsigned_integer"},
+          {"field": "response_model", "pointers": ["/model"], "encoding": "string"},
+          {"field": "response_id", "pointers": ["/id"], "encoding": "string"}
+        ],
+        "derivations": []
+      }
+    }
+  ],
+  "request_profiles": [
+    {
+      "profile_id": "tokenrhythm.chat.reasoning.standard.v1",
+      "description": "Token Rhythm standard Chat reasoning and streaming usage projection",
+      "payload": {
+        "profile_id": "tokenrhythm.chat.reasoning.standard.v1",
+        "revision": 1,
+        "steps": [
+          {"op": "set_literal", "path": "/stream_options/include_usage", "value": true},
+          {"op": "conditional_set", "path": "/thinking", "source": "request_field", "source_path": "@reasoning_effort", "equals": "none", "then": null, "otherwise": {"type": "enabled"}},
+          {
+            "op": "enum_map",
+            "path": "/reasoning_effort",
+            "source": "request_field",
+            "source_path": "@reasoning_effort",
+            "mapping": {"none": "none", "minimal": "high", "low": "high", "medium": "high", "high": "high", "xhigh": "max", "max": "max"},
+            "unmatched": "error",
+            "default": null
+          },
+          {"op": "delete_if_equals", "path": "/reasoning_effort", "source": "request_field", "source_path": "@reasoning_effort", "equals": "none"}
+        ]
+      }
+    },
+    {
+      "profile_id": "tokenrhythm.chat.reasoning.flash.v1",
+      "description": "Token Rhythm DeepSeek Flash Chat reasoning and streaming usage projection",
+      "payload": {
+        "profile_id": "tokenrhythm.chat.reasoning.flash.v1",
+        "revision": 1,
+        "steps": [
+          {"op": "set_literal", "path": "/stream_options/include_usage", "value": true},
+          {"op": "conditional_set", "path": "/thinking", "source": "request_field", "source_path": "@reasoning_effort", "equals": "none", "then": null, "otherwise": {"type": "enabled"}},
+          {
+            "op": "enum_map",
+            "path": "/reasoning_effort",
+            "source": "request_field",
+            "source_path": "@reasoning_effort",
+            "mapping": {"none": "none", "minimal": "high", "low": "low", "medium": "high", "high": "high", "xhigh": "max", "max": "max"},
+            "unmatched": "error",
+            "default": null
+          },
+          {"op": "delete_if_equals", "path": "/reasoning_effort", "source": "request_field", "source_path": "@reasoning_effort", "equals": "none"}
+        ]
+      }
+    }
+  ],
+  "response_profiles": [],
+  "upload_channels": [],
+  "operations": [
+    {
+      "operation_id": "tokenrhythm.image.generate",
+      "operation": "image_generate",
+      "carrier": "provider_tool",
+      "input_resources": [],
+      "output_resources": ["image"],
+      "tool_target_refs": ["qwen-image-2-0.generate", "wan2-7-image.generate"],
+      "request_profile_refs": [],
+      "response_profile_refs": [],
+      "upload_channel_refs": [],
+      "upload_bindings": [],
+      "timeout_ms": 300000,
+      "idempotent": false
+    }
+  ],
+  "tool_targets": [
+    {
+      "target_id": "qwen-image-2-0.generate",
+      "description": "Generate one image with Qwen Image 2.0 through the verified Token Rhythm synchronous endpoint.",
+      "service_entry_id": "public-api",
+      "credential_profile_ids": ["api-key"],
+      "upstream_target_id": "qwen-image-2.0",
+      "availability_model_ids_any": ["qwen-image-2.0"],
+      "display_name": "Qwen Image 2.0",
+      "tool_id": "image_generate",
+      "capability": "image_generate",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "model": {"type": "string", "const": "qwen-image-2.0", "default": "qwen-image-2.0"},
+          "prompt": {"type": "string", "minLength": 1, "description": "Complete text-to-image generation instruction."},
+          "size": {"type": "string", "const": "1024x1024", "default": "1024x1024"},
+          "n": {"type": "integer", "const": 1, "default": 1}
+        },
+        "required": ["prompt"]
+      },
+      "extension_profile": {
+        "summary": "Generate one 1024x1024 image with Qwen Image 2.0 through Token Rhythm.",
+        "characteristics": ["Synchronous OpenAI Images-compatible generation.", "The verified response returns one signed PNG URL."],
+        "input_modes": ["text_to_image"],
+        "resolution_policy": {"mode": "fixed_presets", "presets": [{"value": "1024x1024"}], "aspect_ratios": ["1:1"]},
+        "format_policy": {"input_formats": ["text"], "output_formats": ["image/png"]},
+        "constraints": ["Exactly one 1024x1024 image is requested.", "The signed output URL is accepted only from the reviewed Token Rhythm OSS host."],
+        "limitations": ["Image editing, masks, and reference-image inputs are not exposed by this target."],
+        "evidence_refs": ["tokenrhythm.qwen-image-2.0.real-call.2026-08-19"]
+      },
+      "output": {
+        "kind": "resources",
+        "source_path": "/data",
+        "normalized_result_path": "resources",
+        "resource_kind": "image",
+        "mime_types": ["image/png"],
+        "resource_decoders": [
+          {
+            "source_path": "/data/0/url",
+            "encoding": "https_url",
+            "download_host_suffixes": ["tokenrhythm-prod-backup-oss.oss-cn-beijing.aliyuncs.com"],
+            "resource_kind": "image",
+            "mime_type": "image/png",
+            "output_id_prefix": "image"
+          }
+        ]
+      },
+      "execution": {"endpoint_path": "/images/generations", "authentication": "bearer_authorization", "adapter": "generic_json", "execution_kind": "http_json_sync"}
+    },
+    {
+      "target_id": "wan2-7-image.generate",
+      "description": "Generate one image with Wan 2.7 Image through the Token Rhythm synchronous endpoint.",
+      "service_entry_id": "public-api",
+      "credential_profile_ids": ["api-key"],
+      "upstream_target_id": "wan2.7-image",
+      "availability_model_ids_any": ["wan2.7-image"],
+      "display_name": "Wan 2.7 Image",
+      "tool_id": "image_generate",
+      "capability": "image_generate",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "model": {"type": "string", "const": "wan2.7-image", "default": "wan2.7-image"},
+          "prompt": {"type": "string", "minLength": 1, "description": "Complete text-to-image generation instruction."},
+          "size": {"type": "string", "const": "1024x1024", "default": "1024x1024"},
+          "n": {"type": "integer", "const": 1, "default": 1}
+        },
+        "required": ["prompt"]
+      },
+      "extension_profile": {
+        "summary": "Generate one 1024x1024 image with Wan 2.7 Image through Token Rhythm.",
+        "characteristics": ["Uses the same synchronous OpenAI Images-compatible contract as Qwen Image 2.0.", "Returns one signed PNG URL."],
+        "input_modes": ["text_to_image"],
+        "resolution_policy": {"mode": "fixed_presets", "presets": [{"value": "1024x1024"}], "aspect_ratios": ["1:1"]},
+        "format_policy": {"input_formats": ["text"], "output_formats": ["image/png"]},
+        "constraints": ["Exactly one 1024x1024 image is requested.", "The signed output URL is accepted only from the reviewed Token Rhythm OSS host."],
+        "limitations": ["Image editing, masks, and reference-image inputs are not exposed by this target."],
+        "evidence_refs": ["tokenrhythm.wan2.7-image.user-confirmed-parity.2026-08-19"]
+      },
+      "output": {
+        "kind": "resources",
+        "source_path": "/data",
+        "normalized_result_path": "resources",
+        "resource_kind": "image",
+        "mime_types": ["image/png"],
+        "resource_decoders": [
+          {
+            "source_path": "/data/0/url",
+            "encoding": "https_url",
+            "download_host_suffixes": ["tokenrhythm-prod-backup-oss.oss-cn-beijing.aliyuncs.com"],
+            "resource_kind": "image",
+            "mime_type": "image/png",
+            "output_id_prefix": "image"
+          }
+        ]
+      },
+      "execution": {"endpoint_path": "/images/generations", "authentication": "bearer_authorization", "adapter": "generic_json", "execution_kind": "http_json_sync"}
+    }
+  ],
+  "provenance": {
+    "status": "verified",
+    "sources": [
+      {"url": "https://tokenrhythm.studio/api/models", "note": "Static model identities, limits, modalities, protocol flags, and reasoning modes captured on 2026-08-18."},
+      {"url": "https://tokenrhythm.studio/v1/models", "note": "Authenticated inventory confirmed the 17 Chat model identities on 2026-08-19."},
+      {"url": "https://tokenrhythm.studio/v1/images/generations", "note": "Qwen Image 2.0 request and signed PNG response were verified; Wan 2.7 parity was confirmed by the user."}
+    ],
+    "verified_at": "2026-08-19T00:00:00Z"
+  }
+}

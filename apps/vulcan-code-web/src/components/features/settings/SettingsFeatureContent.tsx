@@ -53,12 +53,6 @@ export interface SettingsFeatureContentProps {
   // Service-backed settings page actions.
   // 服务端支持的设置页面动作。
   actions: SettingsActionProps;
-  // Updates the add-provider picker open state.
-  // 更新添加模型供应商选择弹窗的打开状态。
-  onProviderPickerOpenChange: (open: boolean) => void;
-  // Whether the add-provider picker is open.
-  // 添加模型供应商选择弹窗是否打开。
-  providerPickerOpen: boolean;
   // Startup snapshot used by diagnostics.
   // 诊断页面使用的启动快照。
   startup: StartupSnapshot;
@@ -80,12 +74,7 @@ export function SettingsFeatureContent(props: SettingsFeatureContentProps) {
     return <ProviderManagementArea />;
   }
   if (props.activeSettingsSubArea === "credential-management") {
-    return (
-      <CredentialManagementArea
-        onProviderPickerOpenChange={props.onProviderPickerOpenChange}
-        pickerOpen={props.providerPickerOpen}
-      />
-    );
+    return <CredentialManagementArea />;
   }
   if (props.activeSettingsSubArea === "model-list") {
     return <ModelListSettingsArea />;

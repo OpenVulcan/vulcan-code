@@ -2,6 +2,7 @@ import * as React from "react"
 import {
   CircleAlert,
   CircleCheckBig,
+  KeyRound,
   LoaderCircle,
   ListTree,
   LockKeyhole,
@@ -12,10 +13,18 @@ import {
 } from "lucide-react"
 
 import { ProviderIcon } from "@/components/features/settings/provider-icon"
+import { PublicAiConnectionDialog } from "@/components/features/settings/provider-list-settings"
+import {
+  isFunctionalProvider,
+  orderProvidersByPriority,
+} from "@/components/features/settings/provider-ordering"
 import { CustomProviderModelsDialog } from "@/components/features/settings/custom-provider-models-dialog"
 import { persistAndApplyCustomProviderSnapshot } from "@/components/features/settings/custom-provider-save-state"
 import { ProviderManifestStatusPanel } from "@/components/features/settings/provider-manifest-status"
-import { localizedProviderDescription } from "@/components/features/settings/provider-presentation"
+import {
+  localizedProviderDescription,
+  localizedProviderName,
+} from "@/components/features/settings/provider-presentation"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
   AlertDialog,
@@ -40,6 +49,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
   Dialog,
   DialogContent,
@@ -84,6 +94,7 @@ import {
   loadPublicAiSettings,
   probePublicAiCustomProvider,
   removePublicAiCustomProvider,
+  savePublicAiProviderPriority,
   savePublicAiCustomProvider,
 } from "@/service/settings-actions-service"
 import type {
@@ -115,6 +126,9 @@ export function ProviderManagementArea() {
   const [busyProviderId, setBusyProviderId] = React.useState<string | null>(null)
   const [providerToRemove, setProviderToRemove] = React.useState<PublicAiProviderDescriptor | null>(null)
   const [isolatedProviderToRemove, setIsolatedProviderToRemove] = React.useState<string | null>(null)
+  // credentialProviderId owns the exact provider locked into the add-credential dialog.
+  // credentialProviderId 持有锁定到新增凭据弹窗的精确供应商。
+  const [credentialProviderId, setCredentialProviderId] = React.useState("")
   const [error, setError] = React.useState<string | null>(null)
 
   // refresh loads the effective system and custom provider registry.
@@ -201,9 +215,28 @@ export function ProviderManagementArea() {
     }
   }, [])
 
-  // systemProviders contains the immutable built-in provider definitions.
-  // systemProviders 包含不可变的内置供应商定义。
-  const systemProviders = snapshot?.providers.filter((provider) => provider.kind === "system") ?? []
+  // saveProviderPriority persists one provider ordering value and refreshes the authoritative snapshot.
+  // saveProviderPriority 持久化一个供应商排序值并刷新权威快照。
+  const saveProviderPriority = React.useCallback(async (providerId: string, priority: number) => {
+    setBusyProviderId(providerId)
+    setError(null)
+    try {
+      setSnapshot(await savePublicAiProviderPriority(providerId, priority))
+    } catch (reason) {
+      setError(errorMessage(reason))
+    } finally {
+      setBusyProviderId(null)
+    }
+  }, [])
+
+  // systemProviders contains immutable model providers and excludes tool-only functional providers.
+  // systemProviders 包含不可变模型供应商，并排除仅工具型功能供应商。
+  const systemProviders = snapshot?.providers.filter((provider) => (
+    provider.kind === "system" && !isFunctionalProvider(provider)
+  )) ?? []
+  // functionalProviders contains immutable providers whose service entries expose provider tools only.
+  // functionalProviders 包含服务入口仅公开供应商工具的不可变供应商。
+  const functionalProviders = snapshot?.providers.filter(isFunctionalProvider) ?? []
   // customProviders contains the user-managed provider definitions.
   // customProviders 包含用户管理的供应商定义。
   const customProviders = snapshot?.providers.filter((provider) => provider.kind === "custom") ?? []
@@ -298,62 +331,95 @@ export function ProviderManagementArea() {
         </div>
       ) : null}
 
-      {customProviderManifestFailureTotalCount > 0 ? (
-        <div className="rounded-xl border border-destructive/40 bg-destructive/5 p-4 text-sm">
-          <p className="font-semibold text-destructive">
-            已隔离 {customProviderManifestFailureTotalCount} 个自定义供应商
-          </p>
-          <p className="mt-1 text-muted-foreground">
-            该供应商已停止参与运行时路由；其他供应商及其设置仍可正常使用和保存。下列独立 Manifest 源文件会在保存时保持原始字节不变；可修复源文件后重启 Service，或显式删除对应隔离项。
-          </p>
-          <ul className="mt-2 space-y-2 text-xs text-destructive">
-            {customProviderManifestFailures.map((failure, index) => (
-              <li
-                className="flex flex-wrap items-start justify-between gap-2 rounded-lg border border-destructive/20 p-2"
-                key={`${failure.providerId}:${index}`}
-              >
-                <span className="min-w-0 flex-1 break-all font-mono">
-                  {failure.providerId}：{failure.message}
-                </span>
-                <Button
-                  className="shrink-0"
-                  disabled={busyProviderId !== null}
-                  onClick={() => setIsolatedProviderToRemove(failure.providerId)}
-                  size="sm"
-                  type="button"
-                  variant="destructive"
-                >
-                  <Trash2 className="mr-1 size-3.5" />
-                  删除隔离项
-                </Button>
-              </li>
-            ))}
-          </ul>
-          {snapshot?.customProviderManifestFailuresTruncated ? (
-            <p className="mt-2 text-xs text-muted-foreground">其余诊断已按安全上限省略。</p>
+      <Tabs className="space-y-4" defaultValue="system">
+        <TabsList variant="line">
+          <TabsTrigger value="system">系统供应商</TabsTrigger>
+          <TabsTrigger value="functional">功能供应商</TabsTrigger>
+          <TabsTrigger value="custom">自定义供应商</TabsTrigger>
+          <TabsTrigger value="catalog">供应商清单</TabsTrigger>
+        </TabsList>
+        <TabsContent className="m-0" value="system">
+          <SystemProviderTable
+            busyProviderId={busyProviderId}
+            connections={snapshot?.connections ?? []}
+            heading="系统供应商"
+            loading={!snapshot}
+            onAddCredential={setCredentialProviderId}
+            onSavePriority={(providerId, priority) => void saveProviderPriority(providerId, priority)}
+            priorities={snapshot?.providerPriorities ?? {}}
+            providers={systemProviders}
+            variant="system"
+          />
+        </TabsContent>
+        <TabsContent className="m-0" value="functional">
+          <SystemProviderTable
+            busyProviderId={busyProviderId}
+            connections={snapshot?.connections ?? []}
+            heading="功能供应商"
+            loading={!snapshot}
+            onAddCredential={setCredentialProviderId}
+            onSavePriority={(providerId, priority) => void saveProviderPriority(providerId, priority)}
+            priorities={snapshot?.providerPriorities ?? {}}
+            providers={functionalProviders}
+            variant="functional"
+          />
+        </TabsContent>
+        <TabsContent className="m-0 space-y-4" value="custom">
+          {customProviderManifestFailureTotalCount > 0 ? (
+            <div className="rounded-xl border border-destructive/40 bg-destructive/5 p-4 text-sm">
+              <p className="font-semibold text-destructive">
+                已隔离 {customProviderManifestFailureTotalCount} 个自定义供应商
+              </p>
+              <p className="mt-1 text-muted-foreground">
+                该供应商已停止参与运行时路由；其他供应商及其设置仍可正常使用和保存。下列独立 Manifest 源文件会在保存时保持原始字节不变；可修复源文件后重启 Service，或显式删除对应隔离项。
+              </p>
+              <ul className="mt-2 space-y-2 text-xs text-destructive">
+                {customProviderManifestFailures.map((failure, index) => (
+                  <li
+                    className="flex flex-wrap items-start justify-between gap-2 rounded-lg border border-destructive/20 p-2"
+                    key={`${failure.providerId}:${index}`}
+                  >
+                    <span className="min-w-0 flex-1 break-all font-mono">
+                      {failure.providerId}：{failure.message}
+                    </span>
+                    <Button
+                      className="shrink-0"
+                      disabled={busyProviderId !== null}
+                      onClick={() => setIsolatedProviderToRemove(failure.providerId)}
+                      size="sm"
+                      type="button"
+                      variant="destructive"
+                    >
+                      <Trash2 className="mr-1 size-3.5" />
+                      删除隔离项
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+              {snapshot?.customProviderManifestFailuresTruncated ? (
+                <p className="mt-2 text-xs text-muted-foreground">其余诊断已按安全上限省略。</p>
+              ) : null}
+            </div>
           ) : null}
-        </div>
-      ) : null}
-
-      <ProviderManifestStatusPanel />
-
-      <CustomProviderTable
-        busyProviderId={busyProviderId}
-        connections={snapshot?.connections ?? []}
-        customModels={snapshot?.customModels ?? {}}
-        loading={!snapshot}
-        onCreate={openCreate}
-        onEdit={openEdit}
-        onManageModels={openModels}
-        onRemove={setProviderToRemove}
-        providers={customProviders}
-      />
-
-      <SystemProviderTable
-        connections={snapshot?.connections ?? []}
-        loading={!snapshot}
-        providers={systemProviders}
-      />
+          <CustomProviderTable
+            busyProviderId={busyProviderId}
+            connections={snapshot?.connections ?? []}
+            customModels={snapshot?.customModels ?? {}}
+            loading={!snapshot}
+            onAddCredential={setCredentialProviderId}
+            onCreate={openCreate}
+            onEdit={openEdit}
+            onManageModels={openModels}
+            onRemove={setProviderToRemove}
+            onSavePriority={(providerId, priority) => void saveProviderPriority(providerId, priority)}
+            priorities={snapshot?.providerPriorities ?? {}}
+            providers={customProviders}
+          />
+        </TabsContent>
+        <TabsContent className="m-0" value="catalog">
+          <ProviderManifestStatusPanel />
+        </TabsContent>
+      </Tabs>
 
       <CustomProviderDialog
         connections={snapshot?.connections ?? []}
@@ -372,6 +438,22 @@ export function ProviderManagementArea() {
           snapshot={snapshot}
         />
       ) : null}
+      <PublicAiConnectionDialog
+        connection={null}
+        initialProviderId={credentialProviderId}
+        lockedProviderId={credentialProviderId}
+        onOpenChange={(open) => {
+          if (!open) {
+            setCredentialProviderId("")
+          }
+        }}
+        onSaved={(next) => {
+          setSnapshot(next)
+          setCredentialProviderId("")
+        }}
+        open={credentialProviderId !== ""}
+        providers={snapshot?.providers ?? []}
+      />
       <AlertDialog onOpenChange={(open) => !open && setProviderToRemove(null)} open={providerToRemove !== null}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -449,13 +531,22 @@ function CustomProviderTable(props: {
   connections: PublicAiSettingsSnapshot["connections"]
   customModels: NonNullable<PublicAiSettingsSnapshot["customModels"]>
   loading: boolean
+  onAddCredential: (providerId: string) => void
   onCreate: () => void
   onEdit: (provider: PublicAiProviderDescriptor) => void
   onManageModels: (provider: PublicAiProviderDescriptor) => void
   onRemove: (provider: PublicAiProviderDescriptor) => void
+  onSavePriority: (providerId: string, priority: number) => void
+  priorities: Readonly<Record<string, number>>
   providers: PublicAiProviderDescriptor[]
 }) {
   const { t } = useI18n()
+  // orderedProviders applies the shared high-to-low priority order without mutating the snapshot.
+  // orderedProviders 应用共享的从高到低优先级顺序，且不修改快照。
+  const orderedProviders = React.useMemo(
+    () => orderProvidersByPriority(props.providers, props.priorities),
+    [props.priorities, props.providers],
+  )
   return (
     <section className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -493,11 +584,12 @@ function CustomProviderTable(props: {
                 <TableHead>接口</TableHead>
                 <TableHead className="w-32">资源数量</TableHead>
                 <TableHead className="w-28 text-center">状态</TableHead>
-                <TableHead className="w-24 text-right">操作</TableHead>
+                <TableHead className="w-36">优先级</TableHead>
+                <TableHead className="w-52 text-right">操作</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {props.providers.map((provider) => {
+              {orderedProviders.map((provider) => {
                 // credentialCount counts credentials explicitly bound to this provider.
                 // credentialCount 统计明确绑定到此供应商的凭据。
                 const credentialCount = props.connections.filter(
@@ -543,8 +635,25 @@ function CustomProviderTable(props: {
                         {credentialCount > 0 ? "已配置" : "未配置"}
                       </Badge>
                     </TableCell>
+                    <TableCell className="py-3 align-top">
+                      <ProviderPriorityEditor
+                        busy={props.busyProviderId === provider.id}
+                        onSave={(priority) => props.onSavePriority(provider.id, priority)}
+                        value={props.priorities[provider.id] ?? 0}
+                      />
+                    </TableCell>
                     <TableCell className="py-3 text-right align-top">
                       <div className="flex justify-end gap-1">
+                        <Button
+                          aria-label={`为 ${provider.display_name} 添加凭据`}
+                          onClick={() => props.onAddCredential(provider.id)}
+                          size="sm"
+                          type="button"
+                          variant="outline"
+                        >
+                          <KeyRound className="mr-1 size-3.5" />
+                          添加凭据
+                        </Button>
                         <Button
                           aria-label={t("settings.customProviders.manageModelsFor").replace("{provider}", provider.display_name)}
                           onClick={() => props.onManageModels(provider)}
@@ -595,25 +704,30 @@ function CustomProviderTable(props: {
 // SystemProviderTable renders the Model Core native-provider table structure.
 // SystemProviderTable 渲染 Model Core 的内置供应商表格结构。
 function SystemProviderTable(props: {
+  busyProviderId: string | null
   connections: PublicAiSettingsSnapshot["connections"]
+  heading: string
   loading: boolean
+  onAddCredential: (providerId: string) => void
+  onSavePriority: (providerId: string, priority: number) => void
+  priorities: Readonly<Record<string, number>>
   providers: PublicAiProviderDescriptor[]
+  variant: "system" | "functional"
 }) {
   const { t } = useI18n()
-  // orderedProviders keeps normal built-ins first and promotional entries last.
-  // orderedProviders 将常规内置供应商排在前面，将推广入口排在最后。
-  const orderedProviders = React.useMemo(() => props.providers
-    .map((provider, index) => ({ provider, index }))
-    .sort((left, right) => (
-      Number(Boolean(left.provider.promotion)) - Number(Boolean(right.provider.promotion))
-      || left.index - right.index
-    ))
-    .map(({ provider }) => provider), [props.providers])
+  // orderedProviders applies priority first and preserves the previous promotional tie-break.
+  // orderedProviders 优先应用优先级，并保留原有推广同级排序。
+  const orderedProviders = React.useMemo(
+    () => orderProvidersByPriority(props.providers, props.priorities),
+    [props.priorities, props.providers],
+  )
   return (
     <section className="space-y-3">
       <div className="flex items-center gap-2">
-        <LockKeyhole className="size-4" />
-        <h3 className="font-medium">内置供应商</h3>
+        {props.variant === "system"
+          ? <LockKeyhole className="size-4" />
+          : <ServerCog className="size-4" />}
+        <h3 className="font-medium">{props.heading}</h3>
         <Badge variant="secondary">{props.providers.length}</Badge>
       </div>
 
@@ -630,7 +744,8 @@ function SystemProviderTable(props: {
                 <TableHead className="w-[18rem]">供应商</TableHead>
                 <TableHead>详情</TableHead>
                 <TableHead className="w-32 text-right">配置状态</TableHead>
-                <TableHead className="w-20 text-right">操作</TableHead>
+                <TableHead className="w-36">优先级</TableHead>
+                <TableHead className="w-28 text-right">操作</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -646,13 +761,16 @@ function SystemProviderTable(props: {
                 // providerDescription is the registered bilingual introduction for this provider.
                 // providerDescription 是当前供应商已注册的双语介绍。
                 const providerDescription = localizedProviderDescription(provider.id, t)
+                // providerName localizes registered product names without touching custom providers.
+                // providerName 本地化已注册产品名称，同时不改写自定义供应商。
+                const providerName = localizedProviderName(provider.id, provider.display_name, t)
                 return (
                   <TableRow key={provider.id}>
                     <TableCell className="whitespace-normal py-3 align-top">
                       <div className="flex items-center gap-3">
                         <ProviderIcon category={provider.category} className="size-[26px]" providerId={provider.id} />
                         <div className="min-w-0">
-                          <span className="font-medium">{provider.display_name}</span>
+                          <span className="font-medium">{providerName}</span>
                           <div className="mt-1 truncate font-mono text-xs text-muted-foreground">
                             {provider.id}
                           </div>
@@ -687,10 +805,24 @@ function SystemProviderTable(props: {
                         {credentialCount > 0 ? `${credentialCount} 个凭据` : "未配置"}
                       </Badge>
                     </TableCell>
+                    <TableCell className="py-3 align-top">
+                      <ProviderPriorityEditor
+                        busy={props.busyProviderId === provider.id}
+                        onSave={(priority) => props.onSavePriority(provider.id, priority)}
+                        value={props.priorities[provider.id] ?? 0}
+                      />
+                    </TableCell>
                     <TableCell className="py-3 text-right align-top">
-                      <span className="text-xs text-muted-foreground">
-                        {t("settings.models.liveModels")}
-                      </span>
+                      <Button
+                        disabled={props.busyProviderId !== null}
+                        onClick={() => props.onAddCredential(provider.id)}
+                        size="sm"
+                        type="button"
+                        variant="outline"
+                      >
+                        <KeyRound className="mr-1 size-3.5" />
+                        添加凭据
+                      </Button>
                     </TableCell>
                   </TableRow>
                 )
@@ -700,6 +832,78 @@ function SystemProviderTable(props: {
         </div>
       )}
     </section>
+  )
+}
+
+// ProviderPriorityEditorProps defines one explicit provider-priority mutation control.
+// ProviderPriorityEditorProps 定义一个显式供应商优先级变更控件。
+interface ProviderPriorityEditorProps {
+  // busy prevents edits while this provider mutation is running.
+  // busy 在当前供应商变更运行期间阻止编辑。
+  busy: boolean
+  // onSave receives one validated signed 32-bit priority.
+  // onSave 接收一个已验证的有符号 32 位优先级。
+  onSave: (priority: number) => void
+  // value is the current persisted priority including the inherited zero default.
+  // value 是当前持久化优先级，包含继承的零默认值。
+  value: number
+}
+
+// ProviderPriorityEditor edits and explicitly saves one signed 32-bit ordering value.
+// ProviderPriorityEditor 编辑并显式保存一个有符号 32 位排序值。
+function ProviderPriorityEditor(props: ProviderPriorityEditorProps) {
+  // draft preserves incomplete numeric input until the user explicitly saves it.
+  // draft 在用户显式保存前保留尚未完成的数字输入。
+  const [draft, setDraft] = React.useState(String(props.value))
+  React.useEffect(() => {
+    setDraft(String(props.value))
+  }, [props.value])
+  // parsedPriority is the exact JavaScript numeric representation of the current draft.
+  // parsedPriority 是当前草稿的精确 JavaScript 数字表示。
+  const parsedPriority = Number(draft)
+  // validPriority enforces the backend i32 contract before dispatch.
+  // validPriority 在发送前强制执行后端 i32 契约。
+  const validPriority = draft.trim().length > 0
+    && Number.isInteger(parsedPriority)
+    && parsedPriority >= -2_147_483_648
+    && parsedPriority <= 2_147_483_647
+  // changed reports whether a valid save would alter persisted state.
+  // changed 报告有效保存是否会改变持久化状态。
+  const changed = validPriority && parsedPriority !== props.value
+  // save dispatches only one valid changed value.
+  // save 仅发送一个有效且已变化的值。
+  const save = React.useCallback(() => {
+    if (changed) {
+      props.onSave(parsedPriority)
+    }
+  }, [changed, parsedPriority, props])
+  return (
+    <div className="flex items-center gap-1">
+      <Input
+        aria-label="供应商优先级"
+        className="h-8 w-20"
+        disabled={props.busy}
+        onChange={(event) => setDraft(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault()
+            save()
+          }
+        }}
+        step={1}
+        type="number"
+        value={draft}
+      />
+      <Button
+        disabled={props.busy || !changed}
+        onClick={save}
+        size="sm"
+        type="button"
+        variant="ghost"
+      >
+        保存
+      </Button>
+    </div>
   )
 }
 

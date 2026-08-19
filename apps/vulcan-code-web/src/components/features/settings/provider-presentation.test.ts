@@ -4,6 +4,7 @@ import type { TranslationKey } from "@/i18n-messages"
 import type { PublicAiServiceEntry } from "@/types"
 import {
   localizedProviderDescription,
+  localizedProviderName,
   localizedServiceEntryPresentation,
 } from "./provider-presentation"
 
@@ -62,7 +63,18 @@ describe("localizedProviderDescription", () => {
       .toBe("settings.providerDescription.alibaba")
     expect(localizedProviderDescription("commandcode", translationFixture))
       .toBe("settings.providerDescription.commandcode")
+    expect(localizedProviderDescription("tokenrhythm", translationFixture))
+      .toBe("settings.providerDescription.tokenrhythm")
     expect(localizedProviderDescription("future-provider", translationFixture))
       .toBe("settings.providerDescription.default")
+  })
+})
+
+describe("localizedProviderName", () => {
+  it("localizes registered built-in names and preserves unregistered labels", () => {
+    expect(localizedProviderName("tokenrhythm", "Token Rhythm", translationFixture))
+      .toBe("settings.providerName.tokenrhythm")
+    expect(localizedProviderName("custom-provider", "Custom Provider", translationFixture))
+      .toBe("Custom Provider")
   })
 })

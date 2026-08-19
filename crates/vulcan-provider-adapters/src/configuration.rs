@@ -446,6 +446,10 @@ pub struct PersistedAiConfiguration {
     /// 后台账号用量刷新间隔秒数。
     #[serde(default = "default_usage_refresh_interval_seconds")]
     pub usage_refresh_interval_seconds: u64,
+    /// Sparse user-defined provider priorities; missing entries inherit zero.
+    /// 稀疏的用户自定义供应商优先级；缺失项继承零。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub provider_priority_overrides: BTreeMap<String, i32>,
     /// User-owned compatibility provider definitions without credential secrets or model catalogs.
     /// 不包含凭据秘密或模型目录的用户自有兼容供应商定义。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -591,10 +595,10 @@ pub struct PersistedAiConfiguration {
         BTreeMap<ProviderToolCapabilityKind, BTreeSet<ProviderToolTargetSelection>>,
 }
 
-/// Returns the default five-minute account-usage refresh interval.
-/// 返回默认五分钟账号用量刷新间隔。
+/// Returns the default thirty-minute account-usage refresh interval.
+/// 返回默认三十分钟账号用量刷新间隔。
 fn default_usage_refresh_interval_seconds() -> u64 {
-    300
+    1_800
 }
 
 /// Reads one byte-length-prefixed UTF-8 segment from a persisted composite key.
@@ -660,12 +664,13 @@ fn conservative_legacy_limit(current: Option<u64>, candidate: Option<u64>) -> Op
 }
 
 impl Default for PersistedAiConfiguration {
-    /// Builds one configuration with no providers and a five-minute usage refresh interval.
-    /// 构建一个不含供应商且用量刷新间隔为五分钟的配置。
+    /// Builds one configuration with no providers and a thirty-minute usage refresh interval.
+    /// 构建一个不含供应商且用量刷新间隔为三十分钟的配置。
     fn default() -> Self {
         Self {
             schema_version: PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION,
             usage_refresh_interval_seconds: default_usage_refresh_interval_seconds(),
+            provider_priority_overrides: BTreeMap::new(),
             custom_providers: BTreeMap::new(),
             custom_provider_file_refs: BTreeSet::new(),
             custom_provider_manifests: BTreeMap::new(),
@@ -2150,6 +2155,7 @@ impl PersistedAiConfiguration {
         self.custom_models.remove(provider_id);
         self.custom_provider_model_defaults.remove(provider_id);
         self.provider_capability_overrides.remove(provider_id);
+        self.provider_priority_overrides.remove(provider_id);
         self.provider_context_window_policy_overrides
             .remove(provider_id);
         self.custom_model_template_decisions
@@ -2472,6 +2478,18 @@ mod tests {
         }
         .into_descriptor()
         .expect("custom provider descriptor should be valid")
+    }
+
+    /// Verifies fresh configurations use the thirty-minute usage interval and sparse priorities.
+    /// 验证新配置使用三十分钟用量刷新间隔与稀疏供应商优先级。
+    #[test]
+    fn default_configuration_uses_thirty_minute_usage_refresh_and_no_priorities() {
+        // configuration is the canonical first-run configuration under test.
+        // configuration 是本测试验证的权威首次运行配置。
+        let configuration = PersistedAiConfiguration::default();
+
+        assert_eq!(configuration.usage_refresh_interval_seconds, 1_800);
+        assert!(configuration.provider_priority_overrides.is_empty());
     }
 
     /// Builds one deterministic credential connection for configuration projection tests.
@@ -3573,6 +3591,10 @@ mod tests {
         configuration
             .custom_provider_manifests
             .insert(String::from(retained_provider), retained_manifest);
+        configuration.provider_priority_overrides.extend([
+            (String::from(removed_provider), 20),
+            (String::from(retained_provider), 10),
+        ]);
         let removed_key =
             PersistedAiConfiguration::provider_model_key(removed_provider, "private-model");
         let retained_key =
@@ -3755,6 +3777,10 @@ mod tests {
                 .cloned()
                 .collect::<Vec<_>>(),
             vec![String::from(retained_provider)]
+        );
+        assert_eq!(
+            configuration.provider_priority_overrides,
+            BTreeMap::from([(String::from(retained_provider), 10)])
         );
         assert_eq!(
             configuration

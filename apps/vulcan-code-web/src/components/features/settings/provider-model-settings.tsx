@@ -9,12 +9,14 @@ import {
   type FilterableProviderModel,
 } from "@/components/features/settings/provider-model-filter"
 import { ProviderModelModalitySummary } from "@/components/features/settings/provider-model-modality-summary"
+import { providerPriority } from "@/components/features/settings/provider-ordering"
 import {
   buildProviderModelGroups,
   compactServiceEntryName,
   type PublicModelProtocolRoute,
 } from "@/components/features/settings/provider-model-routes"
 import { ProviderIcon } from "@/components/features/settings/provider-icon"
+import { localizedProviderName } from "@/components/features/settings/provider-presentation"
 import { PublicAiModelOverridesDialog } from "@/components/features/settings/public-ai-model-overrides-dialog"
 import { PublicAiModelCapabilityDialog } from "@/components/features/settings/public-ai-model-capability-dialog"
 import { Badge } from "@/components/ui/badge"
@@ -103,10 +105,24 @@ export function ModelListSettingsArea() {
     }
   }, [])
 
-  const groupedProviders = React.useMemo(
-    () => snapshot ? buildProviderModelGroups(snapshot) : [],
-    [snapshot],
-  )
+  // groupedProviders keeps credential-backed model providers ordered by persisted priority.
+  // groupedProviders 按持久化优先级排列由凭据支持的模型供应商。
+  const groupedProviders = React.useMemo(() => {
+    if (!snapshot) {
+      return []
+    }
+    // indexedGroups preserves current registry order when priorities are equal.
+    // indexedGroups 在优先级相同时保留当前注册表顺序。
+    const indexedGroups = buildProviderModelGroups(snapshot)
+      .map((group, index) => ({ group, index }))
+    return indexedGroups
+      .sort((left, right) => (
+        providerPriority(snapshot.providerPriorities, right.group.provider.id)
+        - providerPriority(snapshot.providerPriorities, left.group.provider.id)
+        || left.index - right.index
+      ))
+      .map(({ group }) => group)
+  }, [snapshot])
   React.useEffect(() => {
     if (groupedProviders.length === 0) {
       setSelectedProviderId(null)
@@ -151,8 +167,9 @@ export function ModelListSettingsArea() {
   )
   // selectedProviderLabel supplies the shared collapsed-menu pill label.
   // selectedProviderLabel 为共享收起菜单胶囊提供标签。
-  const selectedProviderLabel = selectedGroup?.provider.display_name
-    ?? t("settings.models.noProviderSelected")
+  const selectedProviderLabel = selectedGroup
+    ? localizedProviderName(selectedGroup.provider.id, selectedGroup.provider.display_name, t)
+    : t("settings.models.noProviderSelected")
   return (
     <AdaptiveToolPanel
       className="workspace-tool-panel-page workspace-skills-settings credential-management-layout model-list-layout"
@@ -183,7 +200,7 @@ export function ModelListSettingsArea() {
                 className="size-5"
                 providerId={group.provider.id}
               />
-              <span>{group.provider.display_name}</span>
+              <span>{localizedProviderName(group.provider.id, group.provider.display_name, t)}</span>
               <small>{group.models.size}</small>
             </button>
           ))}
@@ -393,7 +410,9 @@ export function ModelListSettingsArea() {
           && record.protocolId === editingRoute?.protocolId
         ))?.overrides}
         protocolId={editingRoute?.protocolId ?? null}
-        providerDisplayName={selectedGroup?.provider.display_name ?? null}
+        providerDisplayName={selectedGroup
+          ? localizedProviderName(selectedGroup.provider.id, selectedGroup.provider.display_name, t)
+          : null}
         providerId={selectedGroup?.provider.id ?? null}
       />
       <PublicAiModelCapabilityDialog
@@ -412,7 +431,9 @@ export function ModelListSettingsArea() {
           record.providerId === selectedGroup?.provider.id
           && record.modelId === editingCapabilityModel?.id
         ))?.overrides}
-        providerDisplayName={selectedGroup?.provider.display_name ?? null}
+        providerDisplayName={selectedGroup
+          ? localizedProviderName(selectedGroup.provider.id, selectedGroup.provider.display_name, t)
+          : null}
         providerId={selectedGroup?.provider.id ?? null}
       />
       </div>

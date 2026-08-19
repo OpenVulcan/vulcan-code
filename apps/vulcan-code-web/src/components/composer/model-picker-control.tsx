@@ -1,6 +1,7 @@
 import * as React from "react";
 import { Check, Cpu, RefreshCw, Search, UserRound } from "lucide-react";
 import { ProviderIcon } from "@/components/features/settings/provider-icon";
+import { localizedProviderName } from "@/components/features/settings/provider-presentation";
 import { ModelBuiltinCapabilityIcons } from "@/components/shared/model-builtin-capabilities";
 import {
   CredentialUsageOverview,
@@ -140,7 +141,14 @@ export function ModelPickerControl(props: {
   // selectedRowRef anchors the exact active model row after the dropdown portal finishes layout.
   // selectedRowRef 在下拉门户完成布局后锚定精确的当前模型行。
   const selectedRowRef = React.useRef<HTMLElement | null>(null);
-  const choices = React.useMemo(() => modelPickerChoicesFromProviders(props.providers), [props.providers]);
+  // choices localizes built-in provider labels without changing exact provider or account identities.
+  // choices 本地化内置供应商标签，同时不改变精确供应商或账号身份。
+  const choices = React.useMemo(() => (
+    modelPickerChoicesFromProviders(props.providers).map((choice) => ({
+      ...choice,
+      providerName: localizedProviderName(choice.providerId, choice.providerName, t),
+    }))
+  ), [props.providers, t]);
   const exactChoice = choices.find((choice) => modelPickerChoiceKey(choice) === props.value);
   // selectedChoice degrades from an obsolete exact account to the backend-resolved active row.
   // selectedChoice 从已失效的精确账号降级到后端解析出的当前行。
@@ -521,7 +529,9 @@ export function ModelAccountPickerControl(props: {
               <div className="min-w-0 flex-1">
                 <CardTitle className="truncate">{selectedAccount.accountName}</CardTitle>
                 <CardDescription className="truncate text-xs">
-                  {provider?.display_name ?? selectedAccount.providerName}
+                  {provider
+                    ? localizedProviderName(provider.id, provider.display_name, t)
+                    : selectedAccount.providerName}
                 </CardDescription>
               </div>
               {usageSupported ? (

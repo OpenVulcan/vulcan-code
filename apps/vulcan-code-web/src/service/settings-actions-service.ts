@@ -382,6 +382,18 @@ export async function savePublicAiUsageRefreshSettings(intervalSeconds: number):
   );
 }
 
+// savePublicAiProviderPriority persists one exact provider ordering value.
+// savePublicAiProviderPriority 持久化一个精确供应商排序值。
+export async function savePublicAiProviderPriority(
+  providerId: string,
+  priority: number,
+): Promise<PublicAiSettingsSnapshot> {
+  return serviceClient.request<PublicAiSettingsSnapshot>(
+    "service_save_public_ai_provider_priority",
+    { request: { providerId, priority } },
+  );
+}
+
 // savePublicAiContextWindowPolicyOverrides persists the system-level Codex window defaults.
 // savePublicAiContextWindowPolicyOverrides 持久化系统级 Codex 窗口默认值。
 export async function savePublicAiContextWindowPolicyOverrides(

@@ -4868,5 +4868,222 @@
         ]
       }
     ]
+  },
+  "tokenrhythm": {
+    "id": "tokenrhythm",
+    "display_name": "Token Rhythm",
+    "kind": "system",
+    "category": "relay",
+    "credential_directory_visibility": "pinned_onboarding",
+    "credential_registration": "direct",
+    "service_entries": [
+      {
+        "id": "public-api",
+        "display_name": "Token Rhythm Public API",
+        "kind": "conversation",
+        "base_url": "https://tokenrhythm.studio/v1",
+        "credential_profiles": [
+          {
+            "id": "api-key",
+            "display_name": "API Key",
+            "credential_mode": "token",
+            "billing_kind": "provider_managed",
+            "account_usage_query": "unsupported",
+            "key_prefix": "sk_",
+            "default_usage_scopes": [
+              "interactive_agent",
+              "internal_background",
+              "external_service"
+            ]
+          }
+        ],
+        "authentication": "bearer_authorization",
+        "request_headers": {
+          "http-referer": "https://opensquilla.ai",
+          "x-title": "OpenSquilla"
+        },
+        "model_discovery": "manifest_static",
+        "request_projector": "compatible",
+        "protocol_routes": [
+          {
+            "protocol_profile_id": "openai-chat-completions.v1",
+            "endpoint_path": "/chat/completions",
+            "usage_extraction_profiles": [
+              {
+                "profile_id": "tokenrhythm.chat.body.v1",
+                "revision": 1,
+                "record_kind": "json_body",
+                "update_kind": "final",
+                "required_pointer": "/usage",
+                "bindings": [
+                  {
+                    "field": "input_tokens",
+                    "pointers": [
+                      "/usage/prompt_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "cache_read_tokens",
+                    "pointers": [
+                      "/usage/prompt_tokens_details/cached_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "output_tokens",
+                    "pointers": [
+                      "/usage/completion_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "reasoning_tokens",
+                    "pointers": [
+                      "/usage/completion_tokens_details/reasoning_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "total_tokens",
+                    "pointers": [
+                      "/usage/total_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "response_model",
+                    "pointers": [
+                      "/model"
+                    ],
+                    "encoding": "string"
+                  },
+                  {
+                    "field": "response_id",
+                    "pointers": [
+                      "/id"
+                    ],
+                    "encoding": "string"
+                  }
+                ],
+                "derivations": []
+              },
+              {
+                "profile_id": "tokenrhythm.chat.sse.usage.v1",
+                "revision": 1,
+                "record_kind": "sse_event",
+                "update_kind": "final",
+                "required_pointer": "/usage",
+                "bindings": [
+                  {
+                    "field": "input_tokens",
+                    "pointers": [
+                      "/usage/prompt_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "cache_read_tokens",
+                    "pointers": [
+                      "/usage/prompt_tokens_details/cached_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "output_tokens",
+                    "pointers": [
+                      "/usage/completion_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "reasoning_tokens",
+                    "pointers": [
+                      "/usage/completion_tokens_details/reasoning_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "total_tokens",
+                    "pointers": [
+                      "/usage/total_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "response_model",
+                    "pointers": [
+                      "/model"
+                    ],
+                    "encoding": "string"
+                  },
+                  {
+                    "field": "response_id",
+                    "pointers": [
+                      "/id"
+                    ],
+                    "encoding": "string"
+                  }
+                ],
+                "derivations": []
+              }
+            ],
+            "request_projection_profiles": [
+              {
+                "profile_id": "tokenrhythm.chat.reasoning.standard.v1",
+                "revision": 1,
+                "steps": [
+                  {
+                    "op": "set_literal",
+                    "path": "/stream_options/include_usage",
+                    "value": true
+                  },
+                  {
+                    "op": "conditional_set",
+                    "path": "/thinking",
+                    "source": "request_field",
+                    "source_path": "@reasoning_effort",
+                    "equals": "none",
+                    "then": null,
+                    "otherwise": {
+                      "type": "enabled"
+                    }
+                  },
+                  {
+                    "op": "enum_map",
+                    "path": "/reasoning_effort",
+                    "source": "request_field",
+                    "source_path": "@reasoning_effort",
+                    "mapping": {
+                      "high": "high",
+                      "low": "high",
+                      "max": "max",
+                      "medium": "high",
+                      "minimal": "high",
+                      "none": "none",
+                      "xhigh": "max"
+                    },
+                    "unmatched": "error"
+                  },
+                  {
+                    "op": "delete_if_equals",
+                    "path": "/reasoning_effort",
+                    "source": "request_field",
+                    "source_path": "@reasoning_effort",
+                    "equals": "none"
+                  }
+                ]
+              }
+            ],
+            "verified": true
+          }
+        ],
+        "default_usage_scopes": [
+          "interactive_agent",
+          "internal_background",
+          "external_service"
+        ]
+      }
+    ]
   }
 }

@@ -1109,6 +1109,9 @@ export interface PublicAiSettingsSnapshot {
   // providerContextWindowPolicyOverrides 保存显式供应商级窗口策略。
   providerContextWindowPolicyOverrides?: Record<string, PublicAiContextWindowPolicyOverrides>;
   usageRefreshIntervalSeconds: number;
+  // providerPriorities stores sparse provider ordering values; missing entries inherit zero.
+  // providerPriorities 保存稀疏供应商排序值；缺失项继承零。
+  providerPriorities: Record<string, number>;
   usageCache: Record<string, PublicAiAccountUsage>;
   providers: PublicAiProviderDescriptor[];
   connections: PublicAiConnection[];

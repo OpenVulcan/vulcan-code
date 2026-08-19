@@ -1791,6 +1791,8 @@ export type TranslationKey =
   | "settings.providerDescription.openai"
   | "settings.providerDescription.anthropic"
   | "settings.providerDescription.google"
+  | "settings.providerDescription.tokenrhythm"
+  | "settings.providerName.tokenrhythm"
   | "settings.providerSummary.serviceEntries"
   | "settings.providerSummary.protocols"
   | "settings.providerSummary.serviceEntriesTitle"
@@ -4434,6 +4436,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.providerDescription.openai": "OpenAI 官方模型与 Codex 账号服务。",
     "settings.providerDescription.anthropic": "Anthropic 官方 Claude 模型与 Claude Code 账号服务。",
     "settings.providerDescription.google": "Google 官方 Gemini API 与 Code Assist 服务。",
+    "settings.providerDescription.tokenrhythm": "提供静态模型目录、OpenAI Chat 兼容推理与图片生成能力的第三方模型中转服务。",
+    "settings.providerName.tokenrhythm": "基元律动",
     "settings.providerSummary.serviceEntries": "{count} 个接入点",
     "settings.providerSummary.protocols": "{count} 个协议支持",
     "settings.providerSummary.serviceEntriesTitle": "具体接入点",
@@ -7074,6 +7078,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.providerDescription.openai": "Official OpenAI models and Codex account services.",
     "settings.providerDescription.anthropic": "Official Anthropic Claude models and Claude Code account services.",
     "settings.providerDescription.google": "Official Google Gemini API and Code Assist services.",
+    "settings.providerDescription.tokenrhythm": "A third-party model relay with a static catalog, OpenAI Chat-compatible inference, and image generation.",
+    "settings.providerName.tokenrhythm": "Token Rhythm",
     "settings.providerSummary.serviceEntries": "{count} endpoints",
     "settings.providerSummary.protocols": "{count} supported protocols",
     "settings.providerSummary.serviceEntriesTitle": "Endpoints",

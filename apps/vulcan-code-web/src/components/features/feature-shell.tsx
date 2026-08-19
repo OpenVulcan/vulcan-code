@@ -46,11 +46,6 @@ type MemorySubAreaId = string
 // LazyLuaSkillInstallDialog 将安装流程保留在初始工作台分块之外。
 const LazyLuaSkillInstallDialog = React.lazy(() => import("@/components/features/skills/lua-skills-panel").then((module) => ({ default: module.LuaSkillInstallDialog })))
 
-// localizedLiteral chooses a short local component label by the active WebUI locale.
-// localizedLiteral 根据当前 WebUI 语言选择组件内短文案。
-function localizedLiteral(locale: string, zh: string, en: string): string {
-  return locale === "zh-CN" ? zh : en
-}
 // FeatureShell renders non-console pages with the same sidebar and inset structure as the console.
 // FeatureShell 使用与控制台一致的侧栏和内容框结构渲染非控制台页面。
 function FeatureShell(props: {
@@ -132,12 +127,6 @@ function FeatureShell(props: {
   // skillHeaderActionRunningRef closes the synchronous repeat-click window before React commits busy state.
   // skillHeaderActionRunningRef 在 React 提交忙碌状态前关闭同步重复点击窗口。
   const skillHeaderActionRunningRef = React.useRef(false)
-  // providerPickerOpen controls the model-provider catalog dialog from the shared header.
-  // providerPickerOpen 从共享标题栏控制模型供应商目录弹窗。
-  const [providerPickerOpen, setProviderPickerOpen] = React.useState(false)
-  React.useEffect(() => {
-    setProviderPickerOpen(false)
-  }, [props.activeSettingsSubArea])
   // runSkillHeaderAction wraps title-bar actions with disabled and spinner feedback.
   // runSkillHeaderAction 为标题栏动作包裹禁用与旋转反馈。
   //
@@ -188,15 +177,9 @@ function FeatureShell(props: {
   // agentsHeaderAction stays empty because the agents page owns a sticky action bar.
   // agentsHeaderAction 保持为空，因为智能体页面自行持有锁顶操作栏。
   const agentsHeaderAction = null
-  // settingsHeaderAction renders actions for the active settings page in the shared title bar.
-  // settingsHeaderAction 在共享标题栏中渲染当前设置页操作。
-  const settingsHeaderAction = props.activeArea === "settings" && props.activeSettingsSubArea === "credential-management" ? (
-    <div className="feature-header-actions">
-      <button className="skill-action-button" onClick={() => setProviderPickerOpen(true)} type="button">
-        <span>{localizedLiteral(locale, "添加凭据", "Add credential")}</span>
-      </button>
-    </div>
-  ) : null
+  // settingsHeaderAction stays empty because credential creation belongs to each provider section.
+  // settingsHeaderAction 保持为空，因为凭据创建属于各供应商区域。
+  const settingsHeaderAction = null
   // skillHeaderSummary stores the active skill page title and compact metrics.
   // skillHeaderSummary 保存当前技能页标题与紧凑统计。
   const skillHeaderSummary = props.activeArea === "skills"
@@ -248,8 +231,6 @@ function FeatureShell(props: {
           props.onSelectArea("settings")
         }}
         onSelectMemorySubArea={setActiveMemorySubArea}
-        onProviderPickerOpenChange={setProviderPickerOpen}
-        providerPickerOpen={providerPickerOpen}
         settingsActions={props.settingsActions}
         agentActions={props.agentActions}
           luaSkillActions={props.luaSkillActions}

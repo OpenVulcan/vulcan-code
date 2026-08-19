@@ -1,0 +1,73 @@
+{
+  "schema_version": "provider-manifest-execution-fixture.v1",
+  "fixture_id": "tokenrhythm-wan-image-generate",
+  "base_manifest": "tavily.json",
+  "production_target_refs": ["tokenrhythm::wan2-7-image.generate"],
+  "tool_target": {
+    "target_id": "public-api.fixture-tokenrhythm-wan-image",
+    "description": "Token Rhythm Wan 2.7 Image synchronous image generation fixture.",
+    "service_entry_id": "public-api",
+    "credential_profile_ids": ["api-key"],
+    "upstream_target_id": "wan2.7-image",
+    "display_name": "Token Rhythm Wan Image Fixture",
+    "tool_id": "fixture_tokenrhythm_wan_image_generate",
+    "capability": "image_generate",
+    "input_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "model": {"type": "string", "const": "wan2.7-image"},
+        "prompt": {"type": "string", "minLength": 1},
+        "size": {"type": "string", "const": "1024x1024"},
+        "n": {"type": "integer", "const": 1}
+      },
+      "required": ["model", "prompt", "size", "n"]
+    },
+    "output": {
+      "kind": "resources",
+      "source_path": "/data",
+      "normalized_result_path": "resources",
+      "resource_kind": "image",
+      "mime_types": ["image/png"],
+      "resource_decoders": [
+        {
+          "source_path": "/data/0/url",
+          "encoding": "https_url",
+          "download_host_suffixes": ["tokenrhythm-prod-backup-oss.oss-cn-beijing.aliyuncs.com"],
+          "resource_kind": "image",
+          "mime_type": "image/png",
+          "output_id_prefix": "image"
+        }
+      ]
+    },
+    "execution": {"endpoint_path": "/fixtures/tokenrhythm-wan-image", "authentication": "bearer_authorization", "adapter": "generic_json", "execution_kind": "http_json_sync"}
+  },
+  "operation": {
+    "operation_id": "fixture.tokenrhythm-wan-image-generate",
+    "operation": "image_generate",
+    "carrier": "provider_tool",
+    "input_resources": [],
+    "output_resources": ["image"],
+    "tool_target_refs": ["public-api.fixture-tokenrhythm-wan-image"],
+    "request_profile_refs": [],
+    "response_profile_refs": [],
+    "upload_channel_refs": [],
+    "upload_bindings": [],
+    "timeout_ms": 60000,
+    "idempotent": false
+  },
+  "upload_channels": [],
+  "required_execution_primitives": ["http_json_sync"],
+  "required_upload_primitives": [],
+  "arguments": {"model": "wan2.7-image", "prompt": "draw a moonlit lake", "size": "1024x1024", "n": 1},
+  "interactions": [
+    {
+      "method": "POST",
+      "path": "/fixtures/tokenrhythm-wan-image",
+      "expected_json_body": {"model": "wan2.7-image", "prompt": "draw a moonlit lake", "size": "1024x1024", "n": 1},
+      "response_status": 200,
+      "response_json_body": {"created": 1787121243, "data": [{"image_id": "fixture-wan-image", "url": "https://tokenrhythm-prod-backup-oss.oss-cn-beijing.aliyuncs.com/generated-images/fixture-wan.png"}], "cost_cny": "0.20000000", "billing_pending": false, "trace_id": "fixture-wan-trace"}
+    }
+  ],
+  "expected_output_kind": "resources"
+}

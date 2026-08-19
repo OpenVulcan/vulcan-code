@@ -2,6 +2,7 @@ import * as React from "react"
 import { ListChecks, RefreshCw, Search } from "lucide-react"
 
 import { ProviderModelModalitySummary } from "@/components/features/settings/provider-model-modality-summary"
+import { localizedProviderName } from "@/components/features/settings/provider-presentation"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -143,6 +144,13 @@ export function CredentialModelAccessDialog(props: CredentialModelAccessDialogPr
   const enabledCount = supportModels.filter((model) => modelIsEnabled(model.id)).length
   const directoryKind = policy?.directoryKind ?? "unavailable"
   const directoryLabel = directoryKindLabel(directoryKind, t)
+  // providerName follows registered built-in localization while preserving unknown labels.
+  // providerName 遵循已注册内置供应商本地化，同时保留未知标签。
+  const providerName = localizedProviderName(
+    connection?.provider_id ?? props.provider?.id ?? "",
+    props.provider?.display_name ?? connection?.provider_id ?? "",
+    t,
+  )
 
   // saveModel applies one switch immediately, then reconciles it with the backend snapshot.
   // saveModel 立即应用一个开关，随后与后端快照协调。
@@ -230,7 +238,7 @@ export function CredentialModelAccessDialog(props: CredentialModelAccessDialogPr
                   {t("settings.credentialModels.description")}
                 </DialogDescription>
                 <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
-                  <Badge variant="outline">{props.provider?.display_name ?? connection?.provider_id}</Badge>
+                  <Badge variant="outline">{providerName}</Badge>
                   {props.entry ? <Badge variant="outline">{props.entry.display_name}</Badge> : null}
                   <Badge variant="secondary">{directoryLabel}</Badge>
                 </div>

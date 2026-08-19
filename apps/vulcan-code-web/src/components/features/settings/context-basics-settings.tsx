@@ -5,10 +5,12 @@ import { ContextWindowPolicyEditor } from "@/components/features/settings/public
 import { ProviderRetrySettingsArea } from "@/components/features/settings/provider-retry-settings"
 import type { SettingsActionProps } from "@/components/features/settings/settings-action-types"
 import { Button } from "@/components/ui/button"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useI18n } from "@/i18n"
 import {
   loadPublicAiSettings,
   savePublicAiContextWindowPolicyOverrides,
+  savePublicAiUsageRefreshSettings,
 } from "@/service/settings-actions-service"
 import type {
   PublicAiContextWindowPolicyOverrides,
@@ -67,6 +69,62 @@ function SystemContextWindowPolicyCard(props: {
   )
 }
 
+// AccountUsageRefreshCard edits the persisted background account-usage cadence.
+// AccountUsageRefreshCard 编辑持久化的后台账号用量刷新周期。
+function AccountUsageRefreshCard(props: {
+  // onSaved receives the authoritative post-save settings snapshot.
+  // onSaved 接收保存后的权威设置快照。
+  onSaved: (snapshot: PublicAiSettingsSnapshot) => void
+  // intervalSeconds is the currently persisted refresh cadence.
+  // intervalSeconds 是当前持久化刷新周期。
+  intervalSeconds: number
+}) {
+  // saving prevents overlapping interval mutations.
+  // saving 防止刷新周期变更重叠执行。
+  const [saving, setSaving] = React.useState(false)
+  // error contains one actionable interval save failure.
+  // error 保存一条可操作的刷新周期保存失败。
+  const [error, setError] = React.useState<string | null>(null)
+  // save persists one selected interval and publishes the resulting settings snapshot.
+  // save 持久化一个选定周期并发布生成的设置快照。
+  const save = React.useCallback(async (intervalSeconds: number) => {
+    setSaving(true)
+    setError(null)
+    try {
+      props.onSaved(await savePublicAiUsageRefreshSettings(intervalSeconds))
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason))
+    } finally {
+      setSaving(false)
+    }
+  }, [props])
+  return (
+    <section className="space-y-3 rounded-xl border p-4">
+      <div>
+        <h3 className="text-sm font-semibold">账号用量后台刷新</h3>
+        <p className="text-xs text-muted-foreground">
+          仅刷新声明支持用量查询且已具备必要凭据的账号；默认每 30 分钟刷新，缓存只保存在内存中。
+        </p>
+      </div>
+      <Select
+        disabled={saving}
+        onValueChange={(value) => void save(Number(value))}
+        value={String(props.intervalSeconds)}
+      >
+        <SelectTrigger className="w-48"><SelectValue /></SelectTrigger>
+        <SelectContent>
+          <SelectItem value="60">每 1 分钟</SelectItem>
+          <SelectItem value="300">每 5 分钟</SelectItem>
+          <SelectItem value="900">每 15 分钟</SelectItem>
+          <SelectItem value="1800">每 30 分钟</SelectItem>
+          <SelectItem value="3600">每 1 小时</SelectItem>
+        </SelectContent>
+      </Select>
+      {error ? <p className="text-sm text-destructive">{error}</p> : null}
+    </section>
+  )
+}
+
 // ContextBasicsSettingsArea groups only model-context and retry policies under the model settings node.
 // ContextBasicsSettingsArea 仅在模型设置基础节点中组织模型上下文与重试策略。
 export function ContextBasicsSettingsArea(props: {
@@ -104,10 +162,16 @@ export function ContextBasicsSettingsArea(props: {
       </div>
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
       {snapshot ? (
-        <SystemContextWindowPolicyCard
-          onSaved={setSnapshot}
-          policy={snapshot.contextWindowPolicyOverrides}
-        />
+        <>
+          <SystemContextWindowPolicyCard
+            onSaved={setSnapshot}
+            policy={snapshot.contextWindowPolicyOverrides}
+          />
+          <AccountUsageRefreshCard
+            intervalSeconds={snapshot.usageRefreshIntervalSeconds}
+            onSaved={setSnapshot}
+          />
+        </>
       ) : (
         <p className="settings-muted-line">{t("settings.contextBasics.loading")}</p>
       )}
