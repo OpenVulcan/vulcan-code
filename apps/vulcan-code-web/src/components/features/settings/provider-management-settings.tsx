@@ -64,7 +64,10 @@ import {
 import { useI18n } from "@/i18n"
 import type { TranslationKey } from "@/i18n-messages"
 import {
+  CUSTOM_PROTOCOL_ROUTE_INHERIT_SELECT_VALUE,
   codexResponsesFeaturePoliciesFromEntry,
+  customProtocolRouteDraftValue,
+  customProtocolRouteSelectValue,
   customProtocolProfileId,
   emptyProtocolRouteDraft,
   protocolCollectionChanged,
@@ -743,13 +746,15 @@ function CustomProtocolRouteDraftCard(props: {
             <Select
               onValueChange={(value) => onChange({
                 ...draft,
-                authentication: value as CustomProtocolRouteDraft["authentication"],
+                authentication: customProtocolRouteDraftValue(value) as CustomProtocolRouteDraft["authentication"],
               })}
-              value={draft.authentication || ""}
+              value={customProtocolRouteSelectValue(draft.authentication)}
             >
               <SelectTrigger><SelectValue placeholder={t("settings.customProviders.routeInherit")} /></SelectTrigger>
               <SelectContent>
-                <SelectItem value="">{t("settings.customProviders.routeInherit")}</SelectItem>
+                <SelectItem value={CUSTOM_PROTOCOL_ROUTE_INHERIT_SELECT_VALUE}>
+                  {t("settings.customProviders.routeInherit")}
+                </SelectItem>
                 <SelectItem value="bearer_authorization">Authorization: Bearer</SelectItem>
                 <SelectItem value="google_api_key">Gemini API Key</SelectItem>
                 <SelectItem value="x_api_key">x-api-key</SelectItem>
@@ -761,13 +766,15 @@ function CustomProtocolRouteDraftCard(props: {
             <Select
               onValueChange={(value) => onChange({
                 ...draft,
-                modelDiscoveryMode: value as CustomProtocolRouteDraft["modelDiscoveryMode"],
+                modelDiscoveryMode: customProtocolRouteDraftValue(value) as CustomProtocolRouteDraft["modelDiscoveryMode"],
               })}
-              value={draft.modelDiscoveryMode || ""}
+              value={customProtocolRouteSelectValue(draft.modelDiscoveryMode)}
             >
               <SelectTrigger><SelectValue placeholder={t("settings.customProviders.routeInherit")} /></SelectTrigger>
               <SelectContent>
-                <SelectItem value="">{t("settings.customProviders.routeInherit")}</SelectItem>
+                <SelectItem value={CUSTOM_PROTOCOL_ROUTE_INHERIT_SELECT_VALUE}>
+                  {t("settings.customProviders.routeInherit")}
+                </SelectItem>
                 <SelectItem value="standard">{t("settings.customProviders.discoveryStandard")}</SelectItem>
                 <SelectItem value="custom_path">{t("settings.customProviders.discoveryCustomPath")}</SelectItem>
                 <SelectItem value="manual">{t("settings.customProviders.discoveryManual")}</SelectItem>

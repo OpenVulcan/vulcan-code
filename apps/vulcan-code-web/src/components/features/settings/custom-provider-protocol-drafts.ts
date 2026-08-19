@@ -33,6 +33,38 @@ export interface CustomProtocolRouteDraft {
   requestHeaders: Record<string, string>
 }
 
+// CUSTOM_PROTOCOL_ROUTE_INHERIT_SELECT_VALUE is the non-empty UI sentinel required by
+// Radix Select for a route field that persists as an empty inherited override.
+// CUSTOM_PROTOCOL_ROUTE_INHERIT_SELECT_VALUE 是 Radix Select 要求的非空 UI 哨兵，
+// 对应持久化为空值的路由继承覆盖。
+export const CUSTOM_PROTOCOL_ROUTE_INHERIT_SELECT_VALUE = "__vulcan_route_inherit__"
+
+/**
+ * Projects one persisted route override into the non-empty value required by the Select UI.
+ * 把一个持久化路由覆盖投影为 Select UI 要求的非空值。
+ *
+ * @param value Persisted route override; an empty string means inherit.
+ * @param value 持久化路由覆盖；空字符串表示继承。
+ * @returns The exact override or the non-empty inherit sentinel.
+ * @returns 精确覆盖值或非空继承哨兵。
+ */
+export function customProtocolRouteSelectValue(value: string): string {
+  return value === "" ? CUSTOM_PROTOCOL_ROUTE_INHERIT_SELECT_VALUE : value
+}
+
+/**
+ * Converts one Select UI value back into the persisted route-override representation.
+ * 把一个 Select UI 值转换回持久化路由覆盖表示。
+ *
+ * @param value Non-empty Select value selected by the user.
+ * @param value 用户选择的非空 Select 值。
+ * @returns An empty string for inheritance, otherwise the exact selected override.
+ * @returns 继承时返回空字符串，否则返回精确选定覆盖值。
+ */
+export function customProtocolRouteDraftValue(value: string): string {
+  return value === CUSTOM_PROTOCOL_ROUTE_INHERIT_SELECT_VALUE ? "" : value
+}
+
 // CodexResponsesFeaturePolicies is the single browser-authoritative capability state for the
 // unique Codex Responses route in one custom provider.
 // CodexResponsesFeaturePolicies 是一个自定义供应商中唯一 Codex Responses 路由的

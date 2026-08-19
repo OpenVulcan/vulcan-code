@@ -133,9 +133,10 @@ pub(crate) fn session_process_public_ai_selection(
 ///
 /// # Returns
 /// 返回值
-/// The immutable session lease first, then the current exact session target, provider/model
-/// fallback, or global active selection.
-/// 依次返回不可变会话租约、当前精确会话目标、供应商与模型回退或全局激活选择。
+/// The immutable session lease first, then the current exact session target. A global active
+/// selection is used only when the session has no persisted model identity.
+/// 优先返回不可变会话租约，其次返回当前精确会话目标。仅当会话没有持久化模型身份时，
+/// 才使用全局激活选择。
 pub(crate) fn public_ai_workbench_selection(
     configuration: &vulcan_provider_adapters::PersistedAiConfiguration,
     runtime: &vulcan_provider_adapters::PublicAiRuntime,
@@ -163,8 +164,9 @@ pub(crate) fn public_ai_workbench_selection(
 ///
 /// # Returns
 /// 返回值
-/// The exact reconciled session selection, configured global selection, or `None`.
-/// 返回精确的已协调会话选择、已配置全局选择或 `None`。
+/// The exact reconciled session selection, the configured global selection for a blank session,
+/// or `None`.
+/// 返回精确的已协调会话选择、空白会话使用的已配置全局选择或 `None`。
 pub(crate) fn public_ai_workbench_selection_after_route_revocation(
     configuration: &vulcan_provider_adapters::PersistedAiConfiguration,
     runtime: &vulcan_provider_adapters::PublicAiRuntime,
@@ -185,55 +187,46 @@ pub(crate) fn public_ai_workbench_selection_after_route_revocation(
 ///
 /// # Returns
 /// 返回值
-/// The first exact persisted selection that resolves, then the configured global selection.
-/// 返回首个可解析的精确持久选择，其次返回已配置全局选择。
+/// The exact persisted selection for an established session. The configured global selection is
+/// considered only for a blank session without any persisted model identity.
+/// 对已有会话返回精确持久化选择。仅对没有任何持久化模型身份的空白会话考虑已配置全局选择。
 fn public_ai_workbench_selection_from_runtime_state(
     configuration: &vulcan_provider_adapters::PersistedAiConfiguration,
     runtime: &vulcan_provider_adapters::PublicAiRuntime,
     runtime_state: Option<&vulcan_workbench_model::SessionRuntimeStateEntry>,
 ) -> Result<Option<vulcan_provider_adapters::ResolvedPublicAiSelection>, String> {
-    // exactSelection follows the persisted account before any provider/model-only compatibility lookup.
-    // exactSelection 在任何仅供应商与模型的兼容查找前遵循持久化账号。
-    let exact_selection = runtime_state
-        .and_then(|runtime_state| {
-            runtime_state
+    if let Some(runtime_state) = runtime_state {
+        // hasPersistedIdentity distinguishes an established session from a blank session. A
+        // transient catalog miss must never replace an established session with the global model.
+        // hasPersistedIdentity 区分已有会话与空白会话。瞬时目录缺失绝不能用全局模型替换已有会话。
+        let has_persisted_identity = runtime_state.active_provider_id.is_some()
+            || runtime_state.active_connection_id.is_some()
+            || runtime_state.active_model_id.is_some();
+        if has_persisted_identity {
+            let Some(((provider_id, connection_id), model_id)) = runtime_state
                 .active_provider_id
                 .as_deref()
                 .zip(runtime_state.active_connection_id.as_deref())
                 .zip(runtime_state.active_model_id.as_deref())
-        })
-        .and_then(|((provider_id, connection_id), model_id)| {
-            runtime
+            else {
+                return Ok(None);
+            };
+            return Ok(runtime
                 .resolve_connection_model_selection(
                     configuration,
                     connection_id,
                     provider_id,
                     model_id,
                 )
-                .ok()
-        });
-    if exact_selection.is_some() {
-        return Ok(exact_selection);
+                .ok());
+        }
     }
-    // providerModelSelection preserves the established compatibility behavior for old session state
-    // that predates connection ownership.
-    // providerModelSelection 为早于账号归属字段的旧会话状态保留既有兼容行为。
-    let provider_model_selection = runtime_state
-        .and_then(|runtime_state| {
-            runtime_state
-                .active_provider_id
-                .as_deref()
-                .zip(runtime_state.active_model_id.as_deref())
-        })
-        .and_then(|(provider_id, model_id)| {
-            runtime
-                .resolve_model_selection(configuration, provider_id, model_id)
-                .ok()
-        });
-    Ok(provider_model_selection
-        // exactGlobalSelection retains the configured account while it remains executable.
-        // exactGlobalSelection 在配置账号仍可执行时保留该精确账号。
-        .or_else(|| runtime.resolve_active_selection(configuration).ok())
+    Ok(runtime
+        // exactGlobalSelection retains the configured account for a blank/new session while it
+        // remains executable.
+        // exactGlobalSelection 仅为可执行的空白或新会话保留已配置账号。
+        .resolve_active_selection(configuration)
+        .ok()
         // reboundGlobalSelection keeps a blank/new session usable when credential-scoped discovery
         // invalidated only the global account while the same provider/model remains available.
         // reboundGlobalSelection 在凭据作用域发现只使全局账号失效、同一供应商/模型仍可用时，
@@ -509,6 +502,150 @@ pub(crate) fn public_ai_provider_rows_for_selection(
         });
     }
     Ok(rows)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+
+    use super::public_ai_workbench_selection_from_runtime_state;
+    use vulcan_provider_adapters::{
+        ActiveAiModelSelection, CredentialConnection, CredentialMode, PersistedAiConfiguration,
+        ProtocolModelVariant, PublicAiRuntime, UnavailableCredentialSecretResolver,
+        parse_openrouter_model_catalog,
+    };
+
+    /// Builds a runtime whose executable global model can expose an unintended session fallback.
+    /// 构建一个拥有可执行全局模型的运行时，用于暴露非预期的会话回退。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The persisted configuration and activated runtime sharing one exact OpenRouter account.
+    /// 返回共享一个精确 OpenRouter 账号的持久化配置与已激活运行时。
+    fn runtime_with_global_selection() -> (PersistedAiConfiguration, PublicAiRuntime) {
+        let runtime = PublicAiRuntime::first_batch(Arc::new(UnavailableCredentialSecretResolver))
+            .expect("runtime should initialize");
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration
+            .connection_graph
+            .add_connection(
+                &runtime
+                    .providers()
+                    .expect("provider registry should resolve"),
+                CredentialConnection {
+                    id: String::from("global-account"),
+                    provider_id: String::from("openrouter"),
+                    service_entry_id: String::from("public-api"),
+                    credential_profile_id: String::from("api-key"),
+                    credential_mode: CredentialMode::Token,
+                    credential_id: String::from("credential-global-account"),
+                    display_name: String::from("Global account"),
+                    secret_reference: String::from("secret-global-account"),
+                    management_secret_reference: None,
+                    service_origin_override: None,
+                    prompt_cache_by_protocol: BTreeMap::new(),
+                },
+            )
+            .expect("global connection should register");
+        configuration.set_model_enabled("openrouter", "openai/gpt-5.6-terra", true);
+        configuration.active = Some(ActiveAiModelSelection {
+            provider_id: String::from("openrouter"),
+            model_id: String::from("openai/gpt-5.6-terra"),
+            connection_id: String::from("global-account"),
+        });
+        let mut catalog = parse_openrouter_model_catalog(
+            "global-account",
+            1,
+            r#"{"data":[{"id":"openai/gpt-5.6-terra","name":"Global","context_length":8192,"supported_parameters":["tools"],"architecture":{"input_modalities":["text"],"output_modalities":["text"]},"top_provider":{"max_completion_tokens":4096}}]}"#,
+        )
+        .expect("global catalog should parse");
+        for model in &mut catalog.models {
+            model.protocol_variants.insert(
+                vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID.to_string(),
+                ProtocolModelVariant {
+                    capabilities: model.capabilities.clone(),
+                    capability_evidence: Default::default(),
+                    discovery_signature: String::from("global-selection-test"),
+                    catalog_generation: catalog.generation,
+                },
+            );
+        }
+        runtime
+            .stage_source_catalog_for_testing(catalog)
+            .expect("global source catalog should stage");
+        runtime
+            .replace_configuration(configuration.clone())
+            .expect("global configuration should install");
+        runtime
+            .reapply_model_catalog_overlays(&configuration)
+            .expect("global catalog should activate");
+        (configuration, runtime)
+    }
+
+    /// Verifies a transient exact-session catalog miss cannot substitute the global model.
+    /// 验证会话精确目录瞬时缺失时不能改用全局模型。
+    #[test]
+    fn established_session_does_not_fall_back_to_global_selection() {
+        let (configuration, runtime) = runtime_with_global_selection();
+        let runtime_state = vulcan_workbench_model::SessionRuntimeStateEntry {
+            active_provider_id: Some(String::from("commandcode")),
+            active_connection_id: Some(String::from("commandcode-account")),
+            active_model_id: Some(String::from("deepseek/deepseek-v4-flash")),
+            ..Default::default()
+        };
+
+        let selection = public_ai_workbench_selection_from_runtime_state(
+            &configuration,
+            &runtime,
+            Some(&runtime_state),
+        )
+        .expect("selection projection should remain readable");
+
+        assert!(
+            selection.is_none(),
+            "an established session must retain no selection until its exact catalog returns"
+        );
+    }
+
+    /// Verifies only a blank session inherits the configured global model.
+    /// 验证仅空白会话继承已配置的全局模型。
+    #[test]
+    fn blank_session_uses_global_selection() {
+        let (configuration, runtime) = runtime_with_global_selection();
+
+        let selection = public_ai_workbench_selection_from_runtime_state(
+            &configuration,
+            &runtime,
+            Some(&vulcan_workbench_model::SessionRuntimeStateEntry::default()),
+        )
+        .expect("blank-session selection should resolve")
+        .expect("global selection should remain available for a blank session");
+
+        assert_eq!(selection.route.connection.id, "global-account");
+        assert_eq!(selection.model.id, "openai/gpt-5.6-terra");
+    }
+
+    /// Verifies an incomplete persisted identity is rejected instead of rebound to another account.
+    /// 验证不完整的持久化身份会被拒绝，而不是重新绑定到其他账号。
+    #[test]
+    fn incomplete_session_identity_does_not_rebind() {
+        let (configuration, runtime) = runtime_with_global_selection();
+        let runtime_state = vulcan_workbench_model::SessionRuntimeStateEntry {
+            active_provider_id: Some(String::from("commandcode")),
+            active_model_id: Some(String::from("deepseek/deepseek-v4-flash")),
+            ..Default::default()
+        };
+
+        let selection = public_ai_workbench_selection_from_runtime_state(
+            &configuration,
+            &runtime,
+            Some(&runtime_state),
+        )
+        .expect("incomplete session projection should remain readable");
+
+        assert!(selection.is_none());
+    }
 }
 
 /// Resolves the active public model capability snapshot without exposing credential material.

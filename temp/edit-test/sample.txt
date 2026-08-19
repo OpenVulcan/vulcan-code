@@ -1,8 +1,9 @@
 a2
-beta-1
-beta-2
-gamma
-delta
-epsilon-new
+b1
+b2
+g2
+d2
+e2
+o2
 omega
 zeta

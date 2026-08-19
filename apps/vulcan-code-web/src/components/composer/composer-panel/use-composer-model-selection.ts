@@ -102,6 +102,24 @@ export function shouldDeferServiceModelChoiceSync(
   return !scopeChanged && pendingModelChoice !== null;
 }
 
+// serviceModelChoiceSyncValue resolves one authoritative model snapshot without inventing a fallback.
+// serviceModelChoiceSyncValue 在不虚构回退模型的前提下解析一份权威模型快照。
+// Parameters: scopeChanged identifies navigation and serviceChoiceKey is the backend-selected
+// exact account key.
+// 参数：scopeChanged 标识会话切换，serviceChoiceKey 是后端选中的精确账号键。
+// Returns: the value to synchronize, or null when a same-session transient snapshot must preserve
+// the current exact selection.
+// 返回值：需要同步的值；同一会话的瞬时快照应保留当前精确选择时返回 null。
+export function serviceModelChoiceSyncValue(
+  scopeChanged: boolean,
+  serviceChoiceKey: string,
+): string | null {
+  if (serviceChoiceKey) {
+    return serviceChoiceKey;
+  }
+  return scopeChanged ? "" : null;
+}
+
 // useComposerModelSelection synchronizes service snapshots with optimistic model and reasoning choices.
 // useComposerModelSelection 将服务快照与乐观模型、推理选择保持同步。
 // Parameters: options provides authoritative provider data, reasoning capabilities, and persistence callbacks.
@@ -160,12 +178,12 @@ export function useComposerModelSelection(options: UseComposerModelSelectionOpti
     () => modelPickerChoicesFromProviders(options.providers),
     [options.providers],
   );
-  // activeModelChoiceKey follows the service-reported active model or the first available model.
-  // activeModelChoiceKey 跟随服务上报的当前模型，或首个可用模型。
+  // activeModelChoiceKey follows only the exact service-reported active account.
+  // activeModelChoiceKey 仅跟随后端明确上报的当前精确账号。
   const activeModelChoiceKey = React.useMemo(() => {
-    // activeChoice is the service-selected model row or the deterministic first fallback.
-    // activeChoice 是服务选中的模型行，或确定性的首行回退。
-    const activeChoice = availableModelChoices.find((choice) => choice.active) ?? availableModelChoices[0];
+    // activeChoice is absent while an established session catalog is being refreshed.
+    // 已有会话目录刷新期间，activeChoice 可以暂时缺失。
+    const activeChoice = availableModelChoices.find((choice) => choice.active);
     return modelPickerChoiceKey(activeChoice);
   }, [availableModelChoices]);
   // activeProviderModel resolves the full API rows needed by secondary-route controls.
@@ -250,10 +268,17 @@ export function useComposerModelSelection(options: UseComposerModelSelectionOpti
     if (shouldDeferServiceModelChoiceSync(scopeChanged, pendingModelChoiceRef.current)) {
       return;
     }
+    const synchronizedChoice = serviceModelChoiceSyncValue(
+      scopeChanged,
+      activeModelChoiceKey,
+    );
+    if (synchronizedChoice === null) {
+      return;
+    }
     pendingModelChoiceRef.current = null;
     modelRequestVersionRef.current += 1;
-    confirmedModelChoiceRef.current = activeModelChoiceKey;
-    setModelChoice(activeModelChoiceKey);
+    confirmedModelChoiceRef.current = synchronizedChoice;
+    setModelChoice(synchronizedChoice);
   }, [activeModelChoiceKey, options.conversationScopeKey]);
 
   React.useLayoutEffect(() => {

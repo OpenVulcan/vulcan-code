@@ -487,19 +487,25 @@ async fn prepare_submission_media_inner(
                 ),
             );
         });
-        let prepared = execution
-            .client
-            .prepare_local_media(
-                &execution.route,
-                model_id.as_str(),
-                &execution.secret,
-                std::path::Path::new(attachment.local_path.as_str()),
-                resource_kind,
-                attachment.mime_type.as_str(),
-                Some(progress),
-                cancellation,
-            )
-            .await;
+        // Physical media upload reads the same latest credential revision as conversation requests.
+        // 媒体物理上传与会话请求一样读取同一份最新凭据修订版。
+        let prepared = async {
+            let secret = execution.credential.resolve_for_request().await?;
+            execution
+                .client
+                .prepare_local_media(
+                    &execution.route,
+                    model_id.as_str(),
+                    &secret,
+                    std::path::Path::new(attachment.local_path.as_str()),
+                    resource_kind,
+                    attachment.mime_type.as_str(),
+                    Some(progress),
+                    cancellation,
+                )
+                .await
+        }
+        .await;
         let prepared = match prepared {
             Ok(prepared) => prepared,
             Err(error) if cancellation.is_cancelled() || error == "media upload cancelled" => {

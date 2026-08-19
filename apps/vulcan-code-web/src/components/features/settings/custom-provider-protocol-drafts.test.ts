@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest"
 
 import {
+  CUSTOM_PROTOCOL_ROUTE_INHERIT_SELECT_VALUE,
   codexResponsesFeaturePoliciesFromEntry,
+  customProtocolRouteDraftValue,
+  customProtocolRouteSelectValue,
   customProtocolProfileId,
   customProtocolsFromServiceEntries,
   emptyProtocolRouteDraft,
@@ -62,6 +65,17 @@ function entryFixture(): PublicAiServiceEntry {
 }
 
 describe("custom provider protocol drafts", () => {
+  // Verifies the Select UI never receives Radix's reserved empty item value while persistence
+  // continues to use the established empty-string inheritance contract.
+  // 验证 Select UI 绝不接收 Radix 保留的空选项值，同时持久化继续使用既有的空字符串继承契约。
+  it("round trips inherited route fields through a non-empty Select sentinel", () => {
+    expect(CUSTOM_PROTOCOL_ROUTE_INHERIT_SELECT_VALUE).not.toBe("")
+    expect(customProtocolRouteSelectValue("")).toBe(CUSTOM_PROTOCOL_ROUTE_INHERIT_SELECT_VALUE)
+    expect(customProtocolRouteDraftValue(CUSTOM_PROTOCOL_ROUTE_INHERIT_SELECT_VALUE)).toBe("")
+    expect(customProtocolRouteSelectValue("x_api_key")).toBe("x_api_key")
+    expect(customProtocolRouteDraftValue("x_api_key")).toBe("x_api_key")
+  })
+
   // Verifies route diagnostics use the selected credential identity and never borrow a sibling route.
   // 验证路由诊断使用选定凭据身份，且绝不借用同级账号路由。
   it("selects only the exact backend route record for the chosen account", () => {

@@ -13,7 +13,11 @@ export function activeStreamingThinkingBlock(
   conversation: ConversationSummary | undefined,
   renderItems: ConversationRenderItem[],
 ): ConversationBlock | null {
-  if (normalizedSessionRunPhase(conversation?.runPhase) !== "thinking") {
+  // The record lifecycle is the authoritative stream boundary. Provider tool loops may advance
+  // the session phase to requesting before the active thinking row reaches the WebUI projection.
+  // 记录生命周期是权威流边界。Provider 工具循环可能在活动思考行到达 WebUI 投影前，
+  // 已经把会话阶段推进为 requesting。
+  if (!conversationIsRunning(conversation)) {
     return null;
   }
   const activeThinkingItem = [...renderItems].reverse().find((item) => (
