@@ -70,6 +70,12 @@ interface ToolRequestCardProgress {
   statusLabel: string;
 }
 
+// ToolDetailLoader resolves one authoritative hidden detail record after tool completion.
+// ToolDetailLoader 在工具完成后解析单条权威隐藏详情记录。
+type ToolDetailLoader = (
+  detailRef: ConversationDetailRef,
+) => Promise<ToolDetailPayload | null>;
+
 // ToolPresentationCard renders one recognized tool presentation with shared expansion behavior.
 // ToolPresentationCard 使用共享展开行为渲染单个已识别工具展示。
 export function ToolPresentationCard(props: {
@@ -82,6 +88,9 @@ export function ToolPresentationCard(props: {
   // Optional request stream state rendered by the resolved original card.
   // 由已解析原始卡片渲染的可选请求流状态。
   requestProgress: ToolRequestCardProgress | null;
+  // Whether the authoritative terminal detail reference is eligible for hydration.
+  // 权威终态详情引用是否具备水合资格。
+  detailLoadEnabled: boolean;
   // Expansion id set shared with the native-flow transcript surface.
   // 与原生流转录界面共享的展开标识集合。
   expandedToolPresentationIds: Set<string>;
@@ -90,7 +99,7 @@ export function ToolPresentationCard(props: {
   onExpandedChange: (presentationId: string, expanded: boolean) => void;
   // Loads one hidden tool-detail record for rich presentation data.
   // 加载单条隐藏工具详情记录用于补充展示数据。
-  onLoadToolDetail: (detailRef: ConversationDetailRef) => Promise<ToolDetailPayload | null>;
+  onLoadToolDetail: ToolDetailLoader;
 }) {
   if (props.presentation.kind === "command_execution") {
     return (
@@ -99,7 +108,7 @@ export function ToolPresentationCard(props: {
         presentation={props.presentation}
         requestProgress={props.requestProgress}
         onExpandedChange={props.onExpandedChange}
-        onLoadToolDetail={props.onLoadToolDetail}
+        onLoadToolDetail={props.detailLoadEnabled ? props.onLoadToolDetail : undefined}
       />
     );
   }
@@ -121,7 +130,7 @@ export function ToolPresentationCard(props: {
         presentation={props.presentation}
         requestProgress={props.requestProgress}
         onExpandedChange={props.onExpandedChange}
-        onLoadToolDetail={props.onLoadToolDetail}
+        onLoadToolDetail={props.detailLoadEnabled ? props.onLoadToolDetail : undefined}
       />
     );
   }
@@ -132,7 +141,7 @@ export function ToolPresentationCard(props: {
         presentation={props.presentation}
         requestProgress={props.requestProgress}
         onExpandedChange={props.onExpandedChange}
-        onLoadToolDetail={props.onLoadToolDetail}
+        onLoadToolDetail={props.detailLoadEnabled ? props.onLoadToolDetail : undefined}
       />
     );
   }
@@ -143,7 +152,7 @@ export function ToolPresentationCard(props: {
         presentation={props.presentation}
         requestProgress={props.requestProgress}
         onExpandedChange={props.onExpandedChange}
-        onLoadToolDetail={props.onLoadToolDetail}
+        onLoadToolDetail={props.detailLoadEnabled ? props.onLoadToolDetail : undefined}
       />
     );
   }
@@ -154,7 +163,7 @@ export function ToolPresentationCard(props: {
         presentation={props.presentation}
         requestProgress={props.requestProgress}
         onExpandedChange={props.onExpandedChange}
-        onLoadToolDetail={props.onLoadToolDetail}
+        onLoadToolDetail={props.detailLoadEnabled ? props.onLoadToolDetail : undefined}
       />
     );
   }
@@ -452,7 +461,7 @@ function ProviderToolSearchPresentationCard(props: {
     <div className={cn("tool-presentation-card markdown-tool", props.expanded && "expanded")}>
       <button
         aria-expanded={props.expanded}
-        className="tool-presentation-summary markdown-tool-summary"
+        className="tool-presentation-summary markdown-tool-summary provider-search-summary"
         onClick={handleToggle}
         title={props.presentation.query}
         type="button"
@@ -465,7 +474,7 @@ function ProviderToolSearchPresentationCard(props: {
           </span>
           <ToolRequestInlineProgress progress={props.requestProgress} />
         </span>
-        <span className="text-muted-foreground text-xs">
+        <span className="provider-search-result-count text-muted-foreground text-xs">
           {props.presentation.results.length} {t("toolPresentation.providerSearch.results")}
         </span>
         {props.expanded ? (
@@ -568,7 +577,7 @@ function MarkdownToolPresentationCard(props: {
   onExpandedChange: (presentationId: string, expanded: boolean) => void;
   // Loads one hidden tool-detail record for full Markdown output.
   // 加载单条隐藏工具详情记录用于完整 Markdown 输出。
-  onLoadToolDetail: (detailRef: ConversationDetailRef) => Promise<ToolDetailPayload | null>;
+  onLoadToolDetail?: ToolDetailLoader;
 }) {
   // t resolves stable WebUI copy keys for the active language.
   // t 根据当前语言解析稳定的 WebUI 文案键。
@@ -589,7 +598,7 @@ function MarkdownToolPresentationCard(props: {
     setHydratedPresentation(cached ?? presentation);
   }, [detailCacheKey, presentation]);
   React.useEffect(() => {
-    if (!expanded || !presentation.detailRef || !detailCacheKey || markdownToolPresentationDetailCache.has(detailCacheKey)) {
+    if (!expanded || !onLoadToolDetail || !presentation.detailRef || !detailCacheKey || markdownToolPresentationDetailCache.has(detailCacheKey)) {
       return;
     }
     let cancelled = false;
@@ -647,7 +656,13 @@ function MarkdownToolPresentationCard(props: {
           {markdownBlock ? (
             <MarkdownMessage content={markdownBlock} eager />
           ) : (
-            <div className="markdown-tool-empty">{loadingDetail ? t("toolPresentation.output.loading") : t("toolPresentation.output.empty")}</div>
+            <div className="markdown-tool-empty">{
+              loadingDetail
+                ? t("toolPresentation.output.loading")
+                : hydratedPresentation.state === "running"
+                  ? t("toolPresentation.output.waiting")
+                  : t("toolPresentation.output.empty")
+            }</div>
           )}
         </div>
       </ConversationMeasuredCollapse>
@@ -672,7 +687,7 @@ function LuaExecutionPresentationCard(props: {
   onExpandedChange: (presentationId: string, expanded: boolean) => void;
   // Loads one hidden tool-detail record for the complete Lua result.
   // 加载单条隐藏工具详情记录用于完整 Lua 结果。
-  onLoadToolDetail: (detailRef: ConversationDetailRef) => Promise<ToolDetailPayload | null>;
+  onLoadToolDetail?: ToolDetailLoader;
 }) {
   // t resolves stable WebUI copy keys for the active language.
   // t 根据当前语言解析稳定的 WebUI 文案键。
@@ -693,7 +708,7 @@ function LuaExecutionPresentationCard(props: {
     setHydratedPresentation(cached ?? presentation);
   }, [detailCacheKey, presentation]);
   React.useEffect(() => {
-    if (!expanded || !presentation.detailRef || !detailCacheKey || luaExecutionPresentationDetailCache.has(detailCacheKey)) {
+    if (!expanded || !onLoadToolDetail || !presentation.detailRef || !detailCacheKey || luaExecutionPresentationDetailCache.has(detailCacheKey)) {
       return;
     }
     let cancelled = false;
@@ -773,7 +788,13 @@ function LuaExecutionPresentationCard(props: {
             {outputMarkdown ? (
               <MarkdownMessage content={outputMarkdown} eager />
             ) : (
-              <div className="markdown-tool-empty">{loadingDetail ? t("toolPresentation.output.loading") : t("toolPresentation.output.empty")}</div>
+            <div className="markdown-tool-empty">{
+              loadingDetail
+                ? t("toolPresentation.output.loading")
+                : hydratedPresentation.state === "running"
+                  ? t("toolPresentation.output.waiting")
+                  : t("toolPresentation.output.empty")
+            }</div>
             )}
           </div>
         </div>
@@ -1157,7 +1178,7 @@ function SubagentOrchestrationPresentationCard(props: {
   onExpandedChange: (presentationId: string, expanded: boolean) => void;
   // Loads one hidden tool-detail record for full subagent results.
   // 加载单条隐藏工具详情记录用于完整子代理结果。
-  onLoadToolDetail: (detailRef: ConversationDetailRef) => Promise<ToolDetailPayload | null>;
+  onLoadToolDetail?: ToolDetailLoader;
 }) {
   // t resolves stable WebUI copy keys for the active language.
   // t 根据当前语言解析稳定的 WebUI 文案键。
@@ -1177,7 +1198,7 @@ function SubagentOrchestrationPresentationCard(props: {
     setHydratedPresentation(cached ?? presentation);
   }, [detailCacheKey, presentation]);
   React.useEffect(() => {
-    if (!expanded || !presentation.detailRef || !detailCacheKey || subagentOrchestrationPresentationDetailCache.has(detailCacheKey)) {
+    if (!expanded || !onLoadToolDetail || !presentation.detailRef || !detailCacheKey || subagentOrchestrationPresentationDetailCache.has(detailCacheKey)) {
       return;
     }
     let cancelled = false;
@@ -1745,7 +1766,7 @@ function CommandExecutionPresentationCard(props: {
   onExpandedChange: (presentationId: string, expanded: boolean) => void;
   // Loads one hidden tool-detail record for command output.
   // 加载单条隐藏工具详情记录用于命令输出。
-  onLoadToolDetail: (detailRef: ConversationDetailRef) => Promise<ToolDetailPayload | null>;
+  onLoadToolDetail?: ToolDetailLoader;
 }) {
   // t resolves stable WebUI copy keys for the active language.
   // t 根据当前语言解析稳定的 WebUI 文案键。
@@ -1767,7 +1788,7 @@ function CommandExecutionPresentationCard(props: {
   }, [detailCacheKey, presentation]);
 
   React.useEffect(() => {
-    if (!expanded || !presentation.detailRef || !detailCacheKey || commandPresentationDetailCache.has(detailCacheKey)) {
+    if (!expanded || !onLoadToolDetail || !presentation.detailRef || !detailCacheKey || commandPresentationDetailCache.has(detailCacheKey)) {
       return;
     }
     let cancelled = false;
@@ -1859,7 +1880,11 @@ function CommandExecutionPresentationCard(props: {
           <div className="tool-presentation-output-scroll">
             <TerminalOutputView
               className="tool-presentation-output-text"
-              emptyText={loadingDetail ? t("toolPresentation.output.loading") : t("toolPresentation.output.empty")}
+              emptyText={loadingDetail
+                ? t("toolPresentation.output.loading")
+                : hydratedPresentation.state === "running"
+                  ? t("toolPresentation.output.waiting")
+                  : t("toolPresentation.output.empty")}
               text={outputText}
             />
           </div>
@@ -1999,7 +2024,7 @@ function AskQuestionPresentationCard(props: {
   onExpandedChange: (presentationId: string, expanded: boolean) => void;
   // Loads one hidden tool-detail record for completed answers.
   // 加载单条隐藏工具详情记录用于补全完成态答案。
-  onLoadToolDetail: (detailRef: ConversationDetailRef) => Promise<ToolDetailPayload | null>;
+  onLoadToolDetail?: ToolDetailLoader;
 }) {
   // t resolves stable WebUI copy keys for the active language.
   // t 根据当前语言解析稳定的 WebUI 文案键。
@@ -2020,7 +2045,7 @@ function AskQuestionPresentationCard(props: {
   }, [detailCacheKey, presentation]);
 
   React.useEffect(() => {
-    if (!expanded || !presentation.detailRef || !detailCacheKey || askQuestionPresentationDetailCache.has(detailCacheKey)) {
+    if (!expanded || !onLoadToolDetail || !presentation.detailRef || !detailCacheKey || askQuestionPresentationDetailCache.has(detailCacheKey)) {
       return;
     }
     let cancelled = false;

@@ -37,6 +37,19 @@ fn project_standard_object_root_schema(schema: &Value) -> Value {
     projected.insert(String::from("type"), Value::String(String::from("object")));
     projected.remove("items");
     projected.remove("enum");
+
+    let has_explicit_empty_properties = matches!(
+        projected.get("properties"),
+        Some(Value::Object(properties)) if properties.is_empty()
+    );
+    let has_closed_object_boundary =
+        projected.get("additionalProperties") == Some(&Value::Bool(false));
+    if has_explicit_empty_properties && has_closed_object_boundary {
+        // Emit the smallest explicit no-argument object accepted by strict OpenAI-compatible validators.
+        // 输出严格 OpenAI 兼容校验器接受的最小显式无参数对象。
+        projected.insert(String::from("required"), Value::Array(Vec::new()));
+        projected.remove("additionalProperties");
+    }
     Value::Object(projected)
 }
 

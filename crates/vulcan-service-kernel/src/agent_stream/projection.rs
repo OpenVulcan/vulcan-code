@@ -2,8 +2,12 @@
 //! 流式转录与运行时事件投影辅助函数。
 
 use super::*;
+use std::collections::{HashMap, HashSet};
 use vulcan_core::controller::INTERJECTED_PROMPT_ADMISSION_ID_KEY;
-use vulcan_service_api::ConversationMessagesPatchedDelta;
+use vulcan_service_api::{
+    ConversationMessagesPatchedDelta, ToolRequestProgressChangedDelta, ToolRequestProgressSnapshot,
+    ToolRequestProgressState,
+};
 
 /// Semantic kind of one provider content delta projected into a streaming transcript record.
 /// 投影到流式转录记录中的单个 Provider 内容增量语义类型。
@@ -180,6 +184,162 @@ pub(crate) fn emit_transient_reasoning_status(
         ServiceEvent::WorkbenchDelta(Box::new(event)),
     );
     Ok(())
+}
+
+/// Emits or clears one ephemeral tool-request progress snapshot under exact runtime authority.
+/// 在精确运行时权限下发送或清除单个瞬态工具请求进度快照。
+///
+/// # Parameters
+/// 参数
+/// `app` emits the lightweight event, `state` owns generation ordering, `session_id` selects the
+/// conversation, `authority` proves event ownership, and `event` carries the exact runtime metadata.
+/// `app` 发送轻量事件，`state` 持有代际顺序，`session_id` 选择会话，`authority` 证明事件归属，
+/// `event` 携带精确运行时元数据。
+///
+/// # Returns
+/// 返回值
+/// Success after an applicable event is emitted, or an explicit metadata, ownership, or lock error.
+/// 适用事件发送后返回成功，否则返回明确的元数据、权限或加锁错误。
+fn emit_tool_request_progress_changed(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    authority: RuntimeEventProjectionAuthority,
+    event: &RuntimeEvent,
+) -> Result<(), String> {
+    // change is absent for runtime events outside the closed request-formation lifecycle.
+    // change 对封闭请求构造生命周期之外的运行时事件为空。
+    let Some((request_stream_id, progress)) = tool_request_progress_change_from_event(event)?
+    else {
+        return Ok(());
+    };
+    // envelope is assembled under the authority and generation lock without touching transcript state.
+    // envelope 在权限与代际锁内组装，且不会修改转录状态。
+    let envelope = commit_runtime_event_projection_state(state, session_id, authority, |guard| {
+        guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+        // generation orders the leaf-only progress update against durable lifecycle patches.
+        // generation 将仅叶子级进度更新与持久生命周期补丁进行排序。
+        let generation = guard.workbench_generation;
+        guard.workbench.revision = generation;
+        Ok(WorkbenchDeltaEnvelope {
+            generation,
+            delta: WorkbenchDelta::ToolRequestProgressChanged(ToolRequestProgressChangedDelta {
+                conversation_id: session_id.to_string(),
+                request_stream_id,
+                progress,
+            }),
+        })
+    })?;
+    emit_service_event_with_trace(
+        app,
+        "workbench_tool_request_progress_emit",
+        ServiceEvent::WorkbenchDelta(Box::new(envelope)),
+    );
+    Ok(())
+}
+
+/// Decodes the exact transient tool-request change represented by one runtime event.
+/// 解码单条运行时事件表示的精确瞬态工具请求变更。
+///
+/// # Parameters
+/// 参数
+/// `event` is the authoritative runtime event produced by `ToolRequestStreamCoordinator`.
+/// `event` 是 `ToolRequestStreamCoordinator` 生成的权威运行时事件。
+///
+/// # Returns
+/// 返回值
+/// A replacement or clear operation for applicable lifecycle events, none for unrelated events,
+/// or an explicit contract error for malformed applicable metadata.
+/// 对适用生命周期事件返回替换或清除操作，对无关事件返回空，适用元数据损坏时返回明确契约错误。
+fn tool_request_progress_change_from_event(
+    event: &RuntimeEvent,
+) -> Result<Option<(String, Option<ToolRequestProgressSnapshot>)>, String> {
+    if !matches!(
+        event.kind,
+        RuntimeEventKind::ToolRequestProgress
+            | RuntimeEventKind::ToolRequestPreviewUpdated
+            | RuntimeEventKind::ToolRequestReady
+            | RuntimeEventKind::ToolRequestInvalid
+            | RuntimeEventKind::ToolRequestAborted
+    ) {
+        return Ok(None);
+    }
+    // metadata is mandatory for every request-stream lifecycle event emitted by the coordinator.
+    // metadata 对协调器发出的每个请求流生命周期事件都是必需的。
+    let metadata = event.metadata.as_ref().ok_or_else(|| {
+        format!(
+            "runtime event {:?} is missing tool request metadata",
+            event.kind
+        )
+    })?;
+    let request_stream_id = tool_request_metadata_string(metadata, "request_stream_id")?;
+    if matches!(
+        event.kind,
+        RuntimeEventKind::ToolRequestReady
+            | RuntimeEventKind::ToolRequestInvalid
+            | RuntimeEventKind::ToolRequestAborted
+    ) {
+        return Ok(Some((request_stream_id, None)));
+    }
+    // progress preserves only coordinator-owned safe fields and the parser-sanitized preview.
+    // progress 仅保留协调器持有的安全字段与解析器净化预览。
+    let progress = ToolRequestProgressSnapshot {
+        request_stream_id: request_stream_id.clone(),
+        tool_call_id: tool_request_metadata_string(metadata, "tool_call_id")?,
+        tool_name: tool_request_metadata_string(metadata, "tool_name")?,
+        state: ToolRequestProgressState::Receiving,
+        received_bytes: tool_request_metadata_u64(metadata, "received_bytes")?,
+        received_characters: tool_request_metadata_u64(metadata, "received_characters")?,
+        request_revision: tool_request_metadata_u64(metadata, "request_revision")?,
+        preview: metadata
+            .get("preview")
+            .filter(|value| !value.is_null())
+            .cloned(),
+    };
+    Ok(Some((request_stream_id, Some(progress))))
+}
+
+/// Reads one required string field from the closed tool-request metadata contract.
+/// 从封闭工具请求元数据契约读取单个必需字符串字段。
+///
+/// # Parameters
+/// 参数
+/// `metadata` is the exact coordinator metadata object and `field` is the required contract key.
+/// `metadata` 是精确协调器元数据对象，`field` 是必需契约键。
+///
+/// # Returns
+/// 返回值
+/// The non-empty string, or an explicit contract error.
+/// 返回非空字符串，否则返回明确契约错误。
+fn tool_request_metadata_string(
+    metadata: &serde_json::Value,
+    field: &str,
+) -> Result<String, String> {
+    metadata
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| format!("tool request metadata field `{field}` must be a non-empty string"))
+}
+
+/// Reads one required unsigned integer field from the closed tool-request metadata contract.
+/// 从封闭工具请求元数据契约读取单个必需无符号整数字段。
+///
+/// # Parameters
+/// 参数
+/// `metadata` is the exact coordinator metadata object and `field` is the required contract key.
+/// `metadata` 是精确协调器元数据对象，`field` 是必需契约键。
+///
+/// # Returns
+/// 返回值
+/// The unsigned integer, or an explicit contract error.
+/// 返回无符号整数，否则返回明确契约错误。
+fn tool_request_metadata_u64(metadata: &serde_json::Value, field: &str) -> Result<u64, String> {
+    metadata
+        .get(field)
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| format!("tool request metadata field `{field}` must be an unsigned integer"))
 }
 
 /// Appends one typed provider content delta to its exact streaming transcript record.
@@ -1108,36 +1268,41 @@ pub(crate) fn build_conversation_messages_patched_delta(
     before_messages: &[ConversationMessage],
     after_messages: &[ConversationMessage],
 ) -> Option<ConversationMessagesPatchedDelta> {
+    // afterIds provides constant-time removal checks for long retained transcripts.
+    // afterIds 为长保留转录提供常量时间的移除检查。
+    let after_ids: HashSet<&str> = after_messages
+        .iter()
+        .map(|message| message.id.as_str())
+        .collect();
+    // beforeById preserves the first authoritative row for each stable message identity.
+    // beforeById 为每个稳定消息身份保留首条权威记录。
+    let mut before_by_id: HashMap<&str, &ConversationMessage> = HashMap::new();
+    for message in before_messages {
+        before_by_id.entry(message.id.as_str()).or_insert(message);
+    }
+
     let mut remove_message_ids = Vec::new();
     for before_message in before_messages {
-        if !after_messages
-            .iter()
-            .any(|after_message| after_message.id == before_message.id)
-        {
+        if !after_ids.contains(before_message.id.as_str()) {
             remove_message_ids.push(before_message.id.clone());
         }
     }
 
     let mut upsert_messages = Vec::new();
     for after_message in after_messages {
-        match before_messages
-            .iter()
-            .find(|before_message| before_message.id == after_message.id)
-        {
+        match before_by_id.get(after_message.id.as_str()).copied() {
             Some(before_message) if before_message == after_message => {}
             _ => upsert_messages.push(after_message.clone()),
         }
     }
 
-    let before_order: Vec<&str> = before_messages
+    // orderUnchanged compares iterators directly and avoids allocating two full id arrays.
+    // orderUnchanged 直接比较迭代器，避免分配两个完整标识数组。
+    let order_unchanged = before_messages
         .iter()
         .map(|message| message.id.as_str())
-        .collect();
-    let after_order: Vec<&str> = after_messages
-        .iter()
-        .map(|message| message.id.as_str())
-        .collect();
-    let message_order = if before_order == after_order {
+        .eq(after_messages.iter().map(|message| message.id.as_str()));
+    let message_order = if order_unchanged {
         None
     } else {
         Some(
@@ -1838,6 +2003,14 @@ fn append_runtime_event_projection_with_authority(
     authority: RuntimeEventProjectionAuthority,
     event: &RuntimeEvent,
 ) -> Result<(), String> {
+    if matches!(
+        event.kind,
+        RuntimeEventKind::ToolRequestProgress | RuntimeEventKind::ToolRequestPreviewUpdated
+    ) {
+        // High-frequency argument formation is leaf-only UI state and must never rebuild retained transcripts.
+        // 高频参数构造属于仅叶子级界面状态，绝不能重建保留转录。
+        return emit_tool_request_progress_changed(app, state, session_id, authority, event);
+    }
     if !runtime_event_projects_conversation_transcript(event.kind) {
         return Ok(());
     }
@@ -2190,6 +2363,9 @@ fn append_runtime_event_projection_with_authority(
             Some(String::from("submit_plan_tool")),
         );
     }
+    // Terminal request-formation events clear the external leaf cache only after their durable patch commits.
+    // 请求构造终态事件仅在持久补丁提交后清除外部叶子缓存。
+    emit_tool_request_progress_changed(app, state, session_id, authority, event)?;
     Ok(())
 }
 
@@ -2209,8 +2385,6 @@ fn runtime_event_projects_conversation_transcript(event_kind: RuntimeEventKind) 
     matches!(
         event_kind,
         RuntimeEventKind::ToolRequestStarted
-            | RuntimeEventKind::ToolRequestProgress
-            | RuntimeEventKind::ToolRequestPreviewUpdated
             | RuntimeEventKind::ToolRequestReady
             | RuntimeEventKind::ToolRequestInvalid
             | RuntimeEventKind::ToolRequestAborted
@@ -2826,21 +3000,78 @@ mod tests {
         );
     }
 
-    /// Verifies every visible tool-request revision reaches the retained transcript projection.
-    /// 验证每个可见工具请求修订都能进入保留转录投影。
+    /// Verifies request-progress decoding preserves exact safe metadata and terminal clearing.
+    /// 验证请求进度解码保留精确安全元数据与终态清除语义。
+    ///
+    /// # Returns
+    /// 返回值
+    /// This test returns no value and reports contract drift through assertions.
+    /// 此测试不返回值，并通过断言报告契约漂移。
+    #[test]
+    fn tool_request_progress_change_uses_the_closed_runtime_contract() {
+        // progress mirrors one exact coordinator event and excludes raw argument content.
+        // progress 镜像一条精确协调器事件，并排除原始参数内容。
+        let progress = RuntimeEvent::new(
+            RuntimeEventKind::ToolRequestProgress,
+            "tool request",
+            String::new(),
+        )
+        .with_metadata(Some(serde_json::json!({
+            "request_stream_id": "request-1",
+            "tool_call_id": "call-1",
+            "tool_name": "terminal_session",
+            "tool_display_state": "receiving",
+            "received_bytes": 512,
+            "received_characters": 500,
+            "request_revision": 3,
+            "preview": { "kind": "command" },
+        })));
+        let (request_stream_id, snapshot) = tool_request_progress_change_from_event(&progress)
+            .expect("progress metadata should satisfy the closed contract")
+            .expect("progress event should produce one replacement");
+        assert_eq!(request_stream_id, "request-1");
+        let snapshot = snapshot.expect("progress event should carry one snapshot");
+        assert_eq!(snapshot.request_stream_id, "request-1");
+        assert_eq!(snapshot.tool_call_id, "call-1");
+        assert_eq!(snapshot.tool_name, "terminal_session");
+        assert_eq!(snapshot.received_bytes, 512);
+        assert_eq!(snapshot.received_characters, 500);
+        assert_eq!(snapshot.request_revision, 3);
+        assert_eq!(
+            snapshot.preview,
+            Some(serde_json::json!({ "kind": "command" }))
+        );
+
+        // ready reuses the same exact identity and clears the leaf Store after durable projection.
+        // ready 复用同一精确身份，并在持久投影后清除叶子 Store。
+        let ready = RuntimeEvent::new(
+            RuntimeEventKind::ToolRequestReady,
+            "tool request ready",
+            String::new(),
+        )
+        .with_metadata(Some(serde_json::json!({
+            "request_stream_id": "request-1",
+        })));
+        assert_eq!(
+            tool_request_progress_change_from_event(&ready)
+                .expect("ready metadata should satisfy the clear contract"),
+            Some((String::from("request-1"), None)),
+        );
+    }
+
+    /// Verifies only durable tool lifecycle events reach retained transcript projection.
+    /// 验证仅持久工具生命周期事件进入保留转录投影。
     ///
     /// # Returns
     /// 返回值
     /// This test returns no value and reports failures through assertions.
     /// 此测试无返回值，并通过断言报告失败。
     #[test]
-    fn visible_runtime_events_project_conversation_transcript() {
-        // visibleRuntimeEvents enumerates tool-card lifecycle events and same-route retry notes.
-        // visibleRuntimeEvents 枚举工具卡片生命周期事件与同一路由重试备注。
-        let visible_runtime_events = [
+    fn durable_runtime_events_project_conversation_transcript() {
+        // durableRuntimeEvents excludes replace-in-place request progress owned by the external Store.
+        // durableRuntimeEvents 排除由外部 Store 持有的原地替换式请求进度。
+        let durable_runtime_events = [
             RuntimeEventKind::ToolRequestStarted,
-            RuntimeEventKind::ToolRequestProgress,
-            RuntimeEventKind::ToolRequestPreviewUpdated,
             RuntimeEventKind::ToolRequestReady,
             RuntimeEventKind::ToolRequestInvalid,
             RuntimeEventKind::ToolRequestAborted,
@@ -2851,10 +3082,10 @@ mod tests {
 
         // eventKind must pass the projection gate so its exact visible record can be persisted.
         // eventKind 必须通过投影门禁，确保其精确可见记录能够持久化。
-        for event_kind in visible_runtime_events {
+        for event_kind in durable_runtime_events {
             assert!(
                 runtime_event_projects_conversation_transcript(event_kind),
-                "visible runtime event {event_kind:?} must reach transcript projection"
+                "durable runtime event {event_kind:?} must reach transcript projection"
             );
         }
         assert!(!runtime_event_projects_conversation_transcript(
@@ -2862,6 +3093,12 @@ mod tests {
         ));
         assert!(!runtime_event_projects_conversation_transcript(
             RuntimeEventKind::ProviderWaiting
+        ));
+        assert!(!runtime_event_projects_conversation_transcript(
+            RuntimeEventKind::ToolRequestProgress
+        ));
+        assert!(!runtime_event_projects_conversation_transcript(
+            RuntimeEventKind::ToolRequestPreviewUpdated
         ));
     }
 

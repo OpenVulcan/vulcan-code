@@ -299,6 +299,65 @@ pub struct MediaUploadProgressChangedDelta {
     pub error: Option<String>,
 }
 
+/// Classifies one ephemeral tool-request formation snapshot.
+/// 对单条瞬态工具请求构造快照进行分类。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolRequestProgressState {
+    /// The provider is still streaming the tool argument document.
+    /// Provider 仍在流式发送工具参数文档。
+    Receiving,
+}
+
+/// Carries the latest safe argument-formation snapshot for one tool request.
+/// 携带单个工具请求最新的安全参数构造快照。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolRequestProgressSnapshot {
+    /// Stable host-side request-stream identity.
+    /// 稳定的宿主侧请求流标识。
+    pub request_stream_id: String,
+    /// Canonical tool-call identity known at this revision.
+    /// 当前修订已知的规范工具调用标识。
+    pub tool_call_id: String,
+    /// Exact public tool name frozen for this request.
+    /// 当前请求冻结的精确公开工具名称。
+    pub tool_name: String,
+    /// Current closed request-formation state.
+    /// 当前封闭的请求构造状态。
+    pub state: ToolRequestProgressState,
+    /// Exact UTF-8 byte count received so far.
+    /// 当前已接收的精确 UTF-8 字节数。
+    pub received_bytes: u64,
+    /// Exact Unicode character count received so far.
+    /// 当前已接收的精确 Unicode 字符数。
+    pub received_characters: u64,
+    /// Monotonic request-local revision.
+    /// 请求局部的单调修订号。
+    pub request_revision: u64,
+    /// Optional parser-sanitized preview owned by the streaming contract.
+    /// 流式契约持有的可选解析器净化预览。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview: Option<serde_json::Value>,
+}
+
+/// Replaces or clears one ephemeral tool-request formation snapshot.
+/// 替换或清除单个瞬态工具请求构造快照。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolRequestProgressChangedDelta {
+    /// Conversation identity owning the request.
+    /// 持有当前请求的会话标识。
+    pub conversation_id: String,
+    /// Stable request-stream identity used for replacement and clearing.
+    /// 用于替换与清除的稳定请求流标识。
+    pub request_stream_id: String,
+    /// Latest safe snapshot, or null after the request leaves formation.
+    /// 最新安全快照；请求离开构造阶段后为空。
+    #[serde(default)]
+    pub progress: Option<ToolRequestProgressSnapshot>,
+}
+
 /// Describes one partial workbench update emitted on hot paths.
 /// 描述热路径上发出的单条局部工作台更新。
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
@@ -373,6 +432,9 @@ pub enum WorkbenchDelta {
     /// Ephemeral media upload progress for a submission that has not been materialized yet.
     /// 尚未物化提交的临时媒体上传进度增量。
     MediaUploadProgressChanged(MediaUploadProgressChangedDelta),
+    /// Ephemeral replace-in-place argument progress for one active tool request.
+    /// 单个活动工具请求使用的瞬态原地替换式参数进度。
+    ToolRequestProgressChanged(ToolRequestProgressChangedDelta),
     /// Ephemeral replace-in-place reasoning status for one active conversation.
     /// 单个活动会话使用的瞬态原地替换式推理状态。
     TransientReasoningStatusChanged(TransientReasoningStatusChangedDelta),
@@ -1166,6 +1228,71 @@ mod tests {
                     }
                 }
             })
+        );
+    }
+
+    /// Verifies tool request progress uses one closed replace-and-clear Web contract.
+    /// 验证工具请求进度使用单个封闭的替换与清除 Web 契约。
+    #[test]
+    fn tool_request_progress_serializes_for_the_live_store() {
+        // envelope mirrors one preview revision consumed only by the leaf-level external Store.
+        // envelope 镜像一条仅由叶子级外部 Store 消费的预览修订。
+        let envelope = WorkbenchDeltaEnvelope {
+            generation: 10,
+            delta: WorkbenchDelta::ToolRequestProgressChanged(ToolRequestProgressChangedDelta {
+                conversation_id: String::from("conversation"),
+                request_stream_id: String::from("request-1"),
+                progress: Some(ToolRequestProgressSnapshot {
+                    request_stream_id: String::from("request-1"),
+                    tool_call_id: String::from("call-1"),
+                    tool_name: String::from("terminal_session"),
+                    state: ToolRequestProgressState::Receiving,
+                    received_bytes: 512,
+                    received_characters: 500,
+                    request_revision: 3,
+                    preview: Some(serde_json::json!({ "kind": "command" })),
+                }),
+            }),
+        };
+
+        assert_eq!(
+            serde_json::to_value(envelope).expect("tool request progress should serialize"),
+            serde_json::json!({
+                "generation": 10,
+                "delta": {
+                    "kind": "toolRequestProgressChanged",
+                    "payload": {
+                        "conversationId": "conversation",
+                        "requestStreamId": "request-1",
+                        "progress": {
+                            "requestStreamId": "request-1",
+                            "toolCallId": "call-1",
+                            "toolName": "terminal_session",
+                            "state": "receiving",
+                            "receivedBytes": 512,
+                            "receivedCharacters": 500,
+                            "requestRevision": 3,
+                            "preview": { "kind": "command" }
+                        }
+                    }
+                }
+            })
+        );
+
+        // clear proves the terminal event carries explicit null instead of an omitted ambiguous field.
+        // clear 证明终态事件携带显式空值，而不是省略产生歧义的字段。
+        let clear = WorkbenchDeltaEnvelope {
+            generation: 11,
+            delta: WorkbenchDelta::ToolRequestProgressChanged(ToolRequestProgressChangedDelta {
+                conversation_id: String::from("conversation"),
+                request_stream_id: String::from("request-1"),
+                progress: None,
+            }),
+        };
+        assert_eq!(
+            serde_json::to_value(clear).expect("tool request clear should serialize")["delta"]["payload"]
+                ["progress"],
+            serde_json::Value::Null,
         );
     }
 }

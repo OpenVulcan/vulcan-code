@@ -71,6 +71,15 @@
   white-space: nowrap;
 }
 
+.provider-search-summary {
+  grid-template-columns: auto auto minmax(0, 1fr) auto auto;
+}
+
+.provider-search-result-count {
+  min-width: max-content;
+  white-space: nowrap;
+}
+
 .tool-presentation-route-badge {
   min-width: 0;
   border: 1px solid color-mix(in oklch, var(--primary) 34%, transparent);

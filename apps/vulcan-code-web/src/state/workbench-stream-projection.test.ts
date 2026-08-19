@@ -78,4 +78,26 @@ describe("workbench stream projection", () => {
       },
     })).toBe(false);
   });
+
+  it("keeps tool request progress out of global React workbench state", () => {
+    expect(workbenchEnvelopeRequiresReactProjection({
+      generation: 6,
+      delta: {
+        kind: "toolRequestProgressChanged",
+        payload: {
+          conversationId: "conversation",
+          requestStreamId: "request-1",
+          progress: {
+            requestStreamId: "request-1",
+            toolCallId: "call-1",
+            toolName: "terminal_session",
+            state: "receiving",
+            receivedBytes: 512,
+            receivedCharacters: 500,
+            requestRevision: 3,
+          },
+        },
+      },
+    })).toBe(false);
+  });
 });

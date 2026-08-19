@@ -106,6 +106,7 @@ pub(crate) fn build_get_goal_tool() -> Arc<NativeToolDefinition> {
         descriptor,
         json!({
             "type": "object",
+            "properties": {},
             "additionalProperties": false
         }),
         move |request: NativeToolExecutionRequest| {
@@ -686,5 +687,21 @@ mod goal_projection_tests {
         assert_eq!(projection["outputTokens"], 1_234);
         assert_eq!(projection["reasoningTokens"], 789);
         assert_eq!(projection["totalTokens"], 37_035);
+    }
+
+    /// Verifies get_goal declares an explicit closed empty-object parameter schema.
+    /// 验证 get_goal 声明显式封闭的空对象参数 Schema。
+    #[test]
+    fn get_goal_uses_explicit_empty_object_schema() {
+        let tool = build_get_goal_tool();
+
+        assert_eq!(
+            tool.args_schema,
+            json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            })
+        );
     }
 }

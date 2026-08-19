@@ -235,6 +235,23 @@ export function ChatArea(props: ChatAreaProps) {
   const transientReasoningStatus = useConversationTransientReasoningStatus(
     activeSurfaceConversationId,
   );
+  // retainedFirstSubmissionKeyRef preserves the exact optimistic correlation across draft ID promotion.
+  // retainedFirstSubmissionKeyRef 在草稿标识转正期间保留精确乐观关联身份。
+  const retainedFirstSubmissionKeyRef = React.useRef<string | null>(null);
+  // pendingFirstSubmissionKey exists only for the first prompt submitted from a draft surface.
+  // pendingFirstSubmissionKey 仅存在于从草稿界面提交的首条提示词。
+  const pendingFirstSubmissionKey = props.selectedDraftConversation?.pendingSubmission?.clientSubmissionId ?? null;
+  if (pendingFirstSubmissionKey) {
+    retainedFirstSubmissionKeyRef.current = pendingFirstSubmissionKey;
+  }
+  // retainedFirstSubmissionKey is accepted after materialization only when the authoritative message carries the same correlation.
+  // retainedFirstSubmissionKey 仅在物化后的权威消息携带相同关联时继续生效。
+  const retainedFirstSubmissionKey = retainedFirstSubmissionKeyRef.current;
+  const firstSubmissionTransitionKey = pendingFirstSubmissionKey
+    ?? (retainedFirstSubmissionKey
+      && hasAuthoritativeSubmissionCorrelation(messages, retainedFirstSubmissionKey)
+      ? retainedFirstSubmissionKey
+      : null);
   // transientReasoningStatusVisible tracks insertion and removal; the shared ResizeObserver owns node reflow.
   // transientReasoningStatusVisible 跟踪插入与移除；共享 ResizeObserver 负责节点重排。
   const transientReasoningStatusVisible = transientReasoningStatus !== null;
@@ -246,10 +263,14 @@ export function ChatArea(props: ChatAreaProps) {
     thinkingOverlayLeaving: streamingThinkingOverlayLeaving,
     emptyPromptVisible,
     emptyPromptLeaving,
+    firstSubmissionMaskVisible,
+    firstSubmissionMaskLeaving,
   } = useConversationVisualTransitions({
     surfaceKey: visualSurfaceKey,
     isEmptyConversation,
     displayedThinkingBlock: displayedStreamingThinkingBlock,
+    firstSubmissionTransitionKey,
+    firstSubmissionMaterializing: isMaterializingConversationSurface,
   });
   // projectedHiddenThinkingBlockIds contains the freshly projected hidden thinking identities.
   // projectedHiddenThinkingBlockIds 包含本次新投影出的隐藏思考身份。
@@ -508,6 +529,15 @@ export function ChatArea(props: ChatAreaProps) {
           block={visibleStreamingThinkingOverlayBlock}
           conversationId={activeSurfaceConversationId}
           leaving={streamingThinkingOverlayLeaving}
+        />
+      ) : null}
+      {firstSubmissionMaskVisible ? (
+        <div
+          aria-hidden="true"
+          className={cn(
+            "conversation-first-submission-mask",
+            firstSubmissionMaskLeaving && "leaving",
+          )}
         />
       ) : null}
       {composerDock}

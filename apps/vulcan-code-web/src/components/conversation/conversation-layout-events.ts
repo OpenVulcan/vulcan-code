@@ -2,6 +2,10 @@
 // CONVERSATION_LAYOUT_WILL_CHANGE_EVENT 在共享外壳几何布局变化前触发。
 export const CONVERSATION_LAYOUT_WILL_CHANGE_EVENT = "vulcan:conversation-layout-will-change";
 
+// CONVERSATION_LAYOUT_SETTLED_EVENT is fired after an animated transcript geometry transaction stabilizes.
+// CONVERSATION_LAYOUT_SETTLED_EVENT 在会话动画几何事务稳定后触发。
+export const CONVERSATION_LAYOUT_SETTLED_EVENT = "vulcan:conversation-layout-settled";
+
 // CONVERSATION_MANUAL_VIEWPORT_INTERACTION_EVENT marks user fold actions that should preserve the clicked viewport.
 // CONVERSATION_MANUAL_VIEWPORT_INTERACTION_EVENT 标记需要保留点击视口的用户折叠操作。
 export const CONVERSATION_MANUAL_VIEWPORT_INTERACTION_EVENT = "vulcan:conversation-manual-viewport-interaction";
@@ -14,10 +18,31 @@ export interface ConversationManualViewportInteractionDetail {
   surfaceId: string | null;
 }
 
+// ConversationLayoutSettledDetail identifies the exact transcript whose animation stabilized.
+// ConversationLayoutSettledDetail 标识动画已经稳定的精确转录界面。
+export interface ConversationLayoutSettledDetail {
+  // Stable conversation or child-task surface id owning the completed geometry transaction.
+  // 持有已完成几何事务的稳定会话或子任务界面标识。
+  surfaceId: string | null;
+}
+
 // dispatchConversationLayoutWillChange notifies the active transcript to preserve its viewport.
 // dispatchConversationLayoutWillChange 通知当前转录界面保留视口位置。
 export function dispatchConversationLayoutWillChange(): void {
   window.dispatchEvent(new Event(CONVERSATION_LAYOUT_WILL_CHANGE_EVENT));
+}
+
+// dispatchConversationLayoutSettled closes the active transcript geometry transaction.
+// dispatchConversationLayoutSettled 结束当前活动会话几何事务。
+// Parameters: surfaceId identifies the transcript whose animated geometry stabilized.
+// 参数：surfaceId 标识动画几何已经稳定的转录界面。
+// Returns: nothing.
+// 返回值：无。
+export function dispatchConversationLayoutSettled(surfaceId: string | null): void {
+  window.dispatchEvent(new CustomEvent<ConversationLayoutSettledDetail>(
+    CONVERSATION_LAYOUT_SETTLED_EVENT,
+    { detail: { surfaceId } },
+  ));
 }
 
 // dispatchConversationManualViewportInteraction tells transcript auto-follow to yield to a user fold action.

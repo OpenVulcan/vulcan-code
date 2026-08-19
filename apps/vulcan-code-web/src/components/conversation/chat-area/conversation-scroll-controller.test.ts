@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { classifyConversationObservedScrollMovement } from "./conversation-scroll-controller";
+import {
+  classifyConversationObservedScrollMovement,
+  conversationResizeCorrectionMode,
+} from "./conversation-scroll-controller";
 
 describe("conversation scroll ownership ledger", () => {
   it("treats an unregistered native movement as reader ownership", () => {
@@ -28,5 +31,15 @@ describe("conversation scroll ownership ledger", () => {
       readerMoved: true,
       retainTarget: false,
     });
+  });
+
+  it("does not restore reader-owned scroll position for ordinary aggregate reflow", () => {
+    expect(conversationResizeCorrectionMode(false, false)).toBe("none");
+  });
+
+  it("limits aggregate reflow correction to tail ownership or one manual transaction", () => {
+    expect(conversationResizeCorrectionMode(true, false)).toBe("tail");
+    expect(conversationResizeCorrectionMode(false, true)).toBe("transaction");
+    expect(conversationResizeCorrectionMode(true, true)).toBe("transaction");
   });
 });

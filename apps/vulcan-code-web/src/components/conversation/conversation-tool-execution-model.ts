@@ -1,6 +1,7 @@
 import type { GeneratedMediaAttachment } from "@/components/media/generated-media";
 import type { ConversationDetailRef } from "@/components/conversation/conversation-detail";
 import type { TranslationKey } from "@/i18n-messages";
+import type { ToolRequestProgressSnapshot } from "@/types";
 import type { ToolExecutionConversationBlock } from "./conversation-tool-execution-types";
 import {
   isSubagentFeedbackMetadata,
@@ -124,6 +125,43 @@ export function toolRequestProgress(blocks: ToolExecutionConversationBlock[]): T
     }
   }
   return latest;
+}
+
+// liveToolRequestProgress projects one external Store snapshot into the existing card model.
+// liveToolRequestProgress 将单条外部 Store 快照投影为既有卡片模型。
+// Parameters: snapshot is the exact safe backend request-progress contract.
+// 参数：snapshot 是精确的后端安全请求进度契约。
+// Returns: one immutable card progress model.
+// 返回值：一个不可变卡片进度模型。
+export function liveToolRequestProgress(
+  snapshot: ToolRequestProgressSnapshot,
+): ToolRequestProgress {
+  return {
+    requestStreamId: snapshot.requestStreamId,
+    state: snapshot.state,
+    receivedCharacters: Math.max(0, snapshot.receivedCharacters),
+    receivedBytes: Math.max(0, snapshot.receivedBytes),
+    revision: snapshot.requestRevision,
+    preview: snapshot.preview ?? null,
+  };
+}
+
+// toolExecutionDetailLoadEnabled accepts detail hydration only after an authoritative terminal result.
+// toolExecutionDetailLoadEnabled 仅在权威终态结果出现后允许详情水合。
+// Parameters: displayState is the durable execution state, requestProgress is any active formation
+// snapshot, and detailRef is the host-owned terminal detail identity.
+// 参数：displayState 是持久执行状态，requestProgress 是任意活动构造快照，detailRef 是宿主持有的
+// 终态详情身份。
+// Returns: true only when an actual terminal detail lookup is valid.
+// 返回值：仅在真实终态详情查询有效时返回 true。
+export function toolExecutionDetailLoadEnabled(
+  displayState: "failed" | "completed" | "running" | "stopped",
+  requestProgress: ToolRequestProgress | null,
+  detailRef: Omit<ConversationDetailRef, "sessionId"> | null,
+): boolean {
+  return displayState !== "running"
+    && requestProgress === null
+    && detailRef !== null;
 }
 
 // toolRequestProgressLabel formats one compact localized request-state and receive-progress label.

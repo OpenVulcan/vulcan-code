@@ -8,7 +8,10 @@ import type { WorkbenchDeltaEnvelope } from "@/types";
 // Returns: true when global React workbench state must consume the event.
 // 返回值：全局 React 工作台状态必须消费该事件时返回 true。
 export function workbenchEnvelopeRequiresReactProjection(envelope: WorkbenchDeltaEnvelope): boolean {
-  if (envelope.delta.kind === "transientReasoningStatusChanged") {
+  if (
+    envelope.delta.kind === "transientReasoningStatusChanged"
+    || envelope.delta.kind === "toolRequestProgressChanged"
+  ) {
     return false;
   }
   if (envelope.delta.kind !== "appendMessageBody") {

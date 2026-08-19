@@ -80,6 +80,27 @@
   pointer-events: none;
 }
 
+.conversation-first-submission-mask {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+  background: var(--background);
+  opacity: 1;
+  transition: opacity 500ms ease;
+  will-change: opacity;
+}
+
+.conversation-first-submission-mask.leaving {
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .conversation-first-submission-mask {
+    display: none;
+  }
+}
+
 .media-upload-progress-stack {
   position: fixed;
   left: 50%;

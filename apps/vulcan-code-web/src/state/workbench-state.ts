@@ -860,6 +860,10 @@ function applyWorkbenchDeltaPayloadWithSubagentSurfaceMessageCache(
       // Media progress is an ordered ephemeral event; its bytes live only in the overlay state.
       // 媒体进度是有序临时事件，字节数仅保留在浮层状态中。
       return workbench;
+    case "toolRequestProgressChanged":
+      // Tool request progress lives only in ConversationLiveStreamStore and never enters snapshots.
+      // 工具请求进度仅存在于 ConversationLiveStreamStore，绝不进入快照。
+      return workbench;
     case "transientReasoningStatusChanged":
       // Transient reasoning lives only in ConversationLiveStreamStore and never enters snapshots.
       // 瞬态推理仅存在于 ConversationLiveStreamStore，绝不进入快照。

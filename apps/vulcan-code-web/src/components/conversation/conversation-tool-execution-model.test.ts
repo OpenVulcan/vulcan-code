@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  liveToolRequestProgress,
+  toolExecutionDetailLoadEnabled,
   toolRequestProgress,
   toolRequestProgressLabel,
 } from "./conversation-tool-execution-model";
@@ -57,5 +59,47 @@ describe("conversation tool request progress", () => {
     ] as ToolExecutionConversationBlock[];
 
     expect(toolRequestProgress(blocks)).toBeNull();
+  });
+
+  it("maps one leaf-store snapshot without changing durable request semantics", () => {
+    expect(liveToolRequestProgress({
+      requestStreamId: "request-1",
+      toolCallId: "call-1",
+      toolName: "terminal_session",
+      state: "receiving",
+      receivedBytes: 1_024,
+      receivedCharacters: 1_000,
+      requestRevision: 4,
+      preview: { kind: "command" },
+    })).toEqual({
+      requestStreamId: "request-1",
+      state: "receiving",
+      receivedBytes: 1_024,
+      receivedCharacters: 1_000,
+      revision: 4,
+      preview: { kind: "command" },
+    });
+  });
+
+  it("permits detail hydration only for a terminal host-owned reference", () => {
+    const detailRef = { recordId: "detail-1", seq: 4 };
+    // toolCallRef proves the documented terminal lookup remains valid before a record id exists.
+    // toolCallRef 证明在记录标识尚不存在时，已定义的终态查询路径仍然有效。
+    const toolCallRef = { toolCallId: "call-1" };
+    const receiving = {
+      requestStreamId: "request-1",
+      state: "receiving" as const,
+      receivedCharacters: 10,
+      receivedBytes: 10,
+      revision: 2,
+      preview: null,
+    };
+
+    expect(toolExecutionDetailLoadEnabled("running", null, detailRef)).toBe(false);
+    expect(toolExecutionDetailLoadEnabled("completed", receiving, detailRef)).toBe(false);
+    expect(toolExecutionDetailLoadEnabled("completed", null, null)).toBe(false);
+    expect(toolExecutionDetailLoadEnabled("completed", null, detailRef)).toBe(true);
+    expect(toolExecutionDetailLoadEnabled("completed", null, toolCallRef)).toBe(true);
+    expect(toolExecutionDetailLoadEnabled("failed", null, detailRef)).toBe(true);
   });
 });

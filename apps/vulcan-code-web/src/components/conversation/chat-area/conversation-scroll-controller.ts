@@ -6,8 +6,10 @@ import {
   type ConversationScrollSnapshot,
 } from "@/components/conversation/chat-area-scroll";
 import {
+  CONVERSATION_LAYOUT_SETTLED_EVENT,
   CONVERSATION_LAYOUT_WILL_CHANGE_EVENT,
   CONVERSATION_MANUAL_VIEWPORT_INTERACTION_EVENT,
+  type ConversationLayoutSettledDetail,
   type ConversationManualViewportInteractionDetail,
 } from "@/components/conversation/conversation-layout-events";
 
@@ -65,6 +67,20 @@ interface ProgrammaticScrollTarget {
   top: number;
 }
 
+// ConversationLayoutTransaction preserves one immutable reader anchor through animated geometry changes.
+// ConversationLayoutTransaction 在动画几何变化期间保留单个不可变阅读锚点。
+interface ConversationLayoutTransaction {
+  // Exact transcript surface that owns the transaction.
+  // 持有当前事务的精确转录界面。
+  surfaceId: string;
+  // Pre-mutation semantic viewport snapshot.
+  // 修改前的语义视口快照。
+  snapshot: ConversationScrollSnapshot;
+  // Reader revision that invalidates the transaction after manual movement.
+  // 阅读者手动移动后使事务失效的修订号。
+  userRevision: number;
+}
+
 // ConversationObservedScrollMovement is the ownership decision derived from native position changes.
 // ConversationObservedScrollMovement 是从原生位置变化推导出的所有权决策。
 export interface ConversationObservedScrollMovement {
@@ -74,6 +90,26 @@ export interface ConversationObservedScrollMovement {
   // Whether the registered target should remain active for another native smooth-scroll event.
   // 已登记目标是否应在下一次原生平滑滚动事件中继续有效。
   retainTarget: boolean;
+}
+
+// ConversationResizeCorrectionMode selects the only eligible response to aggregate content resize.
+// ConversationResizeCorrectionMode 选择聚合内容尺寸变化唯一允许的响应。
+export type ConversationResizeCorrectionMode = "transaction" | "tail" | "none";
+
+// conversationResizeCorrectionMode prevents ordinary reader-owned reflow from restoring every frame.
+// conversationResizeCorrectionMode 防止普通阅读者持有的重排在每帧执行恢复。
+// Parameters: followTail reports tail ownership and transactionActive reports an exact manual layout transaction.
+// 参数：followTail 表示尾部所有权，transactionActive 表示精确手动布局事务。
+// Returns: transaction correction first, tail correction second, or no scroll write.
+// 返回值：优先返回事务校正，其次返回尾部校正，否则不执行滚动写入。
+export function conversationResizeCorrectionMode(
+  followTail: boolean,
+  transactionActive: boolean,
+): ConversationResizeCorrectionMode {
+  if (transactionActive) {
+    return "transaction";
+  }
+  return followTail ? "tail" : "none";
 }
 
 // classifyConversationObservedScrollMovement compares native motion with the controller's explicit target ledger.
@@ -129,6 +165,9 @@ export function useConversationScrollController(
   // pendingFrameRef owns the sole cancellable animation frame for this scrollport.
   // pendingFrameRef 拥有当前滚动视口唯一可取消的动画帧。
   const pendingFrameRef = React.useRef<number | null>(null);
+  // layoutTransactionRef exists only while one manual fold animation owns viewport correction.
+  // layoutTransactionRef 仅在单次手动折叠动画持有视口校正时存在。
+  const layoutTransactionRef = React.useRef<ConversationLayoutTransaction | null>(null);
   // userRevisionRef invalidates asynchronous restores when observed reader movement occurs.
   // userRevisionRef 在观察到阅读者移动时使异步恢复失效。
   const userRevisionRef = React.useRef(0);
@@ -320,6 +359,7 @@ export function useConversationScrollController(
     observedScrollTopRef.current = actualTop;
     if (movement.readerMoved) {
       userRevisionRef.current += 1;
+      layoutTransactionRef.current = null;
       cancelPendingFrame();
       publishFollowTail(conversationViewportAllowsTailFollow(element));
     }
@@ -450,6 +490,7 @@ export function useConversationScrollController(
       return;
     }
     cancelPendingFrame();
+    layoutTransactionRef.current = null;
     renderedSurfaceIdRef.current = surfaceId;
     observedScrollTopRef.current = element.scrollTop;
     programmaticTargetRef.current = null;
@@ -486,14 +527,36 @@ export function useConversationScrollController(
     if (!content) {
       return;
     }
-    // observer coalesces every content and width reflow into the controller's sole correction frame.
-    // observer 将所有内容与宽度重排合并到控制器唯一校正帧。
+    // observer corrects only explicit tail ownership or one active manual layout transaction.
+    // observer 仅校正显式尾部所有权或单个活动手动布局事务。
     const observer = new ResizeObserver(() => {
-      scheduleStoredRestore();
+      // transaction keeps one immutable pre-mutation anchor instead of chasing snapshots rewritten every frame.
+      // transaction 保持单个不可变修改前锚点，避免追逐每帧重写的快照。
+      const transaction = layoutTransactionRef.current;
+      const transactionActive = Boolean(
+        transaction
+        && transaction.surfaceId === options.surfaceId
+        && transaction.userRevision === userRevisionRef.current
+      );
+      const correctionMode = conversationResizeCorrectionMode(
+        followTailRef.current,
+        transactionActive,
+      );
+      if (correctionMode === "transaction" && transaction) {
+        scheduleSnapshotRestore(
+          transaction.surfaceId,
+          transaction.snapshot,
+          transaction.userRevision,
+        );
+        return;
+      }
+      if (correctionMode === "tail") {
+        scheduleStoredRestore();
+      }
     });
     observer.observe(content);
     return () => observer.disconnect();
-  }, [options.active, options.scrollRef, options.surfaceId, scheduleStoredRestore]);
+  }, [options.active, options.scrollRef, options.surfaceId, scheduleSnapshotRestore, scheduleStoredRestore]);
 
   React.useEffect(() => {
     // element owns the native smooth-scroll lifecycle for this exact transcript.
@@ -568,13 +631,50 @@ export function useConversationScrollController(
       // snapshot freezes the reader-owned viewport before the fold mutation changes geometry.
       // snapshot 在折叠修改改变几何前固定阅读者拥有的视口。
       const snapshot = writeCurrentSnapshot(element, detail.surfaceId);
+      layoutTransactionRef.current = {
+        surfaceId: detail.surfaceId,
+        snapshot,
+        userRevision: userRevisionRef.current,
+      };
       scheduleSnapshotRestore(detail.surfaceId, snapshot, userRevisionRef.current);
     };
     window.addEventListener(CONVERSATION_MANUAL_VIEWPORT_INTERACTION_EVENT, handleManualViewportInteraction);
     return () => window.removeEventListener(CONVERSATION_MANUAL_VIEWPORT_INTERACTION_EVENT, handleManualViewportInteraction);
   }, [cancelPendingFrame, publishFollowTail, scheduleSnapshotRestore, writeCurrentSnapshot]);
 
-  React.useEffect(() => () => cancelPendingFrame(), [cancelPendingFrame]);
+  React.useEffect(() => {
+    // handleLayoutSettled applies one final correction and releases per-frame transaction ownership.
+    // handleLayoutSettled 应用一次最终校正，并释放逐帧事务所有权。
+    const handleLayoutSettled = (event: Event): void => {
+      // transaction is absent for programmatic or unrelated geometry changes.
+      // transaction 对程序化或无关几何变化为空。
+      const transaction = layoutTransactionRef.current;
+      // detail prevents another mounted transcript from releasing this surface's transaction.
+      // detail 防止其他已挂载转录界面释放当前界面的事务。
+      const detail = (event as CustomEvent<ConversationLayoutSettledDetail>).detail;
+      if (
+        !transaction
+        || !detail?.surfaceId
+        || detail.surfaceId !== transaction.surfaceId
+        || transaction.surfaceId !== latestOptionsRef.current.surfaceId
+      ) {
+        return;
+      }
+      layoutTransactionRef.current = null;
+      scheduleSnapshotRestore(
+        transaction.surfaceId,
+        transaction.snapshot,
+        transaction.userRevision,
+      );
+    };
+    window.addEventListener(CONVERSATION_LAYOUT_SETTLED_EVENT, handleLayoutSettled);
+    return () => window.removeEventListener(CONVERSATION_LAYOUT_SETTLED_EVENT, handleLayoutSettled);
+  }, [scheduleSnapshotRestore]);
+
+  React.useEffect(() => () => {
+    layoutTransactionRef.current = null;
+    cancelPendingFrame();
+  }, [cancelPendingFrame]);
 
   return React.useMemo(() => ({
     captureAndScheduleLayoutRestore,

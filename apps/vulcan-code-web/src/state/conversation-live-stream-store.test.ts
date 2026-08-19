@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   ConversationLiveStreamStore,
   conversationLiveStreamKey,
+  toolRequestProgressKey,
   transientReasoningStatusKey,
 } from "./conversation-live-stream-store";
 import type {
@@ -390,5 +391,140 @@ describe("ConversationLiveStreamStore", () => {
     expect(store.getTransientReasoningStatus(TEST_CONVERSATION_ID)).toBeNull();
     store.flushNotifications();
     expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it("replaces tool request progress by revision and clears it outside transcript streams", () => {
+    // store owns one exact request identity without rebuilding any conversation message.
+    // store 持有单个精确请求身份，且不会重建任何会话消息。
+    const store = new ConversationLiveStreamStore();
+    // requestStreamId is the closed correlation identity emitted by the backend coordinator.
+    // requestStreamId 是后端协调器发出的封闭关联身份。
+    const requestStreamId = "request-1";
+    // key proves only the owning card receives the batched invalidation.
+    // key 证明仅所属卡片接收批处理失效通知。
+    const key = toolRequestProgressKey(TEST_CONVERSATION_ID, requestStreamId);
+    const listener = vi.fn();
+    store.subscribe(key, listener);
+
+    expect(store.applyEnvelope({
+      generation: 80,
+      delta: {
+        kind: "toolRequestProgressChanged",
+        payload: {
+          conversationId: TEST_CONVERSATION_ID,
+          requestStreamId,
+          progress: {
+            requestStreamId,
+            toolCallId: "call-1",
+            toolName: "terminal_session",
+            state: "receiving",
+            receivedBytes: 512,
+            receivedCharacters: 500,
+            requestRevision: 3,
+            preview: { kind: "command" },
+          },
+        },
+      },
+    })).toBe(true);
+    expect(store.getToolRequestProgress(TEST_CONVERSATION_ID, requestStreamId)).toMatchObject({
+      requestRevision: 3,
+      receivedBytes: 512,
+    });
+
+    // staleEnvelope must not replace a newer request-local revision even with a later transport generation.
+    // staleEnvelope 即使拥有更晚传输代际，也不得替换更新的请求局部修订。
+    expect(store.applyEnvelope({
+      generation: 81,
+      delta: {
+        kind: "toolRequestProgressChanged",
+        payload: {
+          conversationId: TEST_CONVERSATION_ID,
+          requestStreamId,
+          progress: {
+            requestStreamId,
+            toolCallId: "call-1",
+            toolName: "terminal_session",
+            state: "receiving",
+            receivedBytes: 256,
+            receivedCharacters: 250,
+            requestRevision: 2,
+          },
+        },
+      },
+    })).toBe(false);
+    expect(store.getToolRequestProgress(TEST_CONVERSATION_ID, requestStreamId)?.requestRevision).toBe(3);
+
+    expect(store.applyEnvelope({
+      generation: 82,
+      delta: {
+        kind: "toolRequestProgressChanged",
+        payload: {
+          conversationId: TEST_CONVERSATION_ID,
+          requestStreamId,
+          progress: null,
+        },
+      },
+    })).toBe(true);
+    expect(store.getToolRequestProgress(TEST_CONVERSATION_ID, requestStreamId)).toBeNull();
+    store.flushNotifications();
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears transient reasoning and tool request progress on authoritative rebase", () => {
+    // store starts with one transient reasoning value and one request-local progress snapshot.
+    // store 初始持有一条瞬态思考值与一条请求局部进度快照。
+    const store = new ConversationLiveStreamStore();
+    // requestStreamId identifies the exact progress subscription invalidated by the snapshot boundary.
+    // requestStreamId 标识由快照边界失效的精确进度订阅。
+    const requestStreamId = "request-rebase";
+    // reasoningListener and progressListener prove both leaf subscribers receive the batched clear.
+    // reasoningListener 与 progressListener 证明两类叶子订阅者都会收到批量清除通知。
+    const reasoningListener = vi.fn();
+    const progressListener = vi.fn();
+    store.subscribe(transientReasoningStatusKey(TEST_CONVERSATION_ID), reasoningListener);
+    store.subscribe(
+      toolRequestProgressKey(TEST_CONVERSATION_ID, requestStreamId),
+      progressListener,
+    );
+
+    expect(store.applyEnvelope({
+      generation: 90,
+      delta: {
+        kind: "transientReasoningStatusChanged",
+        payload: {
+          conversationId: TEST_CONVERSATION_ID,
+          status: {
+            kind: "encrypted",
+            reasoningTokens: 128,
+          },
+        },
+      },
+    })).toBe(true);
+    expect(store.applyEnvelope({
+      generation: 91,
+      delta: {
+        kind: "toolRequestProgressChanged",
+        payload: {
+          conversationId: TEST_CONVERSATION_ID,
+          requestStreamId,
+          progress: {
+            requestStreamId,
+            toolCallId: "call-rebase",
+            toolName: "terminal_session",
+            state: "receiving",
+            receivedBytes: 64,
+            receivedCharacters: 64,
+            requestRevision: 1,
+          },
+        },
+      },
+    })).toBe(true);
+
+    store.rebaseWorkbenchSnapshot(workbenchSnapshot(92, liveMessage("authoritative")));
+    expect(store.getTransientReasoningStatus(TEST_CONVERSATION_ID)).toBeNull();
+    expect(store.getToolRequestProgress(TEST_CONVERSATION_ID, requestStreamId)).toBeNull();
+    store.flushNotifications();
+    expect(reasoningListener).toHaveBeenCalledTimes(1);
+    expect(progressListener).toHaveBeenCalledTimes(1);
   });
 });

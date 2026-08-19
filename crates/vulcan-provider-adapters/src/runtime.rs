@@ -1424,66 +1424,6 @@ fn runtime_model_is_enabled_from_manifest(
     configuration.model_is_enabled_with_default(provider_id, model_id, inherited_default)
 }
 
-/// Reports whether one concrete provider-tool target remains enabled under its template model.
-/// 报告一个具体供应商工具目标在其模板模型规则下是否仍启用。
-///
-/// # Parameters
-/// 参数
-/// `configuration` owns explicit model access choices; `provider_id` identifies the owning
-/// provider; service and credential identifiers select the exact rule scope; `manifest` is the
-/// frozen generation; and `target_id` selects one concrete target.
-/// `configuration` 持有显式模型访问选择；`provider_id` 标识所属供应商；服务与凭据标识选择
-/// 精确规则作用域；`manifest` 是冻结代际；`target_id` 选择一个具体目标。
-///
-/// # Returns
-/// 返回值
-/// Targets unrelated to a template catalog remain eligible here. Template instances and reviewed
-/// fixed targets whose exact service/upstream identity matches a template model inherit that
-/// model's manifest default and explicit user override.
-/// 与模板目录无关的目标在此保持合格。模板实例以及精确服务/上游身份命中模板模型的已审核固定
-/// 目标，继承该模型的 Manifest 默认值与显式用户覆盖。
-fn provider_tool_template_target_is_enabled(
-    configuration: &PersistedAiConfiguration,
-    provider_id: &str,
-    service_entry_id: &str,
-    credential_profile_id: &str,
-    manifest: &ResolvedProviderManifest,
-    target_id: &str,
-) -> bool {
-    // associated_model_id joins generated and pre-existing reviewed targets to one exact media model.
-    // associated_model_id 把生成目标与既有已审核目标连接到同一个精确媒体模型。
-    let associated_model_id = manifest
-        .tool_target_template_instances
-        .get(target_id)
-        .map(|instance| instance.model_id.as_str())
-        .or_else(|| {
-            manifest
-                .tool_targets
-                .iter()
-                .find(|target| target.target_id == target_id)
-                .and_then(|target| {
-                    manifest
-                        .tool_target_template_instances
-                        .values()
-                        .find(|instance| {
-                            instance.service_entry_id == target.service_entry_id
-                                && instance.model_id == target.upstream_target_id
-                        })
-                        .map(|instance| instance.model_id.as_str())
-                })
-        });
-    associated_model_id.is_none_or(|model_id| {
-        runtime_model_is_enabled_from_manifest(
-            configuration,
-            provider_id,
-            service_entry_id,
-            Some(credential_profile_id),
-            model_id,
-            Some(manifest),
-        )
-    })
-}
-
 /// Builds the complete manifest catalog published at one explicit configuration activation boundary.
 /// 构建在一次显式配置激活边界整体发布的完整 Manifest 目录。
 ///
@@ -6269,6 +6209,8 @@ impl PublicAiRuntime {
             if targets.is_empty() {
                 continue;
             }
+            // providerManifest supplies immutable provenance for every projected target.
+            // providerManifest 为每个投影目标提供不可变溯源信息。
             let provider_manifest = generation
                 .manifests
                 .manifest(provider.id.as_str())
@@ -6285,19 +6227,16 @@ impl PublicAiRuntime {
                         &target,
                         connection.credential_profile_id.as_str(),
                     )
+                    // Provider-tool availability follows the credential's account-filtered catalog,
+                    // while extension target selection independently controls whether AI may call
+                    // the model. Conversation publication must not hide media targets.
+                    // Provider Tool 可用性遵循凭据经账号权限过滤后的目录，扩展目标选择则独立控制 AI
+                    // 是否允许调用该模型；会话发布开关不得隐藏媒体目标。
                     && provider_tool_target_availability_catalog_matches(
                         &target,
                         generation
                             .activated_effective_catalogs
                             .get(connection.id.as_str()),
-                    )
-                    && provider_tool_template_target_is_enabled(
-                        configuration,
-                        provider.id.as_str(),
-                        entry.id.as_str(),
-                        connection.credential_profile_id.as_str(),
-                        provider_manifest,
-                        target.target_id.as_str(),
                     )
                 {
                     available.push(AvailableProviderToolTarget {
@@ -7597,6 +7536,10 @@ impl PublicAiRuntime {
                     selection.target_id
                 )
             })?;
+        // Provider-tool execution revalidates the same account-filtered credential membership used
+        // by settings projection. Conversation publication is a separate policy boundary.
+        // Provider Tool 执行重新校验设置投影使用的同一账号权限过滤后凭据成员关系；会话发布属于
+        // 独立策略边界。
         if !provider_tool_target_availability_catalog_matches(
             &target,
             generation
@@ -7605,19 +7548,6 @@ impl PublicAiRuntime {
         ) {
             return Err(format!(
                 "Provider tool target `{}` is unavailable for the current credential model catalog.",
-                target.target_id
-            ));
-        }
-        if !provider_tool_template_target_is_enabled(
-            configuration,
-            provider.id.as_str(),
-            entry.id.as_str(),
-            connection.credential_profile_id.as_str(),
-            manifest.as_ref(),
-            target.target_id.as_str(),
-        ) {
-            return Err(format!(
-                "Provider tool target `{}` is disabled by its model access policy.",
                 target.target_id
             ));
         }
@@ -17369,10 +17299,10 @@ mod tests {
         );
     }
 
-    /// Verifies template-only media models stay manageable while disabled and cannot resolve.
-    /// 验证仅模板媒体模型在关闭时仍可管理且无法解析执行。
+    /// Verifies template-only media models ignore conversation publication and remain extension targets.
+    /// 验证仅模板媒体模型忽略会话发布状态并保持为扩展目标。
     #[test]
-    fn provider_tool_template_models_obey_model_access_without_losing_management_visibility() {
+    fn provider_tool_template_models_are_independent_from_conversation_access() {
         // runtime owns the bundled provider registry and one immutable publication generation.
         // runtime 持有内置供应商注册表与一个不可变发布代际。
         let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
@@ -17455,49 +17385,124 @@ mod tests {
                 .expect("conversation support should resolve")
         );
 
-        // disabled_targets proves both generated and matching reviewed fixed targets stay hidden.
-        // disabled_targets 证明生成目标与匹配的已审核固定目标均保持隐藏。
-        let disabled_targets = runtime
+        // extension_targets proves the extension inventory remains selectable even though the
+        // same provider/model conversation publication switches are disabled.
+        // extension_targets 证明即使同一供应商/模型的会话发布开关已关闭，扩展清单仍可选择。
+        let extension_targets = runtime
             .available_provider_tool_targets(&configuration)
-            .expect("disabled target inventory should resolve");
-        assert!(disabled_targets.iter().all(|available| {
-            available.target.upstream_target_id != "qwen-image-2.0-pro"
-                && available.target.upstream_target_id != "wan2.7-t2v"
-        }));
-        // disabled_selection attempts the exact persisted target identity without relying on list filtering.
-        // disabled_selection 在不依赖列表过滤的情况下尝试精确持久化目标身份。
-        let disabled_selection = ProviderToolTargetSelection {
+            .expect("extension target inventory should resolve");
+        assert!(
+            extension_targets
+                .iter()
+                .any(|available| available.target.upstream_target_id == "qwen-image-2.0-pro")
+        );
+        assert!(
+            extension_targets
+                .iter()
+                .any(|available| available.target.upstream_target_id == "wan2.7-t2v")
+        );
+        // extension_selection resolves the exact target that a validated extension target set owns.
+        // extension_selection 解析已验证扩展目标集合持有的精确目标。
+        let extension_selection = ProviderToolTargetSelection {
             connection_id: String::from("alibaba-media-account"),
             target_id: wan_target_id,
         };
+        let resolved = runtime
+            .resolve_provider_tool_target(
+                &configuration,
+                ProviderToolCapabilityKind::VideoGenerate,
+                &extension_selection,
+            )
+            .expect("extension target should resolve independently from conversation access");
+        assert_eq!(resolved.target.upstream_target_id, "wan2.7-t2v");
+    }
+
+    /// Verifies account model access remains authoritative for extension target availability.
+    /// 验证账号模型访问仍对扩展目标可用性保持权威。
+    #[test]
+    fn provider_tool_targets_obey_account_model_access() {
+        // runtime owns the bundled APIKEY.FUN manifest and its reviewed fixed targets.
+        // runtime 持有内置 APIKEY.FUN Manifest 及其已审核固定目标。
+        let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
+        // configuration owns one exact APIKEY.FUN credential account.
+        // configuration 持有一个精确的 APIKEY.FUN 凭据账号。
+        let mut configuration = PersistedAiConfiguration::default();
+        // apikeyfunConnection binds the exact public service and API-key credential profile.
+        // apikeyfunConnection 绑定精确公共服务与 API Key 凭据配置档。
+        let mut apikeyfun_connection = connection("apikeyfun-media-account");
+        apikeyfun_connection.provider_id = String::from("apikeyfun");
+        apikeyfun_connection.service_entry_id = String::from("public-api");
+        apikeyfun_connection.credential_profile_id = String::from("api-key");
+        configuration
+            .connection_graph
+            .add_connection(
+                &runtime
+                    .providers()
+                    .expect("provider registry should resolve"),
+                apikeyfun_connection,
+            )
+            .expect("APIKEY.FUN media connection should register");
+        // sourceCatalog reproduces the exact per-key `/models` evidence required by APIKEY.FUN.
+        // sourceCatalog 复现 APIKEY.FUN 所需的精确逐密钥 `/models` 证据。
+        let source_catalog = parse_openai_model_catalog(
+            "apikeyfun-media-account",
+            1,
+            r#"{"data":[{"id":"grok-imagine-video"}]}"#,
+        )
+        .expect("APIKEY.FUN discovery fixture should parse");
+        install_source_catalog(&runtime, source_catalog);
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("test async runtime should initialize")
+            .block_on(runtime.activate_staged_manifest_catalogs(&configuration, &[]))
+            .expect("APIKEY.FUN generation should publish");
+        // initialTarget proves the account catalog initially exposes the fixed video model.
+        // initialTarget 证明账号目录最初公开固定视频模型。
+        let initial_target = runtime
+            .available_provider_tool_targets(&configuration)
+            .expect("initial extension target inventory should resolve")
+            .into_iter()
+            .find(|available| available.target.upstream_target_id == "grok-imagine-video")
+            .expect("Grok Imagine video target should initially be available");
+        // selection freezes the exact credential and extension target used for execution revalidation.
+        // selection 冻结用于执行重新校验的精确凭据与扩展目标。
+        let selection = ProviderToolTargetSelection {
+            connection_id: String::from("apikeyfun-media-account"),
+            target_id: initial_target.target.target_id,
+        };
+        // Account access remains authoritative even though conversation publication is independent.
+        // 即使会话发布保持独立，账号访问仍保持权威。
+        configuration.set_connection_model_enabled(
+            "apikeyfun-media-account",
+            "grok-imagine-video",
+            false,
+        );
+        runtime
+            .reapply_model_catalog_overlays(&configuration)
+            .expect("account access update should rebuild effective catalogs");
+        // filteredTargets proves the disabled account model disappears from extension inventory.
+        // filteredTargets 证明被账号禁用的模型会从扩展清单消失。
+        let filtered_targets = runtime
+            .available_provider_tool_targets(&configuration)
+            .expect("account-filtered target inventory should resolve");
+        assert!(
+            filtered_targets
+                .iter()
+                .all(|available| available.target.upstream_target_id != "grok-imagine-video")
+        );
+        // error proves direct execution cannot bypass the account-filtered extension inventory.
+        // error 证明直接执行无法绕过账号权限过滤后的扩展清单。
         let error = runtime
             .resolve_provider_tool_target(
                 &configuration,
                 ProviderToolCapabilityKind::VideoGenerate,
-                &disabled_selection,
+                &selection,
             )
             .map(|_| ())
-            .expect_err("disabled template target must reject direct resolution");
+            .expect_err("account-disabled extension target must reject direct resolution");
         assert!(
-            error.contains("disabled by its model access policy"),
+            error.contains("unavailable for the current credential model catalog"),
             "{error}"
-        );
-
-        configuration.set_model_enabled("alibaba", "qwen-image-2.0-pro", true);
-        // enabled_targets proves one explicit choice enables every exact target for only that model.
-        // enabled_targets 证明一次显式选择仅启用该模型的全部精确目标。
-        let enabled_targets = runtime
-            .available_provider_tool_targets(&configuration)
-            .expect("enabled target inventory should resolve");
-        assert!(
-            enabled_targets
-                .iter()
-                .any(|available| { available.target.upstream_target_id == "qwen-image-2.0-pro" })
-        );
-        assert!(
-            enabled_targets
-                .iter()
-                .all(|available| { available.target.upstream_target_id != "wan2.7-t2v" })
         );
     }
 

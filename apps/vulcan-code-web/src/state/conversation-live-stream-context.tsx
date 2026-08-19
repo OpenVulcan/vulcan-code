@@ -2,9 +2,10 @@ import React from "react";
 import {
   ConversationLiveStreamStore,
   type ConversationLiveStreamRevision,
+  toolRequestProgressKey,
   transientReasoningStatusKey,
 } from "./conversation-live-stream-store";
-import type { TransientReasoningStatus } from "@/types";
+import type { ToolRequestProgressSnapshot, TransientReasoningStatus } from "@/types";
 
 // ConversationLiveStreamContext carries one stable Store identity through the Workbench tree.
 // ConversationLiveStreamContext 在 Workbench 树中传递单个稳定 Store 身份。
@@ -98,6 +99,41 @@ export function useConversationTransientReasoningStatus(
   const getSnapshot = React.useCallback(
     () => (conversationId ? store.getTransientReasoningStatus(conversationId) : null),
     [conversationId, store],
+  );
+  return React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+}
+
+// useConversationToolRequestProgress subscribes one tool card to one ephemeral request stream.
+// useConversationToolRequestProgress 让单张工具卡订阅单个瞬态请求流。
+// Parameters: conversationId owns the request and requestStreamId is the exact coordinator identity.
+// 参数：conversationId 持有请求，requestStreamId 是精确协调器身份。
+// Returns: the latest safe formation snapshot, or null after terminal clearing.
+// 返回值：最新安全构造快照；终态清除后返回空。
+export function useConversationToolRequestProgress(
+  conversationId: string | null,
+  requestStreamId: string | null,
+): ToolRequestProgressSnapshot | null {
+  // store owns the high-frequency value outside global React workbench state.
+  // store 在全局 React 工作台状态之外持有高频值。
+  const store = useConversationLiveStreamStore();
+  // key isolates the exact tool card subscription from every other active request.
+  // key 将当前精确工具卡订阅与其他全部活动请求隔离。
+  const key = conversationId && requestStreamId
+    ? toolRequestProgressKey(conversationId, requestStreamId)
+    : null;
+  // subscribe connects React only to the matching request identity.
+  // subscribe 仅将 React 连接到匹配的请求身份。
+  const subscribe = React.useCallback(
+    (listener: () => void) => (key ? store.subscribe(key, listener) : () => {}),
+    [key, store],
+  );
+  // getSnapshot returns the stable Store object without cloning on reads.
+  // getSnapshot 返回稳定 Store 对象，读取时不会克隆。
+  const getSnapshot = React.useCallback(
+    () => (conversationId && requestStreamId
+      ? store.getToolRequestProgress(conversationId, requestStreamId)
+      : null),
+    [conversationId, requestStreamId, store],
   );
   return React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }

@@ -2,6 +2,7 @@ import type {
   AppendMessageBodyDelta,
   ConversationMessage,
   ConversationMessageStreamState,
+  ToolRequestProgressSnapshot,
   TransientReasoningStatus,
   WorkbenchDeltaEnvelope,
   WorkbenchSnapshot,
@@ -79,6 +80,19 @@ export function transientReasoningStatusKey(conversationId: string): string {
   return `transient-reasoning-status:${conversationId}`;
 }
 
+// toolRequestProgressKey builds the subscription identity for one request-stream card.
+// toolRequestProgressKey 构建单个请求流卡片的订阅身份。
+// Parameters: conversationId is the owner and requestStreamId is the exact coordinator identity.
+// 参数：conversationId 是所属会话，requestStreamId 是精确协调器身份。
+// Returns: one namespace-isolated Store subscription key.
+// 返回值：一个命名空间隔离的 Store 订阅键。
+export function toolRequestProgressKey(
+  conversationId: string,
+  requestStreamId: string,
+): string {
+  return `tool-request-progress:${conversationId}:${requestStreamId}`;
+}
+
 // LiveStreamFragmentNode stores append history as a reverse linked list for constant-time ingestion.
 // LiveStreamFragmentNode 使用反向链表保存追加历史，以实现常量时间写入。
 interface LiveStreamFragmentNode {
@@ -130,6 +144,9 @@ export class ConversationLiveStreamStore {
   // transientReasoningStatuses stores replace-in-place request status outside transcript replicas.
   // transientReasoningStatuses 在转录副本之外保存原地替换式请求状态。
   readonly #transientReasoningStatuses = new Map<string, TransientReasoningStatus>();
+  // toolRequestProgressSnapshots stores high-frequency argument formation outside retained messages.
+  // toolRequestProgressSnapshots 在保留消息之外保存高频参数构造快照。
+  readonly #toolRequestProgressSnapshots = new Map<string, ToolRequestProgressSnapshot>();
   // listeners stores fine-grained subscribers for one exact stream.
   // listeners 保存单条精确流的细粒度订阅者。
   readonly #listeners = new Map<string, Set<ConversationLiveStreamListener>>();
@@ -144,6 +161,33 @@ export class ConversationLiveStreamStore {
   // Returns: true when the event changed one live stream replica.
   // 返回值：事件改变某条实时流副本时返回 true。
   applyEnvelope(envelope: WorkbenchDeltaEnvelope): boolean {
+    if (envelope.delta.kind === "toolRequestProgressChanged") {
+      // payload replaces or clears one exact request identity without touching transcript replicas.
+      // payload 替换或清除单个精确请求身份，且不会修改转录副本。
+      const { conversationId, requestStreamId, progress } = envelope.delta.payload;
+      const key = toolRequestProgressKey(conversationId, requestStreamId);
+      const existing = this.#toolRequestProgressSnapshots.get(key);
+      if (!progress) {
+        if (!existing) {
+          return false;
+        }
+        this.#toolRequestProgressSnapshots.delete(key);
+        this.#dirtyKeys.add(key);
+        return true;
+      }
+      if (progress.requestStreamId !== requestStreamId) {
+        return false;
+      }
+      if (existing && progress.requestRevision <= existing.requestRevision) {
+        return false;
+      }
+      this.#toolRequestProgressSnapshots.set(key, {
+        ...progress,
+        preview: progress.preview ? { ...progress.preview } : progress.preview,
+      });
+      this.#dirtyKeys.add(key);
+      return true;
+    }
     if (envelope.delta.kind === "transientReasoningStatusChanged") {
       // conversationId and status are the complete replacement contract for one request.
       // conversationId 与 status 构成单个请求的完整替换契约。
@@ -175,6 +219,16 @@ export class ConversationLiveStreamStore {
   // Returns: nothing; matching cached streams are updated in place.
   // 返回值：无；匹配的缓存流会原地更新。
   rebaseWorkbenchSnapshot(snapshot: Pick<WorkbenchSnapshot, "revision" | "messages">): void {
+    // Authoritative snapshots intentionally exclude ephemeral state, so every older transient value is stale.
+    // 权威快照有意排除瞬态状态，因此此前的所有瞬态值均已过期。
+    for (const conversationId of this.#transientReasoningStatuses.keys()) {
+      this.#dirtyKeys.add(transientReasoningStatusKey(conversationId));
+    }
+    this.#transientReasoningStatuses.clear();
+    for (const key of this.#toolRequestProgressSnapshots.keys()) {
+      this.#dirtyKeys.add(key);
+    }
+    this.#toolRequestProgressSnapshots.clear();
     // snapshotGeneration is the exact cutover revision represented by snapshot.messages.
     // snapshotGeneration 是 snapshot.messages 所表示的精确切入版本。
     const snapshotGeneration = snapshot.revision ?? 0;
@@ -285,6 +339,21 @@ export class ConversationLiveStreamStore {
   // 返回值：最新不可变状态；请求完成或清除后返回 null。
   getTransientReasoningStatus(conversationId: string): TransientReasoningStatus | null {
     return this.#transientReasoningStatuses.get(conversationId) ?? null;
+  }
+
+  // getToolRequestProgress returns the latest leaf-only snapshot for one exact request stream.
+  // getToolRequestProgress 返回单个精确请求流最新的仅叶子级快照。
+  // Parameters: conversationId owns the request and requestStreamId is its coordinator identity.
+  // 参数：conversationId 持有请求，requestStreamId 是其协调器身份。
+  // Returns: the stable immutable snapshot, or null after terminal clearing.
+  // 返回值：稳定不可变快照；终态清除后返回空。
+  getToolRequestProgress(
+    conversationId: string,
+    requestStreamId: string,
+  ): ToolRequestProgressSnapshot | null {
+    return this.#toolRequestProgressSnapshots.get(
+      toolRequestProgressKey(conversationId, requestStreamId),
+    ) ?? null;
   }
 
   // readBody materializes one full stream body for cold mount or authoritative reconciliation.

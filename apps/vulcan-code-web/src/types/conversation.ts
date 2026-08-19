@@ -668,6 +668,10 @@ export type WorkbenchDelta =
   }
   | { kind: "mediaUploadProgressChanged"; payload: MediaUploadProgressChangedDelta }
   | {
+    kind: "toolRequestProgressChanged";
+    payload: ToolRequestProgressChangedDelta;
+  }
+  | {
     kind: "transientReasoningStatusChanged";
     payload: TransientReasoningStatusChangedDelta;
   };
@@ -768,6 +772,47 @@ export interface MediaUploadProgressChangedDelta {
   bytesSent: number;
   totalBytes?: number | null;
   error?: string | null;
+}
+
+// ToolRequestProgressSnapshot describes one safe replace-in-place argument-formation snapshot.
+// ToolRequestProgressSnapshot 描述一条安全的原地替换式参数构造快照。
+export interface ToolRequestProgressSnapshot {
+  // Stable host-side request stream identity.
+  // 稳定的宿主侧请求流标识。
+  requestStreamId: string;
+  // Canonical tool-call identity known at this revision.
+  // 当前修订已知的规范工具调用标识。
+  toolCallId: string;
+  // Exact public tool name frozen for this request.
+  // 当前请求冻结的精确公开工具名称。
+  toolName: string;
+  // Closed request-formation state; execution states remain in durable transcript records.
+  // 封闭的请求构造状态；执行状态仍由持久转录记录持有。
+  state: "receiving";
+  // Exact UTF-8 byte and Unicode character counts received so far.
+  // 当前已接收的精确 UTF-8 字节数与 Unicode 字符数。
+  receivedBytes: number;
+  receivedCharacters: number;
+  // Monotonic request-local revision.
+  // 请求局部的单调修订号。
+  requestRevision: number;
+  // Optional parser-sanitized preview owned by the request-stream contract.
+  // 请求流契约持有的可选解析器净化预览。
+  preview?: Record<string, unknown> | null;
+}
+
+// ToolRequestProgressChangedDelta replaces or clears one leaf-only tool request snapshot.
+// ToolRequestProgressChangedDelta 替换或清除单个仅叶子级工具请求快照。
+export interface ToolRequestProgressChangedDelta {
+  // Conversation identity owning the request.
+  // 持有当前请求的会话标识。
+  conversationId: string;
+  // Stable request-stream identity used for replacement and clearing.
+  // 用于替换与清除的稳定请求流标识。
+  requestStreamId: string;
+  // Latest safe snapshot, or null after request formation ends.
+  // 最新安全快照；请求构造结束后为空。
+  progress: ToolRequestProgressSnapshot | null;
 }
 
 // ConversationHydrationChangedDelta replaces conversation hydration progress without a full snapshot.

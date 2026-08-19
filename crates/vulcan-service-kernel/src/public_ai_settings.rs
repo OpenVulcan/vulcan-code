@@ -7387,14 +7387,21 @@ pub(super) async fn service_save_public_ai_model_enabled(
     // current_configuration is re-read only after transaction serialization.
     // current_configuration 仅在事务串行化后重新读取。
     let current_configuration = runtime.configuration_snapshot()?;
-    // settings_catalog captures conversation and provider-tool model membership from one generation.
-    // settings_catalog 从同一代际捕获对话与供应商工具模型成员关系。
+    // settings_catalog captures conversation model membership from one generation.
+    // settings_catalog 从同一代际捕获会话模型成员关系。
     let settings_catalog = runtime.settings_catalog_snapshot(&current_configuration)?;
-    // model_supported accepts manual, conversation-catalog, or signed template declarations exactly.
-    // model_supported 精确接受手工、对话目录或签名模板声明。
-    let model_supported = current_configuration
+    // conversation_model_supported accepts only manual or catalog models that explicitly expose
+    // text conversation. Provider extension targets have their own selection boundary.
+    // conversation_model_supported 仅接受手工模型或明确公开文本会话的目录模型；Provider 扩展目标
+    // 拥有独立选择边界。
+    let conversation_model_supported = current_configuration
         .custom_model(request.provider_id.as_str(), request.model_id.as_str())
-        .is_some()
+        .is_some_and(|model| {
+            current_configuration
+                .custom_providers
+                .contains_key(request.provider_id.as_str())
+                || vulcan_provider_adapters::model_supports_text_conversation(&model.capabilities)
+        })
         || current_configuration
             .connection_graph
             .connections
@@ -7405,21 +7412,15 @@ pub(super) async fn service_save_public_ai_model_enabled(
                     .model_support_catalogs
                     .get(connection.id.as_str())
                     .is_some_and(|catalog| {
-                        catalog
-                            .models
-                            .iter()
-                            .any(|model| model.id == request.model_id)
+                        catalog.models.iter().any(|model| {
+                            model.id == request.model_id
+                                && catalog_model_supports_text_conversation(model)
+                        })
                     })
-            })
-        || settings_catalog
-            .provider_tool_template_models
-            .iter()
-            .any(|model| {
-                model.provider_id == request.provider_id && model.model_id == request.model_id
             });
-    if !model_supported {
+    if !conversation_model_supported {
         return Err(format!(
-            "Provider `{}` does not support model `{}`.",
+            "Provider `{}` does not expose model `{}` for text conversation.",
             request.provider_id, request.model_id
         ));
     }
@@ -9801,6 +9802,29 @@ fn effective_catalog_model_protocol_id(
         .map(|binding| binding.protocol_profile_id.as_str())
 }
 
+/// Reports whether a catalog model is declared for text conversation in any authoritative view.
+/// 报告一个目录模型是否在任一权威视图中声明文本会话能力。
+///
+/// # Parameters
+/// 参数
+/// `model` owns the effective projection plus every protocol-specific capability variant.
+/// `model` 持有生效投影与全部协议专属能力变体。
+///
+/// # Returns
+/// 返回值
+/// `true` when the effective projection or any retained variant declares conversation. Inspecting
+/// variants keeps a blocked conversation model manageable after its effective projection is cleared.
+/// 当生效投影或任一保留变体声明会话时返回 `true`。检查变体可使生效投影被清空后的受阻会话模型
+/// 仍可管理。
+fn catalog_model_supports_text_conversation(
+    model: &vulcan_provider_adapters::ConnectionModel,
+) -> bool {
+    vulcan_provider_adapters::model_supports_text_conversation(&model.capabilities)
+        || model.protocol_variants.values().any(|variant| {
+            vulcan_provider_adapters::model_supports_text_conversation(&variant.capabilities)
+        })
+}
+
 /// Returns the stable browser-facing identifier for one frozen model-binding source.
 /// 返回一个冻结模型绑定来源的稳定浏览器标识。
 ///
@@ -9896,8 +9920,8 @@ fn custom_model_route_unavailable_reason(
     }
 }
 
-/// Builds backend-owned protocol status records for every support-catalog model.
-/// 为支持目录中的每个模型构建由后端持有的协议状态记录。
+/// Builds backend-owned protocol status records for every conversation-capable catalog model.
+/// 为目录中每个具备会话能力的模型构建由后端持有的协议状态记录。
 ///
 /// # Parameters
 /// 参数
@@ -9926,6 +9950,18 @@ fn build_public_ai_model_route_records(
             continue;
         };
         for model in &catalog.models {
+            // Conversation route records are intentionally narrower than the provider's full
+            // system-model inventory. Generation-only system models belong to provider extensions;
+            // custom providers remain conversation-only and keep their management diagnostics.
+            // 会话路由记录有意窄于系统供应商完整模型清单；纯生成系统模型属于 Provider 扩展；
+            // 自定义供应商仍仅支持会话并保留其管理诊断。
+            if !configuration
+                .custom_providers
+                .contains_key(connection.provider_id.as_str())
+                && !catalog_model_supports_text_conversation(model)
+            {
+                continue;
+            }
             // protocolId consumes only the frozen model-level binding.
             // protocolId 只消费冻结的模型级绑定。
             let protocol_id = effective_catalog_model_protocol_id(model).map(str::to_string);
@@ -10084,6 +10120,18 @@ fn build_public_ai_settings_snapshot(
             continue;
         };
         for model in &catalog.models {
+            // modelAccessRecords owns only conversation publication. Provider extension choices
+            // are persisted independently in providerExtensionTargetSets. Custom providers remain
+            // conversation-only and therefore retain their model access surface.
+            // modelAccessRecords 只持有会话发布状态；Provider 扩展选择独立持久化在
+            // providerExtensionTargetSets 中；自定义供应商仍仅支持会话，因此保留模型访问入口。
+            if !configuration
+                .custom_providers
+                .contains_key(connection.provider_id.as_str())
+                && !catalog_model_supports_text_conversation(model)
+            {
+                continue;
+            }
             let access_key = PersistedAiConfiguration::provider_model_key(
                 connection.provider_id.as_str(),
                 model.id.as_str(),
@@ -10143,45 +10191,11 @@ fn build_public_ai_settings_snapshot(
             }
         }
     }
-    for model in &provider_tool_template_models {
-        // access_key shares one provider/model access choice across eligible credential accounts.
-        // access_key 在合格凭据账号之间共享同一个供应商/模型访问选择。
-        let access_key = PersistedAiConfiguration::provider_model_key(
-            model.provider_id.as_str(),
-            model.model_id.as_str(),
-        );
-        // default_enabled is the template model default captured with its declaring generation.
-        // default_enabled 是与模板模型声明代际共同捕获的默认值。
-        let default_enabled = model_default_enabled_by_key
-            .get(access_key.as_str())
-            .copied()
-            .ok_or_else(|| {
-                format!(
-                    "The settings generation has no model access default for provider `{}` model `{}`.",
-                    model.provider_id, model.model_id
-                )
-            })?;
-        model_access_records_by_key
-            .entry(access_key.clone())
-            .or_insert(PublicAiModelAccessRecord {
-                provider_id: model.provider_id.clone(),
-                model_id: model.model_id.clone(),
-                enabled: configuration.model_is_enabled_with_default(
-                    model.provider_id.as_str(),
-                    model.model_id.as_str(),
-                    default_enabled,
-                ),
-                default_enabled,
-                customized: configuration
-                    .model_enabled_overrides
-                    .contains_key(access_key.as_str()),
-            });
-    }
     // model_override_records projects protocol-scoped execution differences for the browser.
     // model_override_records 向浏览器投影协议作用域执行差异。
     let model_override_records = model_override_records_by_key.into_values().collect();
-    // model_access_records now contains conversation, manual, and provider-tool template models.
-    // model_access_records 现在包含对话、手工与供应商工具模板模型。
+    // model_access_records contains only conversation publication choices.
+    // model_access_records 仅包含会话发布选择。
     let model_access_records = model_access_records_by_key.into_values().collect();
     for (provider_id, models) in &configuration.custom_models {
         for model_id in models.keys() {
@@ -12196,10 +12210,10 @@ mod inference_settings_route_tests {
         assert_eq!(record.overrides.output_limit, Some(4_096));
     }
 
-    /// Verifies disabled provider-tool template models remain manageable in one coherent settings snapshot.
-    /// 验证关闭的供应商工具模板模型在一份一致设置快照中仍可管理。
+    /// Verifies provider-tool template models remain extension-manageable without becoming conversation models.
+    /// 验证供应商工具模板模型保持可由扩展管理且不会成为会话模型。
     #[test]
-    fn settings_snapshot_keeps_disabled_provider_tool_template_models_manageable() {
+    fn settings_snapshot_separates_provider_tool_templates_from_conversation_access() {
         // runtime supplies the bundled Alibaba template catalog without network access.
         // runtime 在不访问网络的情况下提供内置阿里云模板目录。
         let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
@@ -12235,30 +12249,24 @@ mod inference_settings_route_tests {
             .replace_configuration(configuration.clone())
             .expect("template access should cross the settings activation boundary");
 
-        // snapshot must project declarations, access state, and executable targets from one generation.
-        // snapshot 必须从同一代际投影声明、访问状态与可执行目标。
+        // snapshot must project declarations and selectable extension targets from one generation.
+        // snapshot 必须从同一代际投影声明与可选择的扩展目标。
         let snapshot = build_public_ai_settings_snapshot(&runtime, &configuration)
             .expect("settings snapshot should build");
         assert!(snapshot.provider_tool_template_models.iter().any(|model| {
             model.provider_id == "alibaba" && model.model_id == "qwen-image-2.0-pro"
         }));
-        // access is the exact provider-level state rendered by the management dialog.
-        // access 是管理弹窗渲染的精确供应商级状态。
-        let access = snapshot
-            .model_access_records
-            .iter()
-            .find(|record| {
-                record.provider_id == "alibaba" && record.model_id == "qwen-image-2.0-pro"
-            })
-            .expect("template model access record should exist");
-        assert!(!access.enabled);
-        assert!(access.default_enabled);
-        assert!(access.customized);
+        assert!(!snapshot.model_access_records.iter().any(|record| {
+            record.provider_id == "alibaba" && record.model_id == "qwen-image-2.0-pro"
+        }));
+        assert!(snapshot.model_route_records.iter().all(|record| {
+            record.provider_id != "alibaba" || record.model_id != "qwen-image-2.0-pro"
+        }));
         assert!(
             snapshot
                 .provider_tool_targets
                 .iter()
-                .all(|available| { available.target.upstream_target_id != "qwen-image-2.0-pro" })
+                .any(|available| { available.target.upstream_target_id == "qwen-image-2.0-pro" })
         );
     }
 
@@ -12314,6 +12322,37 @@ mod inference_settings_route_tests {
                 rule_id: String::from("responses-bound-model-rule"),
             }),
         };
+        // mediaCapabilities exposes only image generation and must never become a conversation row.
+        // mediaCapabilities 仅公开图片生成，绝不能成为会话行。
+        let media_capabilities = ModelCapabilities {
+            operations: vec![AiOperation::ImageGenerate],
+            ..ModelCapabilities::default()
+        };
+        // mediaModel deliberately owns a valid protocol binding to prove binding alone does not
+        // authorize conversation publication.
+        // mediaModel 有意持有有效协议绑定，以证明仅有绑定并不能授权会话发布。
+        let media_model = vulcan_provider_adapters::ConnectionModel {
+            id: String::from("image-generation-only"),
+            display_name: String::from("Image generation only"),
+            capabilities: media_capabilities.clone(),
+            capability_evidence: vulcan_provider_adapters::ModelCapabilityEvidence::default(),
+            protocol_variants: BTreeMap::from([(
+                String::from(vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID),
+                vulcan_provider_adapters::ProtocolModelVariant {
+                    capabilities: media_capabilities,
+                    capability_evidence: vulcan_provider_adapters::ModelCapabilityEvidence::default(
+                    ),
+                    discovery_signature: String::from("responses-media-model-test"),
+                    catalog_generation: 7,
+                },
+            )]),
+            resolved_protocol_binding: Some(vulcan_provider_adapters::ModelProtocolBinding {
+                protocol_profile_id: String::from(vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID),
+                source: vulcan_provider_adapters::ModelProtocolBindingSource::SystemManifest,
+                manifest_revision: 2,
+                rule_id: String::from("responses-media-model-rule"),
+            }),
+        };
         // configuration owns the exact credential identity used by the catalog.
         // configuration 持有目录使用的精确凭据身份。
         let mut configuration = PersistedAiConfiguration::default();
@@ -12340,7 +12379,7 @@ mod inference_settings_route_tests {
             connection.id.clone(),
             ConnectionModelCatalog {
                 connection_id: connection.id,
-                models: vec![model],
+                models: vec![model, media_model],
                 generation: 7,
                 page_count: 1,
                 discovery_schema_revision: String::from("model-binding-test-v1"),
@@ -12357,6 +12396,17 @@ mod inference_settings_route_tests {
             &catalogs,
         )
         .expect("internal candidates should build");
+        assert_eq!(
+            candidates.len(),
+            2,
+            "one conversation model should project both supported internal usage scopes"
+        );
+        assert!(
+            candidates
+                .iter()
+                .all(|candidate| candidate.route.model_id != "image-generation-only"),
+            "generation-only models must not become internal LLM candidates"
+        );
         let candidate = candidates
             .iter()
             .find(|candidate| candidate.route.operation == AiOperation::ConversationRespond)

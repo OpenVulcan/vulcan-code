@@ -10,6 +10,7 @@ import type {
   ToolDetailPayload,
 } from "@/components/conversation/conversation-detail";
 import { cn } from "@/lib/utils";
+import { useConversationToolRequestProgress } from "@/state/conversation-live-stream-context";
 import {
   mergeGeneratedMediaAttachments,
   toolExecutionMayHaveGeneratedMedia,
@@ -17,9 +18,11 @@ import {
 } from "./conversation-tool-execution-media";
 import {
   buildToolExecutionDetailBody,
+  liveToolRequestProgress,
   preferredSubagentTaskDisplayBlock,
   toolDisplayStateLabel,
   toolExecutionDetailRef,
+  toolExecutionDetailLoadEnabled,
   toolExecutionDisplayState,
   toolExecutionErrorPreview,
   toolExecutionIdentifier,
@@ -108,7 +111,20 @@ export function ToolExecutionBlock(props: {
   const subagentTaskId = props.blocks.find((block) => block.subagentTaskId)?.subagentTaskId ?? null;
   const identifier = toolExecutionIdentifier(props.blocks);
   const errorPreview = toolExecutionErrorPreview(props.blocks);
-  const requestProgress = toolRequestProgress(props.blocks);
+  // retainedRequestProgress supplies the durable Started or Ready identity used to bind the leaf Store.
+  // retainedRequestProgress 提供用于绑定叶子 Store 的持久 Started 或 Ready 身份。
+  const retainedRequestProgress = toolRequestProgress(props.blocks);
+  // liveRequestProgress changes only this tool-card subtree during argument token streaming.
+  // liveRequestProgress 在参数 Token 流期间仅改变当前工具卡子树。
+  const liveRequestProgress = useConversationToolRequestProgress(
+    props.conversationId,
+    retainedRequestProgress?.requestStreamId ?? null,
+  );
+  // requestProgress prefers the newer external snapshot while retaining durable lifecycle boundaries.
+  // requestProgress 优先使用较新的外部快照，同时保留持久生命周期边界。
+  const requestProgress = liveRequestProgress
+    ? liveToolRequestProgress(liveRequestProgress)
+    : retainedRequestProgress;
   // requestCardProgress keeps request formation distinct from actual tool execution while reusing the resolved card.
   // requestCardProgress 在复用既有卡片的同时，保持请求构造与真实工具执行语义分离。
   const requestCardProgress = requestProgress ? {
@@ -117,8 +133,23 @@ export function ToolExecutionBlock(props: {
     statusLabel: toolRequestProgressStateLabel(requestProgress, t),
   } : null;
   const detailRefFields = toolExecutionDetailRef(props.blocks);
-  const detailRef = props.conversationId && (detailRefFields || primaryBlock.toolCallId)
-    ? { sessionId: props.conversationId, ...(detailRefFields ?? {}), ...(primaryBlock.toolCallId ? { toolCallId: primaryBlock.toolCallId } : {}) }
+  // detailLookupRefFields preserves the documented tool-call lookup when no hidden record id exists yet.
+  // detailLookupRefFields 在尚无隐藏记录标识时保留已定义的工具调用查询路径。
+  const detailLookupRefFields = detailRefFields || primaryBlock.toolCallId
+    ? {
+        ...(detailRefFields ?? {}),
+        ...(primaryBlock.toolCallId ? { toolCallId: primaryBlock.toolCallId } : {}),
+      }
+    : null;
+  // detailLoadEnabled requires a terminal host-owned detail reference; request formation alone is never loadable.
+  // detailLoadEnabled 要求宿主持有的终态详情引用；仅请求构造状态绝不可加载。
+  const detailLoadEnabled = toolExecutionDetailLoadEnabled(
+    displayState,
+    requestProgress,
+    detailLookupRefFields,
+  );
+  const detailRef = props.conversationId && detailLoadEnabled && detailLookupRefFields
+    ? { sessionId: props.conversationId, ...detailLookupRefFields }
     : undefined;
   const commandSessionById = React.useMemo(
     () => terminalSummaryById(props.commandSessions),
@@ -186,7 +217,9 @@ export function ToolExecutionBlock(props: {
   }, [props.onToolPresentationExpandedChange]);
   const hydratedMediaAttachments = useToolDetailMediaAttachments(
     detailRef,
-    mediaAttachments.length === 0 && toolExecutionMayHaveGeneratedMedia(toolName),
+    detailLoadEnabled
+      && mediaAttachments.length === 0
+      && toolExecutionMayHaveGeneratedMedia(toolName),
     props.onLoadToolDetail,
     props.onExtractGeneratedMediaAttachments,
   );
@@ -208,6 +241,7 @@ export function ToolExecutionBlock(props: {
         expandedToolPresentationIds={effectiveExpandedToolPresentationIds}
         presentation={presentation}
         requestProgress={requestCardProgress}
+        detailLoadEnabled={detailLoadEnabled}
         onExpandedChange={handleToolPresentationExpandedChange}
         onLoadToolDetail={props.onLoadToolDetail}
       />

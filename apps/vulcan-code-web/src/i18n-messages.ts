@@ -1083,6 +1083,7 @@ export type TranslationKey =
   | "terminalState.lost"
   | "terminalState.unknown"
   | "toolPresentation.output.loading"
+  | "toolPresentation.output.waiting"
   | "toolPresentation.output.empty"
   | "toolPresentation.exitCode"
   | "toolPresentation.command.running"
@@ -3728,6 +3729,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "terminalState.lost": "已丢失",
     "terminalState.unknown": "未知",
     "toolPresentation.output.loading": "正在加载输出...",
+    "toolPresentation.output.waiting": "等待工具返回输出...",
     "toolPresentation.output.empty": "无输出",
     "toolPresentation.exitCode": "退出代码",
     "toolPresentation.command.running": "执行中",
@@ -6370,6 +6372,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "terminalState.lost": "Lost",
     "terminalState.unknown": "Unknown",
     "toolPresentation.output.loading": "Loading output...",
+    "toolPresentation.output.waiting": "Waiting for tool output...",
     "toolPresentation.output.empty": "No output",
     "toolPresentation.exitCode": "Exit code",
     "toolPresentation.command.running": "Running",

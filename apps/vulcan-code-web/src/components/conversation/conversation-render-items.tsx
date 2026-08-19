@@ -413,9 +413,9 @@ function ConversationToolSequenceGroup(props: {
   // persistentIds identifies diagnostic rows that must not auto-retire.
   // persistentIds 标识不得自动收纳的诊断工具行。
   const persistentIds = new Set(props.persistentItems.map((item) => item.renderKey ?? item.id));
-  // expandedItems preserves every completed, running, and diagnostic row in original sequence order.
-  // expandedItems 按原始序列顺序保留全部完成、运行和诊断工具行。
-  const expandedItems = expanded ? props.items : [];
+  // foldableItems remains mounted through the closing animation and unmounts only with the measured shell.
+  // foldableItems 在收起动画期间持续挂载，仅随测量外壳在动画完成后卸载。
+  const foldableItems = props.items;
   // visibleItems preserves collapsed live rows without duplicating the expanded body.
   // visibleItems 保留折叠状态的实时工具行，并避免与展开正文重复。
   const visibleItems = expanded
@@ -454,7 +454,7 @@ function ConversationToolSequenceGroup(props: {
       {hasFoldableItems ? (
         <ConversationMeasuredCollapse collapseId={props.collapseId} expanded={expanded}>
           <div className="conversation-tool-sequence-body">
-            {expandedItems.map(props.renderItem)}
+            {foldableItems.map(props.renderItem)}
           </div>
         </ConversationMeasuredCollapse>
       ) : null}

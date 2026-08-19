@@ -472,6 +472,52 @@ fn standard_object_root_projection_lightly_normalizes_codekit_style_schema() {
     assert_eq!(projected["additionalProperties"], json!(false));
 }
 
+/// Verifies explicit closed empty objects use the portable no-argument schema shape.
+/// 验证显式封闭空对象使用可移植的无参数 Schema 结构。
+#[test]
+fn standard_object_root_projection_normalizes_explicit_empty_closed_object() {
+    let schema = json!({
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+    });
+
+    let projected = project_tool_parameters_schema(
+        &schema,
+        VulcanToolSchemaProjectionProfile::StandardObjectRoot,
+    );
+
+    assert_eq!(
+        projected,
+        json!({
+            "type": "object",
+            "properties": {},
+            "required": []
+        })
+    );
+}
+
+/// Verifies open empty objects retain their dynamic-property semantics during projection.
+/// 验证开放空对象在投影期间保留动态属性语义。
+#[test]
+fn standard_object_root_projection_preserves_open_empty_object() {
+    let schema = json!({
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+    });
+
+    let projected = project_tool_parameters_schema(
+        &schema,
+        VulcanToolSchemaProjectionProfile::StandardObjectRoot,
+    );
+
+    assert_eq!(projected["type"], json!("object"));
+    assert_eq!(projected["properties"], json!({}));
+    assert_eq!(projected["additionalProperties"], json!(true));
+    assert!(projected.get("required").is_none());
+}
+
 /// Verifies Moonshot-compatible lightweight projection removes nested auth alternatives while retaining their basic fields.
 /// 验证 Moonshot 兼容的轻量投影会移除嵌套认证备选约束，同时保留基础字段。
 #[test]
