@@ -1,15 +1,18 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "tokenrhythm",
-  "revision": 1,
+  "revision": 3,
   "published_at": "2026-08-19T00:00:00Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
-    "required_protocol_profiles": ["openai-chat-completions.v1"],
+    "required_protocol_profiles": [
+      "openai-chat-completions.v1",
+      "anthropic-messages.v1",
+      "openai-responses.v1"
+    ],
     "required_execution_primitives": ["http_json_sync"],
     "required_upload_primitives": [],
     "required_transformers": [
-      "conditional_set",
       "delete_if_equals",
       "enum_map",
       "set_literal"
@@ -84,6 +87,26 @@
           "response_profile_refs": [],
           "provider_request_id_headers": [],
           "verified": true
+        },
+        {
+          "protocol_profile_id": "anthropic-messages.v1",
+          "endpoint_path": "/messages",
+          "authentication": "x_api_key",
+          "request_headers": {"anthropic-version": "2023-06-01"},
+          "usage_profile_refs": [],
+          "request_profile_refs": [],
+          "response_profile_refs": [],
+          "provider_request_id_headers": [],
+          "verified": true
+        },
+        {
+          "protocol_profile_id": "openai-responses.v1",
+          "endpoint_path": "/responses",
+          "usage_profile_refs": [],
+          "request_profile_refs": [],
+          "response_profile_refs": [],
+          "provider_request_id_headers": [],
+          "verified": true
         }
       ]
     }
@@ -92,16 +115,20 @@
     "default_enabled": true,
     "catalog_membership_policy": "declared_only",
     "unknown_model_policy": "declared_rule_required",
-    "supported_protocols": ["openai-chat-completions.v1"],
-    "selected_protocol": "openai-chat-completions.v1",
+    "supported_protocols": [
+      "openai-chat-completions.v1",
+      "anthropic-messages.v1",
+      "openai-responses.v1"
+    ],
+    "selected_protocol": "anthropic-messages.v1",
     "capabilities": {
       "operations": ["conversation_respond"],
       "input_resources": [],
       "output_resources": [],
       "reasoning": "native",
       "provider_native_tools": [],
-      "reasoning_control": "effort_selection",
-      "reasoning_efforts": ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
+      "reasoning_control": "toggle",
+      "reasoning_efforts": ["none", "high"],
       "prompt_cache": {
         "provider_default_behavior": "The provider may report cache reads without host-managed cache injection.",
         "supports_managed_explicit": false,
@@ -121,115 +148,183 @@
       "display_name": "DeepSeek V4 Flash",
       "scope": {"service_entry_ids": ["public-api"], "credential_profile_ids": ["api-key"]},
       "matcher": {"kind": "exact", "value": "deepseek-v4-flash"},
-      "supported_protocols": ["openai-chat-completions.v1"],
-      "selected_protocol": "openai-chat-completions.v1",
-      "capabilities": {"context_limit": 1000000, "output_limit": 384000, "evidence_revision": "tokenrhythm.catalog.2026-08-19"},
-      "request_profile_refs": ["tokenrhythm.chat.reasoning.flash.v1"]
+      "supported_protocols": ["anthropic-messages.v1"],
+      "selected_protocol": "anthropic-messages.v1",
+      "capabilities": {
+        "reasoning_control": "toggle",
+        "reasoning_efforts": ["none", "high"],
+        "context_limit": 1000000,
+        "output_limit": 384000,
+        "evidence_revision": "tokenrhythm.reasoning-matrix.2026-08-19"
+      },
+      "request_profile_refs": []
     },
     {
       "rule_id": "deepseek-v4-pro",
       "display_name": "DeepSeek V4 Pro",
       "scope": {"service_entry_ids": ["public-api"], "credential_profile_ids": ["api-key"]},
       "matcher": {"kind": "exact", "value": "deepseek-v4-pro"},
-      "supported_protocols": ["openai-chat-completions.v1"],
-      "selected_protocol": "openai-chat-completions.v1",
-      "capabilities": {"context_limit": 1000000, "output_limit": 384000, "evidence_revision": "tokenrhythm.catalog.2026-08-19"}
+      "supported_protocols": ["anthropic-messages.v1"],
+      "selected_protocol": "anthropic-messages.v1",
+      "capabilities": {
+        "reasoning_control": "toggle",
+        "reasoning_efforts": ["none", "high"],
+        "context_limit": 1000000,
+        "output_limit": 384000,
+        "evidence_revision": "tokenrhythm.reasoning-matrix.2026-08-19"
+      },
+      "request_profile_refs": []
     },
     {
       "rule_id": "deepseek-v4-flash-0731",
       "display_name": "DeepSeek V4 Flash 0731",
       "scope": {"service_entry_ids": ["public-api"], "credential_profile_ids": ["api-key"]},
       "matcher": {"kind": "exact", "value": "deepseek-v4-flash-0731"},
-      "supported_protocols": ["openai-chat-completions.v1"],
-      "selected_protocol": "openai-chat-completions.v1",
-      "capabilities": {"context_limit": 1000000, "output_limit": 384000, "evidence_revision": "tokenrhythm.catalog.testing.2026-08-19"},
-      "request_profile_refs": ["tokenrhythm.chat.reasoning.flash.v1"]
+      "supported_protocols": ["openai-responses.v1"],
+      "selected_protocol": "openai-responses.v1",
+      "capabilities": {
+        "reasoning_control": "effort_selection",
+        "reasoning_efforts": ["none", "low", "high", "max"],
+        "context_limit": 1000000,
+        "output_limit": 384000,
+        "evidence_revision": "tokenrhythm.reasoning-matrix.2026-08-19"
+      },
+      "request_profile_refs": [],
+      "protocol_capabilities": {
+        "openai-responses.v1": {"provider_native_tools": ["web_search"]}
+      }
     },
     {
       "rule_id": "deepseek-v4-pro-0813",
       "display_name": "DeepSeek V4 Pro 0813",
       "scope": {"service_entry_ids": ["public-api"], "credential_profile_ids": ["api-key"]},
       "matcher": {"kind": "exact", "value": "deepseek-v4-pro-0813"},
-      "supported_protocols": ["openai-chat-completions.v1"],
-      "selected_protocol": "openai-chat-completions.v1",
-      "capabilities": {"context_limit": 1000000, "output_limit": 384000, "evidence_revision": "tokenrhythm.catalog.2026-08-19"}
+      "supported_protocols": ["anthropic-messages.v1"],
+      "selected_protocol": "anthropic-messages.v1",
+      "capabilities": {
+        "reasoning_control": "effort_selection",
+        "reasoning_efforts": ["none", "low", "high", "max"],
+        "context_limit": 1000000,
+        "output_limit": 384000,
+        "evidence_revision": "tokenrhythm.reasoning-matrix.2026-08-19"
+      },
+      "request_profile_refs": []
     },
     {
       "rule_id": "glm-5",
       "display_name": "GLM-5",
       "scope": {"service_entry_ids": ["public-api"], "credential_profile_ids": ["api-key"]},
       "matcher": {"kind": "exact", "value": "glm-5"},
-      "supported_protocols": ["openai-chat-completions.v1"],
-      "selected_protocol": "openai-chat-completions.v1",
-      "capabilities": {"context_limit": 1000000, "output_limit": 128000, "evidence_revision": "tokenrhythm.catalog.2026-08-19"}
+      "supported_protocols": ["anthropic-messages.v1"],
+      "selected_protocol": "anthropic-messages.v1",
+      "capabilities": {
+        "reasoning_control": "fixed_on",
+        "reasoning_efforts": [],
+        "context_limit": 1000000,
+        "output_limit": 128000,
+        "evidence_revision": "tokenrhythm.reasoning-matrix.2026-08-19"
+      },
+      "request_profile_refs": []
     },
     {
       "rule_id": "glm-5-1",
       "display_name": "GLM-5.1",
       "scope": {"service_entry_ids": ["public-api"], "credential_profile_ids": ["api-key"]},
       "matcher": {"kind": "exact", "value": "glm-5.1"},
-      "supported_protocols": ["openai-chat-completions.v1"],
-      "selected_protocol": "openai-chat-completions.v1",
-      "capabilities": {"context_limit": 200000, "output_limit": 128000, "evidence_revision": "tokenrhythm.catalog.2026-08-19"}
+      "supported_protocols": ["anthropic-messages.v1"],
+      "selected_protocol": "anthropic-messages.v1",
+      "capabilities": {
+        "reasoning_control": "fixed_on",
+        "reasoning_efforts": [],
+        "context_limit": 200000,
+        "output_limit": 128000,
+        "evidence_revision": "tokenrhythm.reasoning-matrix.2026-08-19"
+      },
+      "request_profile_refs": []
     },
     {
       "rule_id": "glm-5-2",
       "display_name": "GLM-5.2",
       "scope": {"service_entry_ids": ["public-api"], "credential_profile_ids": ["api-key"]},
       "matcher": {"kind": "exact", "value": "glm-5.2"},
-      "supported_protocols": ["openai-chat-completions.v1"],
-      "selected_protocol": "openai-chat-completions.v1",
-      "capabilities": {"context_limit": 1000000, "output_limit": 128000, "evidence_revision": "tokenrhythm.catalog.2026-08-19"}
+      "supported_protocols": ["anthropic-messages.v1"],
+      "selected_protocol": "anthropic-messages.v1",
+      "capabilities": {
+        "reasoning_control": "fixed_on",
+        "reasoning_efforts": ["high", "max"],
+        "context_limit": 1000000,
+        "output_limit": 128000,
+        "evidence_revision": "tokenrhythm.reasoning-matrix.2026-08-19"
+      },
+      "request_profile_refs": []
     },
     {
       "rule_id": "minimax-m2-5",
       "display_name": "MiniMax M2.5",
       "scope": {"service_entry_ids": ["public-api"], "credential_profile_ids": ["api-key"]},
       "matcher": {"kind": "exact", "value": "minimax-m2.5"},
-      "supported_protocols": ["openai-chat-completions.v1"],
-      "selected_protocol": "openai-chat-completions.v1",
+      "supported_protocols": ["anthropic-messages.v1"],
+      "selected_protocol": "anthropic-messages.v1",
       "capabilities": {
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": ["minimal", "low", "medium", "high", "xhigh", "max"],
+        "reasoning_control": "fixed_on",
+        "reasoning_efforts": [],
         "context_limit": 200000,
         "output_limit": 200000,
         "prompt_cache": {"provider_default_behavior": "This model does not expose cache-read capability.", "supports_managed_explicit": false, "supported_ttl_options": []},
-        "evidence_revision": "tokenrhythm.catalog.2026-08-19"
-      }
+        "evidence_revision": "tokenrhythm.reasoning-matrix.2026-08-19"
+      },
+      "request_profile_refs": []
     },
     {
       "rule_id": "minimax-m2-7",
       "display_name": "MiniMax M2.7",
       "scope": {"service_entry_ids": ["public-api"], "credential_profile_ids": ["api-key"]},
       "matcher": {"kind": "exact", "value": "minimax-m2.7"},
-      "supported_protocols": ["openai-chat-completions.v1"],
-      "selected_protocol": "openai-chat-completions.v1",
+      "supported_protocols": ["anthropic-messages.v1"],
+      "selected_protocol": "anthropic-messages.v1",
       "capabilities": {
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": ["minimal", "low", "medium", "high", "xhigh", "max"],
+        "reasoning_control": "fixed_on",
+        "reasoning_efforts": [],
         "context_limit": 200000,
         "output_limit": 192000,
         "prompt_cache": {"provider_default_behavior": "This model does not expose cache-read capability.", "supports_managed_explicit": false, "supported_ttl_options": []},
-        "evidence_revision": "tokenrhythm.catalog.2026-08-19"
-      }
+        "evidence_revision": "tokenrhythm.reasoning-matrix.2026-08-19"
+      },
+      "request_profile_refs": []
     },
     {
       "rule_id": "kimi-k2-5",
       "display_name": "Kimi K2.5",
       "scope": {"service_entry_ids": ["public-api"], "credential_profile_ids": ["api-key"]},
       "matcher": {"kind": "exact", "value": "kimi-k2.5"},
-      "supported_protocols": ["openai-chat-completions.v1"],
-      "selected_protocol": "openai-chat-completions.v1",
-      "capabilities": {"input_resources": ["image"], "context_limit": 262144, "output_limit": 65536, "evidence_revision": "tokenrhythm.catalog.2026-08-19"}
+      "supported_protocols": ["anthropic-messages.v1"],
+      "selected_protocol": "anthropic-messages.v1",
+      "capabilities": {
+        "input_resources": ["image"],
+        "reasoning_control": "fixed_on",
+        "reasoning_efforts": [],
+        "context_limit": 262144,
+        "output_limit": 65536,
+        "evidence_revision": "tokenrhythm.reasoning-matrix.2026-08-19"
+      },
+      "request_profile_refs": []
     },
     {
       "rule_id": "kimi-k2-6",
       "display_name": "Kimi K2.6",
       "scope": {"service_entry_ids": ["public-api"], "credential_profile_ids": ["api-key"]},
       "matcher": {"kind": "exact", "value": "kimi-k2.6"},
-      "supported_protocols": ["openai-chat-completions.v1"],
-      "selected_protocol": "openai-chat-completions.v1",
-      "capabilities": {"input_resources": ["image"], "context_limit": 262144, "output_limit": 131072, "evidence_revision": "tokenrhythm.catalog.2026-08-19"}
+      "supported_protocols": ["anthropic-messages.v1"],
+      "selected_protocol": "anthropic-messages.v1",
+      "capabilities": {
+        "input_resources": ["image"],
+        "reasoning_control": "fixed_on",
+        "reasoning_efforts": [],
+        "context_limit": 262144,
+        "output_limit": 131072,
+        "evidence_revision": "tokenrhythm.reasoning-matrix.2026-08-19"
+      },
+      "request_profile_refs": []
     },
     {
       "rule_id": "kimi-k2-7-code",
@@ -240,57 +335,96 @@
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
         "input_resources": ["image"],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": ["minimal", "low", "medium", "high", "xhigh", "max"],
+        "reasoning_control": "fixed_on",
+        "reasoning_efforts": [],
         "context_limit": 262144,
         "output_limit": 16384,
-        "evidence_revision": "tokenrhythm.catalog.2026-08-19"
-      }
+        "evidence_revision": "tokenrhythm.reasoning-matrix.2026-08-19"
+      },
+      "request_profile_refs": ["tokenrhythm.chat.reasoning.fixed.v1"]
     },
     {
       "rule_id": "mimo-v2-5-pro",
       "display_name": "MiMo V2.5 Pro",
       "scope": {"service_entry_ids": ["public-api"], "credential_profile_ids": ["api-key"]},
       "matcher": {"kind": "exact", "value": "mimo-v2.5-pro"},
-      "supported_protocols": ["openai-chat-completions.v1"],
-      "selected_protocol": "openai-chat-completions.v1",
-      "capabilities": {"context_limit": 262144, "output_limit": 262144, "evidence_revision": "tokenrhythm.catalog.2026-08-19"}
+      "supported_protocols": ["anthropic-messages.v1"],
+      "selected_protocol": "anthropic-messages.v1",
+      "capabilities": {
+        "reasoning_control": "toggle",
+        "reasoning_efforts": ["none", "high"],
+        "context_limit": 262144,
+        "output_limit": 262144,
+        "evidence_revision": "tokenrhythm.reasoning-matrix.2026-08-19"
+      },
+      "request_profile_refs": []
     },
     {
       "rule_id": "qwen3-7-max",
       "display_name": "Qwen3.7 Max",
       "scope": {"service_entry_ids": ["public-api"], "credential_profile_ids": ["api-key"]},
       "matcher": {"kind": "exact", "value": "qwen3.7-max"},
-      "supported_protocols": ["openai-chat-completions.v1"],
-      "selected_protocol": "openai-chat-completions.v1",
-      "capabilities": {"context_limit": 1000000, "output_limit": 131072, "evidence_revision": "tokenrhythm.catalog.2026-08-19"}
+      "supported_protocols": ["openai-responses.v1"],
+      "selected_protocol": "openai-responses.v1",
+      "capabilities": {
+        "reasoning_control": "toggle",
+        "reasoning_efforts": ["none", "high"],
+        "context_limit": 1000000,
+        "output_limit": 131072,
+        "evidence_revision": "tokenrhythm.reasoning-matrix.2026-08-19"
+      },
+      "request_profile_refs": []
     },
     {
       "rule_id": "qwen3-8-max",
       "display_name": "Qwen3.8 Max",
       "scope": {"service_entry_ids": ["public-api"], "credential_profile_ids": ["api-key"]},
       "matcher": {"kind": "exact", "value": "qwen3.8-max"},
-      "supported_protocols": ["openai-chat-completions.v1"],
-      "selected_protocol": "openai-chat-completions.v1",
-      "capabilities": {"input_resources": ["image"], "context_limit": 1000000, "output_limit": 131072, "evidence_revision": "tokenrhythm.catalog.testing.2026-08-19"}
+      "supported_protocols": ["openai-responses.v1"],
+      "selected_protocol": "openai-responses.v1",
+      "capabilities": {
+        "input_resources": ["image"],
+        "reasoning_control": "toggle",
+        "reasoning_efforts": ["none", "high"],
+        "context_limit": 1000000,
+        "output_limit": 131072,
+        "evidence_revision": "tokenrhythm.reasoning-matrix.2026-08-19"
+      },
+      "request_profile_refs": []
     },
     {
       "rule_id": "seed-2-1-turbo",
       "display_name": "Seed 2.1 Turbo",
       "scope": {"service_entry_ids": ["public-api"], "credential_profile_ids": ["api-key"]},
       "matcher": {"kind": "exact", "value": "seed-2.1-turbo"},
-      "supported_protocols": ["openai-chat-completions.v1"],
-      "selected_protocol": "openai-chat-completions.v1",
-      "capabilities": {"input_resources": ["image", "video"], "context_limit": 262144, "output_limit": 131072, "evidence_revision": "tokenrhythm.catalog.testing.2026-08-19"}
+      "supported_protocols": ["openai-responses.v1"],
+      "selected_protocol": "openai-responses.v1",
+      "capabilities": {
+        "input_resources": ["image", "video"],
+        "reasoning_control": "toggle",
+        "reasoning_efforts": ["none", "high"],
+        "context_limit": 262144,
+        "output_limit": 131072,
+        "evidence_revision": "tokenrhythm.reasoning-matrix.2026-08-19"
+      },
+      "request_profile_refs": []
     },
     {
       "rule_id": "seed-2-1-pro",
       "display_name": "Seed 2.1 Pro",
       "scope": {"service_entry_ids": ["public-api"], "credential_profile_ids": ["api-key"]},
       "matcher": {"kind": "exact", "value": "seed-2.1-pro"},
-      "supported_protocols": ["openai-chat-completions.v1"],
-      "selected_protocol": "openai-chat-completions.v1",
-      "capabilities": {"input_resources": ["image", "video"], "context_limit": 262144, "output_limit": 131072, "evidence_revision": "tokenrhythm.catalog.testing.2026-08-19"}
+      "supported_protocols": ["openai-responses.v1"],
+      "selected_protocol": "openai-responses.v1",
+      "capabilities": {
+        "input_resources": ["image", "video"],
+        "reasoning_control": "toggle",
+        "reasoning_efforts": ["none", "high"],
+        "context_limit": 262144,
+        "output_limit": 131072,
+        "evidence_revision": "tokenrhythm.reasoning-matrix.2026-08-19"
+      },
+      "request_profile_refs": []
     },
     {
       "rule_id": "qwen-image-2-0",
@@ -382,19 +516,18 @@
   "request_profiles": [
     {
       "profile_id": "tokenrhythm.chat.reasoning.standard.v1",
-      "description": "Token Rhythm standard Chat reasoning and streaming usage projection",
+      "description": "Token Rhythm toggle Chat reasoning and streaming usage projection",
       "payload": {
         "profile_id": "tokenrhythm.chat.reasoning.standard.v1",
         "revision": 1,
         "steps": [
           {"op": "set_literal", "path": "/stream_options/include_usage", "value": true},
-          {"op": "conditional_set", "path": "/thinking", "source": "request_field", "source_path": "@reasoning_effort", "equals": "none", "then": null, "otherwise": {"type": "enabled"}},
           {
             "op": "enum_map",
-            "path": "/reasoning_effort",
+            "path": "/thinking",
             "source": "request_field",
             "source_path": "@reasoning_effort",
-            "mapping": {"none": "none", "minimal": "high", "low": "high", "medium": "high", "high": "high", "xhigh": "max", "max": "max"},
+            "mapping": {"none": {"type": "disabled"}, "high": {"type": "enabled"}},
             "unmatched": "error",
             "default": null
           },
@@ -404,23 +537,63 @@
     },
     {
       "profile_id": "tokenrhythm.chat.reasoning.flash.v1",
-      "description": "Token Rhythm DeepSeek Flash Chat reasoning and streaming usage projection",
+      "description": "Token Rhythm versioned DeepSeek Chat reasoning and streaming usage projection",
       "payload": {
         "profile_id": "tokenrhythm.chat.reasoning.flash.v1",
         "revision": 1,
         "steps": [
           {"op": "set_literal", "path": "/stream_options/include_usage", "value": true},
-          {"op": "conditional_set", "path": "/thinking", "source": "request_field", "source_path": "@reasoning_effort", "equals": "none", "then": null, "otherwise": {"type": "enabled"}},
+          {
+            "op": "enum_map",
+            "path": "/thinking",
+            "source": "request_field",
+            "source_path": "@reasoning_effort",
+            "mapping": {"none": {"type": "disabled"}, "low": {"type": "enabled"}, "high": {"type": "enabled"}, "max": {"type": "enabled"}},
+            "unmatched": "error",
+            "default": null
+          },
           {
             "op": "enum_map",
             "path": "/reasoning_effort",
             "source": "request_field",
             "source_path": "@reasoning_effort",
-            "mapping": {"none": "none", "minimal": "high", "low": "low", "medium": "high", "high": "high", "xhigh": "max", "max": "max"},
+            "mapping": {"none": "none", "low": "low", "high": "high", "max": "max"},
             "unmatched": "error",
             "default": null
           },
           {"op": "delete_if_equals", "path": "/reasoning_effort", "source": "request_field", "source_path": "@reasoning_effort", "equals": "none"}
+        ]
+      }
+    },
+    {
+      "profile_id": "tokenrhythm.chat.reasoning.glm52.v1",
+      "description": "Token Rhythm GLM-5.2 high/max reasoning projection",
+      "payload": {
+        "profile_id": "tokenrhythm.chat.reasoning.glm52.v1",
+        "revision": 1,
+        "steps": [
+          {"op": "set_literal", "path": "/stream_options/include_usage", "value": true},
+          {"op": "set_literal", "path": "/thinking", "value": {"type": "enabled"}},
+          {
+            "op": "enum_map",
+            "path": "/reasoning_effort",
+            "source": "request_field",
+            "source_path": "@reasoning_effort",
+            "mapping": {"high": "high", "max": "max"},
+            "unmatched": "error",
+            "default": null
+          }
+        ]
+      }
+    },
+    {
+      "profile_id": "tokenrhythm.chat.reasoning.fixed.v1",
+      "description": "Token Rhythm fixed-on reasoning projection without a reasoning field",
+      "payload": {
+        "profile_id": "tokenrhythm.chat.reasoning.fixed.v1",
+        "revision": 1,
+        "steps": [
+          {"op": "set_literal", "path": "/stream_options/include_usage", "value": true}
         ]
       }
     }

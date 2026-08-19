@@ -728,7 +728,7 @@ fn opencode_go_manifest_matches_source_derived_model_contracts() {
     );
 }
 
-/// Verifies Token Rhythm freezes its static catalog, Chat route, reasoning maps, headers, and image targets.
+/// Verifies Token Rhythm freezes its static catalog, protocol routes, reasoning maps, headers, and image targets.
 /// 验证基元律动固化静态目录、Chat 路由、思考映射、请求头与图片目标。
 #[test]
 fn tokenrhythm_manifest_freezes_the_reviewed_provider_contract() {
@@ -774,12 +774,37 @@ fn tokenrhythm_manifest_freezes_the_reviewed_provider_contract() {
     let routes = document["services"][0]["protocol_routes"]
         .as_array()
         .expect("Token Rhythm protocol routes must exist");
-    assert_eq!(routes.len(), 1, "Token Rhythm exposes Chat only");
     assert_eq!(
-        routes[0]["protocol_profile_id"],
-        "openai-chat-completions.v1"
+        routes.len(),
+        3,
+        "Token Rhythm exposes the reviewed LLM routes"
     );
-    assert_eq!(routes[0]["endpoint_path"], "/chat/completions");
+    let route_by_protocol = |protocol_id: &str| {
+        routes
+            .iter()
+            .find(|route| route["protocol_profile_id"] == protocol_id)
+            .unwrap_or_else(|| panic!("missing Token Rhythm route `{protocol_id}`"))
+    };
+    assert_eq!(
+        route_by_protocol("openai-chat-completions.v1")["endpoint_path"],
+        "/chat/completions"
+    );
+    assert_eq!(
+        route_by_protocol("anthropic-messages.v1")["endpoint_path"],
+        "/messages"
+    );
+    assert_eq!(
+        route_by_protocol("anthropic-messages.v1")["authentication"],
+        "x_api_key"
+    );
+    assert_eq!(
+        route_by_protocol("anthropic-messages.v1")["request_headers"]["anthropic-version"],
+        "2023-06-01"
+    );
+    assert_eq!(
+        route_by_protocol("openai-responses.v1")["endpoint_path"],
+        "/responses"
+    );
 
     let compiled =
         vulcan_provider_adapters::compile_manifest_text(&text, ManifestOwnership::System)
@@ -802,27 +827,136 @@ fn tokenrhythm_manifest_freezes_the_reviewed_provider_contract() {
             .all(|rule| rule.matcher.kind == vulcan_provider_adapters::MatcherKind::Exact)
     );
 
-    // Required-thinking models intentionally omit none while retaining every enabled UI level.
-    // 强制思考模型有意省略 none，同时保留全部开启态 UI 档位。
-    let enabled_efforts = vec![
-        vulcan_ai_contract::ReasoningEffort::Minimal,
-        vulcan_ai_contract::ReasoningEffort::Low,
-        vulcan_ai_contract::ReasoningEffort::Medium,
-        vulcan_ai_contract::ReasoningEffort::High,
-        vulcan_ai_contract::ReasoningEffort::XHigh,
-        vulcan_ai_contract::ReasoningEffort::Max,
+    let protocol_matrix = [
+        ("deepseek-v4-flash", "anthropic-messages.v1"),
+        ("deepseek-v4-pro", "anthropic-messages.v1"),
+        ("deepseek-v4-flash-0731", "openai-responses.v1"),
+        ("deepseek-v4-pro-0813", "anthropic-messages.v1"),
+        ("glm-5", "anthropic-messages.v1"),
+        ("glm-5.1", "anthropic-messages.v1"),
+        ("glm-5.2", "anthropic-messages.v1"),
+        ("minimax-m2.5", "anthropic-messages.v1"),
+        ("minimax-m2.7", "anthropic-messages.v1"),
+        ("kimi-k2.5", "anthropic-messages.v1"),
+        ("kimi-k2.6", "anthropic-messages.v1"),
+        ("kimi-k2.7-code", "openai-chat-completions.v1"),
+        ("mimo-v2.5-pro", "anthropic-messages.v1"),
+        ("qwen3.7-max", "openai-responses.v1"),
+        ("qwen3.8-max", "openai-responses.v1"),
+        ("seed-2.1-turbo", "openai-responses.v1"),
+        ("seed-2.1-pro", "openai-responses.v1"),
     ];
-    for model_id in ["minimax-m2.5", "minimax-m2.7", "kimi-k2.7-code"] {
+    for (model_id, expected_protocol) in protocol_matrix {
         let rule = compiled
             .rule_for_model("public-api", Some("api-key"), model_id)
-            .unwrap_or_else(|| panic!("missing Token Rhythm rule `{model_id}`"));
+            .unwrap_or_else(|| panic!("missing Token Rhythm protocol rule `{model_id}`"));
         assert_eq!(
-            rule.capabilities
-                .as_ref()
-                .expect("required-thinking capabilities")
-                .reasoning_efforts,
-            enabled_efforts
+            rule.supported_protocols,
+            vec![String::from(expected_protocol)],
+            "Token Rhythm supported protocol drifted for `{model_id}`"
         );
+        assert_eq!(
+            rule.selected_protocol.as_deref(),
+            Some(expected_protocol),
+            "Token Rhythm selected protocol drifted for `{model_id}`"
+        );
+        if expected_protocol != "openai-chat-completions.v1" {
+            assert!(
+                rule.request_profile_refs.is_empty(),
+                "non-Chat Token Rhythm model `{model_id}` must not inherit Chat request profiles"
+            );
+        }
+    }
+    let kimi_chat = compiled
+        .rule_for_model("public-api", Some("api-key"), "kimi-k2.7-code")
+        .expect("Kimi K2.7 Code Chat rule must exist");
+    assert_eq!(
+        kimi_chat.request_profile_refs,
+        vec![String::from("tokenrhythm.chat.reasoning.fixed.v1")]
+    );
+    let flash_0731 = compiled
+        .rule_for_model("public-api", Some("api-key"), "deepseek-v4-flash-0731")
+        .expect("DeepSeek V4 Flash 0731 Responses rule must exist");
+    assert_eq!(
+        flash_0731
+            .protocol_capabilities
+            .get("openai-responses.v1")
+            .expect("DeepSeek V4 Flash 0731 Responses capabilities must exist")
+            .provider_native_tools,
+        vec![vulcan_ai_contract::NativeToolKind::WebSearch]
+    );
+
+    // The reviewed model families freeze their provider-specific reasoning control matrix.
+    // 已审核的模型家族固化各自供应商特定的思考控制矩阵。
+    let reasoning_matrix = [
+        (
+            [
+                "deepseek-v4-flash",
+                "deepseek-v4-pro",
+                "qwen3.7-max",
+                "qwen3.8-max",
+                "seed-2.1-turbo",
+                "seed-2.1-pro",
+                "mimo-v2.5-pro",
+            ]
+            .as_slice(),
+            vulcan_ai_contract::ReasoningControlMode::Toggle,
+            vec![
+                vulcan_ai_contract::ReasoningEffort::None,
+                vulcan_ai_contract::ReasoningEffort::High,
+            ],
+        ),
+        (
+            ["deepseek-v4-flash-0731", "deepseek-v4-pro-0813"].as_slice(),
+            vulcan_ai_contract::ReasoningControlMode::EffortSelection,
+            vec![
+                vulcan_ai_contract::ReasoningEffort::None,
+                vulcan_ai_contract::ReasoningEffort::Low,
+                vulcan_ai_contract::ReasoningEffort::High,
+                vulcan_ai_contract::ReasoningEffort::Max,
+            ],
+        ),
+        (
+            [
+                "glm-5",
+                "glm-5.1",
+                "minimax-m2.5",
+                "minimax-m2.7",
+                "kimi-k2.5",
+                "kimi-k2.6",
+                "kimi-k2.7-code",
+            ]
+            .as_slice(),
+            vulcan_ai_contract::ReasoningControlMode::FixedOn,
+            Vec::new(),
+        ),
+        (
+            ["glm-5.2"].as_slice(),
+            vulcan_ai_contract::ReasoningControlMode::FixedOn,
+            vec![
+                vulcan_ai_contract::ReasoningEffort::High,
+                vulcan_ai_contract::ReasoningEffort::Max,
+            ],
+        ),
+    ];
+    for (model_ids, expected_control, expected_efforts) in reasoning_matrix {
+        for model_id in model_ids {
+            let rule = compiled
+                .rule_for_model("public-api", Some("api-key"), model_id)
+                .unwrap_or_else(|| panic!("missing Token Rhythm rule `{model_id}`"));
+            let capabilities = rule
+                .capabilities
+                .as_ref()
+                .expect("Token Rhythm reasoning capabilities");
+            assert_eq!(
+                capabilities.reasoning_control, expected_control,
+                "Token Rhythm reasoning control drifted for `{model_id}`"
+            );
+            assert_eq!(
+                capabilities.reasoning_efforts, expected_efforts,
+                "Token Rhythm reasoning effort matrix drifted for `{model_id}`"
+            );
+        }
     }
 
     // The two reviewed image models are opt-in generation-only extensions.
@@ -904,12 +1038,57 @@ fn tokenrhythm_manifest_freezes_the_reviewed_provider_contract() {
             .expect("Token Rhythm reasoning enum map")["mapping"]
             .clone()
     };
-    let standard_mapping = reasoning_mapping("tokenrhythm.chat.reasoning.standard.v1");
     let flash_mapping = reasoning_mapping("tokenrhythm.chat.reasoning.flash.v1");
-    assert_eq!(standard_mapping["low"], "high");
-    assert_eq!(standard_mapping["xhigh"], "max");
+    let glm52_mapping = reasoning_mapping("tokenrhythm.chat.reasoning.glm52.v1");
     assert_eq!(flash_mapping["low"], "low");
-    assert_eq!(flash_mapping["xhigh"], "max");
+    assert_eq!(flash_mapping["high"], "high");
+    assert_eq!(flash_mapping["max"], "max");
+    assert_eq!(glm52_mapping["high"], "high");
+    assert_eq!(glm52_mapping["max"], "max");
+    let standard_thinking_mapping = document["request_profiles"]
+        .as_array()
+        .expect("Token Rhythm request profiles")
+        .iter()
+        .find(|profile| profile["profile_id"] == "tokenrhythm.chat.reasoning.standard.v1")
+        .expect("Token Rhythm standard reasoning profile")["payload"]["steps"]
+        .as_array()
+        .expect("Token Rhythm standard profile steps")
+        .iter()
+        .find(|step| step["op"] == "enum_map" && step["path"] == "/thinking")
+        .expect("Token Rhythm standard thinking enum map")["mapping"]
+        .clone();
+    assert_eq!(
+        standard_thinking_mapping["none"]["type"], "disabled",
+        "standard Chat must explicitly disable thinking for none"
+    );
+    assert_eq!(
+        standard_thinking_mapping["high"]["type"], "enabled",
+        "standard Chat must explicitly enable thinking for high"
+    );
+    let standard_profile = document["request_profiles"]
+        .as_array()
+        .expect("Token Rhythm request profiles")
+        .iter()
+        .find(|profile| profile["profile_id"] == "tokenrhythm.chat.reasoning.standard.v1")
+        .expect("Token Rhythm standard reasoning profile");
+    assert!(
+        !standard_profile["payload"]["steps"]
+            .as_array()
+            .expect("Token Rhythm standard profile steps")
+            .iter()
+            .any(|step| step["op"] == "enum_map" && step["path"] == "/reasoning_effort"),
+        "toggle-only models must not receive a provider effort value"
+    );
+    let fixed_profile = document["request_profiles"]
+        .as_array()
+        .expect("Token Rhythm request profiles")
+        .iter()
+        .find(|profile| profile["profile_id"] == "tokenrhythm.chat.reasoning.fixed.v1")
+        .expect("Token Rhythm fixed reasoning profile");
+    assert_eq!(
+        fixed_profile["payload"]["steps"],
+        serde_json::json!([{"op": "set_literal", "path": "/stream_options/include_usage", "value": true}])
+    );
 }
 
 /// Verifies CommandCode freezes exact online identities, multimodality, routing, and usage.
