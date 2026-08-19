@@ -13,13 +13,13 @@ export function activeStreamingThinkingBlock(
   conversation: ConversationSummary | undefined,
   renderItems: ConversationRenderItem[],
 ): ConversationBlock | null {
-  // The record lifecycle is the authoritative stream boundary. Provider tool loops may advance
-  // the session phase to requesting before the active thinking row reaches the WebUI projection.
-  // 记录生命周期是权威流边界。Provider 工具循环可能在活动思考行到达 WebUI 投影前，
-  // 已经把会话阶段推进为 requesting。
-  if (!conversationIsRunning(conversation)) {
+  // The session phase closes the popup as soon as thinking completes, independently of turn completion.
+  // 会话阶段在思考完成时立即关闭弹窗，不依赖整轮结束。
+  if (normalizedSessionRunPhase(conversation?.runPhase) !== "thinking") {
     return null;
   }
+  // The record lifecycle rejects stale thinking rows that remain in a delayed projection.
+  // 记录生命周期会拒绝延迟投影中残留的旧思考行。
   const activeThinkingItem = [...renderItems].reverse().find((item) => (
     item.sourceMessage?.recordKind === "thinking-output"
     && conversationMessageStreamState(item.sourceMessage) === "active"

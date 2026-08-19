@@ -22,6 +22,7 @@ import openRouterIcon from "@/assets/provider-icons/provider-openrouter.svg"
 import qiniuIcon from "@/assets/provider-icons/provider-qiniu.svg"
 import qwenIcon from "@/assets/provider-icons/provider-qwen.svg"
 import tavilyIcon from "@/assets/provider-icons/provider-tavily.svg"
+import tokenRhythmIcon from "@/assets/provider-icons/provider-tokenrhythm.svg"
 import vertexIcon from "@/assets/provider-icons/provider-vertex.svg"
 import zhipuIcon from "@/assets/provider-icons/provider-zhipu.svg"
 import { cn } from "@/lib/utils"
@@ -49,6 +50,7 @@ export type ProviderIconKey =
   | "qwen"
   | "qiniu"
   | "tavily"
+  | "tokenrhythm"
   | "vertex"
   | "zhipu"
 
@@ -103,6 +105,7 @@ const providerIconLibrary: Readonly<Record<ProviderIconKey, ProviderIconAsset>> 
   qwen: { light: qwenIcon },
   qiniu: { light: qiniuIcon, transparent: true },
   tavily: { light: tavilyIcon, transparent: true },
+  tokenrhythm: { light: tokenRhythmIcon, monochrome: true, transparent: true },
   vertex: { light: vertexIcon },
   zhipu: { light: zhipuIcon },
 }
@@ -128,6 +131,7 @@ const providerIconMap: Readonly<Record<string, ProviderIconKey>> = {
   qwen: "qwen",
   qiniu: "qiniu",
   tavily: "tavily",
+  tokenrhythm: "tokenrhythm",
   vertex: "vertex",
   xai: "grok",
   zhipu: "zhipu",

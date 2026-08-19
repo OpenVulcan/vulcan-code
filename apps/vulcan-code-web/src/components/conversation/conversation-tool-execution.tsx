@@ -143,6 +143,47 @@ export function ToolExecutionBlock(props: {
       props.workspacePath,
     ],
   );
+  // localToolPresentationExpansionOverrides keeps clicks inside this leaf card subtree.
+  // localToolPresentationExpansionOverrides 将点击更新限制在当前叶子卡片子树内。
+  const [localToolPresentationExpansionOverrides, setLocalToolPresentationExpansionOverrides] = React.useState<ReadonlyMap<string, boolean>>(
+    () => new Map<string, boolean>(),
+  );
+  // effectiveExpandedToolPresentationIds overlays immediate local choices on persisted surface memory.
+  // effectiveExpandedToolPresentationIds 将即时本地选择覆盖到已持久化的界面记忆之上。
+  const effectiveExpandedToolPresentationIds = React.useMemo(() => {
+    if (localToolPresentationExpansionOverrides.size === 0) {
+      return props.expandedToolPresentationIds;
+    }
+    // nextExpandedIds is isolated to this tool subtree and never mutates the persisted Set.
+    // nextExpandedIds 仅属于当前工具子树，并且绝不修改已持久化的 Set。
+    const nextExpandedIds = new Set(props.expandedToolPresentationIds);
+    for (const [presentationId, expanded] of localToolPresentationExpansionOverrides) {
+      if (expanded) {
+        nextExpandedIds.add(presentationId);
+      } else {
+        nextExpandedIds.delete(presentationId);
+      }
+    }
+    return nextExpandedIds;
+  }, [localToolPresentationExpansionOverrides, props.expandedToolPresentationIds]);
+  // handleToolPresentationExpandedChange updates the leaf immediately and persists memory as a transition.
+  // handleToolPresentationExpandedChange 立即更新叶子卡片，并以过渡任务持久化记忆。
+  // Parameters: presentationId identifies the clicked card and expanded is its requested next state.
+  // 参数：presentationId 标识被点击的卡片，expanded 是其请求的下一状态。
+  // Returns: nothing; the urgent local render and deferred surface-memory update are scheduled separately.
+  // 返回值：无；紧急本地渲染与延后的界面记忆更新会被分别调度。
+  const handleToolPresentationExpandedChange = React.useCallback((presentationId: string, expanded: boolean): void => {
+    setLocalToolPresentationExpansionOverrides((current) => {
+      // next overrides only the clicked presentation while retaining nested file-card choices.
+      // next 只覆盖被点击的展示，同时保留嵌套文件卡片选择。
+      const next = new Map(current);
+      next.set(presentationId, expanded);
+      return next;
+    });
+    React.startTransition(() => {
+      props.onToolPresentationExpandedChange(presentationId, expanded);
+    });
+  }, [props.onToolPresentationExpandedChange]);
   const hydratedMediaAttachments = useToolDetailMediaAttachments(
     detailRef,
     mediaAttachments.length === 0 && toolExecutionMayHaveGeneratedMedia(toolName),
@@ -163,11 +204,11 @@ export function ToolExecutionBlock(props: {
   if (presentation) {
     return (
       <ToolPresentationCard
-        expanded={props.expandedToolPresentationIds.has(presentation.id)}
-        expandedToolPresentationIds={props.expandedToolPresentationIds}
+        expanded={effectiveExpandedToolPresentationIds.has(presentation.id)}
+        expandedToolPresentationIds={effectiveExpandedToolPresentationIds}
         presentation={presentation}
         requestProgress={requestCardProgress}
-        onExpandedChange={props.onToolPresentationExpandedChange}
+        onExpandedChange={handleToolPresentationExpandedChange}
         onLoadToolDetail={props.onLoadToolDetail}
       />
     );

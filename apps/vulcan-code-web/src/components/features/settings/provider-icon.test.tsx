@@ -21,6 +21,7 @@ describe("provider icon library", () => {
     expect(resolveProviderIconKey({ providerId: "code0" })).toBe("code0")
     expect(resolveProviderIconKey({ providerId: "commandcode" })).toBe("commandcode")
     expect(resolveProviderIconKey({ providerId: "opencode-go" })).toBe("opencode-go")
+    expect(resolveProviderIconKey({ providerId: "tokenrhythm" })).toBe("tokenrhythm")
   })
 
   // Product artwork overrides its provider-family default.
@@ -46,6 +47,15 @@ describe("provider icon library", () => {
     const markup = renderToStaticMarkup(<ProviderIcon providerId="opencode-go" />)
 
     expect(markup).toContain('data-provider-icon="opencode-go"')
+    expect(markup).toContain("dark:invert")
+  })
+
+  // Token Rhythm uses the supplied monochrome artwork and remains visible in dark theme.
+  // Token Rhythm 使用用户提供的单色图标，并在暗色主题中保持可见。
+  it("renders Token Rhythm with dark-theme monochrome inversion", () => {
+    const markup = renderToStaticMarkup(<ProviderIcon providerId="tokenrhythm" />)
+
+    expect(markup).toContain('data-provider-icon="tokenrhythm"')
     expect(markup).toContain("dark:invert")
   })
 

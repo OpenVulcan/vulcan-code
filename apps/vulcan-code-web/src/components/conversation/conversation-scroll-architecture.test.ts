@@ -69,6 +69,21 @@ describe("conversation scroll architecture", () => {
     expect(workspace).toContain("React.useLayoutEffect(() => {\n    timelineProjectionStore.reconcile");
   });
 
+  it("keeps tool-card expansion rendering inside the leaf tool subtree", () => {
+    // toolExecution owns urgent visual expansion while surface memory is persisted as a transition.
+    // toolExecution 拥有紧急视觉展开，并以过渡任务持久化界面记忆。
+    const toolExecution = readConversationSource("./conversation-tool-execution.tsx");
+    // workspace must not invalidate a complete Turn for one leaf-card interaction.
+    // workspace 不得因为一次叶子卡片交互而使完整 Turn 失效。
+    const workspace = readConversationSource("./conversation-workspace.tsx");
+
+    expect(toolExecution).toContain("localToolPresentationExpansionOverrides");
+    expect(toolExecution).toContain("effectiveExpandedToolPresentationIds");
+    expect(toolExecution).toContain("React.startTransition(() => {");
+    expect(toolExecution).toContain("onExpandedChange={handleToolPresentationExpandedChange}");
+    expect(workspace).not.toContain("invalidateExpandedTurnRow");
+  });
+
   it("retains independent semantic and expansion memory for every subagent tab", () => {
     // contextPanel owns child-tab memory above the active content component that unmounts during tab switches.
     // contextPanel 在活动内容组件之上拥有子页签记忆，活动内容会在页签切换时卸载。

@@ -33,17 +33,30 @@ const activeThinkingItem: ConversationRenderItem = {
 };
 
 describe("active streaming thinking block", () => {
-  // An active reasoning record remains visible when a tool loop already advanced the session phase.
-  // 当工具循环已经推进会话阶段时，活动推理记录仍保持可见。
-  it("keeps post-tool reasoning visible across a requesting phase", () => {
+  // An active reasoning record remains visible only while the authoritative phase is thinking.
+  // 活动推理记录仅在权威阶段仍为 thinking 时保持可见。
+  it("shows an active reasoning record during the thinking phase", () => {
     const conversation: ConversationSummary = {
       id: "conversation-1",
-      title: "Post-tool reasoning",
+      title: "Active reasoning",
+      status: "running",
+      runPhase: "thinking",
+    };
+
+    expect(activeStreamingThinkingBlock(conversation, [activeThinkingItem])).toBe(thinkingBlock);
+  });
+
+  // Leaving the thinking phase closes the popup even if a delayed row still says active.
+  // 离开 thinking 阶段后，即使延迟行仍标记 active，也必须关闭弹窗。
+  it("hides a delayed active marker after thinking completes", () => {
+    const conversation: ConversationSummary = {
+      id: "conversation-1",
+      title: "Completed reasoning",
       status: "running",
       runPhase: "requesting",
     };
 
-    expect(activeStreamingThinkingBlock(conversation, [activeThinkingItem])).toBe(thinkingBlock);
+    expect(activeStreamingThinkingBlock(conversation, [activeThinkingItem])).toBeNull();
   });
 
   // A sealed reasoning record cannot keep the transient popup alive.
@@ -53,7 +66,7 @@ describe("active streaming thinking block", () => {
       id: "conversation-1",
       title: "Sealed reasoning",
       status: "running",
-      runPhase: "requesting",
+      runPhase: "thinking",
     };
     const sealedMessage: ConversationMessage = {
       ...activeThinkingMessage,

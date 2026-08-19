@@ -391,7 +391,6 @@ export function ComposerPanel(props: {
   const {
     canAutoSubmitCreatedGoal,
     sendDraft,
-    stopConversation: handleComposerStop,
     submitCreatedGoal,
   } = useComposerSendController({
     draftSlotKey,
@@ -689,7 +688,6 @@ export function ComposerPanel(props: {
             sendBlocked={providerToolSettingsBlocked}
             onReasoningEffortChange={(value) => void handleReasoningEffortChange(value)}
             onSend={() => void handleComposerSend()}
-            onStop={() => void handleComposerStop()}
             reasoningAriaLabel={t("composer.aria.reasoning")}
             reasoningEffort={reasoningEffort}
             reasoningEffortOptions={reasoningEffortOptions}

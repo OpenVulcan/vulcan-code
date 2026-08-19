@@ -51,9 +51,6 @@ export interface ComposerPanelToolbarRightProps {
   // Handler for reasoning effort changes.
   // 推理强度变化处理器。
   onReasoningEffortChange: (value: string) => void;
-  // Handler that stops the active run.
-  // 停止当前运行的处理器。
-  onStop: () => void;
   // Handler that sends or stops according to current composer state.
   // 根据当前输入区状态发送或停止的处理器。
   onSend: () => void;
@@ -85,17 +82,6 @@ export function ComposerPanelToolbarRight(props: ComposerPanelToolbarRightProps)
           tooltip={<strong>{t("composer.reasoning.tooltip")}</strong>}
           value={props.reasoningEffort}
         />
-      ) : null}
-      {props.isConversationRunning && (draftHasContent || hasAttachments) ? (
-        <Button
-          aria-label={props.stopAriaLabel}
-          className="send-button running"
-          onClick={props.onStop}
-          size="icon"
-          type="button"
-        >
-          <Square fill="currentColor" size={15} strokeWidth={0} />
-        </Button>
       ) : null}
       <Button
         aria-label={stopOnly ? props.stopAriaLabel : props.sendAriaLabel}
