@@ -776,6 +776,8 @@ fn sync_selected_conversation_fields_for_retained_workbench(
     workbench.session_goal = selected_addons.and_then(|entry| entry.session_goal.clone());
     workbench.session_todolist = selected_addons.and_then(|entry| entry.session_todolist.clone());
     workbench.session_plan_mode = selected_addons.and_then(|entry| entry.session_plan_mode.clone());
+    workbench.session_context_compaction_window_node_id =
+        selected_addons.and_then(|entry| entry.session_context_compaction_window_node_id.clone());
     workbench.session_vmm_policy = workbench
         .session_vmm_policies_by_conversation
         .iter()

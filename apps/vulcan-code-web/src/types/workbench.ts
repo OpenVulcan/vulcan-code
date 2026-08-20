@@ -18,6 +18,10 @@ import type {
   SessionVmmPolicyByConversation,
   SessionVmmPolicySummary,
 } from "./conversation";
+import type {
+  ContextCompactionWindowNodeId,
+  PublicAiContextCompactionWindowNode,
+} from "./public-ai";
 import type { ThinkingDisplayMode } from "@/components/conversation/thinking-display";
 import type {
   MemorySummary,
@@ -246,6 +250,12 @@ export interface WorkbenchSnapshot {
   // Current session output-style state.
   // 当前会话输出风格状态。
   sessionOutputStyle?: SessionOutputStyleSummary | null;
+  // Fixed system context-compaction window nodes in immutable low-to-high order.
+  // 按不可变从低到高顺序排列的固定系统上下文压缩窗口节点。
+  contextCompactionWindowNodes?: PublicAiContextCompactionWindowNode[];
+  // Stable context-compaction window node selected by the current session.
+  // 当前会话选择的稳定上下文压缩窗口节点。
+  sessionContextCompactionWindowNodeId?: ContextCompactionWindowNodeId | null;
   // Current selected-session physical Provider request counts and token usage.
   // 当前选中会话的物理 Provider 请求计数与 Token 用量。
   sessionProviderUsage?: SessionProviderUsageSummary | null;

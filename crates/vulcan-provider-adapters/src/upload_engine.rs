@@ -117,6 +117,9 @@ pub(crate) struct OperationUploadExecutionContext<'a> {
     /// Optional canonical workspace boundary for local resource paths.
     /// 本地资源路径使用的可选规范工作区边界。
     pub workspace_root: Option<&'a Path>,
+    /// Fixture-only HTTP loopback origin used by the closed local conformance harness.
+    /// 仅由封闭本地一致性夹具使用的 HTTP 回环源地址。
+    pub fixture_loopback_origin: Option<&'a str>,
 }
 
 /// Frozen dependencies for materializing one resource through one upload channel.
@@ -143,6 +146,9 @@ pub(crate) struct UploadExecutionContext<'a> {
     /// Optional exact model identifier required by signing handshakes.
     /// 签名握手所需的可选精确模型标识。
     pub model_id: Option<&'a str>,
+    /// Fixture-only HTTP loopback origin used by the closed local conformance harness.
+    /// 仅由封闭本地一致性夹具使用的 HTTP 回环源地址。
+    pub fixture_loopback_origin: Option<&'a str>,
 }
 
 /// Materializes every declared operation upload binding before provider-tool dispatch.
@@ -319,6 +325,7 @@ pub(crate) async fn materialize_operation_uploads(
                 progress: context.progress.clone(),
                 cancellation: context.cancellation,
                 model_id: context.model_id,
+                fixture_loopback_origin: context.fixture_loopback_origin,
             },
             &upload.channel,
             &upload.resource,
@@ -883,6 +890,51 @@ pub(crate) fn resolve_upload_channel<'a>(
     ))
 }
 
+/// Resolves the exact channel and byte length used to report one local operation upload.
+/// 解析用于报告单个本地操作上传的精确通道与字节长度。
+///
+/// # Parameters
+/// 参数
+/// `binding` and `channels` are frozen Manifest declarations; `reference` is the canonical local
+/// path argument; `item_count`, `workspace_root`, and `credential_role` preserve execution limits.
+/// `binding` 与 `channels` 是冻结的 Manifest 声明；`reference` 是规范本地路径参数；
+/// `item_count`、`workspace_root` 与 `credential_role` 保留执行限制。
+///
+/// # Returns
+/// 返回值
+/// The exact selected upload channel id and verified source byte length.
+/// 返回精确选中的上传通道标识与已验证源字节长度。
+pub(crate) async fn inspect_local_operation_upload_progress_route(
+    binding: &crate::OperationUploadBinding,
+    channels: &[crate::UploadChannelDeclaration],
+    reference: &str,
+    item_count: usize,
+    workspace_root: Option<&Path>,
+    credential_role: Option<&str>,
+) -> Result<(String, u64), String> {
+    // resource repeats the same bounded preflight used by materialization without network effects.
+    // resource 重用物化阶段相同的有界预检，且不产生网络副作用。
+    let resource = prepare_operation_upload_resource(
+        binding,
+        reference,
+        item_count,
+        workspace_root,
+        channels,
+        credential_role,
+    )
+    .await?;
+    // channel is selected by the authoritative reference, MIME, and credential-role algorithm.
+    // channel 由权威引用、MIME 与凭据角色算法选择。
+    let channel = resolve_upload_channel(
+        channels,
+        &binding.upload_channel_refs,
+        &resource,
+        credential_role,
+    )?;
+    validate_upload_resource(channel, &resource)?;
+    Ok((channel.upload_channel_id.clone(), resource.byte_len))
+}
+
 /// Enforces every bounded upload limit before any network call (plan §R9.5).
 /// 在任何网络调用前强制全部有界上传限制（方案 §R9.5）。
 ///
@@ -1278,8 +1330,7 @@ async fn upload_temporary_oss_object(
         ));
     }
     let canonical = validate_signed_upload_source(channel, resource).await?;
-    let mut policy_url = reqwest::Url::parse(channel_origin_url(channel)?.as_str())
-        .map_err(|error| format!("Temporary OSS policy URL is invalid: {error}"))?;
+    let mut policy_url = channel_origin_url(channel, context.fixture_loopback_origin)?;
     policy_url
         .query_pairs_mut()
         .append_pair("action", "getPolicy")
@@ -1700,9 +1751,24 @@ async fn read_inline_bytes(resource: &UploadResource) -> Result<Vec<u8>, String>
     Ok(bytes)
 }
 
-/// Builds the strict HTTPS origin for one network-bound channel.
-/// 为一个网络绑定通道构建严格 HTTPS 源地址。
-fn channel_origin_url(channel: &crate::UploadChannelDeclaration) -> Result<String, String> {
+/// Builds the strict production HTTPS URL or a validated fixture-only loopback URL.
+/// 构建严格的生产 HTTPS 地址或经校验且仅供夹具使用的回环地址。
+///
+/// # Parameters
+/// 参数
+/// `channel` owns the exact endpoint path and production host; `fixture_loopback_origin` is
+/// accepted only when it is a credential-free HTTP loopback origin with an explicit port.
+/// `channel` 持有精确端点路径与生产宿主；`fixture_loopback_origin` 仅接受带显式端口且
+/// 不含凭据的 HTTP 回环源地址。
+///
+/// # Returns
+/// 返回值
+/// The exact request URL, or a controlled policy error before any network side effect.
+/// 返回精确请求地址，或在任何网络副作用前返回受控策略错误。
+fn channel_origin_url(
+    channel: &crate::UploadChannelDeclaration,
+    fixture_loopback_origin: Option<&str>,
+) -> Result<reqwest::Url, String> {
     let host = channel.endpoint_host.as_deref().ok_or_else(|| {
         format!(
             "Upload channel `{}` has no endpoint host.",
@@ -1715,7 +1781,44 @@ fn channel_origin_url(channel: &crate::UploadChannelDeclaration) -> Result<Strin
             channel.upload_channel_id
         )
     })?;
-    Ok(format!("https://{host}{path}"))
+    if let Some(origin) = fixture_loopback_origin {
+        let mut url = reqwest::Url::parse(origin).map_err(|_| {
+            format!(
+                "Upload channel `{}` fixture origin is invalid.",
+                channel.upload_channel_id
+            )
+        })?;
+        // loopbackHost is parsed as an IP so DNS names cannot redirect fixture credentials.
+        // loopbackHost 按 IP 解析，因此 DNS 名称无法重定向夹具凭据。
+        let loopback_host = url.host_str().and_then(|value| {
+            value
+                .trim_matches(['[', ']'])
+                .parse::<std::net::IpAddr>()
+                .ok()
+        });
+        if url.scheme() != "http"
+            || !loopback_host.is_some_and(|address| address.is_loopback())
+            || url.port().is_none()
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || !matches!(url.path(), "" | "/")
+            || url.query().is_some()
+            || url.fragment().is_some()
+        {
+            return Err(format!(
+                "Upload channel `{}` fixture origin must be a credential-free HTTP loopback origin with an explicit port.",
+                channel.upload_channel_id
+            ));
+        }
+        url.set_path(path);
+        return Ok(url);
+    }
+    reqwest::Url::parse(format!("https://{host}{path}").as_str()).map_err(|error| {
+        format!(
+            "Upload channel `{}` endpoint URL is invalid: {error}",
+            channel.upload_channel_id
+        )
+    })
 }
 
 /// Reads the response identifier and URL through their declared JSON Pointers.
@@ -1878,7 +1981,7 @@ async fn upload_multipart_file(
     for (name, value) in &channel.fixed_fields {
         form = form.text(name.clone(), value.clone());
     }
-    let url = channel_origin_url(channel)?;
+    let url = channel_origin_url(channel, context.fixture_loopback_origin)?;
     let method = channel.method.as_deref().unwrap_or("POST");
     if method != "POST" {
         return Err(format!(
@@ -1956,7 +2059,7 @@ async fn upload_provider_file_create(
             bytes.as_slice(),
         )),
     );
-    let url = channel_origin_url(channel)?;
+    let url = channel_origin_url(channel, context.fixture_loopback_origin)?;
     let method = channel.method.as_deref().unwrap_or("POST");
     if method != "POST" {
         return Err(format!(
@@ -2028,6 +2131,9 @@ fn upload_headers(
             let value = HeaderValue::from_str(&format!("Bearer {token}"))
                 .map_err(|_| String::from("Upload bearer token is not a valid header value."))?;
             headers.insert(reqwest::header::AUTHORIZATION, value);
+            if authentication == crate::AuthenticationProjection::CodingDeviceBearer {
+                crate::execution::insert_coding_device_identity_headers(&mut headers, secret)?;
+            }
         }
         crate::AuthenticationProjection::XApiKey => {
             let token = secret.expose_value();
@@ -2063,6 +2169,56 @@ mod tests {
     use super::*;
     use crate::UploadChannelDeclaration;
     use std::collections::BTreeMap;
+
+    /// Verifies Coding uploads carry the same Kimi device identity as conversation execution.
+    /// 验证 Coding 上传携带与会话执行相同的 Kimi 设备身份。
+    #[test]
+    fn coding_device_upload_headers_include_identity() {
+        // entry and profile select the exact Coding-device authentication projection.
+        // entry 与 profile 选择精确的 Coding 设备鉴权投影。
+        let mut entry = dummy_entry();
+        entry.authentication = crate::AuthenticationProjection::CodingDeviceBearer;
+        let profile = dummy_credential_profile();
+        let secret = crate::CredentialSecretEnvelope::new(
+            crate::CredentialSecretMaterial::KimiCodingPlanOAuth {
+                tokens: crate::OAuthTokenSet {
+                    access_token: String::from("test-access-token"),
+                    refresh_token: String::from("test-refresh-token"),
+                    issued_at_unix_ms: 1,
+                    expires_at_unix_ms: 2,
+                    scopes: Default::default(),
+                    account_subject: None,
+                    email: None,
+                },
+                device_id: String::from("12345678-1234-1234-1234-123456789abc"),
+            },
+        )
+        .expect("Kimi OAuth credential should validate")
+        .execution_secret()
+        .expect("Kimi OAuth execution secret should resolve");
+
+        let headers = upload_headers(&entry, &profile, &secret)
+            .expect("Coding-device upload headers should project");
+
+        assert_eq!(
+            headers
+                .get(reqwest::header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer test-access-token")
+        );
+        assert_eq!(
+            headers
+                .get("x-msh-device-id")
+                .and_then(|value| value.to_str().ok()),
+            Some("12345678-1234-1234-1234-123456789abc")
+        );
+        assert_eq!(
+            headers
+                .get("x-msh-platform")
+                .and_then(|value| value.to_str().ok()),
+            Some("CLIProxyAPI")
+        );
+    }
 
     fn channel(
         primitive: UploadPrimitiveKind,
@@ -2251,6 +2407,7 @@ mod tests {
                 cancellation: &MediaUploadCancellation::new(),
                 model_id: None,
                 workspace_root: None,
+                fixture_loopback_origin: None,
             },
             &image_edit_operation(),
             arguments,
@@ -2296,6 +2453,7 @@ mod tests {
                 cancellation: &MediaUploadCancellation::new(),
                 model_id: None,
                 workspace_root: None,
+                fixture_loopback_origin: None,
             },
             &image_edit_operation(),
             arguments,
@@ -2327,6 +2485,7 @@ mod tests {
                 progress: None,
                 cancellation: &cancellation,
                 model_id: None,
+                fixture_loopback_origin: None,
             },
             &channel,
             &resource,
@@ -2358,6 +2517,7 @@ mod tests {
                 progress: None,
                 cancellation: &cancellation,
                 model_id: None,
+                fixture_loopback_origin: None,
             },
             &channel,
             &resource,
@@ -2479,6 +2639,7 @@ mod tests {
                 progress: None,
                 cancellation: &cancellation,
                 model_id: None,
+                fixture_loopback_origin: None,
             },
             &channel,
             &resource("image/png", 3),
@@ -2684,6 +2845,37 @@ mod tests {
                 .and_then(|value| value.to_str().ok()),
             Some("test-token")
         );
+    }
+
+    /// Verifies a bearer credential profile overrides an entry-level API-key default for Files API uploads.
+    /// 验证 Bearer 凭据配置档会为 Files API 上传覆盖入口级 API Key 默认值。
+    #[test]
+    fn upload_headers_allow_bearer_profile_to_override_entry_api_key_default() {
+        // entry simulates MiniMax's legacy service-level API-key default.
+        // entry 模拟 MiniMax 旧有的服务级 API Key 默认值。
+        let mut entry = dummy_entry();
+        entry.authentication = crate::AuthenticationProjection::XApiKey;
+        // credential_profile freezes the Bearer projection required by the Files API.
+        // credential_profile 冻结 Files API 要求的 Bearer 投影。
+        let mut credential_profile = dummy_credential_profile();
+        credential_profile.authentication =
+            Some(crate::AuthenticationProjection::BearerAuthorization);
+        // secret is the opaque credential material projected by the selected profile.
+        // secret 是由所选配置档投影的不透明凭据材料。
+        let secret = dummy_secret();
+
+        // headers are the final upload-only request headers sent before multipart streaming.
+        // headers 是 Multipart 流式发送前的最终上传专用请求头。
+        let headers = upload_headers(&entry, &credential_profile, &secret)
+            .expect("bearer override must build upload headers");
+
+        assert_eq!(
+            headers
+                .get(reqwest::header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer test-token")
+        );
+        assert!(!headers.contains_key("x-api-key"));
     }
 
     /// Verifies a resource with an unknown MIME is rejected even when a channel declares no

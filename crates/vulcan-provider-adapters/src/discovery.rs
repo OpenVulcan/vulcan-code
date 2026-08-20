@@ -17,7 +17,7 @@ use vulcan_ai_contract::{
     EmbeddingNormalization, EmbeddingOutputKind, EmbeddingTask, ModelCapabilities,
     ModelParameterDefault, ModelParameterDefinition, ModelParameterSchema, PromptCacheCapability,
     ReasoningControlMode, ReasoningEffort, RerankCapabilities, RerankScoreSemantics,
-    RerankTruncation, ResourceKind,
+    RerankTruncation, ResourceKind, StructuredOutputCapability,
 };
 #[cfg(test)]
 use vulcan_ai_protocols::ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID;
@@ -455,6 +455,9 @@ fn merge_model_capability_evidence(
     if source.output_modalities_declared {
         target.output_modalities_declared = true;
         target.supports_text_output = source.supports_text_output;
+    }
+    if source.structured_output_declared {
+        target.structured_output_declared = true;
     }
 }
 
@@ -1304,6 +1307,7 @@ pub fn parse_openai_model_catalog(
                 output_limit_declared: model.max_output_tokens.is_some(),
                 input_modalities_declared: model.input_modalities.is_some(),
                 output_modalities_declared: model.output_modalities.is_some(),
+                structured_output_declared: false,
                 supports_text_input: model
                     .input_modalities
                     .as_ref()
@@ -1762,7 +1766,7 @@ fn enrich_kimi_model(service_entry_id: &str, protocol_id: &str, model: &mut Conn
             CapabilitySupport::Unknown,
             ReasoningControlMode::Unknown,
             Vec::new(),
-            vec![ResourceKind::Image],
+            vec![ResourceKind::Image, ResourceKind::Video],
         ),
         (_, "kimi-k2.5") => (
             "Kimi K2.5",
@@ -2566,6 +2570,7 @@ fn openrouter_reported_capabilities(model: &OpenRouterModelEntry) -> ModelCapabi
             .collect(),
         input_resources,
         output_resources,
+        structured_output: StructuredOutputCapability::JsonObject,
         embedding: None,
         rerank: None,
         reasoning,
@@ -2609,6 +2614,7 @@ fn openrouter_capability_evidence(model: &OpenRouterModelEntry) -> ModelCapabili
             .is_some_and(|architecture| architecture.input_modalities.is_some()),
         output_modalities_declared: architecture
             .is_some_and(|architecture| architecture.output_modalities.is_some()),
+        structured_output_declared: false,
         supports_text_input: architecture
             .and_then(|architecture| architecture.input_modalities.as_ref())
             .map(|modalities| modalities.iter().any(|modality| modality == "text")),
@@ -3615,10 +3621,14 @@ mod tests {
                 .operations
                 .contains(&AiOperation::ConversationRespond)
         );
+        assert_eq!(
+            capabilities.structured_output,
+            vulcan_ai_contract::StructuredOutputCapability::JsonSchema
+        );
         assert!(
             capabilities
                 .evidence_revision
-                .contains("anthropic.default-capabilities.v1+discovery:")
+                .contains("anthropic.default-capabilities.v2+discovery:")
         );
     }
 
@@ -3766,7 +3776,7 @@ mod tests {
             minimax,
             "global",
             None,
-            "anthropic-messages.v1",
+            ANTHROPIC_MESSAGES_PROFILE_ID,
             &mut model
         ));
         assert_eq!(

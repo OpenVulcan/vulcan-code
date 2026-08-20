@@ -358,6 +358,13 @@ LLM 运行时只冻结连接、秘密引用、模型、协议和路由，不把�
 生产消费者只依据 provenance 中确实出现的字段应用补丁，不能用 `Unknown`、空数组或 `None` 猜测
 作者是否想覆盖。
 
+`capability_patch.structured_output` 使用封闭三态：`json_object`、`json_schema`、`unsupported`。
+省略继续遵循 presence 继承；全部层均未声明时，运行时基线为 `json_object`。只有官方或真实请求证据
+明确证明精确模型路由不支持稳定 JSON 时才写 `unsupported`，不得把远端目录省略字段解释成不支持。
+`json_schema` 表示请求可以携带精确 Schema，`json_object` 表示只能约束为 JSON 对象；两者都会在宿主
+再次执行固定 Schema 校验。该能力可被用户模型能力覆盖，因此 Manifest 只声明系统事实，不负责用户
+是否允许该模型进入多模态理解候选列表。
+
 模型规则中的 `usage_profile_refs`、`request_profile_refs`、`response_profile_refs` 与
 `operation_refs` 同样遵循上述 presence 语义。显式空 `usage_profile_refs` 清除供应商专属统计特例
 后仍恢复所选协议的标准 usage 基线；显式空 request/response/operation 引用则清为空集合。若只是要
@@ -487,6 +494,21 @@ signed_object_upload
 4. 模型规则通过 `operation_refs` 或 capabilities 声明模型支持的功能；
 5. fixtures 验证参数映射、请求、轮询/取消和规范化输出。
 
+图片、视频、音频理解使用额外的固定宿主外壳。`image_understand`、`video_understand`、
+`audio_understand` 暴露给 AI 的参数永远分别只有一个本地媒体路径和 `prompt`；Manifest 中的
+`tool_targets[].input_schema` 只描述供应商内部规范参数。每个媒体理解目标必须声明
+`media_input_projection`，显式给出：
+
+- `path_field`：内部目标接收媒体路径或路径数组的字段；
+- `prompt_field`：内部目标接收提示词的字段；
+- `path_as_single_item_array`：内部字段是否要求单元素数组；
+- `fixed_arguments`：最多 16 个宿主持有的固定参数，不能与路径或提示词字段冲突。
+
+媒体投影只能出现在三项理解 Target 上，三项理解 Target 缺失投影会在 Manifest 激活时失败关闭。
+模式、目标、账号、模型或思考级别切换只替换宿主执行闭包，不能改变工具 ID 或 AI 可见 Schema。
+供应商返回纯文本时，宿主统一包装为 `vulcan.media-understanding.v1`；普通会话模型代替模式则必须按
+其 `structured_output` 能力请求 JSON，并通过同一结果 Schema 的宿主二次校验。
+
 Upload 在任何网络副作用之前完成全部资源预检。网络通道必须使用允许的 HTTPS 宿主和绝对安全
 路径；每个通道必须声明精确 MIME 允许列表及有界数量，本地字节通道还必须声明有界字节数，
 网络通道必须声明 `timeout_ms`，其截止时间覆盖签名握手、文件传输与响应解码的完整生命周期。
@@ -494,6 +516,9 @@ Upload 在任何网络副作用之前完成全部资源预检。网络通道必�
 `remote_url_host_suffixes` 声明精确宿主或点前缀子域后缀。资源上限不能由远端更新放宽。签名上传
 没有已注册签名原语时必须失败，不能猜签名算法。Multipart/File Create 的 method、file field、
 响应 JSON Pointer、引用模板、固定字段冲突和缓存时长均在激活前闭合验证，不留到请求期猜测。
+上传通道支持上传进度时必须声明 `progress_supported=true`；支持中断底层传输时同时声明
+`cancellation_supported=true`。宿主以实际读取或发送字节发布 Preparing、Uploading、Completed、
+Failed、Cancelled 终态；上传 Future 被取消或所属运行结束时也必须产生终态，不能留下永久活动的进度条。
 
 每项操作从凭据解析与上传准备开始共享一个不可重置的绝对截止时间；同步请求与响应读取均受该
 截止时间约束。异步任务冻结完整 target/operation/upload/credential/generation 快照。恢复、轮询与取消使用同一

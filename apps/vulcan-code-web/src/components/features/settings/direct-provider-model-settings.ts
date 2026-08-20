@@ -21,6 +21,7 @@ export function resolveDirectCustomProviderDefaults(
     context_limit: source.context_limit,
     output_limit: source.output_limit,
     input_resources: [...(source.input_resources ?? [])],
+    structured_output: source.structured_output,
     reasoning: source.reasoning,
     reasoning_control: source.reasoning_control,
     reasoning_efforts: [...source.reasoning_efforts],
@@ -63,6 +64,7 @@ export function directCustomModelSettingsDraft(row: CustomProviderModelRow): Pub
     context_limit: row.capabilityOverrides?.context_limit ?? capabilities?.context_limit ?? 200_000,
     output_limit: row.capabilityOverrides?.output_limit ?? capabilities?.output_limit ?? 32_768,
     input_resources: row.capabilityOverrides?.input_resources ?? capabilities?.input_resources ?? [],
+    structured_output: row.capabilityOverrides?.structured_output ?? capabilities?.structured_output ?? "json_object",
     reasoning: reasoningEnabled ? "native" : "unsupported",
     reasoning_control: reasoningEnabled ? "effort_selection" : "fixed_off",
     reasoning_efforts: reasoningEnabled
@@ -92,6 +94,7 @@ function normalizeDirectProviderModelSettings(settings: PublicAiModelCapabilityO
     contextLimit: settings.context_limit ?? null,
     outputLimit: settings.output_limit ?? null,
     inputResources: [...(settings.input_resources ?? [])].sort(),
+    structuredOutput: settings.structured_output ?? null,
     reasoning: settings.reasoning ?? null,
     reasoningControl: settings.reasoning_control ?? null,
     reasoningEfforts: [...(settings.reasoning_efforts ?? [])].sort(),

@@ -2,6 +2,7 @@ import type {
   CommandSessionSummary,
   ComposerAttachmentSummary,
   PendingPromptSummary,
+  ContextCompactionWindowNodeId,
   SessionAddonsChangedResponse,
   SessionGoalUserStatusUpdate,
   SubagentPanelRouteResponse,
@@ -467,6 +468,23 @@ export async function setSessionOutputStyle(
     request: {
       conversationId,
       styleId,
+    },
+  });
+}
+
+// setSessionContextCompactionWindow persists one stable node id or clears the session lock.
+// setSessionContextCompactionWindow 持久化一个稳定节点标识，或清除会话锁定。
+export async function setSessionContextCompactionWindow(
+  conversationId: string | null,
+  nodeId: ContextCompactionWindowNodeId | null,
+): Promise<SessionAddonsChangedResponse | null> {
+  if (!hasServiceRuntime() || !conversationId) {
+    return null;
+  }
+  return serviceClient.request<SessionAddonsChangedResponse>("service_set_session_context_compaction_window", {
+    request: {
+      conversationId,
+      nodeId,
     },
   });
 }

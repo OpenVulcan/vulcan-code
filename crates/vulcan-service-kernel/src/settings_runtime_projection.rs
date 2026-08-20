@@ -483,7 +483,9 @@ pub(crate) fn refresh_settings_projection_locked(
     guard: &mut ServiceBridgeState,
     provider_configuration: &ProviderConfigurationFile,
 ) {
-    let public_model_capabilities = guard.agent_runtime.as_ref().and_then(|agent_runtime| {
+    // publicAiSelection retains both capability and exact protocol facts for composer projection.
+    // publicAiSelection 为输入区投影同时保留能力与精确协议事实。
+    let public_ai_selection = guard.agent_runtime.as_ref().and_then(|agent_runtime| {
         let configuration = agent_runtime
             .public_ai_runtime
             .configuration_snapshot()
@@ -492,9 +494,13 @@ pub(crate) fn refresh_settings_projection_locked(
             .public_ai_runtime
             .resolve_active_selection(&configuration)
             .ok()
-            .map(|selection| selection.model.capabilities)
     });
-    let bridged_image_understanding = guard
+    // publicModelCapabilities belongs to the exact active selection.
+    // publicModelCapabilities 属于精确活动选择。
+    let public_model_capabilities = public_ai_selection
+        .as_ref()
+        .map(|selection| selection.model.capabilities.clone());
+    let bridged_media_kinds = guard
         .agent_runtime
         .as_ref()
         .and_then(|agent_runtime| {
@@ -507,14 +513,14 @@ pub(crate) fn refresh_settings_projection_locked(
                     .session_runtime_state
                     .get(&workspace.selected_session)
             });
-            crate::public_ai_settings::public_ai_session_has_image_understanding_bridge(
+            crate::public_ai_settings::public_ai_session_media_understanding_bridge_kinds(
                 agent_runtime.public_ai_runtime.as_ref(),
                 &configuration,
                 runtime_state,
             )
             .ok()
         })
-        .unwrap_or(false);
+        .unwrap_or_default();
     guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
     guard.workbench.revision = guard.workbench_generation;
     guard.workbench.ui_locale = provider_configuration.ui_locale.clone();
@@ -537,8 +543,11 @@ pub(crate) fn refresh_settings_projection_locked(
     guard.workbench.host_tools = host_tools_settings(provider_configuration);
     guard.workbench.output_style_catalog = output_style_catalog_summary(provider_configuration);
     guard.workbench.composer_attachment_capabilities = composer_attachment_capabilities(
+        public_ai_selection
+            .as_ref()
+            .map(|selection| selection.route.protocol_route.protocol_profile_id.as_str()),
         public_model_capabilities.as_ref(),
-        bridged_image_understanding,
+        &bridged_media_kinds,
     );
 }
 
@@ -613,9 +622,10 @@ pub(crate) fn sync_workbench_runtime_control_fields_locked(
                 .get(&workspace.selected_session),
             &guard.live_context_budgets,
             public_model_capabilities.as_ref(),
+            None,
         )
     });
-    let bridged_image_understanding = guard
+    let bridged_media_kinds = guard
         .agent_runtime
         .as_ref()
         .and_then(|agent_runtime| {
@@ -628,14 +638,14 @@ pub(crate) fn sync_workbench_runtime_control_fields_locked(
                     .session_runtime_state
                     .get(&workspace.selected_session)
             });
-            crate::public_ai_settings::public_ai_session_has_image_understanding_bridge(
+            crate::public_ai_settings::public_ai_session_media_understanding_bridge_kinds(
                 agent_runtime.public_ai_runtime.as_ref(),
                 &configuration,
                 runtime_state,
             )
             .ok()
         })
-        .unwrap_or(false);
+        .unwrap_or_default();
     if let Some(agent_runtime) = guard.agent_runtime.as_ref()
         && let Ok(configuration) = agent_runtime.public_ai_runtime.configuration_snapshot()
         && let Ok(rows) = public_ai_provider_rows_for_selection(
@@ -649,8 +659,11 @@ pub(crate) fn sync_workbench_runtime_control_fields_locked(
     guard.workbench.reasoning_selection =
         reasoning_selection(provider_configuration, public_model_capabilities.as_ref());
     guard.workbench.composer_attachment_capabilities = composer_attachment_capabilities(
+        effective_public_ai_selection
+            .as_ref()
+            .map(|selection| selection.route.protocol_route.protocol_profile_id.as_str()),
         public_model_capabilities.as_ref(),
-        bridged_image_understanding,
+        &bridged_media_kinds,
     );
     guard.workbench.context_usage = context_usage;
 }

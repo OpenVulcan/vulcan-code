@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import type { PublicAiProviderToolTargetSnapshot } from "@/types";
-import { uniqueProviderToolModels } from "./provider-tool-selection-settings";
+import {
+  mediaUnderstandingCapabilityToggleDisabled,
+  providerToolModelKey,
+  uniqueProviderToolModels,
+} from "./provider-tool-selection-settings";
 
 // targetFixture builds one account-expanded image target for grouping regression tests.
 // targetFixture 为分组回归测试构建一个按账号展开的图片目标。
@@ -9,6 +13,7 @@ function targetFixture(
   connectionId: string,
   targetId: string,
   displayName: string,
+  providerId = "provider",
 ): PublicAiProviderToolTargetSnapshot {
   return {
     connectionId,
@@ -16,7 +21,7 @@ function targetFixture(
     manifestSourceLayer: "bundled",
     target: {
       target_id: targetId,
-      provider_id: "provider",
+      provider_id: providerId,
       service_entry_id: "entry",
       credential_profile_ids: ["profile"],
       upstream_target_id: targetId,
@@ -48,5 +53,26 @@ describe("uniqueProviderToolModels", () => {
       "entry.image-01",
       "entry.image-02",
     ]);
+  });
+
+  it("keeps identical upstream target ids from different providers distinct", () => {
+    const models = uniqueProviderToolModels([
+      targetFixture("account-a", "video-understanding", "Video", "provider-a"),
+      targetFixture("account-b", "video-understanding", "Video", "provider-b"),
+    ]);
+
+    expect(models).toHaveLength(2);
+    expect(new Set(models.map(providerToolModelKey)).size).toBe(2);
+  });
+});
+
+describe("mediaUnderstandingCapabilityToggleDisabled", () => {
+  it("allows an enabled stale capability to be turned off when its backend disappears", () => {
+    expect(mediaUnderstandingCapabilityToggleDisabled(false, false, true)).toBe(false);
+  });
+
+  it("blocks new enablement without a backend and every concurrent mutation", () => {
+    expect(mediaUnderstandingCapabilityToggleDisabled(false, false, false)).toBe(true);
+    expect(mediaUnderstandingCapabilityToggleDisabled(true, true, true)).toBe(true);
   });
 });

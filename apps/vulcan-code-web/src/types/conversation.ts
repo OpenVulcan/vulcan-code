@@ -16,6 +16,7 @@ import type {
 } from "./planning-questions";
 import type { CommandSessionSummary, ContextInjectionSnapshot, ContextUsageSnapshot } from "./runtime-context";
 import type { ProjectSummary } from "./projects-files";
+import type { ContextCompactionWindowNodeId } from "./public-ai";
 import type { ConversationHydrationProgress } from "./workbench";
 
 // ConversationRunOutcome identifies the strict terminal result of a settled run.
@@ -441,6 +442,9 @@ export interface SessionAddonsChangedDelta {
   // Current output-style override and the last safely applied snapshot.
   // 当前会话输出风格覆盖与最近一次安全应用的快照。
   sessionOutputStyle?: SessionOutputStyleSummary | null;
+  // Stable context-compaction window node selected by this session.
+  // 当前会话选择的稳定上下文压缩窗口节点。
+  sessionContextCompactionWindowNodeId?: ContextCompactionWindowNodeId | null;
   // Live physical Provider request counts and token usage.
   // 实时物理 Provider 请求计数与 Token 用量。
   sessionProviderUsage?: SessionProviderUsageSummary | null;
@@ -739,11 +743,11 @@ export interface LuaSkillsManagedRuntimeProgressChangedDelta {
   progress: LuaSkillsManagedRuntimeProgressSummary | null;
 }
 
-// MediaUploadProgressChangedDelta describes ephemeral bytes prepared before the prompt is sent.
-// MediaUploadProgressChangedDelta 描述提示词发送前准备的临时媒体字节进度。
+// MediaUploadProgressChangedDelta describes ephemeral bytes transferred before dispatch or by a running media tool.
+// MediaUploadProgressChangedDelta 描述分派前或运行中媒体工具传输的临时字节进度。
 export interface MediaUploadProgressChangedDelta {
-  // Client-generated submission identity used by the cancel action.
-  // 用于取消动作的客户端提交标识。
+  // Unique transfer identity; cancellable pre-dispatch transfers reuse the client submission identity.
+  // 唯一传输标识；可取消的分派前传输复用客户端提交标识。
   clientSubmissionId: string;
   // Existing conversation id, or null while a draft is being prepared.
   // 已有会话标识；草稿准备期间为空。
@@ -772,6 +776,9 @@ export interface MediaUploadProgressChangedDelta {
   bytesSent: number;
   totalBytes?: number | null;
   error?: string | null;
+  // Whether this active transfer accepts the cancellation action.
+  // 当前活动传输是否接受取消动作。
+  cancellable?: boolean;
 }
 
 // ToolRequestProgressSnapshot describes one safe replace-in-place argument-formation snapshot.

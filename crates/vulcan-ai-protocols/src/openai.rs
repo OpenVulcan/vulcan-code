@@ -1712,6 +1712,45 @@ mod tests {
         assert_eq!(encoded.body["stream_options"]["include_usage"], true);
     }
 
+    /// Verifies provider-uploaded Kimi and MiniMax videos use the OpenAI-compatible video URL block.
+    /// 验证供应商已上传的 Kimi 与 MiniMax 视频使用 OpenAI 兼容 video URL 内容块。
+    #[test]
+    fn chat_completions_encodes_provider_video_references() {
+        // references are the two reviewed provider-native uploaded-file URI schemes.
+        // references 是两个已审核供应商原生上传文件 URI 协议。
+        let references = ["ms://file-kimi", "mm_file://file-minimax"];
+        for reference in references {
+            // request carries one already prepared video reference into protocol projection.
+            // request 将一个已完成准备的视频引用带入协议投影。
+            let mut request = codex_request();
+            request.messages[1].content.push(ContentItem::Resource {
+                resource: ResourceReference {
+                    id: String::from("video-1"),
+                    kind: ResourceKind::Video,
+                    media_type: Some(String::from("video/mp4")),
+                    source_kind: vulcan_ai_contract::ResourceSourceKind::HostResolved,
+                    file_name: Some(String::from("clip.mp4")),
+                    image_detail: None,
+                    local_path: None,
+                    url: Some(String::from(reference)),
+                },
+            });
+
+            // encoded is the exact OpenAI Chat wire request sent to the selected provider route.
+            // encoded 是发送到所选供应商路由的精确 OpenAI Chat Wire 请求。
+            let encoded = OpenAiChatProfile
+                .encode(&request)
+                .expect("provider video reference should encode");
+            assert_eq!(
+                encoded.body["messages"][1]["content"][1],
+                json!({
+                    "type": "video_url",
+                    "video_url": { "url": reference },
+                })
+            );
+        }
+    }
+
     /// Verifies every OpenAI request profile emits extra-high reasoning only as `xhigh`.
     /// 验证所有 OpenAI 请求 Profile 仅以 `xhigh` 发出超高推理档位。
     #[test]

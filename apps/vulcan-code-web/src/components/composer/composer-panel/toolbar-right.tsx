@@ -7,7 +7,11 @@ import {
 import type { ComposerSelectOption } from "@/components/composer/composer-model";
 import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
-import type { ContextUsageSnapshot } from "@/types";
+import type {
+  ContextCompactionWindowNodeId,
+  ContextUsageSnapshot,
+  PublicAiContextCompactionWindowNode,
+} from "@/types";
 
 // ComposerPanelToolbarRightProps carries the send/stop and reasoning controls for the composer toolbar.
 // ComposerPanelToolbarRightProps 承载输入区工具栏的发送/停止与推理控件。
@@ -27,6 +31,15 @@ export interface ComposerPanelToolbarRightProps {
   // Current context usage snapshot.
   // 当前上下文用量快照。
   contextUsage: ContextUsageSnapshot | null;
+  // Fixed context-compaction nodes projected by the backend.
+  // 后端投影出的固定上下文压缩节点。
+  contextCompactionWindowNodes: PublicAiContextCompactionWindowNode[];
+  // Stable node selected by the current session.
+  // 当前会话选择的稳定节点。
+  sessionContextCompactionWindowNodeId: ContextCompactionWindowNodeId | null;
+  // Hard context limit declared by the active model.
+  // 当前模型声明的硬上下文窗口。
+  modelContextLimit: number | null;
   // Whether the selected conversation is running.
   // 当前选中会话是否正在运行。
   isConversationRunning: boolean;
@@ -51,6 +64,9 @@ export interface ComposerPanelToolbarRightProps {
   // Handler for reasoning effort changes.
   // 推理强度变化处理器。
   onReasoningEffortChange: (value: string) => void;
+  // Persists or clears one session context-compaction window node.
+  // 持久化或清除一个会话上下文压缩窗口节点。
+  onSetSessionContextCompactionWindow: (nodeId: ContextCompactionWindowNodeId | null) => Promise<boolean>;
   // Handler that sends or stops according to current composer state.
   // 根据当前输入区状态发送或停止的处理器。
   onSend: () => void;
@@ -67,7 +83,14 @@ export function ComposerPanelToolbarRight(props: ComposerPanelToolbarRightProps)
   const stopOnly = props.isConversationRunning && !draftHasContent && !hasAttachments;
   return (
     <div className="composer-toolbar-right">
-      <ContextUsageOrb snapshot={props.contextUsage} />
+      <ContextUsageOrb
+        contextCompactionWindowNodes={props.contextCompactionWindowNodes}
+        disabled={props.isConversationRunning}
+        modelContextLimit={props.modelContextLimit}
+        onNodeChange={props.onSetSessionContextCompactionWindow}
+        selectedNodeId={props.sessionContextCompactionWindowNodeId}
+        snapshot={props.contextUsage}
+      />
       {props.reasoningEffortOptions.length > 0 ? (
         <ComposerSelectControl
           ariaLabel={props.reasoningAriaLabel}

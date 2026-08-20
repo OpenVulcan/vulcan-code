@@ -159,6 +159,10 @@ pub struct SessionRuntimeStateEntry {
     /// 最近一次接受的回合边界所冻结的完整上下文窗口策略。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_context_window_policy: Option<ContextWindowPolicy>,
+    /// Stable context-compaction window node selected only for this session.
+    /// 仅为当前会话选择的稳定上下文压缩窗口节点。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_compaction_window_node_id: Option<ContextCompactionWindowNodeId>,
     /// Last reasoning-effort preset selected while this session was active.
     /// 最近一次该会话激活时选择的推理档位预设。
     #[serde(default, skip_serializing_if = "Option::is_none")]

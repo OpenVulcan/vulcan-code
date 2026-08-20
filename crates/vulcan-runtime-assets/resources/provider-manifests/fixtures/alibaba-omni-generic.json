@@ -32,6 +32,12 @@
       },
       "required": ["task", "media_paths"]
     },
+    "media_input_projection": {
+      "path_field": "media_paths",
+      "prompt_field": "instruction",
+      "path_as_single_item_array": true,
+      "fixed_arguments": {"task": "question_answer"}
+    },
     "output": {
       "kind": "text",
       "source_path": "/text",

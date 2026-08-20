@@ -4,6 +4,11 @@
 use crate::attachment_assets::{
     attachment_descriptor_from_mime_type, stage_attachment_bytes, stage_attachment_file_streaming,
 };
+use crate::media_understanding::{
+    build_model_replacement_media_candidate, media_understanding_input_schema,
+    media_understanding_tool_id, project_media_understanding_arguments,
+    render_media_understanding_provider_result,
+};
 use futures_util::StreamExt;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -12,9 +17,10 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 use vulcan_provider_adapters::{
-    AvailableProviderToolTarget, ManifestSourceLayer, PersistedAiConfiguration,
-    ProviderToolCapabilityKind, ProviderToolExecutionResult, ProviderToolNormalizedOutput,
-    ProviderToolResourceDownloadPolicy, ProviderToolTargetSelection, PublicAiRuntime,
+    AvailableProviderToolTarget, ManifestSourceLayer, MediaUnderstandingBackendSelection,
+    PersistedAiConfiguration, ProviderToolCapabilityKind, ProviderToolExecutionResult,
+    ProviderToolNormalizedOutput, ProviderToolResourceDownloadPolicy, ProviderToolTargetSelection,
+    PublicAiRuntime,
 };
 use vulcan_tools_manager::{
     VulcanPlanToolPolicy, VulcanToolCandidate, VulcanToolDescriptor, VulcanToolHostResult,
@@ -137,6 +143,7 @@ pub(crate) fn build_provider_tool_candidates(
             vulcan_workbench_model::SessionProviderToolTargetSelection,
         >,
     >,
+    session_enabled_capabilities: &Option<BTreeSet<String>>,
     session_extension_target_sets: &Option<
         BTreeMap<String, BTreeSet<vulcan_workbench_model::SessionProviderToolTargetSelection>>,
     >,
@@ -145,11 +152,18 @@ pub(crate) fn build_provider_tool_candidates(
     apply_session_provider_tool_selections(
         &mut configuration,
         session_selections,
+        session_enabled_capabilities,
         session_extension_target_sets,
     )?;
+    validate_enabled_media_understanding_backends(&configuration)?;
     let available = runtime.available_provider_tool_targets(&configuration)?;
     let mut candidates = Vec::new();
     for (capability, selection) in &configuration.provider_tool_selections {
+        if media_understanding_tool_id(*capability).is_some() {
+            return Err(format!(
+                "Media-understanding capability `{capability:?}` cannot use the legacy direct-selection store; configure its dedicated global backend."
+            ));
+        }
         if !capability.is_direct_selection() {
             return Err(format!(
                 "Provider tool capability `{capability:?}` cannot use the direct-selection store."
@@ -187,6 +201,70 @@ pub(crate) fn build_provider_tool_candidates(
             selected,
         ));
     }
+    // mediaUnderstandingSelections is a closed provider-tool or model-replacement union that
+    // never changes the three AI-facing tool schemas.
+    // mediaUnderstandingSelections 是封闭的供应商工具或模型代替联合类型，绝不改变三个 AI 可见工具 Schema。
+    for (capability, backend) in configuration.media_understanding_selections.clone() {
+        if media_understanding_tool_id(capability).is_none() {
+            return Err(format!(
+                "Non-media capability `{capability:?}` cannot use the media-understanding backend store."
+            ));
+        }
+        if !configuration
+            .provider_tool_enabled_capabilities
+            .contains(&capability)
+        {
+            continue;
+        }
+        match backend {
+            MediaUnderstandingBackendSelection::ProviderTool { selection } => {
+                // selected is the exact currently available credential target retained by settings.
+                // selected 是设置保留的当前精确可用凭据目标。
+                let selected = available
+                    .iter()
+                    .find(|candidate| {
+                        candidate.connection_id == selection.connection_id
+                            && candidate.target.target_id == selection.target_id
+                            && candidate.target.contract.capability == capability
+                    })
+                    .cloned()
+                    .ok_or_else(|| {
+                        format!(
+                            "Media-understanding capability `{capability:?}` retains unavailable target `{}` through account `{}`; select a valid model and account before sending.",
+                            selection.target_id, selection.connection_id
+                        )
+                    })?;
+                candidates.push(build_direct_provider_tool_candidate(
+                    Arc::clone(&runtime),
+                    configuration.clone(),
+                    workspace_root.clone(),
+                    selected,
+                ));
+            }
+            MediaUnderstandingBackendSelection::ModelReplacement {
+                selection,
+                reasoning_effort,
+            } => {
+                if !configuration.multimodal_understanding_candidate_is_enabled(
+                    selection.provider_id.as_str(),
+                    selection.model_id.as_str(),
+                ) {
+                    return Err(format!(
+                        "Provider `{}` model `{}` is not enabled as a multimodal understanding candidate.",
+                        selection.provider_id, selection.model_id
+                    ));
+                }
+                candidates.push(build_model_replacement_media_candidate(
+                    Arc::clone(&runtime),
+                    configuration.clone(),
+                    workspace_root.clone(),
+                    capability,
+                    selection,
+                    reasoning_effort,
+                )?);
+            }
+        }
+    }
     let extension_catalog = Arc::new(build_selected_model_extension_catalog(
         &configuration,
         &available,
@@ -204,6 +282,41 @@ pub(crate) fn build_provider_tool_candidates(
         ));
     }
     Ok(candidates)
+}
+
+/// Validates that every enabled fixed media facade has one configured global backend.
+/// 校验每个已启用固定媒体外壳均具有一个已配置全局后端。
+///
+/// # Parameters
+/// 参数
+/// `configuration` is the per-turn configuration after session enable switches are applied.
+/// `configuration` 是应用会话启用开关后的当前回合配置。
+///
+/// # Returns
+/// 返回值
+/// Success when every enabled media capability has one backend, or an explicit configuration error.
+/// 每个已启用媒体能力均具有一个后端时返回成功，否则返回明确配置错误。
+fn validate_enabled_media_understanding_backends(
+    configuration: &PersistedAiConfiguration,
+) -> Result<(), String> {
+    for capability in [
+        ProviderToolCapabilityKind::ImageUnderstand,
+        ProviderToolCapabilityKind::VideoUnderstand,
+        ProviderToolCapabilityKind::AudioUnderstand,
+    ] {
+        if configuration
+            .provider_tool_enabled_capabilities
+            .contains(&capability)
+            && !configuration
+                .media_understanding_selections
+                .contains_key(&capability)
+        {
+            return Err(format!(
+                "Media-understanding capability `{capability:?}` is enabled but has no configured global backend."
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Builds the exact selected native target catalog behind stable extension tools.
@@ -400,7 +513,13 @@ fn build_model_extension_executor_candidate(
                         workspace_root.as_deref(),
                     )
                     .await?;
-                let rendered = render_provider_tool_result(workspace_root.as_deref(), result).await;
+                // rendered uses one canonical media result shape for understanding capabilities.
+                // rendered 为理解能力使用统一规范媒体结果形态。
+                let rendered = if media_understanding_tool_id(capability).is_some() {
+                    render_media_understanding_provider_result(capability, result)
+                } else {
+                    render_provider_tool_result(workspace_root.as_deref(), result).await
+                };
                 cancellation_guard.disarm();
                 rendered
             })
@@ -688,12 +807,14 @@ fn apply_session_provider_tool_selections(
             vulcan_workbench_model::SessionProviderToolTargetSelection,
         >,
     >,
+    session_enabled_capabilities: &Option<BTreeSet<String>>,
     session_extension_target_sets: &Option<
         BTreeMap<String, BTreeSet<vulcan_workbench_model::SessionProviderToolTargetSelection>>,
     >,
 ) -> Result<(), String> {
-    if let Some(session_selections) = session_selections {
-        configuration.provider_tool_selections = session_selections
+    match (session_selections, session_enabled_capabilities) {
+        (Some(session_selections), Some(session_enabled_capabilities)) => {
+            configuration.provider_tool_selections = session_selections
             .iter()
             .map(|(capability, selection)| {
                 let capability: ProviderToolCapabilityKind =
@@ -702,6 +823,11 @@ fn apply_session_provider_tool_selections(
                             "Session provider tool capability `{capability}` is invalid: {error}"
                         )
                     })?;
+                if media_understanding_tool_id(capability).is_some() {
+                    return Err(format!(
+                        "Session media-understanding capability `{capability:?}` cannot select a backend; configure the dedicated global backend and retain only the session enable switch."
+                    ));
+                }
                 if !capability.is_direct_selection() {
                     return Err(format!(
                         "Session capability `{capability:?}` cannot use the direct-selection store."
@@ -716,11 +842,30 @@ fn apply_session_provider_tool_selections(
                 ))
             })
             .collect::<Result<_, String>>()?;
-        configuration.provider_tool_enabled_capabilities = configuration
-            .provider_tool_selections
-            .keys()
-            .copied()
-            .collect();
+            configuration.provider_tool_enabled_capabilities = session_enabled_capabilities
+            .iter()
+            .map(|capability| {
+                let capability: ProviderToolCapabilityKind =
+                    serde_json::from_value(Value::String(capability.clone())).map_err(|error| {
+                        format!(
+                            "Session provider tool capability `{capability}` is invalid: {error}"
+                        )
+                    })?;
+                if !capability.is_direct_selection() {
+                    return Err(format!(
+                        "Session capability `{capability:?}` cannot use the direct enabled-capability store."
+                    ));
+                }
+                Ok(capability)
+            })
+            .collect::<Result<_, String>>()?;
+        }
+        (None, None) => {}
+        _ => {
+            return Err(String::from(
+                "Session provider tool selections and enabled capabilities must be supplied together.",
+            ));
+        }
     }
     if let Some(session_extension_target_sets) = session_extension_target_sets {
         configuration.provider_extension_target_sets = session_extension_target_sets
@@ -761,25 +906,47 @@ fn apply_session_provider_tool_selections(
 ///
 /// # Returns
 /// 返回值
-/// An AI-host binding with the selected model's unmodified input schema.
-/// 返回使用选定模型未修改输入 Schema 的 AI 宿主绑定。
+/// An AI-host binding with an invariant media schema or the selected non-media target schema.
+/// 返回采用不变媒体 Schema 或所选非媒体目标 Schema 的 AI 宿主绑定。
 fn build_direct_provider_tool_candidate(
     runtime: Arc<PublicAiRuntime>,
     configuration: PersistedAiConfiguration,
     workspace_root: Option<PathBuf>,
     selected: AvailableProviderToolTarget,
 ) -> VulcanToolCandidate {
+    // targetSelection freezes the exact target and credential independently from mutable defaults.
+    // targetSelection 独立于可变默认值冻结精确目标与凭据。
+    let target_selection = ProviderToolTargetSelection {
+        connection_id: selected.connection_id.clone(),
+        target_id: selected.target.target_id.clone(),
+    };
+    // contract remains the internal provider-native execution contract.
+    // contract 保持为内部供应商原生执行契约。
     let contract = selected.target.contract.clone();
+    // capability chooses whether the AI-facing facade must remain media-invariant.
+    // capability 选择 AI 可见外壳是否必须保持媒体不变。
     let capability = contract.capability;
+    // toolId never changes when an understanding backend or provider target changes.
+    // toolId 在理解后端或供应商目标切换时永不变化。
+    let tool_id = media_understanding_tool_id(capability)
+        .map(str::to_owned)
+        .unwrap_or_else(|| contract.tool_id.clone());
+    // parametersSchema hides provider and model controls for every understanding tool.
+    // parametersSchema 为全部理解工具隐藏供应商与模型控件。
+    let parameters_schema = media_understanding_input_schema(capability)
+        .unwrap_or_else(|| contract.input_schema.clone());
+    // mediaInputProjection is mandatory internal configuration for a fixed media facade.
+    // mediaInputProjection 是固定媒体外壳必需的内部配置。
+    let media_input_projection = contract.media_input_projection.clone();
     VulcanToolCandidate {
         descriptor: VulcanToolDescriptor {
-            id: contract.tool_id.clone(),
-            name: contract.tool_id,
+            id: tool_id.clone(),
+            name: tool_id,
             description: contract.description,
             help_text: None,
             source: VulcanToolSourceKind::AiHostBinding,
         },
-        parameters_schema: contract.input_schema,
+        parameters_schema,
         ai_visible: true,
         plan_policy: VulcanPlanToolPolicy::Visible,
         request_streaming: None,
@@ -787,21 +954,46 @@ fn build_direct_provider_tool_candidate(
             let runtime = Arc::clone(&runtime);
             let configuration = configuration.clone();
             let workspace_root = workspace_root.clone();
+            let target_selection = target_selection.clone();
+            let media_input_projection = media_input_projection.clone();
             Box::pin(async move {
                 let mut cancellation_guard = ProviderTaskCancellationOnDrop::new(
                     Arc::clone(&runtime),
                     owner_session_id.clone(),
                 );
+                // projectedArguments maps the fixed facade only through reviewed target metadata.
+                // projectedArguments 仅通过已审核目标元数据映射固定外壳。
+                let projected_arguments = if media_understanding_tool_id(capability).is_some() {
+                    project_media_understanding_arguments(
+                        capability,
+                        media_input_projection.as_ref().ok_or_else(|| {
+                            format!(
+                                "Media-understanding target `{}` has no explicit input projection.",
+                                target_selection.target_id
+                            )
+                        })?,
+                        arguments,
+                    )?
+                } else {
+                    arguments
+                };
                 let result = runtime
-                    .execute_selected_provider_tool_for_owner_in_workspace(
+                    .execute_provider_tool_target_for_owner_in_workspace(
                         &configuration,
                         capability,
-                        arguments,
+                        &target_selection,
+                        projected_arguments,
                         owner_session_id,
                         workspace_root.as_deref(),
                     )
                     .await?;
-                let rendered = render_provider_tool_result(workspace_root.as_deref(), result).await;
+                // rendered uses one canonical media result shape for understanding capabilities.
+                // rendered 为理解能力使用统一规范媒体结果形态。
+                let rendered = if media_understanding_tool_id(capability).is_some() {
+                    render_media_understanding_provider_result(capability, result)
+                } else {
+                    render_provider_tool_result(workspace_root.as_deref(), result).await
+                };
                 cancellation_guard.disarm();
                 rendered
             })
@@ -1161,6 +1353,7 @@ mod tests {
         build_selected_model_extension_catalog, download_provider_resource_to_temp,
         model_extension_executor_schema, model_extension_parameters_schema,
         model_extension_tool_id, render_provider_tool_result,
+        validate_enabled_media_understanding_backends,
     };
     use serde_json::json;
     use std::collections::BTreeSet;
@@ -1385,10 +1578,87 @@ mod tests {
         apply_session_provider_tool_selections(
             &mut configuration,
             &Some(Default::default()),
+            &Some(Default::default()),
             &None,
         )
         .expect("apply explicit empty override");
 
+        assert!(configuration.provider_tool_selections.is_empty());
+        assert!(configuration.provider_tool_enabled_capabilities.is_empty());
+    }
+
+    /// Verifies an enabled media capability survives without a legacy session target selection.
+    /// 验证已启用媒体能力无需旧会话目标选择也能保留。
+    #[test]
+    fn session_media_capability_is_independent_from_direct_target_selection() {
+        // configuration starts from empty global switches so only the explicit session override is observable.
+        // configuration 从空全局开关开始，使测试仅观察显式会话覆盖。
+        let mut configuration = vulcan_provider_adapters::PersistedAiConfiguration::default();
+
+        apply_session_provider_tool_selections(
+            &mut configuration,
+            &Some(Default::default()),
+            &Some(BTreeSet::from([String::from("video_understand")])),
+            &None,
+        )
+        .expect("apply media capability override");
+
+        assert!(configuration.provider_tool_selections.is_empty());
+        assert_eq!(
+            configuration.provider_tool_enabled_capabilities,
+            BTreeSet::from([ProviderToolCapabilityKind::VideoUnderstand])
+        );
+    }
+
+    /// Verifies a media switch without its required global backend fails before tool exposure.
+    /// 验证缺少必需全局后端的媒体开关会在工具暴露前失败。
+    #[test]
+    fn enabled_media_capability_requires_global_backend() {
+        // configuration simulates a valid session switch over an incomplete global setup.
+        // configuration 模拟在不完整全局配置上启用有效会话开关。
+        let mut configuration = vulcan_provider_adapters::PersistedAiConfiguration::default();
+        configuration
+            .provider_tool_enabled_capabilities
+            .insert(ProviderToolCapabilityKind::VideoUnderstand);
+
+        let error = validate_enabled_media_understanding_backends(&configuration)
+            .expect_err("enabled video understanding must require one global backend");
+
+        assert!(error.contains("VideoUnderstand"), "{error}");
+        assert!(error.contains("global backend"), "{error}");
+    }
+
+    /// Verifies a legacy session media target cannot create a second backend authority.
+    /// 验证旧版会话媒体目标无法形成第二个后端权威。
+    #[test]
+    fn session_media_target_selection_is_rejected() {
+        // configuration starts without any direct target so the attempted session write is isolated.
+        // configuration 从不含直连目标的状态开始，以隔离本次会话写入尝试。
+        let mut configuration = vulcan_provider_adapters::PersistedAiConfiguration::default();
+        // selections imitates one stale pre-schema-18 session route.
+        // selections 模拟一条过期的 Schema 18 之前会话路由。
+        let selections = std::collections::BTreeMap::from([(
+            String::from("video_understand"),
+            vulcan_workbench_model::SessionProviderToolTargetSelection {
+                connection_id: String::from("legacy-account"),
+                target_id: String::from("legacy-video-target"),
+            },
+        )]);
+        // enabledCapabilities keeps the paired session override structurally complete.
+        // enabledCapabilities 使配对的会话覆盖在结构上保持完整。
+        let enabled_capabilities = BTreeSet::from([String::from("video_understand")]);
+
+        // error proves the stale session route is rejected before it can mutate configuration.
+        // error 证明过期会话路由会在修改配置之前被拒绝。
+        let error = apply_session_provider_tool_selections(
+            &mut configuration,
+            &Some(selections),
+            &Some(enabled_capabilities),
+            &None,
+        )
+        .expect_err("legacy session media target must fail closed");
+
+        assert!(error.contains("cannot select a backend"), "{error}");
         assert!(configuration.provider_tool_selections.is_empty());
     }
 
@@ -1409,6 +1679,7 @@ mod tests {
 
         apply_session_provider_tool_selections(
             &mut configuration,
+            &None,
             &None,
             &Some(Default::default()),
         )

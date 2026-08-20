@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   FileSearch,
   Image,
+  LockKeyhole,
   Music,
   Search,
   SlidersHorizontal,
@@ -17,6 +18,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   Dialog,
   DialogContent,
@@ -48,8 +58,12 @@ import {
 } from "@/service/settings-actions-service";
 import type {
   ContextUsageBreakdownItem,
+  ContextCompactionWindowNodeId,
   ContextUsageSnapshot,
+  PublicAiContextCompactionWindowNode,
+  PublicAiModelCapabilities,
   PublicAiProviderToolCapabilityKind,
+  PublicAiReasoningEffort,
   PublicAiProviderToolTargetSnapshot,
   PublicAiProviderToolTargetSelection,
   PublicAiSessionProviderToolConflict,
@@ -62,7 +76,25 @@ export function ContextUsageOrb(props: {
   // Context usage snapshot projected by the service.
   // 服务投影出的上下文占用快照。
   snapshot: ContextUsageSnapshot | null;
+  // Fixed backend-owned compression-window nodes.
+  // 后端持有的固定压缩窗口节点。
+  contextCompactionWindowNodes: PublicAiContextCompactionWindowNode[];
+  // Stable node id selected by the current session.
+  // 当前会话选择的稳定节点标识。
+  selectedNodeId: ContextCompactionWindowNodeId | null;
+  // Unchanged hard context limit declared by the active model.
+  // 当前模型声明且保持不变的硬上下文窗口。
+  modelContextLimit: number | null;
+  // Whether the session is currently running and therefore immutable.
+  // 会话当前是否正在运行，运行时不可修改。
+  disabled: boolean;
+  // Persists or clears one session-only compression-window lock.
+  // 持久化或清除一个仅限当前会话的压缩窗口锁定。
+  onNodeChange: (nodeId: ContextCompactionWindowNodeId | null) => Promise<boolean>;
 }) {
+  // t resolves stable copy for the active WebUI language.
+  // t 为当前 WebUI 语言解析稳定文案。
+  const { t } = useI18n();
   if (!props.snapshot) {
     return null;
   }
@@ -72,6 +104,20 @@ export function ContextUsageOrb(props: {
   const percent = usageBasisPoints / 100;
   const title = snapshot.tooltipTitle || "上下文容量";
   const detailVisible = breakdown.length > 0;
+  // selectedNode resolves the persisted id against the current backend projection.
+  // selectedNode 根据当前后端投影解析持久化标识。
+  const selectedNode = props.contextCompactionWindowNodes.find((node) => node.id === props.selectedNodeId) ?? null;
+  // availableNodes applies the strict node-window-smaller-than-model contract.
+  // availableNodes 应用节点窗口必须严格小于模型窗口的契约。
+  const modelContextLimit = props.modelContextLimit;
+  const availableNodes = availableContextCompactionWindowNodes(
+    props.contextCompactionWindowNodes,
+    modelContextLimit,
+  );
+  // selectedNodeIsInvalid keeps a changed global node visible until the user restores Default.
+  // selectedNodeIsInvalid 在全局节点变化失效后仍保持可见，直到用户恢复默认。
+  const selectedNodeIsInvalid = selectedNode != null
+    && !availableNodes.some((node) => node.id === selectedNode.id);
   const thresholdState = percent >= 100
     ? "full"
     : percent >= 95
@@ -85,55 +131,120 @@ export function ContextUsageOrb(props: {
   } as React.CSSProperties;
 
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild disabled={props.disabled}>
         <button
-          aria-label={title}
-          className={cn("context-usage-orb", `severity-${snapshot.severity}`)}
-          data-threshold-state={thresholdState}
-          style={style}
+          aria-label={selectedNode
+            ? `${title} · ${formatContextWindowNodeTokens(selectedNode.tokens)}`
+            : title}
+          className={cn("context-usage-control", selectedNode && "is-locked")}
           type="button"
-        />
-      </TooltipTrigger>
-      <TooltipContent
-        align="end"
-        className="context-usage-tooltip"
-        showArrow={false}
-        side="top"
-        sideOffset={8}
-      >
-        <div className="context-usage-card-header">
-          <strong>{title}</strong>
-          <span>{formatContextUsageTotal(snapshot)}</span>
-        </div>
-        <ContextUsageProgressBar
-          breakdown={breakdown}
-          usageBasisPoints={usageBasisPoints}
-        />
-        {detailVisible ? (
-          <div className="context-usage-breakdown">
-            {breakdown.map((item) => (
-              <div className="context-usage-breakdown-row" key={item.kind}>
-                <span className="context-usage-breakdown-label">
-                  <i className={`context-usage-dot kind-${item.kind}`} />
-                  {item.label}
-                </span>
-                <span>{formatBasisPoints(item.basisPoints)}</span>
-              </div>
-            ))}
+        >
+          <span
+            aria-hidden="true"
+            className={cn("context-usage-orb", `severity-${snapshot.severity}`)}
+            data-threshold-state={thresholdState}
+            style={style}
+          />
+          {selectedNode ? (
+            <span className="context-usage-lock-label">
+              <LockKeyhole aria-hidden="true" size={11} strokeWidth={2} />
+              {formatContextWindowNodeTokens(selectedNode.tokens)}
+            </span>
+          ) : null}
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="context-usage-menu" side="top" sideOffset={8}>
+        <DropdownMenuLabel className="context-usage-card">
+          <div className="context-usage-card-header">
+            <strong>{title}</strong>
+            <span>{formatContextUsageTotal(snapshot)}</span>
           </div>
-        ) : null}
-        <div className="context-usage-cache-row">
-          <span>平均缓存命中率</span>
-          <strong>
-            {snapshot.cacheHitBasisPoints == null
-              ? "暂无数据"
-              : formatBasisPoints(snapshot.cacheHitBasisPoints)}
-          </strong>
-        </div>
-      </TooltipContent>
-    </Tooltip>
+          <ContextUsageProgressBar breakdown={breakdown} usageBasisPoints={usageBasisPoints} />
+          {detailVisible ? (
+            <div className="context-usage-breakdown">
+              {breakdown.map((item) => (
+                <div className="context-usage-breakdown-row" key={item.kind}>
+                  <span className="context-usage-breakdown-label">
+                    <i className={`context-usage-dot kind-${item.kind}`} />
+                    {item.label}
+                  </span>
+                  <span>{formatBasisPoints(item.basisPoints)}</span>
+                </div>
+              ))}
+            </div>
+          ) : null}
+          <div className="context-usage-cache-row">
+            <span>平均缓存命中率</span>
+            <strong>
+              {snapshot.cacheHitBasisPoints == null
+                ? "暂无数据"
+                : formatBasisPoints(snapshot.cacheHitBasisPoints)}
+            </strong>
+          </div>
+        </DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        <DropdownMenuLabel>{t("composer.contextWindow.title")}</DropdownMenuLabel>
+        <DropdownMenuRadioGroup
+          onValueChange={(value) => {
+            const nextNodeId = contextWindowNodeIdFromMenuValue(value, props.contextCompactionWindowNodes);
+            if (nextNodeId !== undefined) {
+              void props.onNodeChange(nextNodeId);
+            }
+          }}
+          value={props.selectedNodeId ?? "default"}
+        >
+          <DropdownMenuRadioItem value="default">
+            {t("composer.contextWindow.default")}
+          </DropdownMenuRadioItem>
+          {availableNodes.map((node) => (
+            <DropdownMenuRadioItem key={node.id} value={node.id}>
+              {formatContextWindowNodeTokens(node.tokens)}
+            </DropdownMenuRadioItem>
+          ))}
+          {selectedNodeIsInvalid ? (
+            <DropdownMenuRadioItem disabled value={selectedNode.id}>
+              <AlertTriangle aria-hidden="true" size={13} />
+              {formatContextWindowNodeTokens(selectedNode.tokens)} · {t("composer.contextWindow.invalid")}
+            </DropdownMenuRadioItem>
+          ) : null}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
+}
+
+// contextWindowNodeIdFromMenuValue validates one menu value against the authoritative node list.
+// contextWindowNodeIdFromMenuValue 根据权威节点列表校验一个菜单值。
+function contextWindowNodeIdFromMenuValue(
+  value: string,
+  nodes: PublicAiContextCompactionWindowNode[],
+): ContextCompactionWindowNodeId | null | undefined {
+  if (value === "default") {
+    return null;
+  }
+  return nodes.find((node) => node.id === value)?.id;
+}
+
+// formatContextWindowNodeTokens renders configured node values as compact K labels when exact.
+// formatContextWindowNodeTokens 在可精确表示时把配置节点值渲染为紧凑 K 标签。
+function formatContextWindowNodeTokens(tokens: number): string {
+  if (tokens >= 1_000 && tokens % 1_000 === 0) {
+    return `${tokens / 1_000}K`;
+  }
+  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 1, notation: "compact" }).format(tokens);
+}
+
+// availableContextCompactionWindowNodes returns fixed nodes strictly below one model hard window.
+// availableContextCompactionWindowNodes 返回严格小于模型硬窗口的固定节点。
+export function availableContextCompactionWindowNodes(
+  nodes: PublicAiContextCompactionWindowNode[],
+  modelContextLimit: number | null,
+): PublicAiContextCompactionWindowNode[] {
+  if (modelContextLimit == null) {
+    return [];
+  }
+  return nodes.filter((node) => node.tokens < modelContextLimit);
 }
 
 // ContextUsageProgressBar renders used, unused, category, and threshold states in one track.
@@ -328,6 +439,11 @@ export function ComposerAiCapabilityControl(props: {
   const selectedAccount = selectedAccounts.find(
     (target) => target.connectionId === selectedSelection?.connection_id,
   ) ?? null;
+  // selectedMediaBackendSummary describes the globally configured fixed backend without exposing session route controls.
+  // selectedMediaBackendSummary 描述全局配置的固定后端，不暴露会话级路由控件。
+  const selectedMediaBackendSummary = snapshot && isMediaUnderstandingCapability(selectedCapability)
+    ? mediaUnderstandingBackendSummary(snapshot, selectedCapability)
+    : null;
   const localConflicts = snapshot ? providerToolSettingsConflicts(snapshot, draft) : [];
   const conflicts = localConflicts;
   // enabledCount combines direct enabled capabilities and non-empty extension sets.
@@ -448,7 +564,16 @@ export function ComposerAiCapabilityControl(props: {
                   && (!isModelExtensionCapability(capability)
                     || target.manifestSourceLayer !== "custom"),
               ) ?? [];
-              const targetCount = uniqueProviderToolModels(targets).length;
+              // mediaBackendSummary resolves the one global backend used by this session switch.
+              // mediaBackendSummary 解析此会话开关使用的唯一全局后端。
+              const mediaBackendSummary = snapshot && isMediaUnderstandingCapability(capability)
+                ? mediaUnderstandingBackendSummary(snapshot, capability)
+                : null;
+              // targetCount reports one fixed executable media backend or the regular selectable model count.
+              // targetCount 对媒体能力报告一个固定可执行后端，否则报告常规可选模型数量。
+              const targetCount = isMediaUnderstandingCapability(capability)
+                ? Number(mediaBackendSummary?.available === true)
+                : uniqueProviderToolModels(targets).length;
               const conflict = conflicts.find((item) => item.capability === capability);
               return (
                 <div
@@ -464,7 +589,7 @@ export function ComposerAiCapabilityControl(props: {
                   {directMode ? (
                     <input
                       checked={enabled}
-                      disabled={saving || targetCount === 0}
+                      disabled={providerToolCapabilitySwitchDisabled(saving, targetCount, enabled)}
                       onChange={(event) => {
                         event.stopPropagation();
                         const checked = event.currentTarget.checked;
@@ -475,6 +600,9 @@ export function ComposerAiCapabilityControl(props: {
                             return { ...current, enabledCapabilities: Array.from(enabledCapabilities).sort() };
                           }
                           enabledCapabilities.add(capability);
+                          if (isMediaUnderstandingCapability(capability)) {
+                            return { ...current, enabledCapabilities: Array.from(enabledCapabilities).sort() };
+                          }
                           const first = targets[0];
                           if (first) {
                             return {
@@ -523,7 +651,27 @@ export function ComposerAiCapabilityControl(props: {
             })}
           </aside>
           <section className="composer-capability-dialog-right">
-            {selectedModels.length && isModelExtensionCapability(selectedCapability) ? (
+            {isMediaUnderstandingCapability(selectedCapability) ? (
+              selectedMediaBackendSummary ? (
+                <div className="composer-capability-route-selectors">
+                  <label>
+                    <span>后端模式</span>
+                    <strong>{selectedMediaBackendSummary.modeLabel}</strong>
+                  </label>
+                  <label>
+                    <span>固定路由</span>
+                    <strong>{selectedMediaBackendSummary.routeLabel}</strong>
+                  </label>
+                  <p className="composer-capability-media-note settings-muted-line">
+                    模型、账号与思考级别由模型设置统一配置；当前会话只控制是否启用，工具参数结构不会变化。
+                  </p>
+                </div>
+              ) : (
+                <div className="composer-capability-dialog-empty">
+                  请先在模型设置中配置此媒体理解能力的固定后端。
+                </div>
+              )
+            ) : selectedModels.length && isModelExtensionCapability(selectedCapability) ? (
               <div className="composer-capability-extension-list">
                 <p className="settings-muted-line">
                   选择可供 AI 通过模型扩展参数查询后按需调用的模型。切换此集合不会改变已注册工具名。
@@ -760,12 +908,136 @@ export function orderProviderToolCapabilities(
   });
 }
 
-function orderedProviderToolCapabilities(
+// orderedProviderToolCapabilities merges provider-native targets with model-replacement-only media backends.
+// orderedProviderToolCapabilities 合并供应商原生目标与仅由模型代替提供的媒体后端。
+export function orderedProviderToolCapabilities(
   snapshot: PublicAiSettingsSnapshot,
 ): PublicAiProviderToolCapabilityKind[] {
+  // mediaCapabilities keeps configured replacement backends visible even without a provider-tool target.
+  // mediaCapabilities 让已配置的模型代替后端在没有供应商工具目标时仍然可见。
+  const mediaCapabilities = Object.keys(snapshot.mediaUnderstandingSelections ?? {})
+    .filter(isMediaUnderstandingCapability);
   return orderProviderToolCapabilities(
-    snapshot.providerToolTargets.map((target) => target.target.contract.capability),
+    [
+      ...snapshot.providerToolTargets.map((target) => target.target.contract.capability),
+      ...mediaCapabilities,
+    ],
   );
+}
+
+// PublicAiMediaUnderstandingCapabilityKind is the closed fixed input-only media facade set.
+// PublicAiMediaUnderstandingCapabilityKind 是封闭的固定仅输入型媒体外壳集合。
+type PublicAiMediaUnderstandingCapabilityKind =
+  | "image_understand"
+  | "video_understand"
+  | "audio_understand";
+
+// isMediaUnderstandingCapability identifies the three fixed input-only media facades.
+// isMediaUnderstandingCapability 标识三个固定的仅输入型媒体外壳。
+export function isMediaUnderstandingCapability(
+  capability: string,
+): capability is PublicAiMediaUnderstandingCapabilityKind {
+  return capability === "image_understand"
+    || capability === "video_understand"
+    || capability === "audio_understand";
+}
+
+// mediaUnderstandingBackendSummary resolves one fixed backend and its current executable state.
+// mediaUnderstandingBackendSummary 解析一个固定后端及其当前可执行状态。
+function mediaUnderstandingBackendSummary(
+  snapshot: PublicAiSettingsSnapshot,
+  capability: PublicAiProviderToolCapabilityKind,
+): { modeLabel: string; routeLabel: string; available: boolean } | null {
+  // backend is the global closed choice shared by every session switch for this capability.
+  // backend 是此能力全部会话开关共享的全局封闭选择。
+  const backend = snapshot.mediaUnderstandingSelections?.[capability];
+  if (!backend) {
+    return null;
+  }
+  if (backend.mode === "provider_tool") {
+    // target resolves the exact persisted account and target without substituting another account.
+    // target 精确解析持久化账号与目标，不替换为其他账号。
+    const target = snapshot.providerToolTargets.find((candidate) => (
+      candidate.connectionId === backend.selection.connection_id
+      && candidate.target.target_id === backend.selection.target_id
+      && candidate.target.contract.capability === capability
+    ));
+    return {
+      modeLabel: "供应商专用模式",
+      routeLabel: target
+        ? `${target.target.display_name} · ${target.connectionDisplayName}`
+        : `${backend.selection.target_id} · ${backend.selection.connection_id}`,
+      available: Boolean(target),
+    };
+  }
+  // candidate resolves the exact provider-model-account route selected by settings.
+  // candidate 解析设置选择的精确供应商、模型与账号路由。
+  const candidate = snapshot.mediaUnderstandingModelCandidates?.find((entry) => (
+    entry.selection.provider_id === backend.selection.provider_id
+    && entry.selection.model_id === backend.selection.model_id
+    && entry.selection.connection_id === backend.selection.connection_id
+  ));
+  // candidateEnabled applies the one shared provider-model admission switch.
+  // candidateEnabled 应用唯一共享的供应商模型准入开关。
+  const candidateEnabled = snapshot.multimodalUnderstandingCandidateModels?.some((entry) => (
+    entry.providerId === backend.selection.provider_id
+    && entry.modelId === backend.selection.model_id
+  )) === true;
+  // requiredResource maps the fixed facade to its only accepted non-text resource.
+  // requiredResource 将固定外壳映射到其唯一接受的非文本资源。
+  const requiredResource = capability === "image_understand"
+    ? "image"
+    : capability === "video_understand"
+      ? "video"
+      : "audio";
+  // reasoningAvailable rejects a retained effort that disappeared from the exact model route.
+  // reasoningAvailable 拒绝已从精确模型路由中消失的持久化思考级别。
+  const reasoningAvailable = candidate !== undefined
+    && mediaReplacementReasoningIsAvailable(candidate.capabilities, backend.reasoning_effort);
+  // candidateAvailable mirrors the backend media, conversation, structured-output, and reasoning gates.
+  // candidateAvailable 镜像后端的媒体、会话、结构化输出与思考级别门槛。
+  const candidateAvailable = candidateEnabled
+    && candidate !== undefined
+    && candidate.capabilities.operations?.includes("conversation_respond") === true
+    && candidate.capabilities.input_resources?.includes(requiredResource) === true
+    && candidate.capabilities.structured_output !== "unsupported"
+    && reasoningAvailable;
+  // reasoningLabel renders only the explicitly selected effort.
+  // reasoningLabel 仅渲染显式选择的思考级别。
+  const reasoningLabel = backend.reasoning_effort ? ` · 思考 ${backend.reasoning_effort}` : "";
+  return {
+    modeLabel: "模型代替模式",
+    routeLabel: candidate
+      ? `${candidate.providerDisplayName} · ${candidate.modelDisplayName} · ${candidate.connectionDisplayName}${reasoningLabel}`
+      : `${backend.selection.provider_id}/${backend.selection.model_id} · ${backend.selection.connection_id}${reasoningLabel}`,
+    available: candidateAvailable,
+  };
+}
+
+// mediaReplacementReasoningIsAvailable mirrors the backend's closed reasoning-control validation.
+// mediaReplacementReasoningIsAvailable 镜像后端封闭的思考控制校验。
+function mediaReplacementReasoningIsAvailable(
+  capabilities: PublicAiModelCapabilities,
+  effort: PublicAiReasoningEffort | undefined,
+): boolean {
+  if (effort === undefined) {
+    return true;
+  }
+  // supportedEfforts is the exact route-declared selectable effort set.
+  // supportedEfforts 是精确路由声明的可选思考档位集合。
+  const supportedEfforts = capabilities.reasoning_efforts ?? [];
+  switch (capabilities.reasoning_control) {
+    case "fixed_off":
+      return effort === "none";
+    case "fixed_on":
+      return effort !== "none" && supportedEfforts.includes(effort);
+    case "toggle":
+    case "effort_selection":
+    case "provider_adaptive":
+      return supportedEfforts.includes(effort);
+    default:
+      return false;
+  }
 }
 
 // composerCapabilityIsEnabled resolves direct switches and extension selections without mixing stores.
@@ -777,6 +1049,16 @@ export function composerCapabilityIsEnabled(
   return isDirectProviderToolCapability(capability)
     ? settings.enabledCapabilities.includes(capability)
     : (settings.extensionTargetSets[capability]?.length ?? 0) > 0;
+}
+
+// providerToolCapabilitySwitchDisabled blocks saving and unavailable new activation while preserving stale-state recovery.
+// providerToolCapabilitySwitchDisabled 在保存期间以及无可用后端的新开启场景禁用开关，同时保留过期状态恢复能力。
+export function providerToolCapabilitySwitchDisabled(
+  saving: boolean,
+  targetCount: number,
+  enabled: boolean,
+): boolean {
+  return saving || (targetCount === 0 && !enabled);
 }
 
 // providerToolSettingsConflicts reports stale choices without silently replacing them.
@@ -793,6 +1075,25 @@ export function providerToolSettingsConflicts(
   const capabilities = new Set<PublicAiProviderToolCapabilityKind>(settings.enabledCapabilities);
   const conflicts: PublicAiSessionProviderToolConflict[] = [];
   for (const capability of capabilities) {
+    if (isMediaUnderstandingCapability(capability)) {
+      // backendSummary validates the dedicated global media backend instead of legacy session selections.
+      // backendSummary 校验专用全局媒体后端，而不是旧会话选择。
+      const backendSummary = mediaUnderstandingBackendSummary(snapshot, capability);
+      if (!backendSummary) {
+        conflicts.push({
+          capability,
+          kind: "missing_selection",
+          message: `Capability ${capability} has no configured media-understanding backend.`,
+        });
+      } else if (!backendSummary.available) {
+        conflicts.push({
+          capability,
+          kind: "target_unavailable",
+          message: `The configured media-understanding backend for ${capability} is no longer available.`,
+        });
+      }
+      continue;
+    }
     const selection = settings.selections[capability];
     if (!selection) {
       conflicts.push({

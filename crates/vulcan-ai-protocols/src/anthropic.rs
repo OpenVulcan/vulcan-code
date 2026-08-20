@@ -1562,6 +1562,43 @@ mod tests {
         );
     }
 
+    /// Verifies a MiniMax uploaded-file URI becomes the documented Anthropic-compatible URL source.
+    /// 验证 MiniMax 上传文件 URI 会成为文档化的 Anthropic 兼容 URL 来源。
+    #[test]
+    fn uploaded_video_resource_is_encoded_as_url_source() {
+        // public_request carries the provider-native reference produced by the Files API.
+        // public_request 携带 Files API 产生的供应商原生引用。
+        let mut public_request = request(PromptCachePolicy::ProviderDefault);
+        public_request.messages[0].content = vec![ContentItem::Resource {
+            resource: vulcan_ai_contract::ResourceReference {
+                id: String::from("video"),
+                kind: vulcan_ai_contract::ResourceKind::Video,
+                media_type: Some(String::from("video/mp4")),
+                source_kind: vulcan_ai_contract::ResourceSourceKind::HostResolved,
+                file_name: Some(String::from("clip.mp4")),
+                image_detail: None,
+                local_path: None,
+                url: Some(String::from("mm_file://file-minimax")),
+            },
+        }];
+
+        // encoded is the exact Anthropic-compatible request body for MiniMax M3.
+        // encoded 是 MiniMax M3 的精确 Anthropic 兼容请求正文。
+        let encoded = AnthropicMessagesVideoProfile
+            .encode(&public_request)
+            .expect("uploaded video URI should encode");
+        assert_eq!(
+            encoded.body["messages"][0]["content"][0],
+            json!({
+                "type": "video",
+                "source": {
+                    "type": "url",
+                    "url": "mm_file://file-minimax",
+                },
+            })
+        );
+    }
+
     /// Verifies the standard Anthropic profile rejects the compatible-only video extension.
     /// 验证标准 Anthropic Profile 会拒绝仅兼容协议支持的视频扩展。
     #[test]

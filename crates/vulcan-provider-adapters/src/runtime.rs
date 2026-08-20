@@ -37,13 +37,126 @@ use vulcan_ai_contract::{
     AccountUsageSnapshot, AiExecutionRequest, AiMessage, AiOperation, CapabilitySupport,
     ContentItem, EmbeddingRequest, EmbeddingResponse, InferenceUsageScope, MessageRole,
     ModelCapabilities, PromptCachePolicy, ReasoningControlMode, ReasoningEffort, RerankRequest,
-    RerankResponse,
+    RerankResponse, ResourceKind,
 };
 use vulcan_llm_core::LlmProtocolRuntime;
 
 /// Refreshes renewable tokens this long before their declared expiration.
 /// 在可续期 Token 声明过期前这么长时间执行刷新。
 const OAUTH_REFRESH_SKEW_MS: u64 = 5 * 60 * 1_000;
+
+/// Immutable emitter context for one media upload performed after request dispatch.
+/// 请求分派后执行单次媒体上传时使用的不可变发射上下文。
+#[derive(Clone)]
+struct RuntimeMediaUploadProgressContext {
+    /// Host callback installed by the service boundary.
+    /// 服务边界安装的宿主回调。
+    observer: crate::RuntimeMediaUploadProgressObserver,
+    /// Stable non-secret event fields reused by every lifecycle phase.
+    /// 每个生命周期阶段复用的稳定非秘密事件字段。
+    base: crate::RuntimeMediaUploadProgressEvent,
+    /// Latest transferred byte count retained for cancellation and failure terminal events.
+    /// 为取消与失败终态事件保留的最近已传输字节数。
+    last_bytes_sent: Arc<AtomicU64>,
+}
+
+impl RuntimeMediaUploadProgressContext {
+    /// Emits one phase replacement for this exact transfer.
+    /// 为当前精确传输发出一次阶段替换。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `phase`, `bytes_sent`, `total_bytes`, and `error` are the current transfer facts.
+    /// `phase`、`bytes_sent`、`total_bytes` 与 `error` 是当前传输事实。
+    fn emit(
+        &self,
+        phase: crate::RuntimeMediaUploadPhase,
+        bytes_sent: u64,
+        total_bytes: Option<u64>,
+        error: Option<String>,
+    ) {
+        self.last_bytes_sent.store(bytes_sent, Ordering::Release);
+        // event preserves stable route identity while replacing only lifecycle facts.
+        // event 保留稳定路由身份，仅替换生命周期事实。
+        let mut event = self.base.clone();
+        event.phase = phase;
+        event.bytes_sent = bytes_sent;
+        event.total_bytes = total_bytes;
+        event.error = error;
+        (self.observer)(event);
+    }
+
+    /// Builds the byte callback consumed by the generic upload engine.
+    /// 构建通用上传引擎消费的字节回调。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A cloneable callback that emits uploading replacements for this transfer.
+    /// 返回一个可克隆回调，为当前传输发出上传中替换事件。
+    fn byte_callback(&self) -> crate::MediaUploadProgressCallback {
+        // context remains immutable and can safely cross the asynchronous upload boundary.
+        // context 保持不可变，可安全跨越异步上传边界。
+        let context = self.clone();
+        Arc::new(move |bytes_sent, total_bytes| {
+            context.emit(
+                crate::RuntimeMediaUploadPhase::Uploading,
+                bytes_sent,
+                total_bytes,
+                None,
+            );
+        })
+    }
+}
+
+/// Emits a cancelled terminal event when an in-flight media upload future is dropped.
+/// 当进行中的媒体上传 Future 被丢弃时发出取消终态事件。
+struct RuntimeMediaUploadTerminalGuard {
+    /// Exact progress context retained until a normal terminal phase is emitted.
+    /// 保留到正常终态发出为止的精确进度上下文。
+    context: Option<RuntimeMediaUploadProgressContext>,
+}
+
+impl RuntimeMediaUploadTerminalGuard {
+    /// Creates one armed terminal guard from an optional user-visible progress context.
+    /// 从可选的用户可见进度上下文创建一个已启用终态守卫。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `context` is the exact transfer whose future lifetime is guarded.
+    /// `context` 是其 Future 生命周期被守护的精确传输。
+    ///
+    /// # Returns
+    /// 返回值
+    /// An armed guard when progress is visible, or an inert guard otherwise.
+    /// 进度可见时返回已启用守卫，否则返回惰性守卫。
+    fn new(context: Option<&RuntimeMediaUploadProgressContext>) -> Self {
+        Self {
+            context: context.cloned(),
+        }
+    }
+
+    /// Disarms the drop fallback after a normal terminal event has been emitted.
+    /// 在正常终态事件发出后解除丢弃回退。
+    fn disarm(&mut self) {
+        self.context = None;
+    }
+}
+
+impl Drop for RuntimeMediaUploadTerminalGuard {
+    /// Emits cancellation with the latest observed byte count when still armed.
+    /// 仍启用时使用最近观测字节数发出取消事件。
+    fn drop(&mut self) {
+        let Some(context) = self.context.take() else {
+            return;
+        };
+        context.emit(
+            crate::RuntimeMediaUploadPhase::Cancelled,
+            context.last_bytes_sent.load(Ordering::Acquire),
+            context.base.total_bytes,
+            None,
+        );
+    }
+}
 
 /// Keeps provider endpoint discovery results fresh for six hours by default.
 /// 默认将供应商端点发现结果保鲜六小时。
@@ -1074,6 +1187,10 @@ pub struct PublicAiRuntime {
     /// Complete non-secret provider selections leased by active sessions in this process.
     /// 当前进程内活动会话租用的完整非秘密供应商选择。
     session_selection_leases: Arc<RwLock<BTreeMap<String, ResolvedPublicAiSelection>>>,
+    /// Optional host observer for media prepared by understanding tools after request dispatch.
+    /// 请求分派后由理解工具准备媒体时使用的可选宿主观察器。
+    runtime_media_upload_progress_observer:
+        Arc<RwLock<Option<crate::RuntimeMediaUploadProgressObserver>>>,
 }
 
 /// One complete immutable provider generation published at an explicit activation boundary.
@@ -2403,7 +2520,32 @@ impl PublicAiRuntime {
             bundled_manifests,
             resolved_provider_generation,
             session_selection_leases: Arc::new(RwLock::new(BTreeMap::new())),
+            runtime_media_upload_progress_observer: Arc::new(RwLock::new(None)),
         })
+    }
+
+    /// Installs or clears the host observer for post-dispatch media upload progress.
+    /// 安装或清除分派后媒体上传进度的宿主观察器。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `observer` is the process-local callback owned by the embedding service.
+    /// `observer` 是嵌入服务持有的进程内回调。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success after atomically replacing the observer, or a controlled poisoned-lock error.
+    /// 原子替换观察器后返回成功，或返回受控的锁中毒错误。
+    pub fn set_runtime_media_upload_progress_observer(
+        &self,
+        observer: Option<crate::RuntimeMediaUploadProgressObserver>,
+    ) -> Result<(), String> {
+        let mut current = self
+            .runtime_media_upload_progress_observer
+            .write()
+            .map_err(|_| String::from("The runtime media upload observer lock is poisoned."))?;
+        *current = observer;
+        Ok(())
     }
 
     /// Builds an unavailable runtime suitable for tests and non-service callers.
@@ -6516,6 +6658,8 @@ impl PublicAiRuntime {
         .map_err(|error| diagnose_provider_tool_failure(error, diagnostic_context.as_str()))?;
         let arguments = match resolved.operation.as_ref() {
             Some(operation) if !operation.upload_bindings.is_empty() => {
+                // credentialProfile is shared by upload authorization and exact progress routing.
+                // credentialProfile 由上传鉴权与精确进度路由共同使用。
                 let credential_profile = resolved
                     .entry
                     .credential_profiles
@@ -6530,7 +6674,57 @@ impl PublicAiRuntime {
                             diagnostic_context.as_str(),
                         )
                     })?;
-                tokio::time::timeout(
+                // observer is cloned before upload so callbacks never retain the runtime registry lock.
+                // observer 在上传前克隆，确保回调不会占用运行时注册表锁。
+                let observer = self
+                    .runtime_media_upload_progress_observer
+                    .read()
+                    .map_err(|_| {
+                        diagnose_provider_tool_failure(
+                            "The runtime media upload observer lock is poisoned.".to_owned(),
+                            diagnostic_context.as_str(),
+                        )
+                    })?
+                    .clone();
+                // progressContext is present only for one owned AI-visible media understanding upload.
+                // progressContext 仅在存在所有者的 AI 可见媒体理解上传中存在。
+                let progress_context = provider_tool_media_upload_progress_context(
+                    observer,
+                    owner_session_id.as_deref(),
+                    capability,
+                    &resolved,
+                    operation,
+                    &arguments,
+                    credential_profile,
+                    workspace_root,
+                )
+                .await
+                .map_err(|error| {
+                    diagnose_provider_tool_failure(error, diagnostic_context.as_str())
+                })?;
+                if let Some(context) = progress_context.as_ref() {
+                    context.emit(
+                        crate::RuntimeMediaUploadPhase::Preparing,
+                        0,
+                        context.base.total_bytes,
+                        None,
+                    );
+                }
+                // progressTerminalGuard emits cancellation when the owning tool future is dropped.
+                // progressTerminalGuard 在所属工具 Future 被丢弃时发出取消事件。
+                let mut progress_terminal_guard =
+                    RuntimeMediaUploadTerminalGuard::new(progress_context.as_ref());
+                // progress forwards byte facts from the exact generic upload engine invocation.
+                // progress 从精确的通用上传引擎调用转发字节事实。
+                let progress = progress_context
+                    .as_ref()
+                    .map(RuntimeMediaUploadProgressContext::byte_callback);
+                // uploadCancellation owns this single synchronous provider-tool upload attempt.
+                // uploadCancellation 持有本次同步供应商工具上传尝试。
+                let upload_cancellation = crate::MediaUploadCancellation::new();
+                // uploadResult retains terminal failure so the UI receives a failed replacement.
+                // uploadResult 保留终态失败，使界面收到失败替换事件。
+                let upload_result = tokio::time::timeout(
                     remaining_provider_operation_timeout(
                         operation_deadline,
                         "Provider tool upload materialization",
@@ -6542,30 +6736,56 @@ impl PublicAiRuntime {
                             secret: &secret,
                             credential_profile,
                             channels: &resolved.upload_channels,
-                            progress: None,
-                            cancellation: &crate::MediaUploadCancellation::new(),
+                            progress,
+                            cancellation: &upload_cancellation,
                             model_id: None,
                             workspace_root,
+                            fixture_loopback_origin: None,
                         },
                         operation,
                         arguments,
                     ),
                 )
-                .await
-                .map_err(|_| {
-                    diagnose_provider_tool_failure(
-                        "Provider tool upload materialization exceeded the frozen operation timeout."
-                            .to_owned(),
-                        diagnostic_context.as_str(),
-                    )
-                })?
-                .map_err(|error| {
-                    diagnose_provider_tool_failure_with_secret(
+                .await;
+                let upload_result = match upload_result {
+                    Ok(Ok(arguments)) => Ok(arguments),
+                    Ok(Err(error)) => Err(diagnose_provider_tool_failure_with_secret(
                         error,
                         diagnostic_context.as_str(),
                         &secret,
-                    )
-                })?
+                    )),
+                    Err(_) => Err(diagnose_provider_tool_failure(
+                        "Provider tool upload materialization exceeded the frozen operation timeout."
+                            .to_owned(),
+                        diagnostic_context.as_str(),
+                    )),
+                };
+                match upload_result {
+                    Ok(arguments) => {
+                        if let Some(context) = progress_context.as_ref() {
+                            context.emit(
+                                crate::RuntimeMediaUploadPhase::Completed,
+                                context.base.total_bytes.unwrap_or_default(),
+                                context.base.total_bytes,
+                                None,
+                            );
+                        }
+                        progress_terminal_guard.disarm();
+                        arguments
+                    }
+                    Err(error) => {
+                        if let Some(context) = progress_context.as_ref() {
+                            context.emit(
+                                crate::RuntimeMediaUploadPhase::Failed,
+                                context.last_bytes_sent.load(Ordering::Acquire),
+                                context.base.total_bytes,
+                                Some(error.clone()),
+                            );
+                        }
+                        progress_terminal_guard.disarm();
+                        return Err(error);
+                    }
+                }
             }
             _ => arguments,
         };
@@ -7406,6 +7626,13 @@ impl PublicAiRuntime {
             response_profiles: record.route.frozen_response_profiles.clone(),
             upload_channels: Vec::new(),
             manifest_revision: record.route.manifest_revision,
+            manifest_generation: 0,
+            route_revision: format!(
+                "provider-tool:{}:{}:{}",
+                record.route.provider_id,
+                record.route.connection_id,
+                record.route.selection.target_id
+            ),
         })
     }
 
@@ -7583,6 +7810,15 @@ impl PublicAiRuntime {
         }
         let request_profiles = manifest.request_profiles_for_operation(operation.as_ref())?;
         let response_profiles = manifest.response_profiles_for_operation(operation.as_ref())?;
+        // manifestGeneration is frozen from the same atomic catalog generation as the target.
+        // manifestGeneration 从与目标相同的原子目录代际中冻结。
+        let manifest_generation = generation.manifests.generation;
+        // routeRevision binds the catalog content, connection, and target without credential data.
+        // routeRevision 在不包含凭据数据的前提下绑定目录内容、连接与目标。
+        let route_revision = format!(
+            "{}:{}:{}",
+            generation.manifests.content_sha256, connection.id, target.target_id
+        );
         Ok(ResolvedProviderToolTarget {
             connection,
             entry,
@@ -7592,6 +7828,8 @@ impl PublicAiRuntime {
             response_profiles,
             upload_channels: manifest.upload_channels.clone(),
             manifest_revision: manifest.revision,
+            manifest_generation,
+            route_revision,
         })
     }
 
@@ -8251,6 +8489,214 @@ impl PublicAiRuntime {
                 &secret,
             )
             .await
+    }
+
+    /// Prepares and caches one local media input for an exact resolved conversation route.
+    /// 为一条精确解析后的会话路由准备并缓存一个本地媒体输入。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `selection` freezes the route; `owner_session_id` and `operation_id` route host progress;
+    /// `local_path`, `kind`, and `mime_type` identify the source; `progress` and `cancellation`
+    /// control the observable transfer lifecycle.
+    /// `selection` 冻结路由；`owner_session_id` 与 `operation_id` 路由宿主进度；
+    /// `local_path`、`kind` 与 `mime_type` 标识来源；`progress` 与 `cancellation` 控制可观测传输生命周期。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The immutable provider-native URI or host-inline Data URL built from the verified bytes.
+    /// 返回从已验证字节构建的不可变供应商原生 URI 或宿主内联 Data URL。
+    pub async fn prepare_and_remember_local_media(
+        &self,
+        selection: &ResolvedPublicAiSelection,
+        owner_session_id: Option<&str>,
+        operation_id: &str,
+        local_path: &Path,
+        kind: ResourceKind,
+        mime_type: &str,
+        progress: Option<crate::MediaUploadProgressCallback>,
+        cancellation: &crate::MediaUploadCancellation,
+    ) -> Result<String, String> {
+        // observer is cloned before any callback invocation to avoid retaining the registry lock.
+        // observer 在任何回调调用前完成克隆，避免占用注册表锁。
+        let observer = self
+            .runtime_media_upload_progress_observer
+            .read()
+            .map_err(|_| String::from("The runtime media upload observer lock is poisoned."))?
+            .clone();
+        // progressContext exists only for an owned image, video, or audio preparation.
+        // progressContext 仅在有所有者的图片、视频或音频准备中存在。
+        let progress_context = if let (Some(observer), Some(owner_session_id)) =
+            (observer, owner_session_id)
+        {
+            // mediaKind is the stable UI-facing category for this provider-neutral resource.
+            // mediaKind 是当前供应商中立资源面向界面的稳定类别。
+            let media_kind = match kind {
+                ResourceKind::Image => "image",
+                ResourceKind::Video => "video",
+                ResourceKind::Audio => "audio",
+                ResourceKind::File => {
+                    return Err(String::from(
+                        "Model-replacement media progress does not accept generic files.",
+                    ));
+                }
+            };
+            // uploadChannelId is resolved by the same route function used by media preparation.
+            // uploadChannelId 由媒体准备使用的同一路由函数解析。
+            let upload_channel_id = self
+                .execution_client
+                .conversation_media_upload_channel_id(&selection.route, kind, mime_type)?
+                .unwrap_or_else(|| String::from("host-inline"));
+            // totalBytes is verified before progress starts and rechecked by preparation.
+            // totalBytes 在进度开始前完成校验，并由准备流程再次检查。
+            let total_bytes = tokio::fs::metadata(local_path)
+                .await
+                .map_err(|error| {
+                    format!(
+                        "Media-understanding source `{}` could not be inspected: {error}",
+                        local_path.display()
+                    )
+                })?
+                .len();
+            // fileName is derived only from the canonical workspace path.
+            // fileName 仅从规范工作区路径派生。
+            let file_name = local_path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    String::from("Media-understanding source has no valid file name.")
+                })?;
+            Some(RuntimeMediaUploadProgressContext {
+                observer,
+                base: crate::RuntimeMediaUploadProgressEvent {
+                    transfer_id: format!("media-tool:{}", Uuid::new_v4()),
+                    owner_session_id: owner_session_id.to_string(),
+                    provider_id: selection.route.provider.id.clone(),
+                    service_entry_id: selection.route.entry.id.clone(),
+                    connection_id: selection.route.connection.id.clone(),
+                    model_id: selection.model.id.clone(),
+                    protocol_profile_id: selection.route.protocol_route.protocol_profile_id.clone(),
+                    manifest_revision: selection.route.manifest_revision,
+                    manifest_generation: selection.manifest_generation,
+                    route_revision: selection.route_revision.clone(),
+                    operation_id: operation_id.to_string(),
+                    upload_channel_id,
+                    file_name: file_name.to_string(),
+                    media_kind: media_kind.to_string(),
+                    phase: crate::RuntimeMediaUploadPhase::Preparing,
+                    bytes_sent: 0,
+                    total_bytes: Some(total_bytes),
+                    error: None,
+                },
+                last_bytes_sent: Arc::new(AtomicU64::new(0)),
+            })
+        } else {
+            None
+        };
+        if let Some(context) = progress_context.as_ref() {
+            context.emit(
+                crate::RuntimeMediaUploadPhase::Preparing,
+                0,
+                context.base.total_bytes,
+                None,
+            );
+        }
+        // progressTerminalGuard closes the UI row if this preparation future is cancelled.
+        // progressTerminalGuard 在当前准备 Future 被取消时关闭界面进度行。
+        let mut progress_terminal_guard =
+            RuntimeMediaUploadTerminalGuard::new(progress_context.as_ref());
+        // observedProgress composes a caller callback with the service-owned progress observer.
+        // observedProgress 组合调用方回调与服务持有的进度观察器。
+        let observed_progress = match (progress, progress_context.as_ref()) {
+            (Some(progress), Some(context)) => {
+                let observed = context.byte_callback();
+                Some(Arc::new(move |bytes_sent, total_bytes| {
+                    progress(bytes_sent, total_bytes);
+                    observed(bytes_sent, total_bytes);
+                }) as crate::MediaUploadProgressCallback)
+            }
+            (Some(progress), None) => Some(progress),
+            (None, Some(context)) => Some(context.byte_callback()),
+            (None, None) => None,
+        };
+        // preparationResult keeps all terminal errors available for a failed progress event.
+        // preparationResult 保留全部终态错误，以便发出失败进度事件。
+        let preparation_result = async {
+            // secret is the latest credential revision for the already frozen account route.
+            // secret 是已冻结账号路由的最新凭据修订版。
+            let secret = self
+                .resolve_fresh_execution_secret(
+                    selection.route.connection.id.as_str(),
+                    selection.route.connection.secret_reference.as_str(),
+                )
+                .await?;
+            // prepared binds any native provider reference to the verified local source fingerprint.
+            // prepared 将任意供应商原生引用绑定到已验证本地来源指纹。
+            self.execution_client
+                .prepare_local_media(
+                    &selection.route,
+                    selection.model.id.as_str(),
+                    &secret,
+                    local_path,
+                    kind,
+                    mime_type,
+                    true,
+                    observed_progress,
+                    cancellation,
+                )
+                .await
+        }
+        .await;
+        let prepared = match preparation_result {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                if let Some(context) = progress_context.as_ref() {
+                    // terminalPhase distinguishes cooperative cancellation from provider failure.
+                    // terminalPhase 区分协作式取消与供应商失败。
+                    let terminal_phase = if cancellation.is_cancelled() {
+                        crate::RuntimeMediaUploadPhase::Cancelled
+                    } else {
+                        crate::RuntimeMediaUploadPhase::Failed
+                    };
+                    context.emit(
+                        terminal_phase,
+                        context.last_bytes_sent.load(Ordering::Acquire),
+                        context.base.total_bytes,
+                        (terminal_phase == crate::RuntimeMediaUploadPhase::Failed)
+                            .then(|| error.clone()),
+                    );
+                }
+                progress_terminal_guard.disarm();
+                return Err(error);
+            }
+        };
+        // preparedReference binds this physical invocation directly to the verified bytes.
+        // preparedReference 将本次物理调用直接绑定到已验证字节。
+        let prepared_reference = prepared
+            .prepared_reference()
+            .ok_or_else(|| {
+                String::from("Media-understanding preparation did not produce a request reference.")
+            })?
+            .to_string();
+        self.execution_client.remember_prepared_media(
+            &selection.route,
+            selection.model.id.as_str(),
+            local_path,
+            kind,
+            mime_type,
+            prepared,
+        );
+        if let Some(context) = progress_context.as_ref() {
+            context.emit(
+                crate::RuntimeMediaUploadPhase::Completed,
+                context.base.total_bytes.unwrap_or_default(),
+                context.base.total_bytes,
+                None,
+            );
+        }
+        progress_terminal_guard.disarm();
+        Ok(prepared_reference)
     }
 
     /// Executes one resolved Responses request with fresh credential material.
@@ -10789,6 +11235,7 @@ fn manual_model_capability_evidence(
         output_limit_declared: capabilities.output_limit.is_some(),
         input_modalities_declared: true,
         output_modalities_declared: true,
+        structured_output_declared: true,
         supports_text_input: Some(supports_text),
         supports_text_output: Some(supports_text),
     }
@@ -11105,6 +11552,152 @@ pub struct DeclaredProviderToolTemplateModel {
     pub display_name: String,
 }
 
+/// Builds an exact progress emitter for one provider-tool media upload.
+/// 为一次供应商工具媒体上传构建精确进度发射器。
+///
+/// # Parameters
+/// 参数
+/// The observer and owner opt into reporting; capability, route, operation, arguments, credential
+/// profile, and workspace are the same frozen inputs consumed by upload materialization.
+/// 观察器与所有者用于启用报告；能力、路由、操作、参数、凭据配置档与工作区均与上传物化消费的冻结输入一致。
+///
+/// # Returns
+/// 返回值
+/// `None` when no host observer or owner exists; otherwise a fully preflighted emitter context.
+/// 未安装宿主观察器或不存在所有者时返回 `None`；否则返回完成全部预检的发射上下文。
+#[allow(clippy::too_many_arguments)]
+async fn provider_tool_media_upload_progress_context(
+    observer: Option<crate::RuntimeMediaUploadProgressObserver>,
+    owner_session_id: Option<&str>,
+    capability: ProviderToolCapabilityKind,
+    resolved: &ResolvedProviderToolTarget,
+    operation: &crate::OperationDeclaration,
+    arguments: &serde_json::Value,
+    credential_profile: &crate::CredentialProfile,
+    workspace_root: Option<&Path>,
+) -> Result<Option<RuntimeMediaUploadProgressContext>, String> {
+    // observer and owner are both required to route a user-visible progress replacement.
+    // observer 与 owner 必须同时存在，才能路由面向用户的进度替换事件。
+    let (Some(observer), Some(owner_session_id)) = (observer, owner_session_id) else {
+        return Ok(None);
+    };
+    // mediaKind closes reporting to the three fixed understanding capabilities.
+    // mediaKind 将报告范围限定到三个固定理解能力。
+    let media_kind = match capability {
+        ProviderToolCapabilityKind::ImageUnderstand => "image",
+        ProviderToolCapabilityKind::VideoUnderstand => "video",
+        ProviderToolCapabilityKind::AudioUnderstand => "audio",
+        _ => return Ok(None),
+    };
+    // projection identifies the exact provider-native source field generated from the facade.
+    // projection 标识由固定外壳生成的精确供应商原生来源字段。
+    let projection = resolved
+        .target
+        .contract
+        .media_input_projection
+        .as_ref()
+        .ok_or_else(|| {
+            format!(
+                "Media-understanding target `{}` has no input projection for upload progress.",
+                resolved.target.target_id
+            )
+        })?;
+    // sourcePointer is the authoritative operation binding path for the projected media field.
+    // sourcePointer 是投影媒体字段的权威操作绑定路径。
+    let source_pointer = format!("/{}", projection.path_field);
+    // binding must be unique because one fixed media invocation owns exactly one input file.
+    // binding 必须唯一，因为一次固定媒体调用只持有一个输入文件。
+    let mut matching_bindings = operation
+        .upload_bindings
+        .iter()
+        .filter(|binding| binding.source_path == source_pointer);
+    let binding = matching_bindings.next().ok_or_else(|| {
+        format!(
+            "Media-understanding operation `{}` has no upload binding for `{source_pointer}`.",
+            operation.operation_id
+        )
+    })?;
+    if matching_bindings.next().is_some() {
+        return Err(format!(
+            "Media-understanding operation `{}` has ambiguous upload bindings for `{source_pointer}`.",
+            operation.operation_id
+        ));
+    }
+    // sourceValue is the exact native argument preserved until upload materialization.
+    // sourceValue 是保留到上传物化阶段的精确原生参数。
+    let source_value = arguments.pointer(source_pointer.as_str()).ok_or_else(|| {
+        format!(
+            "Media-understanding upload source `{source_pointer}` is missing after argument projection."
+        )
+    })?;
+    // sourceReference and itemCount retain the scalar versus explicit one-item-array contract.
+    // sourceReference 与 itemCount 保留标量与显式单项数组契约。
+    let (source_reference, item_count) = match source_value {
+        serde_json::Value::String(reference) if !reference.trim().is_empty() => {
+            (reference.as_str(), 1_usize)
+        }
+        serde_json::Value::Array(values) if values.len() == 1 => {
+            let reference = values[0]
+                .as_str()
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| {
+                    String::from(
+                        "Media-understanding upload array must contain one non-empty local path.",
+                    )
+                })?;
+            (reference, values.len())
+        }
+        _ => {
+            return Err(String::from(
+                "Media-understanding upload source must be one non-empty local path.",
+            ));
+        }
+    };
+    // uploadRoute repeats the generic engine preflight to obtain its exact channel and byte facts.
+    // uploadRoute 重复通用引擎预检，以取得其精确通道与字节事实。
+    let (upload_channel_id, total_bytes) =
+        crate::upload_engine::inspect_local_operation_upload_progress_route(
+            binding,
+            &resolved.upload_channels,
+            source_reference,
+            item_count,
+            workspace_root,
+            credential_profile.credential_role.as_deref(),
+        )
+        .await?;
+    // fileName is derived only from the already validated local path argument.
+    // fileName 仅从已校验的本地路径参数派生。
+    let file_name = Path::new(source_reference)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| String::from("Media-understanding upload path has no valid file name."))?;
+    Ok(Some(RuntimeMediaUploadProgressContext {
+        observer,
+        base: crate::RuntimeMediaUploadProgressEvent {
+            transfer_id: format!("media-tool:{}", Uuid::new_v4()),
+            owner_session_id: owner_session_id.to_string(),
+            provider_id: resolved.connection.provider_id.clone(),
+            service_entry_id: resolved.entry.id.clone(),
+            connection_id: resolved.connection.id.clone(),
+            model_id: resolved.target.upstream_target_id.clone(),
+            protocol_profile_id: String::from("provider-tool"),
+            manifest_revision: resolved.manifest_revision,
+            manifest_generation: resolved.manifest_generation,
+            route_revision: resolved.route_revision.clone(),
+            operation_id: operation.operation_id.clone(),
+            upload_channel_id,
+            file_name: file_name.to_string(),
+            media_kind: media_kind.to_string(),
+            phase: crate::RuntimeMediaUploadPhase::Preparing,
+            bytes_sent: 0,
+            total_bytes: Some(total_bytes),
+            error: None,
+        },
+        last_bytes_sent: Arc::new(AtomicU64::new(0)),
+    }))
+}
+
 /// Frozen internal provider tool route resolved before secret loading.
 /// 秘密加载前解析的冻结内部供应商工具路由。
 struct ResolvedProviderToolTarget {
@@ -11132,6 +11725,12 @@ struct ResolvedProviderToolTarget {
     /// Exact manifest revision captured with the target and operation.
     /// 与目标和操作共同捕获的精确 Manifest 修订号。
     manifest_revision: u64,
+    /// Exact immutable manifest generation captured with the target.
+    /// 与目标共同捕获的精确不可变 Manifest 代际。
+    manifest_generation: u64,
+    /// Content- and target-addressed non-secret route identity.
+    /// 内容与目标寻址的非秘密路由身份。
+    route_revision: String,
 }
 
 impl ResolvedProviderToolTarget {
@@ -11475,6 +12074,57 @@ mod tests {
         ANTHROPIC_MESSAGES_PROFILE_ID, ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID,
         GEMINI_GENERATE_CONTENT_PROFILE_ID, OPENAI_CHAT_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID,
     };
+
+    /// Verifies dropping an active upload emits cancellation with the latest byte count.
+    /// 验证丢弃进行中的上传会使用最近字节数发出取消终态。
+    #[test]
+    fn media_upload_terminal_guard_emits_cancelled_on_drop() {
+        // observed owns the complete ordered event sequence emitted by the test context.
+        // observed 持有测试上下文发出的完整有序事件序列。
+        let observed = Arc::new(StdMutex::new(Vec::new()));
+        let observed_for_callback = Arc::clone(&observed);
+        let context = RuntimeMediaUploadProgressContext {
+            observer: Arc::new(move |event| {
+                observed_for_callback
+                    .lock()
+                    .expect("progress event lock")
+                    .push(event);
+            }),
+            base: crate::RuntimeMediaUploadProgressEvent {
+                transfer_id: String::from("transfer-one"),
+                owner_session_id: String::from("session-one"),
+                provider_id: String::from("provider-one"),
+                service_entry_id: String::from("entry-one"),
+                connection_id: String::from("connection-one"),
+                model_id: String::from("model-one"),
+                protocol_profile_id: String::from("provider-tool"),
+                manifest_revision: 1,
+                manifest_generation: 2,
+                route_revision: String::from("route-one"),
+                operation_id: String::from("video-understanding"),
+                upload_channel_id: String::from("video-file"),
+                file_name: String::from("clip.mp4"),
+                media_kind: String::from("video"),
+                phase: crate::RuntimeMediaUploadPhase::Preparing,
+                bytes_sent: 0,
+                total_bytes: Some(10),
+                error: None,
+            },
+            last_bytes_sent: Arc::new(AtomicU64::new(0)),
+        };
+        {
+            // guard remains armed while one uploading event advances the retained byte counter.
+            // guard 在一条上传事件推进保留字节计数时保持启用。
+            let _guard = RuntimeMediaUploadTerminalGuard::new(Some(&context));
+            context.emit(crate::RuntimeMediaUploadPhase::Uploading, 7, Some(10), None);
+        }
+
+        let events = observed.lock().expect("progress event lock");
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].phase, crate::RuntimeMediaUploadPhase::Uploading);
+        assert_eq!(events[1].phase, crate::RuntimeMediaUploadPhase::Cancelled);
+        assert_eq!(events[1].bytes_sent, 7);
+    }
 
     /// Verifies provider diagnostics redact credentials while preserving bounded route identity.
     /// 验证供应商诊断会脱敏凭据并保留有界路由身份。
@@ -19404,7 +20054,7 @@ mod tests {
             .credential_profiles
             .first()
             .expect("Manifest-only entry must declare a credential profile");
-        let route = entry
+        let _route = entry
             .protocol_routes
             .iter()
             .find(|route| route.verified)
@@ -19465,7 +20115,7 @@ mod tests {
             .credential_profiles
             .first()
             .expect("custom provider must expose one profile");
-        let route = entry
+        let _route = entry
             .protocol_routes
             .first()
             .expect("custom provider must expose one route");

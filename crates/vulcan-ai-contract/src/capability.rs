@@ -126,6 +126,23 @@ impl CapabilitySupport {
     }
 }
 
+/// Declares the strongest structured-output contract supported by one exact model route.
+/// 声明一条精确模型路由支持的最强结构化输出契约。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StructuredOutputCapability {
+    /// Supports JSON Object mode and host-side schema validation.
+    /// 支持 JSON Object 模式与宿主侧 Schema 校验。
+    #[default]
+    JsonObject,
+    /// Supports provider-native JSON Schema mode and host-side schema validation.
+    /// 支持供应商原生 JSON Schema 模式与宿主侧 Schema 校验。
+    JsonSchema,
+    /// Does not provide a stable structured-output contract.
+    /// 不提供稳定的结构化输出契约。
+    Unsupported,
+}
+
 /// Describes the resolved capabilities of one model route.
 /// 描述一条模型路由解析后的能力。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -141,6 +158,10 @@ pub struct ModelCapabilities {
     /// 支持的输出资源类别。
     #[serde(default)]
     pub output_resources: Vec<ResourceKind>,
+    /// Structured-output support for this exact route.
+    /// 此精确路由的结构化输出支持能力。
+    #[serde(default)]
+    pub structured_output: StructuredOutputCapability,
     /// Strong embedding capabilities for this exact route.
     /// 此精确路由的强类型向量能力。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -185,18 +206,19 @@ pub struct ModelCapabilities {
 }
 
 impl Default for ModelCapabilities {
-    /// Builds a conservative capability snapshot that enables no optional behavior.
-    /// 构建不启用任何可选行为的保守能力快照。
+    /// Builds a conservative capability snapshot with JSON Object as the only assumed optional behavior.
+    /// 构建一份保守能力快照，仅默认假定支持 JSON Object 这一项可选行为。
     ///
     /// # Returns
     /// 返回值
-    /// A snapshot whose limits and advanced-capability support are unknown.
-    /// 返回限制与高级能力支持状态均未知的快照。
+    /// A snapshot whose limits and advanced capabilities are unknown except for JSON Object output.
+    /// 返回除 JSON Object 输出外，限制与高级能力支持状态均未知的快照。
     fn default() -> Self {
         Self {
             operations: Vec::new(),
             input_resources: Vec::new(),
             output_resources: Vec::new(),
+            structured_output: StructuredOutputCapability::default(),
             embedding: None,
             rerank: None,
             reasoning: CapabilitySupport::Unknown,
@@ -214,7 +236,17 @@ impl Default for ModelCapabilities {
 
 #[cfg(test)]
 mod tests {
-    use super::{ModelCapabilities, NativeToolKind, ReasoningEffort};
+    use super::{ModelCapabilities, NativeToolKind, ReasoningEffort, StructuredOutputCapability};
+
+    /// Verifies omitted structured-output capability defaults to JSON Object support.
+    /// 验证省略结构化输出能力时默认使用 JSON Object 支持。
+    #[test]
+    fn structured_output_defaults_to_json_object() {
+        assert_eq!(
+            ModelCapabilities::default().structured_output,
+            StructuredOutputCapability::JsonObject
+        );
+    }
 
     /// Verifies the public wire contract serializes extra-high reasoning only as `xhigh`.
     /// 验证公共 Wire 契约仅将超高推理强度序列化为 `xhigh`。

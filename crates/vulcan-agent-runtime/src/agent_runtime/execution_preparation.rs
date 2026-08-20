@@ -145,8 +145,9 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
             model_blueprint.provider_id.as_str(),
             model_blueprint.model_id.as_str(),
             model_declared_context_limit(&model_blueprint.public_capabilities),
+            request.context_compaction_window_node_id,
             request.context_compaction_policy,
-        );
+        )?;
     after_precheck_trace(
         "after_precheck_25a4_provider_configuration_ready",
         format!("session={}", request.session_id),
@@ -265,6 +266,7 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         public_ai_configuration,
         workspace_root.clone(),
         &request.provider_tool_selections_override,
+        &request.provider_tool_enabled_capabilities_override,
         &request.provider_extension_target_sets_override,
         suppress_external_web_search,
     )?;

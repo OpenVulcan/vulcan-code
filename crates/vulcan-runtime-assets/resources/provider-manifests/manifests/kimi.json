@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "kimi",
-  "revision": 5,
-  "published_at": "2026-08-06T00:00:00Z",
+  "revision": 7,
+  "published_at": "2026-08-20T00:00:00Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -10,13 +10,16 @@
       "anthropic-messages.v1",
       "anthropic-messages-video.v1"
     ],
-    "required_execution_primitives": [],
+    "required_execution_primitives": [
+      "conversation_media_analyze"
+    ],
     "required_upload_primitives": [
       "multipart_file"
     ],
     "required_transformers": [
       "conditional_set",
       "delete_json_pointer",
+      "rebuild_json_template",
       "set_literal"
     ]
   },
@@ -56,6 +59,16 @@
         {
           "protocol_profile_id": "openai-chat-completions.v1",
           "endpoint_path": "/chat/completions",
+          "input_resource_constraints": [
+            {
+              "resource_kind": "video",
+              "max_bytes": 100000000,
+              "reference_policy": "local_only",
+              "upload_channel_refs": [
+                "platform-cn.video-file"
+              ]
+            }
+          ],
           "usage_profile_refs": [],
           "request_profile_refs": [
             "kimi.chat.reasoning.v1"
@@ -96,6 +109,16 @@
         {
           "protocol_profile_id": "openai-chat-completions.v1",
           "endpoint_path": "/chat/completions",
+          "input_resource_constraints": [
+            {
+              "resource_kind": "video",
+              "max_bytes": 100000000,
+              "reference_policy": "local_only",
+              "upload_channel_refs": [
+                "platform-global.video-file"
+              ]
+            }
+          ],
           "usage_profile_refs": [],
           "request_profile_refs": [
             "kimi.chat.reasoning.v1"
@@ -150,6 +173,16 @@
         {
           "protocol_profile_id": "openai-chat-completions.v1",
           "endpoint_path": "/chat/completions",
+          "input_resource_constraints": [
+            {
+              "resource_kind": "video",
+              "max_bytes": 100000000,
+              "reference_policy": "local_only",
+              "upload_channel_refs": [
+                "coding-plan.video-file"
+              ]
+            }
+          ],
           "usage_profile_refs": [],
           "request_profile_refs": [
             "kimi.chat.reasoning.v1"
@@ -183,7 +216,7 @@
           "input_resource_constraints": [
             {
               "resource_kind": "video",
-              "max_bytes": 1073741824,
+              "max_bytes": 100000000,
               "reference_policy": "local_only",
               "upload_channel_refs": [
                 "coding-plan.video-file"
@@ -655,7 +688,8 @@
       "capabilities": {
         "operations": ["conversation_respond"],
         "input_resources": [
-          "image"
+          "image",
+          "video"
         ],
         "output_resources": [],
         "reasoning": "unknown",
@@ -957,10 +991,128 @@
           }
         ]
       }
+    },
+    {
+      "profile_id": "kimi.video-understanding.request.v1",
+      "description": "Build the reviewed Kimi OpenAI-compatible streaming video-understanding request.",
+      "payload": {
+        "profile_id": "kimi.video-understanding.request.v1",
+        "revision": 1,
+        "steps": [
+          {
+            "op": "rebuild_json_template",
+            "template": {
+              "model": {
+                "$vulcan_model_id": true
+              },
+              "stream": true,
+              "messages": [
+                {
+                  "role": "user",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": {
+                        "$vulcan_ref": {
+                          "path": "/prompt"
+                        }
+                      }
+                    },
+                    {
+                      "type": "video_url",
+                      "video_url": {
+                        "url": {
+                          "$vulcan_ref": {
+                            "path": "/video_reference"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      }
     }
   ],
   "response_profiles": [],
   "upload_channels": [
+    {
+      "upload_channel_id": "platform-cn.video-file",
+      "description": "Upload one local video through the Kimi Open Platform China file endpoint.",
+      "primitive": "multipart_file",
+      "endpoint_host": "api.moonshot.cn",
+      "endpoint_path": "/v1/files",
+      "method": "POST",
+      "file_field": "file",
+      "accepted_mime_types": [
+        "video/mp4",
+        "video/mpeg",
+        "video/quicktime",
+        "video/mov",
+        "video/avi",
+        "video/x-msvideo",
+        "video/x-flv",
+        "video/webm",
+        "video/x-matroska",
+        "video/x-m4v",
+        "video/wmv",
+        "video/x-ms-wmv",
+        "video/3gpp",
+        "video/3gpp2"
+      ],
+      "max_bytes": 100000000,
+      "max_count": 1,
+      "timeout_ms": 1800000,
+      "response_id_pointer": "/id",
+      "reference_template": "ms://{id}",
+      "progress_supported": true,
+      "cancellation_supported": true,
+      "fixed_fields": {
+        "purpose": "video"
+      },
+      "cache_duration_ms": 1800000,
+      "reference_encoding": "template"
+    },
+    {
+      "upload_channel_id": "platform-global.video-file",
+      "description": "Upload one local video through the Kimi Open Platform international file endpoint.",
+      "primitive": "multipart_file",
+      "endpoint_host": "api.moonshot.ai",
+      "endpoint_path": "/v1/files",
+      "method": "POST",
+      "file_field": "file",
+      "accepted_mime_types": [
+        "video/mp4",
+        "video/mpeg",
+        "video/quicktime",
+        "video/mov",
+        "video/avi",
+        "video/x-msvideo",
+        "video/x-flv",
+        "video/webm",
+        "video/x-matroska",
+        "video/x-m4v",
+        "video/wmv",
+        "video/x-ms-wmv",
+        "video/3gpp",
+        "video/3gpp2"
+      ],
+      "max_bytes": 100000000,
+      "max_count": 1,
+      "timeout_ms": 1800000,
+      "response_id_pointer": "/id",
+      "reference_template": "ms://{id}",
+      "progress_supported": true,
+      "cancellation_supported": true,
+      "fixed_fields": {
+        "purpose": "video"
+      },
+      "cache_duration_ms": 1800000,
+      "reference_encoding": "template"
+    },
     {
       "upload_channel_id": "coding-plan.video-file",
       "description": "Upload one local video through the Kimi Coding file endpoint.",
@@ -971,12 +1123,18 @@
       "file_field": "file",
       "accepted_mime_types": [
         "video/mp4",
+        "video/mpeg",
         "video/quicktime",
         "video/x-matroska",
         "video/webm",
-        "video/x-msvideo"
+        "video/x-msvideo",
+        "video/x-flv",
+        "video/x-ms-wmv",
+        "video/x-m4v",
+        "video/3gpp",
+        "video/3gpp2"
       ],
-      "max_bytes": 1073741824,
+      "max_bytes": 100000000,
       "max_count": 1,
       "timeout_ms": 1800000,
       "response_id_pointer": "/id",
@@ -990,10 +1148,283 @@
       "reference_encoding": "template"
     }
   ],
-  "operations": [],
-  "tool_targets": [],
+  "operations": [
+    {
+      "operation_id": "kimi.platform-cn.video-understanding",
+      "operation": "video_understand",
+      "carrier": "provider_tool",
+      "input_resources": ["video"],
+      "output_resources": [],
+      "tool_target_refs": [
+        "platform-cn.kimi-k2.7-code.video-understanding"
+      ],
+      "request_profile_refs": [
+        "kimi.video-understanding.request.v1"
+      ],
+      "response_profile_refs": [],
+      "upload_channel_refs": [
+        "platform-cn.video-file"
+      ],
+      "upload_bindings": [
+        {
+          "source_path": "/video_path",
+          "target_path": "/video_reference",
+          "upload_channel_refs": [
+            "platform-cn.video-file"
+          ],
+          "mime_types_by_extension": {
+            "mp4": "video/mp4",
+            "mpeg": "video/mpeg",
+            "mpg": "video/mpeg",
+            "mov": "video/quicktime",
+            "mkv": "video/x-matroska",
+            "avi": "video/x-msvideo",
+            "flv": "video/x-flv",
+            "webm": "video/webm",
+            "wmv": "video/x-ms-wmv",
+            "m4v": "video/x-m4v",
+            "3gp": "video/3gpp",
+            "3g2": "video/3gpp2"
+          },
+          "required": true,
+          "remove_source": true
+        }
+      ],
+      "timeout_ms": 1800000,
+      "idempotent": false
+    },
+    {
+      "operation_id": "kimi.platform-global.video-understanding",
+      "operation": "video_understand",
+      "carrier": "provider_tool",
+      "input_resources": ["video"],
+      "output_resources": [],
+      "tool_target_refs": [
+        "platform-global.kimi-k2.7-code.video-understanding"
+      ],
+      "request_profile_refs": [
+        "kimi.video-understanding.request.v1"
+      ],
+      "response_profile_refs": [],
+      "upload_channel_refs": [
+        "platform-global.video-file"
+      ],
+      "upload_bindings": [
+        {
+          "source_path": "/video_path",
+          "target_path": "/video_reference",
+          "upload_channel_refs": [
+            "platform-global.video-file"
+          ],
+          "mime_types_by_extension": {
+            "mp4": "video/mp4",
+            "mpeg": "video/mpeg",
+            "mpg": "video/mpeg",
+            "mov": "video/quicktime",
+            "mkv": "video/x-matroska",
+            "avi": "video/x-msvideo",
+            "flv": "video/x-flv",
+            "webm": "video/webm",
+            "wmv": "video/x-ms-wmv",
+            "m4v": "video/x-m4v",
+            "3gp": "video/3gpp",
+            "3g2": "video/3gpp2"
+          },
+          "required": true,
+          "remove_source": true
+        }
+      ],
+      "timeout_ms": 1800000,
+      "idempotent": false
+    },
+    {
+      "operation_id": "kimi.coding-plan.video-understanding",
+      "operation": "video_understand",
+      "carrier": "provider_tool",
+      "input_resources": ["video"],
+      "output_resources": [],
+      "tool_target_refs": [
+        "coding-plan.kimi-for-coding.video-understanding"
+      ],
+      "request_profile_refs": [
+        "kimi.video-understanding.request.v1"
+      ],
+      "response_profile_refs": [],
+      "upload_channel_refs": [
+        "coding-plan.video-file"
+      ],
+      "upload_bindings": [
+        {
+          "source_path": "/video_path",
+          "target_path": "/video_reference",
+          "upload_channel_refs": [
+            "coding-plan.video-file"
+          ],
+          "mime_types_by_extension": {
+            "mp4": "video/mp4",
+            "mpeg": "video/mpeg",
+            "mpg": "video/mpeg",
+            "mov": "video/quicktime",
+            "mkv": "video/x-matroska",
+            "webm": "video/webm",
+            "avi": "video/x-msvideo",
+            "flv": "video/x-flv",
+            "wmv": "video/x-ms-wmv",
+            "m4v": "video/x-m4v",
+            "3gp": "video/3gpp",
+            "3g2": "video/3gpp2"
+          },
+          "required": true,
+          "remove_source": true
+        }
+      ],
+      "timeout_ms": 1800000,
+      "idempotent": false
+    }
+  ],
+  "tool_targets": [
+    {
+      "target_id": "platform-cn.kimi-k2.7-code.video-understanding",
+      "description": "Understand one local video through the Kimi Open Platform China Files API and Kimi K2.7 Code.",
+      "service_entry_id": "platform-cn",
+      "credential_profile_ids": ["api-key"],
+      "upstream_target_id": "kimi-k2.7-code",
+      "availability_model_ids_any": ["kimi-k2.7-code"],
+      "display_name": "Kimi K2.7 Code Video Understanding (China)",
+      "tool_id": "video_understand",
+      "capability": "video_understand",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "video_path": {
+            "type": "string",
+            "minLength": 1,
+            "format": "vulcan-local-path"
+          },
+          "prompt": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": ["video_path", "prompt"]
+      },
+      "media_input_projection": {
+        "path_field": "video_path",
+        "prompt_field": "prompt"
+      },
+      "output": {
+        "kind": "text",
+        "normalized_result_path": "text",
+        "source_path": "/text"
+      },
+      "execution": {
+        "adapter": "generic_json",
+        "authentication": "bearer_authorization",
+        "endpoint_path": "/chat/completions",
+        "execution_kind": "conversation_media_analyze"
+      }
+    },
+    {
+      "target_id": "platform-global.kimi-k2.7-code.video-understanding",
+      "description": "Understand one local video through the Kimi Open Platform international Files API and Kimi K2.7 Code.",
+      "service_entry_id": "platform-global",
+      "credential_profile_ids": ["api-key"],
+      "upstream_target_id": "kimi-k2.7-code",
+      "availability_model_ids_any": ["kimi-k2.7-code"],
+      "display_name": "Kimi K2.7 Code Video Understanding (International)",
+      "tool_id": "video_understand",
+      "capability": "video_understand",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "video_path": {
+            "type": "string",
+            "minLength": 1,
+            "format": "vulcan-local-path"
+          },
+          "prompt": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": ["video_path", "prompt"]
+      },
+      "media_input_projection": {
+        "path_field": "video_path",
+        "prompt_field": "prompt"
+      },
+      "output": {
+        "kind": "text",
+        "normalized_result_path": "text",
+        "source_path": "/text"
+      },
+      "execution": {
+        "adapter": "generic_json",
+        "authentication": "bearer_authorization",
+        "endpoint_path": "/chat/completions",
+        "execution_kind": "conversation_media_analyze"
+      }
+    },
+    {
+      "target_id": "coding-plan.kimi-for-coding.video-understanding",
+      "description": "Understand one local video through the Kimi Coding Files API and Kimi K2.7 Code.",
+      "service_entry_id": "coding-plan",
+      "credential_profile_ids": ["coding-api-key", "coding-plan-login"],
+      "upstream_target_id": "kimi-for-coding",
+      "availability_model_ids_any": ["kimi-for-coding"],
+      "display_name": "Kimi Coding Plan Video Understanding",
+      "tool_id": "video_understand",
+      "capability": "video_understand",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "video_path": {
+            "type": "string",
+            "minLength": 1,
+            "format": "vulcan-local-path"
+          },
+          "prompt": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": ["video_path", "prompt"]
+      },
+      "media_input_projection": {
+        "path_field": "video_path",
+        "prompt_field": "prompt"
+      },
+      "output": {
+        "kind": "text",
+        "normalized_result_path": "text",
+        "source_path": "/text"
+      },
+      "execution": {
+        "adapter": "generic_json",
+        "authentication": "coding_device_bearer",
+        "endpoint_path": "/chat/completions",
+        "execution_kind": "conversation_media_analyze"
+      }
+    }
+  ],
   "provenance": {
-    "status": "migrated",
-    "sources": []
+    "status": "verified",
+    "sources": [
+      {
+        "url": "https://platform.kimi.com/docs/api/files-upload",
+        "note": "Official China Files API upload purpose, Bearer authentication, response id, and 100 MB file limit."
+      },
+      {
+        "url": "https://platform.kimi.com/docs/guide/use-kimi-vision-model",
+        "note": "Official Kimi video models, supported formats, ms:// reference, and OpenAI video_url request shape."
+      },
+      {
+        "url": "https://github.com/MoonshotAI/kimi-cli/blob/cbc15c076d17f70fec9f89c90c0502e68657f505/packages/kosong/src/kosong/chat_provider/kimi.py",
+        "note": "Official Kimi CLI Coding endpoint multipart upload and ms:// reference implementation."
+      }
+    ]
   }
 }

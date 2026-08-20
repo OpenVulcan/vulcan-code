@@ -55,13 +55,13 @@ fn composer_attachment_kind_metadata(
             key: "video",
             aliases: &[],
             label: "视频",
-            accept: "video/mp4,video/quicktime,video/x-matroska,video/webm,video/x-msvideo",
+            accept: "video/mp4,video/mpeg,video/quicktime,video/mov,video/x-m4v,video/x-matroska,video/webm,video/x-msvideo,video/avi,video/x-flv,video/x-ms-wmv,video/wmv,video/3gpp,video/3gpp2",
         },
         ConversationAttachmentKind::Audio => ComposerAttachmentKindMetadata {
             key: "audio",
             aliases: &[],
             label: "音频",
-            accept: "audio/mpeg,audio/wav,audio/mp4,audio/aac,audio/flac,audio/ogg",
+            accept: "audio/mpeg,audio/mp3,audio/wav,audio/x-wav,audio/mp4,audio/m4a,audio/x-m4a,audio/aac,audio/flac,audio/ogg,audio/oga,audio/opus,audio/pcm,audio/l16,audio/basic",
         },
         ConversationAttachmentKind::Pdf => ComposerAttachmentKindMetadata {
             key: "pdf",
@@ -284,6 +284,14 @@ mod tests {
         assert_eq!(
             composer_attachment_kind_accept(&kind),
             "image/png,image/jpeg,image/webp,image/gif,image/bmp"
+        );
+        assert_eq!(
+            composer_attachment_kind_accept(&ConversationAttachmentKind::Video),
+            "video/mp4,video/mpeg,video/quicktime,video/mov,video/x-m4v,video/x-matroska,video/webm,video/x-msvideo,video/avi,video/x-flv,video/x-ms-wmv,video/wmv,video/3gpp,video/3gpp2"
+        );
+        assert_eq!(
+            composer_attachment_kind_accept(&ConversationAttachmentKind::Audio),
+            "audio/mpeg,audio/mp3,audio/wav,audio/x-wav,audio/mp4,audio/m4a,audio/x-m4a,audio/aac,audio/flac,audio/ogg,audio/oga,audio/opus,audio/pcm,audio/l16,audio/basic"
         );
     }
 

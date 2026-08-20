@@ -312,6 +312,9 @@ pub struct ExecutionPreparationRequest {
             vulcan_workbench_model::SessionProviderToolTargetSelection,
         >,
     >,
+    /// Optional session-enabled direct and media capability keys, independent from backend identity.
+    /// 与后端身份分离的可选会话级已启用直连及媒体能力键。
+    pub provider_tool_enabled_capabilities_override: Option<std::collections::BTreeSet<String>>,
     /// Optional session-selected native model-extension target sets keyed by extension capability.
     /// 按扩展能力索引的可选会话级原生模型扩展目标集合。
     pub provider_extension_target_sets_override: Option<
@@ -350,6 +353,9 @@ pub struct ExecutionPreparationRequest {
     /// Optional context-compaction policy resolved for this execution request.
     /// 为本次执行请求解析出的可选上下文压缩策略。
     pub context_compaction_policy: Option<ContextCompactionPolicy>,
+    /// Optional stable context-compaction window node selected by the owning session.
+    /// 所属会话选择的可选稳定上下文压缩窗口节点。
+    pub context_compaction_window_node_id: Option<vulcan_context::ContextCompactionWindowNodeId>,
     /// Optional request-level input-token budget limit resolved for this execution request.
     /// 为本次执行请求解析出的可选输入 Token 预算上限。
     pub context_budget_override: Option<usize>,

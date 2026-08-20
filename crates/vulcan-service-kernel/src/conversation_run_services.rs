@@ -20,7 +20,6 @@ pub(crate) enum StopConversationRunMode {
     /// 停止主会话运行以及所有运行中的智能体。
     MainAndSubagents,
 }
-
 /// RPC response returned by one conversation stop request.
 /// 单次会话停止请求返回的 RPC 响应。
 #[derive(Debug, Serialize)]
@@ -714,6 +713,158 @@ pub(crate) async fn service_set_session_vmm_policy(
             ))?;
         }
     }
+    emit_session_addons_changed_delta(&app, &state, session_id)
+}
+
+/// Persists one session context-compaction window node without changing the model hard window.
+/// 持久化一个会话上下文压缩窗口节点，但不改变模型硬窗口。
+///
+/// # Parameters
+/// 参数
+/// `app` emits addon and Workbench updates, `state` owns the exact session and model runtime, and
+/// `request` carries the immutable conversation id plus an optional stable node id.
+/// `app` 发出 addon 与 Workbench 更新，`state` 持有精确会话与模型运行时，`request` 携带
+/// 不可变会话标识及可选稳定节点标识。
+///
+/// # Returns
+/// 返回值
+/// The authoritative addon projection after durable persistence succeeds.
+/// 持久化成功后返回权威 addon 投影。
+pub(crate) async fn service_set_session_context_compaction_window(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    request: SessionContextCompactionWindowUpdateRequest,
+) -> Result<SessionAddonsChangedResponse, String> {
+    let session_id = parse_session_id(&request.conversation_id)
+        .ok_or_else(|| String::from("当前草稿会话尚未创建，暂时不能切换上下文压缩窗口。"))?;
+    let node_id = request
+        .node_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::parse::<vulcan_context::ContextCompactionWindowNodeId>)
+        .transpose()?;
+    let updated_at = current_unix_millis_text();
+    // configurationTransaction serializes this session node against every model-selection mutation.
+    // configurationTransaction 将本次会话节点修改与全部模型选择变更串行化。
+    let configuration_transaction = begin_public_ai_configuration_transaction().await;
+    // addonPersistGuard makes the runtime-controls snapshot authoritative after older queued writes.
+    // addonPersistGuard 使运行控制快照在旧排队写入之后保持权威。
+    let addon_persist_lock = webui_workspace_persist_lock();
+    let _addon_persist_guard = addon_persist_lock.lock().await;
+    let (controller_runtime, workspace_snapshot, addon_state) = {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        if guard.active_stream_tasks.contains_key(&session_id)
+            || guard
+                .session_turn_admission_reservations
+                .contains_key(&session_id)
+        {
+            return Err(String::from(
+                "当前会话正在执行，完成或停止本次执行后才能切换上下文压缩窗口。",
+            ));
+        }
+        let controller_runtime = guard.controller_runtime.clone().ok_or_else(|| {
+            String::from("service is still starting; controller runtime is not ready")
+        })?;
+        let workspace_snapshot = guard.workspace_snapshot.as_ref().ok_or_else(|| {
+            String::from("service is still starting; workspace snapshot is not ready")
+        })?;
+        if !workspace_snapshot_contains_regular_session(workspace_snapshot, session_id) {
+            return Err(format!("未找到要切换上下文压缩窗口的会话：{session_id}"));
+        }
+        let runtime_state = workspace_snapshot.session_runtime_state.get(&session_id);
+        if let Some(node_id) = node_id {
+            let agent_runtime = guard.agent_runtime.as_ref().ok_or_else(|| {
+                String::from("service is still starting; agent runtime is not ready")
+            })?;
+            let public_ai_runtime = agent_runtime.public_ai_runtime.as_ref();
+            let configuration = public_ai_runtime.configuration_snapshot()?;
+            let node_tokens = configuration
+                .context_compaction_window_nodes
+                .tokens_for(node_id)?;
+            let selection = public_ai_workbench_selection(
+                &configuration,
+                public_ai_runtime,
+                Some(session_id),
+                runtime_state,
+            )?
+            .ok_or_else(|| String::from("当前会话没有可验证的模型选择。"))?;
+            let model_context_limit =
+                selection.model.capabilities.context_limit.ok_or_else(|| {
+                    String::from("当前模型未声明上下文窗口，无法锁定上下文压缩节点。")
+                })?;
+            if node_tokens >= model_context_limit {
+                return Err(format!(
+                    "上下文压缩节点 `{}` 当前为 {} Token，必须严格小于模型上下文窗口 {} Token。",
+                    node_id.as_str(),
+                    node_tokens,
+                    model_context_limit
+                ));
+            }
+        }
+        let mut next_runtime_state =
+            runtime_state
+                .cloned()
+                .unwrap_or_else(|| SessionRuntimeStateEntry {
+                    updated_at: updated_at.clone(),
+                    ..SessionRuntimeStateEntry::default()
+                });
+        next_runtime_state.context_compaction_window_node_id = node_id;
+        next_runtime_state.updated_at = updated_at.clone();
+        let runtime_controls = SessionRuntimeControls::from_runtime_state(&next_runtime_state)
+            .ok_or_else(|| String::from("当前会话没有可持久化的运行控制状态。"))?;
+        let mut addon_state = SessionAddonState::new(session_id);
+        let _ = addon_state.set_typed_namespace(
+            SessionAddonNamespace::RuntimeControls,
+            &runtime_controls,
+            updated_at.clone(),
+        );
+        (controller_runtime, workspace_snapshot.clone(), addon_state)
+    };
+    invalidate_webui_session_addon_persist_version(
+        &state,
+        session_id,
+        SessionAddonNamespace::RuntimeControls,
+    )?;
+    let persisted_addon_state = persist_workspace_session_addon_state_update(
+        controller_runtime,
+        workspace_snapshot,
+        session_id,
+        addon_state,
+    )
+    .await?;
+    {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        {
+            let workspace = guard.workspace_snapshot.as_mut().ok_or_else(|| {
+                String::from("service is still starting; workspace snapshot is not ready")
+            })?;
+            let runtime_state = workspace
+                .session_runtime_state
+                .entry(session_id)
+                .or_insert_with(|| SessionRuntimeStateEntry {
+                    updated_at: updated_at.clone(),
+                    ..SessionRuntimeStateEntry::default()
+                });
+            runtime_state.context_compaction_window_node_id = node_id;
+            runtime_state.live_context_budget_fingerprint = None;
+            runtime_state.anchor_context_budget_fingerprint = None;
+            runtime_state.updated_at = updated_at.clone();
+        }
+        guard.live_context_budgets.remove(&session_id);
+    }
+    drop(configuration_transaction);
+    emit_session_addon_changed_event(
+        &app,
+        session_id,
+        &[SessionAddonNamespace::RuntimeControls],
+        persisted_addon_state.revision,
+        latest_session_addon_updated_at(&persisted_addon_state),
+    );
     emit_session_addons_changed_delta(&app, &state, session_id)
 }
 

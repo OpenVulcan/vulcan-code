@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "anthropic",
-  "revision": 7,
-  "published_at": "2026-08-06T00:00:00Z",
+  "revision": 8,
+  "published_at": "2026-08-20T00:00:00Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -118,7 +118,8 @@
     "selected_protocol": "anthropic-messages.v1",
     "capabilities": {
       "operations": ["conversation_respond"],
-      "evidence_revision": "anthropic.default-capabilities.v1"
+      "structured_output": "json_schema",
+      "evidence_revision": "anthropic.default-capabilities.v2"
     },
     "default_usage_profile_refs": [],
     "default_request_profile_refs": [],

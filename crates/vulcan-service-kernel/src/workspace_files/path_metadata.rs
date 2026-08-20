@@ -190,6 +190,10 @@ pub(crate) fn workspace_file_extension_metadata(
             kind: WorkspaceFileEntryKind::Video,
             mime_type: "video/mp4",
         },
+        "mpeg" | "mpg" => WorkspaceFileExtensionMetadata {
+            kind: WorkspaceFileEntryKind::Video,
+            mime_type: "video/mpeg",
+        },
         "webm" => WorkspaceFileExtensionMetadata {
             kind: WorkspaceFileEntryKind::Video,
             mime_type: "video/webm",
@@ -201,6 +205,22 @@ pub(crate) fn workspace_file_extension_metadata(
         "mkv" => WorkspaceFileExtensionMetadata {
             kind: WorkspaceFileEntryKind::Video,
             mime_type: "video/x-matroska",
+        },
+        "avi" => WorkspaceFileExtensionMetadata {
+            kind: WorkspaceFileEntryKind::Video,
+            mime_type: "video/x-msvideo",
+        },
+        "flv" => WorkspaceFileExtensionMetadata {
+            kind: WorkspaceFileEntryKind::Video,
+            mime_type: "video/x-flv",
+        },
+        "wmv" => WorkspaceFileExtensionMetadata {
+            kind: WorkspaceFileEntryKind::Video,
+            mime_type: "video/x-ms-wmv",
+        },
+        "3gp" | "3gpp" => WorkspaceFileExtensionMetadata {
+            kind: WorkspaceFileEntryKind::Video,
+            mime_type: "video/3gpp",
         },
         "html" | "htm" => WorkspaceFileExtensionMetadata {
             kind: WorkspaceFileEntryKind::Code,

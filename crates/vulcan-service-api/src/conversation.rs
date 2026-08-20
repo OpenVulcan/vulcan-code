@@ -229,13 +229,13 @@ pub enum MediaUploadPhase {
     Failed,
 }
 
-/// Carries one ephemeral media-transfer progress update for the active submission.
-/// 携带活动提交的一条临时媒体传输进度更新。
+/// Carries one ephemeral media-transfer progress update for submission preparation or a running media tool.
+/// 携带提交准备阶段或运行中媒体工具的一条临时媒体传输进度更新。
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct MediaUploadProgressChangedDelta {
-    /// Client-generated submission identity used by the cancel RPC and draft recovery.
-    /// 客户端生成的提交标识，用于取消 RPC 与草稿恢复。
+    /// Unique transfer identity; cancellable pre-dispatch uploads reuse the client submission identity.
+    /// 唯一传输标识；可取消的分派前上传复用客户端提交标识。
     pub client_submission_id: String,
     /// Existing conversation identity, or null while a new draft is being prepared.
     /// 已有会话标识；新草稿准备期间为空。
@@ -297,6 +297,10 @@ pub struct MediaUploadProgressChangedDelta {
     /// 失败阶段携带的受控错误详情。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Whether the active transfer accepts the existing cancellation RPC.
+    /// 当前活动传输是否接受现有取消 RPC。
+    #[serde(default)]
+    pub cancellable: bool,
 }
 
 /// Classifies one ephemeral tool-request formation snapshot.
@@ -1003,6 +1007,19 @@ pub struct SessionProviderUsageSummary {
     pub usage_revision: u64,
 }
 
+/// Exposes one fixed system context-compaction window node to the WebUI.
+/// 向 WebUI 公开一个固定系统上下文压缩窗口节点。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextCompactionWindowNodeSummary {
+    /// Stable backend-owned node identifier persisted by sessions.
+    /// 由后台持有且被会话持久化的稳定节点标识。
+    pub id: String,
+    /// Current backend-authoritative token value for this node.
+    /// 当前节点由后台权威持有的 Token 值。
+    pub tokens: u64,
+}
+
 /// Replaces selected-session addon panels without rebuilding the full workbench.
 /// 在不重建完整工作台的情况下替换当前会话附属面板状态。
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
@@ -1031,6 +1048,10 @@ pub struct SessionAddonsChangedDelta {
     /// 当前输出风格覆盖与最近一次安全应用的快照。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_output_style: Option<SessionOutputStyleSummary>,
+    /// Stable context-compaction window node selected by this session.
+    /// 当前会话选择的稳定上下文压缩窗口节点。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_context_compaction_window_node_id: Option<String>,
     /// Live physical Provider request counts and token usage for this session.
     /// 当前会话实时物理 Provider 请求计数与 Token 用量。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1081,6 +1102,20 @@ pub struct SessionOutputStyleUpdateRequest {
     /// 风格标识；为空或空字符串清除覆盖并继承全局设置。
     #[serde(default)]
     pub style_id: Option<String>,
+}
+
+/// Requests one session-scoped context-compaction window node selection.
+/// 请求一次会话级上下文压缩窗口节点选择。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SessionContextCompactionWindowUpdateRequest {
+    /// Target conversation identifier.
+    /// 目标会话标识。
+    pub conversation_id: String,
+    /// Stable fixed node identifier; null clears the selection and restores the model default.
+    /// 稳定固定节点标识；为空时清除选择并恢复模型默认值。
+    #[serde(default)]
+    pub node_id: Option<String>,
 }
 
 /// Describes the selected session's VMM memory policy override and effective state.
@@ -1143,6 +1178,10 @@ pub struct SessionAddonsChangedResponse {
     /// 当前输出风格覆盖与最近一次安全应用的快照。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_output_style: Option<SessionOutputStyleSummary>,
+    /// Stable context-compaction window node selected by this session.
+    /// 当前会话选择的稳定上下文压缩窗口节点。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_context_compaction_window_node_id: Option<String>,
     /// Live physical Provider request counts and token usage for this session.
     /// 当前会话实时物理 Provider 请求计数与 Token 用量。
     #[serde(default, skip_serializing_if = "Option::is_none")]

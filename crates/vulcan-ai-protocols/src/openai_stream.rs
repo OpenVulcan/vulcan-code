@@ -1943,6 +1943,7 @@ fn normalize_openai_error(
             AiErrorCategory::ProviderOverloaded
         }
         Some("provider_unavailable") => AiErrorCategory::ProviderUnavailable,
+        Some("STREAM_ERROR") => AiErrorCategory::ProviderUnavailable,
         Some("timeout") => AiErrorCategory::Timeout,
         Some("context_length_exceeded" | "max_tokens_exceeded" | "token_limit_exceeded") => {
             AiErrorCategory::ContextLengthExceeded
@@ -2706,6 +2707,34 @@ mod tests {
             decoder
                 .finish()
                 .expect("terminal overload error should finish")
+                .is_empty()
+        );
+    }
+
+    /// Verifies the Responses stream transport error is normalized as a retryable provider failure.
+    /// 验证 Responses 流传输错误会被归一化为可重试的供应商失败。
+    #[test]
+    fn responses_stream_error_is_retryable() {
+        let mut decoder = OpenAiResponsesStreamDecoder::new(String::from("execution"));
+        let events = decoder
+            .push_sse(
+                Some("error"),
+                r#"{"type":"error","code":"STREAM_ERROR","message":"Responses stream call failed"}"#,
+            )
+            .expect("Responses stream error should decode");
+
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AiStreamEvent::ResponseFailed { error }
+                if error.category == AiErrorCategory::ProviderUnavailable
+                    && error.retryable
+                    && error.upstream_code.as_deref() == Some("STREAM_ERROR")
+                    && error.upstream_message.as_deref() == Some("Responses stream call failed")
+        )));
+        assert!(
+            decoder
+                .finish()
+                .expect("terminal stream error should finish")
                 .is_empty()
         );
     }

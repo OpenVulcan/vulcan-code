@@ -107,6 +107,10 @@ pub fn apply_capability_patch(
         target.output_resources = output_resources.clone();
         written.push("output_resources");
     }
+    if let Some(structured_output) = patch.structured_output {
+        target.structured_output = structured_output;
+        written.push("structured_output");
+    }
     if let Some(embedding) = &patch.embedding {
         target.embedding = embedding.clone();
         written.push("embedding");

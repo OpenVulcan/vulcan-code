@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest"
 
-import { internalStateForModel } from "@/components/features/settings/provider-model-settings"
+import {
+  internalStateForModel,
+  multimodalCandidateToggleDisabled,
+} from "@/components/features/settings/provider-model-settings"
 import type { PublicAiInternalInferenceCandidate } from "@/types"
 
 // candidateFixture builds one exact internal route while varying operation, scope, and state.
@@ -66,5 +69,19 @@ describe("internalStateForModel", () => {
     expect(internalStateForModel({
       internalInferenceCandidates: [],
     }, "opencode-go", "deepseek-v4-flash")).toBeNull()
+  })
+})
+
+describe("multimodalCandidateToggleDisabled", () => {
+  it("allows an admitted model to be removed after its route becomes ineligible", () => {
+    expect(multimodalCandidateToggleDisabled(false, false, true)).toBe(false)
+  })
+
+  it("blocks a new admission without an eligible executable route", () => {
+    expect(multimodalCandidateToggleDisabled(false, false, false)).toBe(true)
+  })
+
+  it("blocks every candidate mutation while another settings write is pending", () => {
+    expect(multimodalCandidateToggleDisabled(true, true, true)).toBe(true)
   })
 })

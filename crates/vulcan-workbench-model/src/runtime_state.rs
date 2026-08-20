@@ -3,7 +3,9 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
-use vulcan_context::{ContextWindowPolicy, SessionConversationState};
+use vulcan_context::{
+    ContextCompactionWindowNodeId, ContextWindowPolicy, SessionConversationState,
+};
 use vulcan_context_injection::ContextInjectionState;
 use vulcan_core::types::{ConversationAttachment, ProviderUsageSnapshot};
 use vulcan_provider_config::config::{PersistedPromptSkillState, ReasoningEffortLevel};

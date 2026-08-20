@@ -91,6 +91,7 @@ fn compaction_target_rejects_stale_exact_connection() {
         Some("removed-connection"),
         Some("gpt-test"),
         None,
+        None,
     );
     let Err(error) = result else {
         panic!("stale exact compaction connection must be rejected");
@@ -216,6 +217,9 @@ fn compaction_launch_request_preserves_ordinary_turn_controls() {
                 target_id: String::from("tool-model"),
             },
         )])),
+        provider_tool_enabled_capabilities_override: Some(BTreeSet::from([String::from(
+            "web_search",
+        )])),
         tool_request_hidden_tool_ids: vec![String::from("hidden-tool")],
         session_prompt_skill_overrides: BTreeMap::from([(
             String::from("review"),
@@ -251,6 +255,10 @@ fn compaction_launch_request_preserves_ordinary_turn_controls() {
             .and_then(|selections| selections.get("web_search"))
             .map(|selection| selection.target_id.as_str()),
         Some("tool-model")
+    );
+    assert_eq!(
+        request.provider_tool_enabled_capabilities_override,
+        Some(BTreeSet::from([String::from("web_search")]))
     );
     assert_eq!(
         request.tool_request_hidden_tool_ids,

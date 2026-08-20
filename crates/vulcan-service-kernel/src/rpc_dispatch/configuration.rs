@@ -51,6 +51,7 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_save_public_ai_usage_refresh_settings",
     "service_save_public_ai_provider_priority",
     "service_save_public_ai_context_window_policy_overrides",
+    "service_save_public_ai_context_compaction_window_nodes",
     "service_select_public_ai_model",
     "service_save_public_ai_model_overrides",
     "service_save_public_ai_model_enabled",
@@ -59,6 +60,8 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_save_public_ai_inference_route",
     "service_test_public_ai_inference_route",
     "service_save_public_ai_provider_tool_selection",
+    "service_save_public_ai_multimodal_understanding_candidate",
+    "service_save_public_ai_media_understanding_selection",
     "service_save_public_ai_provider_extension_target_set",
     "service_test_public_ai_provider_tool",
     "service_save_public_ai_provider_tool_capability_enabled",
@@ -369,6 +372,14 @@ pub(super) async fn dispatch(
             )
             .await,
         ),
+        "service_save_public_ai_context_compaction_window_nodes" => rpc_json_result(
+            service_save_public_ai_context_compaction_window_nodes(
+                app,
+                state,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
+        ),
         "service_select_public_ai_model" => rpc_json_result(
             service_select_public_ai_model(app, state, rpc_required_param(params, "request")?)
                 .await,
@@ -419,6 +430,22 @@ pub(super) async fn dispatch(
         ),
         "service_save_public_ai_provider_tool_selection" => rpc_json_result(
             service_save_public_ai_provider_tool_selection(
+                app,
+                state,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
+        ),
+        "service_save_public_ai_multimodal_understanding_candidate" => rpc_json_result(
+            service_save_public_ai_multimodal_understanding_candidate(
+                app,
+                state,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
+        ),
+        "service_save_public_ai_media_understanding_selection" => rpc_json_result(
+            service_save_public_ai_media_understanding_selection(
                 app,
                 state,
                 rpc_required_param(params, "request")?,

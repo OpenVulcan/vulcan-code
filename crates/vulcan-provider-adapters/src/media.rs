@@ -9,6 +9,92 @@ use tokio::sync::Notify;
 /// 报告已传输的源字节数与可选的源文件大小。
 pub type MediaUploadProgressCallback = Arc<dyn Fn(u64, Option<u64>) + Send + Sync>;
 
+/// Closed lifecycle phase emitted for a media transfer started by an AI-visible understanding tool.
+/// AI 可见理解工具发起媒体传输时发出的封闭生命周期阶段。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeMediaUploadPhase {
+    /// The route and local source have been validated before transfer.
+    /// 传输前已完成路由与本地来源校验。
+    Preparing,
+    /// Source bytes are being uploaded or materialized.
+    /// 正在上传或物化源字节。
+    Uploading,
+    /// The provider reference was prepared successfully.
+    /// 供应商引用已成功准备。
+    Completed,
+    /// Preparation failed with one controlled diagnostic.
+    /// 准备过程以一条受控诊断失败。
+    Failed,
+    /// The owning tool execution was cancelled or dropped before completion.
+    /// 所属工具执行在完成前被取消或丢弃。
+    Cancelled,
+}
+
+/// One provider-neutral progress event for media prepared after a user request starts.
+/// 用户请求开始后准备媒体时的一条供应商中立进度事件。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeMediaUploadProgressEvent {
+    /// Unique transfer identity used to replace one progress bar in place.
+    /// 用于原地替换单个进度条的唯一传输标识。
+    pub transfer_id: String,
+    /// Conversation or task session that owns this upload.
+    /// 持有本次上传的会话或任务会话。
+    pub owner_session_id: String,
+    /// Exact provider identifier.
+    /// 精确供应商标识。
+    pub provider_id: String,
+    /// Exact service-entry identifier.
+    /// 精确服务入口标识。
+    pub service_entry_id: String,
+    /// Exact credential connection identifier.
+    /// 精确凭据连接标识。
+    pub connection_id: String,
+    /// Exact upstream model identifier.
+    /// 精确上游模型标识。
+    pub model_id: String,
+    /// Exact protocol profile, or the stable provider-tool carrier identifier.
+    /// 精确协议 Profile，或稳定的供应商工具载体标识。
+    pub protocol_profile_id: String,
+    /// Frozen manifest revision.
+    /// 冻结的 Manifest 修订号。
+    pub manifest_revision: u64,
+    /// Frozen runtime manifest generation when available.
+    /// 可用时冻结的运行时 Manifest 代际。
+    pub manifest_generation: u64,
+    /// Content-addressed or target-addressed non-secret route identity.
+    /// 内容寻址或目标寻址的非秘密路由身份。
+    pub route_revision: String,
+    /// Stable operation that owns the upload.
+    /// 持有本次上传的稳定操作。
+    pub operation_id: String,
+    /// Exact upload channel selected by the frozen route.
+    /// 冻结路由选择的精确上传通道。
+    pub upload_channel_id: String,
+    /// User-visible source file name.
+    /// 面向用户展示的源文件名。
+    pub file_name: String,
+    /// Stable image, video, or audio kind.
+    /// 稳定的图片、视频或音频类型。
+    pub media_kind: String,
+    /// Current transfer lifecycle phase.
+    /// 当前传输生命周期阶段。
+    pub phase: RuntimeMediaUploadPhase,
+    /// Source bytes transferred or materialized so far.
+    /// 当前已传输或物化的源字节数。
+    pub bytes_sent: u64,
+    /// Optional exact source byte length.
+    /// 可选的精确源字节长度。
+    pub total_bytes: Option<u64>,
+    /// Controlled terminal diagnostic for the failed phase.
+    /// 失败阶段携带的受控终态诊断。
+    pub error: Option<String>,
+}
+
+/// Host observer for media-understanding upload progress.
+/// 媒体理解上传进度的宿主观察器。
+pub type RuntimeMediaUploadProgressObserver =
+    Arc<dyn Fn(RuntimeMediaUploadProgressEvent) + Send + Sync>;
+
 /// Coordinates cooperative cancellation for one pre-dispatch media transfer.
 /// 协调单次分派前媒体传输的协作式取消。
 #[derive(Clone, Default)]

@@ -1,0 +1,119 @@
+{
+  "schema_version": "provider-manifest-execution-fixture.v1",
+  "fixture_id": "alibaba-omni-audio-understanding",
+  "base_manifest": "alibaba.json",
+  "production_target_refs": [
+    "alibaba::model-studio-cn.qwen3.5-omni-plus.audio-understanding",
+    "alibaba::model-studio-cn.qwen3.5-omni-flash.audio-understanding",
+    "alibaba::model-studio-singapore.qwen3.5-omni-plus.audio-understanding",
+    "alibaba::model-studio-singapore.qwen3.5-omni-flash.audio-understanding"
+  ],
+  "tool_target": {
+    "target_id": "model-studio-cn.fixture-omni-audio-understanding",
+    "description": "Alibaba Qwen Omni audio-understanding projection and Chat SSE fixture.",
+    "service_entry_id": "model-studio-cn",
+    "credential_profile_ids": ["api-key"],
+    "upstream_target_id": "qwen3.5-omni-plus",
+    "display_name": "Alibaba Omni Audio Understanding Fixture",
+    "tool_id": "fixture_alibaba_omni_audio_understanding",
+    "capability": "audio_understand",
+    "input_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "task": {"type": "string", "enum": ["question_answer"]},
+        "instruction": {"type": "string", "minLength": 1},
+        "media_paths": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "items": {"type": "string", "minLength": 1}
+        }
+      },
+      "required": ["task", "media_paths", "instruction"]
+    },
+    "media_input_projection": {
+      "path_field": "media_paths",
+      "prompt_field": "instruction",
+      "path_as_single_item_array": true,
+      "fixed_arguments": {"task": "question_answer"}
+    },
+    "output": {
+      "kind": "text",
+      "source_path": "/text",
+      "normalized_result_path": "text"
+    },
+    "execution": {
+      "endpoint_path": "/compatible-mode/v1/chat/completions",
+      "authentication": "bearer_authorization",
+      "adapter": "generic_json",
+      "execution_kind": "conversation_media_analyze"
+    }
+  },
+  "operation": {
+    "operation_id": "fixture.alibaba-omni-audio-understanding",
+    "operation": "audio_understand",
+    "carrier": "provider_tool",
+    "input_resources": ["audio"],
+    "output_resources": [],
+    "tool_target_refs": ["model-studio-cn.fixture-omni-audio-understanding"],
+    "request_profile_refs": ["alibaba.media.omni.request.v1"],
+    "response_profile_refs": [],
+    "upload_channel_refs": ["inline.audio-data-url"],
+    "upload_bindings": [
+      {
+        "source_path": "/media_paths",
+        "target_path": "/media",
+        "upload_channel_refs": ["inline.audio-data-url"],
+        "mime_types_by_extension": {"mp3": "audio/mpeg"},
+        "required": true,
+        "remove_source": true,
+        "target_encoding": "resource_descriptor"
+      }
+    ],
+    "timeout_ms": 60000,
+    "idempotent": false
+  },
+  "upload_channels": [],
+  "request_profiles": [],
+  "response_profiles": [],
+  "required_execution_primitives": ["conversation_media_analyze"],
+  "required_upload_primitives": ["inline_data_url"],
+  "required_transformers": [],
+  "arguments": {
+    "task": "question_answer",
+    "instruction": "What is audible?",
+    "media_paths": ["data:audio/mpeg;base64,BAUG"]
+  },
+  "interactions": [
+    {
+      "method": "POST",
+      "path": "/compatible-mode/v1/chat/completions",
+      "expected_json_body": {
+        "model": "qwen3.5-omni-plus",
+        "stream": true,
+        "stream_options": {"include_usage": true},
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "Answer this question using only evidence from the supplied media:\nWhat is audible?"
+              },
+              {
+                "type": "input_audio",
+                "input_audio": {"data": "BAUG", "format": "mp3"}
+              }
+            ]
+          }
+        ]
+      },
+      "response_status": 200,
+      "response_content_type": "text/event-stream",
+      "response_text_body": "data: {\"choices\":[{\"delta\":{\"content\":\"A bell rings.\"}}]}\n\ndata: [DONE]\n\n"
+    }
+  ],
+  "expected_output_kind": "text",
+  "expected_text_output": "A bell rings."
+}

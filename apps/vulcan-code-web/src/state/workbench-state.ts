@@ -396,6 +396,8 @@ function deriveSelectedConversationFields(workbench: WorkbenchSnapshot): Workben
     sessionTodolist: sessionAddons?.sessionTodolist ?? null,
     sessionPlanMode: sessionAddons?.sessionPlanMode ?? null,
     sessionOutputStyle: sessionAddons?.sessionOutputStyle ?? null,
+    sessionContextCompactionWindowNodeId:
+      sessionAddons?.sessionContextCompactionWindowNodeId ?? null,
     sessionProviderUsage: sessionAddons?.sessionProviderUsage ?? null,
     sessionVmmPolicy: sessionVmmPolicyEntry?.sessionVmmPolicy ?? null,
     subagentNavigationByConversation,
@@ -454,6 +456,7 @@ function upsertSessionAddonsForConversation(
       || entry.sessionTodolist
       || entry.sessionPlanMode
       || entry.sessionOutputStyle
+      || entry.sessionContextCompactionWindowNodeId
       || entry.sessionProviderUsage,
   );
   return hasAddon ? [...next, entry] : next;

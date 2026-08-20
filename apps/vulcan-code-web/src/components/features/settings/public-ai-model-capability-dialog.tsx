@@ -33,6 +33,7 @@ import type {
   PublicAiModelCapabilityOverrides,
   PublicAiResourceKind,
   PublicAiSettingsSnapshot,
+  PublicAiStructuredOutputCapability,
 } from "@/types"
 
 // ContextWindowPolicyEditor edits one sparse Codex window layer and leaves empty fields inherited.
@@ -195,6 +196,9 @@ export function PublicAiModelCapabilityDialog(props: ModelCapabilityDialogProps)
   // inputResources is the complete model-level non-text input set.
   // inputResources 是完整的模型级非文本输入集合。
   const [inputResources, setInputResources] = React.useState<PublicAiResourceKind[]>([])
+  // structuredOutput is the model's explicit stable JSON-output contract.
+  // structuredOutput 是模型显式声明的稳定 JSON 输出契约。
+  const [structuredOutput, setStructuredOutput] = React.useState<PublicAiStructuredOutputCapability>("json_object")
   // reasoningEnabled is the simple user-defined model reasoning policy.
   // reasoningEnabled 是简化的自定义模型思考策略。
   const [reasoningEnabled, setReasoningEnabled] = React.useState(true)
@@ -228,12 +232,13 @@ export function PublicAiModelCapabilityDialog(props: ModelCapabilityDialogProps)
     context_limit: contextLimit,
     output_limit: outputLimit,
     input_resources: inputResources,
+    structured_output: structuredOutput,
     reasoning: reasoningEnabled ? "native" : "unsupported",
     reasoning_control: reasoningEnabled ? "effort_selection" : "fixed_off",
     reasoning_efforts: reasoningEnabled ? reasoningEfforts : ["none"],
     context_window_policy: contextWindowPolicy,
     request_projection: requestProjection,
-  }), [contextLimit, contextWindowPolicy, inputResources, outputLimit, reasoningEfforts, reasoningEnabled, requestProjection])
+  }), [contextLimit, contextWindowPolicy, inputResources, outputLimit, reasoningEfforts, reasoningEnabled, requestProjection, structuredOutput])
   // dirty is true only when the visible model layer differs semantically from its authoritative baseline.
   // dirty 仅在可见模型层与权威基线存在语义差异时为真。
   const dirty = !directProviderModelSettingsEqual(currentSettings, baselineSettings)
@@ -257,6 +262,7 @@ export function PublicAiModelCapabilityDialog(props: ModelCapabilityDialogProps)
     setContextLimit(settings.context_limit ?? 200_000)
     setOutputLimit(settings.output_limit ?? 32_768)
     setInputResources(settings.input_resources ?? [])
+    setStructuredOutput(settings.structured_output ?? "json_object")
     // reasoningEnabled requires both support and control to remain active.
     // reasoningEnabled 要求支持与控制同时保持启用。
     const nextReasoningEnabled = settings.reasoning !== "unsupported"
@@ -393,6 +399,24 @@ export function PublicAiModelCapabilityDialog(props: ModelCapabilityDialogProps)
           value={contextWindowPolicy}
         />
         <InputResourceEditor onChange={(value) => { markField("input_resources"); setInputResources(value) }} value={inputResources} />
+        <fieldset className="space-y-2 rounded-lg border p-4">
+          <legend className="px-1 text-sm font-medium">结构化输出</legend>
+          <Select
+            onValueChange={(value) => {
+              markField("structured_output")
+              setStructuredOutput(value as PublicAiStructuredOutputCapability)
+            }}
+            value={structuredOutput}
+          >
+            <SelectTrigger><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="json_object">JSON Object</SelectItem>
+              <SelectItem value="json_schema">JSON Schema</SelectItem>
+              <SelectItem value="unsupported">不支持</SelectItem>
+            </SelectContent>
+          </Select>
+          <p className="text-xs text-muted-foreground">未明确声明时默认使用 JSON Object。</p>
+        </fieldset>
         {props.providerId?.startsWith("custom:") ? (
           <fieldset className="rounded-lg border p-4">
             <legend className="px-1 text-sm font-medium">{t("settings.customModels.output")}</legend>
@@ -496,6 +520,9 @@ export function buildCapabilityOverridePatch(
   if (touchedFields.has("input_resources")) {
     patch.input_resources = [...(current.input_resources ?? [])]
   }
+  if (touchedFields.has("structured_output")) {
+    patch.structured_output = current.structured_output
+  }
   if (touchedFields.has("context_window_policy")) {
     // Null must survive JSON serialization so clearing the editor removes the persisted layer.
     // 清空编辑器时必须保留 null，确保 JSON 序列化后真正移除已持久化的策略层。
@@ -529,6 +556,7 @@ function modelCapabilitySettingsDraft(
     context_limit: overrides?.context_limit ?? capabilities.context_limit ?? 200_000,
     output_limit: overrides?.output_limit ?? capabilities.output_limit ?? 32_768,
     input_resources: overrides?.input_resources ?? capabilities.input_resources ?? [],
+    structured_output: overrides?.structured_output ?? capabilities.structured_output ?? "json_object",
     reasoning: reasoningEnabled ? "native" : "unsupported",
     reasoning_control: reasoningEnabled ? "effort_selection" : "fixed_off",
     reasoning_efforts: reasoningEnabled

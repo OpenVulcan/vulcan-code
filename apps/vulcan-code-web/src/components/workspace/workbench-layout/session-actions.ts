@@ -2,6 +2,7 @@ import React from "react";
 import type { DraftConversationSelection } from "@/components/workspace/workspace-resizable-body";
 import type {
   ConversationSummary,
+  ContextCompactionWindowNodeId,
   PendingPromptSummary,
   SessionGoalUserStatusUpdate,
   WorkbenchSnapshot,
@@ -13,6 +14,7 @@ import {
   saveSessionGoal,
   setSessionPlanMode,
   setSessionOutputStyle,
+  setSessionContextCompactionWindow,
   setSessionVmmPolicy,
   updateSessionGoalStatus,
 } from "@/service/conversation-actions-service";
@@ -211,6 +213,33 @@ export function useWorkbenchSessionActions(options: WorkbenchSessionActionsOptio
     }
   }, [selectedConversation, selectedDraftConversation, t]);
 
+  // handleSetSessionContextCompactionWindow persists one session-only compression-window lock.
+  // handleSetSessionContextCompactionWindow 持久化一个仅限当前会话的压缩窗口锁定。
+  const handleSetSessionContextCompactionWindow = React.useCallback(async (
+    nodeId: ContextCompactionWindowNodeId | null,
+  ): Promise<boolean> => {
+    const activeConversationId = selectedDraftConversation ? null : selectedConversation?.id ?? null;
+    if (!activeConversationId) {
+      toast.error(t("sessionActions.noExistingConversation"));
+      return false;
+    }
+    try {
+      const response = await setSessionContextCompactionWindow(activeConversationId, nodeId);
+      if (!response) {
+        toast.info(t("composer.contextWindow.previewUnavailable"));
+        return false;
+      }
+      setWorkbenchState((current) => applySessionAddonsChangedResponse(current, response));
+      toast.success(nodeId
+        ? t("composer.contextWindow.locked")
+        : t("composer.contextWindow.defaultRestored"));
+      return true;
+    } catch (nextError) {
+      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
+      return false;
+    }
+  }, [selectedConversation, selectedDraftConversation, t]);
+
   // handleEditPendingPrompt restores one queued prompt back into the active composer.
   // handleEditPendingPrompt 将单条排队提示词恢复到当前输入区。
   const handleEditPendingPrompt = React.useCallback(async (entryId: string): Promise<PendingPromptSummary | null> => {
@@ -236,6 +265,7 @@ export function useWorkbenchSessionActions(options: WorkbenchSessionActionsOptio
     handleSetSessionPlanMode,
     handleSetSessionVmmPolicy,
     handleSetSessionOutputStyle,
+    handleSetSessionContextCompactionWindow,
     handleEditPendingPrompt,
   };
 }

@@ -140,9 +140,7 @@ impl ProviderRetryPolicy {
         completed_retries: u32,
         unsafe_delta_seen: bool,
     ) -> Option<ProviderRetryDecision> {
-        if !self.enabled
-            || (unsafe_delta_seen && !core_error_is_replayable_stream_idle_timeout(error))
-        {
+        if !self.enabled || (unsafe_delta_seen && !core_error_is_replayable_stream_failure(error)) {
             return None;
         }
 
@@ -399,11 +397,17 @@ fn classify_structured_retry_reason(
     // accidentally leaves the generic retryable bit unset.
     // 旧适配器误将通用 retryable 标志置空时，官方 Codex 过载代码和消息仍是权威依据。
     let known_overload = structured_error_is_known_overload(error);
-    // replayableStreamIdleTimeout is the sole subtype allowed to replace discarded partial output.
-    // replayableStreamIdleTimeout 是唯一允许替换已丢弃局部输出的子类型。
+    // The exact Responses stream error code is authoritative for transient stream recovery.
+    // 精确的 Responses 流错误代码是瞬态流恢复的权威依据。
+    let known_stream_error = structured_error_is_known_stream_error(error);
+    // replayableStreamIdleTimeout keeps the existing timeout-specific retry classification.
+    // replayableStreamIdleTimeout 保留现有的流空闲超时专用重试分类。
     let replayable_stream_idle_timeout = structured_error_is_replayable_stream_idle_timeout(error);
-    if (!error.retryable && !known_overload)
-        || (error.semantic_output_observed && !replayable_stream_idle_timeout)
+    // replayableStreamFailure contains only the registered stream subtypes allowed to replace discarded partial output.
+    // replayableStreamFailure 仅包含允许替换已丢弃局部输出的已注册流子类型。
+    let replayable_stream_failure = structured_error_is_replayable_stream_failure(error);
+    if !error.retryable && !known_overload && !known_stream_error
+        || (error.semantic_output_observed && !replayable_stream_failure)
         || error.side_effect_observed
         || error.dispatch_outcome == DispatchOutcome::Unknown
     {
@@ -413,6 +417,12 @@ fn classify_structured_retry_reason(
         return Some(ProviderRetryClassification {
             category: ProviderRetryCategory::Transient,
             reason: String::from("Provider overloaded"),
+        });
+    }
+    if known_stream_error {
+        return Some(ProviderRetryClassification {
+            category: ProviderRetryCategory::Transient,
+            reason: String::from("Provider stream error"),
         });
     }
     match error.category {
@@ -445,8 +455,8 @@ fn classify_structured_retry_reason(
     }
 }
 
-/// Reports whether a Core provider failure carries the exact replayable stream-idle timeout subtype.
-/// 报告 Core Provider 失败是否携带精确的可重放流空闲超时子类型。
+/// Reports whether a Core provider failure carries an explicitly replayable stream failure.
+/// 报告 Core Provider 失败是否携带明确可重放的流失败。
 ///
 /// # Parameters
 /// 参数
@@ -455,15 +465,15 @@ fn classify_structured_retry_reason(
 ///
 /// # Returns
 /// 返回值
-/// `true` only when the typed failure proves a dispatched, side-effect-free stream-idle timeout.
-/// 仅当强类型失败证明其为已分派且无副作用的流空闲超时时返回 `true`。
-fn core_error_is_replayable_stream_idle_timeout(error: &VulcanCoreError) -> bool {
+/// `true` only for a registered, dispatched, side-effect-free stream failure subtype.
+/// 仅当强类型失败属于已注册、已分派且无副作用的流失败子类型时返回 `true`。
+fn core_error_is_replayable_stream_failure(error: &VulcanCoreError) -> bool {
     matches!(
         error,
         VulcanCoreError::ProviderFailure {
             details: Some(details),
             ..
-        } if structured_error_is_replayable_stream_idle_timeout(details)
+        } if structured_error_is_replayable_stream_failure(details)
     )
 }
 
@@ -486,6 +496,23 @@ fn structured_error_is_replayable_stream_idle_timeout(error: &AiExecutionError) 
         && error.dispatch_outcome == DispatchOutcome::Dispatched
         && error.retryable
         && !error.side_effect_observed
+}
+
+/// Returns whether the exact Responses stream error permits replay from a clean checkpoint.
+/// 判断精确的 Responses 流错误是否允许从干净检查点重放。
+fn structured_error_is_known_stream_error(error: &AiExecutionError) -> bool {
+    error.upstream_code.as_deref() == Some("STREAM_ERROR")
+        && error.stage == "stream"
+        && error.dispatch_outcome == DispatchOutcome::Dispatched
+        && error.terminal
+        && !error.side_effect_observed
+}
+
+/// Returns whether one structured failure is an explicitly replayable stream failure.
+/// 判断一项结构化失败是否属于明确可重放的流失败。
+fn structured_error_is_replayable_stream_failure(error: &AiExecutionError) -> bool {
+    structured_error_is_replayable_stream_idle_timeout(error)
+        || structured_error_is_known_stream_error(error)
 }
 
 /// Reports whether typed category/subcategory facts prove a deterministic terminal failure.
@@ -1005,6 +1032,42 @@ mod tests {
         };
         details.side_effect_observed = true;
         assert!(policy().next_retry(&idle_timeout, 0, true).is_none());
+    }
+
+    /// Verifies the exact Responses stream error can replace semantic output but never side effects.
+    /// 验证精确的 Responses 流错误可以替换语义输出，但绝不能替换副作用。
+    #[test]
+    fn responses_stream_error_retries_after_semantic_output_but_not_side_effects() {
+        let mut stream_error = structured_provider_error(AiErrorCategory::Unclassified, false);
+        {
+            let VulcanCoreError::ProviderFailure {
+                details: Some(details),
+                ..
+            } = &mut stream_error
+            else {
+                panic!("structured error expected");
+            };
+            details.stage = String::from("stream");
+            details.upstream_code = Some(String::from("STREAM_ERROR"));
+            details.semantic_output_observed = true;
+        }
+
+        let decision = policy()
+            .next_retry(&stream_error, 0, true)
+            .expect("the exact Responses stream error should retry");
+        assert_eq!(decision.reason, "Provider stream error");
+
+        {
+            let VulcanCoreError::ProviderFailure {
+                details: Some(details),
+                ..
+            } = &mut stream_error
+            else {
+                panic!("structured error expected");
+            };
+            details.side_effect_observed = true;
+        }
+        assert!(policy().next_retry(&stream_error, 0, true).is_none());
     }
 
     /// Verifies configured inference uses only typed safe dispatch facts for retry.

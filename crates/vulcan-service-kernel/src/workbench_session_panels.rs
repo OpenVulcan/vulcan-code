@@ -353,6 +353,8 @@ pub(crate) fn session_output_style_summary_from_runtime_state(
 /// `session_plan_mode` 是该会话的可选计划模式摘要。
 /// `session_vmm_policy` is the optional non-empty session VMM policy list projection.
 /// `session_vmm_policy` 是可选的非空会话 VMM 策略列表投影。
+/// `session_context_compaction_window_node_id` is the optional stable session node identifier.
+/// `session_context_compaction_window_node_id` 是可选的会话稳定节点标识。
 ///
 /// # Returns
 /// 返回值
@@ -365,6 +367,7 @@ pub(crate) fn session_addons_changed_delta_for_retained_list(
     session_plan_mode: Option<SessionPlanModeSummary>,
     session_vmm_policy: Option<SessionVmmPolicySummary>,
     session_output_style: Option<SessionOutputStyleSummary>,
+    session_context_compaction_window_node_id: Option<String>,
     session_provider_usage: Option<SessionProviderUsageSummary>,
 ) -> Option<SessionAddonsChangedDelta> {
     if session_goal.is_none()
@@ -372,6 +375,7 @@ pub(crate) fn session_addons_changed_delta_for_retained_list(
         && session_plan_mode.is_none()
         && session_vmm_policy.is_none()
         && session_output_style.is_none()
+        && session_context_compaction_window_node_id.is_none()
         && session_provider_usage.is_none()
     {
         return None;
@@ -383,6 +387,7 @@ pub(crate) fn session_addons_changed_delta_for_retained_list(
         session_plan_mode,
         session_vmm_policy,
         session_output_style,
+        session_context_compaction_window_node_id,
         session_provider_usage: session_provider_usage.map(Box::new),
     })
 }
@@ -1115,6 +1120,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
 
         assert!(entry.is_none());
@@ -1134,6 +1140,7 @@ mod tests {
             None,
             None,
             Some(plan_mode),
+            None,
             None,
             None,
             None,
@@ -1164,6 +1171,28 @@ mod tests {
         assert_eq!(
             compact_panel_preview(content),
             "first line\nsecond line\nthird line"
+        );
+    }
+
+    /// Verifies a stable context-compaction node id alone keeps one retained addon entry.
+    /// 验证仅有稳定上下文压缩节点标识时也会保留会话附属条目。
+    #[test]
+    fn session_addons_changed_delta_for_retained_list_keeps_context_window_node() {
+        let entry = session_addons_changed_delta_for_retained_list(
+            String::from("conversation-a"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(String::from("compression-window-2")),
+            None,
+        )
+        .expect("context window node should retain the addon entry");
+
+        assert_eq!(
+            entry.session_context_compaction_window_node_id.as_deref(),
+            Some("compression-window-2")
         );
     }
 

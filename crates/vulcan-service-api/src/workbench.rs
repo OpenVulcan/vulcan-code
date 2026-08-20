@@ -195,6 +195,14 @@ pub struct WorkbenchSnapshot {
     /// 当前选中会话的输出风格状态。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_output_style: Option<SessionOutputStyleSummary>,
+    /// Fixed system context-compaction window nodes in immutable low-to-high order.
+    /// 按不可变从低到高顺序排列的固定系统上下文压缩窗口节点。
+    #[serde(default)]
+    pub context_compaction_window_nodes: Vec<ContextCompactionWindowNodeSummary>,
+    /// Stable context-compaction window node selected by the current session.
+    /// 当前会话选择的稳定上下文压缩窗口节点。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_context_compaction_window_node_id: Option<String>,
     /// Current selected-session physical Provider request counts and token usage.
     /// 当前选中会话的物理 Provider 请求计数与 Token 用量。
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -33,6 +33,7 @@ fn session_addon_extracts_runtime_controls_and_work_mode() {
         active_model_id: Some(String::from("minimax-text")),
         active_reasoning_effort: Some(ReasoningEffortLevel::None),
         active_reasoning_effort_explicit: true,
+        context_compaction_window_node_id: Some(ContextCompactionWindowNodeId::CompressionWindow2),
         active_work_mode: Some(String::from("plan")),
         ..SessionRuntimeStateEntry::default()
     };
@@ -60,6 +61,20 @@ fn session_addon_extracts_runtime_controls_and_work_mode() {
         Some(ReasoningEffortLevel::None)
     );
     assert!(controls.active_reasoning_effort_explicit);
+    assert_eq!(
+        controls.context_compaction_window_node_id,
+        Some(ContextCompactionWindowNodeId::CompressionWindow2)
+    );
+    let serialized = serde_json::to_string(&addon_state).expect("addon state should serialize");
+    assert!(serialized.contains("compression-window-2"));
+    assert!(!serialized.contains("256000"));
+
+    let mut restored_runtime_state = SessionRuntimeStateEntry::default();
+    addon_state.apply_to_runtime_state(&mut restored_runtime_state);
+    assert_eq!(
+        restored_runtime_state.context_compaction_window_node_id,
+        Some(ContextCompactionWindowNodeId::CompressionWindow2)
+    );
 }
 
 #[test]

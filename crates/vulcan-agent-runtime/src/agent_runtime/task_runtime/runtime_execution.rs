@@ -1241,6 +1241,7 @@ pub(crate) async fn run_task_session_context_compaction(
             .connection_id_override
             .as_deref(),
         compaction_preparation_request.model_id_override.as_deref(),
+        compaction_preparation_request.context_compaction_window_node_id,
         Some(behavior_seed),
     )?
     .ok_or_else(|| {

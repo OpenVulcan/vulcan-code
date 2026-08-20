@@ -411,11 +411,7 @@ async fn execute_generic_openai_chat_sse_request(
         HeaderValue::from_static("text/event-stream"),
     );
     insert_declared_tool_headers(&mut headers, target)?;
-    insert_authentication_header(
-        &mut headers,
-        target.execution.authentication,
-        secret.expose_value(),
-    )?;
+    insert_authentication_header(&mut headers, target.execution.authentication, secret)?;
     let response = http
         .post(url.as_str())
         .headers(headers)
@@ -455,11 +451,7 @@ async fn execute_generic_json_sse_request(
         HeaderValue::from_static("text/event-stream"),
     );
     insert_declared_tool_headers(&mut headers, target)?;
-    insert_authentication_header(
-        &mut headers,
-        target.execution.authentication,
-        secret.expose_value(),
-    )?;
+    insert_authentication_header(&mut headers, target.execution.authentication, secret)?;
     let response = http
         .post(url.as_str())
         .headers(headers)
@@ -538,11 +530,7 @@ async fn execute_generic_multipart_sse_request(
         HeaderValue::from_static("text/event-stream"),
     );
     insert_declared_tool_headers(&mut headers, target)?;
-    insert_authentication_header(
-        &mut headers,
-        target.execution.authentication,
-        secret.expose_value(),
-    )?;
+    insert_authentication_header(&mut headers, target.execution.authentication, secret)?;
     let response = http
         .post(url.as_str())
         .headers(headers)
@@ -2018,11 +2006,7 @@ async fn execute_generic_json_async_request(
         HeaderValue::from_static("application/json"),
     );
     insert_declared_tool_headers(&mut headers, target)?;
-    insert_authentication_header(
-        &mut headers,
-        target.execution.authentication,
-        secret.expose_value(),
-    )?;
+    insert_authentication_header(&mut headers, target.execution.authentication, secret)?;
     let request = match method {
         crate::provider_manifest::GenericJsonAsyncRequestMethod::Get => http.get(url.clone()),
         crate::provider_manifest::GenericJsonAsyncRequestMethod::Post => http.post(url.clone()),
@@ -2100,11 +2084,7 @@ async fn execute_generic_json_async_binary_follow_up(
             .map_err(|_| String::from("Binary provider task follow-up MIME type is invalid."))?,
     );
     insert_declared_tool_headers(&mut headers, target)?;
-    insert_authentication_header(
-        &mut headers,
-        target.execution.authentication,
-        secret.expose_value(),
-    )?;
+    insert_authentication_header(&mut headers, target.execution.authentication, secret)?;
     let request = match method {
         crate::provider_manifest::GenericJsonAsyncRequestMethod::Get => http.get(url.clone()),
         crate::provider_manifest::GenericJsonAsyncRequestMethod::Post => http.post(url.clone()),
@@ -2333,11 +2313,7 @@ async fn execute_generic_mcp_http_request(
             .map_err(|_| String::from("Provider MCP session identifier is invalid."))?;
         headers.insert(HeaderName::from_static("mcp-session-id"), value);
     }
-    insert_authentication_header(
-        &mut headers,
-        target.execution.authentication,
-        secret.expose_value(),
-    )?;
+    insert_authentication_header(&mut headers, target.execution.authentication, secret)?;
     let response = http
         .post(url.as_str())
         .headers(headers)
@@ -2626,11 +2602,7 @@ async fn execute_generic_json_sync_request_with_headers<T: Serialize>(
     );
     insert_declared_tool_headers(&mut headers, target)?;
     insert_fixed_tool_headers(&mut headers, additional_headers)?;
-    insert_authentication_header(
-        &mut headers,
-        target.execution.authentication,
-        secret.expose_value(),
-    )?;
+    insert_authentication_header(&mut headers, target.execution.authentication, secret)?;
     let response = http
         .post(url.as_str())
         .headers(headers)
@@ -3376,16 +3348,18 @@ fn validated_https_url(value: &str, label: &str) -> Result<reqwest::Url, String>
 fn insert_authentication_header(
     headers: &mut HeaderMap,
     projection: AuthenticationProjection,
-    secret: &str,
+    secret: &CredentialExecutionSecret,
 ) -> Result<(), String> {
     let (name, value) = match projection {
         AuthenticationProjection::BearerAuthorization
-        | AuthenticationProjection::CodingDeviceBearer => {
-            (reqwest::header::AUTHORIZATION, format!("Bearer {secret}"))
-        }
-        AuthenticationProjection::XApiKey => {
-            (HeaderName::from_static("x-api-key"), secret.to_string())
-        }
+        | AuthenticationProjection::CodingDeviceBearer => (
+            reqwest::header::AUTHORIZATION,
+            format!("Bearer {}", secret.expose_value()),
+        ),
+        AuthenticationProjection::XApiKey => (
+            HeaderName::from_static("x-api-key"),
+            secret.expose_value().to_string(),
+        ),
         _ => {
             return Err(String::from(
                 "The selected provider tool authentication projection is not registered.",
@@ -3395,6 +3369,9 @@ fn insert_authentication_header(
     let value = HeaderValue::from_str(value.as_str())
         .map_err(|_| String::from("Provider tool authentication contains invalid header bytes."))?;
     headers.insert(name, value);
+    if projection == AuthenticationProjection::CodingDeviceBearer {
+        crate::execution::insert_coding_device_identity_headers(headers, secret)?;
+    }
     Ok(())
 }
 
@@ -3723,6 +3700,58 @@ fn format_structured_provider_error(label: &str, status: Option<u16>, body: &Val
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Verifies direct Coding tools include the frozen Kimi device identity with bearer authorization.
+    /// 验证 Coding 直连工具会随 Bearer 鉴权发送冻结的 Kimi 设备身份。
+    #[test]
+    fn coding_device_authentication_includes_identity_headers() {
+        // secret reproduces the exact execution shape produced by Kimi Coding Plan OAuth.
+        // secret 复现 Kimi Coding Plan OAuth 生成的精确执行结构。
+        let secret = crate::CredentialSecretEnvelope::new(
+            crate::CredentialSecretMaterial::KimiCodingPlanOAuth {
+                tokens: crate::OAuthTokenSet {
+                    access_token: String::from("test-access-token"),
+                    refresh_token: String::from("test-refresh-token"),
+                    issued_at_unix_ms: 1,
+                    expires_at_unix_ms: 2,
+                    scopes: Default::default(),
+                    account_subject: None,
+                    email: None,
+                },
+                device_id: String::from("12345678-1234-1234-1234-123456789abc"),
+            },
+        )
+        .expect("Kimi OAuth credential should validate")
+        .execution_secret()
+        .expect("Kimi OAuth execution secret should resolve");
+        let mut headers = HeaderMap::new();
+
+        insert_authentication_header(
+            &mut headers,
+            AuthenticationProjection::CodingDeviceBearer,
+            &secret,
+        )
+        .expect("Coding-device tool authentication should project");
+
+        assert_eq!(
+            headers
+                .get(reqwest::header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer test-access-token")
+        );
+        assert_eq!(
+            headers
+                .get("x-msh-device-id")
+                .and_then(|value| value.to_str().ok()),
+            Some("12345678-1234-1234-1234-123456789abc")
+        );
+        assert_eq!(
+            headers
+                .get("x-msh-platform")
+                .and_then(|value| value.to_str().ok()),
+            Some("CLIProxyAPI")
+        );
+    }
 
     /// Verifies transport diagnostics never retain task identities or signed URL queries.
     /// 验证传输诊断绝不保留任务身份或签名 URL 查询串。

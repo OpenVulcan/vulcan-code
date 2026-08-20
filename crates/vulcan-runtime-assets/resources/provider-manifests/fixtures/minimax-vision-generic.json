@@ -24,6 +24,10 @@
       },
       "required": ["prompt", "image_url"]
     },
+    "media_input_projection": {
+      "path_field": "image_url",
+      "prompt_field": "prompt"
+    },
     "output": {
       "kind": "text",
       "source_path": "/content",

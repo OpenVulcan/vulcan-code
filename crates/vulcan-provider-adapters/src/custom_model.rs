@@ -6,6 +6,7 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use vulcan_ai_contract::{
     CapabilitySupport, ModelCapabilities, ReasoningControlMode, ReasoningEffort, ResourceKind,
+    StructuredOutputCapability,
 };
 use vulcan_context::ContextWindowPolicyOverrides;
 
@@ -56,6 +57,10 @@ pub struct CustomProviderModelDefaults {
     /// 默认接受的非文本输入资源。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub input_resources: Vec<ResourceKind>,
+    /// Provider-wide structured-output capability.
+    /// 供应商级结构化输出能力。
+    #[serde(default)]
+    pub structured_output: StructuredOutputCapability,
     /// Legacy non-text output resources retained only for backward-compatible decoding.
     /// 仅为向后兼容反序列化而保留的旧版非文本输出资源。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -93,6 +98,7 @@ impl Default for CustomProviderModelDefaults {
             context_limit: CUSTOM_PROVIDER_DEFAULT_CONTEXT_LIMIT,
             output_limit: CUSTOM_PROVIDER_DEFAULT_OUTPUT_LIMIT,
             input_resources: Vec::new(),
+            structured_output: StructuredOutputCapability::default(),
             output_resources: Vec::new(),
             reasoning: default_custom_provider_reasoning(),
             reasoning_control: default_custom_provider_reasoning_control(),
@@ -168,6 +174,9 @@ impl CustomProviderModelDefaults {
         if !evidence.input_modalities_declared && capabilities.input_resources.is_empty() {
             capabilities.input_resources = self.input_resources.clone();
         }
+        if !evidence.structured_output_declared {
+            capabilities.structured_output = self.structured_output;
+        }
         if capabilities.reasoning == CapabilitySupport::Unknown {
             capabilities.reasoning = self.reasoning;
         }
@@ -219,6 +228,7 @@ impl CustomProviderModelDefaults {
         capabilities.context_limit = Some(self.context_limit);
         capabilities.output_limit = Some(self.output_limit);
         capabilities.input_resources = self.input_resources.clone();
+        capabilities.structured_output = self.structured_output;
         capabilities.reasoning = self.reasoning;
         capabilities.reasoning_control = self.reasoning_control;
         capabilities.reasoning_efforts = self.reasoning_efforts.clone();

@@ -4706,6 +4706,7 @@ fn validate_operation_closure(
             target_path.as_str(),
             errors,
         );
+        validate_provider_tool_media_input_projection(target, target_path.as_str(), errors);
         validate_provider_tool_extension_profile(
             target.capability,
             target.extension_profile.as_ref(),
@@ -4737,6 +4738,156 @@ fn validate_operation_closure(
         }
     }
     validate_provider_tool_templates(manifest, ownership, registry, errors);
+}
+
+/// Validates the host-only projection from the invariant media facade into native arguments.
+/// 校验从固定媒体外壳到供应商原生参数的仅宿主可见投影。
+///
+/// # Parameters
+/// 参数
+/// `target` is one declared provider tool, `target_path` scopes diagnostics, and `errors`
+/// accumulates every independent projection violation.
+/// `target` 是一项已声明供应商工具，`target_path` 限定诊断位置，`errors` 收集每项独立投影违规。
+///
+/// # Returns
+/// 返回值
+/// The function appends deterministic validation errors and returns no value.
+/// 本函数追加确定性的校验错误且不返回值。
+fn validate_provider_tool_media_input_projection(
+    target: &super::ToolTargetDeclaration,
+    target_path: &str,
+    errors: &mut Vec<ManifestValidationError>,
+) {
+    // isMediaUnderstanding closes projection authority to the three invariant media tools.
+    // isMediaUnderstanding 将投影权限限定在三个固定媒体工具内。
+    let is_media_understanding = matches!(
+        target.capability,
+        crate::ProviderToolCapabilityKind::ImageUnderstand
+            | crate::ProviderToolCapabilityKind::VideoUnderstand
+            | crate::ProviderToolCapabilityKind::AudioUnderstand
+    );
+    if !is_media_understanding {
+        if target.media_input_projection.is_some() {
+            errors.push(ManifestValidationError::new(
+                "media_input_projection_on_non_media_target",
+                format!("{target_path}.media_input_projection"),
+                "only image, video, or audio understanding targets may declare a media input projection",
+            ));
+        }
+        return;
+    }
+    // projection must be explicit so provider changes cannot alter the public tool schema.
+    // projection 必须显式声明，避免供应商变化改动公开工具 Schema。
+    let Some(projection) = target.media_input_projection.as_ref() else {
+        errors.push(ManifestValidationError::new(
+            "missing_media_input_projection",
+            format!("{target_path}.media_input_projection"),
+            "media-understanding targets require an explicit host-only input projection",
+        ));
+        return;
+    };
+    if projection.path_field.trim().is_empty()
+        || projection.prompt_field.trim().is_empty()
+        || projection.path_field == projection.prompt_field
+        || projection
+            .fixed_arguments
+            .contains_key(projection.path_field.as_str())
+        || projection
+            .fixed_arguments
+            .contains_key(projection.prompt_field.as_str())
+    {
+        errors.push(ManifestValidationError::new(
+            "invalid_media_input_projection_fields",
+            format!("{target_path}.media_input_projection"),
+            "media input projection fields must be non-empty, distinct, and disjoint from fixed arguments",
+        ));
+        return;
+    }
+    // properties is the closed native target field catalog admitted by the input schema.
+    // properties 是输入 Schema 接纳的封闭原生目标字段目录。
+    let Some(properties) = target
+        .input_schema
+        .get("properties")
+        .and_then(Value::as_object)
+    else {
+        errors.push(ManifestValidationError::new(
+            "media_input_projection_requires_object_properties",
+            format!("{target_path}.input_schema.properties"),
+            "media-understanding target schemas must declare object properties",
+        ));
+        return;
+    };
+    // expectedPathType distinguishes a scalar native path from an explicit one-item array.
+    // expectedPathType 区分原生标量路径与显式单项数组路径。
+    let expected_path_type = if projection.path_as_single_item_array {
+        "array"
+    } else {
+        "string"
+    };
+    if properties
+        .get(projection.path_field.as_str())
+        .and_then(|schema| schema.get("type"))
+        .and_then(Value::as_str)
+        != Some(expected_path_type)
+    {
+        errors.push(ManifestValidationError::new(
+            "media_input_projection_path_type_mismatch",
+            format!("{target_path}.media_input_projection.path_field"),
+            format!(
+                "projected path field `{}` must have native schema type `{expected_path_type}`",
+                projection.path_field
+            ),
+        ));
+    }
+    if properties
+        .get(projection.prompt_field.as_str())
+        .and_then(|schema| schema.get("type"))
+        .and_then(Value::as_str)
+        != Some("string")
+    {
+        errors.push(ManifestValidationError::new(
+            "media_input_projection_prompt_type_mismatch",
+            format!("{target_path}.media_input_projection.prompt_field"),
+            format!(
+                "projected prompt field `{}` must have native schema type `string`",
+                projection.prompt_field
+            ),
+        ));
+    }
+    for fixed_field in projection.fixed_arguments.keys() {
+        if !properties.contains_key(fixed_field) {
+            errors.push(ManifestValidationError::new(
+                "media_input_projection_unknown_fixed_field",
+                format!("{target_path}.media_input_projection.fixed_arguments.{fixed_field}"),
+                format!(
+                    "fixed projection field `{fixed_field}` is absent from the native input schema"
+                ),
+            ));
+        }
+    }
+    // requiredFields must all be constructible from the fixed facade plus reviewed constants.
+    // requiredFields 必须都能由固定外壳与已审核常量构造出来。
+    let required_fields = target
+        .input_schema
+        .get("required")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str);
+    for required_field in required_fields {
+        if required_field != projection.path_field
+            && required_field != projection.prompt_field
+            && !projection.fixed_arguments.contains_key(required_field)
+        {
+            errors.push(ManifestValidationError::new(
+                "media_input_projection_missing_required_field",
+                format!("{target_path}.media_input_projection"),
+                format!(
+                    "required native field `{required_field}` is not supplied by the media projection"
+                ),
+            ));
+        }
+    }
 }
 
 /// Validates endpoint, header, and adapter authority shared by fixed targets and templates.
@@ -9264,6 +9415,7 @@ mod tests {
             input_schema: serde_json::json!({"type": "object"}),
             input_numeric_product_ranges: Vec::new(),
             extension_profile: None,
+            media_input_projection: None,
             output: crate::ProviderToolOutputContract {
                 kind: crate::ProviderToolOutputKind::Search,
                 source_path: String::from("/results"),

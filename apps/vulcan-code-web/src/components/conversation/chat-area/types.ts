@@ -14,6 +14,7 @@ import type { DraftConversationSelection } from "@/components/workspace/workspac
 import type {
   ComposerAttachmentSummary,
   ComposerSlashCommandSummary,
+  ContextCompactionWindowNodeId,
   ConversationHydrationProgress,
   PendingPromptSummary,
   ProviderModelSecondaryRouteSelection,
@@ -116,6 +117,9 @@ export interface ChatAreaProps {
   // Persists one selected conversation output-style override.
   // 持久化当前会话的输出风格覆盖。
   onSetSessionOutputStyle: (styleId: string | null) => Promise<boolean>;
+  // Persists or clears the selected session context-compaction window node.
+  // 持久化或清除当前会话的上下文压缩窗口节点。
+  onSetSessionContextCompactionWindow: (nodeId: ContextCompactionWindowNodeId | null) => Promise<boolean>;
   // Stops the currently running conversation.
   // 停止当前运行中的会话。
   onStopConversationRun: () => Promise<boolean>;

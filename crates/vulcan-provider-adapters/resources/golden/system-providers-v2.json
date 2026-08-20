@@ -3500,6 +3500,16 @@
           {
             "protocol_profile_id": "openai-chat-completions.v1",
             "endpoint_path": "/chat/completions",
+            "input_resource_constraints": [
+              {
+                "resource_kind": "video",
+                "max_bytes": 100000000,
+                "reference_policy": "local_only",
+                "upload_channel_refs": [
+                  "platform-cn.video-file"
+                ]
+              }
+            ],
             "request_projection_profiles": [
               {
                 "profile_id": "kimi.chat.reasoning.v1",
@@ -3559,6 +3569,16 @@
           {
             "protocol_profile_id": "openai-chat-completions.v1",
             "endpoint_path": "/chat/completions",
+            "input_resource_constraints": [
+              {
+                "resource_kind": "video",
+                "max_bytes": 100000000,
+                "reference_policy": "local_only",
+                "upload_channel_refs": [
+                  "platform-global.video-file"
+                ]
+              }
+            ],
             "request_projection_profiles": [
               {
                 "profile_id": "kimi.chat.reasoning.v1",
@@ -3636,6 +3656,16 @@
           {
             "protocol_profile_id": "openai-chat-completions.v1",
             "endpoint_path": "/chat/completions",
+            "input_resource_constraints": [
+              {
+                "resource_kind": "video",
+                "max_bytes": 100000000,
+                "reference_policy": "local_only",
+                "upload_channel_refs": [
+                  "coding-plan.video-file"
+                ]
+              }
+            ],
             "request_projection_profiles": [
               {
                 "profile_id": "kimi.chat.reasoning.v1",
@@ -3682,7 +3712,7 @@
             "input_resource_constraints": [
               {
                 "resource_kind": "video",
-                "max_bytes": 1073741824,
+                "max_bytes": 100000000,
                 "reference_policy": "local_only",
                 "upload_channel_refs": [
                   "coding-plan.video-file"
@@ -3718,6 +3748,7 @@
             "credential_mode": "token",
             "billing_kind": "pay_as_you_go",
             "account_usage_query": "unsupported",
+            "authentication": "bearer_authorization",
             "key_prefix": "sk-api-",
             "default_usage_scopes": [
               "interactive_agent",
@@ -3731,6 +3762,7 @@
             "credential_mode": "token",
             "billing_kind": "token_plan",
             "account_usage_query": "mini_max_token_plan",
+            "authentication": "bearer_authorization",
             "key_prefix": "sk-cp-",
             "default_usage_scopes": [
               "interactive_agent"
@@ -3878,6 +3910,7 @@
             "credential_mode": "token",
             "billing_kind": "pay_as_you_go",
             "account_usage_query": "unsupported",
+            "authentication": "bearer_authorization",
             "key_prefix": "sk-api-",
             "default_usage_scopes": [
               "interactive_agent",
@@ -3891,6 +3924,7 @@
             "credential_mode": "token",
             "billing_kind": "token_plan",
             "account_usage_query": "mini_max_token_plan",
+            "authentication": "bearer_authorization",
             "key_prefix": "sk-cp-",
             "default_usage_scopes": [
               "interactive_agent"
@@ -5039,29 +5073,17 @@
                     "value": true
                   },
                   {
-                    "op": "conditional_set",
+                    "op": "enum_map",
                     "path": "/thinking",
                     "source": "request_field",
                     "source_path": "@reasoning_effort",
-                    "equals": "none",
-                    "then": null,
-                    "otherwise": {
-                      "type": "enabled"
-                    }
-                  },
-                  {
-                    "op": "enum_map",
-                    "path": "/reasoning_effort",
-                    "source": "request_field",
-                    "source_path": "@reasoning_effort",
                     "mapping": {
-                      "high": "high",
-                      "low": "high",
-                      "max": "max",
-                      "medium": "high",
-                      "minimal": "high",
-                      "none": "none",
-                      "xhigh": "max"
+                      "high": {
+                        "type": "enabled"
+                      },
+                      "none": {
+                        "type": "disabled"
+                      }
                     },
                     "unmatched": "error"
                   },
@@ -5075,6 +5097,20 @@
                 ]
               }
             ],
+            "verified": true
+          },
+          {
+            "protocol_profile_id": "anthropic-messages.v1",
+            "endpoint_path": "/messages",
+            "request_headers": {
+              "anthropic-version": "2023-06-01"
+            },
+            "authentication": "x_api_key",
+            "verified": true
+          },
+          {
+            "protocol_profile_id": "openai-responses.v1",
+            "endpoint_path": "/responses",
             "verified": true
           }
         ],

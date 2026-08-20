@@ -507,6 +507,12 @@ export type TranslationKey =
   | "composer.aria.reasoning"
   | "composer.aria.send"
   | "composer.aria.stop"
+  | "composer.contextWindow.title"
+  | "composer.contextWindow.default"
+  | "composer.contextWindow.invalid"
+  | "composer.contextWindow.locked"
+  | "composer.contextWindow.defaultRestored"
+  | "composer.contextWindow.previewUnavailable"
   | "composer.modelPicker.filter"
   | "composer.modelPicker.noMatches"
   | "composer.attachment.add"
@@ -2242,6 +2248,17 @@ export type TranslationKey =
   | "settings.contextBasics.description"
   | "settings.contextBasics.loading"
   | "settings.contextBasics.saveSystemDefault"
+  | "settings.contextCompactionNodes.title"
+  | "settings.contextCompactionNodes.description"
+  | "settings.contextCompactionNodes.warning"
+  | "settings.contextCompactionNodes.node1"
+  | "settings.contextCompactionNodes.node2"
+  | "settings.contextCompactionNodes.node3"
+  | "settings.contextCompactionNodes.node4"
+  | "settings.contextCompactionNodes.node5"
+  | "settings.contextCompactionNodes.invalidPositive"
+  | "settings.contextCompactionNodes.invalidAscending"
+  | "settings.contextCompactionNodes.save"
   | "settings.contextWindowPolicy.effectivePercent"
   | "settings.contextWindowPolicy.autoCompactPercent"
   | "settings.contextWindowPolicy.autoCompactTokenLimit"
@@ -2252,6 +2269,13 @@ export type TranslationKey =
   | "settings.contextWindowPolicy.fallbackBuffer"
   | "settings.contextWindowPolicy.clear"
   | "settings.models.conversationUse"
+  | "settings.models.multimodalUnderstandingCandidate"
+  | "settings.models.multimodalUnderstandingUnavailable"
+  | "settings.providerTools.mediaBackendMode"
+  | "settings.providerTools.providerToolMode"
+  | "settings.providerTools.modelReplacementMode"
+  | "settings.providerTools.reasoningEffort"
+  | "settings.providerTools.modelDefaultReasoning"
   | "settings.models.internalUse"
   | "settings.models.loadingCatalog"
   | "settings.models.provider"
@@ -3153,6 +3177,12 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.aria.reasoning": "选择推理等级",
     "composer.aria.send": "发送",
     "composer.aria.stop": "停止",
+    "composer.contextWindow.title": "压缩窗口",
+    "composer.contextWindow.default": "默认（跟随模型）",
+    "composer.contextWindow.invalid": "当前模型不可用",
+    "composer.contextWindow.locked": "已锁定当前会话的压缩窗口。",
+    "composer.contextWindow.defaultRestored": "已恢复跟随模型的默认压缩窗口。",
+    "composer.contextWindow.previewUnavailable": "当前预览会话不能保存压缩窗口。",
     "composer.modelPicker.filter": "输入模型名称或 ID 过滤",
     "composer.modelPicker.noMatches": "当前过滤条件下没有匹配模型。",
     "composer.attachment.add": "添加附件",
@@ -4888,6 +4918,17 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.contextBasics.description": "配置模型上下文窗口、自动压缩和回退缓冲策略，并集中管理请求重试与用量计费。",
     "settings.contextBasics.loading": "正在读取基础设置…",
     "settings.contextBasics.saveSystemDefault": "保存系统默认",
+    "settings.contextCompactionNodes.title": "上下文压缩窗口节点",
+    "settings.contextCompactionNodes.description": "固定五个节点；只能修改 Token 值，不能新增、删除、重命名或调整顺序。",
+    "settings.contextCompactionNodes.warning": "修改节点值会影响所有引用该节点的会话。",
+    "settings.contextCompactionNodes.node1": "节点 1",
+    "settings.contextCompactionNodes.node2": "节点 2",
+    "settings.contextCompactionNodes.node3": "节点 3",
+    "settings.contextCompactionNodes.node4": "节点 4",
+    "settings.contextCompactionNodes.node5": "节点 5",
+    "settings.contextCompactionNodes.invalidPositive": "每个节点必须是正的安全整数。",
+    "settings.contextCompactionNodes.invalidAscending": "五个节点的 Token 值必须从低到高严格递增。",
+    "settings.contextCompactionNodes.save": "保存节点配置",
     "settings.contextWindowPolicy.effectivePercent": "有效窗口百分比",
     "settings.contextWindowPolicy.autoCompactPercent": "自动压缩百分比",
     "settings.contextWindowPolicy.autoCompactTokenLimit": "自动压缩 Token 上限",
@@ -4898,6 +4939,13 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.contextWindowPolicy.fallbackBuffer": "回退缓冲 Token",
     "settings.contextWindowPolicy.clear": "清除本层策略",
     "settings.models.conversationUse": "会话使用",
+    "settings.models.multimodalUnderstandingCandidate": "多模态理解候选",
+    "settings.models.multimodalUnderstandingUnavailable": "需要图片、视频或音频输入能力，以及 JSON Object 或 JSON Schema 输出能力",
+    "settings.providerTools.mediaBackendMode": "理解后端模式",
+    "settings.providerTools.providerToolMode": "供应商专用模式",
+    "settings.providerTools.modelReplacementMode": "模型代替模式",
+    "settings.providerTools.reasoningEffort": "思考级别",
+    "settings.providerTools.modelDefaultReasoning": "模型固定 / 默认",
     "settings.models.internalUse": "内部使用",
     "settings.models.loadingCatalog": "正在读取实时模型目录…",
     "settings.models.provider": "供应商",
@@ -5796,6 +5844,12 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.aria.reasoning": "Select reasoning level",
     "composer.aria.send": "Send",
     "composer.aria.stop": "Stop",
+    "composer.contextWindow.title": "Compaction window",
+    "composer.contextWindow.default": "Default (follow model)",
+    "composer.contextWindow.invalid": "Unavailable for this model",
+    "composer.contextWindow.locked": "The compaction window is locked for this session.",
+    "composer.contextWindow.defaultRestored": "The default model compaction window is restored.",
+    "composer.contextWindow.previewUnavailable": "The preview session cannot save a compaction window.",
     "composer.modelPicker.filter": "Filter by model name or ID",
     "composer.modelPicker.noMatches": "No models match the current filter.",
     "composer.attachment.add": "Add attachment",
@@ -7531,6 +7585,17 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.contextBasics.description": "Configure model context windows, automatic compaction, and fallback buffers while managing request retry, usage, and billing in one place.",
     "settings.contextBasics.loading": "Loading basic settings…",
     "settings.contextBasics.saveSystemDefault": "Save system default",
+    "settings.contextCompactionNodes.title": "Context compaction window nodes",
+    "settings.contextCompactionNodes.description": "Five fixed nodes; token values are editable, while adding, deleting, renaming, and reordering are disabled.",
+    "settings.contextCompactionNodes.warning": "Changing a node value affects every session that references that node.",
+    "settings.contextCompactionNodes.node1": "Node 1",
+    "settings.contextCompactionNodes.node2": "Node 2",
+    "settings.contextCompactionNodes.node3": "Node 3",
+    "settings.contextCompactionNodes.node4": "Node 4",
+    "settings.contextCompactionNodes.node5": "Node 5",
+    "settings.contextCompactionNodes.invalidPositive": "Every node must be a positive safe integer.",
+    "settings.contextCompactionNodes.invalidAscending": "Node token values must be strictly ascending from low to high.",
+    "settings.contextCompactionNodes.save": "Save node configuration",
     "settings.contextWindowPolicy.effectivePercent": "Effective window percent",
     "settings.contextWindowPolicy.autoCompactPercent": "Automatic compaction percent",
     "settings.contextWindowPolicy.autoCompactTokenLimit": "Automatic compaction token limit",
@@ -7541,6 +7606,13 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.contextWindowPolicy.fallbackBuffer": "Fallback buffer tokens",
     "settings.contextWindowPolicy.clear": "Clear this policy layer",
     "settings.models.conversationUse": "Conversation use",
+    "settings.models.multimodalUnderstandingCandidate": "Multimodal understanding candidate",
+    "settings.models.multimodalUnderstandingUnavailable": "Requires image, video, or audio input plus JSON Object or JSON Schema output",
+    "settings.providerTools.mediaBackendMode": "Understanding backend mode",
+    "settings.providerTools.providerToolMode": "Provider-specific mode",
+    "settings.providerTools.modelReplacementMode": "Model replacement mode",
+    "settings.providerTools.reasoningEffort": "Reasoning effort",
+    "settings.providerTools.modelDefaultReasoning": "Model fixed / default",
     "settings.models.internalUse": "Internal use",
     "settings.models.loadingCatalog": "Loading the live model catalog…",
     "settings.models.provider": "Provider",

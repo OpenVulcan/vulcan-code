@@ -121,6 +121,9 @@ pub struct PromptCompactionLaunchContext {
     /// 按语义能力索引的可选供应商工具选择。
     pub provider_tool_selections_override:
         Option<BTreeMap<String, SessionProviderToolTargetSelection>>,
+    /// Optional enabled direct and media capability keys captured from the source turn.
+    /// 从来源回合捕获的可选已启用直连及媒体能力键。
+    pub provider_tool_enabled_capabilities_override: Option<BTreeSet<String>>,
     /// Optional model-extension target sets captured from the source turn.
     /// 从来源回合捕获的可选模型扩展目标集合。
     pub provider_extension_target_sets_override:
@@ -177,6 +180,7 @@ impl Default for PromptCompactionLaunchContext {
             runtime_policy: ExecutionRuntimePolicy::main_session(),
             agent_prompt_snapshot: None,
             provider_tool_selections_override: None,
+            provider_tool_enabled_capabilities_override: None,
             provider_extension_target_sets_override: None,
             subagent_prompt_context: None,
             task_session_store_root: None,
@@ -213,6 +217,9 @@ impl PromptCompactionLaunchContext {
             runtime_policy: request.runtime_policy,
             agent_prompt_snapshot: request.agent_prompt_snapshot.clone(),
             provider_tool_selections_override: request.provider_tool_selections_override.clone(),
+            provider_tool_enabled_capabilities_override: request
+                .provider_tool_enabled_capabilities_override
+                .clone(),
             provider_extension_target_sets_override: request
                 .provider_extension_target_sets_override
                 .clone(),
@@ -255,6 +262,7 @@ pub fn resolve_prompt_compaction_model_target(
     provider_id_override: Option<&str>,
     connection_id_override: Option<&str>,
     model_id_override: Option<&str>,
+    context_compaction_window_node_id: Option<vulcan_context::ContextCompactionWindowNodeId>,
     context_compaction_policy_seed: Option<ContextCompactionPolicy>,
 ) -> Result<Option<PromptCompactionModelTarget>, String> {
     let configuration = runtime.configuration_snapshot()?;
@@ -299,8 +307,9 @@ pub fn resolve_prompt_compaction_model_target(
         selection.route.provider.id.as_str(),
         selection.model.id.as_str(),
         context_limit,
+        context_compaction_window_node_id,
         context_compaction_policy_seed,
-    );
+    )?;
     Ok(Some(PromptCompactionModelTarget {
         provider_id: selection.route.provider.id.clone(),
         connection_id: selection.route.connection.id.clone(),
@@ -1417,6 +1426,9 @@ fn build_prompt_compaction_launch_request(
         provider_usage_budget_baseline: None,
         provider_usage_context_generation_id: None,
         provider_tool_selections_override: launch_context.provider_tool_selections_override.clone(),
+        provider_tool_enabled_capabilities_override: launch_context
+            .provider_tool_enabled_capabilities_override
+            .clone(),
         provider_extension_target_sets_override: launch_context
             .provider_extension_target_sets_override
             .clone(),
@@ -1430,6 +1442,8 @@ fn build_prompt_compaction_launch_request(
         turn_start_mode: None,
         conversation_state,
         context_compaction_policy: model_target.map(|target| target.context_compaction_policy),
+        context_compaction_window_node_id: model_target
+            .and_then(|target| target.context_compaction_policy.compression_window_node_id),
         context_budget_override: None,
         context_window_prefill_input_tokens: None,
         execution_mode: launch_context.execution_mode.clone(),

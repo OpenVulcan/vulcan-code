@@ -42,7 +42,10 @@ pub use custom_provider::*;
 pub use discovery::*;
 pub use execution::*;
 pub use graph::*;
-pub use media::{MediaUploadCancellation, MediaUploadProgressCallback};
+pub use media::{
+    MediaUploadCancellation, MediaUploadProgressCallback, RuntimeMediaUploadPhase,
+    RuntimeMediaUploadProgressEvent, RuntimeMediaUploadProgressObserver,
+};
 pub use native_inference::registered_native_action_binding_id;
 pub use oauth::*;
 pub use provider_manifest::*;

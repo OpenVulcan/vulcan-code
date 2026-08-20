@@ -23,8 +23,8 @@ export function inferComposerAttachmentKindFromFile(file: File): string | null {
   const mimeType = file.type.toLowerCase();
   const name = file.name.toLowerCase();
   if (mimeType.startsWith("image/") || /\.(png|jpe?g|webp|gif|bmp)$/.test(name)) return "image";
-  if (mimeType.startsWith("audio/") || /\.(mp3|wav|m4a|aac|flac|ogg)$/.test(name)) return "audio";
-  if (mimeType.startsWith("video/") || /\.(mp4|mov|mkv|webm|avi)$/.test(name)) return "video";
+  if (mimeType.startsWith("audio/") || /\.(mp3|wav|m4a|aac|flac|ogg|oga|opus|pcm|ulaw)$/.test(name)) return "audio";
+  if (mimeType.startsWith("video/") || /\.(mp4|mpeg|mpg|mov|m4v|mkv|webm|avi|flv|wmv|3gp|3gpp|3g2)$/.test(name)) return "video";
   if (mimeType === "application/pdf" || /\.pdf$/.test(name)) return "pdf";
   return null;
 }

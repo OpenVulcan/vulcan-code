@@ -100,6 +100,15 @@ function snapshotFixture(): PublicAiSettingsSnapshot {
   const betaOnly = modelFixture("beta/chat", "Beta Only", 32_000)
   return {
     usageRefreshIntervalSeconds: 300,
+    contextCompactionWindowNodes: {
+      nodes: [
+        { id: "compression-window-1", tokens: 200_000 },
+        { id: "compression-window-2", tokens: 256_000 },
+        { id: "compression-window-3", tokens: 272_000 },
+        { id: "compression-window-4", tokens: 373_000 },
+        { id: "compression-window-5", tokens: 500_000 },
+      ],
+    },
     providerPriorities: {},
     usageCache: {},
     providers: [],

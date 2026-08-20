@@ -8,6 +8,7 @@ use crate::{
     RequestProjectorKind, SAMPLING_TEMPERATURE_PARAMETER_ID, SecondaryRouteSelection, ServiceEntry,
 };
 use async_stream::try_stream;
+use base64::Engine as _;
 use futures_util::{Stream, StreamExt};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
@@ -858,12 +859,26 @@ struct PreparedMediaCacheEntry {
 /// 携带一次媒体准备结果及其经过精确验证的源文件修订。
 #[derive(Debug)]
 pub struct PreparedConversationMedia {
-    /// Provider-native reference when the frozen route uses an upload channel.
-    /// 冻结路由使用上传通道时产生的供应商原生引用。
-    native_reference: Option<String>,
+    /// Immutable provider-native or caller-requested host-inline reference created from verified bytes.
+    /// 从已验证字节创建的不可变供应商原生或调用方请求的宿主内联引用。
+    prepared_reference: Option<String>,
     /// Content-addressed source revision verified before and after materialization.
     /// 在物化前后验证过的内容寻址源文件修订。
     source_fingerprint: PreparedMediaSourceFingerprint,
+}
+
+impl PreparedConversationMedia {
+    /// Returns the immutable reference created from the verified source bytes.
+    /// 返回从已验证源字节创建的不可变引用。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A provider-native URI for upload routes, a requested Base64 Data URL for host-inline
+    /// routes, or `None` when the caller requested validation-only inline preparation.
+    /// 上传路由返回供应商原生 URI；请求内联保留时返回 Base64 Data URL；调用方仅请求内联校验时返回 `None`。
+    pub fn prepared_reference(&self) -> Option<&str> {
+        self.prepared_reference.as_deref()
+    }
 }
 
 /// Identifies the source-file revision used to create one prepared media reference.
@@ -879,6 +894,17 @@ struct PreparedMediaSourceFingerprint {
     /// SHA-256 digest of the exact source bytes.
     /// 精确源字节的 SHA-256 摘要。
     content_sha256: [u8; 32],
+}
+
+/// Carries one stable source read and the optional retained bytes used for inline projection.
+/// 携带一次稳定源读取及用于内联投影的可选保留字节。
+struct PreparedMediaSourceRead {
+    /// Content-addressed identity of the exact bytes read.
+    /// 已读取精确字节的内容寻址身份。
+    fingerprint: PreparedMediaSourceFingerprint,
+    /// Exact source bytes retained only when the caller must build a Data URL.
+    /// 仅在调用方必须构建 Data URL 时保留的精确源字节。
+    retained_bytes: Option<Vec<u8>>,
 }
 
 /// Streams and hashes the exact stable source revision used by one media reference.
@@ -902,6 +928,31 @@ async fn prepared_media_source_fingerprint(
     progress: Option<MediaUploadProgressCallback>,
     cancellation: Option<&MediaUploadCancellation>,
 ) -> Result<PreparedMediaSourceFingerprint, String> {
+    read_prepared_media_source(local_path, progress, cancellation, false)
+        .await
+        .map(|source| source.fingerprint)
+}
+
+/// Streams one stable source revision while optionally retaining the exact bytes for inline use.
+/// 流式读取一个稳定源修订，并可选保留用于内联处理的精确字节。
+///
+/// # Parameters
+/// 参数
+/// `local_path`, `progress`, and `cancellation` define the same bounded read contract as
+/// `prepared_media_source_fingerprint`; `retain_bytes` enables request-owned byte retention.
+/// `local_path`、`progress` 与 `cancellation` 定义和 `prepared_media_source_fingerprint`
+/// 相同的有界读取契约；`retain_bytes` 启用请求自有字节保留。
+///
+/// # Returns
+/// 返回值
+/// A verified fingerprint and, only when requested, the exact bytes covered by that fingerprint.
+/// 返回已验证指纹，并且仅在请求时返回该指纹覆盖的精确字节。
+async fn read_prepared_media_source(
+    local_path: &Path,
+    progress: Option<MediaUploadProgressCallback>,
+    cancellation: Option<&MediaUploadCancellation>,
+    retain_bytes: bool,
+) -> Result<PreparedMediaSourceRead, String> {
     let metadata = tokio::fs::metadata(local_path)
         .await
         .map_err(|error| format!("Media source metadata could not be read: {error}"))?;
@@ -919,6 +970,9 @@ async fn prepared_media_source_fingerprint(
     let mut source = tokio_util::io::ReaderStream::new(file);
     let mut content_hasher = Sha256::new();
     let mut processed = 0_u64;
+    // retainedBytes owns exactly the chunks included in contentHasher when inline projection is required.
+    // retainedBytes 在需要内联投影时精确持有纳入 contentHasher 的全部分块。
+    let mut retained_bytes = retain_bytes.then(Vec::new);
     while let Some(chunk) = source.next().await {
         if cancellation.is_some_and(MediaUploadCancellation::is_cancelled) {
             return Err(String::from("media upload cancelled"));
@@ -933,6 +987,9 @@ async fn prepared_media_source_fingerprint(
             ));
         }
         content_hasher.update(chunk.as_ref());
+        if let Some(retained_bytes) = retained_bytes.as_mut() {
+            retained_bytes.extend_from_slice(chunk.as_ref());
+        }
         if let Some(callback) = progress.as_ref() {
             callback(processed, Some(expected_byte_len));
         }
@@ -953,10 +1010,13 @@ async fn prepared_media_source_fingerprint(
             "Media source changed during preparation; please retry the submission.",
         ));
     }
-    Ok(PreparedMediaSourceFingerprint {
-        byte_len: expected_byte_len,
-        modified_at,
-        content_sha256: content_hasher.finalize().into(),
+    Ok(PreparedMediaSourceRead {
+        fingerprint: PreparedMediaSourceFingerprint {
+            byte_len: expected_byte_len,
+            modified_at,
+            content_sha256: content_hasher.finalize().into(),
+        },
+        retained_bytes,
     })
 }
 
@@ -1135,14 +1195,16 @@ impl ProviderExecutionClient {
     /// `route`、`model_id` 与 `secret` 固定精确的供应商账号及模型契约。
     /// `local_path` and `mime_type` identify the validated host attachment.
     /// `local_path` 与 `mime_type` 标识已校验的宿主附件。
+    /// `retain_inline_reference` requests an owned Data URL when no upload channel exists;
     /// `progress` receives source-byte progress and `cancellation` owns the submit cancel path.
-    /// `progress` 接收源字节进度，`cancellation` 持有提交取消路径。
+    /// `retain_inline_reference` 在不存在上传通道时请求自有 Data URL；`progress` 接收源字节进度，
+    /// `cancellation` 持有提交取消路径。
     ///
     /// # Returns
     /// 返回值
-    /// A prepared outcome containing the optional provider-native reference and the exact source
-    /// fingerprint verified before and after materialization.
-    /// 返回包含可选供应商原生引用的准备结果，以及在物化前后验证过的精确源文件指纹。
+    /// A prepared outcome containing an immutable provider-native or host-inline reference and
+    /// the exact source fingerprint verified before and after materialization.
+    /// 返回包含不可变供应商原生或宿主内联引用，以及在物化前后验证过的精确源文件指纹的准备结果。
     // Keep route, model, credential, media, progress, and cancellation boundaries explicit for callers.
     // 保持路由、模型、凭据、媒体、进度和取消边界显式，便于调用方准确控制生命周期。
     #[allow(clippy::too_many_arguments)]
@@ -1154,6 +1216,7 @@ impl ProviderExecutionClient {
         local_path: &Path,
         kind: ResourceKind,
         mime_type: &str,
+        retain_inline_reference: bool,
         progress: Option<MediaUploadProgressCallback>,
         cancellation: &MediaUploadCancellation,
     ) -> Result<PreparedConversationMedia, String> {
@@ -1164,7 +1227,22 @@ impl ProviderExecutionClient {
         // 请求绝不能把供应商引用绑定到准备期间已经发生变化的源文件。
         let source_fingerprint =
             prepared_media_source_fingerprint(local_path, None, Some(cancellation)).await?;
-        let native_reference = if let Some(channel) =
+        // maxBytes is the route-wide ceiling enforced before either upload or inline ownership.
+        // maxBytes 是在上传或内联持有之前统一执行的路由级上限。
+        if let Some(max_bytes) = route
+            .protocol_route
+            .input_resource_constraints
+            .iter()
+            .find(|constraint| constraint.resource_kind == kind)
+            .and_then(|constraint| constraint.max_bytes)
+            && source_fingerprint.byte_len > max_bytes
+        {
+            return Err(format!(
+                "Media source is {} bytes and exceeds the frozen route limit of {max_bytes} bytes.",
+                source_fingerprint.byte_len
+            ));
+        }
+        let (prepared_reference, current_source_fingerprint) = if let Some(channel) =
             resolve_conversation_media_upload_channel(route, kind, mime_type)?
         {
             // The frozen route selects a bounded upload channel by resource kind and ordered
@@ -1189,51 +1267,59 @@ impl ProviderExecutionClient {
                         route.connection.credential_profile_id, route.entry.id
                     )
                 })?;
-            Some(
-                crate::upload_engine::materialize_upload(
-                    crate::upload_engine::UploadExecutionContext {
-                        http: &self.http,
-                        entry: &route.entry,
-                        secret,
-                        credential_profile,
-                        progress: progress.clone(),
-                        cancellation,
-                        model_id: Some(model_id),
-                    },
-                    channel,
-                    &resource,
-                )
-                .await?
-                .reference,
+            // nativeReference is immutable provider-owned content produced from the uploaded bytes.
+            // nativeReference 是由已上传字节生成的不可变供应商托管内容。
+            let native_reference = crate::upload_engine::materialize_upload(
+                crate::upload_engine::UploadExecutionContext {
+                    http: &self.http,
+                    entry: &route.entry,
+                    secret,
+                    credential_profile,
+                    progress: progress.clone(),
+                    cancellation,
+                    model_id: Some(model_id),
+                    fixture_loopback_origin: None,
+                },
+                channel,
+                &resource,
             )
+            .await?
+            .reference;
+            // currentSourceFingerprint proves the source stayed unchanged across upload materialization.
+            // currentSourceFingerprint 证明源文件在上传物化期间保持不变。
+            let current_source_fingerprint =
+                prepared_media_source_fingerprint(local_path, None, Some(cancellation)).await?;
+            (Some(native_reference), current_source_fingerprint)
         } else {
-            None
+            // inlineSource retains bytes only for callers that bind the result directly to a request.
+            // inlineSource 仅为把结果直接绑定到请求的调用方保留字节。
+            let inline_source = read_prepared_media_source(
+                local_path,
+                progress,
+                Some(cancellation),
+                retain_inline_reference,
+            )
+            .await?;
+            // inlineReference owns exact verified bytes when requested and otherwise avoids Base64 allocation.
+            // inlineReference 在被请求时持有精确已验证字节，否则避免分配 Base64。
+            let inline_reference = inline_source.retained_bytes.map(|inline_bytes| {
+                format!(
+                    "data:{mime_type};base64,{}",
+                    base64::engine::general_purpose::STANDARD.encode(inline_bytes)
+                )
+            });
+            (inline_reference, inline_source.fingerprint)
         };
         if cancellation.is_cancelled() {
             return Err(String::from("media upload cancelled"));
         }
-        // Inline materialization reports progress during the final verified read; provider-native
-        // channels already reported transfer progress and therefore verify without a second cycle.
-        // 内联物化在最终校验读取期间报告进度；供应商原生通道已经报告传输进度，因此后续
-        // 校验不再产生第二轮进度。
-        let verification_progress = if native_reference.is_none() {
-            progress
-        } else {
-            None
-        };
-        let current_source_fingerprint = prepared_media_source_fingerprint(
-            local_path,
-            verification_progress,
-            Some(cancellation),
-        )
-        .await?;
         if current_source_fingerprint != source_fingerprint {
             return Err(String::from(
                 "Media source changed during preparation; please retry the submission.",
             ));
         }
         Ok(PreparedConversationMedia {
-            native_reference,
+            prepared_reference,
             source_fingerprint: current_source_fingerprint,
         })
     }
@@ -1272,7 +1358,7 @@ impl ProviderExecutionClient {
         prepared: PreparedConversationMedia,
     ) {
         let PreparedConversationMedia {
-            native_reference: Some(url),
+            prepared_reference: Some(url),
             source_fingerprint,
         } = prepared
         else {
@@ -6251,30 +6337,8 @@ pub(crate) fn execution_headers(
         }
     }
     if authentication == AuthenticationProjection::CodingDeviceBearer {
-        let device_name = std::env::var("COMPUTERNAME")
-            .or_else(|_| std::env::var("HOSTNAME"))
-            .unwrap_or_else(|_| String::from("unknown"));
-        let device_model = format!("{} {}", std::env::consts::OS, std::env::consts::ARCH);
-        for (name, value) in [
-            ("user-agent", "CLIProxyAPI/dev"),
-            ("x-msh-platform", "CLIProxyAPI"),
-            ("x-msh-version", "dev"),
-            ("x-msh-device-name", device_name.as_str()),
-            ("x-msh-device-model", device_model.as_str()),
-            (
-                "x-msh-device-id",
-                secret
-                    .provider_device_id()
-                    .unwrap_or("cli-proxy-api-device"),
-            ),
-        ] {
-            headers.insert(
-                HeaderName::from_static(name),
-                HeaderValue::from_str(value).map_err(|_| {
-                    pre_dispatch_failure("Coding-device execution identity is invalid.")
-                })?,
-            );
-        }
+        insert_coding_device_identity_headers(&mut headers, secret)
+            .map_err(pre_dispatch_failure)?;
     }
     // User-Agent is a frozen protocol identity boundary. Only native Codex reproduces the
     // adopted Codex client value; every other protocol identifies VulcanCode itself.
@@ -6289,6 +6353,50 @@ pub(crate) fn execution_headers(
         }),
     );
     Ok(headers)
+}
+
+/// Inserts the registered Kimi Coding device identity shared by conversation, tool, and upload requests.
+/// 插入由会话、工具与上传请求共用的已注册 Kimi Coding 设备身份。
+///
+/// # Parameters
+/// 参数
+/// `headers` receives the exact identity fields and `secret` supplies the frozen provider device id.
+/// `headers` 接收精确身份字段，`secret` 提供冻结的供应商设备标识。
+///
+/// # Returns
+/// 返回值
+/// Success after every bounded header value is inserted, or a controlled validation error.
+/// 全部有界请求头值插入后返回成功，否则返回受控校验错误。
+pub(crate) fn insert_coding_device_identity_headers(
+    headers: &mut HeaderMap,
+    secret: &CredentialExecutionSecret,
+) -> Result<(), String> {
+    // deviceName and deviceModel reproduce the established Coding-device identity contract.
+    // deviceName 与 deviceModel 复现既有 Coding 设备身份契约。
+    let device_name = std::env::var("COMPUTERNAME")
+        .or_else(|_| std::env::var("HOSTNAME"))
+        .unwrap_or_else(|_| String::from("unknown"));
+    let device_model = format!("{} {}", std::env::consts::OS, std::env::consts::ARCH);
+    for (name, value) in [
+        ("user-agent", "CLIProxyAPI/dev"),
+        ("x-msh-platform", "CLIProxyAPI"),
+        ("x-msh-version", "dev"),
+        ("x-msh-device-name", device_name.as_str()),
+        ("x-msh-device-model", device_model.as_str()),
+        (
+            "x-msh-device-id",
+            secret
+                .provider_device_id()
+                .unwrap_or("cli-proxy-api-device"),
+        ),
+    ] {
+        headers.insert(
+            HeaderName::from_static(name),
+            HeaderValue::from_str(value)
+                .map_err(|_| String::from("Coding-device execution identity is invalid."))?,
+        );
+    }
+    Ok(())
 }
 
 /// One parsed transport frame and its optional SSE event name.
@@ -7989,34 +8097,78 @@ mod tests {
     /// 验证对话媒体上传选择完全由内置 Manifest 冻结。
     #[test]
     fn bundled_media_upload_routes_are_manifest_driven() {
-        let kimi =
-            bundled_manifest_route("kimi", "coding-plan", ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID);
-        let kimi_video = kimi
-            .protocol_route
-            .input_resource_constraints
-            .iter()
-            .find(|constraint| constraint.resource_kind == ResourceKind::Video)
-            .expect("Kimi video route must declare its upload binding");
-        assert_eq!(
-            kimi_video.upload_channel_refs,
-            [String::from("coding-plan.video-file")]
-        );
-        assert!(kimi.upload_channels.iter().any(|channel| {
-            channel.upload_channel_id == "coding-plan.video-file"
-                && channel.primitive == Some(crate::UploadPrimitiveKind::MultipartFile)
-        }));
-
-        let minimax = bundled_manifest_route("minimax", "cn", OPENAI_CHAT_PROFILE_ID);
-        let minimax_video = minimax
-            .protocol_route
-            .input_resource_constraints
-            .iter()
-            .find(|constraint| constraint.resource_kind == ResourceKind::Video)
-            .expect("MiniMax video route must declare its upload binding");
-        assert_eq!(
-            minimax_video.upload_channel_refs,
-            [String::from("cn.video-file")]
-        );
+        // kimi_routes cover every Open Platform and Coding Plan protocol route that accepts video.
+        // kimi_routes 覆盖所有接受视频的开放平台与 Coding Plan 协议路由。
+        let kimi_routes = [
+            (
+                "platform-cn",
+                OPENAI_CHAT_PROFILE_ID,
+                "platform-cn.video-file",
+                "api.moonshot.cn",
+                "/v1/files",
+            ),
+            (
+                "platform-global",
+                OPENAI_CHAT_PROFILE_ID,
+                "platform-global.video-file",
+                "api.moonshot.ai",
+                "/v1/files",
+            ),
+            (
+                "coding-plan",
+                OPENAI_CHAT_PROFILE_ID,
+                "coding-plan.video-file",
+                "api.kimi.com",
+                "/coding/v1/files",
+            ),
+            (
+                "coding-plan",
+                ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID,
+                "coding-plan.video-file",
+                "api.kimi.com",
+                "/coding/v1/files",
+            ),
+        ];
+        for (entry_id, protocol_id, channel_id, endpoint_host, endpoint_path) in kimi_routes {
+            // route is the exact provider entry and protocol selected by the model binding.
+            // route 是模型绑定所选择的精确供应商入口与协议。
+            let route = bundled_manifest_route("kimi", entry_id, protocol_id);
+            // video_constraint binds local video preparation to one declared upload channel.
+            // video_constraint 将本地视频准备绑定到一个已声明上传通道。
+            let video_constraint = route
+                .protocol_route
+                .input_resource_constraints
+                .iter()
+                .find(|constraint| constraint.resource_kind == ResourceKind::Video)
+                .expect("Kimi video route must declare its upload binding");
+            assert_eq!(video_constraint.max_bytes, Some(100_000_000));
+            assert_eq!(
+                video_constraint.upload_channel_refs,
+                [String::from(channel_id)]
+            );
+            // channel freezes the complete multipart upload and provider-reference contract.
+            // channel 冻结完整的 Multipart 上传与供应商引用契约。
+            let channel = route
+                .upload_channels
+                .iter()
+                .find(|channel| channel.upload_channel_id == channel_id)
+                .expect("Kimi upload channel must resolve");
+            assert_eq!(
+                channel.primitive,
+                Some(crate::UploadPrimitiveKind::MultipartFile)
+            );
+            assert_eq!(channel.endpoint_host.as_deref(), Some(endpoint_host));
+            assert_eq!(channel.endpoint_path.as_deref(), Some(endpoint_path));
+            assert_eq!(channel.file_field.as_deref(), Some("file"));
+            assert_eq!(channel.max_bytes, Some(100_000_000));
+            assert_eq!(channel.response_id_pointer.as_deref(), Some("/id"));
+            assert_eq!(channel.reference_template.as_deref(), Some("ms://{id}"));
+            assert_eq!(
+                channel.fixed_fields.get("purpose").map(String::as_str),
+                Some("video")
+            );
+            assert!(channel.progress_supported && channel.cancellation_supported);
+        }
 
         let alibaba =
             bundled_manifest_route("alibaba", "model-studio-cn", OPENAI_RESPONSES_PROFILE_ID);
@@ -8178,6 +8330,42 @@ mod tests {
         tokio::fs::remove_file(path.as_path())
             .await
             .expect("media fixture should be removed");
+    }
+
+    /// Verifies an inline preparation read retains exactly the bytes covered by its fingerprint.
+    /// 验证内联准备读取精确保留其指纹覆盖的字节。
+    #[tokio::test]
+    async fn prepared_inline_media_read_binds_retained_bytes_to_fingerprint() {
+        // path is unique per test process and never overlaps a user-owned media source.
+        // path 在每个测试进程中唯一，绝不会与用户媒体源重叠。
+        let path = std::env::temp_dir().join(format!(
+            "vulcan-prepared-inline-media-{}.bin",
+            uuid::Uuid::new_v4()
+        ));
+        // expectedBytes is the exact payload that must survive the stable streamed read.
+        // expectedBytes 是必须通过稳定流式读取保留的精确载荷。
+        let expected_bytes = b"request-owned-inline-media";
+        tokio::fs::write(path.as_path(), expected_bytes)
+            .await
+            .expect("inline media fixture should be written");
+
+        // prepared contains both the retained request bytes and their content-addressed identity.
+        // prepared 同时包含请求保留字节及其内容寻址身份。
+        let prepared = read_prepared_media_source(path.as_path(), None, None, true)
+            .await
+            .expect("inline media should be read once into request ownership");
+
+        assert_eq!(
+            prepared.retained_bytes.as_deref(),
+            Some(expected_bytes.as_slice())
+        );
+        assert_eq!(
+            prepared.fingerprint.content_sha256,
+            <[u8; 32]>::from(Sha256::digest(expected_bytes))
+        );
+        tokio::fs::remove_file(path.as_path())
+            .await
+            .expect("inline media fixture should be removed");
     }
 
     /// Verifies provider-specialized dynamic usage paths are frozen by manifest declarations.
@@ -10655,11 +10843,11 @@ mod tests {
         assert_eq!(anthropic.path, "/anthropic/v1/messages");
         assert_eq!(
             anthropic_headers
-                .get("x-api-key")
+                .get(reqwest::header::AUTHORIZATION)
                 .and_then(|value| value.to_str().ok()),
-            Some("secret")
+            Some("Bearer secret")
         );
-        assert!(!anthropic_headers.contains_key(reqwest::header::AUTHORIZATION));
+        assert!(!anthropic_headers.contains_key("x-api-key"));
 
         let openai_route = minimax_route(OPENAI_CHAT_PROFILE_ID);
         let mut openai_request = minimal_request();

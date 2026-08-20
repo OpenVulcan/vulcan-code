@@ -510,6 +510,7 @@ pub(crate) fn resolve_webui_context_compaction_model_target(
             Some(preparation.model_blueprint.provider_id.as_str()),
             Some(preparation.model_blueprint.connection_id.as_str()),
             Some(preparation.model_blueprint.model_id.as_str()),
+            source_execution.and_then(|(request, _)| request.context_compaction_window_node_id),
             preparation.context_compaction_policy,
         )?,
         None => resolve_prompt_compaction_model_target(
@@ -522,6 +523,8 @@ pub(crate) fn resolve_webui_context_compaction_model_target(
                 .and_then(|runtime_state| runtime_state.active_connection_id.as_deref()),
             session_runtime_state
                 .and_then(|runtime_state| runtime_state.active_model_id.as_deref()),
+            session_runtime_state
+                .and_then(|runtime_state| runtime_state.context_compaction_window_node_id),
             None,
         )?,
     };
@@ -678,9 +681,16 @@ pub(crate) fn build_webui_context_compaction_job_request(
             if let Some(runtime_state) = session_runtime_state {
                 if runtime_state.provider_tool_settings_initialized {
                     for capability in &runtime_state.provider_tool_enabled_capabilities {
-                        if !runtime_state
-                            .provider_tool_selections
-                            .contains_key(capability)
+                        // mediaCapability uses the dedicated global backend and therefore has no session target row.
+                        // mediaCapability 使用专用全局后端，因此没有会话目标行。
+                        let media_capability = matches!(
+                            capability.as_str(),
+                            "image_understand" | "video_understand" | "audio_understand"
+                        );
+                        if !media_capability
+                            && !runtime_state
+                                .provider_tool_selections
+                                .contains_key(capability)
                         {
                             return Err(format!(
                                 "Provider tool capability `{capability}` is enabled but has no selected model and account; confirm the session capability settings before compacting."
@@ -699,6 +709,10 @@ pub(crate) fn build_webui_context_compaction_job_request(
                             .map(|(capability, selection)| (capability.clone(), selection.clone()))
                             .collect(),
                     );
+                    context.provider_tool_enabled_capabilities_override =
+                        Some(runtime_state.provider_tool_enabled_capabilities.clone());
+                    context.provider_extension_target_sets_override =
+                        Some(runtime_state.provider_extension_target_sets.clone());
                 }
                 context.execution_mode = runtime_state
                     .active_work_mode

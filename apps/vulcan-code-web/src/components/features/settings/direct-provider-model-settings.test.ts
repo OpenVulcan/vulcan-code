@@ -49,8 +49,10 @@ describe("direct provider model settings", () => {
 
     expect(draft).toEqual({
       context_limit: 64_000,
+      context_window_policy: undefined,
       output_limit: 8_000,
       input_resources: ["image"],
+      structured_output: "json_object",
       reasoning: "native",
       reasoning_control: "effort_selection",
       reasoning_efforts: ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
@@ -61,8 +63,10 @@ describe("direct provider model settings", () => {
   it("keeps explicit disablement and complete model-level values", () => {
     const draft = directCustomModelSettingsDraft(rowWithCapabilities({
       context_limit: 32_000,
+      context_window_policy: undefined,
       output_limit: 4_000,
       input_resources: [],
+      structured_output: "json_object",
       reasoning: "unsupported",
       reasoning_control: "fixed_off",
       reasoning_efforts: ["none"],
@@ -70,8 +74,10 @@ describe("direct provider model settings", () => {
 
     expect(draft).toEqual({
       context_limit: 32_000,
+      context_window_policy: undefined,
       output_limit: 4_000,
       input_resources: [],
+      structured_output: "json_object",
       reasoning: "unsupported",
       reasoning_control: "fixed_off",
       reasoning_efforts: ["none"],

@@ -25,6 +25,7 @@ import type {
 import type {
   ComposerAttachmentSummary,
   ComposerSlashCommandSummary,
+  ContextCompactionWindowNodeId,
   ConversationHydrationProgress,
   ConversationSummary,
   MainAreaId,
@@ -252,6 +253,9 @@ export interface WorkspaceShellProps {
   // Persists one selected conversation output-style override.
   // 持久化当前会话的输出风格覆盖。
   onSetSessionOutputStyle: (styleId: string | null) => Promise<boolean>;
+  // Persists or clears the selected session context-compaction window node.
+  // 持久化或清除当前会话的上下文压缩窗口节点。
+  onSetSessionContextCompactionWindow: (nodeId: ContextCompactionWindowNodeId | null) => Promise<boolean>;
   // Stops the selected conversation run.
   // 停止当前选中会话运行。
   onStopConversationRun: () => Promise<boolean>;

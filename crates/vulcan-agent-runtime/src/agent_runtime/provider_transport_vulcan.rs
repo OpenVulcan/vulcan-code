@@ -30,7 +30,7 @@ use vulcan_ai_contract::{
     AiContinuation, AiExecutionError, AiExecutionRequest, AiMessage, AiOperation, AiStreamEvent,
     ContentItem, MessageRole, ModelParameterValue, NativeToolKind, ParallelToolCallPolicy,
     PromptCachePolicy, ProviderReplayEnvelope, ReasoningEffort, ReasoningOutputPolicy,
-    RequestUsage, ResourceKind, ResourceReference, StructuredOutputPolicy,
+    RequestUsage, ResourceKind, ResourceReference, ResourceSourceKind, StructuredOutputPolicy,
     ToolCall as PublicToolCall, ToolChoicePolicy, ToolDefinition, ToolResult, UsageValue,
     canonicalize_codex_responses_replay_items, is_replayable_codex_responses_item,
 };
@@ -2459,6 +2459,23 @@ fn validate_resource_projection(
             .as_str(),
         ));
     }
+    if resource.kind != ResourceKind::File
+        && let Some(media_type) = resource.media_type.as_deref()
+        && !vulcan_ai_protocols::protocol_profile_supports_local_media_type(
+            protocol,
+            resource.kind,
+            media_type,
+        )
+    {
+        return Err(provider_failure(
+            route.provider.id.as_str(),
+            format!(
+                "Protocol profile `{protocol}` has no registered {:?} projector for MIME type `{media_type}`.",
+                resource.kind
+            )
+            .as_str(),
+        ));
+    }
     if let Some(constraint) = input_resource_constraint(route, resource.kind) {
         validate_frozen_input_resource_constraint(
             route.provider.id.as_str(),
@@ -2490,7 +2507,9 @@ fn validate_frozen_input_resource_constraint(
     let reference_allowed = match constraint.reference_policy {
         ResourceReferencePolicy::Any => true,
         ResourceReferencePolicy::LocalOnly => {
-            resource.local_path.is_some() && resource.url.is_none()
+            resource.local_path.is_some()
+                && (resource.url.is_none()
+                    || resource.source_kind == ResourceSourceKind::HostResolved)
         }
         ResourceReferencePolicy::RemoteOnly => {
             resource.url.is_some() && resource.local_path.is_none()
@@ -4092,6 +4111,24 @@ mod tests {
             )
             .is_err()
         );
+        // preparedLocalAudio retains local provenance while carrying immutable bytes prepared by the host.
+        // preparedLocalAudio 保留本地来源，同时携带由宿主准备的不可变字节。
+        let prepared_local_audio = ResourceReference {
+            id: String::from("audio-prepared"),
+            kind: ResourceKind::Audio,
+            media_type: Some(String::from("audio/mpeg")),
+            source_kind: ResourceSourceKind::HostResolved,
+            file_name: Some(String::from("audio.mp3")),
+            image_detail: None,
+            local_path: Some(String::from("C:/workspace/audio.mp3")),
+            url: Some(String::from("data:audio/mpeg;base64,AA==")),
+        };
+        validate_frozen_input_resource_constraint(
+            "custom:constraint-fixture",
+            &local_only,
+            &prepared_local_audio,
+        )
+        .expect("host-prepared local media should retain local-only provenance");
 
         // pdfOnly proves MIME admission comes entirely from frozen manifest data.
         // pdfOnly 证明 MIME 准入完全来自冻结清单数据。

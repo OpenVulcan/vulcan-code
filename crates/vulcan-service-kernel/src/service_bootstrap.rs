@@ -610,6 +610,14 @@ fn run_service_bootstrap(
     public_ai_runtime
         .replace_configuration(public_ai_configuration.clone())
         .map_err(|error| ServiceBootstrapError::new("workspace", "Workspace", error))?;
+    // Post-dispatch media tools reuse the existing ordered WebUI upload progress surface.
+    // 分派后媒体工具复用现有有序 WebUI 上传进度界面。
+    crate::media_upload::install_runtime_media_upload_progress_bridge(
+        public_ai_runtime.as_ref(),
+        event_emitter.clone(),
+        state.clone(),
+    )
+    .map_err(|error| ServiceBootstrapError::new("workspace", "Workspace", error))?;
     // The startup recovery chain restores any persisted system manifest layers (active,
     // quarantined-invalid, then previous) into the single authoritative catalog before the
     // first catalog refresh so operators never observe the bundled baseline over a

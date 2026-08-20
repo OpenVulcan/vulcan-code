@@ -123,7 +123,7 @@ pub fn attachment_descriptor_from_mime_type(mime_type: &str) -> Option<Attachmen
             mime_type: "image/bmp",
             extension: "bmp",
         }),
-        "audio/mpeg" => Some(AttachmentDescriptor {
+        "audio/mpeg" | "audio/mp3" => Some(AttachmentDescriptor {
             kind: ConversationAttachmentKind::Audio,
             mime_type: "audio/mpeg",
             extension: "mp3",
@@ -133,7 +133,7 @@ pub fn attachment_descriptor_from_mime_type(mime_type: &str) -> Option<Attachmen
             mime_type: "audio/wav",
             extension: "wav",
         }),
-        "audio/mp4" => Some(AttachmentDescriptor {
+        "audio/mp4" | "audio/m4a" | "audio/x-m4a" => Some(AttachmentDescriptor {
             kind: ConversationAttachmentKind::Audio,
             mime_type: "audio/mp4",
             extension: "m4a",
@@ -148,7 +148,7 @@ pub fn attachment_descriptor_from_mime_type(mime_type: &str) -> Option<Attachmen
             mime_type: "audio/flac",
             extension: "flac",
         }),
-        "audio/ogg" => Some(AttachmentDescriptor {
+        "audio/ogg" | "audio/oga" => Some(AttachmentDescriptor {
             kind: ConversationAttachmentKind::Audio,
             mime_type: "audio/ogg",
             extension: "ogg",
@@ -178,10 +178,20 @@ pub fn attachment_descriptor_from_mime_type(mime_type: &str) -> Option<Attachmen
             mime_type: "video/mp4",
             extension: "mp4",
         }),
-        "video/quicktime" => Some(AttachmentDescriptor {
+        "video/mpeg" | "video/mpg" => Some(AttachmentDescriptor {
+            kind: ConversationAttachmentKind::Video,
+            mime_type: "video/mpeg",
+            extension: "mpeg",
+        }),
+        "video/quicktime" | "video/mov" => Some(AttachmentDescriptor {
             kind: ConversationAttachmentKind::Video,
             mime_type: "video/quicktime",
             extension: "mov",
+        }),
+        "video/x-m4v" => Some(AttachmentDescriptor {
+            kind: ConversationAttachmentKind::Video,
+            mime_type: "video/x-m4v",
+            extension: "m4v",
         }),
         "video/x-matroska" => Some(AttachmentDescriptor {
             kind: ConversationAttachmentKind::Video,
@@ -193,10 +203,30 @@ pub fn attachment_descriptor_from_mime_type(mime_type: &str) -> Option<Attachmen
             mime_type: "video/webm",
             extension: "webm",
         }),
-        "video/x-msvideo" => Some(AttachmentDescriptor {
+        "video/x-msvideo" | "video/avi" => Some(AttachmentDescriptor {
             kind: ConversationAttachmentKind::Video,
             mime_type: "video/x-msvideo",
             extension: "avi",
+        }),
+        "video/x-flv" => Some(AttachmentDescriptor {
+            kind: ConversationAttachmentKind::Video,
+            mime_type: "video/x-flv",
+            extension: "flv",
+        }),
+        "video/x-ms-wmv" | "video/wmv" => Some(AttachmentDescriptor {
+            kind: ConversationAttachmentKind::Video,
+            mime_type: "video/x-ms-wmv",
+            extension: "wmv",
+        }),
+        "video/3gpp" => Some(AttachmentDescriptor {
+            kind: ConversationAttachmentKind::Video,
+            mime_type: "video/3gpp",
+            extension: "3gp",
+        }),
+        "video/3gpp2" => Some(AttachmentDescriptor {
+            kind: ConversationAttachmentKind::Video,
+            mime_type: "video/3gpp2",
+            extension: "3g2",
         }),
         "application/pdf" => Some(AttachmentDescriptor {
             kind: ConversationAttachmentKind::Pdf,
@@ -690,20 +720,45 @@ fn attachment_descriptor_from_extension(extension: &str) -> Option<AttachmentDes
             mime_type: "audio/flac",
             extension: "flac",
         }),
-        "ogg" => Some(AttachmentDescriptor {
+        "ogg" | "oga" => Some(AttachmentDescriptor {
             kind: ConversationAttachmentKind::Audio,
             mime_type: "audio/ogg",
             extension: "ogg",
+        }),
+        "opus" => Some(AttachmentDescriptor {
+            kind: ConversationAttachmentKind::Audio,
+            mime_type: "audio/opus",
+            extension: "opus",
+        }),
+        "pcm" => Some(AttachmentDescriptor {
+            kind: ConversationAttachmentKind::Audio,
+            mime_type: "audio/pcm",
+            extension: "pcm",
+        }),
+        "ulaw" => Some(AttachmentDescriptor {
+            kind: ConversationAttachmentKind::Audio,
+            mime_type: "audio/basic",
+            extension: "ulaw",
         }),
         "mp4" => Some(AttachmentDescriptor {
             kind: ConversationAttachmentKind::Video,
             mime_type: "video/mp4",
             extension: "mp4",
         }),
+        "mpeg" | "mpg" => Some(AttachmentDescriptor {
+            kind: ConversationAttachmentKind::Video,
+            mime_type: "video/mpeg",
+            extension: "mpeg",
+        }),
         "mov" => Some(AttachmentDescriptor {
             kind: ConversationAttachmentKind::Video,
             mime_type: "video/quicktime",
             extension: "mov",
+        }),
+        "m4v" => Some(AttachmentDescriptor {
+            kind: ConversationAttachmentKind::Video,
+            mime_type: "video/x-m4v",
+            extension: "m4v",
         }),
         "mkv" => Some(AttachmentDescriptor {
             kind: ConversationAttachmentKind::Video,
@@ -719,6 +774,26 @@ fn attachment_descriptor_from_extension(extension: &str) -> Option<AttachmentDes
             kind: ConversationAttachmentKind::Video,
             mime_type: "video/x-msvideo",
             extension: "avi",
+        }),
+        "flv" => Some(AttachmentDescriptor {
+            kind: ConversationAttachmentKind::Video,
+            mime_type: "video/x-flv",
+            extension: "flv",
+        }),
+        "wmv" => Some(AttachmentDescriptor {
+            kind: ConversationAttachmentKind::Video,
+            mime_type: "video/x-ms-wmv",
+            extension: "wmv",
+        }),
+        "3gp" | "3gpp" => Some(AttachmentDescriptor {
+            kind: ConversationAttachmentKind::Video,
+            mime_type: "video/3gpp",
+            extension: "3gp",
+        }),
+        "3g2" => Some(AttachmentDescriptor {
+            kind: ConversationAttachmentKind::Video,
+            mime_type: "video/3gpp2",
+            extension: "3g2",
         }),
         "pdf" => Some(AttachmentDescriptor {
             kind: ConversationAttachmentKind::Pdf,
@@ -1100,6 +1175,38 @@ mod tests {
                 .kind,
             ConversationAttachmentKind::Pdf
         );
+        assert_eq!(
+            attachment_descriptor_from_mime_type("video/x-flv")
+                .expect("Kimi FLV MIME type should be supported")
+                .kind,
+            ConversationAttachmentKind::Video
+        );
+        assert_eq!(
+            attachment_descriptor_from_path(&unique_temp_file_path("3gp"))
+                .expect("Kimi 3GP path should be supported")
+                .mime_type,
+            "video/3gpp"
+        );
+        assert_eq!(
+            attachment_descriptor_from_path(&unique_temp_file_path("m4v"))
+                .expect("Kimi M4V path should be supported")
+                .mime_type,
+            "video/x-m4v"
+        );
+        assert_eq!(
+            attachment_descriptor_from_mime_type("video/3gpp2")
+                .expect("Kimi 3G2 MIME type should be supported")
+                .extension,
+            "3g2"
+        );
+        for extension in ["oga", "opus", "pcm", "ulaw"] {
+            assert_eq!(
+                attachment_descriptor_from_path(&unique_temp_file_path(extension))
+                    .expect("registered audio path should be supported")
+                    .kind,
+                ConversationAttachmentKind::Audio
+            );
+        }
     }
 
     /// Verifies the managed attachment root stays inside the shared Vulcan home directory when no workspace path is provided.

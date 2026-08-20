@@ -151,6 +151,7 @@ pub(super) fn apply_conversation_checkpoint(
                 workspace.session_runtime_state.get(&session_id),
                 &guard.live_context_budgets,
                 public_model_capabilities.as_ref(),
+                None,
             );
             guard.workbench.context_usage = context_usage.clone();
             guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
@@ -1050,6 +1051,7 @@ fn emit_terminal_execution_report_workbench_deltas(
                 workspace.session_runtime_state.get(&session_id),
                 &guard.live_context_budgets,
                 public_model_capabilities.as_ref(),
+                None,
             )
         } else {
             None

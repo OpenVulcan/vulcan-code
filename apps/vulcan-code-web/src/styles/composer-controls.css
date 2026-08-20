@@ -99,6 +99,36 @@
   gap: 6px;
 }
 
+.context-usage-control {
+  min-width: 14px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border: 0;
+  border-radius: 7px;
+  padding: 0;
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+}
+
+.context-usage-control.is-locked {
+  padding: 0 5px 0 2px;
+  background: color-mix(in oklch, var(--foreground) 7%, transparent);
+}
+
+.context-usage-control:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.context-usage-control:not(:disabled):hover {
+  background: color-mix(in oklch, var(--foreground) 10%, transparent);
+  color: var(--foreground);
+}
+
 .context-usage-orb {
   --context-usage-track: color-mix(in oklch, var(--muted-foreground) 24%, transparent);
   --context-usage-progress-color: color-mix(in oklch, #4d9cff 76%, var(--foreground) 24%);
@@ -116,7 +146,18 @@
     conic-gradient(var(--context-usage-progress-color) var(--context-usage-progress), var(--context-usage-track) 0);
   color: var(--foreground);
   box-shadow: none;
-  cursor: default;
+  cursor: inherit;
+}
+
+.context-usage-lock-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  color: currentColor;
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1;
+  letter-spacing: -0.01em;
 }
 
 .context-usage-orb[data-threshold-state="warning"] {
@@ -144,6 +185,19 @@
   color: #f4f4f4;
   padding: 13px 12px 12px;
   box-shadow: 0 14px 38px rgb(0 0 0 / 34%);
+  white-space: normal;
+}
+
+.context-usage-menu {
+  width: min(320px, calc(100vw - 24px));
+}
+
+.context-usage-card {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+  padding: 8px;
   white-space: normal;
 }
 

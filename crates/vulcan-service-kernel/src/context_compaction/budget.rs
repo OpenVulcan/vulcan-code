@@ -31,22 +31,35 @@ pub(crate) fn context_compaction_budget_snapshot_from_state(
     state: &SharedServiceBridgeState,
     session_id: SessionId,
 ) -> Option<ContextBudgetSnapshot> {
-    let (live_budget, runtime_state, public_model_capabilities) = state
+    let (live_budget, runtime_state, public_model_capabilities, compression_window_limit) = state
         .lock()
         .ok()
         .map(|guard| {
+            // runtimeState is cloned once so node resolution and historical usage share one revision.
+            // runtimeState 只克隆一次，使节点解析与历史用量共享同一修订。
+            let runtime_state = guard
+                .workspace_snapshot
+                .as_ref()
+                .and_then(|workspace| workspace.session_runtime_state.get(&session_id))
+                .cloned();
+            // publicAiConfiguration resolves only the numeric node value and is never persisted by the session.
+            // publicAiConfiguration 只解析节点数值，且该数值绝不会由会话持久化。
+            let public_ai_configuration = guard
+                .agent_runtime
+                .as_ref()
+                .and_then(|runtime| runtime.public_ai_runtime.configuration_snapshot().ok());
             (
                 guard.live_context_budgets.get(&session_id).cloned(),
-                guard
-                    .workspace_snapshot
-                    .as_ref()
-                    .and_then(|workspace| workspace.session_runtime_state.get(&session_id))
-                    .cloned(),
+                runtime_state.clone(),
                 active_public_ai_model_capabilities(
                     guard
                         .agent_runtime
                         .as_ref()
                         .map(|runtime| runtime.public_ai_runtime.as_ref()),
+                ),
+                crate::context_compaction_window_limit_from_configuration(
+                    runtime_state.as_ref(),
+                    public_ai_configuration.as_ref(),
                 ),
             )
         })
@@ -55,6 +68,7 @@ pub(crate) fn context_compaction_budget_snapshot_from_state(
         historical_context_budget_snapshot_from_runtime_state(
             runtime_state,
             public_model_capabilities.as_ref(),
+            compression_window_limit,
         )
     });
     live_budget

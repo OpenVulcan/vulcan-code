@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "alibaba",
-  "revision": 8,
-  "published_at": "2026-08-18T00:00:00Z",
+  "revision": 9,
+  "published_at": "2026-08-19T00:00:00Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -4511,7 +4511,7 @@
       "operation_id": "alibaba.alibaba_qwen_omni_media_analyze",
       "operation": "image_understand",
       "carrier": "provider_tool",
-      "input_resources": ["image", "audio"],
+      "input_resources": ["image"],
       "output_resources": [],
       "tool_target_refs": [
         "model-studio-cn.qwen3.5-omni-plus.media-analyze",
@@ -4521,17 +4521,47 @@
       ],
       "request_profile_refs": ["alibaba.media.omni.request.v1"],
       "response_profile_refs": [],
-      "upload_channel_refs": ["inline.image-data-url", "inline.audio-data-url"],
+      "upload_channel_refs": ["inline.image-data-url"],
       "upload_bindings": [
         {
           "source_path": "/media_paths",
           "target_path": "/media",
-          "upload_channel_refs": ["inline.image-data-url", "inline.audio-data-url"],
+          "upload_channel_refs": ["inline.image-data-url"],
           "mime_types_by_extension": {
             "jpg": "image/jpeg",
             "jpeg": "image/jpeg",
             "png": "image/png",
-            "webp": "image/webp",
+            "webp": "image/webp"
+          },
+          "required": true,
+          "remove_source": true,
+          "target_encoding": "resource_descriptor"
+        }
+      ],
+      "timeout_ms": 60000,
+      "idempotent": false
+    },
+    {
+      "operation_id": "alibaba.alibaba_qwen_omni_audio_understand",
+      "operation": "audio_understand",
+      "carrier": "provider_tool",
+      "input_resources": ["audio"],
+      "output_resources": [],
+      "tool_target_refs": [
+        "model-studio-cn.qwen3.5-omni-plus.audio-understanding",
+        "model-studio-cn.qwen3.5-omni-flash.audio-understanding",
+        "model-studio-singapore.qwen3.5-omni-plus.audio-understanding",
+        "model-studio-singapore.qwen3.5-omni-flash.audio-understanding"
+      ],
+      "request_profile_refs": ["alibaba.media.omni.request.v1"],
+      "response_profile_refs": [],
+      "upload_channel_refs": ["inline.audio-data-url"],
+      "upload_bindings": [
+        {
+          "source_path": "/media_paths",
+          "target_path": "/media",
+          "upload_channel_refs": ["inline.audio-data-url"],
+          "mime_types_by_extension": {
             "mp3": "audio/mpeg",
             "wav": "audio/wav",
             "amr": "audio/amr",
@@ -5988,7 +6018,63 @@
       },
       "service_entry_id": "model-studio-cn",
       "target_id": "model-studio-cn.qwen3.5-omni-plus.media-analyze",
+      "media_input_projection": {
+        "path_field": "media_paths",
+        "prompt_field": "instruction",
+        "path_as_single_item_array": true,
+        "fixed_arguments": {
+          "task": "question_answer"
+        }
+      },
       "tool_id": "vulcan_image_understand",
+      "upstream_target_id": "qwen3.5-omni-plus"
+    },
+    {
+      "capability": "audio_understand",
+      "credential_profile_ids": ["api-key"],
+      "description": "Understand one local audio file with Qwen3.5 Omni Plus through the China Model Studio endpoint.",
+      "display_name": "qwen3.5-omni-plus Audio Understanding",
+      "execution": {
+        "adapter": "generic_json",
+        "authentication": "bearer_authorization",
+        "endpoint_base_url": "https://dashscope.aliyuncs.com",
+        "endpoint_path": "/compatible-mode/v1/chat/completions",
+        "execution_kind": "conversation_media_analyze"
+      },
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "instruction": {"minLength": 1, "type": "string"},
+          "media_paths": {
+            "items": {
+              "description": "Local audio file path.",
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 1,
+            "minItems": 1,
+            "type": "array"
+          },
+          "task": {"enum": ["question_answer"], "type": "string"}
+        },
+        "required": ["task", "media_paths", "instruction"],
+        "type": "object"
+      },
+      "output": {
+        "kind": "text",
+        "normalized_result_path": "text",
+        "source_path": "/text"
+      },
+      "service_entry_id": "model-studio-cn",
+      "target_id": "model-studio-cn.qwen3.5-omni-plus.audio-understanding",
+      "media_input_projection": {
+        "path_field": "media_paths",
+        "prompt_field": "instruction",
+        "path_as_single_item_array": true,
+        "fixed_arguments": {"task": "question_answer"}
+      },
+      "tool_id": "audio_understand",
       "upstream_target_id": "qwen3.5-omni-plus"
     },
     {
@@ -6068,7 +6154,63 @@
       },
       "service_entry_id": "model-studio-cn",
       "target_id": "model-studio-cn.qwen3.5-omni-flash.media-analyze",
+      "media_input_projection": {
+        "path_field": "media_paths",
+        "prompt_field": "instruction",
+        "path_as_single_item_array": true,
+        "fixed_arguments": {
+          "task": "question_answer"
+        }
+      },
       "tool_id": "vulcan_image_understand",
+      "upstream_target_id": "qwen3.5-omni-flash"
+    },
+    {
+      "capability": "audio_understand",
+      "credential_profile_ids": ["api-key"],
+      "description": "Understand one local audio file with Qwen3.5 Omni Flash through the China Model Studio endpoint.",
+      "display_name": "qwen3.5-omni-flash Audio Understanding",
+      "execution": {
+        "adapter": "generic_json",
+        "authentication": "bearer_authorization",
+        "endpoint_base_url": "https://dashscope.aliyuncs.com",
+        "endpoint_path": "/compatible-mode/v1/chat/completions",
+        "execution_kind": "conversation_media_analyze"
+      },
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "instruction": {"minLength": 1, "type": "string"},
+          "media_paths": {
+            "items": {
+              "description": "Local audio file path.",
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 1,
+            "minItems": 1,
+            "type": "array"
+          },
+          "task": {"enum": ["question_answer"], "type": "string"}
+        },
+        "required": ["task", "media_paths", "instruction"],
+        "type": "object"
+      },
+      "output": {
+        "kind": "text",
+        "normalized_result_path": "text",
+        "source_path": "/text"
+      },
+      "service_entry_id": "model-studio-cn",
+      "target_id": "model-studio-cn.qwen3.5-omni-flash.audio-understanding",
+      "media_input_projection": {
+        "path_field": "media_paths",
+        "prompt_field": "instruction",
+        "path_as_single_item_array": true,
+        "fixed_arguments": {"task": "question_answer"}
+      },
+      "tool_id": "audio_understand",
       "upstream_target_id": "qwen3.5-omni-flash"
     },
     {
@@ -7641,7 +7783,63 @@
       },
       "service_entry_id": "model-studio-singapore",
       "target_id": "model-studio-singapore.qwen3.5-omni-plus.media-analyze",
+      "media_input_projection": {
+        "path_field": "media_paths",
+        "prompt_field": "instruction",
+        "path_as_single_item_array": true,
+        "fixed_arguments": {
+          "task": "question_answer"
+        }
+      },
       "tool_id": "vulcan_image_understand",
+      "upstream_target_id": "qwen3.5-omni-plus"
+    },
+    {
+      "capability": "audio_understand",
+      "credential_profile_ids": ["api-key"],
+      "description": "Understand one local audio file with Qwen3.5 Omni Plus through the Singapore Model Studio endpoint.",
+      "display_name": "qwen3.5-omni-plus Audio Understanding",
+      "execution": {
+        "adapter": "generic_json",
+        "authentication": "bearer_authorization",
+        "endpoint_base_url": "https://dashscope-intl.aliyuncs.com",
+        "endpoint_path": "/compatible-mode/v1/chat/completions",
+        "execution_kind": "conversation_media_analyze"
+      },
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "instruction": {"minLength": 1, "type": "string"},
+          "media_paths": {
+            "items": {
+              "description": "Local audio file path.",
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 1,
+            "minItems": 1,
+            "type": "array"
+          },
+          "task": {"enum": ["question_answer"], "type": "string"}
+        },
+        "required": ["task", "media_paths", "instruction"],
+        "type": "object"
+      },
+      "output": {
+        "kind": "text",
+        "normalized_result_path": "text",
+        "source_path": "/text"
+      },
+      "service_entry_id": "model-studio-singapore",
+      "target_id": "model-studio-singapore.qwen3.5-omni-plus.audio-understanding",
+      "media_input_projection": {
+        "path_field": "media_paths",
+        "prompt_field": "instruction",
+        "path_as_single_item_array": true,
+        "fixed_arguments": {"task": "question_answer"}
+      },
+      "tool_id": "audio_understand",
       "upstream_target_id": "qwen3.5-omni-plus"
     },
     {
@@ -7721,7 +7919,63 @@
       },
       "service_entry_id": "model-studio-singapore",
       "target_id": "model-studio-singapore.qwen3.5-omni-flash.media-analyze",
+      "media_input_projection": {
+        "path_field": "media_paths",
+        "prompt_field": "instruction",
+        "path_as_single_item_array": true,
+        "fixed_arguments": {
+          "task": "question_answer"
+        }
+      },
       "tool_id": "vulcan_image_understand",
+      "upstream_target_id": "qwen3.5-omni-flash"
+    },
+    {
+      "capability": "audio_understand",
+      "credential_profile_ids": ["api-key"],
+      "description": "Understand one local audio file with Qwen3.5 Omni Flash through the Singapore Model Studio endpoint.",
+      "display_name": "qwen3.5-omni-flash Audio Understanding",
+      "execution": {
+        "adapter": "generic_json",
+        "authentication": "bearer_authorization",
+        "endpoint_base_url": "https://dashscope-intl.aliyuncs.com",
+        "endpoint_path": "/compatible-mode/v1/chat/completions",
+        "execution_kind": "conversation_media_analyze"
+      },
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "instruction": {"minLength": 1, "type": "string"},
+          "media_paths": {
+            "items": {
+              "description": "Local audio file path.",
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 1,
+            "minItems": 1,
+            "type": "array"
+          },
+          "task": {"enum": ["question_answer"], "type": "string"}
+        },
+        "required": ["task", "media_paths", "instruction"],
+        "type": "object"
+      },
+      "output": {
+        "kind": "text",
+        "normalized_result_path": "text",
+        "source_path": "/text"
+      },
+      "service_entry_id": "model-studio-singapore",
+      "target_id": "model-studio-singapore.qwen3.5-omni-flash.audio-understanding",
+      "media_input_projection": {
+        "path_field": "media_paths",
+        "prompt_field": "instruction",
+        "path_as_single_item_array": true,
+        "fixed_arguments": {"task": "question_answer"}
+      },
+      "tool_id": "audio_understand",
       "upstream_target_id": "qwen3.5-omni-flash"
     },
     {

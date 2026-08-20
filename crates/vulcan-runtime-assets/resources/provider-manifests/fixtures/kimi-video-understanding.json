@@ -1,0 +1,134 @@
+{
+  "schema_version": "provider-manifest-execution-fixture.v1",
+  "fixture_id": "kimi-video-understanding",
+  "base_manifest": "kimi.json",
+  "production_target_refs": [
+    "kimi::platform-cn.kimi-k2.7-code.video-understanding",
+    "kimi::platform-global.kimi-k2.7-code.video-understanding",
+    "kimi::coding-plan.kimi-for-coding.video-understanding"
+  ],
+  "tool_target": {
+    "target_id": "platform-cn.fixture-video-understanding",
+    "description": "Kimi internal video reference and OpenAI-compatible Chat SSE fixture.",
+    "service_entry_id": "platform-cn",
+    "credential_profile_ids": ["api-key"],
+    "upstream_target_id": "kimi-k2.7-code",
+    "display_name": "Kimi Video Understanding Fixture",
+    "tool_id": "fixture_kimi_video_understanding",
+    "capability": "video_understand",
+    "input_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "video_path": {"type": "string", "minLength": 1},
+        "prompt": {"type": "string", "minLength": 1}
+      },
+      "required": ["video_path", "prompt"]
+    },
+    "media_input_projection": {
+      "path_field": "video_path",
+      "prompt_field": "prompt"
+    },
+    "output": {
+      "kind": "text",
+      "source_path": "/text",
+      "normalized_result_path": "text"
+    },
+    "execution": {
+      "endpoint_path": "/v1/chat/completions",
+      "authentication": "bearer_authorization",
+      "adapter": "generic_json",
+      "execution_kind": "conversation_media_analyze"
+    }
+  },
+  "operation": {
+    "operation_id": "fixture.kimi-video-understanding",
+    "operation": "video_understand",
+    "carrier": "provider_tool",
+    "input_resources": ["video"],
+    "output_resources": [],
+    "tool_target_refs": ["platform-cn.fixture-video-understanding"],
+    "request_profile_refs": ["kimi.video-understanding.request.v1"],
+    "response_profile_refs": [],
+    "upload_channel_refs": ["fixture.video-file"],
+    "upload_bindings": [
+      {
+        "source_path": "/video_path",
+        "target_path": "/video_reference",
+        "upload_channel_refs": ["fixture.video-file"],
+        "mime_types_by_extension": {"mp4": "video/mp4"},
+        "required": true,
+        "remove_source": true
+      }
+    ],
+    "timeout_ms": 60000,
+    "idempotent": false
+  },
+  "upload_channels": [
+    {
+      "upload_channel_id": "fixture.video-file",
+      "description": "Fixture-only Kimi multipart video upload.",
+      "primitive": "multipart_file",
+      "endpoint_host": "fixture.invalid",
+      "endpoint_path": "/v1/files",
+      "method": "POST",
+      "file_field": "file",
+      "accepted_mime_types": ["video/mp4"],
+      "max_bytes": 100000000,
+      "max_count": 1,
+      "timeout_ms": 60000,
+      "response_id_pointer": "/id",
+      "reference_template": "ms://{id}",
+      "progress_supported": true,
+      "cancellation_supported": true,
+      "fixed_fields": {"purpose": "video"},
+      "reference_encoding": "template"
+    }
+  ],
+  "request_profiles": [],
+  "response_profiles": [],
+  "required_execution_primitives": ["conversation_media_analyze"],
+  "required_upload_primitives": ["multipart_file"],
+  "required_transformers": [],
+  "arguments": {
+    "video_path": "kimi-video-fixture.mp4",
+    "prompt": "Summarize the video."
+  },
+  "interactions": [
+    {
+      "method": "POST",
+      "path": "/v1/files",
+      "expected_body_contains": [
+        "name=\"purpose\"",
+        "video",
+        "name=\"file\"; filename=\"kimi-video-fixture.mp4\"",
+        "Content-Type: video/mp4",
+        "fixture-video-bytes"
+      ],
+      "response_status": 200,
+      "response_json_body": {"id": "file-fixture"}
+    },
+    {
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "expected_json_body": {
+        "model": "kimi-k2.7-code",
+        "stream": true,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {"type": "text", "text": "Summarize the video."},
+              {"type": "video_url", "video_url": {"url": "ms://file-fixture"}}
+            ]
+          }
+        ]
+      },
+      "response_status": 200,
+      "response_content_type": "text/event-stream",
+      "response_text_body": "data: {\"choices\":[{\"delta\":{\"content\":\"A person crosses the room.\"}}]}\n\ndata: [DONE]\n\n"
+    }
+  ],
+  "expected_output_kind": "text",
+  "expected_text_output": "A person crosses the room."
+}

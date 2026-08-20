@@ -31,6 +31,7 @@ import { useI18n } from "@/i18n"
 import {
   loadPublicAiSettings,
   savePublicAiInternalModelEnabled,
+  savePublicAiMultimodalUnderstandingCandidate,
   savePublicAiModelEnabled,
 } from "@/service/settings-actions-service"
 import type {
@@ -264,6 +265,22 @@ export function ModelListSettingsArea() {
                   selectedGroup.provider.id,
                   modelId,
                 )
+                // multimodalCandidateEligible is backend-resolved across all executable account routes.
+                // multimodalCandidateEligible 由后端跨全部可执行账号路由解析。
+                const multimodalCandidateEligible = snapshot.mediaUnderstandingModelCandidates?.some(
+                  (candidate) => (
+                    candidate.selection.provider_id === selectedGroup.provider.id
+                    && candidate.selection.model_id === modelId
+                  ),
+                ) ?? false
+                // multimodalCandidateEnabled is one shared provider-model switch, independent from conversation use.
+                // multimodalCandidateEnabled 是与会话使用相互独立的共享供应商模型开关。
+                const multimodalCandidateEnabled = snapshot.multimodalUnderstandingCandidateModels?.some(
+                  (record) => (
+                    record.providerId === selectedGroup.provider.id
+                    && record.modelId === modelId
+                  ),
+                ) ?? false
                 return (
                   <article className="settings-model-row" key={`${selectedGroup.provider.id}/${modelId}`}>
                     <div className="settings-model-row-main">
@@ -353,6 +370,32 @@ export function ModelListSettingsArea() {
                           onCheckedChange={(checked) => {
                             runSnapshotMutation(`conversation/${modelKey}`, () => (
                               savePublicAiModelEnabled({
+                                providerId: selectedGroup.provider.id,
+                                modelId,
+                                enabled: checked,
+                              })
+                            ))
+                          }}
+                        />
+                      </label>
+                      <label
+                        className="settings-model-switch-control"
+                        title={multimodalCandidateEligible
+                          ? undefined
+                          : t("settings.models.multimodalUnderstandingUnavailable")}
+                      >
+                        <span>{t("settings.models.multimodalUnderstandingCandidate")}</span>
+                        <Switch
+                          aria-label={`${t("settings.models.multimodalUnderstandingCandidate")} ${representative.model.display_name}`}
+                          checked={multimodalCandidateEnabled}
+                          disabled={multimodalCandidateToggleDisabled(
+                            pendingMutationKey !== null,
+                            multimodalCandidateEligible,
+                            multimodalCandidateEnabled,
+                          )}
+                          onCheckedChange={(checked) => {
+                            runSnapshotMutation(`multimodal-candidate/${modelKey}`, () => (
+                              savePublicAiMultimodalUnderstandingCandidate({
                                 providerId: selectedGroup.provider.id,
                                 modelId,
                                 enabled: checked,
@@ -486,6 +529,18 @@ export function internalStateForModel(
   return operations.size > 0
     ? { enabled, operations: Array.from(operations) }
     : null
+}
+
+// multimodalCandidateToggleDisabled blocks concurrent writes and invalid new admissions while preserving stale-state cleanup.
+// multimodalCandidateToggleDisabled 阻止并发写入和无效的新准入，同时保留清理失效旧状态的能力。
+// `pending` reports an active settings mutation, `eligible` reports a currently executable route, and `enabled` reports persisted admission; the return value controls the switch disabled state.
+// `pending` 表示设置写入进行中，`eligible` 表示当前存在可执行路由，`enabled` 表示已持久化准入；返回值控制开关禁用状态。
+export function multimodalCandidateToggleDisabled(
+  pending: boolean,
+  eligible: boolean,
+  enabled: boolean,
+): boolean {
+  return pending || (!eligible && !enabled)
 }
 
 // internalOperationLabel returns the localized compact operation name.

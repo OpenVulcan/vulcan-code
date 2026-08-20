@@ -168,6 +168,56 @@ mod tests {
         assert!(is_allowed_service_media_asset_path(&profile_attachment));
         assert!(!is_allowed_service_media_asset_path(&lookalike_attachment));
     }
+
+    /// Verifies the service media route recognizes every added Kimi video extension and canonical MIME type.
+    /// 验证服务媒体路由识别所有新增 Kimi 视频扩展名及其规范 MIME 类型。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns normally after every added extension is accepted and mapped without MIME ambiguity.
+    /// 所有新增扩展名均被接受并无歧义地映射 MIME 后正常返回。
+    #[test]
+    fn kimi_video_extensions_are_served_with_canonical_mime_types() {
+        assert_eq!(
+            infer_service_media_asset_mime_type(Path::new("clip.mpeg")),
+            "video/mpeg"
+        );
+        assert_eq!(
+            infer_service_media_asset_mime_type(Path::new("clip.mpg")),
+            "video/mpeg"
+        );
+        assert_eq!(
+            infer_service_media_asset_mime_type(Path::new("clip.avi")),
+            "video/x-msvideo"
+        );
+        assert_eq!(
+            infer_service_media_asset_mime_type(Path::new("clip.flv")),
+            "video/x-flv"
+        );
+        assert_eq!(
+            infer_service_media_asset_mime_type(Path::new("clip.wmv")),
+            "video/x-ms-wmv"
+        );
+        assert_eq!(
+            infer_service_media_asset_mime_type(Path::new("clip.3gp")),
+            "video/3gpp"
+        );
+        assert_eq!(
+            infer_service_media_asset_mime_type(Path::new("clip.3gpp")),
+            "video/3gpp"
+        );
+        assert!(has_supported_service_media_asset_extension(Path::new(
+            "clip.3gp"
+        )));
+        assert_eq!(
+            infer_service_media_asset_mime_type(Path::new("clip.m4v")),
+            "video/x-m4v"
+        );
+        assert_eq!(
+            infer_service_media_asset_mime_type(Path::new("clip.3g2")),
+            "video/3gpp2"
+        );
+    }
 }
 
 /// Returns whether a local path extension is supported by the media route.
@@ -186,9 +236,18 @@ fn has_supported_service_media_asset_extension(path: &Path) -> bool {
             | Some("bmp")
             | Some("svg")
             | Some("mp4")
+            | Some("mpeg")
+            | Some("mpg")
             | Some("webm")
             | Some("mov")
+            | Some("m4v")
             | Some("mkv")
+            | Some("avi")
+            | Some("flv")
+            | Some("wmv")
+            | Some("3gp")
+            | Some("3gpp")
+            | Some("3g2")
             | Some("mp3")
             | Some("wav")
             | Some("m4a")
@@ -267,9 +326,16 @@ fn infer_service_media_asset_mime_type(path: &Path) -> String {
         Some("bmp") => String::from("image/bmp"),
         Some("svg") => String::from("image/svg+xml"),
         Some("mp4") => String::from("video/mp4"),
+        Some("mpeg") | Some("mpg") => String::from("video/mpeg"),
         Some("webm") => String::from("video/webm"),
         Some("mov") => String::from("video/quicktime"),
+        Some("m4v") => String::from("video/x-m4v"),
         Some("mkv") => String::from("video/x-matroska"),
+        Some("avi") => String::from("video/x-msvideo"),
+        Some("flv") => String::from("video/x-flv"),
+        Some("wmv") => String::from("video/x-ms-wmv"),
+        Some("3gp") | Some("3gpp") => String::from("video/3gpp"),
+        Some("3g2") => String::from("video/3gpp2"),
         Some("mp3") => String::from("audio/mpeg"),
         Some("wav") => String::from("audio/wav"),
         Some("m4a") => String::from("audio/mp4"),

@@ -287,6 +287,23 @@ export interface PublicAiCustomModelRequestProjection {
 // PublicAiToolSchemaProjectionMode 选择 Provider 可见的函数工具 Schema 契约。
 export type PublicAiToolSchemaProjectionMode = "lightweight" | "passthrough" | "strict";
 
+// PublicAiStructuredOutputCapability identifies one model's strongest stable JSON-output contract.
+// PublicAiStructuredOutputCapability 标识一个模型最强的稳定 JSON 输出契约。
+export type PublicAiStructuredOutputCapability = "json_object" | "json_schema" | "unsupported";
+
+// PublicAiReasoningEffort identifies one provider-neutral user-selectable reasoning level.
+// PublicAiReasoningEffort 标识一个供应商无关且用户可选的思考档位。
+export type PublicAiReasoningEffort =
+  | "none"
+  | "adaptive"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "max"
+  | "ultra";
+
 // PublicAiCustomModelDefinition is one credential-independent user model overlay.
 // PublicAiCustomModelDefinition 是一个与凭据无关的用户模型覆盖定义。
 export interface PublicAiCustomModelDefinition {
@@ -304,6 +321,7 @@ export interface PublicAiModelCapabilityOverrides {
   context_limit?: number;
   output_limit?: number;
   input_resources?: PublicAiResourceKind[];
+  structured_output?: PublicAiStructuredOutputCapability;
   reasoning?: string;
   reasoning_control?: string;
   reasoning_efforts?: string[];
@@ -327,12 +345,47 @@ export interface PublicAiContextWindowPolicyOverrides {
   fallback_buffer_tokens?: number;
 }
 
+// ContextCompactionWindowNodeId is one immutable backend-owned node identity.
+// ContextCompactionWindowNodeId 是一个由后台持有的不可变节点身份。
+export type ContextCompactionWindowNodeId =
+  | "compression-window-1"
+  | "compression-window-2"
+  | "compression-window-3"
+  | "compression-window-4"
+  | "compression-window-5";
+
+// PublicAiContextCompactionWindowNode exposes one fixed node and its editable token value.
+// PublicAiContextCompactionWindowNode 公开一个固定节点及其可编辑 Token 值。
+export interface PublicAiContextCompactionWindowNode {
+  // id is immutable and is the only value persisted by sessions.
+  // id 不可变，且是会话唯一持久化的值。
+  id: ContextCompactionWindowNodeId;
+  // tokens is the current backend-authoritative compaction-window value.
+  // tokens 是当前由后台权威持有的压缩窗口值。
+  tokens: number;
+}
+
+// PublicAiContextCompactionWindowConfiguration contains exactly five ordered nodes.
+// PublicAiContextCompactionWindowConfiguration 包含恰好五个有序节点。
+export interface PublicAiContextCompactionWindowConfiguration {
+  // nodes remain in immutable low-to-high product order.
+  // nodes 保持不可变的产品从低到高顺序。
+  nodes: [
+    PublicAiContextCompactionWindowNode,
+    PublicAiContextCompactionWindowNode,
+    PublicAiContextCompactionWindowNode,
+    PublicAiContextCompactionWindowNode,
+    PublicAiContextCompactionWindowNode,
+  ];
+}
+
 // PublicAiCustomProviderModelDefaults is the safe provider-wide fallback capability contract.
 // PublicAiCustomProviderModelDefaults 是安全的供应商级回退能力契约。
 export interface PublicAiCustomProviderModelDefaults {
   context_limit: number;
   output_limit: number;
   input_resources?: PublicAiResourceKind[];
+  structured_output?: PublicAiStructuredOutputCapability;
   reasoning: string;
   reasoning_control: string;
   reasoning_efforts: string[];
@@ -501,6 +554,7 @@ export interface PublicAiModelCapabilityEvidence {
   output_limit_declared: boolean;
   input_modalities_declared: boolean;
   output_modalities_declared: boolean;
+  structured_output_declared?: boolean;
   supports_text_input?: boolean;
   supports_text_output?: boolean;
 }
@@ -521,6 +575,9 @@ export interface PublicAiModelCapabilities {
   // Resource modalities emitted by this exact model route.
   // 此精确模型路由输出的资源模态。
   output_resources?: PublicAiResourceKind[];
+  // Stable structured-output capability for this exact model route.
+  // 此精确模型路由的稳定结构化输出能力。
+  structured_output?: PublicAiStructuredOutputCapability;
   // Provider-native tools available on this exact protocol and model route.
   // 此精确协议与模型路由可用的供应商原生工具。
   provider_native_tools?: PublicAiNativeToolKind[];
@@ -898,6 +955,38 @@ export interface PublicAiProviderToolTargetSelection {
   target_id: string;
 }
 
+// PublicAiMediaUnderstandingBackendSelection chooses one closed backend for one media tool.
+// PublicAiMediaUnderstandingBackendSelection 为一项媒体工具选择一个封闭后端。
+export type PublicAiMediaUnderstandingBackendSelection =
+  | {
+      mode: "provider_tool";
+      selection: PublicAiProviderToolTargetSelection;
+    }
+  | {
+      mode: "model_replacement";
+      selection: PublicAiActiveSelection;
+      reasoning_effort?: PublicAiReasoningEffort;
+    };
+
+// PublicAiMultimodalUnderstandingCandidateRecord exposes one shared provider-model admission switch.
+// PublicAiMultimodalUnderstandingCandidateRecord 公开一个共享供应商模型准入开关。
+export interface PublicAiMultimodalUnderstandingCandidateRecord {
+  providerId: string;
+  modelId: string;
+}
+
+// PublicAiMediaUnderstandingModelCandidate exposes one exact executable replacement route.
+// PublicAiMediaUnderstandingModelCandidate 公开一条精确可执行的替代理解路由。
+export interface PublicAiMediaUnderstandingModelCandidate {
+  providerDisplayName: string;
+  serviceEntryDisplayName: string;
+  connectionDisplayName: string;
+  modelDisplayName: string;
+  selection: PublicAiActiveSelection;
+  catalogGeneration: number;
+  capabilities: PublicAiModelCapabilities;
+}
+
 // PublicAiSessionProviderToolConflict describes one retained choice that requires confirmation.
 // PublicAiSessionProviderToolConflict 描述一项需要确认的已保留选择。
 export interface PublicAiSessionProviderToolConflict {
@@ -1105,6 +1194,9 @@ export interface PublicAiSettingsSnapshot {
   // contextWindowPolicyOverrides is the system-level sparse Codex window policy.
   // contextWindowPolicyOverrides 是系统级稀疏 Codex 窗口策略。
   contextWindowPolicyOverrides: PublicAiContextWindowPolicyOverrides;
+  // contextCompactionWindowNodes exposes the complete fixed system node configuration.
+  // contextCompactionWindowNodes 公开完整的固定系统节点配置。
+  contextCompactionWindowNodes: PublicAiContextCompactionWindowConfiguration;
   // providerContextWindowPolicyOverrides stores explicit provider-level window policies.
   // providerContextWindowPolicyOverrides 保存显式供应商级窗口策略。
   providerContextWindowPolicyOverrides?: Record<string, PublicAiContextWindowPolicyOverrides>;
@@ -1169,6 +1261,11 @@ export interface PublicAiSettingsSnapshot {
   providerToolSelections: Partial<
     Record<PublicAiProviderToolCapabilityKind, PublicAiProviderToolTargetSelection>
   >;
+  multimodalUnderstandingCandidateModels?: PublicAiMultimodalUnderstandingCandidateRecord[];
+  mediaUnderstandingSelections?: Partial<
+    Record<PublicAiProviderToolCapabilityKind, PublicAiMediaUnderstandingBackendSelection>
+  >;
+  mediaUnderstandingModelCandidates?: PublicAiMediaUnderstandingModelCandidate[];
   providerToolEnabledCapabilities: PublicAiProviderToolCapabilityKind[];
   providerExtensionTargetSets: Partial<
     Record<PublicAiProviderToolCapabilityKind, PublicAiProviderToolTargetSelection[]>

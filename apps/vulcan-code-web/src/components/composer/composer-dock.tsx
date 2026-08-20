@@ -25,7 +25,9 @@ import type {
   ComposerAttachmentCapabilitySummary,
   ComposerAttachmentSummary,
   ComposerSlashCommandSummary,
+  ContextCompactionWindowNodeId,
   ContextUsageSnapshot,
+  PublicAiContextCompactionWindowNode,
   PendingPromptSummary,
   ProviderSummary,
   ProviderModelSecondaryRouteSelection,
@@ -57,6 +59,12 @@ export function ComposerDock(props: {
   // Context usage snapshot shown by the composer orb.
   // 输入区圆盘展示的上下文占用快照。
   contextUsage: ContextUsageSnapshot | null;
+  // Fixed context-compaction nodes available to this composer.
+  // 当前输入区可用的固定上下文压缩节点。
+  contextCompactionWindowNodes: PublicAiContextCompactionWindowNode[];
+  // Stable context-compaction node selected by the current session.
+  // 当前会话选择的稳定上下文压缩节点。
+  sessionContextCompactionWindowNodeId: ContextCompactionWindowNodeId | null;
   // Whether the dock is visually centered for an empty conversation.
   // 输入区浮层是否在空会话中居中显示。
   emptyMode: boolean;
@@ -143,6 +151,9 @@ export function ComposerDock(props: {
   // Persists one selected conversation output-style override.
   // 持久化当前会话的输出风格覆盖。
   onSetSessionOutputStyle: (styleId: string | null) => Promise<boolean>;
+  // Persists or clears the selected session context-compaction window node.
+  // 持久化或清除当前会话的上下文压缩窗口节点。
+  onSetSessionContextCompactionWindow: (nodeId: ContextCompactionWindowNodeId | null) => Promise<boolean>;
   // onStopConversationRun stops the selected backend conversation stream.
   // onStopConversationRun 停止当前选中的后端会话流。
   onStopConversationRun: () => Promise<boolean>;
@@ -257,6 +268,8 @@ export function ComposerDock(props: {
         projectId={props.projectId}
         conversationId={props.conversationId}
         contextUsage={props.contextUsage}
+        contextCompactionWindowNodes={props.contextCompactionWindowNodes}
+        sessionContextCompactionWindowNodeId={props.sessionContextCompactionWindowNodeId}
         slashCommands={props.slashCommands}
         pendingPrompts={props.pendingPrompts}
         sessionGoal={props.sessionGoal}
@@ -279,6 +292,7 @@ export function ComposerDock(props: {
         onSetSessionPlanMode={props.onSetSessionPlanMode}
         onSetSessionVmmPolicy={props.onSetSessionVmmPolicy}
         onSetSessionOutputStyle={props.onSetSessionOutputStyle}
+        onSetSessionContextCompactionWindow={props.onSetSessionContextCompactionWindow}
         onStopConversationRun={props.onStopConversationRun}
         onStageAttachmentBytes={props.onStageAttachmentBytes}
         resolveMediaSourceUrl={props.resolveMediaSourceUrl}

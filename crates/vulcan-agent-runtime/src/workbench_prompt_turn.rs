@@ -76,6 +76,45 @@ fn applied_output_style_snapshot(
         id,
     })
 }
+
+/// Validates that every enabled session capability which owns a session target has that target.
+/// 校验每项持有会话目标的已启用会话能力均已具有该目标。
+///
+/// # Parameters
+/// 参数
+/// `runtime_state` is the authoritative session capability and target snapshot for this turn.
+/// `runtime_state` 是当前回合权威的会话能力与目标快照。
+///
+/// # Returns
+/// 返回值
+/// Success for a complete direct selection or a media capability backed globally; otherwise an
+/// explicit stale-session error.
+/// 直连选择完整或媒体能力由全局后端承载时返回成功；否则返回明确的过期会话错误。
+fn validate_session_provider_tool_target_completeness(
+    runtime_state: &SessionRuntimeStateEntry,
+) -> Result<(), String> {
+    if !runtime_state.provider_tool_settings_initialized {
+        return Ok(());
+    }
+    for capability in &runtime_state.provider_tool_enabled_capabilities {
+        // mediaCapability owns only a session enable switch; its backend is global and immutable for this turn.
+        // mediaCapability 只持有会话启用开关；其后端为全局配置且在当前回合不可变。
+        let media_capability = matches!(
+            capability.as_str(),
+            "image_understand" | "video_understand" | "audio_understand"
+        );
+        if !media_capability
+            && !runtime_state
+                .provider_tool_selections
+                .contains_key(capability)
+        {
+            return Err(format!(
+                "Provider tool capability `{capability}` is enabled but has no selected model and account; confirm the session capability settings before sending."
+            ));
+        }
+    }
+    Ok(())
+}
 pub use transcript::{
     build_shared_user_prompt_transcript_body, build_shared_user_prompt_transcript_metadata,
 };
@@ -1092,18 +1131,7 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
         vmm_session_memory,
         Some(&expected_turn_id),
     );
-    if runtime_state.provider_tool_settings_initialized {
-        for capability in &runtime_state.provider_tool_enabled_capabilities {
-            if !runtime_state
-                .provider_tool_selections
-                .contains_key(capability)
-            {
-                return Err(format!(
-                    "Provider tool capability `{capability}` is enabled but has no selected model and account; confirm the session capability settings before sending."
-                ));
-            }
-        }
-    }
+    validate_session_provider_tool_target_completeness(runtime_state)?;
     let provider_usage_budget_baseline = runtime_state
         .provider_route_lease
         .as_ref()
@@ -1157,6 +1185,9 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
                     .collect()
             },
         ),
+        provider_tool_enabled_capabilities_override: runtime_state
+            .provider_tool_settings_initialized
+            .then(|| runtime_state.provider_tool_enabled_capabilities.clone()),
         provider_extension_target_sets_override: runtime_state
             .provider_tool_settings_initialized
             .then(|| runtime_state.provider_extension_target_sets.clone()),
@@ -1171,6 +1202,7 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
             .then_some(ExecutionTurnStartMode::RestoredCheckpoint),
         conversation_state: runtime_state.conversation_state.clone(),
         context_compaction_policy: None,
+        context_compaction_window_node_id: runtime_state.context_compaction_window_node_id,
         context_budget_override: None,
         context_window_prefill_input_tokens: runtime_state.auto_compact_prefill_input_tokens,
         execution_mode: input.start.execution_mode,

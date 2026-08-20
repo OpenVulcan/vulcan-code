@@ -14,12 +14,14 @@ import type {
   PublicAiCustomModelProtocolPreference,
   PublicAiModelCapabilityOverrides,
   PublicAiContextWindowPolicyOverrides,
+  PublicAiContextCompactionWindowConfiguration,
   PublicAiModelOverrides,
   PublicAiInferenceRoute,
   PublicAiInferenceTestResult,
   PublicAiInternalModelOverrides,
   PublicAiOperation,
   PublicAiProviderToolCapabilityKind,
+  PublicAiMediaUnderstandingBackendSelection,
   PublicAiProviderToolTestResult,
   PublicAiProviderToolTargetSelection,
   PublicAiSessionProviderToolSettings,
@@ -405,6 +407,17 @@ export async function savePublicAiContextWindowPolicyOverrides(
   );
 }
 
+// savePublicAiContextCompactionWindowNodes atomically persists all five fixed node values.
+// savePublicAiContextCompactionWindowNodes 原子持久化全部五个固定节点值。
+export async function savePublicAiContextCompactionWindowNodes(
+  nodes: PublicAiContextCompactionWindowConfiguration,
+): Promise<PublicAiSettingsSnapshot> {
+  return serviceClient.request<PublicAiSettingsSnapshot>(
+    "service_save_public_ai_context_compaction_window_nodes",
+    { request: { nodes } },
+  );
+}
+
 // selectPublicAiModel persists one exact model and account selection.
 // selectPublicAiModel 持久化一个精确模型与账号选择。
 export async function selectPublicAiModel(request: {
@@ -504,6 +517,31 @@ export async function savePublicAiProviderToolSelection(request: {
 }): Promise<PublicAiSettingsSnapshot> {
   return serviceClient.request<PublicAiSettingsSnapshot>(
     "service_save_public_ai_provider_tool_selection",
+    { request },
+  );
+}
+
+// savePublicAiMultimodalUnderstandingCandidate replaces one shared provider-model admission switch.
+// savePublicAiMultimodalUnderstandingCandidate 替换一个共享供应商模型准入开关。
+export async function savePublicAiMultimodalUnderstandingCandidate(request: {
+  providerId: string;
+  modelId: string;
+  enabled: boolean;
+}): Promise<PublicAiSettingsSnapshot> {
+  return serviceClient.request<PublicAiSettingsSnapshot>(
+    "service_save_public_ai_multimodal_understanding_candidate",
+    { request },
+  );
+}
+
+// savePublicAiMediaUnderstandingSelection replaces one image, video, or audio understanding backend.
+// savePublicAiMediaUnderstandingSelection 替换一项图片、视频或音频理解后端。
+export async function savePublicAiMediaUnderstandingSelection(request: {
+  capability: PublicAiProviderToolCapabilityKind;
+  selection: PublicAiMediaUnderstandingBackendSelection | null;
+}): Promise<PublicAiSettingsSnapshot> {
+  return serviceClient.request<PublicAiSettingsSnapshot>(
+    "service_save_public_ai_media_understanding_selection",
     { request },
   );
 }

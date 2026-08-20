@@ -65,6 +65,87 @@ pub const CONTEXT_BUDGET_WARNING_RATIO: f32 = 0.70;
 /// 超过该占用比例后，宿主应将当前会话视为实际上已经溢出。
 pub const CONTEXT_BUDGET_OVERFLOW_RATIO: f32 = 0.97;
 
+/// Identifies one fixed system-owned context-compaction window node.
+/// 标识一个由系统持有的固定上下文压缩窗口节点。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum ContextCompactionWindowNodeId {
+    /// First and smallest configurable compaction-window node.
+    /// 第一个且最小的可配置压缩窗口节点。
+    #[serde(rename = "compression-window-1")]
+    CompressionWindow1,
+    /// Second configurable compaction-window node.
+    /// 第二个可配置压缩窗口节点。
+    #[serde(rename = "compression-window-2")]
+    CompressionWindow2,
+    /// Third configurable compaction-window node.
+    /// 第三个可配置压缩窗口节点。
+    #[serde(rename = "compression-window-3")]
+    CompressionWindow3,
+    /// Fourth configurable compaction-window node.
+    /// 第四个可配置压缩窗口节点。
+    #[serde(rename = "compression-window-4")]
+    CompressionWindow4,
+    /// Fifth and largest configurable compaction-window node.
+    /// 第五个且最大的可配置压缩窗口节点。
+    #[serde(rename = "compression-window-5")]
+    CompressionWindow5,
+}
+
+impl ContextCompactionWindowNodeId {
+    /// Lists every supported node in the immutable product order.
+    /// 按不可变产品顺序列出全部受支持节点。
+    pub const ALL: [Self; 5] = [
+        Self::CompressionWindow1,
+        Self::CompressionWindow2,
+        Self::CompressionWindow3,
+        Self::CompressionWindow4,
+        Self::CompressionWindow5,
+    ];
+
+    /// Returns the zero-based immutable order index for this node.
+    /// 返回当前节点从零开始的不可变顺序索引。
+    pub const fn index(self) -> usize {
+        match self {
+            Self::CompressionWindow1 => 0,
+            Self::CompressionWindow2 => 1,
+            Self::CompressionWindow3 => 2,
+            Self::CompressionWindow4 => 3,
+            Self::CompressionWindow5 => 4,
+        }
+    }
+
+    /// Returns the stable serialized identifier used by sessions and WebUI projections.
+    /// 返回会话与 WebUI 投影使用的稳定序列化标识。
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::CompressionWindow1 => "compression-window-1",
+            Self::CompressionWindow2 => "compression-window-2",
+            Self::CompressionWindow3 => "compression-window-3",
+            Self::CompressionWindow4 => "compression-window-4",
+            Self::CompressionWindow5 => "compression-window-5",
+        }
+    }
+}
+
+impl std::str::FromStr for ContextCompactionWindowNodeId {
+    type Err = String;
+
+    /// Parses one exact stable node identifier without aliases or fallback values.
+    /// 解析一个精确稳定节点标识，不接受别名或回退值。
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "compression-window-1" => Ok(Self::CompressionWindow1),
+            "compression-window-2" => Ok(Self::CompressionWindow2),
+            "compression-window-3" => Ok(Self::CompressionWindow3),
+            "compression-window-4" => Ok(Self::CompressionWindow4),
+            "compression-window-5" => Ok(Self::CompressionWindow5),
+            unsupported => Err(format!(
+                "Unsupported context compaction window node id `{unsupported}`."
+            )),
+        }
+    }
+}
+
 /// Selects the usage scope used to compare the active context with the model window.
 /// 选择用于将活动上下文与模型窗口比较的用量范围。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -290,6 +371,12 @@ pub struct ContextCompactionPolicy {
     /// Provenance describing how the retained-tail policy was resolved.
     /// 描述尾部保留策略解析方式的来源。
     pub tail_policy_source: ContextCompactionTailPolicySource,
+    /// Optional fixed node selected by the owning session for this frozen execution.
+    /// 所属会话为本次冻结执行选择的可选固定节点。
+    pub compression_window_node_id: Option<ContextCompactionWindowNodeId>,
+    /// Resolved node token limit used only by compaction calculations for this execution.
+    /// 本次执行中仅供压缩计算使用的已解析节点 Token 上限。
+    pub compression_window_limit: Option<usize>,
     /// Legacy input reserve retained for decoding old settings; it no longer shrinks the model window.
     /// 保留用于读取旧设置的输入缓冲字段；它不再缩小模型窗口。
     pub reserved: usize,
@@ -312,6 +399,8 @@ impl Default for ContextCompactionPolicy {
             preserve_recent_tokens: CONTEXT_COMPACTION_MIN_TAIL_TOKENS,
             tail_context_limit: None,
             tail_policy_source: ContextCompactionTailPolicySource::MissingContextLimitMinimum,
+            compression_window_node_id: None,
+            compression_window_limit: None,
             reserved: 0,
             window: ContextWindowPolicy::default(),
             window_policy_is_explicit: false,

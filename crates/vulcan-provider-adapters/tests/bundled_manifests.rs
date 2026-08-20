@@ -1624,7 +1624,7 @@ fn migrated_tool_target_inventories_are_complete_and_unique() {
     let directory = bundled_manifests_directory();
     for (provider_id, target_count) in [
         ("tavily", 2_usize),
-        ("alibaba", 51_usize),
+        ("alibaba", 55_usize),
         ("minimax", 34_usize),
     ] {
         let path = directory.join(format!("{provider_id}.json"));
@@ -1664,8 +1664,8 @@ fn migrated_tool_target_inventories_are_complete_and_unique() {
 /// 验证每个内置系统工具目标只使用通用执行适配器。
 ///
 /// This is the stable R0 guard against restoring a provider-named production adapter after the
-/// 92-target inventory. It checks the compiled authority rather than raw JSON spelling.
-/// 这是防止 92 条目标清单恢复供应商命名生产适配器的稳定 R0 守卫；它检查编译后的
+/// 101-target inventory. It checks the compiled authority rather than raw JSON spelling.
+/// 这是防止 101 条目标清单恢复供应商命名生产适配器的稳定 R0 守卫；它检查编译后的
 /// 权威，而不是原始 JSON 拼写。
 #[test]
 fn bundled_system_tool_targets_use_only_generic_execution() {
@@ -1691,7 +1691,7 @@ fn bundled_system_tool_targets_use_only_generic_execution() {
         }
     }
     assert_eq!(
-        target_count, 94,
+        target_count, 101,
         "the complete production target inventory must remain covered"
     );
 }

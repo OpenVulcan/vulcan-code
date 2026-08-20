@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "minimax",
-  "revision": 11,
-  "published_at": "2026-08-09T00:00:00Z",
+  "revision": 12,
+  "published_at": "2026-08-19T00:00:00Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -46,6 +46,7 @@
           "credential_mode": "token",
           "billing_kind": "pay_as_you_go",
           "account_usage_query": "unsupported",
+          "authentication": "bearer_authorization",
           "key_prefix": "sk-api-",
           "default_usage_scopes": [
             "interactive_agent",
@@ -59,6 +60,7 @@
           "credential_mode": "token",
           "billing_kind": "token_plan",
           "account_usage_query": "mini_max_token_plan",
+          "authentication": "bearer_authorization",
           "key_prefix": "sk-cp-",
           "default_usage_scopes": [
             "interactive_agent"
@@ -147,6 +149,7 @@
           "credential_mode": "token",
           "billing_kind": "pay_as_you_go",
           "account_usage_query": "unsupported",
+          "authentication": "bearer_authorization",
           "key_prefix": "sk-api-",
           "default_usage_scopes": [
             "interactive_agent",
@@ -160,6 +163,7 @@
           "credential_mode": "token",
           "billing_kind": "token_plan",
           "account_usage_query": "mini_max_token_plan",
+          "authentication": "bearer_authorization",
           "key_prefix": "sk-cp-",
           "default_usage_scopes": [
             "interactive_agent"
@@ -1264,6 +1268,10 @@
       },
       "service_entry_id": "global",
       "target_id": "global:coding-plan-vlm",
+      "media_input_projection": {
+        "path_field": "image_path",
+        "prompt_field": "prompt"
+      },
       "tool_id": "image_understand",
       "upstream_target_id": "coding-plan-vlm"
     },
@@ -3255,6 +3263,10 @@
       },
       "service_entry_id": "cn",
       "target_id": "cn:coding-plan-vlm",
+      "media_input_projection": {
+        "path_field": "image_path",
+        "prompt_field": "prompt"
+      },
       "tool_id": "image_understand",
       "upstream_target_id": "coding-plan-vlm"
     },

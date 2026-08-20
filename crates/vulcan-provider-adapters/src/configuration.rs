@@ -13,12 +13,19 @@ use vulcan_ai_contract::{
     AiOperation, CapabilitySupport, EmbeddingEncoding, EmbeddingOutputKind, EmbeddingTask,
     InferenceUsageScope, ModelCapabilities, ModelParameterValue, PromptCachePolicy,
     ReasoningControlMode, ReasoningEffort, RerankTruncation, ResourceKind,
+    StructuredOutputCapability,
 };
-use vulcan_context::{ContextCompactionPolicy, ContextWindowPolicyOverrides};
+use vulcan_context::{
+    ContextCompactionPolicy, ContextCompactionWindowNodeId, ContextWindowPolicyOverrides,
+};
 
 /// Identifies the current persisted AI configuration schema.
 /// 标识当前持久化 AI 配置 Schema。
-pub const PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION: u32 = 16;
+pub const PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION: u32 = 18;
+
+/// Largest integer that can cross the JSON-to-JavaScript settings boundary without precision loss.
+/// 可在 JSON 到 JavaScript 设置边界间无精度损失传递的最大整数。
+const JAVASCRIPT_MAX_SAFE_INTEGER_U64: u64 = 9_007_199_254_740_991;
 
 /// Stores only user-declared differences from immutable model capability sources.
 /// 仅保存用户相对于不可变模型能力来源声明的差异。
@@ -37,6 +44,10 @@ pub struct ModelCapabilityOverrides {
     /// 可选的完整非文本输入资源替换集合。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_resources: Option<Vec<ResourceKind>>,
+    /// Optional complete structured-output capability replacement.
+    /// 可选的完整结构化输出能力替换值。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub structured_output: Option<StructuredOutputCapability>,
     /// Legacy non-text output replacement retained only for schema-seven decoding.
     /// 仅为读取 Schema 7 而保留的旧版非文本输出替换值。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -75,6 +86,7 @@ impl ModelCapabilityOverrides {
         self.context_limit.is_none()
             && self.output_limit.is_none()
             && self.input_resources.is_none()
+            && self.structured_output.is_none()
             && self.output_resources.is_none()
             && self.reasoning.is_none()
             && self.reasoning_control.is_none()
@@ -160,6 +172,9 @@ fn apply_capability_overrides(
     if let Some(input_resources) = overrides.input_resources.as_ref() {
         capabilities.input_resources = input_resources.clone();
     }
+    if let Some(structured_output) = overrides.structured_output {
+        capabilities.structured_output = structured_output;
+    }
     if let Some(reasoning) = overrides.reasoning {
         capabilities.reasoning = reasoning;
     }
@@ -184,6 +199,31 @@ pub struct ActiveAiModelSelection {
     /// Explicit credential connection identifier.
     /// 显式凭据连接标识。
     pub connection_id: String,
+}
+
+/// Selects the single backend used by one media-understanding capability.
+/// 选择一项媒体理解能力使用的唯一后端。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
+pub enum MediaUnderstandingBackendSelection {
+    /// Executes one exact Manifest-owned provider tool target.
+    /// 执行一个由 Manifest 持有的精确供应商工具目标。
+    ProviderTool {
+        /// Exact provider target and credential selection.
+        /// 精确供应商目标与凭据选择。
+        selection: ProviderToolTargetSelection,
+    },
+    /// Executes one ordinary multimodal conversation model as the replacement backend.
+    /// 使用一个普通多模态会话模型作为替代理解后端。
+    ModelReplacement {
+        /// Exact model and credential selection.
+        /// 精确模型与凭据选择。
+        selection: ActiveAiModelSelection,
+        /// Optional exact reasoning level selected for the replacement model.
+        /// 为替代模型选择的可选精确思考档位。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reasoning_effort: Option<ReasoningEffort>,
+    },
 }
 
 /// Stores protocol-specific cache and adapter parameter choices for one provider model.
@@ -434,6 +474,125 @@ pub struct CustomProviderManifestFailure {
     pub message: String,
 }
 
+/// Stores one immutable-identity context-compaction window node and its editable token value.
+/// 保存一个身份不可变的上下文压缩窗口节点及其可编辑 Token 值。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ContextCompactionWindowNode {
+    /// Stable code-owned node identifier persisted by sessions.
+    /// 由代码持有且被会话持久化的稳定节点标识。
+    pub id: ContextCompactionWindowNodeId,
+    /// User-editable compaction-window token value for this node.
+    /// 当前节点由用户编辑的压缩窗口 Token 值。
+    pub tokens: u64,
+}
+
+/// Owns the exact five system context-compaction nodes in immutable product order.
+/// 按不可变产品顺序持有恰好五个系统上下文压缩节点。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ContextCompactionWindowConfiguration {
+    /// Complete fixed node array; array length prevents add and delete operations.
+    /// 完整固定节点数组；数组长度从结构上禁止新增与删除。
+    pub nodes: [ContextCompactionWindowNode; 5],
+}
+
+impl Default for ContextCompactionWindowConfiguration {
+    /// Builds the official ascending 200K, 256K, 272K, 373K, and 500K node values.
+    /// 构建官方严格递增的 200K、256K、272K、373K 与 500K 节点值。
+    fn default() -> Self {
+        Self {
+            nodes: [
+                ContextCompactionWindowNode {
+                    id: ContextCompactionWindowNodeId::CompressionWindow1,
+                    tokens: 200_000,
+                },
+                ContextCompactionWindowNode {
+                    id: ContextCompactionWindowNodeId::CompressionWindow2,
+                    tokens: 256_000,
+                },
+                ContextCompactionWindowNode {
+                    id: ContextCompactionWindowNodeId::CompressionWindow3,
+                    tokens: 272_000,
+                },
+                ContextCompactionWindowNode {
+                    id: ContextCompactionWindowNodeId::CompressionWindow4,
+                    tokens: 373_000,
+                },
+                ContextCompactionWindowNode {
+                    id: ContextCompactionWindowNodeId::CompressionWindow5,
+                    tokens: 500_000,
+                },
+            ],
+        }
+    }
+}
+
+impl ContextCompactionWindowConfiguration {
+    /// Validates fixed identities, immutable order, safe positive values, and strict ascent.
+    /// 校验固定身份、不可变顺序、安全正整数值与严格递增关系。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `Ok(())` for one complete usable configuration, otherwise one explicit invariant error.
+    /// 完整可用时返回 `Ok(())`，否则返回一条明确的不变量错误。
+    pub fn validate(&self) -> Result<(), String> {
+        for (index, (node, expected_id)) in self
+            .nodes
+            .iter()
+            .zip(ContextCompactionWindowNodeId::ALL)
+            .enumerate()
+        {
+            if node.id != expected_id {
+                return Err(format!(
+                    "Context compaction window node {} must use id `{}`.",
+                    index + 1,
+                    expected_id.as_str()
+                ));
+            }
+            if node.tokens == 0 || node.tokens > JAVASCRIPT_MAX_SAFE_INTEGER_U64 {
+                return Err(format!(
+                    "Context compaction window node `{}` tokens must be a positive JavaScript-safe integer.",
+                    node.id.as_str()
+                ));
+            }
+        }
+        for pair in self.nodes.windows(2) {
+            if pair[0].tokens >= pair[1].tokens {
+                return Err(format!(
+                    "Context compaction window nodes must be strictly ascending: `{}` must be lower than `{}`.",
+                    pair[0].id.as_str(),
+                    pair[1].id.as_str()
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Resolves one stable node identifier to its current authoritative token value.
+    /// 将一个稳定节点标识解析为当前权威 Token 值。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `node_id` is the exact session-persisted fixed identifier.
+    /// `node_id` 是会话持久化的精确固定标识。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The current token value, or an explicit invariant error if configuration identity drifted.
+    /// 返回当前 Token 值；若配置身份发生漂移则返回明确的不变量错误。
+    pub fn tokens_for(&self, node_id: ContextCompactionWindowNodeId) -> Result<u64, String> {
+        let node = &self.nodes[node_id.index()];
+        if node.id != node_id {
+            return Err(format!(
+                "Context compaction window configuration does not contain `{}` at its fixed index.",
+                node_id.as_str()
+            ));
+        }
+        Ok(node.tokens)
+    }
+}
+
 /// Stores all new AI configuration while excluding runtime-discovered model catalogs.
 /// 保存全部新 AI 配置，同时排除运行时发现的模型目录。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -551,6 +710,10 @@ pub struct PersistedAiConfiguration {
         skip_serializing_if = "ContextWindowPolicyOverrides::is_empty"
     )]
     pub context_window_policy_overrides: ContextWindowPolicyOverrides,
+    /// Fixed system context-compaction window nodes with user-editable token values.
+    /// Token 值可由用户编辑的固定系统上下文压缩窗口节点。
+    #[serde(default)]
+    pub context_compaction_window_nodes: ContextCompactionWindowConfiguration,
     /// Provider-scoped sparse Codex context-window defaults.
     /// 供应商级稀疏 Codex 上下文窗口默认值。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -583,6 +746,15 @@ pub struct PersistedAiConfiguration {
     /// 为新会话默认启用的语义供应商工具能力。
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub provider_tool_enabled_capabilities: BTreeSet<ProviderToolCapabilityKind>,
+    /// Models explicitly allowed to appear in image, video, or audio understanding candidates.
+    /// 明确允许进入图片、视频或音频理解候选列表的模型。
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub multimodal_understanding_candidate_models: BTreeSet<String>,
+    /// One exact backend selection per media-understanding capability.
+    /// 每项媒体理解能力唯一的精确后端选择。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub media_understanding_selections:
+        BTreeMap<ProviderToolCapabilityKind, MediaUnderstandingBackendSelection>,
     /// Explicit native model-extension targets selected per extension capability.
     /// 按扩展能力显式选择的原生模型扩展目标。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -691,6 +863,7 @@ impl Default for PersistedAiConfiguration {
             model_capability_overrides: BTreeMap::new(),
             provider_capability_overrides: BTreeMap::new(),
             context_window_policy_overrides: ContextWindowPolicyOverrides::default(),
+            context_compaction_window_nodes: ContextCompactionWindowConfiguration::default(),
             provider_context_window_policy_overrides: BTreeMap::new(),
             model_context_window_policy_overrides: BTreeMap::new(),
             internal_model_enabled_overrides: BTreeMap::new(),
@@ -702,6 +875,8 @@ impl Default for PersistedAiConfiguration {
             secondary_routes: BTreeMap::new(),
             provider_tool_selections: BTreeMap::new(),
             provider_tool_enabled_capabilities: BTreeSet::new(),
+            multimodal_understanding_candidate_models: BTreeSet::new(),
+            media_understanding_selections: BTreeMap::new(),
             provider_extension_target_sets: BTreeMap::new(),
             provider_tool_disabled_targets: BTreeMap::new(),
         }
@@ -869,7 +1044,7 @@ impl PersistedAiConfiguration {
                 };
                 Ok(normalized || inserted_vmm)
             }
-            10..=15 => {
+            10..=17 => {
                 self.normalize_direct_provider_model_settings();
                 self.inference_profiles
                     .entry(String::from("vmm"))
@@ -975,6 +1150,34 @@ impl PersistedAiConfiguration {
             // 旧结构无法还原缺失的 false 状态，因此有意丢弃，避免猜测用户意图。
             self.internal_model_enabled_overrides.clear();
         }
+        if source_schema_version < 18 {
+            // Schema 18 separates media-understanding backend selection from direct search/extract
+            // targets. Only the historical image-understanding target has an unambiguous migration;
+            // video and audio remain unconfigured instead of being inferred from adjacent state.
+            // Schema 18 将媒体理解后端选择从搜索/抓取直连目标中分离。只有历史图片理解目标
+            // 具备无歧义迁移；视频与音频保持未配置，不从相邻状态推断。
+            if let Some(selection) = self
+                .provider_tool_selections
+                .remove(&ProviderToolCapabilityKind::ImageUnderstand)
+            {
+                self.media_understanding_selections.insert(
+                    ProviderToolCapabilityKind::ImageUnderstand,
+                    MediaUnderstandingBackendSelection::ProviderTool { selection },
+                );
+            } else {
+                self.provider_tool_enabled_capabilities
+                    .remove(&ProviderToolCapabilityKind::ImageUnderstand);
+            }
+            self.provider_tool_selections
+                .remove(&ProviderToolCapabilityKind::VideoUnderstand);
+            self.provider_tool_selections
+                .remove(&ProviderToolCapabilityKind::AudioUnderstand);
+            self.provider_tool_enabled_capabilities
+                .remove(&ProviderToolCapabilityKind::VideoUnderstand);
+            self.provider_tool_enabled_capabilities
+                .remove(&ProviderToolCapabilityKind::AudioUnderstand);
+        }
+        self.context_compaction_window_nodes.validate()?;
         self.validate_context_window_policy_layers()?;
         Ok(changed)
     }
@@ -1259,6 +1462,60 @@ impl PersistedAiConfiguration {
         )
     }
 
+    /// Reports whether one exact provider model is enabled as a multimodal-understanding candidate.
+    /// 报告一个精确供应商模型是否已启用为多模态理解候选。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `provider_id` and `model_id` identify the exact user-owned candidate switch.
+    /// `provider_id` 与 `model_id` 标识精确的用户候选开关。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` only when the user explicitly enabled the model.
+    /// 仅当用户明确启用该模型时返回 `true`。
+    pub fn multimodal_understanding_candidate_is_enabled(
+        &self,
+        provider_id: &str,
+        model_id: &str,
+    ) -> bool {
+        self.multimodal_understanding_candidate_models
+            .contains(Self::provider_model_key(provider_id, model_id).as_str())
+    }
+
+    /// Stores one exact multimodal-understanding candidate switch and clears disabled replacement routes.
+    /// 保存一个精确多模态理解候选开关，并清理已禁用模型的替代路由。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `provider_id` and `model_id` identify the model, and `enabled` is the requested state.
+    /// `provider_id` 与 `model_id` 标识模型，`enabled` 是请求状态。
+    pub fn set_multimodal_understanding_candidate_enabled(
+        &mut self,
+        provider_id: &str,
+        model_id: &str,
+        enabled: bool,
+    ) {
+        let key = Self::provider_model_key(provider_id, model_id);
+        if enabled {
+            self.multimodal_understanding_candidate_models.insert(key);
+        } else {
+            self.multimodal_understanding_candidate_models
+                .remove(key.as_str());
+            // A disabled model cannot remain a latent backend that silently reactivates when the
+            // candidate switch is enabled later; every affected media kind requires reselection.
+            // 已禁用模型不能作为潜在后端，在未来重新开启候选开关时静默恢复；所有受影响媒体类型
+            // 都必须重新选择。
+            self.media_understanding_selections.retain(|_, backend| {
+                !matches!(
+                    backend,
+                    MediaUnderstandingBackendSelection::ModelReplacement { selection, .. }
+                        if selection.provider_id == provider_id && selection.model_id == model_id
+                )
+            });
+        }
+    }
+
     /// Parses one canonical provider-model key without guessing delimiters inside identifiers.
     /// 解析一个规范供应商模型键，且不会猜测标识符内部的分隔符。
     ///
@@ -1456,6 +1713,27 @@ impl PersistedAiConfiguration {
         Ok(())
     }
 
+    /// Replaces all five fixed context-compaction window values after strict validation.
+    /// 在严格校验后整体替换五个固定上下文压缩窗口值。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `nodes` is the complete fixed configuration submitted by the settings surface.
+    /// `nodes` 是设置界面提交的完整固定配置。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `Ok(())` after an atomic in-memory replacement, otherwise a validation error.
+    /// 原子完成内存替换后返回 `Ok(())`，否则返回校验错误。
+    pub fn set_context_compaction_window_nodes(
+        &mut self,
+        nodes: ContextCompactionWindowConfiguration,
+    ) -> Result<(), String> {
+        nodes.validate()?;
+        self.context_compaction_window_nodes = nodes;
+        Ok(())
+    }
+
     /// Resolves one complete Codex-compatible compaction policy for one execution turn.
     /// 为一次执行回合解析完整的 Codex 兼容压缩策略。
     ///
@@ -1477,40 +1755,96 @@ impl PersistedAiConfiguration {
         provider_id: &str,
         model_id: &str,
         context_limit: Option<usize>,
+        compression_window_node_id: Option<ContextCompactionWindowNodeId>,
         session_policy: Option<ContextCompactionPolicy>,
-    ) -> ContextCompactionPolicy {
+    ) -> Result<ContextCompactionPolicy, String> {
         let sparse = self.context_window_policy_sparse_for_route(provider_id, model_id);
         let resolved_window = sparse.resolve();
-        let resolved_tail = vulcan_context::resolve_context_compaction_tail_policy(context_limit);
+        // A fully explicit seed already froze both the node identity and its resolved value.
+        // 完整显式种子已经冻结节点身份及其解析值。
+        let frozen_selection = session_policy
+            .filter(|policy| policy.window_policy_is_explicit)
+            .map(|policy| {
+                (
+                    policy.compression_window_node_id,
+                    policy.compression_window_limit,
+                )
+            });
+        let (resolved_node_id, resolved_node_limit) = match frozen_selection {
+            Some(selection) => selection,
+            None => match compression_window_node_id {
+                Some(node_id) => {
+                    let tokens = self.context_compaction_window_nodes.tokens_for(node_id)?;
+                    let tokens = usize::try_from(tokens).map_err(|_| {
+                        format!(
+                            "Context compaction window node `{}` exceeds this platform's token range.",
+                            node_id.as_str()
+                        )
+                    })?;
+                    (Some(node_id), Some(tokens))
+                }
+                None => (None, None),
+            },
+        };
+        if resolved_node_id.is_some() != resolved_node_limit.is_some() {
+            return Err(String::from(
+                "A frozen context compaction window must contain both node id and resolved token limit.",
+            ));
+        }
+        if let (Some(node_id), Some(node_limit)) = (resolved_node_id, resolved_node_limit) {
+            let model_limit = context_limit.ok_or_else(|| {
+                format!(
+                    "Context compaction window node `{}` requires a model-declared context limit.",
+                    node_id.as_str()
+                )
+            })?;
+            if node_limit >= model_limit {
+                return Err(format!(
+                    "Context compaction window node `{}` resolves to {} tokens, which must be lower than model context limit {}.",
+                    node_id.as_str(),
+                    node_limit,
+                    model_limit
+                ));
+            }
+        }
+        let resolved_tail = vulcan_context::resolve_context_compaction_tail_policy(
+            resolved_node_limit.or(context_limit),
+        );
         if let Some(session_policy) = session_policy {
             if session_policy.window_policy_is_explicit {
-                return ContextCompactionPolicy {
+                return Ok(ContextCompactionPolicy {
                     tail_turns: resolved_tail.tail_segments,
                     preserve_recent_tokens: resolved_tail.preserve_recent_tokens,
                     tail_context_limit: resolved_tail.context_limit,
                     tail_policy_source: resolved_tail.source,
+                    compression_window_node_id: resolved_node_id,
+                    compression_window_limit: resolved_node_limit,
                     ..session_policy
-                };
+                });
             }
-            return ContextCompactionPolicy {
+            return Ok(ContextCompactionPolicy {
                 tail_turns: resolved_tail.tail_segments,
                 preserve_recent_tokens: resolved_tail.preserve_recent_tokens,
                 tail_context_limit: resolved_tail.context_limit,
                 tail_policy_source: resolved_tail.source,
+                compression_window_node_id: resolved_node_id,
+                compression_window_limit: resolved_node_limit,
                 window: resolved_window,
                 window_policy_is_explicit: true,
                 ..session_policy
-            };
+            });
         }
-        ContextCompactionPolicy {
+        Ok(ContextCompactionPolicy {
             tail_turns: resolved_tail.tail_segments,
             preserve_recent_tokens: resolved_tail.preserve_recent_tokens,
             tail_context_limit: resolved_tail.context_limit,
             tail_policy_source: resolved_tail.source,
+            compression_window_node_id: resolved_node_id,
+            compression_window_limit: resolved_node_limit,
             window: resolved_window,
             window_policy_is_explicit: true,
             ..ContextCompactionPolicy::default()
-        }
+        })
     }
 
     /// Saves or clears the system-level sparse context-window policy.
@@ -1843,6 +2177,11 @@ impl PersistedAiConfiguration {
         {
             capabilities.input_resources = input_resources.clone();
         }
+        if !evidence.structured_output_declared
+            && let Some(structured_output) = overrides.structured_output
+        {
+            capabilities.structured_output = structured_output;
+        }
         // Reasoning fields are resolved independently because a directory may declare support
         // while omitting its control mode or selectable levels.
         // 思考字段按字段独立解析，因为目录可能声明支持却省略控制模式或可选档位。
@@ -1891,6 +2230,15 @@ impl PersistedAiConfiguration {
             .remove(provider_model_key.as_str());
         self.model_capability_overrides
             .remove(provider_model_key.as_str());
+        self.multimodal_understanding_candidate_models
+            .remove(provider_model_key.as_str());
+        self.media_understanding_selections.retain(|_, backend| {
+            !matches!(
+                backend,
+                MediaUnderstandingBackendSelection::ModelReplacement { selection, .. }
+                    if selection.provider_id == provider_id && selection.model_id == model_id
+            )
+        });
         self.model_context_window_policy_overrides
             .remove(provider_model_key.as_str());
         self.custom_model_template_decisions
@@ -1984,6 +2332,23 @@ impl PersistedAiConfiguration {
                 .internal_model_overrides
                 .keys()
                 .any(|key| key.starts_with(provider_model_prefix.as_str()))
+            || self
+                .multimodal_understanding_candidate_models
+                .iter()
+                .any(|key| key.starts_with(provider_model_prefix.as_str()))
+            || self
+                .media_understanding_selections
+                .values()
+                .any(|backend| match backend {
+                    MediaUnderstandingBackendSelection::ProviderTool { selection } => self
+                        .connection_graph
+                        .connections
+                        .get(selection.connection_id.as_str())
+                        .is_some_and(|connection| connection.provider_id == provider_id),
+                    MediaUnderstandingBackendSelection::ModelReplacement { selection, .. } => {
+                        selection.provider_id == provider_id
+                    }
+                })
         {
             return true;
         }
@@ -2152,6 +2517,15 @@ impl PersistedAiConfiguration {
     /// `provider_id` 标识将被永久移除的精确供应商。
     pub fn remove_provider_owned_model_settings(&mut self, provider_id: &str) {
         let provider_model_prefix = format!("{}:{provider_id}:", provider_id.len());
+        // providerConnectionIds identifies provider-tool backends owned by this provider.
+        // providerConnectionIds 标识由当前供应商持有的供应商工具后端。
+        let provider_connection_ids = self
+            .connection_graph
+            .connections
+            .values()
+            .filter(|connection| connection.provider_id == provider_id)
+            .map(|connection| connection.id.clone())
+            .collect::<BTreeSet<_>>();
         self.custom_models.remove(provider_id);
         self.custom_provider_model_defaults.remove(provider_id);
         self.provider_capability_overrides.remove(provider_id);
@@ -2166,6 +2540,17 @@ impl PersistedAiConfiguration {
             .retain(|key, _| !key.starts_with(provider_model_prefix.as_str()));
         self.model_capability_overrides
             .retain(|key, _| !key.starts_with(provider_model_prefix.as_str()));
+        self.multimodal_understanding_candidate_models
+            .retain(|key| !key.starts_with(provider_model_prefix.as_str()));
+        self.media_understanding_selections
+            .retain(|_, backend| match backend {
+                MediaUnderstandingBackendSelection::ProviderTool { selection } => {
+                    !provider_connection_ids.contains(selection.connection_id.as_str())
+                }
+                MediaUnderstandingBackendSelection::ModelReplacement { selection, .. } => {
+                    selection.provider_id != provider_id
+                }
+            });
         self.model_context_window_policy_overrides
             .retain(|key, _| !key.starts_with(provider_model_prefix.as_str()));
         self.model_overrides
@@ -2844,8 +3229,8 @@ mod tests {
         );
     }
 
-    /// Verifies schema fifteen price configuration is ignored and never serialized into schema sixteen.
-    /// 验证 Schema 十五价格配置会被忽略，且绝不会序列化到 Schema 十六。
+    /// Verifies schema fifteen price configuration is ignored and never serialized into the current schema.
+    /// 验证 Schema 十五价格配置会被忽略，且绝不会序列化到当前 Schema。
     #[test]
     fn schema_fifteen_discards_legacy_billing_configuration() {
         let mut historical = serde_json::to_value(PersistedAiConfiguration::default())
@@ -2875,6 +3260,88 @@ mod tests {
         let serialized =
             serde_json::to_value(configuration).expect("migrated configuration should serialize");
         assert!(serialized.get("billing").is_none());
+    }
+
+    /// Verifies schema sixteen receives the complete default fixed-node configuration.
+    /// 验证 Schema 十六会获得完整的默认固定节点配置。
+    #[test]
+    fn schema_sixteen_migration_adds_default_context_compaction_window_nodes() {
+        let mut historical = serde_json::to_value(PersistedAiConfiguration::default())
+            .expect("default configuration should serialize");
+        historical["schema_version"] = serde_json::json!(16);
+        historical
+            .as_object_mut()
+            .expect("configuration should be an object")
+            .remove("context_compaction_window_nodes");
+
+        let mut configuration: PersistedAiConfiguration = serde_json::from_value(historical)
+            .expect("schema sixteen should deserialize with default nodes");
+
+        assert!(
+            configuration
+                .migrate_to_current_schema()
+                .expect("migration")
+        );
+        assert_eq!(
+            configuration.context_compaction_window_nodes,
+            ContextCompactionWindowConfiguration::default()
+        );
+        assert_eq!(
+            configuration.schema_version,
+            PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION
+        );
+    }
+
+    /// Verifies schema seventeen migrates only the unambiguous image backend and disables inferred media.
+    /// 验证 Schema 十七只迁移无歧义图片后端，并禁用推断式媒体配置。
+    #[test]
+    fn schema_seventeen_migrates_only_explicit_image_understanding_backend() {
+        let mut historical = PersistedAiConfiguration::default();
+        historical.schema_version = 17;
+        let image_selection = ProviderToolTargetSelection {
+            connection_id: String::from("vision-account"),
+            target_id: String::from("vision-target"),
+        };
+        historical.provider_tool_selections.insert(
+            ProviderToolCapabilityKind::ImageUnderstand,
+            image_selection.clone(),
+        );
+        historical.provider_tool_selections.insert(
+            ProviderToolCapabilityKind::VideoUnderstand,
+            ProviderToolTargetSelection {
+                connection_id: String::from("legacy-video-account"),
+                target_id: String::from("legacy-video-target"),
+            },
+        );
+        historical.provider_tool_enabled_capabilities.extend([
+            ProviderToolCapabilityKind::ImageUnderstand,
+            ProviderToolCapabilityKind::VideoUnderstand,
+        ]);
+
+        assert!(historical.migrate_to_current_schema().expect("migration"));
+        assert_eq!(
+            historical
+                .media_understanding_selections
+                .get(&ProviderToolCapabilityKind::ImageUnderstand),
+            Some(&MediaUnderstandingBackendSelection::ProviderTool {
+                selection: image_selection,
+            })
+        );
+        assert!(
+            historical
+                .provider_tool_enabled_capabilities
+                .contains(&ProviderToolCapabilityKind::ImageUnderstand)
+        );
+        assert!(
+            !historical
+                .provider_tool_enabled_capabilities
+                .contains(&ProviderToolCapabilityKind::VideoUnderstand)
+        );
+        assert!(
+            !historical
+                .provider_tool_selections
+                .contains_key(&ProviderToolCapabilityKind::VideoUnderstand)
+        );
     }
 
     /// Verifies conversation publication and non-conversation internal use are independent states.
@@ -2932,6 +3399,161 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    /// Verifies candidate switches and replacement backends are removed with their owning model.
+    /// 验证候选开关与替代后端会随其所属模型一并移除。
+    #[test]
+    fn model_removal_cleans_multimodal_candidate_and_replacement_backend() {
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration.set_multimodal_understanding_candidate_enabled(
+            "custom:vision",
+            "vision-model",
+            true,
+        );
+        configuration.media_understanding_selections.insert(
+            ProviderToolCapabilityKind::VideoUnderstand,
+            MediaUnderstandingBackendSelection::ModelReplacement {
+                selection: ActiveAiModelSelection {
+                    provider_id: String::from("custom:vision"),
+                    model_id: String::from("vision-model"),
+                    connection_id: String::from("vision-account"),
+                },
+                reasoning_effort: Some(ReasoningEffort::Medium),
+            },
+        );
+
+        configuration.remove_model_owned_settings("custom:vision", "vision-model");
+
+        assert!(
+            !configuration
+                .multimodal_understanding_candidate_is_enabled("custom:vision", "vision-model")
+        );
+        assert!(
+            !configuration
+                .media_understanding_selections
+                .contains_key(&ProviderToolCapabilityKind::VideoUnderstand)
+        );
+    }
+
+    /// Verifies disabling one candidate clears only replacement routes owned by that exact model.
+    /// 验证禁用一个候选模型只会清理该精确模型持有的替代路由。
+    #[test]
+    fn candidate_disable_requires_exact_model_reselection() {
+        // configuration contains two admitted models and one unrelated provider-specific backend.
+        // configuration 包含两个已准入模型与一个无关的供应商专用后端。
+        let mut configuration = PersistedAiConfiguration::default();
+        for model_id in ["disabled-model", "retained-model"] {
+            configuration.set_multimodal_understanding_candidate_enabled(
+                "media-provider",
+                model_id,
+                true,
+            );
+        }
+        for (capability, model_id) in [
+            (
+                ProviderToolCapabilityKind::ImageUnderstand,
+                "disabled-model",
+            ),
+            (
+                ProviderToolCapabilityKind::VideoUnderstand,
+                "retained-model",
+            ),
+        ] {
+            configuration.media_understanding_selections.insert(
+                capability,
+                MediaUnderstandingBackendSelection::ModelReplacement {
+                    selection: ActiveAiModelSelection {
+                        provider_id: String::from("media-provider"),
+                        model_id: model_id.to_string(),
+                        connection_id: String::from("media-account"),
+                    },
+                    reasoning_effort: None,
+                },
+            );
+        }
+        configuration.media_understanding_selections.insert(
+            ProviderToolCapabilityKind::AudioUnderstand,
+            MediaUnderstandingBackendSelection::ProviderTool {
+                selection: ProviderToolTargetSelection {
+                    connection_id: String::from("media-account"),
+                    target_id: String::from("audio-target"),
+                },
+            },
+        );
+
+        configuration.set_multimodal_understanding_candidate_enabled(
+            "media-provider",
+            "disabled-model",
+            false,
+        );
+
+        assert!(
+            !configuration
+                .media_understanding_selections
+                .contains_key(&ProviderToolCapabilityKind::ImageUnderstand)
+        );
+        assert!(
+            configuration
+                .media_understanding_selections
+                .contains_key(&ProviderToolCapabilityKind::VideoUnderstand)
+        );
+        assert!(
+            configuration
+                .media_understanding_selections
+                .contains_key(&ProviderToolCapabilityKind::AudioUnderstand)
+        );
+        assert!(
+            configuration
+                .multimodal_understanding_candidate_is_enabled("media-provider", "retained-model")
+        );
+    }
+
+    /// Verifies provider removal cleans both provider-tool and model-replacement media backends.
+    /// 验证移除供应商会同时清理供应商工具与模型代替媒体后端。
+    #[test]
+    fn provider_removal_cleans_every_owned_media_backend() {
+        let provider_id = "custom:media-owner";
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration.connection_graph.connections.insert(
+            String::from("media-owner-account"),
+            custom_provider_connection("media-owner-account", provider_id),
+        );
+        configuration.set_multimodal_understanding_candidate_enabled(
+            provider_id,
+            "media-model",
+            true,
+        );
+        configuration.media_understanding_selections.insert(
+            ProviderToolCapabilityKind::ImageUnderstand,
+            MediaUnderstandingBackendSelection::ProviderTool {
+                selection: ProviderToolTargetSelection {
+                    connection_id: String::from("media-owner-account"),
+                    target_id: String::from("image-target"),
+                },
+            },
+        );
+        configuration.media_understanding_selections.insert(
+            ProviderToolCapabilityKind::AudioUnderstand,
+            MediaUnderstandingBackendSelection::ModelReplacement {
+                selection: ActiveAiModelSelection {
+                    provider_id: provider_id.to_string(),
+                    model_id: String::from("media-model"),
+                    connection_id: String::from("media-owner-account"),
+                },
+                reasoning_effort: None,
+            },
+        );
+
+        assert!(configuration.provider_has_model_customizations(provider_id));
+        configuration.remove_provider_owned_model_settings(provider_id);
+
+        assert!(
+            configuration
+                .multimodal_understanding_candidate_models
+                .is_empty()
+        );
+        assert!(configuration.media_understanding_selections.is_empty());
     }
 
     /// Verifies a confirmed protocol switch removes only incompatible route settings for that provider.
@@ -3392,6 +4014,7 @@ mod tests {
                 context_limit: Some(32_000),
                 output_limit: None,
                 input_resources: Some(vec![ResourceKind::Image]),
+                structured_output: Some(StructuredOutputCapability::JsonSchema),
                 output_resources: None,
                 ..ModelCapabilityOverrides::default()
             },
@@ -3400,6 +4023,7 @@ mod tests {
             context_limit: Some(200_000),
             input_resources: Vec::new(),
             output_resources: vec![ResourceKind::File],
+            structured_output: StructuredOutputCapability::Unsupported,
             ..ModelCapabilities::default()
         };
 
@@ -3408,6 +4032,21 @@ mod tests {
         assert_eq!(effective.context_limit, Some(32_000));
         assert_eq!(effective.input_resources, vec![ResourceKind::Image]);
         assert_eq!(effective.output_resources, vec![ResourceKind::File]);
+        assert_eq!(
+            effective.structured_output,
+            StructuredOutputCapability::JsonSchema
+        );
+
+        configuration
+            .model_capability_overrides
+            .get_mut(PersistedAiConfiguration::provider_model_key("provider", "model").as_str())
+            .expect("model capability overrides must remain available")
+            .structured_output = Some(StructuredOutputCapability::Unsupported);
+        configuration.apply_model_capability_overrides("provider", "model", &mut effective);
+        assert_eq!(
+            effective.structured_output,
+            StructuredOutputCapability::Unsupported
+        );
     }
 
     /// Verifies misspelled capability fields fail instead of appearing to persist successfully.
@@ -4385,12 +5024,9 @@ mod tests {
             },
         );
 
-        let policy = configuration.resolve_context_compaction_policy(
-            provider_id,
-            model_id,
-            Some(500_000),
-            None,
-        );
+        let policy = configuration
+            .resolve_context_compaction_policy(provider_id, model_id, Some(500_000), None, None)
+            .expect("route policy should resolve");
         assert_eq!(policy.window.effective_context_window_percent, 95);
         assert_eq!(policy.window.auto_compact_percent, 88);
         assert_eq!(policy.window.auto_compact_token_limit, Some(123_456));
@@ -4399,6 +5035,91 @@ mod tests {
         assert_eq!(policy.tail_context_limit, Some(500_000));
         assert_eq!(policy.tail_turns, 10);
         assert_eq!(policy.preserve_recent_tokens, 25_000);
+    }
+
+    /// Verifies the five fixed node ids and their default low-to-high token values.
+    /// 验证五个固定节点标识及其默认从低到高 Token 值。
+    #[test]
+    fn context_compaction_window_nodes_default_to_the_fixed_contract() {
+        let configuration = ContextCompactionWindowConfiguration::default();
+
+        assert!(configuration.validate().is_ok());
+        assert_eq!(
+            configuration.nodes.map(|node| (node.id, node.tokens)),
+            [
+                (ContextCompactionWindowNodeId::CompressionWindow1, 200_000),
+                (ContextCompactionWindowNodeId::CompressionWindow2, 256_000),
+                (ContextCompactionWindowNodeId::CompressionWindow3, 272_000),
+                (ContextCompactionWindowNodeId::CompressionWindow4, 373_000),
+                (ContextCompactionWindowNodeId::CompressionWindow5, 500_000),
+            ]
+        );
+    }
+
+    /// Verifies fixed nodes reject id reassignment and non-ascending token values.
+    /// 验证固定节点会拒绝标识重分配及非递增 Token 值。
+    #[test]
+    fn context_compaction_window_nodes_reject_identity_and_order_changes() {
+        let mut wrong_id = ContextCompactionWindowConfiguration::default();
+        wrong_id.nodes[0].id = ContextCompactionWindowNodeId::CompressionWindow2;
+        assert!(
+            wrong_id
+                .validate()
+                .expect_err("id change must fail")
+                .contains("must use id")
+        );
+
+        let mut wrong_order = ContextCompactionWindowConfiguration::default();
+        wrong_order.nodes[2].tokens = wrong_order.nodes[1].tokens;
+        assert!(
+            wrong_order
+                .validate()
+                .expect_err("equal node values must fail")
+                .contains("strictly ascending")
+        );
+    }
+
+    /// Verifies a session node changes only the resolved compaction base and retained-tail policy.
+    /// 验证会话节点只改变已解析压缩基准与尾部保留策略。
+    #[test]
+    fn context_compaction_window_node_resolves_below_the_model_hard_window() {
+        let configuration = PersistedAiConfiguration::default();
+
+        let policy = configuration
+            .resolve_context_compaction_policy(
+                "provider",
+                "model",
+                Some(1_000_000),
+                Some(ContextCompactionWindowNodeId::CompressionWindow2),
+                None,
+            )
+            .expect("256K node should resolve below a 1M model");
+
+        assert_eq!(
+            policy.compression_window_node_id,
+            Some(ContextCompactionWindowNodeId::CompressionWindow2)
+        );
+        assert_eq!(policy.compression_window_limit, Some(256_000));
+        assert_eq!(policy.tail_context_limit, Some(256_000));
+    }
+
+    /// Verifies equal or larger node values are rejected for the selected model.
+    /// 验证等于或大于所选模型窗口的节点值会被拒绝。
+    #[test]
+    fn context_compaction_window_node_must_be_strictly_lower_than_model_window() {
+        let configuration = PersistedAiConfiguration::default();
+
+        let error = configuration
+            .resolve_context_compaction_policy(
+                "provider",
+                "model",
+                Some(256_000),
+                Some(ContextCompactionWindowNodeId::CompressionWindow2),
+                None,
+            )
+            .expect_err("equal node and model windows must fail");
+
+        assert!(error.contains("must be lower than model context limit"));
     }
 
     /// Verifies a child-task behavior override keeps the selected route window policy.
@@ -4422,12 +5143,15 @@ mod tests {
             auto: false,
             ..ContextCompactionPolicy::default()
         };
-        let policy = configuration.resolve_context_compaction_policy(
-            provider_id,
-            model_id,
-            Some(300_000),
-            Some(behavior_only),
-        );
+        let policy = configuration
+            .resolve_context_compaction_policy(
+                provider_id,
+                model_id,
+                Some(300_000),
+                None,
+                Some(behavior_only),
+            )
+            .expect("behavior-only policy should resolve");
 
         assert!(!policy.auto);
         assert_eq!(policy.window.effective_context_window_percent, 92);

@@ -38,6 +38,10 @@ import {
 import { retireMaterializedDraftSubmission } from "@/components/workspace/draft-submission-state";
 import { resolveEmptyWorkbenchDraftRoute } from "@/components/workspace/workbench-layout/empty-workbench-route";
 import { MediaUploadProgressPanel } from "@/components/workspace/media-upload-progress-panel";
+import {
+  mediaUploadProgressKey,
+  reduceMediaUploadProgress,
+} from "@/components/workspace/media-upload-progress-state";
 import { WorkbenchDialogs } from "@/components/workspace/workbench-dialogs";
 import { routeWorkspaceInputOwnerFromPointer } from "@/components/workspace/workspace-input-owner";
 import { useWorkbenchShellChrome } from "@/components/workspace/workbench-layout/shell-chrome";
@@ -395,8 +399,8 @@ export function WorkbenchLayout(props: {
   // projectTerminalCountListenerReady closes the bootstrap race between event registration and the first query.
   // projectTerminalCountListenerReady 消除事件注册与首次查询之间的初始竞态。
   const [projectTerminalCountListenerReady, setProjectTerminalCountListenerReady] = React.useState(false);
-  // mediaUploadProgresses keeps every active pre-dispatch upload keyed by its exact submission identity.
-  // mediaUploadProgresses 按精确提交标识保存所有活跃的分派前上传，避免并发上传互相覆盖。
+  // mediaUploadProgresses keeps every active pre-dispatch or tool-triggered transfer keyed by its exact identity.
+  // mediaUploadProgresses 按精确身份保存所有活跃的分派前或工具触发传输，避免并发上传互相覆盖。
   const [mediaUploadProgresses, setMediaUploadProgresses] = React.useState<Record<string, MediaUploadProgressChangedDelta>>({});
   React.useEffect(() => {
     setProjectTerminalCountListenerReady(false);
@@ -1171,6 +1175,7 @@ export function WorkbenchLayout(props: {
     handleSetSessionPlanMode,
     handleSetSessionVmmPolicy,
     handleSetSessionOutputStyle,
+    handleSetSessionContextCompactionWindow,
     handleEditPendingPrompt,
   } = useWorkbenchSessionActions({
     selectedConversation,
@@ -1654,15 +1659,7 @@ export function WorkbenchLayout(props: {
           continue;
         }
         const progress = envelope.delta.payload;
-        setMediaUploadProgresses((current) => {
-          const next = { ...current };
-          if (progress.phase === "preparing" || progress.phase === "uploading") {
-            next[progress.clientSubmissionId] = progress;
-          } else {
-            delete next[progress.clientSubmissionId];
-          }
-          return next;
-        });
+        setMediaUploadProgresses((current) => reduceMediaUploadProgress(current, progress));
         acceptedEnvelopes.push(envelope);
         nextAcceptedRevision = envelope.generation;
         continue;
@@ -1946,7 +1943,7 @@ export function WorkbenchLayout(props: {
         <div className="media-upload-progress-stack">
           {Object.values(mediaUploadProgresses).map((progress) => (
             <MediaUploadProgressPanel
-              key={progress.clientSubmissionId}
+              key={mediaUploadProgressKey(progress)}
               progress={progress}
               onCancel={handleCancelConversationSubmission}
             />
@@ -2026,6 +2023,7 @@ export function WorkbenchLayout(props: {
             onSetSessionPlanMode={handleSetSessionPlanMode}
             onSetSessionVmmPolicy={handleSetSessionVmmPolicy}
             onSetSessionOutputStyle={handleSetSessionOutputStyle}
+            onSetSessionContextCompactionWindow={handleSetSessionContextCompactionWindow}
             onStopConversationRun={handleStopConversationRun}
             onContinueConversation={handleContinueConversation}
             onOpenSubagentPanel={handleOpenSubagentPanel}

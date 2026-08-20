@@ -34,9 +34,11 @@ import type {
   ComposerAttachmentCapabilitySummary,
   ComposerAttachmentSummary,
   ComposerSlashCommandSummary,
+  ContextCompactionWindowNodeId,
   ContextUsageSnapshot,
   PendingPromptSummary,
   ProviderSummary,
+  PublicAiContextCompactionWindowNode,
   ProviderModelSecondaryRouteSelection,
   ProviderModelSecondaryRouteSummary,
   ReasoningSelectionSummary,
@@ -107,6 +109,12 @@ export function ComposerPanel(props: {
   // Current persisted output-style state for the selected conversation.
   // 当前选中会话的持久化输出风格状态。
   sessionOutputStyle: SessionOutputStyleSummary | null;
+  // Fixed context-compaction nodes available to the selected session.
+  // 当前选中会话可用的固定上下文压缩节点。
+  contextCompactionWindowNodes: PublicAiContextCompactionWindowNode[];
+  // Stable context-compaction node selected by the current session.
+  // 当前会话选择的稳定上下文压缩节点。
+  sessionContextCompactionWindowNodeId: ContextCompactionWindowNodeId | null;
   // Whether the effective project configuration makes VMM available to this composer.
   // 当前项目最终生效配置是否允许输入区使用 VMM。
   vmmAvailable: boolean;
@@ -169,6 +177,9 @@ export function ComposerPanel(props: {
   // Persists one selected conversation output-style override.
   // 持久化当前会话的输出风格覆盖。
   onSetSessionOutputStyle: (styleId: string | null) => Promise<boolean>;
+  // Persists or clears the selected session context-compaction window node.
+  // 持久化或清除当前会话的上下文压缩窗口节点。
+  onSetSessionContextCompactionWindow: (nodeId: ContextCompactionWindowNodeId | null) => Promise<boolean>;
   // Stops the selected backend conversation stream.
   // 停止当前选中的后端会话流。
   onStopConversationRun: () => Promise<boolean>;
@@ -683,10 +694,14 @@ export function ComposerPanel(props: {
           <ComposerPanelToolbarRight
             attachmentCount={attachments.length}
             contextUsage={props.contextUsage}
+            contextCompactionWindowNodes={props.contextCompactionWindowNodes}
+            sessionContextCompactionWindowNodeId={props.sessionContextCompactionWindowNodeId}
+            modelContextLimit={activeProviderModelSummary?.model.contextLimit ?? null}
             draftInput={draftInput}
             isConversationRunning={props.isConversationRunning}
             sendBlocked={providerToolSettingsBlocked}
             onReasoningEffortChange={(value) => void handleReasoningEffortChange(value)}
+            onSetSessionContextCompactionWindow={props.onSetSessionContextCompactionWindow}
             onSend={() => void handleComposerSend()}
             reasoningAriaLabel={t("composer.aria.reasoning")}
             reasoningEffort={reasoningEffort}

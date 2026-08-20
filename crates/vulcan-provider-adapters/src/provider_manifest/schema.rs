@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use vulcan_ai_contract::{
     AiOperation, CapabilitySupport, EmbeddingCapabilities, InferenceUsageScope,
     ModelParameterDefinition, NativeToolKind, PromptCacheCapability, ReasoningControlMode,
-    ReasoningEffort, RerankCapabilities, ResourceKind,
+    ReasoningEffort, RerankCapabilities, ResourceKind, StructuredOutputCapability,
 };
 
 use super::{MANIFEST_SCHEMA_VERSION, RuleMatcher};
@@ -538,6 +538,10 @@ pub struct ManifestCapabilityPatch {
     /// 支持的输出资源类别；省略则继承。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_resources: Option<Vec<ResourceKind>>,
+    /// Structured-output support; omitted inherits.
+    /// 结构化输出支持能力；省略则继承。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub structured_output: Option<StructuredOutputCapability>,
     /// Strong embedding capabilities; `null` clears, omitted inherits.
     /// 强类型向量能力；`null` 清除，省略继承。
     #[serde(
@@ -1946,6 +1950,10 @@ pub struct ToolTargetDeclaration {
     /// Exact AI-visible input JSON Schema.
     /// 精确 AI 可见输入 JSON Schema。
     pub input_schema: Value,
+    /// Explicit host-only mapping from the fixed media facade into native target arguments.
+    /// 从固定媒体外壳到原生目标参数的显式仅宿主可见映射。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_input_projection: Option<crate::ProviderToolMediaInputProjection>,
     /// Host-only bounded product assertions kept outside the AI-visible JSON Schema.
     /// 位于 AI 可见 JSON Schema 之外的仅宿主可见有界乘积断言。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

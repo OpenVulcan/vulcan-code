@@ -2,7 +2,7 @@
 //! 供应商无关的 Wire 协议 Profile。
 
 use std::collections::BTreeSet;
-use vulcan_ai_contract::AiExecutionRequest;
+use vulcan_ai_contract::{AiExecutionRequest, ResourceKind};
 
 pub mod anthropic;
 pub mod cohere;
@@ -46,6 +46,84 @@ pub(crate) fn compatible_provider_signature<'a>(
     signature: &'a str,
 ) -> Option<&'a str> {
     vulcan_ai_contract::provider_continuation_payload(provider, signature)
+}
+
+/// Returns whether one exact protocol profile has a registered local-media projector for a MIME type.
+/// 返回一个精确协议 Profile 是否为指定 MIME 类型注册了本地媒体投影器。
+///
+/// # Parameters
+/// 参数
+/// `protocol_profile_id` is the frozen protocol identity, `kind` is the provider-neutral media
+/// category, and `media_type` is the normalized host MIME type.
+/// `protocol_profile_id` 是冻结协议标识，`kind` 是供应商无关媒体类别，`media_type` 是规范化宿主 MIME 类型。
+///
+/// # Returns
+/// 返回值
+/// `true` only when the current encoder can represent the local media without protocol probing.
+/// 仅当当前编码器无需协议探测即可表示该本地媒体时返回 `true`。
+pub fn protocol_profile_supports_local_media_type(
+    protocol_profile_id: &str,
+    kind: ResourceKind,
+    media_type: &str,
+) -> bool {
+    // normalizedMediaType keeps aliases outside the protocol registry and compares exact encoder labels.
+    // normalizedMediaType 将别名处理留在协议注册表之外，并与编码器标签做精确比较。
+    let normalized_media_type = media_type.trim().to_ascii_lowercase();
+    match protocol_profile_id {
+        OPENAI_CHAT_PROFILE_ID => match kind {
+            ResourceKind::Image | ResourceKind::Video => true,
+            ResourceKind::Audio => matches!(
+                normalized_media_type.as_str(),
+                "audio/wav"
+                    | "audio/x-wav"
+                    | "audio/mpeg"
+                    | "audio/mp3"
+                    | "audio/aiff"
+                    | "audio/x-aiff"
+                    | "audio/aac"
+                    | "audio/ogg"
+                    | "audio/flac"
+                    | "audio/mp4"
+                    | "audio/m4a"
+                    | "audio/x-m4a"
+            ),
+            ResourceKind::File => false,
+        },
+        OPENAI_RESPONSES_PROFILE_ID | OPENAI_CODEX_RESPONSES_PROFILE_ID => {
+            kind == ResourceKind::Image
+        }
+        ANTHROPIC_MESSAGES_PROFILE_ID | CLAUDE_CODE_MESSAGES_PROFILE_ID => {
+            kind == ResourceKind::Image
+                && matches!(
+                    normalized_media_type.as_str(),
+                    "image/jpeg" | "image/png" | "image/gif" | "image/webp"
+                )
+        }
+        ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID => match kind {
+            ResourceKind::Image => matches!(
+                normalized_media_type.as_str(),
+                "image/jpeg" | "image/png" | "image/gif" | "image/webp"
+            ),
+            ResourceKind::Video => matches!(
+                normalized_media_type.as_str(),
+                "video/mp4"
+                    | "video/x-msvideo"
+                    | "video/quicktime"
+                    | "video/mov"
+                    | "video/x-matroska"
+            ),
+            ResourceKind::Audio | ResourceKind::File => false,
+        },
+        GEMINI_GENERATE_CONTENT_PROFILE_ID
+        | GEMINI_INTERACTIONS_PROFILE_ID
+        | GOOGLE_CODE_ASSIST_PROFILE_ID => {
+            matches!(
+                kind,
+                ResourceKind::Image | ResourceKind::Video | ResourceKind::Audio
+            )
+        }
+        _ => false,
+    }
 }
 
 /// Rejects route-bound provider context before encoding through a different wire protocol.
@@ -130,5 +208,36 @@ mod signature_provenance_tests {
             compatible_provider_signature(SIGNATURE_PROVIDER_ANTHROPIC, "payload"),
             None
         );
+    }
+
+    /// Verifies protocol media admission mirrors the exact format-sensitive encoders.
+    /// 验证协议媒体准入与精确的格式敏感编码器保持一致。
+    #[test]
+    fn local_media_type_support_matches_registered_encoders() {
+        assert!(!protocol_profile_supports_local_media_type(
+            OPENAI_CHAT_PROFILE_ID,
+            ResourceKind::Audio,
+            "audio/opus"
+        ));
+        assert!(protocol_profile_supports_local_media_type(
+            OPENAI_CHAT_PROFILE_ID,
+            ResourceKind::Audio,
+            "audio/flac"
+        ));
+        assert!(protocol_profile_supports_local_media_type(
+            GEMINI_GENERATE_CONTENT_PROFILE_ID,
+            ResourceKind::Audio,
+            "audio/opus"
+        ));
+        assert!(!protocol_profile_supports_local_media_type(
+            ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID,
+            ResourceKind::Video,
+            "video/webm"
+        ));
+        assert!(protocol_profile_supports_local_media_type(
+            ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID,
+            ResourceKind::Video,
+            "video/x-matroska"
+        ));
     }
 }

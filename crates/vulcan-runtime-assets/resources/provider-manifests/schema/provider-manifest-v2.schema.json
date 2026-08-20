@@ -1545,6 +1545,20 @@
         "mcp_http_call": {"$ref": "#/$defs/provider_tool_mcp_http_call"}
       }
     },
+    "provider_tool_media_input_projection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path_field", "prompt_field"],
+      "properties": {
+        "path_field": {"type": "string", "minLength": 1, "maxLength": 128},
+        "prompt_field": {"type": "string", "minLength": 1, "maxLength": 128},
+        "path_as_single_item_array": {"type": "boolean"},
+        "fixed_arguments": {
+          "type": "object",
+          "maxProperties": 16
+        }
+      }
+    },
     "tool_target": {
       "type": "object",
       "additionalProperties": false,
@@ -1575,6 +1589,7 @@
         "tool_id": {"type": "string"},
         "capability": {"$ref": "#/$defs/provider_tool_capability"},
         "input_schema": {"type": "object"},
+        "media_input_projection": {"$ref": "#/$defs/provider_tool_media_input_projection"},
         "input_numeric_product_ranges": {
           "type": "array",
           "items": {"$ref": "#/$defs/provider_tool_numeric_product_range"}
@@ -2359,6 +2374,13 @@
           "items": {
             "type": "string"
           }
+        },
+        "structured_output": {
+          "enum": [
+            "json_object",
+            "json_schema",
+            "unsupported"
+          ]
         },
         "embedding": {
           "oneOf": [

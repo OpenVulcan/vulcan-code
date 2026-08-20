@@ -970,6 +970,10 @@ pub struct ModelCapabilityEvidence {
     /// 目录是否明确声明了输出模态。
     #[serde(default)]
     pub output_modalities_declared: bool,
+    /// Whether the directory explicitly declared structured-output support.
+    /// 目录是否明确声明了结构化输出支持能力。
+    #[serde(default)]
+    pub structured_output_declared: bool,
     /// Explicit text-input support, or `None` when the directory omitted input modalities.
     /// 明确的文本输入支持；目录未声明输入模态时为 `None`。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1463,6 +1467,10 @@ pub struct ProviderToolContract {
     /// Exact model-native JSON Schema registered for this selected target.
     /// 为当前选定目标注册的精确模型原生 JSON Schema。
     pub input_schema: Value,
+    /// Explicit host-only mapping from the fixed media facade into this target's native arguments.
+    /// 从固定媒体外壳到当前目标原生参数的显式仅宿主可见映射。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_input_projection: Option<ProviderToolMediaInputProjection>,
     /// Host-only bounded product assertions applied after JSON Schema defaults.
     /// 在 JSON Schema 默认值之后应用的仅宿主可见有界乘积断言。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1474,6 +1482,27 @@ pub struct ProviderToolContract {
     /// Closed provider-response normalization contract.
     /// 封闭的供应商响应归一化契约。
     pub output: ProviderToolOutputContract,
+}
+
+/// Maps fixed media-understanding arguments into one provider target's native root fields.
+/// 将固定媒体理解参数映射到一个供应商目标的原生根字段。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderToolMediaInputProjection {
+    /// Native root field receiving the media path or single-item path array.
+    /// 接收媒体路径或单项路径数组的原生根字段。
+    pub path_field: String,
+    /// Native root field receiving the caller prompt.
+    /// 接收调用方提示词的原生根字段。
+    pub prompt_field: String,
+    /// Whether the native path field requires one single-item array.
+    /// 原生路径字段是否要求一个单项数组。
+    #[serde(default)]
+    pub path_as_single_item_array: bool,
+    /// Reviewed literal native arguments required in addition to path and prompt.
+    /// 除路径与提示词外所需的已审核原生字面量参数。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub fixed_arguments: BTreeMap<String, Value>,
 }
 
 /// One host-only inclusive product range over two integer input fields.

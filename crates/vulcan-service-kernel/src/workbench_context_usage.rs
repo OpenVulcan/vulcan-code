@@ -10,6 +10,7 @@ pub(crate) fn context_usage_snapshot_from_runtime_state(
     runtime_state: Option<&SessionRuntimeStateEntry>,
     live_context_budgets: &BTreeMap<SessionId, ContextBudgetSnapshot>,
     model_capabilities: Option<&vulcan_ai_contract::ModelCapabilities>,
+    compression_window_limit: Option<usize>,
 ) -> Option<ContextUsageSnapshot> {
     let runtime_state = runtime_state?;
     // providerUsage gates the surface on a completed usable Provider observation, not on a draft or optimistic user message.
@@ -25,6 +26,7 @@ pub(crate) fn context_usage_snapshot_from_runtime_state(
         historical_context_budget = historical_context_budget_snapshot_from_runtime_state(
             runtime_state,
             model_capabilities,
+            compression_window_limit,
         );
         historical_context_budget.as_ref()
     };
@@ -241,6 +243,7 @@ fn proportional_integer_shares(total: usize, weights: &[usize]) -> Vec<usize> {
 pub(crate) fn historical_context_budget_snapshot_from_runtime_state(
     runtime_state: &SessionRuntimeStateEntry,
     model_capabilities: Option<&vulcan_ai_contract::ModelCapabilities>,
+    compression_window_limit: Option<usize>,
 ) -> Option<ContextBudgetSnapshot> {
     let observed_usage = runtime_state
         .provider_call_ledger
@@ -260,7 +263,10 @@ pub(crate) fn historical_context_budget_snapshot_from_runtime_state(
             .saturating_div(100)
     });
     let auto_compact_limit = context_limit.map(|raw_window| {
-        let percentage_limit = raw_window
+        // compressionWindow is session-scoped while rawWindow remains the effective hard model window.
+        // compressionWindow 只作用于会话压缩，而 rawWindow 仍是模型有效硬窗口。
+        let compression_window = compression_window_limit.unwrap_or(raw_window);
+        let percentage_limit = compression_window
             .saturating_mul(usize::from(window_policy.auto_compact_percent))
             .saturating_div(100)
             .max(1);
@@ -349,6 +355,20 @@ pub(crate) fn historical_context_budget_snapshot_from_runtime_state(
             })
             .unwrap_or_else(|| historical_context_budget_severity(usage_ratio)),
     })
+}
+
+/// Resolves one session node id to its current configured token value without persisting the number.
+/// 将一个会话节点标识解析为当前配置的 Token 值，且不持久化该数值。
+pub(crate) fn context_compaction_window_limit_from_configuration(
+    runtime_state: Option<&SessionRuntimeStateEntry>,
+    configuration: Option<&vulcan_provider_adapters::PersistedAiConfiguration>,
+) -> Option<usize> {
+    let node_id = runtime_state?.context_compaction_window_node_id?;
+    let tokens = configuration?
+        .context_compaction_window_nodes
+        .tokens_for(node_id)
+        .ok()?;
+    usize::try_from(tokens).ok()
 }
 
 /// Resolves one historical usage ratio into the shared context-budget severity buckets.
@@ -528,6 +548,7 @@ mod tests {
                 session_id,
                 Some(&runtime_state),
                 &live_context_budgets,
+                None,
                 None,
             )
             .is_none()

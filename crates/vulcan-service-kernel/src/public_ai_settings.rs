@@ -14,30 +14,35 @@ use vulcan_ai_contract::{
     InferenceCallerBudget, InferenceCallerContext, InferencePermission, InferenceUsageScope,
     MessageRole, ModelCapabilities, ParallelToolCallPolicy, PromptCachePolicy,
     ReasoningControlMode, ReasoningEffort, ReasoningOutputPolicy, RerankRequest,
-    RerankScoreSemantics, RerankText, RerankTruncation, StructuredOutputPolicy, ToolChoicePolicy,
+    RerankScoreSemantics, RerankText, RerankTruncation, ResourceKind, StructuredOutputCapability,
+    StructuredOutputPolicy, ToolChoicePolicy,
 };
 use vulcan_context::ContextWindowPolicyOverrides;
+use vulcan_core::types::ConversationAttachmentKind;
 use vulcan_provider_adapters::{
     AccountUsageQueryKind, ActiveAiModelSelection, AvailableProviderToolTarget,
     CatalogDiscoveryState, CatalogDiscoveryStatus, CommonModelTemplateSuggestion,
-    ConnectionModelAccessPolicy, ConnectionModelCatalog, CredentialBillingKind,
-    CredentialConnection, CredentialMode, CredentialSecretEnvelope, CredentialSecretResolver,
-    CredentialSecretStore, CustomModelDefinition, CustomModelProtocolPreference,
-    CustomModelTemplateDecision, CustomProtocolRoute, CustomProviderAuthentication,
-    CustomProviderDefinition, CustomProviderManifestFailure, CustomProviderModelDefaults,
-    CustomProviderModelDiscoveryMode, CustomProviderProtocol, DeclaredProviderToolTemplateModel,
-    InferenceProfile, InferenceRouteBinding, InferenceRouteConfiguration, InternalModelOverrides,
-    ManifestSourceLayer, ModelCapabilityOverrides, ModelDiscoveryKind, ModelExecutionOverrides,
-    OAuthAuthorizationChallenge, OAuthClientConfiguration, OAuthTransactionPhase,
-    OAuthTransactionSnapshot, PersistedAiConfiguration, ProviderDescriptor, ProviderKind,
-    ProviderRegistry, ProviderToolCapabilityKind, ProviderToolExecutionResult, ProviderToolTarget,
-    ProviderToolTargetSelection, PublicAiRuntime, PublicAiRuntimeSettingsCatalogSnapshot,
-    ResponsesRemoteCompactionPolicy, ResponsesRouteFeatures, ResponsesWebsocketPolicy,
-    ServiceEntry, ServiceEntryKind, StagedConnectionCatalogObservation,
-    credential_authorization_binding, registered_native_action_binding_id,
-    validate_custom_provider_identifier,
+    ConnectionModelAccessPolicy, ConnectionModelCatalog, ContextCompactionWindowConfiguration,
+    CredentialBillingKind, CredentialConnection, CredentialMode, CredentialSecretEnvelope,
+    CredentialSecretResolver, CredentialSecretStore, CustomModelDefinition,
+    CustomModelProtocolPreference, CustomModelTemplateDecision, CustomProtocolRoute,
+    CustomProviderAuthentication, CustomProviderDefinition, CustomProviderManifestFailure,
+    CustomProviderModelDefaults, CustomProviderModelDiscoveryMode, CustomProviderProtocol,
+    DeclaredProviderToolTemplateModel, InferenceProfile, InferenceRouteBinding,
+    InferenceRouteConfiguration, InternalModelOverrides, ManifestSourceLayer,
+    MediaUnderstandingBackendSelection, ModelCapabilityOverrides, ModelDiscoveryKind,
+    ModelExecutionOverrides, OAuthAuthorizationChallenge, OAuthClientConfiguration,
+    OAuthTransactionPhase, OAuthTransactionSnapshot, PersistedAiConfiguration, ProviderDescriptor,
+    ProviderKind, ProviderRegistry, ProviderToolCapabilityKind, ProviderToolExecutionResult,
+    ProviderToolTarget, ProviderToolTargetSelection, PublicAiRuntime,
+    PublicAiRuntimeSettingsCatalogSnapshot, ResponsesRemoteCompactionPolicy,
+    ResponsesRouteFeatures, ResponsesWebsocketPolicy, ServiceEntry, ServiceEntryKind,
+    StagedConnectionCatalogObservation, credential_authorization_binding,
+    registered_native_action_binding_id, validate_custom_provider_identifier,
 };
-use vulcan_service_api::{ServiceEventEmitter, WorkbenchSnapshot};
+use vulcan_service_api::{
+    ContextCompactionWindowNodeSummary, ServiceEventEmitter, WorkbenchSnapshot,
+};
 
 use crate::{
     SharedServiceBridgeState, begin_public_ai_configuration_transaction,
@@ -60,6 +65,9 @@ pub(super) struct PublicAiSettingsSnapshot {
     /// System-level sparse Codex context-window policy inherited by every route.
     /// 所有路由继承的系统级稀疏 Codex 上下文窗口策略。
     context_window_policy_overrides: ContextWindowPolicyOverrides,
+    /// Fixed system context-compaction window nodes in immutable display order.
+    /// 按不可变展示顺序排列的固定系统上下文压缩窗口节点。
+    context_compaction_window_nodes: ContextCompactionWindowConfiguration,
     /// Explicit provider-level sparse Codex context-window policies.
     /// 显式供应商级稀疏 Codex 上下文窗口策略。
     provider_context_window_policy_overrides: BTreeMap<String, ContextWindowPolicyOverrides>,
@@ -166,6 +174,16 @@ pub(super) struct PublicAiSettingsSnapshot {
     /// One explicit selected target per semantic provider tool capability.
     /// 每项语义供应商工具能力唯一显式选择的目标。
     provider_tool_selections: BTreeMap<ProviderToolCapabilityKind, ProviderToolTargetSelection>,
+    /// Provider models explicitly admitted to image, video, and audio understanding candidates.
+    /// 显式允许进入图片、视频与音频理解候选的供应商模型。
+    multimodal_understanding_candidate_models: Vec<PublicAiMultimodalUnderstandingCandidateRecord>,
+    /// One explicit provider-tool or model-replacement backend per understanding capability.
+    /// 每项理解能力唯一显式选择的供应商工具或模型代替后端。
+    media_understanding_selections:
+        BTreeMap<ProviderToolCapabilityKind, MediaUnderstandingBackendSelection>,
+    /// Every currently executable account route eligible for model-replacement understanding.
+    /// 当前可执行且符合模型代替理解条件的全部账号路由。
+    media_understanding_model_candidates: Vec<PublicAiMediaUnderstandingModelCandidate>,
     /// Provider tool capabilities enabled by default for newly materialized sessions.
     /// 为新物化会话默认启用的供应商工具能力。
     provider_tool_enabled_capabilities: BTreeSet<ProviderToolCapabilityKind>,
@@ -349,6 +367,47 @@ pub(super) struct PublicAiProviderToolTargetSnapshot {
     /// Exact model- or service-native target contract.
     /// 精确的模型或服务原生目标契约。
     target: ProviderToolTarget,
+}
+
+/// Browser-facing provider-model admission record for multimodal understanding.
+/// 面向浏览器的供应商模型多模态理解准入记录。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct PublicAiMultimodalUnderstandingCandidateRecord {
+    /// Exact provider identifier shared by all credential routes for the model.
+    /// 该模型全部凭据路由共享的精确供应商标识。
+    provider_id: String,
+    /// Exact upstream model identifier.
+    /// 精确上游模型标识。
+    model_id: String,
+}
+
+/// Browser-facing exact account route eligible for model-replacement media understanding.
+/// 面向浏览器且可用于模型代替媒体理解的精确账号路由。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct PublicAiMediaUnderstandingModelCandidate {
+    /// User-visible provider name.
+    /// 用户可见供应商名称。
+    provider_display_name: String,
+    /// User-visible service-entry name.
+    /// 用户可见服务入口名称。
+    service_entry_display_name: String,
+    /// User-visible credential connection name.
+    /// 用户可见凭据连接名称。
+    connection_display_name: String,
+    /// User-visible model name.
+    /// 用户可见模型名称。
+    model_display_name: String,
+    /// Exact immutable account and model selection persisted when chosen.
+    /// 选中时持久化的精确不可变账号与模型选择。
+    selection: ActiveAiModelSelection,
+    /// Process-local catalog generation that established the route.
+    /// 建立该路由的进程内目录代次。
+    catalog_generation: u64,
+    /// Exact model capability contract used to filter media and reasoning controls.
+    /// 用于筛选媒体与思考控件的精确模型能力契约。
+    capabilities: ModelCapabilities,
 }
 
 /// Browser-facing conflict retained for one session provider tool capability.
@@ -698,6 +757,16 @@ pub(super) struct PublicAiContextWindowPolicyOverridesSaveRequest {
     overrides: ContextWindowPolicyOverrides,
 }
 
+/// Saves all fixed system context-compaction window node values atomically.
+/// 原子保存全部固定系统上下文压缩窗口节点值。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct PublicAiContextCompactionWindowNodesSaveRequest {
+    /// Complete five-node configuration with immutable identifiers and order.
+    /// 包含不可变标识与顺序的完整五节点配置。
+    nodes: ContextCompactionWindowConfiguration,
+}
+
 /// Selects one exact public AI model and account.
 /// 选择一个精确公共 AI 模型与账号。
 #[derive(Debug, Clone, Deserialize)]
@@ -867,6 +936,35 @@ pub(super) struct PublicAiProviderToolSelectionSaveRequest {
     /// One exact target, or absence to disable the capability.
     /// 一个精确目标，缺失时禁用该能力。
     selection: Option<ProviderToolTargetSelection>,
+}
+
+/// Enables or disables one provider model as a multimodal understanding candidate.
+/// 启用或禁用一个供应商模型作为多模态理解候选。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct PublicAiMultimodalUnderstandingCandidateSaveRequest {
+    /// Exact provider identifier shared by every account route for this switch.
+    /// 此开关覆盖全部账号路由的精确供应商标识。
+    provider_id: String,
+    /// Exact upstream model identifier.
+    /// 精确上游模型标识。
+    model_id: String,
+    /// Replacement admission state.
+    /// 替换后的准入状态。
+    enabled: bool,
+}
+
+/// Saves or clears one provider-tool or model-replacement media-understanding backend.
+/// 保存或清除一项供应商工具或模型代替媒体理解后端。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct PublicAiMediaUnderstandingSelectionSaveRequest {
+    /// Exact image, video, or audio understanding capability.
+    /// 精确的图片、视频或音频理解能力。
+    capability: ProviderToolCapabilityKind,
+    /// One exact backend, or absence to clear only the backend selection.
+    /// 一个精确后端；缺失时仅清除后端选择，不改写独立能力开关。
+    selection: Option<MediaUnderstandingBackendSelection>,
 }
 
 /// Replaces the complete native target set for one model-extension capability.
@@ -7174,6 +7272,45 @@ pub(super) async fn service_save_public_ai_context_window_policy_overrides(
     Ok(snapshot)
 }
 
+/// Saves the complete process-wide context-compaction window node configuration.
+/// 保存完整的进程级上下文压缩窗口节点配置。
+pub(super) async fn service_save_public_ai_context_compaction_window_nodes(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    request: PublicAiContextCompactionWindowNodesSaveRequest,
+) -> Result<PublicAiSettingsSnapshot, String> {
+    request.nodes.validate()?;
+    // transaction retains ownership through persistence and Workbench publication.
+    // transaction 在持久化与 Workbench 发布全程保留所有权。
+    let transaction = begin_public_ai_configuration_transaction().await;
+    let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
+    let nodes = request.nodes;
+    // nodesChanged prevents an idempotent save from invalidating otherwise reusable budgets.
+    // nodesChanged 防止幂等保存使原本可复用的预算失效。
+    let nodes_changed = nodes != current_configuration.context_compaction_window_nodes;
+    let (_configuration, snapshot) =
+        mutate_public_ai_configuration_and_publish_using_in_transaction(
+            &state,
+            runtime.as_ref(),
+            &current_configuration,
+            "保存上下文压缩窗口节点失败",
+            |configuration| configuration.set_context_compaction_window_nodes(nodes),
+            |configuration| build_public_ai_settings_snapshot(runtime.as_ref(), configuration),
+            |configuration| {
+                publish_public_ai_workbench_after_context_compaction_window_nodes_change(
+                    &app,
+                    &state,
+                    runtime.as_ref(),
+                    configuration,
+                    nodes_changed,
+                )
+                .map(|_| ())
+            },
+        )?;
+    drop(transaction);
+    Ok(snapshot)
+}
+
 /// Selects one model and remembers its exact account.
 /// 选择一个模型并记住其精确账号。
 pub(super) async fn service_select_public_ai_model(
@@ -7195,7 +7332,9 @@ pub(super) async fn service_select_public_ai_model(
     // transaction serializes validation, durable preferences, lease revocation, and publication.
     // transaction 串行化校验、持久偏好、租约撤销与发布。
     let transaction = begin_public_ai_configuration_transaction().await;
-    if let Some(session_id) = conversation_id {
+    // session_context_compaction_window_node_id preserves the current session lock across models.
+    // session_context_compaction_window_node_id 在模型之间保留当前会话锁定节点。
+    let session_context_compaction_window_node_id = if let Some(session_id) = conversation_id {
         let guard = state
             .lock()
             .map_err(|error| format!("Failed to lock service state: {error}"))?;
@@ -7208,7 +7347,14 @@ pub(super) async fn service_select_public_ai_model(
         if !session_exists {
             return Err(format!("Conversation `{session_id}` has no runtime state."));
         }
-    }
+        guard
+            .workspace_snapshot
+            .as_ref()
+            .and_then(|workspace| workspace.session_runtime_state.get(&session_id))
+            .and_then(|runtime_state| runtime_state.context_compaction_window_node_id)
+    } else {
+        None
+    };
     // current_configuration is the immutable validation baseline before persistent mutation.
     // current_configuration 是持久化修改前使用的不可变校验基线。
     let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
@@ -7257,6 +7403,39 @@ pub(super) async fn service_select_public_ai_model(
             "Connection `{}` does not expose model `{}`.",
             request.connection_id, request.model_id
         ));
+    }
+    // selected_model is the exact target used to validate an existing session compression lock.
+    // selected_model 是用于校验既有会话压缩锁定的精确目标。
+    let selected_model = runtime.resolve_connection_model_selection(
+        &current_configuration,
+        request.connection_id.as_str(),
+        request.provider_id.as_str(),
+        request.model_id.as_str(),
+    )?;
+    if let Some(node_id) = session_context_compaction_window_node_id {
+        // node_tokens resolves the stable persisted id against the current global configuration.
+        // node_tokens 根据当前全局配置解析持久化的稳定标识。
+        let node_tokens = current_configuration
+            .context_compaction_window_nodes
+            .tokens_for(node_id)?;
+        // model_context_limit is the unchanged hard window declared by the selected model.
+        // model_context_limit 是所选模型声明且保持不变的硬窗口。
+        let model_context_limit =
+            selected_model
+                .model
+                .capabilities
+                .context_limit
+                .ok_or_else(|| {
+                    String::from("目标模型未声明上下文窗口，无法保留当前会话的上下文压缩锁定。")
+                })?;
+        if node_tokens >= model_context_limit {
+            return Err(format!(
+                "当前会话锁定的上下文压缩节点 `{}` 为 {} Token，必须严格小于目标模型上下文窗口 {} Token。请先切回默认窗口。",
+                node_id.as_str(),
+                node_tokens,
+                model_context_limit
+            ));
+        }
     }
     let selected_fallback = ActiveAiModelSelection {
         provider_id: request.provider_id.clone(),
@@ -8309,6 +8488,12 @@ pub(super) async fn service_save_public_ai_provider_tool_selection(
     state: SharedServiceBridgeState,
     request: PublicAiProviderToolSelectionSaveRequest,
 ) -> Result<PublicAiSettingsSnapshot, String> {
+    if media_understanding_resource_kind(request.capability).is_some() {
+        return Err(format!(
+            "Media-understanding capability `{:?}` must be configured through its dedicated backend selection.",
+            request.capability
+        ));
+    }
     if !request.capability.is_direct_selection() {
         return Err(format!(
             "Provider tool capability `{:?}` must be configured through its model-extension target set.",
@@ -8347,6 +8532,203 @@ pub(super) async fn service_save_public_ai_provider_tool_selection(
             } else {
                 configuration
                     .provider_tool_selections
+                    .remove(&request.capability);
+            }
+            Ok(())
+        },
+        |configuration| build_public_ai_settings_snapshot(runtime.as_ref(), configuration),
+    )?;
+    drop(transaction);
+    Ok(snapshot)
+}
+
+/// Saves one provider-model admission switch for all multimodal understanding lists.
+/// 保存一个覆盖全部多模态理解列表的供应商模型准入开关。
+///
+/// # Parameters
+/// 参数
+/// `app` publishes the resulting settings, `state` owns runtime state, and `request` is the replacement switch.
+/// `app` 发布结果设置，`state` 持有运行时状态，`request` 是替换后的开关值。
+///
+/// # Returns
+/// 返回值
+/// The authoritative settings snapshot after persistence and publication.
+/// 持久化并发布后的权威设置快照。
+pub(super) async fn service_save_public_ai_multimodal_understanding_candidate(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    request: PublicAiMultimodalUnderstandingCandidateSaveRequest,
+) -> Result<PublicAiSettingsSnapshot, String> {
+    // transaction serializes candidate validation through authoritative settings publication.
+    // transaction 把候选校验串行化到权威设置发布完成。
+    let transaction = begin_public_ai_configuration_transaction().await;
+    // runtime and currentConfiguration freeze validation against one persisted generation.
+    // runtime 与 currentConfiguration 将校验冻结在同一持久化代际。
+    let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
+    if request.enabled {
+        // settingsCatalog freezes effective route capabilities independently from conversation switches.
+        // settingsCatalog 独立于会话开关冻结生效路由能力。
+        let settings_catalog = runtime.settings_catalog_snapshot(&current_configuration)?;
+        // candidates contains every currently executable account route before the user admission switch.
+        // candidates 包含用户准入开关之前当前可执行的全部账号路由。
+        let candidates = build_media_understanding_model_candidates(
+            &settings_catalog.runtime_configuration,
+            &settings_catalog.providers,
+            &settings_catalog.catalogs,
+        )?;
+        // eligible requires at least one exact account route for the shared provider-model switch.
+        // eligible 要求共享供应商模型开关至少存在一条精确账号路由。
+        let eligible = candidates.iter().any(|candidate| {
+            candidate.selection.provider_id == request.provider_id
+                && candidate.selection.model_id == request.model_id
+        });
+        if !eligible {
+            return Err(format!(
+                "Provider `{}` model `{}` has no executable multimodal conversation route with stable structured output.",
+                request.provider_id, request.model_id
+            ));
+        }
+    }
+    // snapshot is rebuilt only after the replacement switch is persisted successfully.
+    // snapshot 仅在替换后的开关成功持久化后重建。
+    let (_configuration, snapshot) = mutate_public_ai_configuration_and_publish_without_session_model_reconciliation_in_transaction(
+        &app,
+        &state,
+        runtime.as_ref(),
+        &current_configuration,
+        "保存多模态理解模型候选开关失败",
+        |configuration| {
+            configuration.set_multimodal_understanding_candidate_enabled(
+                request.provider_id.as_str(),
+                request.model_id.as_str(),
+                request.enabled,
+            );
+            Ok(())
+        },
+        |configuration| build_public_ai_settings_snapshot(runtime.as_ref(), configuration),
+    )?;
+    drop(transaction);
+    Ok(snapshot)
+}
+
+/// Saves or clears one image, video, or audio understanding backend selection.
+/// 保存或清除一项图片、视频或音频理解后端选择。
+///
+/// # Parameters
+/// 参数
+/// `app` publishes settings, `state` owns runtime state, and `request` selects one closed backend mode.
+/// `app` 发布设置，`state` 持有运行时状态，`request` 选择一个封闭后端模式。
+///
+/// # Returns
+/// 返回值
+/// The authoritative settings snapshot after strict target validation.
+/// 严格目标校验后的权威设置快照。
+pub(super) async fn service_save_public_ai_media_understanding_selection(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    request: PublicAiMediaUnderstandingSelectionSaveRequest,
+) -> Result<PublicAiSettingsSnapshot, String> {
+    if media_understanding_resource_kind(request.capability).is_none() {
+        return Err(format!(
+            "Capability `{:?}` is not an image, video, or audio understanding capability.",
+            request.capability
+        ));
+    }
+    // transaction serializes backend validation through authoritative settings publication.
+    // transaction 把后端校验串行化到权威设置发布完成。
+    let transaction = begin_public_ai_configuration_transaction().await;
+    // runtime and currentConfiguration freeze targets and candidates to one generation.
+    // runtime 与 currentConfiguration 将目标和候选冻结到同一代际。
+    let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
+    // settingsCatalog supplies provider targets and resolved model capabilities from one generation.
+    // settingsCatalog 从同一代际提供供应商目标与解析后的模型能力。
+    let settings_catalog = runtime.settings_catalog_snapshot(&current_configuration)?;
+    // modelCandidates remains access-switch independent but still requires executable credentials.
+    // modelCandidates 与会话访问开关独立，但仍要求凭据可执行。
+    let model_candidates = build_media_understanding_model_candidates(
+        &settings_catalog.runtime_configuration,
+        &settings_catalog.providers,
+        &settings_catalog.catalogs,
+    )?;
+    if let Some(selection) = request.selection.as_ref() {
+        match selection {
+            MediaUnderstandingBackendSelection::ProviderTool { selection } => {
+                // validTarget binds the exact credential target to the requested semantic capability.
+                // validTarget 将精确凭据目标绑定到请求的语义能力。
+                let valid_target =
+                    settings_catalog
+                        .available_provider_tool_targets
+                        .iter()
+                        .any(|candidate| {
+                            candidate.connection_id == selection.connection_id
+                                && candidate.target.target_id == selection.target_id
+                                && candidate.target.contract.capability == request.capability
+                        });
+                if !valid_target {
+                    return Err(format!(
+                        "Provider tool target `{}` is not available through connection `{}` for capability `{:?}`.",
+                        selection.target_id, selection.connection_id, request.capability
+                    ));
+                }
+            }
+            MediaUnderstandingBackendSelection::ModelReplacement {
+                selection,
+                reasoning_effort,
+            } => {
+                if !settings_catalog
+                    .runtime_configuration
+                    .multimodal_understanding_candidate_is_enabled(
+                        selection.provider_id.as_str(),
+                        selection.model_id.as_str(),
+                    )
+                {
+                    return Err(format!(
+                        "Provider `{}` model `{}` is not enabled as a multimodal understanding candidate.",
+                        selection.provider_id, selection.model_id
+                    ));
+                }
+                // candidate is the one immutable account route selected by the user.
+                // candidate 是用户选择的唯一不可变账号路由。
+                let candidate = model_candidates
+                    .iter()
+                    .find(|candidate| candidate.selection == *selection)
+                    .ok_or_else(|| {
+                        format!(
+                            "Provider `{}` model `{}` is not executable through connection `{}`.",
+                            selection.provider_id, selection.model_id, selection.connection_id
+                        )
+                    })?;
+                if !model_route_supports_media_understanding(
+                    &candidate.capabilities,
+                    request.capability,
+                ) {
+                    return Err(format!(
+                        "Provider `{}` model `{}` does not support capability `{:?}` with stable structured output.",
+                        selection.provider_id, selection.model_id, request.capability
+                    ));
+                }
+                if let Some(reasoning_effort) = reasoning_effort {
+                    validate_internal_reasoning_effort(&candidate.capabilities, *reasoning_effort)?;
+                }
+            }
+        }
+    }
+    // snapshot is rebuilt only after the complete closed backend selection is persisted.
+    // snapshot 仅在完整封闭后端选择成功持久化后重建。
+    let (_configuration, snapshot) = mutate_public_ai_configuration_and_publish_without_session_model_reconciliation_in_transaction(
+        &app,
+        &state,
+        runtime.as_ref(),
+        &current_configuration,
+        "保存媒体理解后端选择失败",
+        |configuration| {
+            if let Some(selection) = request.selection.clone() {
+                configuration
+                    .media_understanding_selections
+                    .insert(request.capability, selection);
+            } else {
+                configuration
+                    .media_understanding_selections
                     .remove(&request.capability);
             }
             Ok(())
@@ -8452,16 +8834,33 @@ pub(super) async fn service_save_public_ai_provider_tool_capability_enabled(
     // transaction 把能力校验串行化到工作台发布完成。
     let transaction = begin_public_ai_configuration_transaction().await;
     let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
-    let available = runtime.available_provider_tool_targets(&current_configuration)?;
-    if request.enabled
-        && !available
-            .iter()
-            .any(|candidate| candidate.target.contract.capability == request.capability)
-    {
-        return Err(format!(
-            "Provider tool capability `{:?}` has no available model and account.",
-            request.capability
-        ));
+    if request.enabled {
+        // settingsCatalog freezes provider-tool and conversation-model inventories to one generation.
+        // settingsCatalog 将供应商工具与会话模型目录冻结在同一代际。
+        let settings_catalog = runtime.settings_catalog_snapshot(&current_configuration)?;
+        // mediaModelCandidates is derived only for fixed media facades; search and fetch keep their direct-target rule.
+        // mediaModelCandidates 仅为固定媒体外壳派生；搜索与抓取继续遵循直连目标规则。
+        let media_model_candidates =
+            if media_understanding_resource_kind(request.capability).is_some() {
+                build_media_understanding_model_candidates(
+                    &settings_catalog.runtime_configuration,
+                    &settings_catalog.providers,
+                    &settings_catalog.catalogs,
+                )?
+            } else {
+                Vec::new()
+            };
+        if !provider_tool_capability_backend_is_available(
+            &settings_catalog.runtime_configuration,
+            request.capability,
+            &settings_catalog.available_provider_tool_targets,
+            &media_model_candidates,
+        ) {
+            return Err(format!(
+                "Provider tool capability `{:?}` has no available configured backend.",
+                request.capability
+            ));
+        }
     }
     let (_configuration, snapshot) = mutate_public_ai_configuration_and_publish_without_session_model_reconciliation_in_transaction(
         &app,
@@ -8846,7 +9245,29 @@ fn provider_tool_session_conflicts(
         BTreeSet<ProviderToolTargetSelection>,
     >,
 ) -> Result<Vec<PublicAiSessionProviderToolConflict>, String> {
-    let available = runtime.available_provider_tool_targets(configuration)?;
+    // settingsCatalog supplies the exact conversation routes needed to validate global media backends.
+    // settingsCatalog 提供校验全局媒体后端所需的精确会话路由。
+    let settings_catalog = runtime.settings_catalog_snapshot(configuration)?;
+    // available belongs to the same immutable catalog generation as every media model candidate.
+    // available 与全部媒体模型候选归属于同一份不可变目录代际。
+    let available = &settings_catalog.available_provider_tool_targets;
+    // mediaCapabilitiesEnabled avoids deriving an unrelated model inventory for sessions that use only search or fetch.
+    // mediaCapabilitiesEnabled 避免为仅使用搜索或抓取的会话派生无关模型目录。
+    let media_capabilities_enabled = enabled_capabilities
+        .iter()
+        .copied()
+        .any(|capability| media_understanding_resource_kind(capability).is_some());
+    // mediaModelCandidates applies the same structured-output and media-input route projection as settings.
+    // mediaModelCandidates 应用与设置页相同的结构化输出及媒体输入路由投影。
+    let media_model_candidates = if media_capabilities_enabled {
+        build_media_understanding_model_candidates(
+            &settings_catalog.runtime_configuration,
+            &settings_catalog.providers,
+            &settings_catalog.catalogs,
+        )?
+    } else {
+        Vec::new()
+    };
     let capabilities = enabled_capabilities.clone();
     let mut conflicts = Vec::new();
     for capability in capabilities {
@@ -8859,6 +9280,36 @@ fn provider_tool_session_conflicts(
                     capability
                 ),
             });
+            continue;
+        }
+        if media_understanding_resource_kind(capability).is_some() {
+            if !configuration
+                .media_understanding_selections
+                .contains_key(&capability)
+            {
+                conflicts.push(PublicAiSessionProviderToolConflict {
+                    capability,
+                    kind: String::from("missing_selection"),
+                    message: format!(
+                        "Media-understanding capability `{:?}` is enabled but has no configured backend.",
+                        capability
+                    ),
+                });
+            } else if !media_understanding_backend_is_available(
+                configuration,
+                capability,
+                available,
+                &media_model_candidates,
+            ) {
+                conflicts.push(PublicAiSessionProviderToolConflict {
+                    capability,
+                    kind: String::from("target_unavailable"),
+                    message: format!(
+                        "The configured backend for media-understanding capability `{:?}` is no longer available; configure it again before sending.",
+                        capability
+                    ),
+                });
+            }
             continue;
         }
         let Some(selection) = selections.get(&capability) else {
@@ -8901,6 +9352,90 @@ fn provider_tool_session_conflicts(
         });
     }
     Ok(conflicts)
+}
+
+/// Reports whether one configured media-understanding backend remains exactly executable.
+/// 报告一项已配置媒体理解后端是否仍可精确执行。
+///
+/// # Parameters
+/// 参数
+/// `configuration` owns the closed backend choice and candidate switch, `capability` identifies
+/// one fixed media tool, and the two slices are frozen provider-tool and conversation inventories.
+/// `configuration` 持有封闭后端选择与候选开关，`capability` 标识一个固定媒体工具，两个切片分别是
+/// 冻结的供应商工具目录与会话模型目录。
+///
+/// # Returns
+/// 返回值
+/// `true` only when the exact provider target or admitted structured-output model route still exists.
+/// 仅当精确供应商目标或已准入的结构化输出模型路由仍然存在时返回 `true`。
+fn media_understanding_backend_is_available(
+    configuration: &PersistedAiConfiguration,
+    capability: ProviderToolCapabilityKind,
+    available_provider_targets: &[AvailableProviderToolTarget],
+    model_candidates: &[PublicAiMediaUnderstandingModelCandidate],
+) -> bool {
+    let Some(backend) = configuration
+        .media_understanding_selections
+        .get(&capability)
+    else {
+        return false;
+    };
+    match backend {
+        MediaUnderstandingBackendSelection::ProviderTool { selection } => {
+            available_provider_targets.iter().any(|candidate| {
+                candidate.connection_id == selection.connection_id
+                    && candidate.target.target_id == selection.target_id
+                    && candidate.target.contract.capability == capability
+            })
+        }
+        MediaUnderstandingBackendSelection::ModelReplacement {
+            selection,
+            reasoning_effort,
+        } => {
+            configuration.multimodal_understanding_candidate_is_enabled(
+                selection.provider_id.as_str(),
+                selection.model_id.as_str(),
+            ) && model_candidates.iter().any(|candidate| {
+                candidate.selection == *selection
+                    && model_route_supports_media_understanding(&candidate.capabilities, capability)
+                    && reasoning_effort.is_none_or(|effort| {
+                        validate_internal_reasoning_effort(&candidate.capabilities, effort).is_ok()
+                    })
+            })
+        }
+    }
+}
+
+/// Reports whether one direct capability has an executable provider or replacement backend.
+/// 报告一项直连能力是否具有可执行的供应商后端或模型代替后端。
+///
+/// # Parameters
+/// 参数
+/// `configuration` owns media selections, `capability` selects the validation rule, and the two
+/// inventories belong to one settings-catalog generation.
+/// `configuration` 持有媒体选择，`capability` 选择校验规则，两份目录归属于同一设置目录代际。
+///
+/// # Returns
+/// 返回值
+/// `true` for an exact executable media backend or at least one matching ordinary direct target.
+/// 精确媒体后端可执行，或至少存在一个匹配的普通直连目标时返回 `true`。
+fn provider_tool_capability_backend_is_available(
+    configuration: &PersistedAiConfiguration,
+    capability: ProviderToolCapabilityKind,
+    available_provider_targets: &[AvailableProviderToolTarget],
+    model_candidates: &[PublicAiMediaUnderstandingModelCandidate],
+) -> bool {
+    if media_understanding_resource_kind(capability).is_some() {
+        return media_understanding_backend_is_available(
+            configuration,
+            capability,
+            available_provider_targets,
+            model_candidates,
+        );
+    }
+    available_provider_targets
+        .iter()
+        .any(|candidate| candidate.target.contract.capability == capability)
 }
 
 /// Filters historical selections to targets that still exist and remain enabled.
@@ -9078,8 +9613,8 @@ pub(crate) fn provider_tool_capability_key(capability: ProviderToolCapabilityKin
         .expect("provider tool capability must serialize as a string")
 }
 
-/// Reports whether the effective session has a valid selected image-understanding bridge.
-/// 判断当前会话生效配置是否具有有效的图片理解桥接目标。
+/// Returns every media resource backed by a valid understanding bridge for the effective session.
+/// 返回当前会话生效配置中由有效理解桥接承载的全部媒体资源。
 ///
 /// Inherited sessions read the current global defaults, while explicit session overrides remain isolated.
 /// 继承全局设置的会话读取当前全局默认值，会话显式覆盖则保持隔离。
@@ -9091,49 +9626,58 @@ pub(crate) fn provider_tool_capability_key(capability: ProviderToolCapabilityKin
 ///
 /// # Returns
 /// 返回值
-/// `true` only when the effective configuration enables and selects an available image-understanding target.
-/// 仅当生效配置启用并选中了可用图片理解目标时返回 `true`。
-pub(crate) fn public_ai_session_has_image_understanding_bridge(
+/// A closed set containing image, video, or audio only when the corresponding capability is enabled
+/// and its exact provider-tool or model-replacement backend remains executable.
+/// 返回封闭集合；仅当对应能力已启用且精确供应商工具或模型代替后端仍可执行时，
+/// 集合才包含图片、视频或音频。
+pub(crate) fn public_ai_session_media_understanding_bridge_kinds(
     runtime: &PublicAiRuntime,
     configuration: &PersistedAiConfiguration,
     runtime_state: Option<&vulcan_workbench_model::SessionRuntimeStateEntry>,
-) -> Result<bool, String> {
+) -> Result<BTreeSet<ResourceKind>, String> {
     let explicit_session_settings = runtime_state.is_some_and(|state| {
         state.provider_tool_settings_initialized && state.provider_tool_selections_overridden
     });
-    let (enabled, selection) = if explicit_session_settings {
+    // enabledCapabilities preserves the session switch layer while backend identity remains the
+    // globally configured closed media-backend selection.
+    // enabledCapabilities 保留会话开关层，而后端身份继续采用全局配置的封闭媒体后端选择。
+    let enabled_capabilities = if explicit_session_settings {
         let runtime_state = runtime_state.expect("explicit session settings require runtime state");
-        let enabled = session_provider_tool_enabled_capabilities_from_runtime(runtime_state)?;
-        let selections = session_provider_tool_selections_from_runtime(runtime_state)?;
-        (
-            enabled.contains(&ProviderToolCapabilityKind::ImageUnderstand),
-            selections
-                .get(&ProviderToolCapabilityKind::ImageUnderstand)
-                .cloned(),
-        )
+        session_provider_tool_enabled_capabilities_from_runtime(runtime_state)?
     } else {
-        (
-            configuration
-                .provider_tool_enabled_capabilities
-                .contains(&ProviderToolCapabilityKind::ImageUnderstand),
-            configuration
-                .provider_tool_selections
-                .get(&ProviderToolCapabilityKind::ImageUnderstand)
-                .cloned(),
-        )
+        configuration.provider_tool_enabled_capabilities.clone()
     };
-    if !enabled {
-        return Ok(false);
+    let settings_catalog = runtime.settings_catalog_snapshot(configuration)?;
+    // availableProviderTargets shares one immutable generation with modelCandidates.
+    // availableProviderTargets 与 modelCandidates 共享同一份不可变目录代际。
+    let available_provider_targets = &settings_catalog.available_provider_tool_targets;
+    let model_candidates = build_media_understanding_model_candidates(
+        &settings_catalog.runtime_configuration,
+        &settings_catalog.providers,
+        &settings_catalog.catalogs,
+    )?;
+    let mut bridged_media_kinds = BTreeSet::new();
+    for capability in [
+        ProviderToolCapabilityKind::ImageUnderstand,
+        ProviderToolCapabilityKind::VideoUnderstand,
+        ProviderToolCapabilityKind::AudioUnderstand,
+    ] {
+        if !enabled_capabilities.contains(&capability) {
+            continue;
+        }
+        if media_understanding_backend_is_available(
+            &settings_catalog.runtime_configuration,
+            capability,
+            available_provider_targets,
+            &model_candidates,
+        ) {
+            bridged_media_kinds.insert(
+                media_understanding_resource_kind(capability)
+                    .expect("closed media-understanding capability must map to a resource"),
+            );
+        }
     }
-    let Some(selection) = selection else {
-        return Ok(false);
-    };
-    let available = runtime.available_provider_tool_targets(configuration)?;
-    Ok(available.iter().any(|candidate| {
-        candidate.connection_id == selection.connection_id
-            && candidate.target.target_id == selection.target_id
-            && candidate.target.contract.capability == ProviderToolCapabilityKind::ImageUnderstand
-    }))
+    Ok(bridged_media_kinds)
 }
 
 /// Reports whether one exact provider-model-account selection is still executable.
@@ -10246,6 +10790,26 @@ fn build_public_ai_settings_snapshot(
         &available_provider_tool_targets,
         &configuration.provider_tool_selections,
     );
+    // multimodalUnderstandingCandidateModels exposes the shared provider-model switch without
+    // requiring the browser to decode persisted composite keys.
+    // multimodalUnderstandingCandidateModels 公开共享供应商模型开关，浏览器无需解析持久化组合键。
+    let multimodal_understanding_candidate_models = configuration
+        .multimodal_understanding_candidate_models
+        .iter()
+        .filter_map(|key| {
+            let (provider_id, model_id) =
+                PersistedAiConfiguration::provider_model_key_parts(key.as_str())?;
+            Some(PublicAiMultimodalUnderstandingCandidateRecord {
+                provider_id: provider_id.to_string(),
+                model_id: model_id.to_string(),
+            })
+        })
+        .collect();
+    // mediaUnderstandingModelCandidates remains independent from conversation publication and
+    // the user admission switch so settings can both enable and select exact account routes.
+    // mediaUnderstandingModelCandidates 与会话发布和用户准入开关相互独立，使设置可启用并选择精确账号路由。
+    let media_understanding_model_candidates =
+        build_media_understanding_model_candidates(configuration, &providers, &catalogs)?;
     let internal_inference_candidates =
         build_internal_inference_candidates(configuration, &providers, &catalogs)?;
     let inference_route_diagnostics =
@@ -10296,6 +10860,7 @@ fn build_public_ai_settings_snapshot(
         .collect();
     Ok(PublicAiSettingsSnapshot {
         context_window_policy_overrides: configuration.context_window_policy_overrides,
+        context_compaction_window_nodes: configuration.context_compaction_window_nodes.clone(),
         provider_context_window_policy_overrides: configuration
             .provider_context_window_policy_overrides
             .clone(),
@@ -10368,6 +10933,9 @@ fn build_public_ai_settings_snapshot(
             })
             .collect(),
         provider_tool_selections,
+        multimodal_understanding_candidate_models,
+        media_understanding_selections: configuration.media_understanding_selections.clone(),
+        media_understanding_model_candidates,
         provider_tool_enabled_capabilities: configuration
             .provider_tool_enabled_capabilities
             .clone(),
@@ -10497,6 +11065,193 @@ fn push_internal_inference_route_diagnostic(
 /// 返回值
 /// Stable candidates that preserve product, credential, binding, operation, and usage scope.
 /// 返回保留产品、凭据、绑定、操作与用途范围的稳定候选。
+/// Maps one media-understanding capability to its required model input resource.
+/// 将一项媒体理解能力映射到模型必须支持的输入资源。
+///
+/// # Parameters
+/// 参数
+/// `capability` is the exact semantic provider-tool capability.
+/// `capability` 是精确的语义供应商工具能力。
+///
+/// # Returns
+/// 返回值
+/// The required media kind, or absence for every non-understanding capability.
+/// 返回所需媒体类型；非理解能力返回空。
+fn media_understanding_resource_kind(
+    capability: ProviderToolCapabilityKind,
+) -> Option<ResourceKind> {
+    match capability {
+        ProviderToolCapabilityKind::ImageUnderstand => Some(ResourceKind::Image),
+        ProviderToolCapabilityKind::VideoUnderstand => Some(ResourceKind::Video),
+        ProviderToolCapabilityKind::AudioUnderstand => Some(ResourceKind::Audio),
+        _ => None,
+    }
+}
+
+/// Reports whether one exact model route can replace a selected media-understanding backend.
+/// 报告一条精确模型路由能否替代所选媒体理解后端。
+///
+/// # Parameters
+/// 参数
+/// `capabilities` is the resolved route contract and `capability` selects the media kind.
+/// `capabilities` 是解析后的路由契约，`capability` 选择媒体类型。
+///
+/// # Returns
+/// 返回值
+/// `true` only for conversation routes with the required input and stable JSON output.
+/// 仅对支持所需输入、会话能力及稳定 JSON 输出的路由返回 `true`。
+fn model_route_supports_media_understanding(
+    capabilities: &ModelCapabilities,
+    capability: ProviderToolCapabilityKind,
+) -> bool {
+    let Some(resource_kind) = media_understanding_resource_kind(capability) else {
+        return false;
+    };
+    capabilities
+        .operations
+        .contains(&AiOperation::ConversationRespond)
+        && capabilities.input_resources.contains(&resource_kind)
+        && capabilities.structured_output != StructuredOutputCapability::Unsupported
+}
+
+/// Projects model media-input declarations through the encoder set of one frozen protocol route.
+/// 将模型媒体输入声明投影到一条冻结协议路由实际注册的编码器集合。
+///
+/// # Parameters
+/// 参数
+/// `capabilities` is the resolved model contract and `protocol_profile_id` is its immutable route binding.
+/// `capabilities` 是已解析模型契约，`protocol_profile_id` 是其不可变路由绑定。
+///
+/// # Returns
+/// 返回值
+/// A cloned capability contract whose image, video, and audio inputs are retained only when the
+/// selected protocol can encode them; unrelated resource declarations are preserved unchanged.
+/// 返回克隆后的能力契约；仅当所选协议可编码时保留图片、视频与音频输入，其他资源声明保持不变。
+fn protocol_projected_media_capabilities(
+    capabilities: &ModelCapabilities,
+    protocol_profile_id: &str,
+) -> ModelCapabilities {
+    // projected prevents model metadata from claiming a media route that the selected wire protocol cannot carry.
+    // projected 防止模型元数据声明所选 Wire 协议无法承载的媒体路由。
+    let mut projected = capabilities.clone();
+    projected.input_resources.retain(|resource_kind| {
+        let attachment_kind = match resource_kind {
+            ResourceKind::Image => Some(ConversationAttachmentKind::Image),
+            ResourceKind::Video => Some(ConversationAttachmentKind::Video),
+            ResourceKind::Audio => Some(ConversationAttachmentKind::Audio),
+            ResourceKind::File => None,
+        };
+        attachment_kind.is_none_or(|attachment_kind| {
+            vulcan_agent_runtime::provider_input_normalizer::protocol_profile_supports_attachment_kind(
+                protocol_profile_id,
+                attachment_kind,
+            )
+        })
+    });
+    if !vulcan_agent_runtime::provider_input_normalizer::protocol_profile_supports_structured_output(
+        protocol_profile_id,
+        projected.structured_output,
+    ) {
+        // Unsupported is the only honest projection when the frozen encoder cannot represent the model policy.
+        // 当冻结编码器无法表达模型策略时，Unsupported 是唯一诚实的投影结果。
+        projected.structured_output = StructuredOutputCapability::Unsupported;
+    }
+    projected
+}
+
+/// Builds every executable account route eligible for at least one media-understanding kind.
+/// 构建至少符合一种媒体理解类型的全部可执行账号路由。
+///
+/// # Parameters
+/// 参数
+/// `configuration` owns credentials, `providers` owns labels, and `catalogs` owns effective routes.
+/// `configuration` 持有凭据，`providers` 持有展示名，`catalogs` 持有生效路由。
+///
+/// # Returns
+/// 返回值
+/// Stable sorted route candidates independent from conversation publication switches.
+/// 返回与会话发布开关独立、稳定排序的路由候选。
+fn build_media_understanding_model_candidates(
+    configuration: &PersistedAiConfiguration,
+    providers: &vulcan_provider_adapters::ProviderRegistry,
+    catalogs: &BTreeMap<String, ConnectionModelCatalog>,
+) -> Result<Vec<PublicAiMediaUnderstandingModelCandidate>, String> {
+    let mut candidates = Vec::new();
+    for connection in configuration.connection_graph.connections.values() {
+        if configuration.connection_is_pending_validation(connection.id.as_str()) {
+            continue;
+        }
+        let Some(catalog) = catalogs.get(connection.id.as_str()) else {
+            continue;
+        };
+        let provider = providers
+            .provider(connection.provider_id.as_str())
+            .ok_or_else(|| {
+                format!(
+                    "Provider `{}` referenced by connection `{}` is not registered.",
+                    connection.provider_id, connection.id
+                )
+            })?;
+        let entry = provider
+            .service_entries
+            .iter()
+            .find(|entry| entry.id == connection.service_entry_id)
+            .ok_or_else(|| {
+                format!(
+                    "Service entry `{}` referenced by connection `{}` is not registered.",
+                    connection.service_entry_id, connection.id
+                )
+            })?;
+        for model in &catalog.models {
+            let Some(protocol_profile_id) = effective_catalog_model_protocol_id(model) else {
+                continue;
+            };
+            // candidateCapabilities intersects model declarations with the exact protocol encoder set.
+            // candidateCapabilities 将模型声明与精确协议编码器集合取交集。
+            let candidate_capabilities =
+                protocol_projected_media_capabilities(&model.capabilities, protocol_profile_id);
+            let supports_any_media = [
+                ProviderToolCapabilityKind::ImageUnderstand,
+                ProviderToolCapabilityKind::VideoUnderstand,
+                ProviderToolCapabilityKind::AudioUnderstand,
+            ]
+            .into_iter()
+            .any(|capability| {
+                model_route_supports_media_understanding(&candidate_capabilities, capability)
+            });
+            if !supports_any_media {
+                continue;
+            }
+            candidates.push(PublicAiMediaUnderstandingModelCandidate {
+                provider_display_name: provider.display_name.clone(),
+                service_entry_display_name: entry.display_name.clone(),
+                connection_display_name: connection.display_name.clone(),
+                model_display_name: model.display_name.clone(),
+                selection: ActiveAiModelSelection {
+                    provider_id: connection.provider_id.clone(),
+                    model_id: model.id.clone(),
+                    connection_id: connection.id.clone(),
+                },
+                catalog_generation: catalog.generation,
+                capabilities: candidate_capabilities,
+            });
+        }
+    }
+    candidates.sort_by(|left, right| {
+        (
+            left.provider_display_name.as_str(),
+            left.model_display_name.as_str(),
+            left.connection_display_name.as_str(),
+        )
+            .cmp(&(
+                right.provider_display_name.as_str(),
+                right.model_display_name.as_str(),
+                right.connection_display_name.as_str(),
+            ))
+    });
+    Ok(candidates)
+}
+
 fn build_internal_inference_candidates(
     configuration: &PersistedAiConfiguration,
     providers: &vulcan_provider_adapters::ProviderRegistry,
@@ -11090,6 +11845,83 @@ fn ensure_no_rerank_overrides(overrides: &InternalModelOverrides) -> Result<(), 
     Ok(())
 }
 
+/// Invalidates node-dependent budget fingerprints for every locked active or archived session.
+/// 使所有已锁定活动或归档会话中依赖节点的预算指纹失效。
+///
+/// # Parameters
+/// 参数
+/// `workspace` is the detached candidate whose session node ids remain unchanged.
+/// `workspace` 是会话节点 ID 保持不变的独立候选工作区。
+///
+/// # Returns
+/// 返回值
+/// Exact session ids whose in-memory live budget snapshots must also be removed at commit.
+/// 返回提交时还必须移除内存 live 预算快照的精确会话 ID。
+fn invalidate_context_compaction_window_budget_fingerprints(
+    workspace: &mut vulcan_workspace_store::workspace_store::WorkspaceSnapshot,
+) -> BTreeSet<crate::SessionId> {
+    // invalidatedSessionIds identifies only sessions whose selected node resolves through global values.
+    // invalidatedSessionIds 仅标识所选节点通过全局数值解析的会话。
+    let mut invalidated_session_ids = BTreeSet::new();
+    for (session_id, runtime_state) in workspace
+        .session_runtime_state
+        .iter_mut()
+        .chain(workspace.archived_session_runtime_state.iter_mut())
+    {
+        if runtime_state.context_compaction_window_node_id.is_none() {
+            continue;
+        }
+        runtime_state.live_context_budget_fingerprint = None;
+        runtime_state.anchor_context_budget_fingerprint = None;
+        invalidated_session_ids.insert(*session_id);
+    }
+    invalidated_session_ids
+}
+
+/// Publishes changed global node values with atomic session-budget invalidation.
+/// 以原子会话预算失效方式发布已变化的全局节点数值。
+///
+/// # Parameters
+/// 参数
+/// `app`, `state`, `runtime`, and `configuration` identify the exact committed generation;
+/// `nodes_changed` distinguishes a real value change from an idempotent save.
+/// `app`、`state`、`runtime` 与 `configuration` 标识精确提交代际；`nodes_changed`
+/// 区分真实数值变化与幂等保存。
+///
+/// # Returns
+/// 返回值
+/// The atomically installed Workbench snapshot, or one explicit publication error.
+/// 返回原子安装的工作台快照，或一条明确的发布错误。
+fn publish_public_ai_workbench_after_context_compaction_window_nodes_change(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    runtime: &PublicAiRuntime,
+    configuration: &PersistedAiConfiguration,
+    nodes_changed: bool,
+) -> Result<WorkbenchSnapshot, String> {
+    publish_public_ai_workbench_with_workspace_reconciliation_and_commit(
+        app,
+        state,
+        runtime,
+        configuration,
+        |workspace| {
+            // invalidatedSessionIds is empty for an idempotent save and preserves every route lease.
+            // invalidatedSessionIds 在幂等保存时为空，并始终保留全部路由租约。
+            let invalidated_session_ids = nodes_changed
+                .then(|| invalidate_context_compaction_window_budget_fingerprints(workspace))
+                .unwrap_or_default();
+            Ok(
+                PublicAiWorkspaceReconciliation::context_budget_invalidations(
+                    invalidated_session_ids,
+                ),
+            )
+        },
+        true,
+        "context_compaction_window_nodes",
+        || Ok(()),
+    )
+}
+
 /// Publishes public AI model rows through the existing shared workbench event.
 /// 通过既有共享工作台事件发布公共 AI 模型行。
 ///
@@ -11187,6 +12019,9 @@ struct PublicAiWorkspaceReconciliation {
     /// Changed sessions whose process-local model route leases must be revoked.
     /// 已修改且必须撤销进程内模型路由租约的会话。
     revoked_session_ids: BTreeSet<crate::SessionId>,
+    /// Sessions whose node-dependent in-memory context budgets must be discarded at commit.
+    /// 提交时必须丢弃依赖节点的内存上下文预算的会话。
+    invalidated_context_budget_session_ids: BTreeSet<crate::SessionId>,
 }
 
 impl PublicAiWorkspaceReconciliation {
@@ -11206,6 +12041,7 @@ impl PublicAiWorkspaceReconciliation {
         Self {
             changed_session_ids: session_ids.clone(),
             revoked_session_ids: session_ids,
+            invalidated_context_budget_session_ids: BTreeSet::new(),
         }
     }
 
@@ -11225,6 +12061,27 @@ impl PublicAiWorkspaceReconciliation {
         Self {
             changed_session_ids: session_ids,
             revoked_session_ids: BTreeSet::new(),
+            invalidated_context_budget_session_ids: BTreeSet::new(),
+        }
+    }
+
+    /// Creates an in-memory budget invalidation that preserves durable controls and route leases.
+    /// 创建一份保留持久控制项与路由租约的内存预算失效结果。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `session_ids` identifies locked active or archived sessions affected by changed node values.
+    /// `session_ids` 标识受节点数值变化影响的已锁定活动或归档会话。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A reconciliation that invalidates context budgets without scheduling redundant addon writes.
+    /// 返回一份使上下文预算失效且不安排冗余 addon 写入的协调结果。
+    fn context_budget_invalidations(session_ids: BTreeSet<crate::SessionId>) -> Self {
+        Self {
+            changed_session_ids: BTreeSet::new(),
+            revoked_session_ids: BTreeSet::new(),
+            invalidated_context_budget_session_ids: session_ids,
         }
     }
 }
@@ -11326,35 +12183,42 @@ where
         // plannedWorkspace and changedSessionIds remain detached until every fallible projection
         // and lease-exclusion check has succeeded.
         // plannedWorkspace 与 changedSessionIds 在全部可失败投影及租约排除检查成功前保持独立。
-        let (planned_workspace, revoked_session_ids, changed_session_ids) =
-            if let Some(workspace) = guard.workspace_snapshot.as_ref() {
-                // forcedWorkspace applies explicit access revocation before catalog-only fallback.
-                // forcedWorkspace 在仅目录回退前应用显式访问撤销。
-                let mut forced_workspace = workspace.clone();
-                let explicit_reconciliation = reconcile_workspace(&mut forced_workspace)?;
-                let revoked_session_ids = explicit_reconciliation.revoked_session_ids;
-                let (planned_workspace, catalog_changed_session_ids) = if reconcile_session_models {
-                    plan_reconciled_session_model_selections(
-                        &forced_workspace,
-                        runtime,
-                        configuration,
-                        &catalogs,
-                    )?
-                } else {
-                    // Provider-tool changes do not change the model route owned by this session.
-                    // 供应商工具变更不会改变该会话拥有的模型路由。
-                    (forced_workspace, BTreeSet::new())
-                };
-                let mut changed_session_ids = explicit_reconciliation.changed_session_ids;
-                changed_session_ids.extend(catalog_changed_session_ids);
-                (
-                    Some(planned_workspace),
-                    revoked_session_ids,
-                    changed_session_ids,
-                )
+        let (
+            planned_workspace,
+            revoked_session_ids,
+            changed_session_ids,
+            invalidated_context_budget_session_ids,
+        ) = if let Some(workspace) = guard.workspace_snapshot.as_ref() {
+            // forcedWorkspace applies explicit access revocation before catalog-only fallback.
+            // forcedWorkspace 在仅目录回退前应用显式访问撤销。
+            let mut forced_workspace = workspace.clone();
+            let PublicAiWorkspaceReconciliation {
+                mut changed_session_ids,
+                revoked_session_ids,
+                invalidated_context_budget_session_ids,
+            } = reconcile_workspace(&mut forced_workspace)?;
+            let (planned_workspace, catalog_changed_session_ids) = if reconcile_session_models {
+                plan_reconciled_session_model_selections(
+                    &forced_workspace,
+                    runtime,
+                    configuration,
+                    &catalogs,
+                )?
             } else {
-                (None, BTreeSet::new(), BTreeSet::new())
+                // Provider-tool changes do not change the model route owned by this session.
+                // 供应商工具变更不会改变该会话拥有的模型路由。
+                (forced_workspace, BTreeSet::new())
             };
+            changed_session_ids.extend(catalog_changed_session_ids);
+            (
+                Some(planned_workspace),
+                revoked_session_ids,
+                changed_session_ids,
+                invalidated_context_budget_session_ids,
+            )
+        } else {
+            (None, BTreeSet::new(), BTreeSet::new(), BTreeSet::new())
+        };
         // selectedSessionId and selectedRuntimeState identify the same candidate workbench owner
         // for the shared lease-aware projection helper.
         // selectedSessionId 与 selectedRuntimeState 为共享租约感知投影辅助函数标识同一候选工作台所有者。
@@ -11366,6 +12230,17 @@ where
                 .session_runtime_state
                 .get(&workspace.selected_session)
         });
+        // plannedLiveContextBudgets removes stale node-derived snapshots without touching other sessions.
+        // plannedLiveContextBudgets 移除依赖旧节点值的快照，同时不影响其他会话。
+        let planned_live_context_budgets = if invalidated_context_budget_session_ids.is_empty() {
+            None
+        } else {
+            let mut live_context_budgets = guard.live_context_budgets.clone();
+            live_context_budgets.retain(|session_id, _| {
+                !invalidated_context_budget_session_ids.contains(session_id)
+            });
+            Some(live_context_budgets)
+        };
         // effectiveSelection prefers the immutable process-local session lease before current catalogs.
         // effectiveSelection 在当前目录之前优先采用进程内不可变会话租约。
         let effective_selection = if selected_session_id
@@ -11384,9 +12259,9 @@ where
                 selected_runtime_state,
             )?
         };
-        // bridgedImageUnderstanding freezes the exact attachment bridge result for this candidate.
-        // bridgedImageUnderstanding 冻结当前候选的精确附件桥接结果。
-        let bridged_image_understanding = public_ai_session_has_image_understanding_bridge(
+        // bridgedMediaKinds freezes every exact attachment bridge result for this candidate.
+        // bridgedMediaKinds 冻结当前候选的每一项精确附件桥接结果。
+        let bridged_media_kinds = public_ai_session_media_understanding_bridge_kinds(
             runtime,
             configuration,
             selected_runtime_state,
@@ -11402,6 +12277,47 @@ where
         // plannedWorkbench 把全部浏览器可见变更隔离到最终提交边界。
         let mut planned_workbench = guard.workbench.clone();
         planned_workbench.providers = rows;
+        // contextCompactionWindowNodes publishes the same validated configuration generation as providers.
+        // contextCompactionWindowNodes 与供应商一起发布同一份已校验配置代际。
+        planned_workbench.context_compaction_window_nodes = configuration
+            .context_compaction_window_nodes
+            .nodes
+            .iter()
+            .map(|node| ContextCompactionWindowNodeSummary {
+                id: node.id.as_str().to_string(),
+                tokens: node.tokens,
+            })
+            .collect();
+        // selectedNodeId remains session-owned and is never replaced by the global token values.
+        // selectedNodeId 始终由会话持有，绝不会被全局 Token 数值替代。
+        planned_workbench.session_context_compaction_window_node_id = selected_runtime_state
+            .and_then(|runtime_state| runtime_state.context_compaction_window_node_id)
+            .map(|node_id| node_id.as_str().to_string());
+        if selected_session_id
+            .is_some_and(|session_id| invalidated_context_budget_session_ids.contains(&session_id))
+        {
+            // contextUsage is rebuilt from historical usage and the new node value in the same generation.
+            // contextUsage 在同一代际中根据历史用量与新节点值重新构建。
+            let live_context_budgets = planned_live_context_budgets
+                .as_ref()
+                .unwrap_or(&guard.live_context_budgets);
+            let compression_window_limit =
+                crate::context_compaction_window_limit_from_configuration(
+                    selected_runtime_state,
+                    Some(configuration),
+                );
+            planned_workbench.context_usage = selected_session_id.and_then(|session_id| {
+                crate::context_usage_snapshot_from_runtime_state(
+                    session_id,
+                    selected_runtime_state,
+                    live_context_budgets,
+                    effective_selection
+                        .as_ref()
+                        .map(|selection| &selection.model.capabilities),
+                    compression_window_limit,
+                )
+            });
+        }
         if let Some(provider_configuration) = guard
             .agent_runtime
             .as_ref()
@@ -11415,10 +12331,13 @@ where
             );
             planned_workbench.composer_attachment_capabilities =
                 crate::composer_attachment_capabilities(
+                    effective_selection.as_ref().map(|selection| {
+                        selection.route.protocol_route.protocol_profile_id.as_str()
+                    }),
                     effective_selection
                         .as_ref()
                         .map(|selection| &selection.model.capabilities),
-                    bridged_image_understanding,
+                    &bridged_media_kinds,
                 );
         }
         // leaseScopeIds materializes the exact sessions proven unleased during planning.
@@ -11462,6 +12381,9 @@ where
         // 已发布的供应商投影是新的权威快照，必须以更高版本覆盖 WebUI 中的旧快照；
         // 以下赋值之后不再存在可失败操作。
         guard.workspace_snapshot = planned_workspace;
+        if let Some(planned_live_context_budgets) = planned_live_context_budgets {
+            guard.live_context_budgets = planned_live_context_budgets;
+        }
         guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
         planned_workbench.revision = guard.workbench_generation;
         guard.workbench = planned_workbench;
@@ -11612,6 +12534,25 @@ fn remove_connection_from_configuration(
     configuration
         .provider_tool_selections
         .retain(|_, selection| selection.connection_id != connection_id);
+    // Media backends and native extension sets freeze exact accounts; deleting an account clears
+    // only those references and deliberately leaves the independent capability switches unchanged.
+    // 媒体后端与原生扩展集合冻结精确账号；删除账号时仅清理这些引用，并有意保留独立能力开关不变。
+    configuration
+        .media_understanding_selections
+        .retain(|_, backend| match backend {
+            MediaUnderstandingBackendSelection::ProviderTool { selection } => {
+                selection.connection_id != connection_id
+            }
+            MediaUnderstandingBackendSelection::ModelReplacement { selection, .. } => {
+                selection.connection_id != connection_id
+            }
+        });
+    for selections in configuration.provider_extension_target_sets.values_mut() {
+        selections.retain(|selection| selection.connection_id != connection_id);
+    }
+    configuration
+        .provider_extension_target_sets
+        .retain(|_, selections| !selections.is_empty());
     Ok(())
 }
 
@@ -11759,8 +12700,389 @@ fn validate_custom_model_protocol_preferences(
 }
 
 #[cfg(test)]
+mod context_compaction_window_node_tests {
+    use super::*;
+    use vulcan_context::ContextCompactionWindowNodeId;
+    use vulcan_workbench_model::SessionRuntimeStateEntry;
+
+    /// Verifies changed global node values invalidate only locked active and archived budgets.
+    /// 验证全局节点数值变化只使已锁定活动与归档会话的预算失效。
+    #[test]
+    fn changed_node_values_invalidate_locked_session_budgets_only() {
+        // activeLockedId identifies a visible session whose node resolves through global values.
+        // activeLockedId 标识节点通过全局数值解析的可见会话。
+        let active_locked_id = crate::SessionId::from_u128(0x6201);
+        // activeUnlockedId identifies a visible default-window session that must remain untouched.
+        // activeUnlockedId 标识必须保持不变的可见默认窗口会话。
+        let active_unlocked_id = crate::SessionId::from_u128(0x6202);
+        // archivedLockedId proves archived session state follows the same invalidation contract.
+        // archivedLockedId 证明归档会话状态遵循相同失效契约。
+        let archived_locked_id = crate::SessionId::from_u128(0x6203);
+        // lockedState carries both budget and assembly fingerprints to prove only budget identity changes.
+        // lockedState 同时携带预算与组装指纹，用于证明只有预算身份发生变化。
+        let locked_state = SessionRuntimeStateEntry {
+            context_compaction_window_node_id: Some(
+                ContextCompactionWindowNodeId::CompressionWindow2,
+            ),
+            live_context_budget_fingerprint: Some(String::from("live-budget")),
+            live_context_assembly_fingerprint: Some(String::from("live-assembly")),
+            anchor_context_budget_fingerprint: Some(String::from("anchor-budget")),
+            anchor_context_assembly_fingerprint: Some(String::from("anchor-assembly")),
+            ..SessionRuntimeStateEntry::default()
+        };
+        // unlockedState carries stale-looking values that are independent of global node configuration.
+        // unlockedState 携带看似过期但与全局节点配置无关的值。
+        let unlocked_state = SessionRuntimeStateEntry {
+            live_context_budget_fingerprint: Some(String::from("unlocked-live-budget")),
+            anchor_context_budget_fingerprint: Some(String::from("unlocked-anchor-budget")),
+            ..SessionRuntimeStateEntry::default()
+        };
+        // workspace contains both active and archived runtime-state stores used by production publication.
+        // workspace 包含生产发布使用的活动与归档运行态存储。
+        let mut workspace = vulcan_workspace_store::workspace_store::WorkspaceSnapshot {
+            task_projects: Vec::new(),
+            archived_task_projects: Vec::new(),
+            sessions: Vec::new(),
+            archived_sessions: Vec::new(),
+            session_messages: BTreeMap::new(),
+            archived_session_messages: BTreeMap::new(),
+            session_compactions: BTreeMap::new(),
+            archived_session_compactions: BTreeMap::new(),
+            session_runtime_state: BTreeMap::from([
+                (active_locked_id, locked_state.clone()),
+                (active_unlocked_id, unlocked_state),
+            ]),
+            archived_session_runtime_state: BTreeMap::from([(archived_locked_id, locked_state)]),
+            session_run_phases: BTreeMap::new(),
+            expanded_task_projects: BTreeSet::new(),
+            selected_session: active_locked_id,
+            hydrated_session_ids: BTreeSet::from([
+                active_locked_id,
+                active_unlocked_id,
+                archived_locked_id,
+            ]),
+        };
+
+        // invalidatedSessionIds must include every locked state and no default-window state.
+        // invalidatedSessionIds 必须包含全部锁定状态，且不包含默认窗口状态。
+        let invalidated_session_ids =
+            invalidate_context_compaction_window_budget_fingerprints(&mut workspace);
+
+        assert_eq!(
+            invalidated_session_ids,
+            BTreeSet::from([active_locked_id, archived_locked_id])
+        );
+        for session_id in [active_locked_id, archived_locked_id] {
+            let runtime_state = workspace
+                .session_runtime_state
+                .get(&session_id)
+                .or_else(|| workspace.archived_session_runtime_state.get(&session_id))
+                .expect("locked runtime state should remain present");
+            assert_eq!(runtime_state.live_context_budget_fingerprint, None);
+            assert_eq!(runtime_state.anchor_context_budget_fingerprint, None);
+            assert_eq!(
+                runtime_state.live_context_assembly_fingerprint.as_deref(),
+                Some("live-assembly")
+            );
+            assert_eq!(
+                runtime_state.anchor_context_assembly_fingerprint.as_deref(),
+                Some("anchor-assembly")
+            );
+        }
+        let unlocked_runtime_state = workspace
+            .session_runtime_state
+            .get(&active_unlocked_id)
+            .expect("unlocked runtime state should remain present");
+        assert_eq!(
+            unlocked_runtime_state
+                .live_context_budget_fingerprint
+                .as_deref(),
+            Some("unlocked-live-budget")
+        );
+        assert_eq!(
+            unlocked_runtime_state
+                .anchor_context_budget_fingerprint
+                .as_deref(),
+            Some("unlocked-anchor-budget")
+        );
+        let reconciliation = PublicAiWorkspaceReconciliation::context_budget_invalidations(
+            invalidated_session_ids.clone(),
+        );
+        assert!(reconciliation.changed_session_ids.is_empty());
+        assert!(reconciliation.revoked_session_ids.is_empty());
+        assert_eq!(
+            reconciliation.invalidated_context_budget_session_ids,
+            invalidated_session_ids
+        );
+    }
+}
+
+#[cfg(test)]
 mod inference_settings_route_tests {
     use super::*;
+
+    /// Verifies a media capability can be enabled with only an admitted model-replacement route.
+    /// 验证媒体能力仅凭已准入的模型代替路由即可启用。
+    #[test]
+    fn media_capability_backend_accepts_model_replacement_without_provider_target() {
+        // selection is the exact provider-model-account route shared by configuration and inventory.
+        // selection 是配置与目录共同持有的精确供应商、模型、账号路由。
+        let selection = ActiveAiModelSelection {
+            provider_id: String::from("replacement-provider"),
+            model_id: String::from("replacement-video-model"),
+            connection_id: String::from("replacement-account"),
+        };
+        // configuration enables the one shared candidate switch and selects it for video understanding.
+        // configuration 启用唯一共享候选开关，并将其选作视频理解后端。
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration.set_multimodal_understanding_candidate_enabled(
+            selection.provider_id.as_str(),
+            selection.model_id.as_str(),
+            true,
+        );
+        configuration.media_understanding_selections.insert(
+            ProviderToolCapabilityKind::VideoUnderstand,
+            MediaUnderstandingBackendSelection::ModelReplacement {
+                selection: selection.clone(),
+                reasoning_effort: None,
+            },
+        );
+        // candidate proves an executable conversation route with video input and stable JSON output.
+        // candidate 证明存在支持视频输入和稳定 JSON 输出的可执行会话路由。
+        let candidate = PublicAiMediaUnderstandingModelCandidate {
+            provider_display_name: String::from("Replacement Provider"),
+            service_entry_display_name: String::from("Chat"),
+            connection_display_name: String::from("Replacement Account"),
+            model_display_name: String::from("Replacement Video Model"),
+            selection,
+            catalog_generation: 1,
+            capabilities: ModelCapabilities {
+                operations: vec![AiOperation::ConversationRespond],
+                input_resources: vec![ResourceKind::Video],
+                structured_output: StructuredOutputCapability::JsonObject,
+                ..ModelCapabilities::default()
+            },
+        };
+
+        assert!(provider_tool_capability_backend_is_available(
+            &configuration,
+            ProviderToolCapabilityKind::VideoUnderstand,
+            &[],
+            &[candidate],
+        ));
+        // search remains target-owned and cannot borrow the unrelated replacement inventory.
+        // 搜索仍由目标持有，不能借用无关的模型代替目录。
+        assert!(!provider_tool_capability_backend_is_available(
+            &configuration,
+            ProviderToolCapabilityKind::WebSearch,
+            &[],
+            &[],
+        ));
+    }
+
+    /// Verifies account removal clears every exact media and native-extension reference it owns.
+    /// 验证账号移除会清理其持有的全部精确媒体与原生扩展引用。
+    #[test]
+    fn connection_removal_clears_exact_media_and_extension_references() {
+        // removedConnection is the only configured account and therefore needs no replacement default.
+        // removedConnection 是唯一已配置账号，因此不需要替代默认账号。
+        let removed_connection = CredentialConnection {
+            id: String::from("removed-account"),
+            provider_id: String::from("removed-provider"),
+            service_entry_id: String::from("chat"),
+            credential_profile_id: String::from("api-key"),
+            credential_mode: CredentialMode::Token,
+            credential_id: String::from("removed-credential"),
+            display_name: String::from("Removed Account"),
+            secret_reference: String::from("removed-secret"),
+            management_secret_reference: None,
+            service_origin_override: None,
+            prompt_cache_by_protocol: BTreeMap::new(),
+        };
+        // removedTarget and retainedTarget prove cleanup is exact rather than capability-wide.
+        // removedTarget 与 retainedTarget 证明清理按精确账号执行，而不是整项能力清空。
+        let removed_target = ProviderToolTargetSelection {
+            connection_id: removed_connection.id.clone(),
+            target_id: String::from("removed-target"),
+        };
+        let retained_target = ProviderToolTargetSelection {
+            connection_id: String::from("retained-account"),
+            target_id: String::from("retained-target"),
+        };
+        // configuration contains both media backend modes plus a mixed native-extension set.
+        // configuration 同时包含两种媒体后端模式与一个混合原生扩展集合。
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration
+            .connection_graph
+            .connections
+            .insert(removed_connection.id.clone(), removed_connection.clone());
+        configuration.media_understanding_selections.insert(
+            ProviderToolCapabilityKind::ImageUnderstand,
+            MediaUnderstandingBackendSelection::ProviderTool {
+                selection: removed_target.clone(),
+            },
+        );
+        configuration.media_understanding_selections.insert(
+            ProviderToolCapabilityKind::VideoUnderstand,
+            MediaUnderstandingBackendSelection::ModelReplacement {
+                selection: ActiveAiModelSelection {
+                    provider_id: removed_connection.provider_id.clone(),
+                    model_id: String::from("video-model"),
+                    connection_id: removed_connection.id.clone(),
+                },
+                reasoning_effort: None,
+            },
+        );
+        configuration.media_understanding_selections.insert(
+            ProviderToolCapabilityKind::AudioUnderstand,
+            MediaUnderstandingBackendSelection::ProviderTool {
+                selection: retained_target.clone(),
+            },
+        );
+        configuration.provider_extension_target_sets.insert(
+            ProviderToolCapabilityKind::ImageGenerate,
+            BTreeSet::from([removed_target, retained_target.clone()]),
+        );
+
+        remove_connection_from_configuration(
+            &mut configuration,
+            removed_connection.id.as_str(),
+            None,
+        )
+        .expect("connection removal should succeed");
+
+        assert!(
+            !configuration
+                .connection_graph
+                .connections
+                .contains_key(removed_connection.id.as_str())
+        );
+        assert_eq!(configuration.media_understanding_selections.len(), 1);
+        assert!(
+            configuration
+                .media_understanding_selections
+                .contains_key(&ProviderToolCapabilityKind::AudioUnderstand)
+        );
+        assert_eq!(
+            configuration
+                .provider_extension_target_sets
+                .get(&ProviderToolCapabilityKind::ImageGenerate),
+            Some(&BTreeSet::from([retained_target]))
+        );
+    }
+
+    /// Verifies replacement candidates expose only media inputs encoded by the frozen protocol.
+    /// 验证模型代替候选只公开冻结协议能够编码的媒体输入。
+    #[test]
+    fn media_candidate_capabilities_intersect_model_and_protocol_support() {
+        // capabilities deliberately over-declares every media kind so protocol projection is observable.
+        // capabilities 有意声明全部媒体类型，使协议投影结果可观察。
+        let capabilities = ModelCapabilities {
+            operations: vec![AiOperation::ConversationRespond],
+            input_resources: vec![
+                ResourceKind::Image,
+                ResourceKind::Video,
+                ResourceKind::Audio,
+                ResourceKind::File,
+            ],
+            ..ModelCapabilities::default()
+        };
+
+        // responses retains only its registered image projector and preserves unrelated file metadata.
+        // responses 仅保留已注册图片编码器，并保持无关文件元数据。
+        let responses = protocol_projected_media_capabilities(
+            &capabilities,
+            vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID,
+        );
+        assert_eq!(
+            responses.input_resources,
+            vec![ResourceKind::Image, ResourceKind::File]
+        );
+        // chat exposes all three media encoders used by model replacement.
+        // chat 公开模型代替所需的三种媒体编码器。
+        let chat = protocol_projected_media_capabilities(
+            &capabilities,
+            vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID,
+        );
+        assert_eq!(chat.input_resources, capabilities.input_resources);
+    }
+
+    /// Verifies the explicit Anthropic video profile cannot accidentally admit audio replacement.
+    /// 验证显式 Anthropic 视频协议不会意外准入音频模型代替。
+    #[test]
+    fn anthropic_video_candidate_excludes_unregistered_audio_input() {
+        // capabilities represents a multimodal model whose wire route is narrower than its catalog metadata.
+        // capabilities 表示 Wire 路由窄于目录元数据的多模态模型。
+        let capabilities = ModelCapabilities {
+            operations: vec![AiOperation::ConversationRespond],
+            input_resources: vec![
+                ResourceKind::Image,
+                ResourceKind::Video,
+                ResourceKind::Audio,
+            ],
+            structured_output: StructuredOutputCapability::JsonSchema,
+            ..ModelCapabilities::default()
+        };
+
+        let projected = protocol_projected_media_capabilities(
+            &capabilities,
+            vulcan_ai_protocols::ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID,
+        );
+        assert_eq!(
+            projected.input_resources,
+            vec![ResourceKind::Image, ResourceKind::Video]
+        );
+        assert!(model_route_supports_media_understanding(
+            &projected,
+            ProviderToolCapabilityKind::VideoUnderstand,
+        ));
+        assert!(!model_route_supports_media_understanding(
+            &projected,
+            ProviderToolCapabilityKind::AudioUnderstand,
+        ));
+    }
+
+    /// Verifies Anthropic routes cannot admit schema-free JSON Object output as stable replacement output.
+    /// 验证 Anthropic 路由不能把无 Schema 的 JSON Object 输出准入为稳定替代输出。
+    #[test]
+    fn anthropic_candidate_requires_json_schema_capability() {
+        // capabilities uses the product default so the protocol projection must close the mismatch.
+        // capabilities 使用产品默认值，因此协议投影必须关闭这一不匹配。
+        let capabilities = ModelCapabilities {
+            operations: vec![AiOperation::ConversationRespond],
+            input_resources: vec![ResourceKind::Image],
+            ..ModelCapabilities::default()
+        };
+
+        let projected = protocol_projected_media_capabilities(
+            &capabilities,
+            vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID,
+        );
+        assert_eq!(
+            projected.structured_output,
+            StructuredOutputCapability::Unsupported
+        );
+        assert!(!model_route_supports_media_understanding(
+            &projected,
+            ProviderToolCapabilityKind::ImageUnderstand,
+        ));
+    }
+
+    /// Verifies fixed-off routes accept only the explicit no-reasoning effort without a declared effort list.
+    /// 验证固定关闭路由无需声明档位列表，但只接受显式无思考档位。
+    #[test]
+    fn fixed_off_reasoning_accepts_only_none() {
+        // capabilities models a route whose control mode itself is the complete authority.
+        // capabilities 模拟一条由控制模式本身提供完整权威的路由。
+        let capabilities = ModelCapabilities {
+            reasoning_control: ReasoningControlMode::FixedOff,
+            reasoning_efforts: Vec::new(),
+            ..ModelCapabilities::default()
+        };
+
+        assert!(validate_internal_reasoning_effort(&capabilities, ReasoningEffort::None).is_ok());
+        assert!(validate_internal_reasoning_effort(&capabilities, ReasoningEffort::Low).is_err());
+    }
 
     /// Verifies manifest RPCs accept only identities pinned by the trusted bundled index.
     /// 验证 Manifest RPC 仅接受可信内置 Index 固定的身份。
@@ -13011,6 +14333,29 @@ mod inference_settings_route_tests {
         assert_eq!(
             conflicts[0].capability,
             ProviderToolCapabilityKind::WebSearch
+        );
+    }
+
+    /// Verifies an enabled media capability reads its dedicated backend store instead of the legacy session target map.
+    /// 验证已启用媒体能力读取专用后端存储，而不是旧会话目标映射。
+    #[test]
+    fn session_media_understanding_settings_reject_missing_backend() {
+        let runtime = PublicAiRuntime::unavailable().expect("test public AI runtime");
+        let configuration = PersistedAiConfiguration::default();
+        let conflicts = provider_tool_session_conflicts(
+            &runtime,
+            &configuration,
+            &BTreeSet::from([ProviderToolCapabilityKind::VideoUnderstand]),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .expect("media conflict analysis");
+
+        assert_eq!(conflicts.len(), 1);
+        assert_eq!(conflicts[0].kind, "missing_selection");
+        assert_eq!(
+            conflicts[0].capability,
+            ProviderToolCapabilityKind::VideoUnderstand
         );
     }
 

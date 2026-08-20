@@ -250,6 +250,10 @@ struct FixtureHttpInteraction {
     /// 可选精确 JSON 请求正文。
     #[serde(default)]
     expected_json_body: Option<Value>,
+    /// UTF-8 fragments that must occur in the raw request body, including multipart metadata.
+    /// 必须出现在原始请求正文中的 UTF-8 分片，包含 Multipart 元数据。
+    #[serde(default)]
+    expected_body_contains: Vec<String>,
     /// Case-insensitive request header names with exact trimmed expected values.
     /// 大小写不敏感的请求头名称及精确裁剪后预期值。
     #[serde(default)]
@@ -645,7 +649,7 @@ async fn execute_provider_manifest_execution_fixture(
         })?;
     let (origin, server) = spawn_fixture_server(fixture.interactions.clone())?;
     entry.base_url = origin.clone();
-    target.execution.endpoint_base_url = Some(origin);
+    target.execution.endpoint_base_url = Some(origin.clone());
     let secret = CredentialSecretEnvelope::new_api_key(String::from("fixture-secret"))?
         .execution_secret()?;
     let http = reqwest::Client::builder()
@@ -678,6 +682,7 @@ async fn execute_provider_manifest_execution_fixture(
                 cancellation: &MediaUploadCancellation::new(),
                 model_id: None,
                 workspace_root: fixture_path.parent(),
+                fixture_loopback_origin: Some(origin.as_str()),
             },
             &operation,
             canonical_arguments,
@@ -1150,6 +1155,17 @@ fn validate_fixture_contract(
                 fixture.fixture_id
             ));
         }
+        if interaction.expected_body_contains.len() > 16
+            || interaction
+                .expected_body_contains
+                .iter()
+                .any(|fragment| fragment.is_empty() || fragment.len() > 1_024)
+        {
+            return Err(format!(
+                "Fixture `{}` request-body fragment expectations exceed the bounded contract.",
+                fixture.fixture_id
+            ));
+        }
     }
     Ok(())
 }
@@ -1476,13 +1492,25 @@ fn serve_fixture_interaction(
             ));
         }
     }
+    // requestBody is shared by exact JSON and bounded raw-fragment verification.
+    // requestBody 由精确 JSON 校验与有界原始分片校验共享。
+    let request_body = &request[header_end + 4..];
     if let Some(expected) = interaction.expected_json_body.as_ref() {
-        let body = &request[header_end + 4..];
-        let actual: Value = serde_json::from_slice(body)
+        let actual: Value = serde_json::from_slice(request_body)
             .map_err(|error| format!("Fixture request JSON is invalid: {error}"))?;
         if &actual != expected {
             return Err(format!(
                 "Fixture request JSON mismatch: expected {expected}, received {actual}."
+            ));
+        }
+    }
+    for expected_fragment in &interaction.expected_body_contains {
+        if !request_body
+            .windows(expected_fragment.len())
+            .any(|window| window == expected_fragment.as_bytes())
+        {
+            return Err(format!(
+                "Fixture request body is missing expected fragment `{expected_fragment}`."
             ));
         }
     }

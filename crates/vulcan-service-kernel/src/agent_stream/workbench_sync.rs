@@ -201,6 +201,9 @@ pub(crate) fn apply_execution_preparation(
                     workspace.session_runtime_state.get(&preparation.session_id),
                     &live_context_budgets,
                     public_model_capabilities.as_ref(),
+                    preparation
+                        .context_compaction_policy
+                        .and_then(|policy| policy.compression_window_limit),
                 );
                 (boundary_project_id, context_usage)
             };

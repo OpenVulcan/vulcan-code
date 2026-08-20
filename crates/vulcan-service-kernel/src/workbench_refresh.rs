@@ -828,6 +828,22 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
     } = input;
     let public_ai_configuration =
         public_ai_runtime.and_then(|runtime| runtime.configuration_snapshot().ok());
+    // contextCompactionWindowNodes is projected from one validated backend configuration snapshot.
+    // contextCompactionWindowNodes 从同一份已校验后台配置快照投影。
+    let context_compaction_window_nodes = public_ai_configuration
+        .as_ref()
+        .map(|configuration| {
+            configuration
+                .context_compaction_window_nodes
+                .nodes
+                .iter()
+                .map(|node| ContextCompactionWindowNodeSummary {
+                    id: node.id.as_str().to_string(),
+                    tokens: node.tokens,
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
     // selected_runtime_state owns the persisted model and reasoning controls for the active conversation.
     // selected_runtime_state 持有当前会话持久化的模型与思考控制。
     let selected_runtime_state = workspace
@@ -849,17 +865,17 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
             .ok()
             .flatten()
         });
-    let bridged_image_understanding = public_ai_runtime
+    let bridged_media_kinds = public_ai_runtime
         .zip(public_ai_configuration.as_ref())
         .and_then(|(runtime, configuration)| {
-            crate::public_ai_settings::public_ai_session_has_image_understanding_bridge(
+            crate::public_ai_settings::public_ai_session_media_understanding_bridge_kinds(
                 runtime,
                 configuration,
                 selected_runtime_state,
             )
             .ok()
         })
-        .unwrap_or(false);
+        .unwrap_or_default();
     let public_ai_model_selectors = public_ai_runtime
         .zip(public_ai_configuration.as_ref())
         .and_then(|(runtime, configuration)| runtime.available_model_selectors(configuration).ok());
@@ -940,6 +956,9 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
                 runtime_state,
                 provider_configuration.prompt.output_style.id(),
             );
+            let session_context_compaction_window_node_id = runtime_state
+                .and_then(|runtime_state| runtime_state.context_compaction_window_node_id)
+                .map(|node_id| node_id.as_str().to_string());
             session_addons_changed_delta_for_retained_list(
                 session.id.to_string(),
                 session_goal,
@@ -947,6 +966,7 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
                 session_plan_mode,
                 session_vmm_policy,
                 session_output_style,
+                session_context_compaction_window_node_id,
                 session_provider_usage,
             )
         })
@@ -1150,8 +1170,11 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
         composer_attachment_capabilities: composer_attachment_capabilities(
             public_ai_selection
                 .as_ref()
+                .map(|selection| selection.route.protocol_route.protocol_profile_id.as_str()),
+            public_ai_selection
+                .as_ref()
                 .map(|selection| &selection.model.capabilities),
-            bridged_image_understanding,
+            &bridged_media_kinds,
         ),
         output_style_catalog: output_style_catalog_summary(provider_configuration),
         composer_slash_commands: vulcan_service_api::composer_slash_command_catalog(),
@@ -1178,6 +1201,10 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
             selected_runtime_state,
             provider_configuration.prompt.output_style.id(),
         ),
+        context_compaction_window_nodes,
+        session_context_compaction_window_node_id: selected_runtime_state
+            .and_then(|runtime_state| runtime_state.context_compaction_window_node_id)
+            .map(|node_id| node_id.as_str().to_string()),
         session_provider_usage: selected_session_provider_usage,
         session_addons_by_conversation,
         session_vmm_policies_by_conversation,
@@ -1220,6 +1247,10 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
             public_ai_selection
                 .as_ref()
                 .map(|selection| &selection.model.capabilities),
+            context_compaction_window_limit_from_configuration(
+                selected_runtime_state,
+                public_ai_configuration.as_ref(),
+            ),
         ),
     }
 }

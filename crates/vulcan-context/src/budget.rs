@@ -229,6 +229,11 @@ pub fn build_request_context_budget_snapshot_with_options(
         .compaction_policy
         .map(|policy| policy.window)
         .unwrap_or_default();
+    // The session node changes only the compaction calculation base, never the hard model window.
+    // 会话节点只改变压缩计算基准，绝不改变模型硬窗口。
+    let compression_window_limit = options
+        .compaction_policy
+        .and_then(|policy| policy.compression_window_limit);
     let compaction_auto_enabled = options
         .compaction_policy
         .map(|policy| policy.auto)
@@ -280,12 +285,15 @@ pub fn build_request_context_budget_snapshot_with_options(
         let percentage = usize::from(window_policy.effective_context_window_percent);
         limit.saturating_mul(percentage).saturating_div(100).max(1)
     });
-    let percentage_limit = raw_context_limit.map(|raw_window| {
-        raw_window
-            .saturating_mul(usize::from(window_policy.auto_compact_percent))
-            .saturating_div(100)
-            .max(1)
-    });
+    let percentage_limit =
+        compression_window_limit
+            .or(raw_context_limit)
+            .map(|compression_window| {
+                compression_window
+                    .saturating_mul(usize::from(window_policy.auto_compact_percent))
+                    .saturating_div(100)
+                    .max(1)
+            });
     let explicit_limit = window_policy
         .auto_compact_token_limit
         .and_then(|limit| usize::try_from(limit).ok());
@@ -408,13 +416,18 @@ pub fn build_context_budget_fingerprint(
     let compaction_policy_label = compaction_policy
         .map(|policy| {
             format!(
-                "auto={}|prune={}|tail={}|preserve={}|tail_context={:?}|tail_source={}|reserved={}|window_effective={}|window_compact={}|window_limit={:?}|window_scope={:?}|window_buffer={}",
+                "auto={}|prune={}|tail={}|preserve={}|tail_context={:?}|tail_source={}|compression_node={}|compression_limit={:?}|reserved={}|window_effective={}|window_compact={}|window_limit={:?}|window_scope={:?}|window_buffer={}",
                 policy.auto,
                 policy.prune,
                 policy.tail_turns,
                 policy.preserve_recent_tokens,
                 policy.tail_context_limit,
                 policy.tail_policy_source.label(),
+                policy
+                    .compression_window_node_id
+                    .map(vulcan_context_node_label)
+                    .unwrap_or("none"),
+                policy.compression_window_limit,
                 policy.reserved,
                 policy.window.effective_context_window_percent,
                 policy.window.auto_compact_percent,
@@ -454,6 +467,12 @@ pub fn build_context_budget_fingerprint(
         ai_tools_label,
         compaction_policy_label,
     )
+}
+
+/// Returns the stable label for one frozen context-compaction window node.
+/// 返回一个冻结上下文压缩窗口节点的稳定标签。
+fn vulcan_context_node_label(node_id: crate::ContextCompactionWindowNodeId) -> &'static str {
+    node_id.as_str()
 }
 
 /// Returns the coarse budget severity bucket that corresponds to one usage ratio.
@@ -677,6 +696,69 @@ mod tests {
     //! 上下文预算估算测试。
 
     use super::*;
+    use vulcan_core::types::{ProviderContinuation, ProviderPromptLayers};
+
+    /// Builds one empty request snapshot for context-window budget tests.
+    /// 为上下文窗口预算测试构建一份空请求快照。
+    fn test_request_snapshot() -> CoreProviderRequestSnapshot {
+        CoreProviderRequestSnapshot {
+            provider_id: String::from("provider"),
+            model_id: String::from("model"),
+            system_prompt: String::new(),
+            prompt_layers: ProviderPromptLayers::default(),
+            prompt: String::new(),
+            prompt_in_history: false,
+            history: Vec::new(),
+            temperature: None,
+            max_turns: 1,
+            tool_schemas: Vec::new(),
+            additional_params: None,
+            request_headers: None,
+            continuation: ProviderContinuation::default(),
+        }
+    }
+
+    /// Verifies a 256K session node changes the 90% compaction line without shrinking a 1M hard window.
+    /// 验证 256K 会话节点会改变 90% 压缩线，但不会缩小 1M 硬窗口。
+    #[test]
+    fn session_node_changes_only_the_compaction_window_base() {
+        let capabilities = ContextBudgetCapabilities {
+            context_limit: Some(1_000_000),
+            ..ContextBudgetCapabilities::default()
+        };
+        let request_snapshot = test_request_snapshot();
+        let policy = ContextCompactionPolicy {
+            compression_window_node_id: Some(
+                crate::ContextCompactionWindowNodeId::CompressionWindow2,
+            ),
+            compression_window_limit: Some(256_000),
+            ..ContextCompactionPolicy::default()
+        };
+
+        let budget = build_request_context_budget_snapshot_with_options(
+            RequestContextBudgetSnapshotInput {
+                provider_id: "provider",
+                model_id: "model",
+                protocol_profile_id: "protocol",
+                capabilities: &capabilities,
+                reasoning: ContextReasoningEffort::None,
+                request_snapshot: &request_snapshot,
+                observed_usage: None,
+                accounted_input_tokens: Some(1),
+                accounting_source: ContextBudgetAccountingSource::CharacterEstimate,
+                accounting_warning_code: Some("test"),
+                provider_anchor_call_id: None,
+                prefill_input_tokens: None,
+            },
+            RequestContextBudgetSnapshotOptions {
+                compaction_policy: Some(policy),
+            },
+        );
+
+        assert_eq!(budget.context_limit, Some(1_000_000));
+        assert_eq!(budget.effective_context_window, Some(950_000));
+        assert_eq!(budget.auto_compact_limit, Some(230_400));
+    }
 
     /// Verifies Chinese text is estimated close to one token per visible character.
     /// 验证中文文本按接近每个可见字符一个 Token 估算。

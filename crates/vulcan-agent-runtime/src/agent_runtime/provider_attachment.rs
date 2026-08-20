@@ -44,8 +44,10 @@ pub(crate) fn build_attachment_provider_tool_hint(
     path_argument: &str,
 ) -> String {
     format!(
-        "INFO: Attachment \"{}\" is kept locally because the selected model does not support image input. Use host AI tool `{tool_id}` with `{path_argument}` set to `{}`.",
-        attachment.file_name, attachment.local_path
+        "INFO: Attachment \"{}\" is kept locally because the selected route cannot consume {} input directly. Use host AI tool `{tool_id}` with `{path_argument}` set to `{}`.",
+        attachment.file_name,
+        attachment.kind.modality_name(),
+        attachment.local_path
     )
 }
 
@@ -80,5 +82,26 @@ mod tests {
             build_attachment_transport_error_text(&test_attachment(), "anthropic-messages.v1");
         assert!(message.contains("screen.png"));
         assert!(message.contains("anthropic-messages.v1"));
+    }
+
+    /// Verifies host-tool hints name the actual media modality instead of a fixed image label.
+    /// 验证宿主工具提示使用实际媒体模态，而不是固定图片标签。
+    #[test]
+    fn provider_tool_hint_names_actual_media_modality() {
+        // attachment differs from the base fixture only by its video identity.
+        // attachment 仅通过视频身份区别于基础夹具。
+        let mut attachment = test_attachment();
+        attachment.kind = ConversationAttachmentKind::Video;
+        attachment.file_name = String::from("clip.mp4");
+        attachment.local_path = String::from("C:/attachments/clip.mp4");
+        attachment.mime_type = String::from("video/mp4");
+
+        let message =
+            build_attachment_provider_tool_hint(&attachment, "video_understand", "video_path");
+
+        assert!(message.contains("video input"));
+        assert!(message.contains("video_understand"));
+        assert!(message.contains("video_path"));
+        assert!(!message.contains("image input"));
     }
 }

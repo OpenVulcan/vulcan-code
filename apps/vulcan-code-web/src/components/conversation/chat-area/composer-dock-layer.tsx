@@ -67,6 +67,10 @@ export function ChatAreaComposerDockLayer(props: ChatAreaComposerDockLayerProps)
       conversationId={props.conversationId}
       slashCommands={workbench.composerSlashCommands ?? []}
       contextUsage={props.isEmptyConversation ? null : workbench.contextUsage ?? null}
+      contextCompactionWindowNodes={workbench.contextCompactionWindowNodes ?? []}
+      sessionContextCompactionWindowNodeId={
+        props.isEmptyConversation ? null : workbench.sessionContextCompactionWindowNodeId ?? null
+      }
       emptyMode={props.isEmptyConversation}
       onScrollToBottom={props.onScrollToBottom}
       onSelectWorkbenchModel={chatAreaProps.onSelectWorkbenchModel}
@@ -84,6 +88,7 @@ export function ChatAreaComposerDockLayer(props: ChatAreaComposerDockLayerProps)
       onSetSessionPlanMode={chatAreaProps.onSetSessionPlanMode}
       onSetSessionVmmPolicy={chatAreaProps.onSetSessionVmmPolicy}
       onSetSessionOutputStyle={chatAreaProps.onSetSessionOutputStyle}
+      onSetSessionContextCompactionWindow={chatAreaProps.onSetSessionContextCompactionWindow}
       onStopConversationRun={chatAreaProps.onStopConversationRun}
       onStageAttachmentBytes={chatAreaProps.onStageAttachmentBytes}
       resolveMediaSourceUrl={chatAreaProps.resolveMediaSourceUrl}

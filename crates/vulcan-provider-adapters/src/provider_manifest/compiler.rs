@@ -967,6 +967,7 @@ pub(crate) fn expand_tool_target_templates(
                 tool_id: template.tool_id.clone(),
                 capability: template.capability,
                 input_schema: template.input_schema.clone(),
+                media_input_projection: None,
                 input_numeric_product_ranges: template.input_numeric_product_ranges.clone(),
                 extension_profile: template.extension_profile.clone(),
                 output: template.output.clone(),
@@ -1467,6 +1468,7 @@ fn compile_tool_targets(manifest: &ProviderManifestV1) -> Vec<crate::ProviderToo
                 description: target.description.clone(),
                 capability: target.capability,
                 input_schema: target.input_schema.clone(),
+                media_input_projection: target.media_input_projection.clone(),
                 input_numeric_product_ranges: target.input_numeric_product_ranges.clone(),
                 extension_profile: target
                     .extension_profile

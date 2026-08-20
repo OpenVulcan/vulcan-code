@@ -6,7 +6,7 @@ use crate::agent_runtime::provider_attachment::{
     build_missing_attachment_replay_text,
 };
 use crate::attachment_asset_index::{AttachmentReplayStatus, resolve_attachment_replay_status};
-use vulcan_ai_contract::{ModelCapabilities, ResourceKind};
+use vulcan_ai_contract::{ModelCapabilities, ResourceKind, StructuredOutputCapability};
 use vulcan_core::types::{ConversationAttachment, ConversationAttachmentKind};
 
 /// Holds the exact user payload that remains valid after protocol and model capability checks.
@@ -63,16 +63,16 @@ pub fn normalize_provider_user_input_for_model(
     )
 }
 
-/// Normalizes one user payload while allowing an exact registered image-understanding bridge.
-/// 在允许精确注册的图片理解桥接工具时归一化一条用户载荷。
+/// Normalizes one user payload while allowing exact registered media-understanding bridges.
+/// 在允许精确注册的媒体理解桥接工具时归一化一条用户载荷。
 ///
 /// `bridge_tool_ids` contains only the tool identifiers visible in the current frozen execution.
 /// `bridge_tool_ids` 只包含当前冻结执行中对模型可见的工具标识。
 ///
 /// # Returns
 /// 返回值
-/// A normalized payload with bridged images removed from native attachments and described in text.
-/// 返回从原生附件中移除桥接图片并在文本中描述的规范载荷。
+/// A normalized payload with bridged media removed from native attachments and described in text.
+/// 返回从原生附件中移除桥接媒体并在文本中描述的规范载荷。
 pub fn normalize_provider_user_input_for_model_with_tool_bridges(
     protocol_profile_id: &str,
     capabilities: Option<&ModelCapabilities>,
@@ -89,8 +89,10 @@ pub fn normalize_provider_user_input_for_model_with_tool_bridges(
             resolve_attachment_replay_status(&attachment),
             AttachmentReplayStatus::Missing | AttachmentReplayStatus::Purged
         );
+        // protocolSupported includes both content-block shape and the actual media MIME encoder.
+        // protocolSupported 同时包含内容块形态与实际媒体 MIME 编码器。
         let protocol_supported =
-            protocol_profile_supports_attachment_kind(protocol_profile_id, attachment.kind.clone());
+            protocol_profile_supports_attachment(protocol_profile_id, &attachment);
         let model_supported = capabilities
             .map(|value| {
                 value
@@ -104,16 +106,14 @@ pub fn normalize_provider_user_input_for_model_with_tool_bridges(
         } else {
             let diagnostic = if !replayable {
                 build_missing_attachment_replay_text(&attachment)
+            } else if let Some((tool_id, path_argument)) =
+                media_understanding_bridge_for_attachment(&attachment, bridge_tool_ids)
+            {
+                // a host bridge replaces both missing model input and missing wire encoding.
+                // 宿主桥接同时替代缺失的模型输入能力与 Wire 编码能力。
+                build_attachment_provider_tool_hint(&attachment, tool_id, path_argument)
             } else if !protocol_supported {
                 build_attachment_transport_error_text(&attachment, "the selected protocol profile")
-            } else if !model_supported {
-                if let Some((tool_id, path_argument)) =
-                    image_understanding_bridge_for_attachment(&attachment, bridge_tool_ids)
-                {
-                    build_attachment_provider_tool_hint(&attachment, tool_id, path_argument)
-                } else {
-                    build_attachment_transport_error_text(&attachment, "the selected model")
-                }
             } else {
                 build_attachment_transport_error_text(&attachment, "the selected model")
             };
@@ -136,8 +136,8 @@ pub fn normalize_provider_user_input_for_model_with_tool_bridges(
     }
 }
 
-/// Selects the exact path argument contract for one registered image bridge.
-/// 选择一个已注册图片桥接工具的精确路径参数契约。
+/// Selects the exact path argument contract for one registered media-understanding bridge.
+/// 选择一个已注册媒体理解桥接工具的精确路径参数契约。
 ///
 /// # Parameters
 /// 参数
@@ -148,23 +148,24 @@ pub fn normalize_provider_user_input_for_model_with_tool_bridges(
 /// 返回值
 /// The visible tool identifier and its path argument name, or `None` when no exact bridge applies.
 /// 返回可见工具标识及其路径参数名；没有精确桥接时返回 `None`。
-fn image_understanding_bridge_for_attachment<'a>(
+fn media_understanding_bridge_for_attachment<'a>(
     attachment: &ConversationAttachment,
     bridge_tool_ids: &'a [String],
 ) -> Option<(&'a str, &'static str)> {
-    if !matches!(attachment.kind, ConversationAttachmentKind::Image) {
-        return None;
-    }
-    bridge_tool_ids
-        .iter()
-        .find(|tool_id| tool_id.as_str() == "image_understand")
-        .map(|tool_id| (tool_id.as_str(), "image_path"))
-        .or_else(|| {
-            bridge_tool_ids
-                .iter()
-                .find(|tool_id| tool_id.as_str() == "vulcan_media_analyze")
-                .map(|tool_id| (tool_id.as_str(), "media_paths"))
-        })
+    // bridge identifies the one fixed tool id and path argument for the attachment kind.
+    // bridge 标识当前附件类型唯一固定的工具标识与路径参数。
+    let bridge = match attachment.kind {
+        ConversationAttachmentKind::Image => Some(("image_understand", "image_path")),
+        ConversationAttachmentKind::Video => Some(("video_understand", "video_path")),
+        ConversationAttachmentKind::Audio => Some(("audio_understand", "audio_path")),
+        ConversationAttachmentKind::File | ConversationAttachmentKind::Pdf => None,
+    };
+    bridge.and_then(|(expected_tool_id, path_argument)| {
+        bridge_tool_ids
+            .iter()
+            .find(|tool_id| tool_id.as_str() == expected_tool_id)
+            .map(|tool_id| (tool_id.as_str(), path_argument))
+    })
 }
 
 /// Reports whether a protocol profile has a real encoder for one attachment kind.
@@ -177,10 +178,14 @@ pub fn protocol_profile_supports_attachment_kind(
     kind: ConversationAttachmentKind,
 ) -> bool {
     match protocol_profile_id {
-        vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID => true,
+        vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID
+        | vulcan_ai_protocols::GEMINI_GENERATE_CONTENT_PROFILE_ID
+        | vulcan_ai_protocols::GEMINI_INTERACTIONS_PROFILE_ID
+        | vulcan_ai_protocols::GOOGLE_CODE_ASSIST_PROFILE_ID => true,
         vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID
         | vulcan_ai_protocols::OPENAI_CODEX_RESPONSES_PROFILE_ID
-        | vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID => {
+        | vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID
+        | vulcan_ai_protocols::CLAUDE_CODE_MESSAGES_PROFILE_ID => {
             matches!(kind, ConversationAttachmentKind::Image)
         }
         vulcan_ai_protocols::ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID => {
@@ -191,6 +196,88 @@ pub fn protocol_profile_supports_attachment_kind(
         }
         _ => false,
     }
+}
+
+/// Reports whether one frozen protocol can encode an attachment's exact kind and MIME type.
+/// 报告一个冻结协议能否编码附件的精确类型与 MIME。
+///
+/// # Parameters
+/// 参数
+/// `protocol_profile_id` identifies the exact encoder and `attachment` contains the concrete
+/// attachment category and normalized MIME type.
+/// `protocol_profile_id` 标识精确编码器，`attachment` 包含具体附件类别与规范 MIME。
+///
+/// # Returns
+/// 返回值
+/// `true` only when both the content-block projector and format-sensitive encoder are registered.
+/// 仅当内容块投影器与格式敏感编码器均已注册时返回 `true`。
+pub fn protocol_profile_supports_attachment(
+    protocol_profile_id: &str,
+    attachment: &ConversationAttachment,
+) -> bool {
+    // resourceKind normalizes the core attachment category for the shared protocol registry.
+    // resourceKind 归一化核心附件类别，用于共享协议注册表。
+    let resource_kind = attachment_resource_kind(attachment.kind.clone());
+    // formatSupported preserves the existing generic-file projector while media uses exact MIME admission.
+    // formatSupported 保留既有通用文件投影器，媒体则使用精确 MIME 准入。
+    let format_supported = resource_kind == ResourceKind::File
+        || vulcan_ai_protocols::protocol_profile_supports_local_media_type(
+            protocol_profile_id,
+            resource_kind,
+            attachment.mime_type.as_str(),
+        );
+    protocol_profile_supports_attachment_kind(protocol_profile_id, attachment.kind.clone())
+        && format_supported
+}
+
+/// Reports whether one frozen protocol can encode the declared structured-output policy.
+/// 报告一个冻结协议能否编码声明的结构化输出策略。
+///
+/// # Parameters
+/// 参数
+/// `protocol_profile_id` identifies the exact encoder and `capability` is the model-declared output mode.
+/// `protocol_profile_id` 标识精确编码器，`capability` 是模型声明的输出模式。
+///
+/// # Returns
+/// 返回值
+/// `true` only for a registered encoder and an output mode it can represent without fallback.
+/// 仅当编码器已注册且可在不降级的情况下表达该输出模式时返回 `true`。
+pub fn protocol_profile_supports_structured_output(
+    protocol_profile_id: &str,
+    capability: StructuredOutputCapability,
+) -> bool {
+    if capability == StructuredOutputCapability::Unsupported {
+        return false;
+    }
+    // registeredProfile prevents unknown future protocols from inheriting an unverified JSON contract.
+    // registeredProfile 防止未知未来协议继承未经验证的 JSON 契约。
+    let registered_profile = matches!(
+        protocol_profile_id,
+        vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID
+            | vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID
+            | vulcan_ai_protocols::OPENAI_CODEX_RESPONSES_PROFILE_ID
+            | vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID
+            | vulcan_ai_protocols::ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID
+            | vulcan_ai_protocols::CLAUDE_CODE_MESSAGES_PROFILE_ID
+            | vulcan_ai_protocols::GEMINI_GENERATE_CONTENT_PROFILE_ID
+            | vulcan_ai_protocols::GEMINI_INTERACTIONS_PROFILE_ID
+            | vulcan_ai_protocols::GOOGLE_CODE_ASSIST_PROFILE_ID
+            | vulcan_ai_protocols::COHERE_CHAT_PROFILE_ID
+    );
+    if !registered_profile {
+        return false;
+    }
+    // Anthropic-family encoders require an explicit JSON Schema and reject schema-free JSON Object mode.
+    // Anthropic 系编码器要求显式 JSON Schema，并拒绝无 Schema 的 JSON Object 模式。
+    if matches!(
+        protocol_profile_id,
+        vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID
+            | vulcan_ai_protocols::ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID
+            | vulcan_ai_protocols::CLAUDE_CODE_MESSAGES_PROFILE_ID
+    ) {
+        return capability == StructuredOutputCapability::JsonSchema;
+    }
+    true
 }
 
 /// Maps a conversation attachment kind to the public resource contract.
@@ -213,8 +300,10 @@ mod tests {
     use super::{
         normalize_provider_user_input, normalize_provider_user_input_for_model,
         normalize_provider_user_input_for_model_with_tool_bridges,
+        protocol_profile_supports_attachment, protocol_profile_supports_attachment_kind,
+        protocol_profile_supports_structured_output,
     };
-    use vulcan_ai_contract::{ModelCapabilities, ResourceKind};
+    use vulcan_ai_contract::{ModelCapabilities, ResourceKind, StructuredOutputCapability};
     use vulcan_core::types::{ConversationAttachment, ConversationAttachmentKind};
 
     /// Builds one replayable attachment fixture.
@@ -367,6 +456,152 @@ mod tests {
         assert!(normalized.text.contains("image_understand"));
         assert!(normalized.text.contains("image_path"));
         assert!(!normalized.text.contains("ERROR: Cannot read"));
+    }
+
+    /// Downgrades unsupported video and audio input to their exact fixed host tools.
+    /// 将不支持的视频与音频输入降级到各自精确固定的宿主工具。
+    #[test]
+    fn video_and_audio_understanding_bridges_keep_fixed_contracts() {
+        let capabilities = ModelCapabilities::default();
+        let bridge_tool_ids = vec![
+            String::from("video_understand"),
+            String::from("audio_understand"),
+        ];
+        let normalized = normalize_provider_user_input_for_model_with_tool_bridges(
+            vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID,
+            Some(&capabilities),
+            "inspect",
+            &[
+                test_attachment(ConversationAttachmentKind::Video, "a.mp4", "video/mp4"),
+                test_attachment(ConversationAttachmentKind::Audio, "a.mp3", "audio/mpeg"),
+            ],
+            &bridge_tool_ids,
+        );
+
+        assert!(normalized.attachments.is_empty());
+        assert_eq!(normalized.downgraded_attachments.len(), 2);
+        assert!(normalized.text.contains("video_understand"));
+        assert!(normalized.text.contains("video_path"));
+        assert!(normalized.text.contains("audio_understand"));
+        assert!(normalized.text.contains("audio_path"));
+        assert!(!normalized.text.contains("selected protocol profile"));
+    }
+
+    /// Routes a model-declared but format-incompatible media attachment through the exact host bridge.
+    /// 将模型已声明但格式不兼容的媒体附件路由到精确宿主桥接。
+    #[test]
+    fn format_incompatible_audio_uses_understanding_bridge() {
+        // capabilities proves model support so only exact protocol MIME admission can select the bridge.
+        // capabilities 证明模型支持该模态，因此只有精确协议 MIME 准入能选择桥接。
+        let capabilities = ModelCapabilities {
+            input_resources: vec![ResourceKind::Audio],
+            ..ModelCapabilities::default()
+        };
+        // attachment uses Opus, which the OpenAI Chat input-audio projector does not register.
+        // attachment 使用 OpenAI Chat input-audio 投影器未注册的 Opus。
+        let attachment = test_attachment(
+            ConversationAttachmentKind::Audio,
+            "voice.opus",
+            "audio/opus",
+        );
+        // bridgeToolIds exposes only the fixed audio-understanding facade.
+        // bridgeToolIds 仅公开固定音频理解外壳。
+        let bridge_tool_ids = vec![String::from("audio_understand")];
+
+        assert!(!protocol_profile_supports_attachment(
+            vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID,
+            &attachment,
+        ));
+        let normalized = normalize_provider_user_input_for_model_with_tool_bridges(
+            vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID,
+            Some(&capabilities),
+            "inspect",
+            &[attachment],
+            &bridge_tool_ids,
+        );
+
+        assert!(normalized.attachments.is_empty());
+        assert_eq!(normalized.downgraded_attachments.len(), 1);
+        assert!(normalized.text.contains("audio_understand"));
+        assert!(normalized.text.contains("audio_path"));
+    }
+
+    /// Verifies the retired aggregate media tool cannot replace any fixed understanding facade.
+    /// 验证已退役的聚合媒体工具不能替代任一固定理解外壳。
+    #[test]
+    fn legacy_aggregate_media_tool_is_not_an_understanding_bridge() {
+        // capabilities deliberately lacks media input so only an explicitly matching bridge could handle it.
+        // capabilities 有意不含媒体输入，因此只有显式匹配的桥接才能处理附件。
+        let capabilities = ModelCapabilities::default();
+        let normalized = normalize_provider_user_input_for_model_with_tool_bridges(
+            vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID,
+            Some(&capabilities),
+            "inspect",
+            &[test_attachment(
+                ConversationAttachmentKind::Video,
+                "a.mp4",
+                "video/mp4",
+            )],
+            &[String::from("vulcan_media_analyze")],
+        );
+
+        assert!(normalized.attachments.is_empty());
+        assert_eq!(normalized.downgraded_attachments.len(), 1);
+        assert!(normalized.text.contains("selected model"));
+        assert!(!normalized.text.contains("vulcan_media_analyze"));
+        assert!(!normalized.text.contains("media_paths"));
+    }
+
+    /// Verifies Anthropic-family protocols require JSON Schema while OpenAI Chat accepts both JSON modes.
+    /// 验证 Anthropic 系协议要求 JSON Schema，而 OpenAI Chat 接受两种 JSON 模式。
+    #[test]
+    fn structured_output_support_is_protocol_exact() {
+        assert!(!protocol_profile_supports_structured_output(
+            vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID,
+            StructuredOutputCapability::JsonObject,
+        ));
+        assert!(protocol_profile_supports_structured_output(
+            vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID,
+            StructuredOutputCapability::JsonSchema,
+        ));
+        assert!(protocol_profile_supports_structured_output(
+            vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID,
+            StructuredOutputCapability::JsonObject,
+        ));
+        assert!(protocol_profile_supports_structured_output(
+            vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID,
+            StructuredOutputCapability::JsonSchema,
+        ));
+    }
+
+    /// Verifies registered Gemini and Claude Code media encoders participate in attachment admission.
+    /// 验证已注册的 Gemini 与 Claude Code 媒体编码器参与附件准入。
+    #[test]
+    fn attachment_support_includes_registered_gemini_and_claude_code_encoders() {
+        for protocol_profile_id in [
+            vulcan_ai_protocols::GEMINI_GENERATE_CONTENT_PROFILE_ID,
+            vulcan_ai_protocols::GEMINI_INTERACTIONS_PROFILE_ID,
+            vulcan_ai_protocols::GOOGLE_CODE_ASSIST_PROFILE_ID,
+        ] {
+            for kind in [
+                ConversationAttachmentKind::Image,
+                ConversationAttachmentKind::Video,
+                ConversationAttachmentKind::Audio,
+            ] {
+                assert!(protocol_profile_supports_attachment_kind(
+                    protocol_profile_id,
+                    kind,
+                ));
+            }
+        }
+        assert!(protocol_profile_supports_attachment_kind(
+            vulcan_ai_protocols::CLAUDE_CODE_MESSAGES_PROFILE_ID,
+            ConversationAttachmentKind::Image,
+        ));
+        assert!(!protocol_profile_supports_attachment_kind(
+            vulcan_ai_protocols::CLAUDE_CODE_MESSAGES_PROFILE_ID,
+            ConversationAttachmentKind::Video,
+        ));
     }
 
     /// Rejects every attachment for an unregistered protocol profile.

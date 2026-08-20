@@ -25,6 +25,207 @@ fn current_execution_registry_contains_only_runtime_backed_primitives() {
     );
 }
 
+/// Verifies bundled Kimi video targets close target, operation, upload, and reference ownership.
+/// 验证内置 Kimi 视频目标完整闭合目标、操作、上传与引用归属。
+#[test]
+fn bundled_video_understanding_targets_compile_with_exact_upload_references() {
+    // expectedTargets enumerates only provider contracts proven by the Kimi reference implementation.
+    // expectedTargets 只枚举由 Kimi 参考实现证实的供应商契约。
+    let expected_targets = vec![
+        (
+            "platform-cn.kimi-k2.7-code.video-understanding",
+            "platform-cn.video-file",
+            "api.moonshot.cn",
+            "/v1/files",
+        ),
+        (
+            "platform-global.kimi-k2.7-code.video-understanding",
+            "platform-global.video-file",
+            "api.moonshot.ai",
+            "/v1/files",
+        ),
+        (
+            "coding-plan.kimi-for-coding.video-understanding",
+            "coding-plan.video-file",
+            "api.kimi.com",
+            "/coding/v1/files",
+        ),
+    ];
+    // manifestPath is the exact authoritative bundled source under test.
+    // manifestPath 是本测试验证的精确权威内置源。
+    let manifest_path =
+        vulcan_runtime_assets::source_bundled_provider_manifests_directory().join("kimi.json");
+    let manifest_text = std::fs::read_to_string(&manifest_path)
+        .unwrap_or_else(|_| panic!("missing bundled manifest at {}", manifest_path.display()));
+    let compiled = super::compiler::compile_manifest_text(
+        manifest_text.as_str(),
+        super::ManifestOwnership::System,
+    )
+    .unwrap_or_else(|error| panic!("Kimi manifest must compile: {error}"));
+    for (target_id, upload_channel_id, endpoint_host, endpoint_path) in expected_targets {
+        // target owns the fixed facade projection while one unique operation owns upload.
+        // target 持有固定外壳投影，而唯一操作持有上传。
+        let target = compiled
+            .tool_targets
+            .iter()
+            .find(|target| target.target_id == target_id)
+            .unwrap_or_else(|| panic!("missing video target `{target_id}`"));
+        assert_eq!(
+            target.contract.capability,
+            crate::ProviderToolCapabilityKind::VideoUnderstand
+        );
+        let projection = target
+            .contract
+            .media_input_projection
+            .as_ref()
+            .expect("video target must declare a fixed-facade projection");
+        assert_eq!(projection.path_field, "video_path");
+        assert_eq!(projection.prompt_field, "prompt");
+        let operation = compiled
+            .operations
+            .iter()
+            .find(|operation| operation.tool_target_refs.contains(&target_id.to_string()))
+            .unwrap_or_else(|| panic!("missing operation for `{target_id}`"));
+        assert_eq!(operation.upload_bindings.len(), 1);
+        assert_eq!(operation.upload_bindings[0].source_path, "/video_path");
+        assert_eq!(operation.upload_bindings[0].target_path, "/video_reference");
+        assert_eq!(
+            operation.upload_bindings[0].upload_channel_refs,
+            [upload_channel_id.to_string()]
+        );
+        let channel = compiled
+            .upload_channels
+            .iter()
+            .find(|channel| channel.upload_channel_id == upload_channel_id)
+            .unwrap_or_else(|| panic!("missing upload channel `{upload_channel_id}`"));
+        assert_eq!(
+            channel.primitive,
+            Some(crate::UploadPrimitiveKind::MultipartFile)
+        );
+        assert_eq!(channel.endpoint_host.as_deref(), Some(endpoint_host));
+        assert_eq!(channel.endpoint_path.as_deref(), Some(endpoint_path));
+        assert_eq!(channel.method.as_deref(), Some("POST"));
+        assert_eq!(channel.file_field.as_deref(), Some("file"));
+        assert_eq!(channel.max_bytes, Some(100_000_000));
+        assert_eq!(channel.response_id_pointer.as_deref(), Some("/id"));
+        assert_eq!(
+            channel.fixed_fields.get("purpose").map(String::as_str),
+            Some("video")
+        );
+        assert_eq!(channel.reference_template.as_deref(), Some("ms://{id}"));
+        assert!(channel.progress_supported);
+        assert!(channel.cancellation_supported);
+    }
+}
+
+/// Verifies every bundled Kimi video route preserves the complete format set accepted by kimi-cli.
+/// 验证每条内置 Kimi 视频路由均保留 kimi-cli 接受的完整格式集合。
+#[test]
+fn bundled_kimi_video_routes_preserve_reference_format_set() {
+    // manifestPath points to the authoritative Kimi source asset.
+    // manifestPath 指向权威 Kimi 源资源。
+    let manifest_path =
+        vulcan_runtime_assets::source_bundled_provider_manifests_directory().join("kimi.json");
+    // manifestText is compiled through the production validator before assertions inspect it.
+    // manifestText 在断言检查前通过生产校验器编译。
+    let manifest_text = std::fs::read_to_string(&manifest_path)
+        .unwrap_or_else(|_| panic!("missing Kimi manifest at {}", manifest_path.display()));
+    // compiled owns the normalized operations and channels used at runtime.
+    // compiled 持有运行时使用的规范化操作与通道。
+    let compiled = super::compiler::compile_manifest_text(
+        manifest_text.as_str(),
+        super::ManifestOwnership::System,
+    )
+    .expect("Kimi manifest must compile");
+    // expectedFormats mirrors kimi-cli's closed video suffix table and MIME decisions.
+    // expectedFormats 对应 kimi-cli 的封闭视频后缀表与 MIME 决策。
+    let expected_formats = [
+        ("mp4", "video/mp4"),
+        ("mkv", "video/x-matroska"),
+        ("avi", "video/x-msvideo"),
+        ("mov", "video/quicktime"),
+        ("wmv", "video/x-ms-wmv"),
+        ("webm", "video/webm"),
+        ("m4v", "video/x-m4v"),
+        ("flv", "video/x-flv"),
+        ("3gp", "video/3gpp"),
+        ("3g2", "video/3gpp2"),
+    ];
+
+    for operation in compiled
+        .operations
+        .iter()
+        .filter(|operation| operation.operation == "video_understand")
+    {
+        // binding is unique because each fixed video facade owns one source file.
+        // binding 是唯一的，因为每个固定视频外壳只持有一个源文件。
+        let binding = operation
+            .upload_bindings
+            .first()
+            .expect("Kimi video operation must own one upload binding");
+        // channel is the exact upload declaration referenced by this operation.
+        // channel 是当前操作引用的精确上传声明。
+        let channel_id = operation
+            .upload_channel_refs
+            .first()
+            .expect("Kimi video operation must reference one upload channel");
+        let channel = compiled
+            .upload_channels
+            .iter()
+            .find(|channel| &channel.upload_channel_id == channel_id)
+            .expect("Kimi video upload channel must exist");
+        for (extension, mime_type) in expected_formats {
+            assert_eq!(
+                binding
+                    .mime_types_by_extension
+                    .get(extension)
+                    .map(String::as_str),
+                Some(mime_type),
+                "operation `{}` must map .{extension}",
+                operation.operation_id
+            );
+            assert!(
+                channel
+                    .accepted_mime_types
+                    .iter()
+                    .any(|accepted| accepted == mime_type),
+                "channel `{channel_id}` must accept `{mime_type}`"
+            );
+        }
+    }
+}
+
+/// Verifies media targets require reviewed projection metadata and non-media targets reject it.
+/// 验证媒体目标必须具有已审核投影元数据，且非媒体目标拒绝该元数据。
+#[test]
+fn media_input_projection_is_closed_by_manifest_validation() {
+    let manifest_path =
+        vulcan_runtime_assets::source_bundled_provider_manifests_directory().join("kimi.json");
+    let manifest_text = std::fs::read_to_string(&manifest_path)
+        .unwrap_or_else(|_| panic!("missing Kimi manifest at {}", manifest_path.display()));
+    let mut manifest: serde_json::Value =
+        serde_json::from_str(&manifest_text).expect("Kimi manifest must be valid JSON");
+    let video_target = manifest["tool_targets"]
+        .as_array_mut()
+        .expect("tool targets")
+        .iter_mut()
+        .find(|target| target["capability"] == "video_understand")
+        .expect("video target");
+    video_target
+        .as_object_mut()
+        .expect("video target object")
+        .remove("media_input_projection");
+    let invalid_text = serde_json::to_string(&manifest).expect("manifest must serialize");
+    assert!(
+        super::compiler::compile_manifest_text(
+            invalid_text.as_str(),
+            super::ManifestOwnership::System,
+        )
+        .is_err(),
+        "a media target without explicit projection must fail closed"
+    );
+}
+
 /// Verifies APIKEY.FUN DeepSeek keeps one canonical reasoning channel without weakening Responses validation.
 /// 验证 APIKEY.FUN DeepSeek 在不放宽 Responses 校验的前提下只保留一条规范思考通道。
 #[test]

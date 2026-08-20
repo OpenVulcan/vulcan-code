@@ -21,10 +21,13 @@ function renderToolbar(options: {
     <I18nProvider initialLocale="en-US">
       <ComposerPanelToolbarRight
         attachmentCount={options.attachmentCount}
+        contextCompactionWindowNodes={[]}
         contextUsage={null}
         draftInput={options.draftInput}
         isConversationRunning={options.isConversationRunning}
+        modelContextLimit={null}
         onReasoningEffortChange={vi.fn()}
+        onSetSessionContextCompactionWindow={vi.fn()}
         onSend={vi.fn()}
         reasoningAriaLabel="Reasoning"
         reasoningEffort=""
@@ -33,6 +36,7 @@ function renderToolbar(options: {
         selectFallbackLabel="Select"
         sendAriaLabel="Send"
         sendBlocked={false}
+        sessionContextCompactionWindowNodeId={null}
         stopAriaLabel="Stop"
       />
     </I18nProvider>,

@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import {
   directProviderModelSettingsEqual,
@@ -27,6 +28,7 @@ import type {
   PublicAiCustomModelRequestProjection,
   PublicAiResourceKind,
   PublicAiSettingsSnapshot,
+  PublicAiStructuredOutputCapability,
 } from "@/types"
 
 // CustomProviderModelDefaultsCardProps binds one direct provider-settings layer to snapshot updates.
@@ -67,6 +69,9 @@ export function CustomProviderModelDefaultsCard(props: CustomProviderModelDefaul
   // inputResources is the complete provider-wide non-text input set.
   // inputResources 是完整的供应商级非文本输入集合。
   const [inputResources, setInputResources] = React.useState(props.defaults.input_resources ?? [])
+  // structuredOutput is the provider-wide stable JSON-output contract.
+  // structuredOutput 是供应商级稳定 JSON 输出契约。
+  const [structuredOutput, setStructuredOutput] = React.useState<PublicAiStructuredOutputCapability>(props.defaults.structured_output ?? "json_object")
   // reasoningEnabled is the simple explicit on/off policy shown to users.
   // reasoningEnabled 是向用户展示的简化显式思考启停策略。
   const [reasoningEnabled, setReasoningEnabled] = React.useState(reasoningIsEnabled(props.defaults))
@@ -94,6 +99,7 @@ export function CustomProviderModelDefaultsCard(props: CustomProviderModelDefaul
     setContextLimit(defaults.context_limit)
     setOutputLimit(defaults.output_limit)
     setInputResources(defaults.input_resources ?? [])
+    setStructuredOutput(defaults.structured_output ?? "json_object")
     setReasoningEnabled(reasoningIsEnabled(defaults))
     setReasoningEfforts(visibleReasoningEfforts(defaults))
     setContextWindowPolicy(defaults.context_window_policy)
@@ -107,12 +113,13 @@ export function CustomProviderModelDefaultsCard(props: CustomProviderModelDefaul
     context_limit: contextLimit,
     output_limit: outputLimit,
     input_resources: inputResources,
+    structured_output: structuredOutput,
     reasoning: reasoningEnabled ? "native" : "unsupported",
     reasoning_control: reasoningEnabled ? "effort_selection" : "fixed_off",
     reasoning_efforts: reasoningEnabled ? reasoningEfforts : ["none"],
     context_window_policy: contextWindowPolicy,
     request_projection: requestProjection,
-  }), [contextLimit, contextWindowPolicy, inputResources, outputLimit, reasoningEfforts, reasoningEnabled, requestProjection])
+  }), [contextLimit, contextWindowPolicy, inputResources, outputLimit, reasoningEfforts, reasoningEnabled, requestProjection, structuredOutput])
   // dirty is true only while visible values differ semantically from the authoritative snapshot.
   // dirty 仅在可见值与权威快照存在语义差异时为真。
   const dirty = !directProviderModelSettingsEqual(currentSettings, props.defaults)
@@ -206,6 +213,20 @@ export function CustomProviderModelDefaultsCard(props: CustomProviderModelDefaul
           />
         </div>
         <ContextWindowPolicyEditor onChange={setContextWindowPolicy} value={contextWindowPolicy} />
+        <fieldset className="space-y-2 rounded-lg border p-3">
+          <legend className="px-1 text-xs font-medium">结构化输出</legend>
+          <Select
+            onValueChange={(value) => setStructuredOutput(value as PublicAiStructuredOutputCapability)}
+            value={structuredOutput}
+          >
+            <SelectTrigger><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="json_object">JSON Object</SelectItem>
+              <SelectItem value="json_schema">JSON Schema</SelectItem>
+              <SelectItem value="unsupported">不支持</SelectItem>
+            </SelectContent>
+          </Select>
+        </fieldset>
         <p className="text-xs text-muted-foreground">
           {t("settings.customModels.outputRecommendation").replace(
             "{count}",
