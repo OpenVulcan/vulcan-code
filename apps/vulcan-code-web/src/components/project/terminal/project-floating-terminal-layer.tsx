@@ -127,9 +127,9 @@ interface ProjectTerminalUiState {
 // projectTerminalUiStateCache 在会话切换引发的 React 重挂载之间保留项目界面所有权。
 const projectTerminalUiStateCache = new Map<string, ProjectTerminalUiState>();
 
-// projectTerminalSeenOpenRequests prevents one old toolbar request from replaying after a remount.
-// projectTerminalSeenOpenRequests 防止旧工具栏打开请求在重挂载后再次播放。
-const projectTerminalSeenOpenRequests = new Map<string, number>();
+// projectTerminalSeenRequests prevents one old toolbar request from replaying after a remount.
+// projectTerminalSeenRequests 防止旧工具栏请求在重挂载后再次播放。
+const projectTerminalSeenRequests = new Map<string, number>();
 
 // projectTerminalResizeRequestTails serializes PTY grid changes across React pane remounts.
 // projectTerminalResizeRequestTails 在 React 面板重挂载之间串行化 PTY 网格变化。
@@ -172,6 +172,20 @@ async function resizeProjectTerminalInOrder(
 
 // ProjectFloatingTerminalLayerProps binds the floating terminal container to one explicit active project.
 // ProjectFloatingTerminalLayerProps 将浮动终端容器绑定到一个明确的活动项目。
+// ProjectTerminalVisibilityRequest identifies one explicit open or toggle action for a project terminal.
+// ProjectTerminalVisibilityRequest 标识项目终端的一次明确展开或切换动作。
+export type ProjectTerminalVisibilityRequest = {
+  // Exact project targeted by the visibility action.
+  // 可见性动作的精确目标项目。
+  projectId: string;
+  // Explicit visibility command issued by the workbench.
+  // 工作台发出的明确可见性命令。
+  action: "open" | "toggle";
+  // Monotonic request revision used to process each command exactly once.
+  // 用于确保每个命令只处理一次的单调请求修订号。
+  nonce: number;
+};
+
 export interface ProjectFloatingTerminalLayerProps {
   // Explicit project selected by the workbench project state.
   // 工作台项目状态明确选中的项目。
@@ -179,9 +193,9 @@ export interface ProjectFloatingTerminalLayerProps {
   // Authoritative workbench projects used to prune removed project UI state.
   // 用于裁剪已移除项目界面状态的权威工作台项目集合。
   projects: readonly ProjectSummary[];
-  // Explicit request that expands only its exact target project's terminal container.
-  // 仅展开其精确目标项目终端容器的明确请求。
-  openRequest: { projectId: string; nonce: number } | null;
+  // Explicit request that changes visibility only for its exact target project's terminal container.
+  // 仅改变其精确目标项目终端容器可见性的明确请求。
+  openRequest: ProjectTerminalVisibilityRequest | null;
   // Live top-bar button used as the macOS-style minimize and restore animation anchor.
   // 用作 macOS 风格最小化与恢复动画锚点的实时顶部栏按钮。
   minimizeAnchorRef: React.RefObject<HTMLButtonElement | null>;
@@ -196,9 +210,9 @@ export function ProjectFloatingTerminalLayer(props: ProjectFloatingTerminalLayer
   // projectStates retains independent UI state while users switch between projects.
   // projectStates 在用户切换项目时保留相互独立的界面状态。
   const projectStates = React.useRef(projectTerminalUiStateCache);
-  // seenOpenRequests prevents an old explicit open request from replaying after later project switches.
-  // seenOpenRequests 防止旧的明确打开请求在后续项目切换后重新播放。
-  const seenOpenRequests = React.useRef(projectTerminalSeenOpenRequests);
+  // seenRequests prevents an old explicit visibility request from replaying after later project switches.
+  // seenRequests 防止旧的明确可见性请求在后续项目切换后重新播放。
+  const seenRequests = React.useRef(projectTerminalSeenRequests);
   // stateRevision rerenders after the active map entry changes.
   // stateRevision 在活动映射条目变化后触发重新渲染。
   const [, setStateRevision] = React.useState(0);
@@ -213,7 +227,7 @@ export function ProjectFloatingTerminalLayer(props: ProjectFloatingTerminalLayer
   // Prune project-scoped UI caches after authoritative project removal.
   // 权威项目移除后裁剪项目级界面缓存。
   React.useEffect(() => {
-    pruneRemovedProjectTerminalUiState(projectStates.current, seenOpenRequests.current, props.projects);
+    pruneRemovedProjectTerminalUiState(projectStates.current, seenRequests.current, props.projects);
   }, [props.projects]);
   // activeState is the exact project entry rendered during this pass.
   // activeState 是本次渲染使用的精确项目条目。
@@ -248,6 +262,12 @@ export function ProjectFloatingTerminalLayer(props: ProjectFloatingTerminalLayer
   const setExpanded = React.useCallback((action: React.SetStateAction<boolean>) => {
     updateActiveState((current) => ({ ...current, expanded: resolveStateAction(action, current.expanded) }));
   }, [updateActiveState]);
+  // minimizeProjectTerminal releases keyboard ownership before hiding the terminal surface.
+  // minimizeProjectTerminal 在隐藏终端表面前释放键盘所有权。
+  const minimizeProjectTerminal = React.useCallback(() => {
+    if (selectedTerminalId) releaseProjectTerminalInputOwner(selectedTerminalId);
+    setExpanded(false);
+  }, [selectedTerminalId, setExpanded]);
   // setSidebarCollapsed preserves the project-owned navigation density independently from window visibility.
   // setSidebarCollapsed 独立于窗口可见性保留项目持有的导航密度。
   const setSidebarCollapsed = React.useCallback((action: React.SetStateAction<boolean>) => {
@@ -289,11 +309,12 @@ export function ProjectFloatingTerminalLayer(props: ProjectFloatingTerminalLayer
   }, [updateActiveState]);
   React.useEffect(() => {
     if (!projectId || props.openRequest?.projectId !== projectId) return;
-    const seenNonce = seenOpenRequests.current.get(projectId) ?? 0;
+    const seenNonce = seenRequests.current.get(projectId) ?? 0;
     if (props.openRequest.nonce <= seenNonce) return;
-    seenOpenRequests.current.set(projectId, props.openRequest.nonce);
-    setExpanded(true);
-  }, [projectId, props.openRequest, setExpanded]);
+    seenRequests.current.set(projectId, props.openRequest.nonce);
+    if (props.openRequest.action === "toggle" && expanded) minimizeProjectTerminal();
+    else setExpanded(true);
+  }, [expanded, minimizeProjectTerminal, projectId, props.openRequest, setExpanded]);
   React.useEffect(() => {
     setTerminalConfirmation(null);
   }, [projectId]);
@@ -472,10 +493,7 @@ export function ProjectFloatingTerminalLayer(props: ProjectFloatingTerminalLayer
         </button>
         <button
           aria-label="收起项目终端"
-          onClick={() => {
-            if (selectedTerminalId) releaseProjectTerminalInputOwner(selectedTerminalId);
-            setExpanded(false);
-          }}
+          onClick={minimizeProjectTerminal}
           title="收起"
           type="button"
         >
@@ -713,7 +731,7 @@ export function ProjectFloatingTerminalLayer(props: ProjectFloatingTerminalLayer
           if (!open && busyAction === null) setTerminalConfirmation(null);
         }}
       >
-        <AlertDialogContent>
+        <AlertDialogContent layerClassName="z-[1000]">
           <AlertDialogHeader>
             <AlertDialogTitle>
               {terminalConfirmation?.action === "close" ? "关闭运行中的终端？" : "停止当前终端？"}
@@ -749,7 +767,7 @@ export function ProjectFloatingTerminalLayer(props: ProjectFloatingTerminalLayer
 //
 // Parameters / 参数:
 // - `projectStates`: Project-keyed floating terminal UI state. / 按项目键控的浮动终端界面状态。
-// - `seenOpenRequests`: Project-keyed handled open-request revisions. / 按项目键控的已处理打开请求修订。
+// - `seenRequests`: Project-keyed handled visibility-request revisions. / 按项目键控的已处理可见性请求修订。
 // - `projects`: Authoritative projects currently present in the workbench. / 当前存在于工作台的权威项目集合。
 //
 // Returns / 返回值:
@@ -757,15 +775,15 @@ export function ProjectFloatingTerminalLayer(props: ProjectFloatingTerminalLayer
 // 删除每个已移除项目的状态后无返回值。
 export function pruneRemovedProjectTerminalUiState<T>(
   projectStates: Map<string, T>,
-  seenOpenRequests: Map<string, number>,
+  seenRequests: Map<string, number>,
   projects: readonly Pick<ProjectSummary, "id">[],
 ): void {
   const retainedProjectIds = new Set(projects.map((project) => project.id));
   for (const projectId of projectStates.keys()) {
     if (!retainedProjectIds.has(projectId)) projectStates.delete(projectId);
   }
-  for (const projectId of seenOpenRequests.keys()) {
-    if (!retainedProjectIds.has(projectId)) seenOpenRequests.delete(projectId);
+  for (const projectId of seenRequests.keys()) {
+    if (!retainedProjectIds.has(projectId)) seenRequests.delete(projectId);
   }
 }
 

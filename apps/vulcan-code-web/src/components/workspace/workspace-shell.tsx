@@ -1051,13 +1051,13 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   const activeTerminalProject = props.workbench.projects.find(
     (project) => project.id === props.activeProjectId,
   ) ?? null;
-  // projectTerminalLabel describes the active project's top-bar terminal action.
-  // projectTerminalLabel 描述当前活动项目的顶部栏终端操作。
+  // projectTerminalLabel describes the active project's top-bar terminal toggle action.
+  // projectTerminalLabel 描述当前活动项目的顶部栏终端切换操作。
   const projectTerminalLabel = activeTerminalProject
     ? props.projectTerminalRunningCount > 0
-      ? `打开 ${activeTerminalProject.name} 项目终端，${props.projectTerminalRunningCount} 个后台终端正在运行`
-      : `打开 ${activeTerminalProject.name} 项目终端`
-    : "打开项目终端";
+      ? `展开或收起 ${activeTerminalProject.name} 项目终端，${props.projectTerminalRunningCount} 个后台终端正在运行`
+      : `展开或收起 ${activeTerminalProject.name} 项目终端`
+    : "展开或收起项目终端";
   // projectTerminalAction anchors the floating terminal immediately left of the context-panel toggle.
   // projectTerminalAction 将浮动终端入口锚定在上下文面板切换按钮左侧。
   const projectTerminalAction = activeTerminalProject ? (
@@ -1068,7 +1068,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           aria-haspopup="dialog"
           aria-label={projectTerminalLabel}
           className="icon-button project-terminal-launch-button"
-          onClick={props.onOpenProjectTerminal}
+          onClick={props.onToggleProjectTerminal}
           size={props.projectTerminalRunningCount > 0 ? "sm" : "icon-sm"}
           type="button"
           variant="ghost"

@@ -62,23 +62,28 @@ interface AlertDialogContentProps extends React.ComponentProps<typeof AlertDialo
   // Semantic width of the confirmation surface.
   // 确认弹窗表面的语义宽度。
   size?: AlertDialogContentSize
+  // Optional layer class applied to both the modal backdrop and content surface.
+  // 可选层级样式，同时应用于模态遮罩与内容表面。
+  layerClassName?: string
 }
 
 // AlertDialogContent renders the shared confirmation surface at a semantic width.
 // AlertDialogContent 使用语义宽度渲染共享确认弹窗表面。
 function AlertDialogContent({
   className,
+  layerClassName,
   size = "compact",
   ...props
 }: AlertDialogContentProps) {
   return (
     <AlertDialogPortal>
-      <AlertDialogOverlay />
+      <AlertDialogOverlay className={layerClassName} />
       <AlertDialogPrimitive.Content
         data-slot="alert-dialog-content"
         data-size={size}
         className={cn(
           "group/alert-dialog-content fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 rounded-xl bg-popover p-4 text-popover-foreground ring-1 ring-foreground/10 duration-100 outline-none data-[size=compact]:sm:max-w-sm data-[size=sm]:sm:max-w-md data-[size=md]:sm:max-w-lg data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          layerClassName,
           className
         )}
         {...props}

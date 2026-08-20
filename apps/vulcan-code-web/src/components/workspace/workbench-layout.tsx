@@ -30,7 +30,10 @@ import {
   type ConversationMenuAction,
   type ProjectMenuAction,
 } from "@/components/project/ProjectSidebar";
-import { ProjectFloatingTerminalLayer } from "@/components/project/terminal/project-floating-terminal-layer";
+import {
+  ProjectFloatingTerminalLayer,
+  type ProjectTerminalVisibilityRequest,
+} from "@/components/project/terminal/project-floating-terminal-layer";
 import { clearProjectTerminalInputBuffers } from "@/components/project/terminal/project-terminal-input-buffer";
 import {
   type DraftConversationSelection,
@@ -381,12 +384,9 @@ export function WorkbenchLayout(props: {
       ? selectedProjectId
       : props.workbench.projects[0]?.id ?? null;
   });
-  // projectTerminalOpenRequest expands the project floating terminal only after an explicit user action.
-  // projectTerminalOpenRequest 仅在用户明确操作后展开项目浮动终端。
-  const [projectTerminalOpenRequest, setProjectTerminalOpenRequest] = React.useState<{
-    projectId: string;
-    nonce: number;
-  } | null>(null);
+  // projectTerminalOpenRequest carries explicit open or toggle commands to the project floating terminal.
+  // projectTerminalOpenRequest 向项目浮动终端传递明确的展开或切换命令。
+  const [projectTerminalOpenRequest, setProjectTerminalOpenRequest] = React.useState<ProjectTerminalVisibilityRequest | null>(null);
   // projectTerminalButtonRef exposes the exact top-bar target for the macOS-style Genie animation.
   // projectTerminalButtonRef 暴露 macOS 风格精灵动画使用的精确顶部栏目标。
   const projectTerminalButtonRef = React.useRef<HTMLButtonElement | null>(null);
@@ -1057,12 +1057,13 @@ export function WorkbenchLayout(props: {
   // activeProject resolves the explicit owner used by project-level floating tools.
   // activeProject 解析项目级浮动工具使用的明确归属项目。
   const activeProject = workbenchState.projects.find((project) => project.id === activeProjectId) ?? null;
-  // handleOpenActiveProjectTerminal issues one explicit open request for the current project.
-  // handleOpenActiveProjectTerminal 为当前项目发出一次明确的打开请求。
-  const handleOpenActiveProjectTerminal = React.useCallback(() => {
+  // handleToggleActiveProjectTerminal switches the current project's terminal between visible and minimized states.
+  // handleToggleActiveProjectTerminal 在当前项目终端的显示与最小化状态之间切换。
+  const handleToggleActiveProjectTerminal = React.useCallback(() => {
     if (!activeProject) return;
     setProjectTerminalOpenRequest((request) => ({
       projectId: activeProject.id,
+      action: "toggle",
       nonce: (request?.nonce ?? 0) + 1,
     }));
   }, [activeProject]);
@@ -1154,6 +1155,7 @@ export function WorkbenchLayout(props: {
       setActiveProjectId(project.id);
       setProjectTerminalOpenRequest((request) => ({
         projectId: project.id,
+        action: "open",
         nonce: (request?.nonce ?? 0) + 1,
       }));
       return;
@@ -1958,7 +1960,7 @@ export function WorkbenchLayout(props: {
             projectTerminalRunningCount={activeProjectId
               ? projectTerminalRunningCounts[activeProjectId]?.runningCount ?? 0
               : 0}
-            onOpenProjectTerminal={handleOpenActiveProjectTerminal}
+            onToggleProjectTerminal={handleToggleActiveProjectTerminal}
             startup={props.startup}
             workbench={consoleWorkbenchState}
             activeSkillSubArea={activeWorkbenchSkillSubArea}

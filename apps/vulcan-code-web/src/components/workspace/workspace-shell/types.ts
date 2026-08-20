@@ -90,9 +90,9 @@ export interface WorkspaceShellProps {
   // Count of running background terminals owned by the active project.
   // 当前活动项目持有的运行中后台终端数量。
   projectTerminalRunningCount: number;
-  // Opens the terminal container owned by the active project.
-  // 打开当前活动项目持有的终端容器。
-  onOpenProjectTerminal: () => void;
+  // Toggles the terminal container owned by the active project.
+  // 切换当前活动项目持有的终端容器。
+  onToggleProjectTerminal: () => void;
   // Publishes the exact persisted transcript currently visible in this workspace shell.
   // 发布当前工作区壳中真实可见的持久化转录。
   onNotificationPresentationContextChange: (context: NotificationPresentationContext) => void;

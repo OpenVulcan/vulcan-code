@@ -82,15 +82,55 @@ describe("project terminal data contracts", () => {
       ["retained", { expanded: true }],
       ["removed", { expanded: false }],
     ]);
-    const seenOpenRequests = new Map([
+    const seenRequests = new Map([
       ["retained", 2],
       ["removed", 1],
     ]);
 
-    pruneRemovedProjectTerminalUiState(projectStates, seenOpenRequests, [{ id: "retained" }]);
+    pruneRemovedProjectTerminalUiState(projectStates, seenRequests, [{ id: "retained" }]);
 
     expect([...projectStates.keys()]).toEqual(["retained"]);
-    expect([...seenOpenRequests.keys()]).toEqual(["retained"]);
+    expect([...seenRequests.keys()]).toEqual(["retained"]);
+  });
+
+  // Verifies the top terminal action uses the same visibility request path as the floating window.
+  // 验证顶部终端操作与浮动窗口使用同一条可见性请求链路。
+  it("toggles the floating terminal from the top-bar action", () => {
+    const componentSource = readFileSync(
+      new URL("./project-floating-terminal-layer.tsx", import.meta.url),
+      "utf8",
+    );
+    const workbenchSource = readFileSync(
+      new URL("../../workspace/workbench-layout.tsx", import.meta.url),
+      "utf8",
+    );
+    const shellSource = readFileSync(
+      new URL("../../workspace/workspace-shell.tsx", import.meta.url),
+      "utf8",
+    );
+
+    expect(componentSource).toContain('props.openRequest.action === "toggle"');
+    expect(componentSource).toContain("onClick={minimizeProjectTerminal}");
+    expect(workbenchSource).toContain("action: \"toggle\",");
+    expect(workbenchSource).toContain("onToggleProjectTerminal={handleToggleActiveProjectTerminal}");
+    expect(shellSource).toContain("onClick={props.onToggleProjectTerminal}");
+  });
+
+  // Verifies the running-terminal confirmation is above every dynamically activated floating terminal.
+  // 验证运行中终端确认弹窗始终位于动态激活的浮动终端之上。
+  it("raises the terminal lifecycle confirmation layer", () => {
+    const componentSource = readFileSync(
+      new URL("./project-floating-terminal-layer.tsx", import.meta.url),
+      "utf8",
+    );
+    const alertDialogSource = readFileSync(
+      new URL("../../../components/ui/alert-dialog.tsx", import.meta.url),
+      "utf8",
+    );
+
+    expect(componentSource).toContain('<AlertDialogContent layerClassName="z-[1000]">');
+    expect(alertDialogSource).toContain("layerClassName?: string");
+    expect(alertDialogSource).toContain("<AlertDialogOverlay className={layerClassName} />");
   });
 
   // Verifies React batching deduplicates output and exposes a bounded-history gap explicitly.
@@ -239,7 +279,7 @@ describe("project terminal data contracts", () => {
     expect(componentSource).toContain('title="关闭终端"');
     expect(componentSource).toContain('floatingControls.maximized ? "还原" : "最大化"');
     expect(componentSource).toContain("projectTerminalUiStateCache");
-    expect(componentSource).toContain("projectTerminalSeenOpenRequests");
+    expect(componentSource).toContain("projectTerminalSeenRequests");
     expect(componentSource).toContain("sidebarCollapsed: false");
     expect(componentSource).toContain('className="project-terminal-compact-session-list"');
     expect(componentSource).toContain('{index + 1}');
