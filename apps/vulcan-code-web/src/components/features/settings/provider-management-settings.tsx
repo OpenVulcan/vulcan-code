@@ -319,9 +319,9 @@ export function ProviderManagementArea() {
   return (
     <div className="settings-direct-content provider-management-surface space-y-6 px-4 lg:px-6">
       <div>
-        <h2 className="text-xl font-semibold">供应商管理</h2>
+        <h2 className="text-xl font-semibold">{t("settings.providers.managementTitle")}</h2>
         <p className="text-sm text-muted-foreground">
-          管理 Vulcan Code 已实现的内置供应商与复用现有协议适配器的自定义供应商。
+          {t("settings.providers.managementDescription")}
         </p>
       </div>
 
@@ -333,16 +333,16 @@ export function ProviderManagementArea() {
 
       <Tabs className="space-y-4" defaultValue="system">
         <TabsList variant="line">
-          <TabsTrigger value="system">系统供应商</TabsTrigger>
-          <TabsTrigger value="functional">功能供应商</TabsTrigger>
-          <TabsTrigger value="custom">自定义供应商</TabsTrigger>
-          <TabsTrigger value="catalog">供应商清单</TabsTrigger>
+          <TabsTrigger value="system">{t("settings.providers.system")}</TabsTrigger>
+          <TabsTrigger value="functional">{t("settings.providers.functional")}</TabsTrigger>
+          <TabsTrigger value="custom">{t("settings.providers.custom")}</TabsTrigger>
+          <TabsTrigger value="catalog">{t("settings.providers.catalog")}</TabsTrigger>
         </TabsList>
         <TabsContent className="m-0" value="system">
           <SystemProviderTable
             busyProviderId={busyProviderId}
             connections={snapshot?.connections ?? []}
-            heading="系统供应商"
+            heading={t("settings.providers.system")}
             loading={!snapshot}
             onAddCredential={setCredentialProviderId}
             onSavePriority={(providerId, priority) => void saveProviderPriority(providerId, priority)}
@@ -355,7 +355,7 @@ export function ProviderManagementArea() {
           <SystemProviderTable
             busyProviderId={busyProviderId}
             connections={snapshot?.connections ?? []}
-            heading="功能供应商"
+            heading={t("settings.providers.functional")}
             loading={!snapshot}
             onAddCredential={setCredentialProviderId}
             onSavePriority={(providerId, priority) => void saveProviderPriority(providerId, priority)}
@@ -368,10 +368,10 @@ export function ProviderManagementArea() {
           {customProviderManifestFailureTotalCount > 0 ? (
             <div className="rounded-xl border border-destructive/40 bg-destructive/5 p-4 text-sm">
               <p className="font-semibold text-destructive">
-                已隔离 {customProviderManifestFailureTotalCount} 个自定义供应商
+                {t("settings.providers.isolatedCount").replace("{count}", String(customProviderManifestFailureTotalCount))}
               </p>
               <p className="mt-1 text-muted-foreground">
-                该供应商已停止参与运行时路由；其他供应商及其设置仍可正常使用和保存。下列独立 Manifest 源文件会在保存时保持原始字节不变；可修复源文件后重启 Service，或显式删除对应隔离项。
+                {t("settings.providers.isolatedDescription")}
               </p>
               <ul className="mt-2 space-y-2 text-xs text-destructive">
                 {customProviderManifestFailures.map((failure, index) => (
@@ -391,13 +391,13 @@ export function ProviderManagementArea() {
                       variant="destructive"
                     >
                       <Trash2 className="mr-1 size-3.5" />
-                      删除隔离项
+                      {t("settings.providers.removeIsolated")}
                     </Button>
                   </li>
                 ))}
               </ul>
               {snapshot?.customProviderManifestFailuresTruncated ? (
-                <p className="mt-2 text-xs text-muted-foreground">其余诊断已按安全上限省略。</p>
+                <p className="mt-2 text-xs text-muted-foreground">{t("settings.providers.diagnosticsOmitted")}</p>
               ) : null}
             </div>
           ) : null}
@@ -489,11 +489,11 @@ export function ProviderManagementArea() {
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>删除隔离的自定义供应商</AlertDialogTitle>
+            <AlertDialogTitle>{t("settings.providers.removeIsolatedTitle")}</AlertDialogTitle>
             <AlertDialogDescription>
               <span className="block space-y-2">
                 <span className="block">
-                  将永久删除该供应商的独立 Manifest、中央引用、连接、凭据与模型设置；其他供应商不受影响。
+                  {t("settings.providers.removeIsolatedDescription")}
                 </span>
                 <span className="block break-all font-mono text-foreground">
                   {isolatedProviderToRemove}
@@ -515,7 +515,7 @@ export function ProviderManagementArea() {
               }}
               variant="destructive"
             >
-              永久删除
+              {t("settings.providers.permanentlyDelete")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -552,7 +552,7 @@ function CustomProviderTable(props: {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <ServerCog className="size-4" />
-          <h3 className="font-medium">自定义供应商</h3>
+          <h3 className="font-medium">{t("settings.providers.customTitle")}</h3>
           <Badge variant="secondary">{props.providers.length}</Badge>
         </div>
         <Button
@@ -562,30 +562,30 @@ function CustomProviderTable(props: {
           onClick={props.onCreate}
         >
           <Plus className="size-4" />
-          <span className="leading-none">添加供应商</span>
+          <span className="leading-none">{t("settings.providers.addProvider")}</span>
         </Button>
       </div>
 
       {props.loading ? (
         <div className="flex items-center gap-2 rounded-lg border p-4 text-sm text-muted-foreground">
           <LoaderCircle className="size-4 animate-spin" />
-          正在加载供应商
+          {t("settings.providers.loading")}
         </div>
       ) : props.providers.length === 0 ? (
         <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
-          尚未添加自定义供应商。
+          {t("settings.providers.emptyCustom")}
         </div>
       ) : (
         <div className="overflow-hidden rounded-xl border">
           <Table>
             <TableHeader className="bg-muted/40">
               <TableRow>
-                <TableHead className="w-[18rem]">供应商</TableHead>
-                <TableHead>接口</TableHead>
-                <TableHead className="w-32">资源数量</TableHead>
-                <TableHead className="w-28 text-center">状态</TableHead>
-                <TableHead className="w-36">优先级</TableHead>
-                <TableHead className="w-52 text-right">操作</TableHead>
+                <TableHead className="w-[18rem]">{t("settings.providers.table.provider")}</TableHead>
+                <TableHead>{t("settings.providers.table.endpoint")}</TableHead>
+                <TableHead className="w-32">{t("settings.providers.table.resources")}</TableHead>
+                <TableHead className="w-28 text-center">{t("settings.providers.table.status")}</TableHead>
+                <TableHead className="w-36">{t("settings.providers.table.priority")}</TableHead>
+                <TableHead className="w-52 text-right">{t("settings.providers.table.actions")}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -616,7 +616,7 @@ function CustomProviderTable(props: {
                     </TableCell>
                     <TableCell className="whitespace-normal py-3 align-top">
                       <div className="font-medium">
-                        {protocolNames.length > 0 ? protocolNames.join(" · ") : "未声明调用协议"}
+                        {protocolNames.length > 0 ? protocolNames.join(" · ") : t("settings.providers.table.protocolUnavailable")}
                       </div>
                       <div className="mt-1 space-y-1 text-xs text-muted-foreground">
                         {provider.service_entries.map((entry) => (
@@ -628,11 +628,11 @@ function CustomProviderTable(props: {
                     </TableCell>
                     <TableCell className="whitespace-normal py-3 align-top text-sm text-muted-foreground">
                       <div>{t("settings.customProviders.modelCount").replace("{count}", String(modelCount))}</div>
-                      <div className="mt-1">{credentialCount} 个凭据</div>
+                        <div className="mt-1">{t("settings.providers.credentialCount").replace("{count}", String(credentialCount))}</div>
                     </TableCell>
                     <TableCell className="py-3 text-center align-top">
                       <Badge variant={credentialCount > 0 ? "default" : "secondary"}>
-                        {credentialCount > 0 ? "已配置" : "未配置"}
+                        {credentialCount > 0 ? t("settings.providers.configured") : t("settings.providers.notConfigured")}
                       </Badge>
                     </TableCell>
                     <TableCell className="py-3 align-top">
@@ -645,14 +645,14 @@ function CustomProviderTable(props: {
                     <TableCell className="py-3 text-right align-top">
                       <div className="flex justify-end gap-1">
                         <Button
-                          aria-label={`为 ${provider.display_name} 添加凭据`}
+                          aria-label={t("settings.providers.addCredentialFor").replace("{provider}", provider.display_name)}
                           onClick={() => props.onAddCredential(provider.id)}
                           size="sm"
                           type="button"
                           variant="outline"
                         >
                           <KeyRound className="mr-1 size-3.5" />
-                          添加凭据
+                          {t("settings.providerOnboarding.addCredential")}
                         </Button>
                         <Button
                           aria-label={t("settings.customProviders.manageModelsFor").replace("{provider}", provider.display_name)}
@@ -665,7 +665,7 @@ function CustomProviderTable(props: {
                           <ListTree className="size-4" />
                         </Button>
                         <Button
-                          aria-label={`编辑 ${provider.display_name}`}
+                          aria-label={t("settings.providers.editFor").replace("{provider}", provider.display_name)}
                           onClick={() => props.onEdit(provider)}
                           size="icon-sm"
                           type="button"
@@ -674,7 +674,7 @@ function CustomProviderTable(props: {
                           <Pencil className="size-4" />
                         </Button>
                         <Button
-                          aria-label={`移除 ${provider.display_name}`}
+                          aria-label={t("settings.providers.removeFor").replace("{provider}", provider.display_name)}
                           disabled={props.busyProviderId === provider.id}
                           onClick={() => props.onRemove(provider)}
                           size="icon-sm"
@@ -734,18 +734,18 @@ function SystemProviderTable(props: {
       {props.loading ? (
         <div className="flex items-center gap-2 rounded-lg border p-4 text-sm text-muted-foreground">
           <LoaderCircle className="size-4 animate-spin" />
-          正在加载供应商
+          {t("settings.providers.loading")}
         </div>
       ) : (
         <div className="overflow-hidden rounded-xl border">
           <Table>
             <TableHeader className="bg-muted/40">
               <TableRow>
-                <TableHead className="w-[18rem]">供应商</TableHead>
-                <TableHead>详情</TableHead>
-                <TableHead className="w-32 text-right">配置状态</TableHead>
-                <TableHead className="w-36">优先级</TableHead>
-                <TableHead className="w-28 text-right">操作</TableHead>
+                <TableHead className="w-[18rem]">{t("settings.providers.table.provider")}</TableHead>
+                <TableHead>{t("settings.providers.table.details")}</TableHead>
+                <TableHead className="w-32 text-right">{t("settings.providers.table.configurationStatus")}</TableHead>
+                <TableHead className="w-36">{t("settings.providers.table.priority")}</TableHead>
+                <TableHead className="w-28 text-right">{t("settings.providers.table.operation")}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -802,7 +802,7 @@ function SystemProviderTable(props: {
                     </TableCell>
                     <TableCell className="py-3 text-right align-top">
                       <Badge variant={credentialCount > 0 ? "default" : "secondary"}>
-                        {credentialCount > 0 ? `${credentialCount} 个凭据` : "未配置"}
+                        {credentialCount > 0 ? t("settings.providers.credentialCount").replace("{count}", String(credentialCount)) : t("settings.providers.notConfigured")}
                       </Badge>
                     </TableCell>
                     <TableCell className="py-3 align-top">
@@ -821,7 +821,7 @@ function SystemProviderTable(props: {
                         variant="outline"
                       >
                         <KeyRound className="mr-1 size-3.5" />
-                        添加凭据
+                        {t("settings.providerOnboarding.addCredential")}
                       </Button>
                     </TableCell>
                   </TableRow>
@@ -852,6 +852,7 @@ interface ProviderPriorityEditorProps {
 // ProviderPriorityEditor edits and explicitly saves one signed 32-bit ordering value.
 // ProviderPriorityEditor 编辑并显式保存一个有符号 32 位排序值。
 function ProviderPriorityEditor(props: ProviderPriorityEditorProps) {
+  const { t } = useI18n()
   // draft preserves incomplete numeric input until the user explicitly saves it.
   // draft 在用户显式保存前保留尚未完成的数字输入。
   const [draft, setDraft] = React.useState(String(props.value))
@@ -880,7 +881,7 @@ function ProviderPriorityEditor(props: ProviderPriorityEditorProps) {
   return (
     <div className="flex items-center gap-1">
       <Input
-        aria-label="供应商优先级"
+        aria-label={t("settings.providers.priorityAria")}
         className="h-8 w-20"
         disabled={props.busy}
         onChange={(event) => setDraft(event.target.value)}
@@ -901,7 +902,7 @@ function ProviderPriorityEditor(props: ProviderPriorityEditorProps) {
         type="button"
         variant="ghost"
       >
-        保存
+        {t("settings.providers.savePriority")}
       </Button>
     </div>
   )

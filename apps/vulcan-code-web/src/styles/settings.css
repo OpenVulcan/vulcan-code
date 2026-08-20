@@ -571,7 +571,18 @@
   gap: 6px;
   color: var(--muted-foreground);
   font-size: 12px;
-  white-space: nowrap;
+  white-space: normal;
+}
+
+.settings-model-switch-control > span {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow-wrap: anywhere;
+  line-height: 1.2;
+}
+
+.settings-model-switch-control > button {
+  flex: 0 0 auto;
 }
 
 .settings-model-modality-summary,

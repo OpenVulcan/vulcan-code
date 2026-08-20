@@ -1,4 +1,23 @@
-import type { AgentSkillCategorySaveRequest, AgentSkillSaveRequest } from "@/types"
+import type { TranslationKey } from "@/i18n"
+import type { AgentSkillCategorySaveRequest, AgentSkillSaveRequest, AgentSkillsCatalogSummary } from "@/types"
+
+// agentSkillsCatalogSummary builds the locale-aware catalog count shown by Agent Skills surfaces.
+// agentSkillsCatalogSummary 构建 Agent Skills 各界面显示的本地化目录计数摘要。
+export function agentSkillsCatalogSummary(
+  catalog: AgentSkillsCatalogSummary,
+  t: (key: TranslationKey) => string,
+): string {
+  const systemCount = catalog.records.filter((record) => record.scopeKey === "system").length
+  const userCount = catalog.records.filter((record) => record.scopeKey === "user").length
+  const pluginCount = catalog.records.filter((record) => record.scopeKey === "plugin").length
+  const effectiveCount = catalog.records.filter((record) => record.effective).length
+  return t("skills.catalogSummary")
+    .replace("{system}", String(systemCount))
+    .replace("{user}", String(userCount))
+    .replace("{plugin}", String(pluginCount))
+    .replace("{effective}", String(effectiveCount))
+    .replace("{issues}", String(catalog.errors.length))
+}
 
 // AgentSkillActionProps defines the independent Agent Skills management boundary.
 // AgentSkillActionProps 定义独立 Agent Skills 管理边界。

@@ -4,6 +4,7 @@ import type { PublicAiContextCompactionWindowNode, PublicAiSettingsSnapshot } fr
 import {
   availableContextCompactionWindowNodes,
   composerCapabilityIsEnabled,
+  formatContextWindowNodeTokens,
   orderProviderToolCapabilities,
   orderedProviderToolCapabilities,
   providerToolCapabilitySwitchDisabled,
@@ -337,5 +338,13 @@ describe("availableContextCompactionWindowNodes", () => {
       .toEqual([200_000, 256_000, 272_000, 373_000]);
     expect(availableContextCompactionWindowNodes(nodes, 500_001).map((node) => node.tokens))
       .toEqual([200_000, 256_000, 272_000, 373_000, 500_000]);
+  });
+});
+
+describe("formatContextWindowNodeTokens", () => {
+  it("formats original model windows as integer K or M labels", () => {
+    expect(formatContextWindowNodeTokens(400_000)).toBe("400K");
+    expect(formatContextWindowNodeTokens(1_000_000)).toBe("1M");
+    expect(formatContextWindowNodeTokens(1_500_000)).toBe("1500K");
   });
 });

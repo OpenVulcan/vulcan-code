@@ -19,14 +19,9 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuLabel,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+  SegmentedControl,
+  SegmentedControlItem,
+} from "@/components/ui/choice-controls";
 import {
   Dialog,
   DialogContent,
@@ -94,7 +89,7 @@ export function ContextUsageOrb(props: {
 }) {
   // t resolves stable copy for the active WebUI language.
   // t 为当前 WebUI 语言解析稳定文案。
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   if (!props.snapshot) {
     return null;
   }
@@ -102,7 +97,7 @@ export function ContextUsageOrb(props: {
   const breakdown = contextUsageBreakdown(snapshot);
   const usageBasisPoints = contextUsageBasisPoints(snapshot);
   const percent = usageBasisPoints / 100;
-  const title = snapshot.tooltipTitle || "上下文容量";
+  const title = snapshot.tooltipTitle || t("contextUsage.title");
   const detailVisible = breakdown.length > 0;
   // selectedNode resolves the persisted id against the current backend projection.
   // selectedNode 根据当前后端投影解析持久化标识。
@@ -114,6 +109,11 @@ export function ContextUsageOrb(props: {
     props.contextCompactionWindowNodes,
     modelContextLimit,
   );
+  // defaultContextWindowLabel exposes the active model's original hard window on the restore-default item.
+  // defaultContextWindowLabel 在恢复默认选项上直接展示当前模型的原始硬窗口。
+  const defaultContextWindowLabel = modelContextLimit == null
+    ? t("composer.contextWindow.default")
+    : formatContextWindowNodeTokens(modelContextLimit);
   // selectedNodeIsInvalid keeps a changed global node visible until the user restores Default.
   // selectedNodeIsInvalid 在全局节点变化失效后仍保持可见，直到用户恢复默认。
   const selectedNodeIsInvalid = selectedNode != null
@@ -131,8 +131,8 @@ export function ContextUsageOrb(props: {
   } as React.CSSProperties;
 
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild disabled={props.disabled}>
+    <Tooltip>
+      <TooltipTrigger asChild>
         <button
           aria-label={selectedNode
             ? `${title} · ${formatContextWindowNodeTokens(selectedNode.tokens)}`
@@ -153,70 +153,81 @@ export function ContextUsageOrb(props: {
             </span>
           ) : null}
         </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="context-usage-menu" side="top" sideOffset={8}>
-        <DropdownMenuLabel className="context-usage-card">
-          <div className="context-usage-card-header">
-            <strong>{title}</strong>
-            <span>{formatContextUsageTotal(snapshot)}</span>
+      </TooltipTrigger>
+      <TooltipContent
+        align="end"
+        className="context-usage-tooltip"
+        showArrow={false}
+        side="top"
+        sideOffset={8}
+      >
+        <div className="context-usage-card-header">
+          <strong>{title}</strong>
+          <span>{formatContextUsageTotal(snapshot, locale)}</span>
+        </div>
+        <ContextUsageProgressBar breakdown={breakdown} usageBasisPoints={usageBasisPoints} />
+        {detailVisible ? (
+          <div className="context-usage-breakdown">
+            {breakdown.map((item) => (
+              <div className="context-usage-breakdown-row" key={item.kind}>
+                <span className="context-usage-breakdown-label">
+                  <i className={`context-usage-dot kind-${item.kind}`} />
+                  {item.label}
+                </span>
+                <span>{formatBasisPoints(item.basisPoints)}</span>
+              </div>
+            ))}
           </div>
-          <ContextUsageProgressBar breakdown={breakdown} usageBasisPoints={usageBasisPoints} />
-          {detailVisible ? (
-            <div className="context-usage-breakdown">
-              {breakdown.map((item) => (
-                <div className="context-usage-breakdown-row" key={item.kind}>
-                  <span className="context-usage-breakdown-label">
-                    <i className={`context-usage-dot kind-${item.kind}`} />
-                    {item.label}
-                  </span>
-                  <span>{formatBasisPoints(item.basisPoints)}</span>
-                </div>
-              ))}
-            </div>
-          ) : null}
-          <div className="context-usage-cache-row">
-            <span>平均缓存命中率</span>
-            <strong>
-              {snapshot.cacheHitBasisPoints == null
-                ? "暂无数据"
-                : formatBasisPoints(snapshot.cacheHitBasisPoints)}
-            </strong>
-          </div>
-        </DropdownMenuLabel>
-        <DropdownMenuSeparator />
-        <DropdownMenuLabel>{t("composer.contextWindow.title")}</DropdownMenuLabel>
-        <DropdownMenuRadioGroup
-          onValueChange={(value) => {
-            const nextNodeId = contextWindowNodeIdFromMenuValue(value, props.contextCompactionWindowNodes);
-            if (nextNodeId !== undefined) {
-              void props.onNodeChange(nextNodeId);
-            }
-          }}
-          value={props.selectedNodeId ?? "default"}
-        >
-          <DropdownMenuRadioItem value="default">
-            {t("composer.contextWindow.default")}
-          </DropdownMenuRadioItem>
-          {availableNodes.map((node) => (
-            <DropdownMenuRadioItem key={node.id} value={node.id}>
-              {formatContextWindowNodeTokens(node.tokens)}
-            </DropdownMenuRadioItem>
-          ))}
-          {selectedNodeIsInvalid ? (
-            <DropdownMenuRadioItem disabled value={selectedNode.id}>
-              <AlertTriangle aria-hidden="true" size={13} />
-              {formatContextWindowNodeTokens(selectedNode.tokens)} · {t("composer.contextWindow.invalid")}
-            </DropdownMenuRadioItem>
-          ) : null}
-        </DropdownMenuRadioGroup>
-      </DropdownMenuContent>
-    </DropdownMenu>
+        ) : null}
+        <div className="context-usage-cache-row">
+          <span>{t("composer.contextUsage.cacheHitRate")}</span>
+          <strong>
+            {snapshot.cacheHitBasisPoints == null
+              ? t("composer.contextUsage.noData")
+              : formatBasisPoints(snapshot.cacheHitBasisPoints)}
+          </strong>
+        </div>
+        <div className="context-usage-window-section">
+          <span className="context-usage-window-title">{t("composer.contextWindow.title")}</span>
+          <SegmentedControl
+            aria-label={t("composer.contextWindow.title")}
+            className="context-usage-window-switch"
+            disabled={props.disabled}
+            onValueChange={(value) => {
+              const nextNodeId = contextWindowNodeIdFromSwitchValue(value, props.contextCompactionWindowNodes);
+              if (nextNodeId !== undefined) {
+                void props.onNodeChange(nextNodeId);
+              }
+            }}
+            value={props.selectedNodeId ?? "default"}
+          >
+            {availableNodes.map((node) => (
+              <SegmentedControlItem key={node.id} value={node.id}>
+                {formatContextWindowNodeTokens(node.tokens)}
+              </SegmentedControlItem>
+            ))}
+            {selectedNodeIsInvalid ? (
+              <SegmentedControlItem disabled value={selectedNode.id}>
+                <AlertTriangle aria-hidden="true" size={13} />
+                {formatContextWindowNodeTokens(selectedNode.tokens)} · {t("composer.contextWindow.invalid")}
+              </SegmentedControlItem>
+            ) : null}
+            <SegmentedControlItem
+              aria-label={`${t("composer.contextWindow.default")} · ${defaultContextWindowLabel}`}
+              value="default"
+            >
+              {defaultContextWindowLabel}
+            </SegmentedControlItem>
+          </SegmentedControl>
+        </div>
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
-// contextWindowNodeIdFromMenuValue validates one menu value against the authoritative node list.
-// contextWindowNodeIdFromMenuValue 根据权威节点列表校验一个菜单值。
-function contextWindowNodeIdFromMenuValue(
+// contextWindowNodeIdFromSwitchValue validates one switch value against the authoritative node list.
+// contextWindowNodeIdFromSwitchValue 根据权威节点列表校验一个切换值。
+function contextWindowNodeIdFromSwitchValue(
   value: string,
   nodes: PublicAiContextCompactionWindowNode[],
 ): ContextCompactionWindowNodeId | null | undefined {
@@ -226,13 +237,13 @@ function contextWindowNodeIdFromMenuValue(
   return nodes.find((node) => node.id === value)?.id;
 }
 
-// formatContextWindowNodeTokens renders configured node values as compact K labels when exact.
-// formatContextWindowNodeTokens 在可精确表示时把配置节点值渲染为紧凑 K 标签。
-function formatContextWindowNodeTokens(tokens: number): string {
-  if (tokens >= 1_000 && tokens % 1_000 === 0) {
-    return `${tokens / 1_000}K`;
+// formatContextWindowNodeTokens renders node and model windows as integer K/M labels.
+// formatContextWindowNodeTokens 把节点与模型窗口渲染为不带小数的 K/M 标签。
+export function formatContextWindowNodeTokens(tokens: number): string {
+  if (tokens >= 1_000_000 && tokens % 1_000_000 === 0) {
+    return `${tokens / 1_000_000}M`;
   }
-  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 1, notation: "compact" }).format(tokens);
+  return `${Math.round(tokens / 1_000)}K`;
 }
 
 // availableContextCompactionWindowNodes returns fixed nodes strictly below one model hard window.
@@ -257,10 +268,11 @@ function ContextUsageProgressBar(props: {
   // 标准化后的上下文占用万分比。
   usageBasisPoints: number;
 }) {
+  const { t } = useI18n();
   const percent = props.usageBasisPoints / 100;
   return (
     <div
-      aria-label={`上下文已使用 ${percent.toFixed(1)}%`}
+      aria-label={t("composer.contextUsage.usedPercent").replace("{percent}", percent.toFixed(1))}
       className="context-usage-progress-track"
       role="progressbar"
       aria-valuemax={100}
@@ -305,21 +317,33 @@ function contextUsageBreakdown(snapshot: ContextUsageSnapshot): ContextUsageBrea
 
 // formatContextUsageTotal renders the compact current-window summary.
 // formatContextUsageTotal 渲染紧凑的当前窗口摘要。
-function formatContextUsageTotal(snapshot: ContextUsageSnapshot): string {
+function formatContextUsageTotal(snapshot: ContextUsageSnapshot, locale: string): string {
   const usageBasisPoints = contextUsageBasisPoints(snapshot);
   if (typeof snapshot.usedTokens !== "number" || !Number.isFinite(snapshot.usedTokens)) {
     return formatBasisPoints(usageBasisPoints);
   }
-  const used = formatContextTokenCount(snapshot.usedTokens);
+  const used = formatContextTokenCount(snapshot.usedTokens, locale);
   if (typeof snapshot.maxTokens !== "number" || !Number.isFinite(snapshot.maxTokens)) {
     return `${used} Token`;
   }
-  return `${used}/${formatContextTokenCount(snapshot.maxTokens)} (${formatBasisPoints(usageBasisPoints)})`;
+  return `${used}/${formatContextTokenCount(snapshot.maxTokens, locale)} (${formatBasisPoints(usageBasisPoints)})`;
 }
 
 // formatContextTokenCount formats large token counts with Chinese ten-thousand and hundred-million units.
 // formatContextTokenCount 使用中文万与亿单位格式化较大的 Token 数量。
-function formatContextTokenCount(value: number): string {
+function formatContextTokenCount(value: number, locale = "zh-CN"): string {
+  if (!locale.startsWith("zh")) {
+    if (value >= 1_000_000_000) {
+      return `${formatCompactDecimal(value / 1_000_000_000)}B`;
+    }
+    if (value >= 1_000_000) {
+      return `${formatCompactDecimal(value / 1_000_000)}M`;
+    }
+    if (value >= 1_000) {
+      return `${formatCompactDecimal(value / 1_000)}K`;
+    }
+    return Math.max(0, Math.round(value)).toLocaleString("en-US");
+  }
   if (value >= 100_000_000) {
     return `${formatCompactDecimal(value / 100_000_000)}亿`;
   }
@@ -442,7 +466,7 @@ export function ComposerAiCapabilityControl(props: {
   // selectedMediaBackendSummary describes the globally configured fixed backend without exposing session route controls.
   // selectedMediaBackendSummary 描述全局配置的固定后端，不暴露会话级路由控件。
   const selectedMediaBackendSummary = snapshot && isMediaUnderstandingCapability(selectedCapability)
-    ? mediaUnderstandingBackendSummary(snapshot, selectedCapability)
+    ? mediaUnderstandingBackendSummary(snapshot, selectedCapability, t)
     : null;
   const localConflicts = snapshot ? providerToolSettingsConflicts(snapshot, draft) : [];
   const conflicts = localConflicts;
@@ -567,7 +591,7 @@ export function ComposerAiCapabilityControl(props: {
               // mediaBackendSummary resolves the one global backend used by this session switch.
               // mediaBackendSummary 解析此会话开关使用的唯一全局后端。
               const mediaBackendSummary = snapshot && isMediaUnderstandingCapability(capability)
-                ? mediaUnderstandingBackendSummary(snapshot, capability)
+                ? mediaUnderstandingBackendSummary(snapshot, capability, t)
                 : null;
               // targetCount reports one fixed executable media backend or the regular selectable model count.
               // targetCount 对媒体能力报告一个固定可执行后端，否则报告常规可选模型数量。
@@ -655,26 +679,26 @@ export function ComposerAiCapabilityControl(props: {
               selectedMediaBackendSummary ? (
                 <div className="composer-capability-route-selectors">
                   <label>
-                    <span>后端模式</span>
+                    <span>{t("composer.capability.mediaBackendMode")}</span>
                     <strong>{selectedMediaBackendSummary.modeLabel}</strong>
                   </label>
                   <label>
-                    <span>固定路由</span>
+                    <span>{t("composer.capability.mediaFixedRoute")}</span>
                     <strong>{selectedMediaBackendSummary.routeLabel}</strong>
                   </label>
                   <p className="composer-capability-media-note settings-muted-line">
-                    模型、账号与思考级别由模型设置统一配置；当前会话只控制是否启用，工具参数结构不会变化。
+                    {t("composer.capability.mediaBackendNote")}
                   </p>
                 </div>
               ) : (
                 <div className="composer-capability-dialog-empty">
-                  请先在模型设置中配置此媒体理解能力的固定后端。
+                  {t("composer.capability.mediaBackendMissing")}
                 </div>
               )
             ) : selectedModels.length && isModelExtensionCapability(selectedCapability) ? (
               <div className="composer-capability-extension-list">
                 <p className="settings-muted-line">
-                  选择可供 AI 通过模型扩展参数查询后按需调用的模型。切换此集合不会改变已注册工具名。
+                  {t("composer.capability.extensionHint")}
                 </p>
                 {selectedModels.map((model) => {
                   // modelTargets contains every configured account for one extension model.
@@ -725,12 +749,12 @@ export function ComposerAiCapabilityControl(props: {
                       />
                       <span className="composer-capability-extension-copy">
                         <strong>{model.target.display_name}</strong>
-                        <small>{profile?.summary ?? "缺少已审核模型扩展说明，当前不可选择。"}</small>
+                        <small>{profile?.summary ?? t("composer.capability.extensionProfileMissing")}</small>
                         {profile?.constraints?.length ? (
-                          <small>约束：{profile.constraints.join("；")}</small>
+                          <small>{t("composer.capability.extensionConstraints").replace("{value}", profile.constraints.join(t("global.listDelimiter")))}</small>
                         ) : null}
                         {profile?.limitations?.length ? (
-                          <small>限制：{profile.limitations.join("；")}</small>
+                          <small>{t("composer.capability.extensionLimitations").replace("{value}", profile.limitations.join(t("global.listDelimiter")))}</small>
                         ) : null}
                       </span>
                       <Select
@@ -947,6 +971,9 @@ export function isMediaUnderstandingCapability(
 function mediaUnderstandingBackendSummary(
   snapshot: PublicAiSettingsSnapshot,
   capability: PublicAiProviderToolCapabilityKind,
+  // t is omitted only by the pure conflict validator, which consumes availability and never renders mode labels.
+  // t 仅在纯冲突校验器中省略；该校验器只消费可用性，不渲染模式标签。
+  t?: ReturnType<typeof useI18n>["t"],
 ): { modeLabel: string; routeLabel: string; available: boolean } | null {
   // backend is the global closed choice shared by every session switch for this capability.
   // backend 是此能力全部会话开关共享的全局封闭选择。
@@ -963,7 +990,7 @@ function mediaUnderstandingBackendSummary(
       && candidate.target.contract.capability === capability
     ));
     return {
-      modeLabel: "供应商专用模式",
+      modeLabel: t ? t("composer.capability.mode.provider") : "",
       routeLabel: target
         ? `${target.target.display_name} · ${target.connectionDisplayName}`
         : `${backend.selection.target_id} · ${backend.selection.connection_id}`,
@@ -1004,9 +1031,11 @@ function mediaUnderstandingBackendSummary(
     && reasoningAvailable;
   // reasoningLabel renders only the explicitly selected effort.
   // reasoningLabel 仅渲染显式选择的思考级别。
-  const reasoningLabel = backend.reasoning_effort ? ` · 思考 ${backend.reasoning_effort}` : "";
+  const reasoningLabel = t && backend.reasoning_effort
+    ? ` · ${t("composer.capability.reasoning").replace("{effort}", backend.reasoning_effort)}`
+    : "";
   return {
-    modeLabel: "模型代替模式",
+    modeLabel: t ? t("composer.capability.mode.model") : "",
     routeLabel: candidate
       ? `${candidate.providerDisplayName} · ${candidate.modelDisplayName} · ${candidate.connectionDisplayName}${reasoningLabel}`
       : `${backend.selection.provider_id}/${backend.selection.model_id} · ${backend.selection.connection_id}${reasoningLabel}`,

@@ -3,7 +3,7 @@ import { Copy, FolderOpen, Maximize2, Minimize2, Pencil, Plus, RefreshCw, Rotate
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 
-import type { AgentSkillActionProps } from "@/components/features/agent-skills/agent-skills-types"
+import { agentSkillsCatalogSummary, type AgentSkillActionProps } from "@/components/features/agent-skills/agent-skills-types"
 import { AgentSkillCategoryManagementDialog, AgentSkillEditorDialog } from "@/components/features/agent-skills/agent-skill-management-dialogs"
 import { hasLinkedGitHubSourceOrigin, SourceOriginLink } from "@/components/features/source-origin-link"
 import { Badge } from "@/components/ui/badge"
@@ -49,7 +49,7 @@ export function AgentSkillsArea(props: {
   // 包含完整 Agent Skills 领域的工作台快照。
   workbench: WorkbenchSnapshot
 }) {
-  const { locale } = useI18n()
+  const { locale, t } = useI18n()
   // busyAction stores one catalog-wide mutation currently in flight.
   // busyAction 保存当前正在执行的一项目录级变更。
   const [busyAction, setBusyAction] = React.useState<string | null>(null)
@@ -230,7 +230,7 @@ export function AgentSkillsArea(props: {
           <div className="agent-catalog-toolbar-main">
             <div className="agent-catalog-toolbar-heading">
               <h2>{locale.startsWith("zh") ? "技能" : "Skills"}</h2>
-              <p>{props.workbench.agentSkills.notice}</p>
+              <p>{agentSkillsCatalogSummary(props.workbench.agentSkills, t)}</p>
             </div>
             <div className="agent-catalog-toolbar-actions">
               <Button disabled={busyAction !== null} onClick={() => openEditor(null)}>

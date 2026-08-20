@@ -101,12 +101,9 @@ interface AgentEditorDraft {
   // Whether this draft edits an existing id.
   // 当前草稿是否编辑已有标识。
   existing: boolean
-  // Source scope label of the definition being edited.
-  // 当前编辑定义的来源作用域标签。
-  sourceScope: string
   // Stable source scope key of the definition being edited.
   // 当前编辑定义的稳定来源作用域键。
-  sourceScopeKey: string
+  sourceScopeKey: SubagentDefinitionSummary["scopeKey"]
   // Optional system definition id overridden by this draft.
   // 当前草稿覆盖的可选系统定义标识。
   overrideOf: string
@@ -544,7 +541,7 @@ function AgentEditorForm(props: {
   // 三态策略表可选择的工具行。
   toolOptions: AgentCapabilityPolicyOption[]
 }) {
-  const { locale } = useI18n()
+  const { locale, t } = useI18n()
   const text = React.useCallback((zh: string, en: string) => localizedAgentLiteral(locale, zh, en), [locale])
   const draft = props.draft
   const editingSystemBackedDefinition = draft?.sourceScopeKey === "system" || Boolean(draft?.overrideOf)
@@ -740,7 +737,7 @@ function AgentEditorForm(props: {
               </div>
             </div>
             <div className="agent-editor-context">
-              <span>{text("当前层级", "Current layer")}: {draft.sourceScope || text("用户", "User")}</span>
+              <span>{text("当前层级", "Current layer")}: {localizedAgentScopeLabel(draft.sourceScopeKey, t)}</span>
               {draft.definitionFile ? <span>{draft.definitionFile}</span> : null}
               {editingSystemBackedDefinition ? <strong>{text("仅保存用户侧元数据覆盖", "Only user metadata override will be saved")}</strong> : null}
             </div>
@@ -1050,6 +1047,7 @@ function AgentDefinitionCard(props: {
   const fixedModelSelector = agentDefinitionFixedModelSelector(definition)
   const fixedModelUnavailable = agentDefinitionFixedModelUnavailable(definition)
   const fixedModelTitle = agentDefinitionFixedModelTitle(definition, locale)
+  const scopeLabel = localizedAgentScopeLabel(definition.scopeKey, t)
   return (
     <article className="agent-definition-row">
       <button className="agent-definition-row-icon" onClick={() => props.onOpenDetail(definition)} title={t("skills.action.details")} type="button">
@@ -1060,7 +1058,7 @@ function AgentDefinitionCard(props: {
         <div className="agent-definition-row-title-line">
           <button className="agent-definition-title-button" onClick={() => props.onOpenDetail(definition)} type="button">{displayName}</button>
           <div className="agent-definition-row-badges">
-            <Badge variant="outline">{definition.scope}</Badge>
+            <Badge variant="outline">{scopeLabel}</Badge>
             <Badge variant="outline">{toolAccessLabel}</Badge>
             {definition.categoryId ? <Badge variant="outline" title={definition.categoryId}>{categoryLabel}</Badge> : null}
             {definition.packageId ? <Badge variant="outline">{definition.packageId}</Badge> : null}
@@ -1132,12 +1130,13 @@ function AgentDefinitionDetailDialog(props: {
   const definition = props.definition
   const displayName = definition ? localizedDefinitionName(definition, locale) : null
   const modelDetail = definition ? agentDefinitionProviderModelDetail(definition, locale) : null
+  const scopeLabel = definition ? localizedAgentScopeLabel(definition.scopeKey, t) : null
   return (
     <Dialog open={props.open && definition !== null} onOpenChange={props.onOpenChange}>
       <DialogContent className="agent-skill-detail-dialog">
         <DialogHeader>
           <DialogTitle>{displayName ?? text("智能体详情", "Agent details")}</DialogTitle>
-          <DialogDescription>{definition ? definition.scope : text("查看智能体定义。", "Inspect the agent definition.")}</DialogDescription>
+          <DialogDescription>{scopeLabel ?? text("查看智能体定义。", "Inspect the agent definition.")}</DialogDescription>
         </DialogHeader>
         {definition ? (
           <div className="agent-skill-detail-body">
@@ -1148,7 +1147,7 @@ function AgentDefinitionDetailDialog(props: {
               </div>
               <div>
                 <span>{text("来源", "Scope")}</span>
-                <strong>{definition.scope}</strong>
+                <strong>{scopeLabel}</strong>
               </div>
               {definition.owningPluginId ? (
                 <div>
@@ -1255,7 +1254,6 @@ function emptyAgentDraft(metadataLocale: AgentMetadataLocale): AgentEditorDraft 
     promptSkillPolicyMode: "all",
     promptSkillPolicySkills: "",
     existing: false,
-    sourceScope: "用户",
     sourceScopeKey: "user",
     overrideOf: "",
     definitionFile: "",
@@ -1291,7 +1289,6 @@ function draftFromDefinition(definition: SubagentDefinitionSummary, metadataLoca
     promptSkillPolicyMode: normalizedCapabilityPolicyMode(definition.promptSkillPolicyMode, definition.enabledPromptSkills, definition.disabledPromptSkills),
     promptSkillPolicySkills: listText(definition.promptSkillPolicySkills?.length ? definition.promptSkillPolicySkills : legacyPolicyTools(definition.enabledPromptSkills, definition.disabledPromptSkills)),
     existing: true,
-    sourceScope: definition.scope,
     sourceScopeKey: definition.scopeKey,
     overrideOf: definition.overrideOf ?? "",
     definitionFile: definition.definitionFile,
@@ -1992,4 +1989,22 @@ function listFromText(value: string): string[] {
 // localizedAgentLiteral 在中文界面返回中文文案，否则返回英文文案。
 function localizedAgentLiteral(locale: string, zh: string, en: string): string {
   return locale === "zh-CN" ? zh : en
+}
+
+// localizedAgentScopeLabel converts the stable scope key into the active locale label.
+// localizedAgentScopeLabel 将稳定的作用域键转换为当前语言的显示标签。
+function localizedAgentScopeLabel(
+  scopeKey: SubagentDefinitionSummary["scopeKey"],
+  t: ReturnType<typeof useI18n>["t"],
+): string {
+  switch (scopeKey) {
+    case "system":
+      return t("skills.label.system")
+    case "user":
+      return t("skills.label.user")
+    case "package":
+      return t("skills.label.package")
+    case "plugin":
+      return t("skills.label.plugin")
+  }
 }

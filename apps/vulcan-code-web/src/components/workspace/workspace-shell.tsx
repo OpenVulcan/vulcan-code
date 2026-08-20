@@ -13,6 +13,7 @@ import { terminalSessionViewModel } from "@/components/conversation/conversation
 import { activeSkillHeaderSummary } from "@/components/features/skills/skill-area-header";
 import type { SkillHeaderBusyActionId } from "@/components/features/skills/skill-area-types";
 import { activeAgentsHeaderSummary } from "@/components/features/agents/agent-area-header";
+import { agentSkillsCatalogSummary } from "@/components/features/agent-skills/agent-skills-types";
 import {
   ProjectSidebar,
 } from "@/components/project/ProjectSidebar";
@@ -1238,7 +1239,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         />
       </React.Suspense>
     ),
-    detail: props.workbench.agentSkills.notice,
+    detail: agentSkillsCatalogSummary(props.workbench.agentSkills, t),
     headerActions: null,
     title: t("area.agentSkills"),
     toolPanels: [{

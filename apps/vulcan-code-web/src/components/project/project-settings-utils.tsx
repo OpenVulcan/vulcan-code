@@ -28,7 +28,7 @@ export function projectSettingsSections(project: ProjectSummary, workbench: Work
     {
       id: "codebase-memory",
       icon: <Network size={16} />,
-      label: "Codebase Memory",
+      label: t("projectSettings.codebaseMemory.title"),
       detail: project.codebaseMemoryEnabled
         ? t("projectSettings.codebaseMemory.enabled")
         : t("projectSettings.codebaseMemory.disabled"),
@@ -42,7 +42,7 @@ export function projectSettingsSections(project: ProjectSummary, workbench: Work
     {
       id: "agent-skills",
       icon: <Bot size={16} />,
-      label: "Agent Skills",
+      label: t("projectSettings.agentTitle"),
       detail: t("projectSettings.promptSkillCount").replace("{count}", String(workbench.agentSkills.records.filter((skill) => skill.effective).length)),
     },
     {

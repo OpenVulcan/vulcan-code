@@ -330,7 +330,7 @@ export function ProjectContextMenu(props: {
         </ContextMenuItem>
         <ContextMenuItem onSelect={() => props.onAction("open-terminal", props.project)}>
           <TerminalSquare size={15} />
-          <span>在终端控制台中打开</span>
+          <span>{t("projectMenu.openTerminal")}</span>
         </ContextMenuItem>
         <ContextMenuItem disabled>
           <PanelTopOpen size={15} />

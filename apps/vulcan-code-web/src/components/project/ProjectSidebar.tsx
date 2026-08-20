@@ -22,6 +22,7 @@ import {
   Hammer,
   Pin,
   Puzzle,
+  Settings,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -455,6 +456,22 @@ export function ProjectSidebar(props: {
         ) : null}
       </SidebarContent>
       <SidebarFooter>
+        {sidebarState === "collapsed" ? (
+          <SidebarMenu>
+            {/* The collapsed settings shortcut stays immediately above the user menu. */}
+            {/* 折叠态设置快捷入口紧贴用户菜单上方。 */}
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                aria-label={t("area.settings")}
+                className="workspace-sidebar-feature-button"
+                onClick={() => props.onSelectArea("settings")}
+                tooltip={t("area.settings")}
+              >
+                <Settings size={16} />
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          </SidebarMenu>
+        ) : null}
         <SidebarUserMenu onOpenSettings={() => props.onSelectArea("settings")} />
       </SidebarFooter>
     </Sidebar>

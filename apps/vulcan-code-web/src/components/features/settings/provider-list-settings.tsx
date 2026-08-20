@@ -160,7 +160,7 @@ export function CredentialManagementArea() {
         ? localizedProviderName(provider.id, provider.display_name, t)
         : activeProviderId
     })()
-    : "选择供应商"
+    : t("settings.credentials.selectProvider")
 
   // Select the first ordered provider when the current provider is absent or stale.
   // 当前供应商缺失或过期时选择排序后的第一个供应商。
@@ -187,12 +187,12 @@ export function CredentialManagementArea() {
       panel={(
         <WorkspaceToolPanelMenu
           activeLabel={activeProviderLabel}
-          ariaLabel="凭据分类"
-          className="credential-management-menu"
-          collapseLabel="收起为胶囊"
-          expanded={menuExpanded}
-          expandLabel="展开凭据分类"
-          heading="凭据分类"
+           ariaLabel={t("settings.credentials.categoryAria")}
+           className="credential-management-menu"
+           collapseLabel={t("settings.credentials.collapse")}
+           expanded={menuExpanded}
+           expandLabel={t("settings.credentials.expand")}
+           heading={t("settings.credentials.categoryAria")}
           onExpandedChange={setMenuExpanded}
         >
           {directoryProviders.map((provider) => (
@@ -239,15 +239,15 @@ export function CredentialManagementArea() {
               type="button"
             >
               <KeyRound className="mr-1 size-4" />
-              添加凭据
+               {t("settings.providerOnboarding.addCredential")}
             </Button>
           </div>
         ) : null}
         {error ? <p className="settings-muted-line settings-error-text">{error}</p> : null}
         {!snapshot ? (
           <article className="settings-card">
-            <strong>正在连接公共 AI 运行时</strong>
-            <p>启动后会从各凭据实时获取模型，不读取本地模型缓存。</p>
+            <strong>{t("settings.credentials.connecting")}</strong>
+            <p>{t("settings.credentials.connectingDescription")}</p>
           </article>
         ) : visibleConnections.length > 0 ? (
           <div className="credential-management-list">
@@ -294,13 +294,13 @@ export function CredentialManagementArea() {
           </div>
         ) : activeProviderId ? (
           <div className="flex min-h-48 w-full flex-col items-center justify-center gap-2 text-center text-muted-foreground">
-            <strong>尚未添加该供应商的凭据</strong>
-            <p>使用上方“添加凭据”按钮，为当前供应商创建第一个账号。</p>
+            <strong>{t("settings.credentials.emptyProvider")}</strong>
+            <p>{t("settings.credentials.emptyProviderDescription")}</p>
           </div>
         ) : (
           <div className="flex min-h-48 w-full flex-col items-center justify-center gap-2 text-center text-muted-foreground">
-            <strong>尚未添加模型账号</strong>
-            <p>点击“添加凭据”，选择供应商、服务入口、凭据方式与协议。</p>
+            <strong>{t("settings.credentials.emptyAll")}</strong>
+            <p>{t("settings.credentials.emptyAllDescription")}</p>
           </div>
         )}
         <PublicAiConnectionDialog
@@ -472,7 +472,7 @@ function CredentialAccountCard(props: CredentialAccountCardProps) {
           {usageSupported ? (
             <CredentialIconAction
               disabled={props.busy}
-              label="刷新账号用量"
+              label={t("settings.credentials.refreshUsage")}
               onClick={props.onRefreshUsage}
             >
               <RefreshCw className={`size-4 ${props.busy ? "animate-spin" : ""}`} />
@@ -507,7 +507,7 @@ function CredentialAccountCard(props: CredentialAccountCardProps) {
         {props.entry?.kind !== "provider_tools" ? (
           <CredentialIconAction
             disabled={props.busy || props.connection.pending_validation}
-            label="同步支持模型"
+            label={t("settings.credentials.syncModels")}
             onClick={props.onSync}
           >
             <Boxes className="size-4" />
@@ -518,8 +518,8 @@ function CredentialAccountCard(props: CredentialAccountCardProps) {
           label={props.connection.pending_validation
             ? t("settings.customModels.pendingCannotDefault")
             : props.isDefault
-              ? "当前默认账号"
-              : "设为默认账号"}
+               ? t("settings.credentials.currentDefault")
+               : t("settings.credentials.setDefault")}
           onClick={props.onSetDefault}
         >
           <Star
@@ -528,12 +528,12 @@ function CredentialAccountCard(props: CredentialAccountCardProps) {
               : "size-4"}
           />
         </CredentialIconAction>
-        <CredentialIconAction label="编辑凭据" onClick={props.onEdit}>
+        <CredentialIconAction label={t("settings.credentials.edit")} onClick={props.onEdit}>
           <KeyRound className="size-4" />
         </CredentialIconAction>
         <CredentialIconAction
           disabled={props.busy}
-          label="删除凭据"
+          label={t("settings.credentials.remove")}
           onClick={props.onDelete}
         >
           <Trash2 className="size-4 text-destructive" />
@@ -606,6 +606,7 @@ function PublicAiDeleteConnectionDialog(props: {
   // 移除后接收权威快照。
   onSaved: (snapshot: PublicAiSettingsSnapshot) => void
 }) {
+  const { t } = useI18n()
   const replacements = props.connection
     ? props.connections.filter((connection) => (
         connection.provider_id === props.connection?.provider_id
@@ -631,7 +632,7 @@ function PublicAiDeleteConnectionDialog(props: {
       return
     }
     if (props.isProviderDefault && replacements.length > 0 && !replacementId) {
-      setError("删除默认账号前必须选择替代默认账号。")
+      setError(t("settings.credentials.deleteDefaultMissingReplacement"))
       return
     }
     setSaving(true)
@@ -654,14 +655,14 @@ function PublicAiDeleteConnectionDialog(props: {
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>删除模型账号</DialogTitle>
+          <DialogTitle>{t("settings.credentials.deleteTitle")}</DialogTitle>
           <DialogDescription>
-            将删除“{props.connection?.display_name}”及其系统凭据，此操作不可撤销。
+            {t("settings.credentials.deleteDescription").replace("{name}", props.connection?.display_name ?? "")}
           </DialogDescription>
         </DialogHeader>
         {props.isProviderDefault && replacements.length > 0 ? (
           <div className="settings-field">
-            <span>替代默认账号</span>
+            <span>{t("settings.credentials.replacementDefault")}</span>
             <Select onValueChange={setReplacementId} value={replacementId}>
               <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
               <SelectContent>
@@ -675,10 +676,10 @@ function PublicAiDeleteConnectionDialog(props: {
         {error ? <p className="settings-error-text">{error}</p> : null}
         <DialogFooter>
           <button className="skill-action-button secondary" onClick={() => props.onOpenChange(false)} type="button">
-            取消
+            {t("settings.credentials.cancel")}
           </button>
           <button className="skill-action-button secondary danger" disabled={saving} onClick={() => void remove()} type="button">
-            {saving ? "删除中…" : "确认删除"}
+            {saving ? t("settings.credentials.deleting") : t("settings.credentials.confirmDelete")}
           </button>
         </DialogFooter>
       </DialogContent>
@@ -696,42 +697,43 @@ function AccountUsageLine(props: {
   // 最新的仅内存用量观测。
   usage?: PublicAiAccountUsage
 }) {
+  const { t } = useI18n()
   if (props.credentialProfile?.account_usage_query === "unsupported") {
-    return <span>该凭据不支持账号用量查询</span>
+    return <span>{t("settings.credentials.usageUnsupported")}</span>
   }
   if (!props.usage) {
-    return <span>用量尚未查询</span>
+    return <span>{t("settings.credentials.usageNotQueried")}</span>
   }
   if (props.usage.availability === "temporarily_unavailable") {
-    return <span>{props.usage.refresh_message ?? "账号用量暂时不可用"}</span>
+    return <span>{props.usage.refresh_message ?? t("settings.credentials.usageUnavailable")}</span>
   }
   if (!Array.isArray(props.usage.quota_windows)) {
-    return <span className="text-destructive">账号用量响应格式无效，请重新刷新</span>
+    return <span className="text-destructive">{t("settings.credentials.usageInvalid")}</span>
   }
   return (
     <div className="settings-modal-list">
       <span>
         {props.usage.plan_name ? `${props.usage.plan_name} · ` : ""}
         {props.usage.remaining_amount !== undefined
-          ? `剩余 ${props.usage.remaining_amount}${props.usage.currency ? ` ${props.usage.currency}` : ""}`
-          : props.usage.quota_windows.length === 0 ? "该供应商不提供套餐额度窗口" : "套餐额度窗口"}
+          ? t("settings.credentials.remaining").replace("{value}", `${props.usage.remaining_amount}${props.usage.currency ? ` ${props.usage.currency}` : ""}`)
+          : props.usage.quota_windows.length === 0 ? t("settings.credentials.noQuotaWindows") : t("settings.credentials.quotaWindow")}
         {props.usage.used_amount !== undefined
-          ? ` · 已用 ${props.usage.used_amount}${props.usage.currency ? ` ${props.usage.currency}` : ""}`
+          ? ` · ${t("settings.credentials.used").replace("{value}", `${props.usage.used_amount}${props.usage.currency ? ` ${props.usage.currency}` : ""}`)}`
           : ""}
       </span>
       {props.usage.quota_windows.map((window) => (
         <span key={window.id}>
           {window.bucket_name ? `${window.bucket_name} · ` : ""}
-          {window.display_name}：
+          {window.display_name}{t("global.labelSeparator")}
           {!window.available
-            ? "当前套餐未包含"
+            ? t("settings.credentials.notIncluded")
             : window.unlimited
-              ? "无限"
+              ? t("settings.credentials.unlimited")
               : window.total !== undefined && window.total !== "0"
-                ? `${window.remaining ?? "未知"} / ${window.total} ${window.unit}${window.remaining_percent !== undefined ? ` · ${window.remaining_percent}%` : ""}`
+                ? `${window.remaining ?? t("settings.credentials.unknown")} / ${window.total} ${window.unit}${window.remaining_percent !== undefined ? ` · ${window.remaining_percent}%` : ""}`
                 : window.remaining_percent !== undefined
-                  ? `剩余 ${window.remaining_percent}%`
-                  : `${window.remaining ?? "未知"} / ${window.total ?? "未知"} ${window.unit}`}
+                  ? t("settings.credentials.remaining").replace("{value}", `${window.remaining_percent}%`)
+                  : `${window.remaining ?? t("settings.credentials.unknown")} / ${window.total ?? t("settings.credentials.unknown")} ${window.unit}`}
         </span>
       ))}
     </div>
@@ -921,7 +923,7 @@ export function PublicAiConnectionDialog(props: {
       || !displayName.trim()
       || (requiresToken && !secret)
     ) {
-      setError("请完整填写连接信息。")
+      setError(t("settings.credentials.connectionIncomplete"))
       return
     }
     setSaving(true)
@@ -1041,18 +1043,18 @@ export function PublicAiConnectionDialog(props: {
         <DialogHeader>
           <DialogTitle>
             {props.connection
-              ? isProviderToolEntry ? "编辑工具服务凭据" : "编辑模型账号"
-              : isProviderToolEntry ? "添加工具服务凭据" : "添加模型账号"}
+              ? isProviderToolEntry ? t("settings.credentials.editToolTitle") : t("settings.credentials.editModelTitle")
+              : isProviderToolEntry ? t("settings.credentials.addToolTitle") : t("settings.credentials.addModelTitle")}
           </DialogTitle>
           <DialogDescription>
             {isProviderToolEntry
-              ? "该凭据只用于所选供应商的原生 AI 工具，不会创建虚假的对话模型。"
-              : "协议绑定在当前账号上，模型调用期间不会切换协议或账号。"}
+              ? t("settings.credentials.toolDescription")
+              : t("settings.credentials.modelDescription")}
           </DialogDescription>
         </DialogHeader>
         <div className="settings-form-grid">
           <label className="settings-form-field">
-            <span>供应商</span>
+            <span>{t("settings.credentials.provider")}</span>
             <span className="provider-credential-select">
               <ProviderIcon category={provider?.category} providerId={provider?.id} />
               <Select
@@ -1075,10 +1077,10 @@ export function PublicAiConnectionDialog(props: {
             </span>
           </label>
           <label className="settings-form-field">
-            <span>服务入口</span>
+            <span>{t("settings.credentials.serviceEntry")}</span>
             {provider?.credential_registration === "mini_max_regional_api_key"
               && credentialMode === "token" ? (
-              <strong>保存时自动识别区域</strong>
+              <strong>{t("settings.credentials.autoRegion")}</strong>
             ) : (
               <Select
                 onValueChange={(value) => {
@@ -1097,7 +1099,7 @@ export function PublicAiConnectionDialog(props: {
             )}
           </label>
           <label className="settings-form-field">
-            <span>凭据类型</span>
+            <span>{t("settings.credentials.credentialType")}</span>
             <Select
               onValueChange={(value) => {
                 const nextProfile = entry?.credential_profiles.find((item) => item.id === value)
@@ -1115,12 +1117,12 @@ export function PublicAiConnectionDialog(props: {
             </Select>
           </label>
           <label className="settings-form-field">
-            <span>账号显示名</span>
+            <span>{t("settings.credentials.displayName")}</span>
             <Input onChange={(event) => setDisplayName(event.target.value)} value={displayName} />
           </label>
           {credentialMode === "token" ? (
             <label className="settings-form-field">
-              <span>{props.connection ? "替换 Token（留空则不变）" : "API Token"}</span>
+              <span>{props.connection ? t("settings.credentials.replaceToken") : t("settings.credentials.apiToken")}</span>
               <Input
                 autoComplete="off"
                 onChange={(event) => setSecret(event.target.value)}
@@ -1144,22 +1146,22 @@ export function PublicAiConnectionDialog(props: {
           {credentialProfile
             && usageCapabilityRequiresManagementKey(credentialProfile.account_usage_query) ? (
             <div className="settings-form-field">
-              <span>管理密钥（可选）</span>
+              <span>{t("settings.credentials.managementKey")}</span>
               <Input
                 autoComplete="off"
                 onChange={(event) => setManagementKey(event.target.value)}
-                placeholder={props.connection?.has_management_key ? "留空保持现有管理密钥" : ""}
+                placeholder={props.connection?.has_management_key ? t("settings.credentials.managementKeyPlaceholder") : ""}
                 type="password"
                 value={managementKey}
               />
-              <small>仅用于该账号的用量查询，不用于模型调用。</small>
+              <small>{t("settings.credentials.managementKeyHint")}</small>
               {props.connection?.has_management_key ? (
                 <label className="settings-inline-checkbox">
                   <Switch
                     checked={removeManagementKey}
                     onCheckedChange={setRemoveManagementKey}
                   />
-                  <span>移除现有管理密钥</span>
+                  <span>{t("settings.credentials.removeManagementKey")}</span>
                 </label>
               ) : null}
             </div>
@@ -1172,7 +1174,7 @@ export function PublicAiConnectionDialog(props: {
                 <Input onChange={(event) => setOauthClientId(event.target.value)} value={oauthClientId} />
               </label>
               <label className="settings-form-field">
-                <span>Google OAuth Client Secret（可选）</span>
+                <span>{t("settings.credentials.oauthClientSecretOptional")}</span>
                 <Input
                   autoComplete="off"
                   onChange={(event) => setOauthClientSecret(event.target.value)}
@@ -1195,10 +1197,10 @@ export function PublicAiConnectionDialog(props: {
         {oauthTransaction ? (
           <div className="settings-muted-line">
             <span>
-              授权状态：{oauthPhaseDisplayName(oauthTransaction.phase)}
+              {t("settings.credentials.authorizationStatus")}{t("global.labelSeparator")}{oauthPhaseDisplayName(oauthTransaction.phase, t)}
               {oauthTransaction.message ? ` · ${oauthTransaction.message}` : ""}
             </span>
-            {oauthUserCode ? <strong>授权码：{oauthUserCode}</strong> : null}
+            {oauthUserCode ? <strong>{t("settings.credentials.authorizationCode")}{t("global.labelSeparator")}{oauthUserCode}</strong> : null}
           </div>
         ) : null}
         {error ? <p className="settings-muted-line settings-error-text">{error}</p> : null}
@@ -1208,18 +1210,18 @@ export function PublicAiConnectionDialog(props: {
             onClick={() => pendingAuthorization ? void cancelAuthorization() : props.onOpenChange(false)}
             type="button"
           >
-            {pendingAuthorization ? "取消授权" : "取消"}
+            {pendingAuthorization ? t("settings.credentials.cancelAuthorization") : t("settings.credentials.cancel")}
           </button>
           <button className="skill-action-button" disabled={saving || pendingAuthorization !== null} onClick={() => void save()} type="button">
             {pendingAuthorization
-              ? "等待浏览器授权"
+              ? t("settings.credentials.waitBrowser")
               : saving
-                ? "保存并同步…"
+                ? t("settings.credentials.saveSyncing")
                 : credentialMode === "auth"
                   ? props.connection
-                    ? "重新授权并保存"
-                    : "打开浏览器授权"
-                  : "保存并同步"}
+                    ? t("settings.credentials.reauthorizeAndSave")
+                    : t("settings.credentials.openBrowserAuthorize")
+                  : t("settings.credentials.saveSync")}
           </button>
         </DialogFooter>
       </DialogContent>
@@ -1270,16 +1272,19 @@ function protocolDisplayName(protocolId: string): string {
 
 // oauthPhaseDisplayName maps exact OAuth phases to user-facing progress labels.
 // oauthPhaseDisplayName 将精确 OAuth 阶段映射为用户可见进度标签。
-function oauthPhaseDisplayName(phase: PublicAiOAuthTransaction["phase"]): string {
-  const labels: Record<PublicAiOAuthTransaction["phase"], string> = {
-    waiting_for_user_authorization: "等待用户确认授权",
-    waiting_for_callback: "等待浏览器回调",
-    finalizing_credential: "正在完成凭据保存",
-    succeeded: "授权成功",
-    failed: "授权失败",
-    cancelled: "已取消",
+function oauthPhaseDisplayName(
+  phase: PublicAiOAuthTransaction["phase"],
+  t: ReturnType<typeof useI18n>["t"],
+): string {
+  const labels: Record<PublicAiOAuthTransaction["phase"], Parameters<typeof t>[0]> = {
+    waiting_for_user_authorization: "settings.credentials.oauth.waitingAuthorization",
+    waiting_for_callback: "settings.credentials.oauth.waitingCallback",
+    finalizing_credential: "settings.credentials.oauth.finalizing",
+    succeeded: "settings.credentials.oauth.succeeded",
+    failed: "settings.credentials.oauth.failed",
+    cancelled: "settings.credentials.oauth.cancelled",
   }
-  return labels[phase]
+  return t(labels[phase])
 }
 
 // errorMessage normalizes unknown service failures for inline display.

@@ -17,6 +17,7 @@ import { Progress } from "@/components/ui/progress";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { VmmSelectField, vmmPolicyModeOptions } from "@/components/features/memory/vmm-project-settings-fields";
+import { agentSkillsCatalogSummary } from "@/components/features/agent-skills/agent-skills-types";
 import { useI18n } from "@/i18n";
 import type { TranslationKey } from "@/i18n-messages";
 import { cn } from "@/lib/utils";
@@ -332,7 +333,7 @@ export function ProjectOverviewSection(props: {
           <p>{props.vmmDraft?.hasOverride ? t("projectSettings.vmmHasOverride") : t("projectSettings.vmmInheritsGlobal")}</p>
         </div>
         <div className="project-settings-panel">
-          <strong>Agent Skills</strong>
+          <strong>{t("projectSettings.agentTitle")}</strong>
           <p>{overrideCount > 0 ? t("projectSettings.agentOverrideCount").replace("{count}", String(overrideCount)) : t("projectSettings.agentInheritsGlobal")}</p>
         </div>
       </div>
@@ -461,7 +462,7 @@ export function ProjectAgentSkillsSection(props: {
       </header>
       <div className="project-settings-panel compact">
         <StatusPill status="ready" label={`${props.workbench.agentSkills.records.filter((record) => record.effective && record.enabled).length} ${t("projectSettings.agentTitle")}`} />
-        <p>{props.workbench.agentSkills.notice}</p>
+        <p>{agentSkillsCatalogSummary(props.workbench.agentSkills, t)}</p>
       </div>
       {props.agentLoading ? (
         <p className="project-settings-muted">{t("projectSettings.agentLoading")}</p>

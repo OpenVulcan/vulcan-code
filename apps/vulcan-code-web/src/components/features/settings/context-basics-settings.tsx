@@ -214,6 +214,7 @@ function AccountUsageRefreshCard(props: {
   // intervalSeconds 是当前持久化刷新周期。
   intervalSeconds: number
 }) {
+  const { t } = useI18n()
   // saving prevents overlapping interval mutations.
   // saving 防止刷新周期变更重叠执行。
   const [saving, setSaving] = React.useState(false)
@@ -236,9 +237,9 @@ function AccountUsageRefreshCard(props: {
   return (
     <section className="space-y-3 rounded-xl border p-4">
       <div>
-        <h3 className="text-sm font-semibold">账号用量后台刷新</h3>
+        <h3 className="text-sm font-semibold">{t("settings.usageRefresh.title")}</h3>
         <p className="text-xs text-muted-foreground">
-          仅刷新声明支持用量查询且已具备必要凭据的账号；默认每 30 分钟刷新，缓存只保存在内存中。
+          {t("settings.usageRefresh.description")}
         </p>
       </div>
       <Select
@@ -248,11 +249,11 @@ function AccountUsageRefreshCard(props: {
       >
         <SelectTrigger className="w-48"><SelectValue /></SelectTrigger>
         <SelectContent>
-          <SelectItem value="60">每 1 分钟</SelectItem>
-          <SelectItem value="300">每 5 分钟</SelectItem>
-          <SelectItem value="900">每 15 分钟</SelectItem>
-          <SelectItem value="1800">每 30 分钟</SelectItem>
-          <SelectItem value="3600">每 1 小时</SelectItem>
+          <SelectItem value="60">{t("settings.usageRefresh.minute").replace("{count}", "1")}</SelectItem>
+          <SelectItem value="300">{t("settings.usageRefresh.minutes").replace("{count}", "5")}</SelectItem>
+          <SelectItem value="900">{t("settings.usageRefresh.minutes").replace("{count}", "15")}</SelectItem>
+          <SelectItem value="1800">{t("settings.usageRefresh.minutes").replace("{count}", "30")}</SelectItem>
+          <SelectItem value="3600">{t("settings.usageRefresh.hour").replace("{count}", "1")}</SelectItem>
         </SelectContent>
       </Select>
       {error ? <p className="text-sm text-destructive">{error}</p> : null}

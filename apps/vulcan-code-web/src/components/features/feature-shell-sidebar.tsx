@@ -14,7 +14,7 @@ import {
 } from "lucide-react"
 
 import { formatSkillText } from "@/components/features/featureText"
-import { vmmSectionIcon } from "@/components/features/memory/vmm-memory-sections"
+import { localizedVmmManagementSection, vmmSectionIcon } from "@/components/features/memory/vmm-memory-sections"
 import type { SkillSubAreaId } from "@/components/features/skills/skill-area-types"
 import {
   enabledPluginDetailMounts,
@@ -91,6 +91,9 @@ function FeatureSidebar(props: {
   workbench: WorkbenchSnapshot
 }) {
   const { t } = useI18n()
+  // sidebarState places the collapsed settings return action directly above the user menu.
+  // sidebarState 将折叠态设置返回动作放到用户菜单正上方。
+  const { state: sidebarState } = useSidebar()
   const feature = primaryFeatureAreas(t).find((area) => area.id === props.activeArea)
   const headerLabel = props.activeArea === "settings" ? t("settings.systemSettings") : feature?.label ?? t("sidebar.console")
 
@@ -109,7 +112,6 @@ function FeatureSidebar(props: {
         {props.activeArea === "settings" ? (
           <SettingsSidebarMenu
             activeSettingsSubArea={props.activeSettingsSubArea}
-            onBackToWorkspace={() => props.onSelectArea("chat")}
             onSelectSettingsSubArea={props.onSelectSettingsSubArea}
           />
         ) : (
@@ -124,6 +126,22 @@ function FeatureSidebar(props: {
         )}
       </SidebarContent>
       <SidebarFooter>
+        {props.activeArea === "settings" && sidebarState === "collapsed" ? (
+          <SidebarMenu>
+            {/* The collapsed return shortcut stays immediately above the user menu. */}
+            {/* 折叠态返回快捷入口紧贴用户菜单上方。 */}
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                aria-label={t("settings.backToWorkspace")}
+                className="workspace-sidebar-feature-button settings-back-menu-row"
+                onClick={() => props.onSelectArea("chat")}
+                tooltip={t("settings.backToWorkspace")}
+              >
+                <Undo2 size={16} />
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          </SidebarMenu>
+        ) : null}
         <SidebarUserMenu onOpenSettings={() => props.onSelectArea("settings")} />
       </SidebarFooter>
     </Sidebar>
@@ -216,29 +234,18 @@ function SettingsSidebarMenu(props: {
   // Selected settings sub page.
   // 当前设置二级页面。
   activeSettingsSubArea: SettingsSubAreaId
-  // Returns from settings to the main workspace.
-  // 从设置页返回主工作区。
-  onBackToWorkspace: () => void
   // Updates the selected settings sub page.
   // 更新设置二级页面选择。
   onSelectSettingsSubArea: (area: SettingsSubAreaId) => void
 }) {
   const { t } = useI18n()
+  // sidebarState keeps settings category flyouts synchronized with the sidebar mode.
+  // sidebarState 让设置分类悬浮菜单与侧栏模式保持同步。
   const { state: sidebarState } = useSidebar()
   const groups = settingsSubAreaGroups(t)
   return (
     <SidebarGroup className="settings-tree-section">
       <SidebarMenu className="settings-tree-list">
-        <SidebarMenuItem>
-          <SidebarMenuButton
-            className="workspace-sidebar-feature-button settings-back-menu-row"
-            onClick={props.onBackToWorkspace}
-            tooltip={t("settings.backToWorkspace")}
-          >
-            <Undo2 size={16} />
-            <span className="vcn-sidebar-label workspace-sidebar-feature-label">{t("settings.backToWorkspace")}</span>
-          </SidebarMenuButton>
-        </SidebarMenuItem>
         {groups.map((group) => (
           <SettingsSidebarGroupRow
             activeSettingsSubArea={props.activeSettingsSubArea}
@@ -488,8 +495,7 @@ function featureSidebarRows(
   if (activeArea === "memory") {
     return workbench.vmmMemory.sections.map((section) => ({
       id: section.id,
-      label: section.label,
-      detail: section.description,
+      ...localizedVmmManagementSection(section, t),
       icon: vmmSectionIcon(section.id),
     }))
   }

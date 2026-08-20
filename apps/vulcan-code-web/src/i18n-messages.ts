@@ -228,6 +228,7 @@ export type TranslationKey =
   | "projectMenu.pin"
   | "projectMenu.unpin"
   | "projectMenu.openDirectory"
+  | "projectMenu.openTerminal"
   | "projectMenu.createWorktree"
   | "projectMenu.renameProject"
   | "projectMenu.setIcon"
@@ -491,6 +492,20 @@ export type TranslationKey =
   | "composer.capability.close.description"
   | "composer.capability.close.discard"
   | "composer.capability.close.keepEditing"
+  | "composer.contextUsage.cacheHitRate"
+  | "composer.contextUsage.noData"
+  | "composer.contextUsage.usedPercent"
+  | "composer.capability.mediaBackendMode"
+  | "composer.capability.mediaFixedRoute"
+  | "composer.capability.mediaBackendNote"
+  | "composer.capability.mediaBackendMissing"
+  | "composer.capability.extensionHint"
+  | "composer.capability.extensionProfileMissing"
+  | "composer.capability.extensionConstraints"
+  | "composer.capability.extensionLimitations"
+  | "composer.capability.mode.provider"
+  | "composer.capability.mode.model"
+  | "composer.capability.reasoning"
   | "composer.reasoning.off"
   | "composer.reasoning.low"
   | "composer.reasoning.medium"
@@ -1204,6 +1219,8 @@ export type TranslationKey =
   | "memory.scope"
   | "memory.scope.global"
   | "memory.scope.project"
+  | "memory.overview.title"
+  | "memory.overview.description"
   | "memory.project"
   | "memory.action.testConnection"
   | "memory.action.refreshUsersProjects"
@@ -2259,6 +2276,113 @@ export type TranslationKey =
   | "settings.contextCompactionNodes.invalidPositive"
   | "settings.contextCompactionNodes.invalidAscending"
   | "settings.contextCompactionNodes.save"
+  | "settings.usageRefresh.title"
+  | "settings.usageRefresh.description"
+  | "settings.usageRefresh.minute"
+  | "settings.usageRefresh.minutes"
+  | "settings.usageRefresh.hour"
+  | "settings.credentials.selectProvider"
+  | "settings.credentials.categoryAria"
+  | "settings.credentials.collapse"
+  | "settings.credentials.expand"
+  | "settings.credentials.connecting"
+  | "settings.credentials.connectingDescription"
+  | "settings.credentials.emptyProvider"
+  | "settings.credentials.emptyProviderDescription"
+  | "settings.credentials.emptyAll"
+  | "settings.credentials.emptyAllDescription"
+  | "settings.credentials.refreshUsage"
+  | "settings.credentials.syncModels"
+  | "settings.credentials.currentDefault"
+  | "settings.credentials.setDefault"
+  | "settings.credentials.edit"
+  | "settings.credentials.remove"
+  | "settings.credentials.deleteDefaultMissingReplacement"
+  | "settings.credentials.deleteTitle"
+  | "settings.credentials.deleteDescription"
+  | "settings.credentials.replacementDefault"
+  | "settings.credentials.cancel"
+  | "settings.credentials.deleting"
+  | "settings.credentials.confirmDelete"
+  | "settings.credentials.usageUnsupported"
+  | "settings.credentials.usageNotQueried"
+  | "settings.credentials.usageUnavailable"
+  | "settings.credentials.usageInvalid"
+  | "settings.credentials.noQuotaWindows"
+  | "settings.credentials.quotaWindow"
+  | "settings.credentials.remaining"
+  | "settings.credentials.used"
+  | "settings.credentials.notIncluded"
+  | "settings.credentials.unlimited"
+  | "settings.credentials.unknown"
+  | "settings.credentials.connectionIncomplete"
+  | "settings.credentials.editToolTitle"
+  | "settings.credentials.editModelTitle"
+  | "settings.credentials.addToolTitle"
+  | "settings.credentials.addModelTitle"
+  | "settings.credentials.toolDescription"
+  | "settings.credentials.modelDescription"
+  | "settings.credentials.provider"
+  | "settings.credentials.serviceEntry"
+  | "settings.credentials.autoRegion"
+  | "settings.credentials.credentialType"
+  | "settings.credentials.displayName"
+  | "settings.credentials.replaceToken"
+  | "settings.credentials.apiToken"
+  | "settings.credentials.managementKey"
+  | "settings.credentials.managementKeyPlaceholder"
+  | "settings.credentials.managementKeyHint"
+  | "settings.credentials.removeManagementKey"
+  | "settings.credentials.oauthClientSecretOptional"
+  | "settings.credentials.authorizationStatus"
+  | "settings.credentials.authorizationCode"
+  | "settings.credentials.cancelAuthorization"
+  | "settings.credentials.waitBrowser"
+  | "settings.credentials.saveSyncing"
+  | "settings.credentials.reauthorizeAndSave"
+  | "settings.credentials.openBrowserAuthorize"
+  | "settings.credentials.saveSync"
+  | "settings.credentials.oauth.waitingAuthorization"
+  | "settings.credentials.oauth.waitingCallback"
+  | "settings.credentials.oauth.finalizing"
+  | "settings.credentials.oauth.succeeded"
+  | "settings.credentials.oauth.failed"
+  | "settings.credentials.oauth.cancelled"
+  | "settings.providers.managementTitle"
+  | "settings.providers.managementDescription"
+  | "settings.providers.system"
+  | "settings.providers.functional"
+  | "settings.providers.custom"
+  | "settings.providers.catalog"
+  | "settings.providers.isolatedCount"
+  | "settings.providers.isolatedDescription"
+  | "settings.providers.removeIsolated"
+  | "settings.providers.diagnosticsOmitted"
+  | "settings.providers.removeIsolatedTitle"
+  | "settings.providers.removeIsolatedDescription"
+  | "settings.providers.permanentlyDelete"
+  | "settings.providers.customTitle"
+  | "settings.providers.addProvider"
+  | "settings.providers.loading"
+  | "settings.providers.emptyCustom"
+  | "settings.providers.table.provider"
+  | "settings.providers.table.endpoint"
+  | "settings.providers.table.resources"
+  | "settings.providers.table.status"
+  | "settings.providers.table.priority"
+  | "settings.providers.table.actions"
+  | "settings.providers.table.details"
+  | "settings.providers.table.configurationStatus"
+  | "settings.providers.table.operation"
+  | "settings.providers.table.protocolUnavailable"
+  | "settings.providers.credentialCount"
+  | "settings.providers.configured"
+  | "settings.providers.notConfigured"
+  | "settings.providers.addCredentialFor"
+  | "settings.providers.editFor"
+  | "settings.providers.removeFor"
+  | "settings.providers.priorityAria"
+  | "settings.providers.savePriority"
   | "settings.contextWindowPolicy.effectivePercent"
   | "settings.contextWindowPolicy.autoCompactPercent"
   | "settings.contextWindowPolicy.autoCompactTokenLimit"
@@ -2525,6 +2649,9 @@ export type TranslationKey =
   | "skills.filter.empty"
   | "skills.label.system"
   | "skills.label.user"
+  | "skills.label.package"
+  | "skills.label.plugin"
+  | "skills.catalogSummary"
   | "skills.label.source"
   | "skills.label.explicit"
   | "skills.label.implicit"
@@ -3874,6 +4001,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.scope": "作用域",
     "memory.scope.global": "全局配置",
     "memory.scope.project": "项目配置",
+    "memory.overview.title": "状态总览",
+    "memory.overview.description": "查看记忆服务状态、完成首次配置并处理阻塞问题。",
     "memory.project": "项目",
     "memory.action.testConnection": "测试连接",
     "memory.action.refreshUsersProjects": "刷新用户/项目",
@@ -5195,6 +5324,9 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "skills.filter.empty": "没有符合当前筛选条件的项目。",
     "skills.label.system": "系统",
     "skills.label.user": "用户",
+    "skills.label.package": "技能包",
+    "skills.label.plugin": "插件",
+    "skills.catalogSummary": "系统记录 {system}，用户记录 {user}，插件记录 {plugin}，有效技能 {effective}，目录问题 {issues}。",
     "skills.label.source": "来源",
     "skills.label.explicit": "显式",
     "skills.label.implicit": "隐式",
@@ -5340,6 +5472,128 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "skills.agent.emptyDetail": "点击刷新或同步系统技能后会扫描系统目录与用户目录下的 SKILL.md。",
     "skills.agent.detailsTitle": "Agent Skill 详情",
     "skills.agent.detailsDescription": "查看 Agent Skill 详情。",
+    "projectMenu.openTerminal": "在终端中打开",
+    "composer.contextUsage.cacheHitRate": "平均缓存命中率",
+    "composer.contextUsage.noData": "暂无数据",
+    "composer.contextUsage.usedPercent": "上下文已使用 {percent}%",
+    "composer.capability.mediaBackendMode": "后端模式",
+    "composer.capability.mediaFixedRoute": "固定路由",
+    "composer.capability.mediaBackendNote": "模型、账号与思考级别由模型设置统一配置；当前会话只控制是否启用，工具参数结构不会变化。",
+    "composer.capability.mediaBackendMissing": "请先在模型设置中配置此媒体理解能力的固定后端。",
+    "composer.capability.extensionHint": "选择可供 AI 通过模型扩展参数查询后按需调用的模型。切换此集合不会改变已注册工具名。",
+    "composer.capability.extensionProfileMissing": "缺少已审核模型扩展说明，当前不可选择。",
+    "composer.capability.extensionConstraints": "约束：{value}",
+    "composer.capability.extensionLimitations": "限制：{value}",
+    "composer.capability.mode.provider": "供应商专用模式",
+    "composer.capability.mode.model": "模型代替模式",
+    "composer.capability.reasoning": "思考 {effort}",
+    "settings.usageRefresh.title": "账号用量后台刷新",
+    "settings.usageRefresh.description": "仅刷新声明支持用量查询且已具备必要凭据的账号；默认每 30 分钟刷新，缓存只保存在内存中。",
+    "settings.usageRefresh.minute": "每 {count} 分钟",
+    "settings.usageRefresh.minutes": "每 {count} 分钟",
+    "settings.usageRefresh.hour": "每 {count} 小时",
+    "settings.credentials.selectProvider": "选择供应商",
+    "settings.credentials.categoryAria": "凭据分类",
+    "settings.credentials.collapse": "收起为胶囊",
+    "settings.credentials.expand": "展开凭据分类",
+    "settings.credentials.connecting": "正在连接公共 AI 运行时",
+    "settings.credentials.connectingDescription": "启动后会从各凭据实时获取模型，不读取本地模型缓存。",
+    "settings.credentials.emptyProvider": "尚未添加该供应商的凭据",
+    "settings.credentials.emptyProviderDescription": "使用上方“添加凭据”按钮，为当前供应商创建第一个账号。",
+    "settings.credentials.emptyAll": "尚未添加模型账号",
+    "settings.credentials.emptyAllDescription": "点击“添加凭据”，选择供应商、服务入口、凭据方式与协议。",
+    "settings.credentials.refreshUsage": "刷新账号用量",
+    "settings.credentials.syncModels": "同步支持模型",
+    "settings.credentials.currentDefault": "当前默认账号",
+    "settings.credentials.setDefault": "设为默认账号",
+    "settings.credentials.edit": "编辑凭据",
+    "settings.credentials.remove": "删除凭据",
+    "settings.credentials.deleteDefaultMissingReplacement": "删除默认账号前必须选择替代默认账号。",
+    "settings.credentials.deleteTitle": "删除模型账号",
+    "settings.credentials.deleteDescription": "将删除“{name}”及其系统凭据，此操作不可撤销。",
+    "settings.credentials.replacementDefault": "替代默认账号",
+    "settings.credentials.cancel": "取消",
+    "settings.credentials.deleting": "删除中…",
+    "settings.credentials.confirmDelete": "确认删除",
+    "settings.credentials.usageUnsupported": "该凭据不支持账号用量查询",
+    "settings.credentials.usageNotQueried": "用量尚未查询",
+    "settings.credentials.usageUnavailable": "账号用量暂时不可用",
+    "settings.credentials.usageInvalid": "账号用量响应格式无效，请重新刷新",
+    "settings.credentials.noQuotaWindows": "该供应商不提供套餐额度窗口",
+    "settings.credentials.quotaWindow": "套餐额度窗口",
+    "settings.credentials.remaining": "剩余 {value}",
+    "settings.credentials.used": "已用 {value}",
+    "settings.credentials.notIncluded": "当前套餐未包含",
+    "settings.credentials.unlimited": "无限",
+    "settings.credentials.unknown": "未知",
+    "settings.credentials.connectionIncomplete": "请完整填写连接信息。",
+    "settings.credentials.editToolTitle": "编辑工具服务凭据",
+    "settings.credentials.editModelTitle": "编辑模型账号",
+    "settings.credentials.addToolTitle": "添加工具服务凭据",
+    "settings.credentials.addModelTitle": "添加模型账号",
+    "settings.credentials.toolDescription": "该凭据只用于所选供应商的原生 AI 工具，不会创建虚假的对话模型。",
+    "settings.credentials.modelDescription": "协议绑定在当前账号上，模型调用期间不会切换协议或账号。",
+    "settings.credentials.provider": "供应商",
+    "settings.credentials.serviceEntry": "服务入口",
+    "settings.credentials.autoRegion": "保存时自动识别区域",
+    "settings.credentials.credentialType": "凭据类型",
+    "settings.credentials.displayName": "账号显示名",
+    "settings.credentials.replaceToken": "替换 Token（留空则不变）",
+    "settings.credentials.apiToken": "API Token",
+    "settings.credentials.managementKey": "管理密钥（可选）",
+    "settings.credentials.managementKeyPlaceholder": "留空保持现有管理密钥",
+    "settings.credentials.managementKeyHint": "仅用于该账号的用量查询，不用于模型调用。",
+    "settings.credentials.removeManagementKey": "移除现有管理密钥",
+    "settings.credentials.oauthClientSecretOptional": "Google OAuth Client Secret（可选）",
+    "settings.credentials.authorizationStatus": "授权状态",
+    "settings.credentials.authorizationCode": "授权码",
+    "settings.credentials.cancelAuthorization": "取消授权",
+    "settings.credentials.waitBrowser": "等待浏览器授权",
+    "settings.credentials.saveSyncing": "保存并同步…",
+    "settings.credentials.reauthorizeAndSave": "重新授权并保存",
+    "settings.credentials.openBrowserAuthorize": "打开浏览器授权",
+    "settings.credentials.saveSync": "保存并同步",
+    "settings.credentials.oauth.waitingAuthorization": "等待用户确认授权",
+    "settings.credentials.oauth.waitingCallback": "等待浏览器回调",
+    "settings.credentials.oauth.finalizing": "正在完成凭据保存",
+    "settings.credentials.oauth.succeeded": "授权成功",
+    "settings.credentials.oauth.failed": "授权失败",
+    "settings.credentials.oauth.cancelled": "已取消",
+    "settings.providers.managementTitle": "供应商管理",
+    "settings.providers.managementDescription": "管理 Vulcan Code 已实现的内置供应商与复用现有协议适配器的自定义供应商。",
+    "settings.providers.system": "系统供应商",
+    "settings.providers.functional": "功能供应商",
+    "settings.providers.custom": "自定义供应商",
+    "settings.providers.catalog": "供应商清单",
+    "settings.providers.isolatedCount": "已隔离 {count} 个自定义供应商",
+    "settings.providers.isolatedDescription": "该供应商已停止参与运行时路由；其他供应商及其设置仍可正常使用和保存。下列独立 Manifest 源文件会在保存时保持原始字节不变；可修复源文件后重启 Service，或显式删除对应隔离项。",
+    "settings.providers.removeIsolated": "删除隔离项",
+    "settings.providers.diagnosticsOmitted": "其余诊断已按安全上限省略。",
+    "settings.providers.removeIsolatedTitle": "删除隔离的自定义供应商",
+    "settings.providers.removeIsolatedDescription": "将永久删除该供应商的独立 Manifest、中央引用、连接、凭据与模型设置；其他供应商不受影响。",
+    "settings.providers.permanentlyDelete": "永久删除",
+    "settings.providers.customTitle": "自定义供应商",
+    "settings.providers.addProvider": "添加供应商",
+    "settings.providers.loading": "正在加载供应商",
+    "settings.providers.emptyCustom": "尚未添加自定义供应商。",
+    "settings.providers.table.provider": "供应商",
+    "settings.providers.table.endpoint": "接口",
+    "settings.providers.table.resources": "资源数量",
+    "settings.providers.table.status": "状态",
+    "settings.providers.table.priority": "优先级",
+    "settings.providers.table.actions": "操作",
+    "settings.providers.table.details": "详情",
+    "settings.providers.table.configurationStatus": "配置状态",
+    "settings.providers.table.operation": "操作",
+    "settings.providers.table.protocolUnavailable": "未声明调用协议",
+    "settings.providers.credentialCount": "{count} 个凭据",
+    "settings.providers.configured": "已配置",
+    "settings.providers.notConfigured": "未配置",
+    "settings.providers.addCredentialFor": "为 {provider} 添加凭据",
+    "settings.providers.editFor": "编辑 {provider}",
+    "settings.providers.removeFor": "移除 {provider}",
+    "settings.providers.priorityAria": "供应商优先级",
+    "settings.providers.savePriority": "保存",
   },
   "en-US": {
     "app.subtitle": "Ai Coding",
@@ -6541,6 +6795,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.scope": "Scope",
     "memory.scope.global": "Global config",
     "memory.scope.project": "Project config",
+    "memory.overview.title": "Status overview",
+    "memory.overview.description": "Review memory service status, complete initial setup, and resolve blocking issues.",
     "memory.project": "Project",
     "memory.action.testConnection": "Test connection",
     "memory.action.refreshUsersProjects": "Refresh users/projects",
@@ -7862,6 +8118,9 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "skills.filter.empty": "No items match the current filters.",
     "skills.label.system": "System",
     "skills.label.user": "User",
+    "skills.label.package": "Package",
+    "skills.label.plugin": "Plugin",
+    "skills.catalogSummary": "System records {system}, user records {user}, plugin records {plugin}, effective skills {effective}, catalog issues {issues}.",
     "skills.label.source": "Source",
     "skills.label.explicit": "Explicit",
     "skills.label.implicit": "Implicit",
@@ -8007,5 +8266,127 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "skills.agent.emptyDetail": "Refresh or sync system skills to scan SKILL.md files under system and user directories.",
     "skills.agent.detailsTitle": "Agent Skill Details",
     "skills.agent.detailsDescription": "View Agent Skill details.",
+    "projectMenu.openTerminal": "Open in terminal",
+    "composer.contextUsage.cacheHitRate": "Average cache hit rate",
+    "composer.contextUsage.noData": "No data",
+    "composer.contextUsage.usedPercent": "Context used {percent}%",
+    "composer.capability.mediaBackendMode": "Backend mode",
+    "composer.capability.mediaFixedRoute": "Fixed route",
+    "composer.capability.mediaBackendNote": "The model, account, and reasoning level are configured in Model settings; this session only controls whether the capability is enabled, and tool parameter schemas do not change.",
+    "composer.capability.mediaBackendMissing": "Configure a fixed backend for this media-understanding capability in Model settings first.",
+    "composer.capability.extensionHint": "Choose models that AI can query for extension parameters and call on demand. Changing this set does not change registered tool names.",
+    "composer.capability.extensionProfileMissing": "No reviewed model-extension description is available, so this model cannot be selected.",
+    "composer.capability.extensionConstraints": "Constraints: {value}",
+    "composer.capability.extensionLimitations": "Limitations: {value}",
+    "composer.capability.mode.provider": "Provider-specific mode",
+    "composer.capability.mode.model": "Model replacement mode",
+    "composer.capability.reasoning": "Reasoning {effort}",
+    "settings.usageRefresh.title": "Background account-usage refresh",
+    "settings.usageRefresh.description": "Refresh only accounts that declare usage-query support and have the required credentials; the default interval is 30 minutes and the cache stays in memory.",
+    "settings.usageRefresh.minute": "Every {count} minute",
+    "settings.usageRefresh.minutes": "Every {count} minutes",
+    "settings.usageRefresh.hour": "Every {count} hour",
+    "settings.credentials.selectProvider": "Select provider",
+    "settings.credentials.categoryAria": "Credential categories",
+    "settings.credentials.collapse": "Collapse to pill",
+    "settings.credentials.expand": "Expand credential categories",
+    "settings.credentials.connecting": "Connecting to the public AI runtime",
+    "settings.credentials.connectingDescription": "After startup, models are fetched live from credentials; the local model cache is not read.",
+    "settings.credentials.emptyProvider": "No credential has been added for this provider",
+    "settings.credentials.emptyProviderDescription": "Use the Add credential button above to create the first account for this provider.",
+    "settings.credentials.emptyAll": "No model account has been added",
+    "settings.credentials.emptyAllDescription": "Click Add credential to choose a provider, service entry, credential method, and protocol.",
+    "settings.credentials.refreshUsage": "Refresh account usage",
+    "settings.credentials.syncModels": "Sync supported models",
+    "settings.credentials.currentDefault": "Current default account",
+    "settings.credentials.setDefault": "Set as default account",
+    "settings.credentials.edit": "Edit credential",
+    "settings.credentials.remove": "Delete credential",
+    "settings.credentials.deleteDefaultMissingReplacement": "Choose a replacement default account before deleting the current default.",
+    "settings.credentials.deleteTitle": "Delete model account",
+    "settings.credentials.deleteDescription": "This will delete “{name}” and its system credential. This action cannot be undone.",
+    "settings.credentials.replacementDefault": "Replacement default account",
+    "settings.credentials.cancel": "Cancel",
+    "settings.credentials.deleting": "Deleting…",
+    "settings.credentials.confirmDelete": "Confirm delete",
+    "settings.credentials.usageUnsupported": "This credential does not support account-usage lookup",
+    "settings.credentials.usageNotQueried": "Usage has not been queried",
+    "settings.credentials.usageUnavailable": "Account usage is temporarily unavailable",
+    "settings.credentials.usageInvalid": "The account-usage response is invalid; refresh and try again",
+    "settings.credentials.noQuotaWindows": "This provider does not expose quota windows",
+    "settings.credentials.quotaWindow": "Quota window",
+    "settings.credentials.remaining": "Remaining {value}",
+    "settings.credentials.used": "Used {value}",
+    "settings.credentials.notIncluded": "Not included in the current plan",
+    "settings.credentials.unlimited": "Unlimited",
+    "settings.credentials.unknown": "Unknown",
+    "settings.credentials.connectionIncomplete": "Complete the connection fields before saving.",
+    "settings.credentials.editToolTitle": "Edit tool-service credential",
+    "settings.credentials.editModelTitle": "Edit model account",
+    "settings.credentials.addToolTitle": "Add tool-service credential",
+    "settings.credentials.addModelTitle": "Add model account",
+    "settings.credentials.toolDescription": "This credential is used only for the selected provider's native AI tools; it does not create a fake conversation model.",
+    "settings.credentials.modelDescription": "The protocol is bound to this account and will not switch protocol or account during model calls.",
+    "settings.credentials.provider": "Provider",
+    "settings.credentials.serviceEntry": "Service entry",
+    "settings.credentials.autoRegion": "Region is detected automatically on save",
+    "settings.credentials.credentialType": "Credential type",
+    "settings.credentials.displayName": "Account display name",
+    "settings.credentials.replaceToken": "Replace token (leave blank to keep it)",
+    "settings.credentials.apiToken": "API token",
+    "settings.credentials.managementKey": "Management key (optional)",
+    "settings.credentials.managementKeyPlaceholder": "Leave blank to keep the existing management key",
+    "settings.credentials.managementKeyHint": "Used only for account-usage lookup, not model calls.",
+    "settings.credentials.removeManagementKey": "Remove existing management key",
+    "settings.credentials.oauthClientSecretOptional": "Google OAuth client secret (optional)",
+    "settings.credentials.authorizationStatus": "Authorization status",
+    "settings.credentials.authorizationCode": "Authorization code",
+    "settings.credentials.cancelAuthorization": "Cancel authorization",
+    "settings.credentials.waitBrowser": "Waiting for browser authorization",
+    "settings.credentials.saveSyncing": "Saving and syncing…",
+    "settings.credentials.reauthorizeAndSave": "Reauthorize and save",
+    "settings.credentials.openBrowserAuthorize": "Open browser authorization",
+    "settings.credentials.saveSync": "Save and sync",
+    "settings.credentials.oauth.waitingAuthorization": "Waiting for user authorization",
+    "settings.credentials.oauth.waitingCallback": "Waiting for browser callback",
+    "settings.credentials.oauth.finalizing": "Finalizing credential save",
+    "settings.credentials.oauth.succeeded": "Authorization succeeded",
+    "settings.credentials.oauth.failed": "Authorization failed",
+    "settings.credentials.oauth.cancelled": "Cancelled",
+    "settings.providers.managementTitle": "Provider management",
+    "settings.providers.managementDescription": "Manage implemented built-in providers and custom providers that reuse existing protocol adapters in Vulcan Code.",
+    "settings.providers.system": "System providers",
+    "settings.providers.functional": "Functional providers",
+    "settings.providers.custom": "Custom providers",
+    "settings.providers.catalog": "Provider catalog",
+    "settings.providers.isolatedCount": "{count} custom providers isolated",
+    "settings.providers.isolatedDescription": "This provider no longer participates in runtime routing; other providers and their settings remain usable and saveable. The standalone Manifest source files below retain their original bytes on save; repair the source and restart the Service, or explicitly remove the isolated entry.",
+    "settings.providers.removeIsolated": "Delete isolated entry",
+    "settings.providers.diagnosticsOmitted": "Remaining diagnostics were omitted at the safety limit.",
+    "settings.providers.removeIsolatedTitle": "Delete isolated custom provider",
+    "settings.providers.removeIsolatedDescription": "This permanently deletes the provider's standalone Manifest, central references, connections, credentials, and model settings; other providers are unaffected.",
+    "settings.providers.permanentlyDelete": "Delete permanently",
+    "settings.providers.customTitle": "Custom providers",
+    "settings.providers.addProvider": "Add provider",
+    "settings.providers.loading": "Loading providers",
+    "settings.providers.emptyCustom": "No custom providers have been added.",
+    "settings.providers.table.provider": "Provider",
+    "settings.providers.table.endpoint": "Endpoint",
+    "settings.providers.table.resources": "Resources",
+    "settings.providers.table.status": "Status",
+    "settings.providers.table.priority": "Priority",
+    "settings.providers.table.actions": "Actions",
+    "settings.providers.table.details": "Details",
+    "settings.providers.table.configurationStatus": "Configuration status",
+    "settings.providers.table.operation": "Operation",
+    "settings.providers.table.protocolUnavailable": "No call protocol declared",
+    "settings.providers.credentialCount": "{count} credentials",
+    "settings.providers.configured": "Configured",
+    "settings.providers.notConfigured": "Not configured",
+    "settings.providers.addCredentialFor": "Add credential for {provider}",
+    "settings.providers.editFor": "Edit {provider}",
+    "settings.providers.removeFor": "Remove {provider}",
+    "settings.providers.priorityAria": "Provider priority",
+    "settings.providers.savePriority": "Save",
   },
 }

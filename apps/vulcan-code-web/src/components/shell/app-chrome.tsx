@@ -201,6 +201,29 @@ export function GlobalActions(props: {
       props.onToggleTheme();
     }
   }, [props]);
+  // menuPointerInteractionRef records whether the current menu closure originated from a pointer action inside the menu.
+  // menuPointerInteractionRef 记录当前菜单关闭是否源于菜单内部的鼠标操作。
+  const menuPointerInteractionRef = React.useRef(false);
+  // markMenuPointerInteraction marks main-menu and submenu pointer interactions before Radix closes the root menu.
+  // markMenuPointerInteraction 在 Radix 关闭根菜单前标记主菜单与子菜单的鼠标操作。
+  const markMenuPointerInteraction = React.useCallback(() => {
+    menuPointerInteractionRef.current = true;
+  }, []);
+  // markMenuKeyboardInteraction preserves the normal trigger focus return for keyboard-driven closure.
+  // markMenuKeyboardInteraction 为键盘触发的关闭保留正常的触发按钮焦点回送。
+  const markMenuKeyboardInteraction = React.useCallback(() => {
+    menuPointerInteractionRef.current = false;
+  }, []);
+  // handleMenuCloseAutoFocus suppresses only the focus return caused by a pointer selection inside this menu.
+  // handleMenuCloseAutoFocus 仅阻止该菜单内部鼠标选择导致的焦点回送。
+  const handleMenuCloseAutoFocus = React.useCallback<
+    NonNullable<React.ComponentProps<typeof DropdownMenuContent>["onCloseAutoFocus"]>
+  >((event) => {
+    if (menuPointerInteractionRef.current) {
+      menuPointerInteractionRef.current = false;
+      event.preventDefault();
+    }
+  }, []);
 
   return (
     <DropdownMenu>
@@ -215,7 +238,15 @@ export function GlobalActions(props: {
           <ChevronDown size={16} />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="app-chrome-menu" side="bottom" sideOffset={0}>
+      <DropdownMenuContent
+        align="end"
+        className="app-chrome-menu"
+        onCloseAutoFocus={handleMenuCloseAutoFocus}
+        onKeyDownCapture={markMenuKeyboardInteraction}
+        onPointerDownCapture={markMenuPointerInteraction}
+        side="bottom"
+        sideOffset={0}
+      >
         <DropdownMenuItem className="app-chrome-menu-status" disabled>
           <span>{t("appChrome.status")}</span>
           <StatusPill status={statusKind} label={statusLabel} />
@@ -226,7 +257,11 @@ export function GlobalActions(props: {
             <span>{t("appChrome.theme")}</span>
             <small>{props.theme === "dark" ? t("appChrome.theme.dark") : t("appChrome.theme.light")}</small>
           </DropdownMenuSubTrigger>
-          <DropdownMenuSubContent className="app-chrome-menu-sub">
+          <DropdownMenuSubContent
+            className="app-chrome-menu-sub"
+            onKeyDownCapture={markMenuKeyboardInteraction}
+            onPointerDownCapture={markMenuPointerInteraction}
+          >
             <DropdownMenuItem onSelect={() => selectTheme("light")}>
               <Sun size={15} />
               <span>{t("appChrome.theme.light")}</span>
@@ -245,7 +280,11 @@ export function GlobalActions(props: {
             <span>{t("global.language")}</span>
             <small>{props.locale === "zh-CN" ? t("appChrome.language.zh") : "English"}</small>
           </DropdownMenuSubTrigger>
-          <DropdownMenuSubContent className="app-chrome-menu-sub">
+          <DropdownMenuSubContent
+            className="app-chrome-menu-sub"
+            onKeyDownCapture={markMenuKeyboardInteraction}
+            onPointerDownCapture={markMenuPointerInteraction}
+          >
             <DropdownMenuItem onSelect={() => props.onChangeLocale("zh-CN")}>
               <span className="app-chrome-menu-language-mark">ZH</span>
               <span>{t("appChrome.language.zh")}</span>

@@ -4,6 +4,7 @@ import {
   ChevronsUpDown,
   LogOut,
   Settings,
+  Undo2,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -59,18 +60,18 @@ export function SidebarBrandMenu(props: {
               <small>{props.currentLabel}</small>
             </span>
           </div>
-          {props.activeArea !== "settings" ? (
-            <button
-              aria-label={t("global.openSettings")}
-              className="sidebar-brand-settings-button"
-              onClick={() => props.onSelectArea("settings")}
-              onDoubleClick={(event) => event.stopPropagation()}
-              title={t("area.settings")}
-              type="button"
-            >
-              <Settings size={15} />
-            </button>
-          ) : null}
+          {/* The header action keeps settings and back navigation in the same expanded slot. */}
+          {/* 头部动作让设置与返回导航共用展开态的同一位置。 */}
+          <button
+            aria-label={props.activeArea === "settings" ? t("settings.backToWorkspace") : t("global.openSettings")}
+            className="sidebar-brand-settings-button"
+            onClick={() => props.onSelectArea(props.activeArea === "settings" ? "chat" : "settings")}
+            onDoubleClick={(event) => event.stopPropagation()}
+            title={props.activeArea === "settings" ? t("settings.backToWorkspace") : t("area.settings")}
+            type="button"
+          >
+            {props.activeArea === "settings" ? <Undo2 size={15} /> : <Settings size={15} />}
+          </button>
         </div>
       </SidebarMenuItem>
     </SidebarMenu>

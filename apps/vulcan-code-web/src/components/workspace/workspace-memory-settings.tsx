@@ -1,5 +1,5 @@
 import * as React from "react";
-import { vmmSectionIcon } from "@/components/features/memory/vmm-memory-sections";
+import { localizedVmmManagementSection, vmmSectionIcon } from "@/components/features/memory/vmm-memory-sections";
 import type { MemoryActionProps } from "@/components/features/memory/use-memory-area-controller";
 import { useI18n } from "@/i18n";
 import type { WorkbenchSnapshot } from "@/types";
@@ -73,7 +73,7 @@ export function FloatingMemoryMenu(props: {
   const { t } = useI18n();
   // rows stores the embedded memory menu rows.
   // rows 保存内嵌记忆菜单行。
-  const rows = memoryMenuRows(props.workbench);
+  const rows = memoryMenuRows(props.workbench, t);
   // activeMeta stores the selected menu label for the collapsed pill.
   // activeMeta 保存收起胶囊展示的当前菜单标签。
   const activeMeta = memorySubAreaMeta(props.activeSubArea, props.workbench, t);
@@ -106,21 +106,20 @@ export function FloatingMemoryMenu(props: {
 
 // memoryMenuRows builds embedded memory menu rows from the snapshot.
 // memoryMenuRows 根据快照构建内嵌记忆菜单行。
-function memoryMenuRows(workbench: WorkbenchSnapshot): Array<{ detail: string; icon: React.ReactNode; id: MemorySubAreaId; label: string }> {
+function memoryMenuRows(workbench: WorkbenchSnapshot, t: ReturnType<typeof useI18n>["t"]): Array<{ detail: string; icon: React.ReactNode; id: MemorySubAreaId; label: string }> {
   return workbench.vmmMemory.sections.map((section) => ({
-    detail: section.description,
+    ...localizedVmmManagementSection(section, t),
     icon: vmmSectionIcon(section.id),
     id: section.id,
-    label: section.label,
   }));
 }
 
 // memorySubAreaMeta returns the compact label and detail for one embedded memory page.
 // memorySubAreaMeta 返回单个内嵌记忆页面的紧凑标签与详情。
 export function memorySubAreaMeta(subArea: MemorySubAreaId, workbench: WorkbenchSnapshot, t: ReturnType<typeof useI18n>["t"]): { detail: string; label: string } {
-  const row = memoryMenuRows(workbench).find((item) => item.id === subArea);
+  const row = memoryMenuRows(workbench, t).find((item) => item.id === subArea);
   return {
-    detail: row?.detail ?? workbench.vmmMemory.notice,
+    detail: row?.detail ?? t("area.memory.description"),
     label: row?.label ?? t("workspaceToolPanel.status"),
   };
 }

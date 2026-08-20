@@ -100,7 +100,8 @@
 }
 
 .context-usage-control {
-  min-width: 14px;
+  width: 24px;
+  min-width: 24px;
   height: 24px;
   display: inline-flex;
   align-items: center;
@@ -111,17 +112,14 @@
   padding: 0;
   background: transparent;
   color: var(--muted-foreground);
-  cursor: pointer;
+  cursor: default;
 }
 
 .context-usage-control.is-locked {
+  width: auto;
+  min-width: 0;
   padding: 0 5px 0 2px;
   background: color-mix(in oklch, var(--foreground) 7%, transparent);
-}
-
-.context-usage-control:disabled {
-  cursor: not-allowed;
-  opacity: 0.62;
 }
 
 .context-usage-control:not(:disabled):hover {
@@ -131,7 +129,7 @@
 
 .context-usage-orb {
   --context-usage-track: color-mix(in oklch, var(--muted-foreground) 24%, transparent);
-  --context-usage-progress-color: color-mix(in oklch, #4d9cff 76%, var(--foreground) 24%);
+  --context-usage-progress-color: #4d9cff;
   width: 14px;
   height: 14px;
   flex: 0 0 14px;
@@ -141,9 +139,12 @@
   border: 0;
   border-radius: 999px;
   padding: 0;
-  background:
-    radial-gradient(circle at center, var(--card) 0 44%, transparent 45%),
-    conic-gradient(var(--context-usage-progress-color) var(--context-usage-progress), var(--context-usage-track) 0);
+  background: conic-gradient(
+    var(--context-usage-progress-color) var(--context-usage-progress),
+    var(--context-usage-track) 0
+  );
+  -webkit-mask: radial-gradient(circle at center, transparent 0 44%, #000 45%);
+  mask: radial-gradient(circle at center, transparent 0 44%, #000 45%);
   color: var(--foreground);
   box-shadow: none;
   cursor: inherit;
@@ -188,17 +189,56 @@
   white-space: normal;
 }
 
-.context-usage-menu {
-  width: min(320px, calc(100vw - 24px));
-}
-
-.context-usage-card {
+.context-usage-window-section {
   display: flex;
   flex-direction: column;
-  align-items: stretch;
-  gap: 12px;
-  padding: 8px;
-  white-space: normal;
+  gap: 8px;
+  border-top: 1px solid rgb(255 255 255 / 8%);
+  padding-top: 10px;
+}
+
+.context-usage-window-title {
+  color: rgb(244 244 244 / 54%);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.25;
+}
+
+.context-usage-window-switch {
+  width: 100%;
+  flex-wrap: nowrap;
+  gap: 2px;
+  border-radius: 8px;
+  background: rgb(255 255 255 / 7%);
+  padding: 2px;
+}
+
+.context-usage-window-switch [data-slot="segmented-control-item"] {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 26px;
+  padding: 0 6px;
+  border-radius: 6px;
+  color: rgb(244 244 244 / 62%);
+  font-size: 11px;
+  font-weight: 560;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.context-usage-window-switch [data-slot="segmented-control-item"]:hover:not(:disabled) {
+  color: #f4f4f4;
+}
+
+.context-usage-window-switch [data-slot="segmented-control-item"][data-state="on"] {
+  background: rgb(255 255 255 / 14%);
+  color: #f4f4f4;
+  box-shadow: none;
+}
+
+.context-usage-window-switch [data-slot="segmented-control-item"]:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .context-usage-card-header,
