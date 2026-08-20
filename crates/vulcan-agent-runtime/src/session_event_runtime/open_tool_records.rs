@@ -70,6 +70,66 @@ pub fn normalize_orphaned_tool_request_records(
     orphaned_record_ids.len()
 }
 
+/// Supersedes exact pre-execution request cards owned by a failed Provider attempt.
+/// 将失败 Provider 尝试精确持有的执行前请求卡片标记为已被取代。
+///
+/// # Parameters
+/// 参数
+/// `runtime_state` owns the open request correlations and retained tool cards.
+/// `runtime_state` 持有未闭合请求关联与保留工具卡片。
+/// `now` is the retry-boundary timestamp written after a successful transition.
+/// `now` 是成功转换后写入的重试边界时间戳。
+/// `reason` is the stable terminal reason attached to every superseded request.
+/// `reason` 是附加到每条已被取代请求的稳定终止原因。
+///
+/// # Returns
+/// 返回值
+/// The number of exact open request cards changed to the superseded state.
+/// 被改为已取代状态的精确未闭合请求卡片数量。
+pub(super) fn supersede_open_tool_request_records(
+    runtime_state: &mut SessionRuntimeStateEntry,
+    now: &str,
+    reason: &str,
+) -> usize {
+    // requestRecordIds selects only request formation that has not crossed ToolStarted.
+    // requestRecordIds 仅选择尚未跨过 ToolStarted 的请求构造记录。
+    let request_record_ids = std::mem::take(&mut runtime_state.tool_request_record_ids)
+        .into_values()
+        .collect::<BTreeSet<_>>();
+    if request_record_ids.is_empty() {
+        return 0;
+    }
+    let mut superseded_record_ids = BTreeSet::new();
+    for record in &mut runtime_state.conversation_state.records {
+        if !request_record_ids.contains(&record.id)
+            || record.record_kind != SessionMessageRecordKind::ToolCallOutput
+        {
+            continue;
+        }
+        let Some(serde_json::Value::Object(metadata)) = record.metadata.as_mut() else {
+            continue;
+        };
+        metadata.insert(
+            String::from("tool_display_state"),
+            serde_json::Value::String(String::from("superseded")),
+        );
+        metadata.insert(
+            String::from("request_terminal_reason"),
+            serde_json::Value::String(reason.to_string()),
+        );
+        superseded_record_ids.insert(record.id.clone());
+    }
+    // Canonical call aliases are released by record identity so a later retry cannot attach to the old card.
+    // 规范调用别名按记录身份释放，确保后续重试无法挂接到旧卡片。
+    runtime_state
+        .tool_call_record_ids
+        .retain(|_, record_id| !request_record_ids.contains(record_id));
+    if !superseded_record_ids.is_empty() {
+        runtime_state.updated_at = now.to_string();
+    }
+    superseded_record_ids.len()
+}
+
 /// Converts request-stage metadata into the stopped state used after ownerless hydration.
 /// 将请求阶段元数据转换为无所有者水合后使用的已停止状态。
 ///

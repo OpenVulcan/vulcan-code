@@ -121,6 +121,7 @@ function structuredMessageBlockKind(message: ConversationMessage): ConversationB
     return "tool-result";
   }
   if (message.recordKind === "display-note") {
+    if (metadataString(message.metadata, ["notice_kind"]) === "provider_retry") return "notice";
     if (isSubagentFeedbackMetadata(message.metadata)) return "tool-result";
   }
   if (message.recordKind === "thinking-output") return "thinking";
@@ -175,6 +176,7 @@ function structuredMessageAttributes(
       "hostResult.payload.executionStatus",
     ]) : null;
   const explicitStatus = metadataString(message.metadata, [
+      "provider_retry_state",
       "result.status",
       "tool_display_state",
       "display_state",

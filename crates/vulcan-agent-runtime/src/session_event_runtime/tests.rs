@@ -61,10 +61,213 @@ fn provider_retry_projects_visible_display_note() {
         record
             .metadata
             .as_ref()
+            .and_then(|value| value["notice_kind"].as_str()),
+        Some("provider_retry")
+    );
+    assert_eq!(
+        record
+            .metadata
+            .as_ref()
+            .and_then(|value| value["provider_retry_state"].as_str()),
+        Some("retrying")
+    );
+    assert_eq!(
+        record
+            .metadata
+            .as_ref()
             .and_then(|value| value["unbounded"].as_bool()),
         Some(false)
     );
     assert!(!record.record_kind.contributes_to_context());
+
+    let succeeded_event = RuntimeEvent::new(
+        RuntimeEventKind::ProviderRetryStatusChanged,
+        "Provider 重试成功",
+        String::new(),
+    )
+    .with_metadata(Some(json!({
+        "provider_retry_state": "succeeded",
+    })));
+    assert!(
+        append_runtime_event_projection_to_state(
+            &mut runtime_state,
+            session_id,
+            "3501",
+            &succeeded_event,
+        )
+        .expect("retry success should update the retained note")
+    );
+    assert_eq!(runtime_state.conversation_state.records.len(), 1);
+    let updated_record = runtime_state
+        .conversation_state
+        .records
+        .last()
+        .expect("updated retry record should remain retained");
+    assert_eq!(updated_record.title, "Provider 重试成功");
+    assert_eq!(
+        updated_record
+            .metadata
+            .as_ref()
+            .and_then(|value| value["provider_retry_state"].as_str()),
+        Some("succeeded")
+    );
+}
+
+/// Verifies retry start supersedes only request cards that never crossed ToolStarted.
+/// 验证重试开始只会取代尚未跨过 ToolStarted 的请求卡片。
+#[test]
+fn provider_retry_supersedes_ready_pre_execution_tool_request() {
+    // runtimeState receives one request-stage card with both physical and canonical aliases.
+    // runtimeState 接收一张同时具有真实请求与规范调用别名的请求阶段卡片。
+    let mut runtime_state = SessionRuntimeStateEntry::default();
+    let session_id = test_session_id();
+    let request_started = RuntimeEvent::new(
+        RuntimeEventKind::ToolRequestStarted,
+        "工具请求 · pending-call · vulcan_file_read",
+        String::new(),
+    )
+    .with_metadata(Some(json!({
+        "request_stream_id": "request-stream-1",
+        "tool_call_id": "pending-call",
+        "tool_name": "vulcan_file_read",
+        "tool_display_state": "receiving",
+        "received_bytes": 12,
+        "received_characters": 12,
+        "request_revision": 1,
+    })));
+    assert!(
+        append_runtime_event_projection_to_state(
+            &mut runtime_state,
+            session_id,
+            "3600",
+            &request_started,
+        )
+        .expect("request start should create the exact pre-execution card")
+    );
+    let ready = RuntimeEvent::new(
+        RuntimeEventKind::ToolRequestReady,
+        "工具请求 · canonical-call · vulcan_file_read",
+        String::new(),
+    )
+    .with_metadata(Some(json!({
+        "request_stream_id": "request-stream-1",
+        "tool_call_id": "canonical-call",
+        "tool_name": "vulcan_file_read",
+        "tool_display_state": "ready",
+        "received_bytes": 99,
+        "received_characters": 99,
+        "request_revision": 2,
+    })));
+    assert!(
+        append_runtime_event_projection_to_state(&mut runtime_state, session_id, "3601", &ready,)
+            .expect("ready request should promote the canonical alias")
+    );
+
+    // completed_started proves a separate tool that crossed ToolStarted remains terminal and unchanged.
+    // completed_started 证明另一个已经跨过 ToolStarted 的工具会保持终态且不受影响。
+    let completed_started = RuntimeEvent::new(
+        RuntimeEventKind::ToolStarted,
+        "工具调用 · completed-call · vulcan_file_list",
+        "## Tool Call",
+    )
+    .with_metadata(Some(json!({
+        "tool_call_id": "completed-call",
+        "tool_name": "vulcan_file_list",
+    })));
+    assert!(
+        append_runtime_event_projection_to_state(
+            &mut runtime_state,
+            session_id,
+            "3601.1",
+            &completed_started,
+        )
+        .expect("started tool should create an independent execution card")
+    );
+    // completed_finished closes the independent execution before the Provider retry boundary.
+    // completed_finished 在 Provider 重试边界之前闭合独立执行记录。
+    let completed_finished = RuntimeEvent::new(
+        RuntimeEventKind::ToolFinished,
+        "工具返回 · completed-call",
+        "## Tool Result\n\nlisted files",
+    )
+    .with_metadata(Some(json!({
+        "tool_call_id": "completed-call",
+        "tool_name": "vulcan_file_list",
+        "display_state": "completed",
+    })));
+    assert!(
+        append_runtime_event_projection_to_state(
+            &mut runtime_state,
+            session_id,
+            "3601.2",
+            &completed_finished,
+        )
+        .expect("finished tool should close its independent execution card")
+    );
+
+    let retry_event = RuntimeEvent::new(
+        RuntimeEventKind::Retrying,
+        "Provider 自动重试",
+        "Provider 第 1/5 次重试将在 3 秒后开始",
+    )
+    .with_metadata(Some(json!({
+        "attempt": 1,
+        "max_retries": 5,
+        "delay_ms": 3_000,
+        "delay_seconds": 3,
+    })));
+    assert!(
+        append_runtime_event_projection_to_state(
+            &mut runtime_state,
+            session_id,
+            "3602",
+            &retry_event,
+        )
+        .expect("retry projection should supersede the ready request")
+    );
+    assert!(runtime_state.tool_request_record_ids.is_empty());
+    assert!(runtime_state.tool_call_record_ids.is_empty());
+    let request_record = runtime_state
+        .conversation_state
+        .records
+        .iter()
+        .find(|record| record.record_kind == SessionMessageRecordKind::ToolCallOutput)
+        .expect("request card should remain visible as a terminal historical row");
+    assert_eq!(
+        request_record
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata["tool_display_state"].as_str()),
+        Some("superseded")
+    );
+    assert_eq!(
+        request_record
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata["request_terminal_reason"].as_str()),
+        Some("provider_retry_superseded")
+    );
+    assert!(
+        runtime_state
+            .conversation_state
+            .records
+            .iter()
+            .any(|record| {
+                record
+                    .metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.get("tool_call_id"))
+                    .and_then(serde_json::Value::as_str)
+                    == Some("completed-call")
+                    && record
+                        .metadata
+                        .as_ref()
+                        .and_then(|metadata| metadata.get("result"))
+                        .and_then(|result| result.get("status"))
+                        .and_then(serde_json::Value::as_str)
+                        == Some("completed")
+            })
+    );
 }
 
 /// Verifies a slow Provider first-event status remains transient and never enters the durable transcript.

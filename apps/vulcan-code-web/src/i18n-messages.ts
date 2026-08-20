@@ -366,6 +366,9 @@ export type TranslationKey =
   | "conversation.systemError.true"
   | "conversation.systemError.false"
   | "conversation.systemError.raw"
+  | "conversation.providerRetry.retrying"
+  | "conversation.providerRetry.succeeded"
+  | "conversation.providerRetry.failed"
   | "conversation.continue"
   | "conversation.continuing"
   | "conversation.metadata.type"
@@ -3162,6 +3165,9 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.systemError.true": "是",
     "conversation.systemError.false": "否",
     "conversation.systemError.raw": "查看原始错误",
+    "conversation.providerRetry.retrying": "正在重试",
+    "conversation.providerRetry.succeeded": "重试成功",
+    "conversation.providerRetry.failed": "重试失败",
     "conversation.continue": "继续",
     "conversation.continuing": "继续中",
     "conversation.metadata.type": "类型",
@@ -5956,6 +5962,9 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.systemError.true": "Yes",
     "conversation.systemError.false": "No",
     "conversation.systemError.raw": "View raw error",
+    "conversation.providerRetry.retrying": "Retrying",
+    "conversation.providerRetry.succeeded": "Retry succeeded",
+    "conversation.providerRetry.failed": "Retry failed",
     "conversation.continue": "Continue",
     "conversation.continuing": "Continuing",
     "conversation.metadata.type": "Type",

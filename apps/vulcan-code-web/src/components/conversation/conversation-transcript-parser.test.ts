@@ -26,4 +26,27 @@ describe("conversation transcript parser source identity", () => {
     expect(block?.id).toBe("message-42-markdown-0");
     expect(block?.sourceMessageId).toBe("message-42");
   });
+
+  // Verifies backend-owned Provider retry metadata selects the retained notice-card path.
+  // 验证后端持有的 Provider 重试元数据会选择可保留的提示卡路径。
+  it("projects Provider retry display notes as structured notices", () => {
+    const message: ConversationMessage = {
+      id: "provider-retry-1",
+      conversationId: "conversation",
+      role: "assistant",
+      recordKind: "display-note",
+      body: "Vulcan 公共契约 第 1/5 次重试将在 3 秒后开始：Provider unavailable",
+      metadata: {
+        notice_kind: "provider_retry",
+        provider_retry_state: "retrying",
+      },
+    };
+
+    const [block] = parseConversationBlocks(message);
+
+    expect(block?.kind).toBe("notice");
+    expect(block?.status).toBe("retrying");
+    expect(block?.sourceMessageId).toBe("provider-retry-1");
+    expect(block?.rawMetadata).toEqual(message.metadata);
+  });
 });

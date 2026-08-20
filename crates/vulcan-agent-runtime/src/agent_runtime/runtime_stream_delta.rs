@@ -2,7 +2,7 @@
 //! 运行时流式增量处理辅助逻辑与可变循环状态模块。
 
 use crate::agent_runtime::events::{
-    ExecutionStreamEvent, ProviderRequestDurabilityCompletion, RuntimeEvent,
+    ExecutionStreamEvent, ProviderRequestDurabilityCompletion, RuntimeEvent, RuntimeEventKind,
 };
 use crate::agent_runtime::provider_request_telemetry::{
     ProviderRequestTelemetryContext, ProviderRequestTelemetryEvent,
@@ -81,6 +81,9 @@ pub(crate) struct RuntimeStreamDeltaState {
     /// Low-frequency physical Provider request telemetry state machine.
     /// 低频真实 Provider 请求遥测状态机。
     provider_request_telemetry: ProviderRequestTelemetryTracker,
+    /// Whether one retained retry notice is waiting for the next physical-request outcome.
+    /// 是否存在一条正在等待下一次真实请求结果的已保留重试提示。
+    provider_retry_pending: bool,
     /// Model-side tool request stream coordinator kept separate from real tool execution.
     /// 与真实工具执行分离保存的模型侧工具请求流协调器。
     tool_request_stream: ToolRequestStreamCoordinator,
@@ -123,6 +126,7 @@ impl RuntimeStreamDeltaState {
             terminal_error: None,
             context_compaction_required: None,
             provider_request_telemetry: ProviderRequestTelemetryTracker::default(),
+            provider_retry_pending: false,
             tool_request_stream: ToolRequestStreamCoordinator::default(),
             observed_tool_request: false,
         }
@@ -573,6 +577,9 @@ pub(crate) fn process_provider_stream_delta(
                 .collect()
         }
         Ok(ProviderStreamDelta::RuntimeEvent(event)) => {
+            if event.kind == RuntimeEventKind::Retrying {
+                state.provider_retry_pending = true;
+            }
             state.process_runtime_event(session_id, event)
         }
         Ok(ProviderStreamDelta::UsageUpdated(usage)) => {
@@ -586,7 +593,11 @@ pub(crate) fn process_provider_stream_delta(
                 .complete_success(state.active_provider_usage.as_ref())
                 .into_iter()
                 .collect::<Vec<_>>();
-            provider_request_events_with_durability_boundary(events, completion)
+            let mut events = provider_request_events_with_durability_boundary(events, completion);
+            events.extend(take_provider_retry_status_changed_event(
+                state, session_id, true,
+            ));
+            events
         }
         Ok(ProviderStreamDelta::RequestFailed {
             will_retry,
@@ -595,20 +606,26 @@ pub(crate) fn process_provider_stream_delta(
             delay_ms,
             error_category,
             error,
-        }) => state
-            .provider_request_telemetry
-            .complete_failure(
-                will_retry,
-                retry_number,
-                max_retries,
-                delay_ms,
-                &error_category,
-                error.as_deref(),
-                state.active_provider_usage.as_ref(),
-            )
-            .into_iter()
-            .map(ExecutionStreamEvent::ProviderRequestTelemetry)
-            .collect(),
+        }) => {
+            let mut events = state
+                .provider_request_telemetry
+                .complete_failure(
+                    will_retry,
+                    retry_number,
+                    max_retries,
+                    delay_ms,
+                    &error_category,
+                    error.as_deref(),
+                    state.active_provider_usage.as_ref(),
+                )
+                .into_iter()
+                .map(ExecutionStreamEvent::ProviderRequestTelemetry)
+                .collect::<Vec<_>>();
+            events.extend(take_provider_retry_status_changed_event(
+                state, session_id, false,
+            ));
+            events
+        }
         Ok(ProviderStreamDelta::RequestFailedDurable {
             will_retry,
             retry_number,
@@ -627,7 +644,11 @@ pub(crate) fn process_provider_stream_delta(
                 error.as_deref(),
                 state.active_provider_usage.as_ref(),
             );
-            provider_request_events_with_durability_boundary(events, completion)
+            let mut events = provider_request_events_with_durability_boundary(events, completion);
+            events.extend(take_provider_retry_status_changed_event(
+                state, session_id, false,
+            ));
+            events
         }
         Ok(ProviderStreamDelta::LoweringRepair(event)) => {
             vec![ExecutionStreamEvent::ProviderLoweringRepair { session_id, event }]
@@ -663,12 +684,15 @@ pub(crate) fn process_provider_stream_delta(
                 last_successful_provider_usage: state.last_successful_provider_usage.clone(),
                 provider_request_count: state.provider_request_count(),
             });
+            events.extend(take_provider_retry_status_changed_event(
+                state, session_id, true,
+            ));
             events
         }
         Err(error) => {
             // telemetryEvents closes a request when an adapter error bypassed the typed failure delta.
             // telemetryEvents 在适配器错误绕过类型化失败增量时关闭请求。
-            let telemetry_events = state
+            let mut telemetry_events = state
                 .provider_request_telemetry
                 .complete_failure(
                     false,
@@ -681,11 +705,51 @@ pub(crate) fn process_provider_stream_delta(
                 )
                 .into_iter()
                 .map(ExecutionStreamEvent::ProviderRequestTelemetry)
-                .collect();
+                .collect::<Vec<_>>();
             state.terminal_error = Some(error);
+            telemetry_events.extend(take_provider_retry_status_changed_event(
+                state, session_id, false,
+            ));
             telemetry_events
         }
     }
+}
+
+/// Builds one display-only terminal update for the latest pending Provider retry notice.
+/// 为最近一条待定 Provider 重试提示构建一条纯展示终态更新。
+///
+/// `state` owns the exact pending-retry marker for this serialized stream.
+/// `state` 持有当前串行流的精确待定重试标记。
+/// `session_id` identifies the session that owns the serialized Provider request.
+/// `session_id` 标识持有该序列化 Provider 请求的会话。
+/// `succeeded` is the authoritative physical-request terminal outcome.
+/// `succeeded` 是真实请求的权威终态结果。
+/// Returns one runtime event that updates an existing retry note when present.
+/// 返回一条在重试提示存在时原位更新它的运行时事件。
+fn take_provider_retry_status_changed_event(
+    state: &mut RuntimeStreamDeltaState,
+    session_id: SessionId,
+    succeeded: bool,
+) -> Option<ExecutionStreamEvent> {
+    if !std::mem::take(&mut state.provider_retry_pending) {
+        return None;
+    }
+    let (title, display_state) = if succeeded {
+        ("Provider 重试成功", "succeeded")
+    } else {
+        ("Provider 重试失败", "failed")
+    };
+    Some(ExecutionStreamEvent::RuntimeEvent {
+        session_id,
+        event: RuntimeEvent::new(
+            RuntimeEventKind::ProviderRetryStatusChanged,
+            title,
+            String::new(),
+        )
+        .with_metadata(Some(serde_json::json!({
+            "provider_retry_state": display_state,
+        }))),
+    })
 }
 
 /// Converts one started or terminal telemetry event into a durable execution barrier.
@@ -779,6 +843,49 @@ mod tests {
     fn build_delta_state_with_telemetry() -> RuntimeStreamDeltaState {
         build_delta_state()
             .with_provider_request_telemetry_context(ProviderRequestTelemetryContext::for_test())
+    }
+
+    /// Verifies terminal retry updates are emitted exactly once and only after a retry notice.
+    /// 验证重试终态更新仅在重试提示之后发出，并且恰好发出一次。
+    #[test]
+    fn provider_retry_terminal_status_requires_one_pending_retry_notice() {
+        // session_id identifies the single serialized Provider stream under test.
+        // session_id 标识当前测试中的单一串行 Provider 流。
+        let session_id = Uuid::nil();
+        // state owns the authoritative pending-retry marker.
+        // state 持有权威的待定重试标记。
+        let mut state = build_delta_state();
+
+        assert!(take_provider_retry_status_changed_event(&mut state, session_id, true).is_none());
+
+        let retry_events = process_provider_stream_delta(
+            session_id,
+            &mut state,
+            Ok(ProviderStreamDelta::RuntimeEvent(RuntimeEvent::new(
+                RuntimeEventKind::Retrying,
+                "Vulcan 公共契约 第 1/5 次重试将在 3 秒后开始",
+                "Provider unavailable",
+            ))),
+        );
+        assert!(retry_events.iter().any(|event| matches!(
+            event,
+            ExecutionStreamEvent::RuntimeEvent { event, .. }
+                if event.kind == RuntimeEventKind::Retrying
+        )));
+
+        let terminal_event = take_provider_retry_status_changed_event(&mut state, session_id, true)
+            .expect("pending retry status update");
+        assert!(matches!(
+            terminal_event,
+            ExecutionStreamEvent::RuntimeEvent { event, .. }
+                if event.kind == RuntimeEventKind::ProviderRetryStatusChanged
+                    && event.metadata
+                        .as_ref()
+                        .and_then(|metadata| metadata.get("provider_retry_state"))
+                        .and_then(serde_json::Value::as_str)
+                        == Some("succeeded")
+        ));
+        assert!(take_provider_retry_status_changed_event(&mut state, session_id, true).is_none());
     }
 
     /// Preserves the prepared protocol profile when emitting one provider request checkpoint.

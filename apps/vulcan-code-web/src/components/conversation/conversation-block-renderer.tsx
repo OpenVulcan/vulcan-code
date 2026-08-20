@@ -32,6 +32,10 @@ import {
   SystemErrorCard,
 } from "@/components/conversation/conversation-system-error-card";
 import {
+  providerRetryDisplayState,
+  ProviderRetryCard,
+} from "@/components/conversation/conversation-provider-retry-card";
+import {
   blockTitle,
   isContextCompactionBlock,
   isMergeableToolBlock,
@@ -280,6 +284,14 @@ function SpecialConversationBlock(props: {
     : null;
   if (systemProviderError) {
     return <SystemErrorCard error={systemProviderError} />;
+  }
+  // providerRetryState exists only for backend-owned Provider retry lifecycle notes.
+  // providerRetryState 仅存在于后端持有的 Provider 重试生命周期提示。
+  const providerRetryState = props.block.kind === "notice"
+    ? providerRetryDisplayState(props.block.rawMetadata)
+    : null;
+  if (providerRetryState) {
+    return <ProviderRetryCard block={props.block} state={providerRetryState} />;
   }
 
   if (props.block.kind === "turn-stats") {

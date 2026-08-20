@@ -2391,6 +2391,7 @@ fn runtime_event_projects_conversation_transcript(event_kind: RuntimeEventKind) 
             | RuntimeEventKind::ToolStarted
             | RuntimeEventKind::ToolFinished
             | RuntimeEventKind::Retrying
+            | RuntimeEventKind::ProviderRetryStatusChanged
     )
 }
 
@@ -2477,7 +2478,13 @@ fn runtime_event_projection_record_is_stable(record: &SessionConversationRecord)
         SessionMessageRecordKind::ToolCallOutput
             | SessionMessageRecordKind::ToolResultOutput
             | SessionMessageRecordKind::ToolDetailOutput
-    )
+    ) || (record.record_kind == SessionMessageRecordKind::DisplayNote
+        && record.metadata.as_ref().is_some_and(|metadata| {
+            metadata
+                .get("notice_kind")
+                .and_then(serde_json::Value::as_str)
+                == Some("provider_retry")
+        }))
 }
 
 /// Compares two runtime conversation records without requiring protocol-level PartialEq.
@@ -2817,6 +2824,42 @@ mod tests {
         );
     }
 
+    /// Verifies only Provider retry display notes are stable during an active streamed turn.
+    /// 验证活动流式轮次中只有 Provider 重试展示提示属于稳定记录。
+    #[test]
+    fn runtime_projection_retains_only_provider_retry_display_notes() {
+        // provider_retry is the exact backend-owned notice discriminator.
+        // provider_retry 是后端持有的精确提示判别字段。
+        let provider_retry = SessionConversationRecord {
+            id: String::from("provider-retry-1"),
+            kind: SessionMessageKind::Assistant,
+            record_kind: SessionMessageRecordKind::DisplayNote,
+            visible: true,
+            title: String::from("Provider 重试中"),
+            body: String::from("Provider unavailable"),
+            metadata: Some(serde_json::json!({
+                "notice_kind": "provider_retry",
+                "provider_retry_state": "retrying",
+            })),
+            created_at: String::from("1000"),
+        };
+        // generic_note proves unrelated display notes keep their prior final-hydration behavior.
+        // generic_note 证明无关展示提示仍保持原有的最终水合行为。
+        let generic_note = SessionConversationRecord {
+            id: String::from("generic-note-1"),
+            kind: SessionMessageKind::Assistant,
+            record_kind: SessionMessageRecordKind::DisplayNote,
+            visible: true,
+            title: String::from("普通提示"),
+            body: String::from("generic"),
+            metadata: None,
+            created_at: String::from("1001"),
+        };
+
+        assert!(runtime_event_projection_record_is_stable(&provider_retry));
+        assert!(!runtime_event_projection_record_is_stable(&generic_note));
+    }
+
     /// Verifies close-agent UI cleanup reads only the structured host result task ids.
     /// 验证关闭代理的界面清理只读取结构化宿主结果中的任务标识。
     #[test]
@@ -3078,6 +3121,7 @@ mod tests {
             RuntimeEventKind::ToolStarted,
             RuntimeEventKind::ToolFinished,
             RuntimeEventKind::Retrying,
+            RuntimeEventKind::ProviderRetryStatusChanged,
         ];
 
         // eventKind must pass the projection gate so its exact visible record can be persisted.

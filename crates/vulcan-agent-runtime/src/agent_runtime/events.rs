@@ -155,6 +155,9 @@ pub enum RuntimeEventKind {
     /// Provider execution is waiting before an automatic retry.
     /// Provider 执行正在等待一次自动重试。
     Retrying,
+    /// One retained Provider retry notice changed to a terminal display state.
+    /// 一条已保留的 Provider 重试提示变更为终态展示状态。
+    ProviderRetryStatusChanged,
     /// Provider request was dispatched but has not produced its first stream event yet.
     /// Provider 请求已经发出，但尚未产生首个流事件。
     ProviderWaiting,
