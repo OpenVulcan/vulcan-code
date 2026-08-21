@@ -3,11 +3,13 @@
 
 use super::*;
 use vulcan_ai_contract::{AiExecutionError, AiExecutionRequest};
-use vulcan_core::types::{ControllerConfig, ConversationSnapshot};
+use vulcan_core::types::{
+    ControllerConfig, ConversationSnapshot, ToolInvocationRequest, ToolInvocationResult,
+};
 
 /// Strict schema version accepted for execution-retry snapshots.
 /// 执行重试快照接受的严格 Schema 版本。
-pub const EXECUTION_RETRY_SNAPSHOT_SCHEMA_VERSION: u32 = 4;
+pub const EXECUTION_RETRY_SNAPSHOT_SCHEMA_VERSION: u32 = 8;
 
 /// Lifecycle state of one persisted execution-retry snapshot.
 /// 单个持久化执行重试快照的生命周期状态。
@@ -54,8 +56,8 @@ pub enum ExecutionRetryPendingAction {
         /// 按模型原始顺序保存的稳定工具调用进度。
         tools: Vec<ExecutionRetryToolProgress>,
     },
-    /// Build the next provider request from completed tool results in the frozen controller state.
-    /// 从冻结控制器状态中的已完成工具结果构建下一份 Provider 请求。
+    /// Build the next Provider request from stable seeded input in the frozen controller state.
+    /// 从冻结控制器状态中的稳定播种输入构建下一份 Provider 请求。
     PrepareNextProviderRequest,
     /// Commit a provider-proven final assistant result without another provider request.
     /// 在不再次请求 Provider 的情况下提交已由 Provider 证明的最终助手结果。
@@ -154,9 +156,15 @@ pub enum ExecutionRetryToolState {
     /// The tool has not started and may be executed after exact binding validation.
     /// 工具尚未开始，可在精确绑定校验后执行。
     NotStarted,
-    /// The tool completed and its exact result is retained in the canonical controller snapshot.
-    /// 工具已完成，且精确结果已保留在规范控制器快照中。
+    /// The tool body started but no durable terminal result has been retained yet.
+    /// 工具主体已经启动，但尚未保留可靠的终态结果。
+    Running,
+    /// The tool completed successfully and its exact result is retained in this sidecar.
+    /// 工具已成功完成，且精确结果保留在当前 sidecar 中。
     Completed,
+    /// The tool completed with an error and its exact result is retained in this sidecar.
+    /// 工具以错误结束，且精确结果保留在当前 sidecar 中。
+    Failed,
     /// The tool may have produced an external side effect, so automatic replay is forbidden.
     /// 工具可能已产生外部副作用，因此禁止自动重放。
     OutcomeUnknown,
@@ -166,18 +174,50 @@ pub enum ExecutionRetryToolState {
 /// 单个工具调用的稳定身份与重放状态。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExecutionRetryToolProgress {
-    /// Provider-issued stable tool-call identity.
-    /// Provider 签发的稳定工具调用身份。
-    pub tool_call_id: String,
-    /// Exact registered public tool name.
-    /// 精确注册的公共工具名称。
-    pub tool_name: String,
-    /// Stable fingerprint of the frozen tool binding and schema.
-    /// 冻结工具绑定与 Schema 的稳定指纹。
-    pub binding_fingerprint: String,
+    /// Exact original invocation request emitted by the Provider.
+    /// Provider 发出的精确原始调用请求。
+    pub request: ToolInvocationRequest,
+    /// Exact durable result for a completed or failed invocation.
+    /// 已完成或失败调用对应的精确可靠结果。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<ToolInvocationResult>,
+    /// Stable fingerprint of the frozen tool binding and schema, or `None` only before the mandatory batch-prepared boundary.
+    /// 冻结工具绑定与 Schema 的稳定指纹；仅在强制批次准备边界之前允许为 `None`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binding_fingerprint: Option<String>,
     /// Replay-safety state at the persisted boundary.
     /// 持久化边界处的重放安全状态。
     pub state: ExecutionRetryToolState,
+}
+
+/// One user-authored follow-up durably attached to an interrupted execution before recovery starts.
+/// 在恢复开始前可靠附着到被中断执行的一条用户补充消息。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExecutionRetryUserFollowup {
+    /// User-visible prompt text appended only after prior tool-call reconciliation.
+    /// 仅在旧工具调用完成对账后追加的用户可见提示词文本。
+    pub visible_prompt: String,
+    /// Provider-visible prompt text, including optional host-only guidance.
+    /// Provider 可见提示词文本，包含可选的仅宿主可见引导。
+    pub provider_prompt: String,
+    /// Stable client submission identity used by transcript admission metadata.
+    /// 转录准入元数据使用的稳定客户端提交标识。
+    pub client_submission_id: String,
+}
+
+impl ExecutionRetryUserFollowup {
+    /// Returns whether every required follow-up identity and prompt field is non-empty.
+    /// 返回补充消息的全部必需身份与提示词字段是否均非空。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` only for a structurally usable durable recovery follow-up.
+    /// 仅对结构上可用的可靠恢复补充消息返回 `true`。
+    pub fn is_structurally_valid(&self) -> bool {
+        !self.visible_prompt.trim().is_empty()
+            && !self.provider_prompt.trim().is_empty()
+            && !self.client_submission_id.trim().is_empty()
+    }
 }
 
 /// Complete sidecar payload required to resume the same logical execution.
@@ -206,6 +246,9 @@ pub struct ExecutionRetrySnapshot {
     /// 存在时的稳定逻辑回合身份。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub logical_turn_id: Option<String>,
+    /// Zero-based physical Provider attempt index reserved for the next request.
+    /// 为下一次请求保留的从零开始的物理 Provider attempt 索引。
+    pub next_provider_attempt_index: u32,
     /// Physical attempt that published this boundary.
     /// 发布当前边界的物理尝试身份。
     pub physical_attempt_id: String,
@@ -235,6 +278,10 @@ pub struct ExecutionRetrySnapshot {
     /// Exact next action to execute after a successful claim.
     /// 成功领取后要执行的精确下一步动作。
     pub pending_action: ExecutionRetryPendingAction,
+    /// Optional user follow-up appended at the first protocol-safe recovery boundary.
+    /// 在首个协议安全恢复边界追加的可选用户补充消息。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_followup: Option<ExecutionRetryUserFollowup>,
     /// Structured terminal or interruption error that froze this snapshot.
     /// 冻结当前快照的结构化终态或中断错误。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -329,7 +376,11 @@ impl ExecutionRetrySnapshotRef {
     pub fn pending_action_executor_supported(&self) -> bool {
         matches!(
             self.pending_action_label.as_str(),
-            "resume_preparation" | "dispatch_provider_request" | "prepare_next_provider_request"
+            "resume_preparation"
+                | "dispatch_provider_request"
+                | "execute_tool_batch"
+                | "prepare_next_provider_request"
+                | "finalize_assistant"
         )
     }
 
@@ -347,7 +398,10 @@ impl ExecutionRetrySnapshotRef {
                 .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
         let action_boundary_complete = match self.pending_action_label.as_str() {
             "resume_preparation" => self.preparation_route_selection.is_some(),
-            "dispatch_provider_request" | "prepare_next_provider_request" => {
+            "dispatch_provider_request"
+            | "execute_tool_batch"
+            | "prepare_next_provider_request"
+            | "finalize_assistant" => {
                 self.preparation_route_selection.is_none() && self.provider_route.is_some()
             }
             _ => false,
@@ -462,6 +516,36 @@ mod tests {
         let mut empty_body = safe_reference();
         empty_body.content_bytes = 0;
         assert!(!empty_body.replay_safety_proven());
+    }
+
+    /// Verifies tool-only recovery and final-assistant recovery both require and accept an exact route lease.
+    /// 验证纯工具恢复与最终助手恢复都要求并接受精确路由租约。
+    #[test]
+    fn route_bound_recovery_actions_have_registered_replay_executors() {
+        // route is the frozen Provider identity required by post-preparation recovery actions.
+        // route 是准备完成后的恢复动作所要求的冻结 Provider 身份。
+        let route = SessionProviderRouteLeaseIdentity {
+            schema_version: 1,
+            provider_id: String::from("provider-a"),
+            connection_id: String::from("connection-a"),
+            model_id: String::from("model-a"),
+            protocol_profile_id: String::from("openai-responses.v1"),
+            manifest_revision: 1,
+            manifest_generation: 1,
+            catalog_revision: String::from("catalog-a"),
+            route_revision: String::from("route-a"),
+        };
+        for action in ["execute_tool_batch", "finalize_assistant"] {
+            // reference isolates one supported action while preserving the same exact sidecar proof.
+            // reference 隔离一个受支持动作，同时保留相同的精确 sidecar 证明。
+            let mut reference = safe_reference();
+            reference.pending_action_label = String::from(action);
+            reference.preparation_route_selection = None;
+            reference.provider_route = Some(route.clone());
+
+            assert!(reference.pending_action_executor_supported());
+            assert!(reference.replay_safety_proven());
+        }
     }
 
     /// Verifies safety invalidation closes lifecycle ownership and retains a concrete diagnostic.

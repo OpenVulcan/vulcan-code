@@ -6,6 +6,7 @@ use super::pruning::{
 use super::*;
 use vulcan_ai_contract::{ContentItem, MessageRole};
 use vulcan_context::conversation_state_from_session_messages;
+use vulcan_workbench_model::SessionMediaUnderstandingMode;
 
 fn test_budget() -> CompactionInputBudget {
     CompactionInputBudget {
@@ -226,6 +227,10 @@ fn compaction_launch_request_preserves_ordinary_turn_controls() {
         provider_tool_enabled_capabilities_override: Some(BTreeSet::from([String::from(
             "web_search",
         )])),
+        provider_tool_media_understanding_modes_override: Some(BTreeMap::from([(
+            String::from("video_understand"),
+            SessionMediaUnderstandingMode::ModelReplacement,
+        )])),
         tool_request_hidden_tool_ids: vec![String::from("hidden-tool")],
         session_prompt_skill_overrides: BTreeMap::from([(
             String::from("review"),
@@ -265,6 +270,13 @@ fn compaction_launch_request_preserves_ordinary_turn_controls() {
     assert_eq!(
         request.provider_tool_enabled_capabilities_override,
         Some(BTreeSet::from([String::from("web_search")]))
+    );
+    assert_eq!(
+        request.provider_tool_media_understanding_modes_override,
+        Some(BTreeMap::from([(
+            String::from("video_understand"),
+            SessionMediaUnderstandingMode::ModelReplacement,
+        )]))
     );
     assert_eq!(
         request.tool_request_hidden_tool_ids,

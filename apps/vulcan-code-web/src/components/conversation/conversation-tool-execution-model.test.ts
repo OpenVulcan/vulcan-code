@@ -30,6 +30,8 @@ describe("conversation tool request progress", () => {
       },
     ] as ToolExecutionConversationBlock[];
 
+    // progress is the newest receiving snapshot selected from this request stream.
+    // progress 是从该请求流中选出的最新接收快照。
     const progress = toolRequestProgress(blocks);
 
     expect(progress).toMatchObject({
@@ -59,6 +61,38 @@ describe("conversation tool request progress", () => {
     ] as ToolExecutionConversationBlock[];
 
     expect(toolRequestProgress(blocks)).toBeNull();
+  });
+
+  it("closes the receiving presentation as soon as one tool argument document is assembled", () => {
+    // blocks contains the exact per-tool structural boundary emitted before Provider completion.
+    // blocks 包含 Provider 完成前针对单个工具发出的精确结构闭合边界。
+    const blocks = [
+      {
+        rawMetadata: {
+          request_stream_id: "request-assembled",
+          tool_display_state: "arguments_assembled",
+          received_characters: 2_048,
+          received_bytes: 2_112,
+          request_revision: 7,
+        },
+      },
+    ] as ToolExecutionConversationBlock[];
+
+    // progress is the independently closed visual state for this request stream.
+    // progress 是该请求流独立闭合后的视觉状态。
+    const progress = toolRequestProgress(blocks);
+
+    expect(progress).toMatchObject({
+      requestStreamId: "request-assembled",
+      state: "arguments_assembled",
+      receivedCharacters: 2_048,
+      receivedBytes: 2_112,
+      revision: 7,
+    });
+    expect(toolRequestProgressLabel(progress!)).toBe(
+      "Arguments assembled · 2,048 characters · 2.1 KiB",
+    );
+    expect(toolRequestProgressLabel(progress!)).not.toContain("Receiving data");
   });
 
   it("maps one leaf-store snapshot without changing durable request semantics", () => {

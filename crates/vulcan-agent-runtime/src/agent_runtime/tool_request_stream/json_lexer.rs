@@ -227,6 +227,20 @@ impl Default for IncrementalJsonLexer {
 }
 
 impl IncrementalJsonLexer {
+    /// Reports whether the streamed document already closes one complete JSON root without consuming input.
+    /// 报告流式文档是否已经封闭一个完整 JSON 根值，且不消费输入。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` only when no token or container remains open and no permanent failure exists.
+    /// 仅当不存在未封闭 Token、容器或永久失败时返回 `true`。
+    pub(super) fn is_root_complete(&self) -> bool {
+        self.failure.is_none()
+            && self.token.is_none()
+            && self.containers.is_empty()
+            && self.root_phase == RootPhase::Complete
+    }
+
     /// Consumes one ordered raw JSON fragment and emits completed semantic events.
     /// 消费一段有序原始 JSON 碎片并发出已完成的语义事件。
     ///
@@ -952,6 +966,24 @@ mod tests {
             .push(r#""\uD83D"#)
             .expect("high-surrogate prefix should remain pending");
         assert!(escape_lexer.finish().is_err());
+    }
+
+    /// Verifies root completion is observable without consuming the end-of-stream boundary.
+    /// 验证无需消费流结束边界即可观察根值完成状态。
+    #[test]
+    fn closed_root_is_observable_before_stream_finish() {
+        let mut lexer = IncrementalJsonLexer::default();
+        lexer
+            .push(r#"{"value":1"#)
+            .expect("object prefix should remain valid");
+        assert!(!lexer.is_root_complete());
+        lexer.push("}").expect("object close should remain valid");
+        assert!(lexer.is_root_complete());
+        lexer
+            .push("  \n")
+            .expect("trailing whitespace should remain valid");
+        assert!(lexer.is_root_complete());
+        lexer.finish().expect("closed document should finish");
     }
 
     /// Verifies trailing commas are rejected instead of being treated as incomplete valid JSON.

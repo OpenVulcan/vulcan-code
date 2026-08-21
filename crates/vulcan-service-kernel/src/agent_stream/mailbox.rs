@@ -68,6 +68,26 @@ fn apply_webui_prompt_intervention_transaction(
             message: String::from("workspace snapshot is not ready"),
         }
     })?;
+    // pendingModelSelection is checked before any guided prompt or mailbox draft is drained because
+    // the current frozen transport cannot safely consume inputs intended for the replacement route.
+    // pendingModelSelection 必须在取出任何引导提示词或 mailbox 草稿前检查，因为当前冻结传输
+    // 不能安全消费本应交给替代路由的输入。
+    if let Some(pending_selection) = workspace
+        .session_runtime_state
+        .get(&session_id)
+        .and_then(|runtime_state| runtime_state.pending_model_selection.as_ref())
+    {
+        return Err(
+            RuntimePromptInterventionError::ProviderRouteSwitchRequired {
+                message: format!(
+                    "session `{session_id}` selected exact route provider=`{}`, connection=`{}`, model=`{}`",
+                    pending_selection.provider_id,
+                    pending_selection.connection_id,
+                    pending_selection.model_id
+                ),
+            },
+        );
+    }
     let dispatch_context = webui_pending_prompt_dispatch_context(workspace, session_id, false);
     // runtime_state_draft isolates only the session-scoped pending UI state that this transaction can modify.
     // runtime_state_draft 仅隔离该事务能够修改的会话级待发送 UI 状态。

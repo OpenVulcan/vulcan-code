@@ -281,13 +281,25 @@ fn tool_request_progress_change_from_event(
     ) {
         return Ok(Some((request_stream_id, None)));
     }
+    // progressState closes the receiving animation as soon as the strict lexer proves one JSON root.
+    // progressState 在严格词法器证明一个 JSON 根值后立即结束接收动画。
+    let progress_state =
+        match tool_request_metadata_string(metadata, "tool_display_state")?.as_str() {
+            "receiving" => ToolRequestProgressState::Receiving,
+            "arguments_assembled" => ToolRequestProgressState::ArgumentsAssembled,
+            state => {
+                return Err(format!(
+                    "runtime tool request progress has unsupported display state `{state}`"
+                ));
+            }
+        };
     // progress preserves only coordinator-owned safe fields and the parser-sanitized preview.
     // progress 仅保留协调器持有的安全字段与解析器净化预览。
     let progress = ToolRequestProgressSnapshot {
         request_stream_id: request_stream_id.clone(),
         tool_call_id: tool_request_metadata_string(metadata, "tool_call_id")?,
         tool_name: tool_request_metadata_string(metadata, "tool_name")?,
-        state: ToolRequestProgressState::Receiving,
+        state: progress_state,
         received_bytes: tool_request_metadata_u64(metadata, "received_bytes")?,
         received_characters: tool_request_metadata_u64(metadata, "received_characters")?,
         request_revision: tool_request_metadata_u64(metadata, "request_revision")?,
@@ -425,6 +437,107 @@ pub(crate) fn seal_stream_content_records(
         record_ids,
         StreamContentKind::Output,
     )
+}
+
+/// Discards active provider-content drafts before one interrupted physical request can be retried.
+/// 在中断的物理请求可被重试前丢弃活跃 Provider 内容草稿。
+///
+/// # Parameters
+/// # 参数
+/// `app` emits a node-removal patch for the currently focused conversation surface.
+/// `app` 为当前聚焦会话界面发送节点移除补丁。
+/// `state` owns the retained runtime, display transcript, and Workbench projections.
+/// `state` 持有保留运行态、显示转录与 Workbench 投影。
+/// `session_id` identifies the session whose incomplete provider drafts must be removed.
+/// `session_id` 标识需要移除未完成 Provider 草稿的会话。
+///
+/// # Returns
+/// # 返回值
+/// The exact removed record identifiers, or an explicit state-lock failure.
+/// 返回精确移除的记录标识，或明确的状态加锁失败。
+pub(crate) fn discard_active_stream_content_records(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+) -> Result<Vec<String>, String> {
+    // conversationId binds retained removal and the optional focused-surface patch to one owner.
+    // conversationId 将保留态移除与可选聚焦界面补丁绑定到同一所有者。
+    let conversation_id = session_id.to_string();
+    // event is produced under the same lock as every authoritative projection mutation.
+    // event 与全部权威投影变更在同一个锁内生成。
+    let (event, discarded_ids) = {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        // beforeMessages freezes the currently focused nodes before exact draft removal.
+        // beforeMessages 在精确草稿移除前冻结当前聚焦节点。
+        let before_messages = guard
+            .workbench
+            .messages
+            .iter()
+            .filter(|message| message.conversation_id == conversation_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        let now = current_unix_millis_text();
+        // discardedIds originate from explicit active stream metadata, never from record titles or guessed ordering.
+        // discardedIds 来源于显式活跃流元数据，绝不依据记录标题或猜测顺序。
+        let discarded_ids = {
+            let workspace = guard.workspace_snapshot.as_mut().ok_or_else(|| {
+                String::from("service is still starting; workspace snapshot is not ready")
+            })?;
+            let Some(runtime_state) = workspace.session_runtime_state.get_mut(&session_id) else {
+                return Ok(Vec::new());
+            };
+            let discarded_ids = discard_active_streaming_records_in_state(runtime_state, &now);
+            if discarded_ids.is_empty() {
+                return Ok(Vec::new());
+            }
+            // discardedIdSet applies the same exact removal to the separately retained display layer.
+            // discardedIdSet 将相同精确移除应用到独立保留的显示层。
+            let discarded_id_set = discarded_ids.iter().cloned().collect::<HashSet<_>>();
+            if let Some(messages) = workspace.session_messages.get_mut(&session_id) {
+                messages.retain(|message| !discarded_id_set.contains(&message.id));
+            }
+            sync_hydrated_session_dialogue_ready_marker(workspace, session_id);
+            discarded_ids
+        };
+        let discarded_id_set = discarded_ids.iter().cloned().collect::<HashSet<_>>();
+        guard.workbench.messages.retain(|message| {
+            message.conversation_id != conversation_id || !discarded_id_set.contains(&message.id)
+        });
+        // afterMessages provides the exact authoritative order after removal for patch generation.
+        // afterMessages 提供移除后的精确权威顺序，用于生成补丁。
+        let after_messages = guard
+            .workbench
+            .messages
+            .iter()
+            .filter(|message| message.conversation_id == conversation_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        let event = build_conversation_messages_patched_delta(
+            &conversation_id,
+            before_messages.as_slice(),
+            after_messages.as_slice(),
+        )
+        .map(|patch| {
+            guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+            let generation = guard.workbench_generation;
+            guard.workbench.revision = generation;
+            WorkbenchDeltaEnvelope {
+                generation,
+                delta: WorkbenchDelta::ConversationMessagesPatched(patch),
+            }
+        });
+        (event, discarded_ids)
+    };
+    if let Some(event) = event {
+        emit_service_event_with_trace(
+            app,
+            "workbench_interrupted_stream_drafts_removed_emit",
+            ServiceEvent::WorkbenchDelta(Box::new(event)),
+        );
+    }
+    Ok(discarded_ids)
 }
 
 /// Permanently closes the active record for one exact provider content kind.
@@ -3309,12 +3422,39 @@ mod tests {
         assert_eq!(snapshot.request_stream_id, "request-1");
         assert_eq!(snapshot.tool_call_id, "call-1");
         assert_eq!(snapshot.tool_name, "terminal_session");
+        assert_eq!(snapshot.state, ToolRequestProgressState::Receiving);
         assert_eq!(snapshot.received_bytes, 512);
         assert_eq!(snapshot.received_characters, 500);
         assert_eq!(snapshot.request_revision, 3);
         assert_eq!(
             snapshot.preview,
             Some(serde_json::json!({ "kind": "command" }))
+        );
+
+        // assembled closes only the receiving presentation while the Provider response may remain open.
+        // assembled 仅关闭接收展示状态，Provider 响应仍可保持打开。
+        let assembled = RuntimeEvent::new(
+            RuntimeEventKind::ToolRequestProgress,
+            "tool request assembled",
+            String::new(),
+        )
+        .with_metadata(Some(serde_json::json!({
+            "request_stream_id": "request-1",
+            "tool_call_id": "call-1",
+            "tool_name": "terminal_session",
+            "tool_display_state": "arguments_assembled",
+            "received_bytes": 512,
+            "received_characters": 500,
+            "request_revision": 4,
+        })));
+        let (_, assembled_snapshot) = tool_request_progress_change_from_event(&assembled)
+            .expect("assembled metadata should satisfy the closed contract")
+            .expect("assembled event should produce one replacement");
+        assert_eq!(
+            assembled_snapshot
+                .expect("assembled event should carry one snapshot")
+                .state,
+            ToolRequestProgressState::ArgumentsAssembled
         );
 
         // ready reuses the same exact identity and clears the leaf Store after durable projection.

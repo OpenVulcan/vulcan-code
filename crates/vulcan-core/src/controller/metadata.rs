@@ -185,7 +185,17 @@ pub(super) fn merge_metadata_objects(
 
 /// Resolves one stable tool-call identifier from the provider-emitted tool-call payload.
 /// 从 Provider 产出的工具调用载荷中解析一份稳定工具调用标识。
-pub(super) fn resolved_tool_call_id(tool_call: &crate::types::ConversationToolCall) -> String {
+///
+/// # Parameters
+/// 参数
+/// `tool_call` is the canonical Provider-authored call whose result-pairing identity is required.
+/// `tool_call` 是需要解析结果配对标识的规范 Provider 工具调用。
+///
+/// # Returns
+/// 返回值
+/// The non-empty Provider-visible call id, or the stable item id when the Provider id is absent or blank.
+/// 返回非空 Provider 可见调用标识；Provider 标识缺失或空白时返回稳定项目标识。
+pub fn resolved_tool_call_id(tool_call: &crate::types::ConversationToolCall) -> String {
     tool_call
         .tool_call_id
         .clone()

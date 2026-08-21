@@ -77,16 +77,16 @@ export interface ConversationSummary {
   // Display-only fork source marker.
   // 纯展示用分叉来源标记。
   forkSource?: ConversationForkSourceSummary | null;
-  // Revisioned prompt-free continuation admission state.
-  // 带修订的无提示词 Continue 准入状态。
+  // Revisioned problem-turn recovery admission state.
+  // 带修订的问题回合恢复准入状态。
   continuation?: ConversationContinuationSummary | null;
 }
 
 // ConversationContinuationSummary is the exact backend claim token for Continue.
 // ConversationContinuationSummary 是 Continue 使用的精确后端领取令牌。
 export interface ConversationContinuationSummary {
-  // Whether the canonical terminal boundary may continue without a new prompt.
-  // 规范终止边界是否允许在没有新提示词时继续。
+  // Whether the canonical terminal boundary may be claimed for recovery.
+  // 规范终止边界是否允许被领取并恢复。
   eligible: boolean;
   // Exact continuation generation.
   // 精确 Continue 代际。
@@ -798,7 +798,7 @@ export interface ToolRequestProgressSnapshot {
   toolName: string;
   // Closed request-formation state; execution states remain in durable transcript records.
   // 封闭的请求构造状态；执行状态仍由持久转录记录持有。
-  state: "receiving";
+  state: "receiving" | "arguments_assembled";
   // Exact UTF-8 byte and Unicode character counts received so far.
   // 当前已接收的精确 UTF-8 字节数与 Unicode 字符数。
   receivedBytes: number;

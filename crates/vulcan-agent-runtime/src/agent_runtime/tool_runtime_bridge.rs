@@ -4,6 +4,7 @@
 use crate::agent_runtime::events::{RuntimeEvent, RuntimeEventKind};
 use crate::model::SessionId;
 use serde_json::{Map, Value, json};
+use sha2::{Digest, Sha256};
 #[cfg(test)]
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -121,6 +122,82 @@ impl VulcanManagedToolRuntimeBridge {
                 &self.execution_mode,
             )
             .await
+    }
+
+    /// Returns the stable fingerprint of the exact resolved or explicitly unregistered binding used by one request.
+    /// 返回单条请求所使用精确已解析绑定或明确未注册绑定的稳定指纹。
+    pub(crate) fn binding_fingerprint_for_request(
+        &self,
+        request: &CoreToolInvocationRequest,
+    ) -> Result<String, String> {
+        match self.definitions_by_id.get(&request.tool_name) {
+            Some(definition) => resolved_tool_binding_fingerprint(definition),
+            None => unregistered_tool_binding_fingerprint(&request.tool_name),
+        }
+    }
+}
+
+/// Computes a stable fingerprint for one resolved tool binding without serializing its opaque invoker.
+/// 为一条已解析工具绑定计算稳定指纹，同时不序列化其不透明调用器。
+pub(crate) fn resolved_tool_binding_fingerprint(
+    definition: &ResolvedToolDefinition,
+) -> Result<String, String> {
+    let binding = json!({
+        "schema_version": 1,
+        "descriptor": {
+            "id": definition.descriptor.id,
+            "name": definition.descriptor.name,
+            "description": definition.descriptor.description,
+            "help_text": definition.descriptor.help_text,
+            "source": format!("{:?}", definition.descriptor.source),
+        },
+        "parameters_schema": definition.parameters_schema,
+        "plan_policy": format!("{:?}", definition.plan_policy),
+    });
+    stable_tool_binding_fingerprint(&binding)
+}
+
+/// Computes a stable fingerprint for the explicit absence of one provider-requested tool binding.
+/// 为 Provider 请求的单个工具绑定明确缺失状态计算稳定指纹。
+fn unregistered_tool_binding_fingerprint(tool_name: &str) -> Result<String, String> {
+    let binding = json!({
+        "schema_version": 1,
+        "binding_state": "unregistered",
+        "tool_name": tool_name,
+    });
+    stable_tool_binding_fingerprint(&binding)
+}
+
+/// Hashes one canonical tool-binding description into the recovery protocol fingerprint.
+/// 将一份规范工具绑定描述哈希为恢复协议指纹。
+fn stable_tool_binding_fingerprint(binding: &Value) -> Result<String, String> {
+    let canonical = canonicalize_tool_binding_json(&binding);
+    let encoded = serde_json::to_vec(&canonical)
+        .map_err(|error| format!("Failed to serialize resolved tool binding: {error}"))?;
+    Ok(Sha256::digest(encoded)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
+}
+
+/// Recursively orders JSON object keys so tool-binding fingerprints are independent of map insertion order.
+/// 递归排序 JSON 对象键，使工具绑定指纹不受映射插入顺序影响。
+fn canonicalize_tool_binding_json(value: &Value) -> Value {
+    match value {
+        Value::Object(map) => {
+            let mut entries = map.iter().collect::<Vec<_>>();
+            entries.sort_by(|left, right| left.0.cmp(right.0));
+            Value::Object(
+                entries
+                    .into_iter()
+                    .map(|(key, value)| (key.clone(), canonicalize_tool_binding_json(value)))
+                    .collect(),
+            )
+        }
+        Value::Array(items) => {
+            Value::Array(items.iter().map(canonicalize_tool_binding_json).collect())
+        }
+        other => other.clone(),
     }
 }
 
@@ -285,9 +362,14 @@ pub(crate) fn attach_runtime_event_projection_barrier(
         return Ok((event, None));
     }
 
-    // requiredForExecution distinguishes the tool-side-effect safety gate from display-only ordering barriers.
-    // requiredForExecution 将工具副作用安全门禁与仅用于显示排序的屏障区分开来。
-    let required_for_execution = event.kind == RuntimeEventKind::ToolStarted;
+    // requiredForExecution distinguishes durable recovery gates from display-only ordering barriers.
+    // requiredForExecution 将可靠恢复门禁与仅用于显示排序的屏障区分开来。
+    let required_for_execution = matches!(
+        event.kind,
+        RuntimeEventKind::ToolBatchPrepared
+            | RuntimeEventKind::ToolStarted
+            | RuntimeEventKind::ToolFinished
+    );
     let barrier_id = Uuid::new_v4().to_string();
     let (sender, receiver) = oneshot::channel();
     let registry = RUNTIME_EVENT_PROJECTION_BARRIERS.get_or_init(|| Mutex::new(HashMap::new()));
@@ -346,7 +428,7 @@ pub(crate) async fn wait_runtime_event_projection_barrier(
     match tokio::time::timeout(RUNTIME_EVENT_PROJECTION_BARRIER_TIMEOUT, barrier.receiver).await {
         Ok(Ok(())) => Ok(()),
         Ok(Err(_)) if required_for_execution => Err(String::from(
-            "Tool execution safety barrier was rejected before the tool body started.",
+            "Tool recovery durability barrier was rejected before execution could advance.",
         )),
         Ok(Err(_)) => Ok(()),
         Err(_) => {
@@ -359,7 +441,7 @@ pub(crate) async fn wait_runtime_event_projection_barrier(
             }
             if required_for_execution {
                 return Err(String::from(
-                    "Tool execution safety barrier timed out before the tool body started.",
+                    "Tool recovery durability barrier timed out before execution could advance.",
                 ));
             }
             Ok(())

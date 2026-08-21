@@ -487,8 +487,8 @@ pub(crate) fn apply_provider_request_usage_telemetry(
 ///
 /// # Returns
 /// 返回值
-/// Returns an error only when authoritative state accounting or WebUI projection fails; Hook delivery remains best-effort.
-/// 仅当权威状态统计或 WebUI 投影失败时返回错误；Hook 投递仍保持尽力而为。
+/// Returns an error only when authoritative state accounting or persistence fails; WebUI projection and Hook delivery remain best-effort.
+/// 仅当权威状态统计或持久化失败时返回错误；WebUI 投影与 Hook 投递均保持尽力而为。
 pub(crate) async fn process_provider_request_telemetry_event(
     state: &SharedServiceBridgeState,
     controller_runtime: &ControllerRuntimeHandle,
@@ -523,26 +523,31 @@ pub(crate) async fn process_provider_request_telemetry_event(
                                 "Session `{session_id}` lost its Provider ledger before persistence."
                             )
                         })?;
-                    persist_provider_call_boundary(
-                        state,
-                        controller_runtime,
-                        &snapshot,
-                        session_id,
-                    )
-                    .await
-                    .map_err(|error| {
-                        format!(
-                            "{persist_reason}: failed to durably persist Provider call boundary: {error}"
-                        )
-                    })
-                    .and_then(|()| {
+                    // durableBudgetBaseline is derived before persistence so malformed ledger state can still use the in-memory rollback path.
+                    // durableBudgetBaseline 在持久化前派生，使格式错误的账本状态仍可使用内存回滚路径。
+                    let durable_budget_baseline =
                         if event.kind == ProviderRequestTelemetryEventKind::Completed {
-                            event.replace_durable_budget_baseline(
-                                durable_provider_usage_baseline(&snapshot, session_id)?,
-                            )?;
-                        }
-                        Ok(())
-                    })
+                            durable_provider_usage_baseline(&snapshot, session_id).map(Some)
+                        } else {
+                            Ok(None)
+                        };
+                    let durable_persistence_result = match durable_budget_baseline {
+                        Err(error) => Err(error),
+                        Ok(durable_budget_baseline) => persist_provider_call_boundary(
+                            state,
+                            controller_runtime,
+                            &snapshot,
+                            session_id,
+                        )
+                        .await
+                        .map_err(|error| {
+                            format!(
+                                "{persist_reason}: failed to durably persist Provider call boundary: {error}"
+                            )
+                        })
+                        .map(|()| durable_budget_baseline),
+                    };
+                    durable_persistence_result
                     .or_else(|error| {
                         restore_provider_usage_boundary_after_persist_failure(
                             state,
@@ -555,20 +560,42 @@ pub(crate) async fn process_provider_request_telemetry_event(
                         })?;
                         Err(error)
                     })
+                    .map(|durable_budget_baseline| {
+                        if let Some(durable_budget_baseline) = durable_budget_baseline
+                            && let Err(error) = event
+                                .replace_durable_budget_baseline(durable_budget_baseline)
+                        {
+                            // A poisoned live budget cache cannot revoke a boundary that is already durable; the next budget read will fail closed.
+                            // 已中毒的实时预算缓存不能撤销已经可靠落盘的边界；下一次预算读取会自行失败关闭。
+                            eprintln!(
+                                "[webui-service] durable Provider budget baseline refresh failed: session={session_id} error={error}"
+                            );
+                        }
+                    })
                 } else {
                     Ok(())
                 };
-                persistence_result.and_then(|()| {
-                    if let Some(app) = app {
-                        emit_session_addons_changed_delta(app, state, session_id)?;
-                    }
-                    Ok(())
-                })
+                if persistence_result.is_ok()
+                    && let Some(app) = app
+                    && let Err(error) = emit_session_addons_changed_delta(app, state, session_id)
+                {
+                    // Projection failure cannot revoke a Provider boundary that already crossed authoritative durable storage.
+                    // 投影失败不能撤销已经跨越权威可靠存储的 Provider 边界。
+                    eprintln!(
+                        "[webui-service] durable Provider boundary addon projection failed: session={session_id} error={error}"
+                    );
+                }
+                persistence_result
             }
         }
     } else {
         Ok(())
     };
+    // The drop-cancellation tracker must never observe a boundary that authoritative persistence rolled back.
+    // Drop 取消跟踪器绝不能观测到已被权威持久化回滚的边界。
+    if accounting_result.is_ok() {
+        provider_telemetry_guard.observe_durable_boundary(&event);
+    }
     provider_telemetry_guard.forward(event);
     accounting_result
 }

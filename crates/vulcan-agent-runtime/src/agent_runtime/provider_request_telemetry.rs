@@ -1,7 +1,9 @@
 //! Low-frequency structured telemetry for physical Provider API requests.
 //! 真实 Provider API 请求的低频结构化遥测。
 
-use crate::agent_runtime::execution_models::{ExecutionPreparation, ExecutionPromptPurpose};
+use crate::agent_runtime::execution_models::{
+    ExecutionPreparation, ExecutionPromptPurpose, ExecutionProviderRequestContinuation,
+};
 use crate::agent_runtime::provider_transport_request_budget::{
     ProviderRequestBudgetEvidence, ProviderUsageBudgetBaselineHandle,
     build_provider_request_budget_evidence,
@@ -40,9 +42,12 @@ pub const HOOK_PROVIDER_REQUEST_RETRYING: &str = "provider.request.retrying";
 /// 从唯一执行准备来源捕获的不可变运行元数据。
 #[derive(Debug, Clone)]
 pub(crate) struct ProviderRequestTelemetryContext {
-    /// Host-generated execution identity shared by requests in one stream.
-    /// 单次流内请求共享的宿主生成执行身份。
+    /// Stable logical execution identity shared across restored physical streams.
+    /// 跨恢复物理流共享的稳定逻辑执行身份。
     execution_id: String,
+    /// Zero-based physical Provider attempt index assigned to the first request in this stream.
+    /// 分配给当前流首个请求的从零开始的物理 Provider attempt 索引。
+    initial_attempt_index: u32,
     /// Current session identity.
     /// 当前会话身份。
     session_id: SessionId,
@@ -128,12 +133,14 @@ impl ProviderRequestTelemetryContext {
     ///
     /// # Returns
     /// 返回值
-    /// Returns an immutable context with a new host execution identity.
-    /// 返回带有新宿主执行身份的不可变上下文。
+    /// Returns an immutable context that preserves exactly one retry or host-restart identity.
+    /// 返回不可变上下文，并且精确保留重试身份或宿主重启身份中的唯一一个。
     pub(crate) fn from_preparation(
         preparation: &ExecutionPreparation,
+        execution_retry_snapshot: Option<&vulcan_workbench_model::ExecutionRetrySnapshot>,
+        provider_request_continuation: Option<&ExecutionProviderRequestContinuation>,
         provider_usage_budget_baseline: ProviderUsageBudgetBaselineHandle,
-    ) -> Self {
+    ) -> Result<Self, String> {
         // ownerKind is derived from explicit purpose and subagent context, never from names.
         // ownerKind 从显式用途与子代理上下文派生，绝不根据名称猜测。
         let owner_kind = match preparation.prompt_purpose {
@@ -222,8 +229,22 @@ impl ProviderRequestTelemetryContext {
                     .collect()
             })
             .unwrap_or_default();
-        Self {
-            execution_id: Uuid::new_v4().to_string(),
+        // telemetrySeed preserves logical identity across both manual Continue and host-owned route restarts.
+        // telemetrySeed 在手动 Continue 与宿主拥有的路由重启中都保留逻辑身份。
+        let (execution_id, turn_id, initial_attempt_index) = provider_request_telemetry_seed(
+            preparation.conversation_hook_turn_id.as_deref(),
+            execution_retry_snapshot.map(|snapshot| {
+                (
+                    snapshot.logical_execution_id.as_str(),
+                    snapshot.logical_turn_id.as_deref(),
+                    snapshot.next_provider_attempt_index,
+                )
+            }),
+            provider_request_continuation,
+        )?;
+        Ok(Self {
+            execution_id,
+            initial_attempt_index,
             session_id: preparation.session_id,
             workspace_id: preparation.workspace_path.clone(),
             provider_name: preparation.model_blueprint.provider_name.clone(),
@@ -247,10 +268,10 @@ impl ProviderRequestTelemetryContext {
             operation,
             owner_id: preparation.agent_id.clone(),
             owner_name: preparation.agent_name.clone(),
-            turn_id: preparation.conversation_hook_turn_id.clone(),
+            turn_id,
             context_generation_id: preparation.provider_usage_context_generation_id.clone(),
             provider_usage_budget_baseline,
-        }
+        })
     }
 
     /// Builds a deterministic telemetry context for sibling-module state-machine tests.
@@ -259,6 +280,7 @@ impl ProviderRequestTelemetryContext {
     pub(crate) fn for_test() -> Self {
         Self {
             execution_id: String::from("execution-1"),
+            initial_attempt_index: 0,
             session_id: SessionId::nil(),
             workspace_id: String::from("workspace-1"),
             provider_name: String::from("Mock Provider"),
@@ -295,6 +317,55 @@ impl ProviderRequestTelemetryContext {
             provider_usage_budget_baseline: ProviderUsageBudgetBaselineHandle::new(None),
         }
     }
+}
+
+/// Resolves the logical request, logical turn, and first physical attempt for one telemetry stream.
+/// 为单个遥测流解析逻辑请求、逻辑回合与首个物理 attempt。
+///
+/// # Parameters
+/// 参数
+/// - `conversation_turn_id`: Current canonical user-turn identity when this is a new user execution.
+/// - `conversation_turn_id`：当前执行属于新用户回合时的规范用户回合身份。
+/// - `restored_identity`: Exact logical identity and next attempt index from a claimed retry snapshot.
+/// - `restored_identity`：来自已领取重试快照的精确逻辑身份与下一 attempt 索引。
+/// - `host_continuation`: Exact next-request identity captured before a host-owned stream restart.
+/// - `host_continuation`：宿主拥有的流重启前捕获的精确下一请求身份。
+///
+/// # Returns
+/// 返回值
+/// A stable logical request id, optional logical turn id, and the first physical attempt index.
+/// 返回稳定逻辑请求标识、可选逻辑回合标识及首个物理 attempt 索引。
+fn provider_request_telemetry_seed(
+    conversation_turn_id: Option<&str>,
+    restored_identity: Option<(&str, Option<&str>, u32)>,
+    host_continuation: Option<&ExecutionProviderRequestContinuation>,
+) -> Result<(String, Option<String>, u32), String> {
+    if restored_identity.is_some() && host_continuation.is_some() {
+        return Err(String::from(
+            "Provider request telemetry cannot combine an unconsumed retry replay with a host restart continuation.",
+        ));
+    }
+    if let Some((logical_execution_id, logical_turn_id, next_provider_attempt_index)) =
+        restored_identity
+    {
+        return Ok((
+            logical_execution_id.to_string(),
+            logical_turn_id.map(str::to_string),
+            next_provider_attempt_index,
+        ));
+    }
+    if let Some(host_continuation) = host_continuation {
+        return Ok((
+            host_continuation.logical_request_id.clone(),
+            host_continuation.logical_turn_id.clone(),
+            host_continuation.next_provider_attempt_index,
+        ));
+    }
+    let logical_turn_id = conversation_turn_id.map(str::to_string);
+    let logical_execution_id = logical_turn_id
+        .clone()
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+    Ok((logical_execution_id, logical_turn_id, 0))
 }
 
 /// Stable telemetry event kind mapped directly to one plugin Hook point.
@@ -732,7 +803,50 @@ impl ProviderRequestTelemetryTracker {
     /// Returns no value.
     /// 不返回值。
     pub(crate) fn install_context(&mut self, context: ProviderRequestTelemetryContext) {
+        self.next_attempt_index = context.initial_attempt_index;
         self.context = Some(context);
+    }
+
+    /// Returns the exact identity of the active physical request for retry-checkpoint persistence.
+    /// 返回用于持久化重试检查点的当前活动物理请求精确身份。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The logical request id, optional logical turn id, and current physical attempt index.
+    /// 返回逻辑请求标识、可选逻辑回合标识及当前物理 attempt 索引。
+    pub(crate) fn active_checkpoint_identity(&self) -> Option<(String, Option<String>, u32)> {
+        let context = self.context.as_ref()?;
+        let active_request = self.active_request.as_ref()?;
+        Some((
+            context.execution_id.clone(),
+            context.turn_id.clone(),
+            active_request.attempt_index,
+        ))
+    }
+
+    /// Returns the exact logical identity reserved for the next Provider request after a safe loop boundary.
+    /// 返回安全循环边界后为下一次 Provider 请求保留的精确逻辑身份。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns the next identity only when telemetry is initialized and no physical request remains active.
+    /// 仅当遥测已经初始化且没有物理请求仍处于活动状态时返回下一身份。
+    pub(crate) fn next_request_continuation_identity(
+        &self,
+    ) -> Result<ExecutionProviderRequestContinuation, String> {
+        if self.active_request.is_some() {
+            return Err(String::from(
+                "Provider request continuation cannot be captured while a physical request is active.",
+            ));
+        }
+        let context = self.context.as_ref().ok_or_else(|| {
+            String::from("Provider request continuation has no initialized telemetry context.")
+        })?;
+        Ok(ExecutionProviderRequestContinuation {
+            logical_request_id: context.execution_id.clone(),
+            logical_turn_id: context.turn_id.clone(),
+            next_provider_attempt_index: self.next_attempt_index,
+        })
     }
 
     /// Returns the baseline handle shared with Provider request budgeting.
@@ -1893,6 +2007,7 @@ mod tests {
         let mut tracker = ProviderRequestTelemetryTracker::default();
         tracker.install_context(ProviderRequestTelemetryContext {
             execution_id: String::from("execution-1"),
+            initial_attempt_index: 0,
             session_id: SessionId::nil(),
             turn_id: None,
             workspace_id: String::from("workspace-1"),
@@ -2249,6 +2364,138 @@ mod tests {
         assert_eq!(
             complete_output_tokens(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID, &usage),
             200
+        );
+    }
+
+    /// Verifies a claimed Continue seed wins over a new-turn identity and retains its next physical attempt.
+    /// 验证已领取 Continue 种子优先于新回合身份，并保留其下一物理 attempt。
+    #[test]
+    fn restored_telemetry_seed_preserves_logical_identity_and_attempt() {
+        // seed is resolved from the exact claimed snapshot tuple used by production launch assembly.
+        // seed 从生产启动装配使用的精确已领取快照元组解析。
+        let seed = provider_request_telemetry_seed(
+            Some("new-turn-must-not-win"),
+            Some(("logical-request-a", Some("logical-turn-a"), 4)),
+            None,
+        )
+        .expect("claimed retry identity should be valid");
+
+        assert_eq!(
+            seed,
+            (
+                String::from("logical-request-a"),
+                Some(String::from("logical-turn-a")),
+                4,
+            )
+        );
+    }
+
+    /// Verifies a host restart keeps the logical request and advances the replacement stream's first attempt.
+    /// 验证宿主重启会保留逻辑请求，并推进替代流的首次尝试索引。
+    #[test]
+    fn host_restart_telemetry_seed_preserves_next_attempt() {
+        // continuation is the exact identity emitted by the previous telemetry tracker.
+        // continuation 是前一个遥测跟踪器发出的精确身份。
+        let continuation = ExecutionProviderRequestContinuation {
+            logical_request_id: String::from("logical-request-a"),
+            logical_turn_id: Some(String::from("logical-turn-a")),
+            next_provider_attempt_index: 5,
+        };
+
+        let seed = provider_request_telemetry_seed(
+            Some("new-turn-must-not-win"),
+            None,
+            Some(&continuation),
+        )
+        .expect("host continuation identity should be valid");
+
+        assert_eq!(
+            seed,
+            (
+                String::from("logical-request-a"),
+                Some(String::from("logical-turn-a")),
+                5,
+            )
+        );
+    }
+
+    /// Verifies an unconsumed replay and a host restart cannot silently compete for telemetry ownership.
+    /// 验证未消费的重放与宿主重启不能静默争夺遥测所有权。
+    #[test]
+    fn conflicting_telemetry_continuation_sources_fail_closed() {
+        // continuation deliberately conflicts with the claimed snapshot source.
+        // continuation 刻意与已领取快照来源产生冲突。
+        let continuation = ExecutionProviderRequestContinuation {
+            logical_request_id: String::from("host-request"),
+            logical_turn_id: Some(String::from("host-turn")),
+            next_provider_attempt_index: 3,
+        };
+
+        let error = provider_request_telemetry_seed(
+            Some("new-turn"),
+            Some(("retry-request", Some("retry-turn"), 2)),
+            Some(&continuation),
+        )
+        .expect_err("conflicting continuation sources must fail closed");
+
+        assert!(error.contains("cannot combine"));
+    }
+
+    /// Verifies tracker installation applies the restored attempt base to the next physical call.
+    /// 验证跟踪器安装会把恢复的 attempt 基数应用到下一次物理调用。
+    #[test]
+    fn restored_attempt_base_is_used_by_next_physical_request() {
+        // context models one Continue stream starting after four already-reserved physical attempts.
+        // context 模拟一个在四次已保留物理 attempt 之后启动的 Continue 流。
+        let mut context = ProviderRequestTelemetryContext::for_test();
+        context.execution_id = String::from("logical-request-a");
+        context.turn_id = Some(String::from("logical-turn-a"));
+        context.initial_attempt_index = 4;
+        let mut tracker = ProviderRequestTelemetryTracker::default();
+        tracker.install_context(context);
+
+        tracker
+            .start_request(&test_request_snapshot(), None)
+            .expect("restored request evidence should build");
+
+        assert_eq!(
+            tracker.active_checkpoint_identity(),
+            Some((
+                String::from("logical-request-a"),
+                Some(String::from("logical-turn-a")),
+                4,
+            ))
+        );
+    }
+
+    /// Verifies a completed physical request exposes the exact identity reserved for a host restart.
+    /// 验证已完成的物理请求会暴露为宿主重启保留的精确身份。
+    #[test]
+    fn completed_request_exposes_next_host_restart_identity() {
+        // context starts at attempt four to prove the continuation advances rather than resets.
+        // context 从尝试四开始，以证明延续身份会推进而不是重置。
+        let mut context = ProviderRequestTelemetryContext::for_test();
+        context.execution_id = String::from("logical-request-a");
+        context.turn_id = Some(String::from("logical-turn-a"));
+        context.initial_attempt_index = 4;
+        let mut tracker = ProviderRequestTelemetryTracker::default();
+        tracker.install_context(context);
+        tracker
+            .start_request(&test_request_snapshot(), None)
+            .expect("request evidence should build");
+        tracker
+            .complete_success(None)
+            .expect("active request should complete");
+
+        assert_eq!(
+            tracker
+                .next_request_continuation_identity()
+                .expect("closed request should expose continuation identity"),
+            ExecutionProviderRequestContinuation {
+                logical_request_id: String::from("logical-request-a"),
+                logical_turn_id: Some(String::from("logical-turn-a")),
+                next_provider_attempt_index: 5,
+            }
         );
     }
 

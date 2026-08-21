@@ -754,6 +754,17 @@ pub(crate) async fn handle_webui_detached_child_execution_event(
             session_id,
             conversation_state,
         ),
+        ExecutionStreamEvent::ProviderRouteSwitchRequired {
+            session_id,
+            conversation_state,
+            ..
+        } => apply_conversation_checkpoint(
+            app,
+            state,
+            controller_runtime,
+            session_id,
+            conversation_state,
+        ),
         ExecutionStreamEvent::Finished(report) => {
             let _ = agent_runtime;
             let session_id = report.session_id;

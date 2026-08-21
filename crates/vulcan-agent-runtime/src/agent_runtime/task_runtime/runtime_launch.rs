@@ -404,11 +404,7 @@ pub(crate) async fn prepare_task_runtime_stream_launch(
         request.clone(),
     )
     .with_parent_snapshot(bootstrap.core_snapshot.clone());
-    Ok(build_runtime_stream_launch_payload(
-        &request,
-        bootstrap,
-        Some(child_context),
-    ))
+    build_runtime_stream_launch_payload(&request, bootstrap, Some(child_context))
 }
 
 /// Builds one child runtime-stream launch and performs a persisted preflight compaction when the first preparation already exceeds the budget.

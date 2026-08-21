@@ -48,4 +48,22 @@ describe("conversation continuation architecture", () => {
     expect(handlerSource).toContain("setContinuationClaimKey(null)");
     expect(handlerSource).toContain('kind: "failed"');
   });
+
+  it("binds composer text to recovery only when the selected problem turn exposes a continuation", () => {
+    // actions owns the selected-conversation decision at the composer submission boundary.
+    // actions 持有输入区提交边界的选中会话决策。
+    const actions = readContinuationSource("../workspace/workbench-layout/conversation-actions.ts");
+    // service owns the exact RPC payload sent to the desktop backend.
+    // service 持有发送到桌面后端的精确 RPC 载荷。
+    const service = readContinuationSource("../../service/conversation-actions-service.ts");
+
+    expect(actions).toContain("selectedConversation?.continuation");
+    expect(actions).toContain("expectedGeneration: selectedConversation.continuation.generation");
+    expect(actions).toContain(
+      "expectedLedgerRevision: selectedConversation.continuation.expectedLedgerRevision",
+    );
+    expect(actions).toContain("submission.sessionSettings,\n      continuationExpectation,");
+    expect(service).toContain("continuationExpectation: ConversationContinuationExpectation | null = null");
+    expect(service).toContain("continuationExpectation,\n  });");
+  });
 });

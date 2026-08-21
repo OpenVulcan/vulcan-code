@@ -14,6 +14,32 @@ use vulcan_core::types::{
 };
 use vulcan_tools_manager::{ResolvedToolDefinition, VulcanToolsManager};
 
+/// Exact recovery action selected from one claimed execution-retry snapshot.
+/// 从一份已认领执行重试快照中选出的精确恢复动作。
+#[derive(Debug, Clone)]
+pub(crate) enum ProviderTransportRecoveryAction {
+    /// Reconcile the retained per-tool batch before the next Provider request.
+    /// 在下一次 Provider 请求前协调已保留的逐工具批次。
+    ExecuteToolBatch {
+        /// Stable tool-call progress in original Provider order.
+        /// 按 Provider 原始顺序保存的稳定工具调用进度。
+        tools: Vec<vulcan_workbench_model::ExecutionRetryToolProgress>,
+        /// Optional user follow-up appended after every tool result is paired.
+        /// 在全部工具结果完成配对后追加的可选用户补充消息。
+        user_followup: Option<vulcan_workbench_model::ExecutionRetryUserFollowup>,
+    },
+    /// Resume the Provider loop from a retained canonical boundary.
+    /// 从保留的规范边界恢复 Provider 循环。
+    ResumeProviderLoop {
+        /// Optional user follow-up appended before the replacement Provider request.
+        /// 在替代 Provider 请求前追加的可选用户补充消息。
+        user_followup: Option<vulcan_workbench_model::ExecutionRetryUserFollowup>,
+    },
+    /// Finalize the retained tool-free assistant tail without a Provider request.
+    /// 不发起 Provider 请求，直接完成已保留的无工具助手尾部。
+    FinalizeAssistant,
+}
+
 /// Provider transport turn-start mode selected by the launch layer.
 /// 启动层选择的 Provider 传输回合启动模式。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,6 +139,9 @@ pub(crate) struct ProviderTransportExecutionRequest {
     /// Exact controller configuration restored by a claimed execution retry.
     /// 由已认领执行重试恢复的精确控制器配置。
     pub(crate) controller_config_override: Option<vulcan_core::types::ControllerConfig>,
+    /// Optional exact recovery action executed before normal Provider-loop startup.
+    /// 常规 Provider 循环启动前执行的可选精确恢复动作。
+    pub(crate) recovery_action: Option<ProviderTransportRecoveryAction>,
     /// Optional temperature override already normalized by the executor.
     /// 已由执行器归一化后的可选 temperature 覆盖值。
     pub(crate) temperature: Option<f64>,
@@ -183,6 +212,7 @@ pub(crate) fn build_provider_transport_execution_request(
     core_snapshot: CoreConversationSnapshot,
     initial_provider_request: Option<AiExecutionRequest>,
     controller_config_override: Option<vulcan_core::types::ControllerConfig>,
+    recovery_action: Option<ProviderTransportRecoveryAction>,
     temperature: Option<f64>,
     max_turns: usize,
     task_runtime: Arc<TaskRuntime>,
@@ -210,6 +240,7 @@ pub(crate) fn build_provider_transport_execution_request(
         core_snapshot,
         initial_provider_request,
         controller_config_override,
+        recovery_action,
         temperature,
         max_turns,
         task_runtime,

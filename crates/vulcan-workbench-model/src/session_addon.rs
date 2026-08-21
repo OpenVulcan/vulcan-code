@@ -9,7 +9,7 @@ use vulcan_provider_config::config::ReasoningEffortLevel;
 
 use crate::{
     SessionId, SessionPlanModeState, SessionProviderToolTargetSelection, SessionRuntimeStateEntry,
-    SessionTodolistState,
+    SessionTodolistState, runtime_state::SessionMediaUnderstandingMode,
 };
 
 /// Returns whether a persisted boolean is false so default addon values stay omitted.
@@ -856,8 +856,8 @@ pub struct SessionRuntimeControls {
     /// 最近一次被该会话使用的激活模型标识。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_model_id: Option<String>,
-    /// Exact model selection waiting for the next user-submission boundary.
-    /// 等待下一次用户提交边界生效的精确模型选择。
+    /// Exact model selection waiting for the next real Provider-request boundary.
+    /// 等待下一次真实 Provider 请求边界生效的精确模型选择。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pending_model_selection: Option<crate::SessionPendingModelSelection>,
     /// Persisted non-secret identity of the session's frozen provider route.
@@ -884,6 +884,10 @@ pub struct SessionRuntimeControls {
     /// 按语义能力索引的会话级供应商工具目标选择。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub provider_tool_selections: BTreeMap<String, SessionProviderToolTargetSelection>,
+    /// Session-selected media backend modes keyed by semantic capability.
+    /// 按语义能力索引的会话级媒体后端模式选择。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub media_understanding_modes: BTreeMap<String, SessionMediaUnderstandingMode>,
     /// Provider tool capabilities enabled only for this session.
     /// 仅为当前会话启用的供应商工具能力。
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
@@ -929,6 +933,7 @@ impl SessionRuntimeControls {
             active_reasoning_effort_explicit: runtime_state.active_reasoning_effort_explicit,
             active_temperature: runtime_state.active_temperature,
             provider_tool_selections: runtime_state.provider_tool_selections.clone(),
+            media_understanding_modes: runtime_state.media_understanding_modes.clone(),
             provider_tool_enabled_capabilities: runtime_state
                 .provider_tool_enabled_capabilities
                 .clone(),
@@ -958,6 +963,7 @@ impl SessionRuntimeControls {
         runtime_state.active_reasoning_effort_explicit = self.active_reasoning_effort_explicit;
         runtime_state.active_temperature = self.active_temperature;
         runtime_state.provider_tool_selections = self.provider_tool_selections.clone();
+        runtime_state.media_understanding_modes = self.media_understanding_modes.clone();
         runtime_state.provider_tool_enabled_capabilities =
             self.provider_tool_enabled_capabilities.clone();
         runtime_state.provider_extension_target_sets = self.provider_extension_target_sets.clone();
@@ -985,6 +991,7 @@ impl SessionRuntimeControls {
             || self.active_reasoning_effort_explicit
             || self.active_temperature.is_some()
             || !self.provider_tool_selections.is_empty()
+            || !self.media_understanding_modes.is_empty()
             || !self.provider_tool_enabled_capabilities.is_empty()
             || !self.provider_extension_target_sets.is_empty()
             || self.provider_tool_settings_initialized

@@ -17,10 +17,10 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 use vulcan_provider_adapters::{
-    AvailableProviderToolTarget, ManifestSourceLayer, MediaUnderstandingBackendSelection,
-    PersistedAiConfiguration, ProviderToolCapabilityKind, ProviderToolExecutionResult,
-    ProviderToolNormalizedOutput, ProviderToolResourceDownloadPolicy, ProviderToolTargetSelection,
-    PublicAiRuntime,
+    AvailableProviderToolTarget, ManifestSourceLayer, MediaUnderstandingBackendMode,
+    MediaUnderstandingBackendSelection, PersistedAiConfiguration, ProviderToolCapabilityKind,
+    ProviderToolExecutionResult, ProviderToolNormalizedOutput, ProviderToolResourceDownloadPolicy,
+    ProviderToolTargetSelection, PublicAiRuntime,
 };
 use vulcan_tools_manager::{
     VulcanPlanToolPolicy, VulcanToolCandidate, VulcanToolDescriptor, VulcanToolHostResult,
@@ -147,6 +147,9 @@ pub(crate) fn build_provider_tool_candidates(
     session_extension_target_sets: &Option<
         BTreeMap<String, BTreeSet<vulcan_workbench_model::SessionProviderToolTargetSelection>>,
     >,
+    session_media_understanding_modes: &Option<
+        BTreeMap<String, vulcan_workbench_model::SessionMediaUnderstandingMode>,
+    >,
     suppress_web_search: bool,
 ) -> Result<Vec<VulcanToolCandidate>, String> {
     apply_session_provider_tool_selections(
@@ -154,6 +157,7 @@ pub(crate) fn build_provider_tool_candidates(
         session_selections,
         session_enabled_capabilities,
         session_extension_target_sets,
+        session_media_understanding_modes,
     )?;
     validate_enabled_media_understanding_backends(&configuration)?;
     let available = runtime.available_provider_tool_targets(&configuration)?;
@@ -811,6 +815,9 @@ fn apply_session_provider_tool_selections(
     session_extension_target_sets: &Option<
         BTreeMap<String, BTreeSet<vulcan_workbench_model::SessionProviderToolTargetSelection>>,
     >,
+    session_media_understanding_modes: &Option<
+        BTreeMap<String, vulcan_workbench_model::SessionMediaUnderstandingMode>,
+    >,
 ) -> Result<(), String> {
     match (session_selections, session_enabled_capabilities) {
         (Some(session_selections), Some(session_enabled_capabilities)) => {
@@ -865,6 +872,25 @@ fn apply_session_provider_tool_selections(
             return Err(String::from(
                 "Session provider tool selections and enabled capabilities must be supplied together.",
             ));
+        }
+    }
+    if let Some(session_media_understanding_modes) = session_media_understanding_modes {
+        for (capability, mode) in session_media_understanding_modes {
+            let capability: ProviderToolCapabilityKind =
+                serde_json::from_value(Value::String(capability.clone())).map_err(|error| {
+                    format!(
+                        "Session media-understanding capability `{capability}` is invalid: {error}"
+                    )
+                })?;
+            let backend_mode = match mode {
+                vulcan_workbench_model::SessionMediaUnderstandingMode::ProviderTool => {
+                    MediaUnderstandingBackendMode::ProviderTool
+                }
+                vulcan_workbench_model::SessionMediaUnderstandingMode::ModelReplacement => {
+                    MediaUnderstandingBackendMode::ModelReplacement
+                }
+            };
+            configuration.apply_media_understanding_mode(capability, backend_mode)?;
         }
     }
     if let Some(session_extension_target_sets) = session_extension_target_sets {
@@ -1356,7 +1382,8 @@ mod tests {
         validate_enabled_media_understanding_backends,
     };
     use serde_json::json;
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
+    use vulcan_ai_contract::ReasoningEffort;
     use vulcan_provider_adapters::{
         AvailableProviderToolTarget, ManifestSourceLayer, ProviderToolCapabilityKind,
         ProviderToolCompositeOutput, ProviderToolEmbeddingOutput, ProviderToolEmbeddingVector,
@@ -1580,6 +1607,7 @@ mod tests {
             &Some(Default::default()),
             &Some(Default::default()),
             &None,
+            &None,
         )
         .expect("apply explicit empty override");
 
@@ -1600,6 +1628,7 @@ mod tests {
             &Some(Default::default()),
             &Some(BTreeSet::from([String::from("video_understand")])),
             &None,
+            &None,
         )
         .expect("apply media capability override");
 
@@ -1608,6 +1637,69 @@ mod tests {
             configuration.provider_tool_enabled_capabilities,
             BTreeSet::from([ProviderToolCapabilityKind::VideoUnderstand])
         );
+    }
+
+    /// Verifies a session media mode selects the matching independently stored backend route.
+    /// 验证会话媒体模式会选择对应的独立后端路由。
+    #[test]
+    fn session_media_mode_selects_the_requested_backend_route() {
+        let capability = ProviderToolCapabilityKind::VideoUnderstand;
+        let provider_selection = ProviderToolTargetSelection {
+            connection_id: String::from("provider-account"),
+            target_id: String::from("provider-video"),
+        };
+        let replacement_selection = vulcan_provider_adapters::ActiveAiModelSelection {
+            provider_id: String::from("replacement-provider"),
+            model_id: String::from("replacement-video-model"),
+            connection_id: String::from("replacement-account"),
+        };
+        let mut configuration = vulcan_provider_adapters::PersistedAiConfiguration::default();
+        let mut backend_options =
+            vulcan_provider_adapters::MediaUnderstandingBackendOptions::default();
+        backend_options.update_from_selection(
+            &vulcan_provider_adapters::MediaUnderstandingBackendSelection::ProviderTool {
+                selection: provider_selection.clone(),
+            },
+        );
+        backend_options.update_from_selection(
+            &vulcan_provider_adapters::MediaUnderstandingBackendSelection::ModelReplacement {
+                selection: replacement_selection.clone(),
+                reasoning_effort: Some(ReasoningEffort::Medium),
+            },
+        );
+        configuration
+            .media_understanding_backend_options
+            .insert(capability, backend_options);
+        let media_modes = BTreeMap::from([(
+            String::from("video_understand"),
+            vulcan_workbench_model::SessionMediaUnderstandingMode::ModelReplacement,
+        )]);
+
+        apply_session_provider_tool_selections(
+            &mut configuration,
+            &Some(Default::default()),
+            &Some(BTreeSet::from([String::from("video_understand")])),
+            &None,
+            &Some(media_modes),
+        )
+        .expect("session replacement mode should select its stored route");
+
+        assert_eq!(
+            configuration
+                .media_understanding_selections
+                .get(&capability),
+            Some(
+                &vulcan_provider_adapters::MediaUnderstandingBackendSelection::ModelReplacement {
+                    selection: replacement_selection,
+                    reasoning_effort: Some(ReasoningEffort::Medium),
+                }
+            )
+        );
+        assert_eq!(
+            configuration.provider_tool_enabled_capabilities,
+            BTreeSet::from([capability])
+        );
+        assert!(configuration.provider_tool_selections.is_empty());
     }
 
     /// Verifies a media switch without its required global backend fails before tool exposure.
@@ -1655,6 +1747,7 @@ mod tests {
             &Some(selections),
             &Some(enabled_capabilities),
             &None,
+            &None,
         )
         .expect_err("legacy session media target must fail closed");
 
@@ -1682,6 +1775,7 @@ mod tests {
             &None,
             &None,
             &Some(Default::default()),
+            &None,
         )
         .expect("apply explicit empty extension override");
 

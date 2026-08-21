@@ -210,6 +210,65 @@ fn webui_prompt_intervention_is_atomic_on_invalid_mailbox_payload() {
     );
 }
 
+/// Verifies an accepted model switch suspends the frozen route before any queued guidance is consumed.
+/// 验证已接受的模型切换会在消费任何排队引导前暂停冻结路由。
+#[test]
+fn pending_model_switch_preempts_prompt_intervention_without_draining_guidance() {
+    // parentSessionId identifies the exact running session whose next Provider request must switch routes.
+    // parentSessionId 标识下一次 Provider 请求必须切换路由的精确运行会话。
+    let parent_session_id = SessionId::new_v4();
+    let mut service_state = test_service_state_with_parent_session(parent_session_id);
+    let runtime_state = service_state
+        .workspace_snapshot
+        .as_mut()
+        .expect("workspace snapshot should exist")
+        .session_runtime_state
+        .entry(parent_session_id)
+        .or_insert_with(SessionRuntimeStateEntry::default);
+    runtime_state.pending_model_selection =
+        Some(vulcan_workbench_model::SessionPendingModelSelection {
+            provider_id: String::from("command-code"),
+            connection_id: String::from("command-code-account"),
+            model_id: String::from("deepseek"),
+        });
+    runtime_state.ui_state.pending_prompt_queue.push(
+        vulcan_workbench_model::PendingSessionPromptEntry {
+            id: String::from("guided-after-switch"),
+            prompt: String::from("补充说明"),
+            hidden_model_guidance: None,
+            preview: String::from("补充说明"),
+            attachments: Vec::new(),
+            model_reference: None,
+            runtime_options: vulcan_workbench_model::PendingPromptRuntimeOptions::default(),
+            source: PendingSessionPromptSource::UserInterrupt,
+            task_id: None,
+            panel_entry_id: None,
+            created_at: String::from("1000"),
+        },
+    );
+    let state = Arc::new(Mutex::new(service_state));
+    let intervention =
+        build_webui_prompt_intervention(ServiceEventEmitter::new(Vec::new()), Arc::clone(&state));
+    let mut controller = test_mailbox_controller();
+
+    let error = intervention(parent_session_id, &mut controller)
+        .expect_err("pending route must suspend the frozen Provider loop");
+
+    assert!(matches!(
+        error,
+        RuntimePromptInterventionError::ProviderRouteSwitchRequired { .. }
+    ));
+    assert!(controller.snapshot().messages.is_empty());
+    let guard = state.lock().expect("state lock");
+    let retained_state = guard
+        .workspace_snapshot
+        .as_ref()
+        .and_then(|workspace| workspace.session_runtime_state.get(&parent_session_id))
+        .expect("runtime state should remain present");
+    assert_eq!(retained_state.ui_state.pending_prompt_queue.len(), 1);
+    assert!(retained_state.pending_model_selection.is_some());
+}
+
 /// Builds one completed subagent mailbox metadata object with the required execution identity.
 /// 构建一份带必需执行身份的已完成智能体 mailbox 元数据对象。
 fn completed_subagent_mailbox_metadata(

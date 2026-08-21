@@ -173,6 +173,16 @@ const handleSubmitConversationPrompt = React.useCallback(async (submission: Comp
   const activeConversationId = selectedDraftConversation
     ? null
     : selectedConversation?.id ?? null;
+  // continuationExpectation turns composer text on a problem turn into an exact recovery follow-up.
+  // continuationExpectation 将问题回合中的输入区文本转换为精确恢复补充消息。
+  const continuationExpectation = selectedDraftConversation
+    ? null
+    : selectedConversation?.continuation
+      ? {
+          expectedGeneration: selectedConversation.continuation.generation,
+          expectedLedgerRevision: selectedConversation.continuation.expectedLedgerRevision,
+        }
+      : null;
   // clientSubmissionId correlates the optimistic first message with the authoritative service acknowledgement.
   // clientSubmissionId 将乐观首条消息与权威服务确认关联起来。
   const clientSubmissionId = crypto.randomUUID();
@@ -218,6 +228,7 @@ const handleSubmitConversationPrompt = React.useCallback(async (submission: Comp
       submission.reasoningEffort,
       submission.modelSelection,
       submission.sessionSettings,
+      continuationExpectation,
     );
     if (!ack) {
       if (selectedDraftConversation) {
@@ -267,7 +278,9 @@ const handleSubmitConversationPrompt = React.useCallback(async (submission: Comp
     }
     const errorMessage = nextError instanceof Error ? nextError.message : String(nextError);
     if (!errorMessage.startsWith("submission_cancelled:")) {
-      toast.error(errorMessage);
+      toast.error(continuationExpectation
+        ? continuationErrorMessage(nextError, translate)
+        : errorMessage);
     }
     return false;
   } finally {

@@ -4,6 +4,7 @@
 use crate::agent_runtime::events::{
     ExecutionStreamEvent, ProviderRequestDurabilityCompletion, RuntimeEvent, RuntimeEventKind,
 };
+use crate::agent_runtime::execution_models::ExecutionProviderRequestContinuation;
 use crate::agent_runtime::provider_request_telemetry::{
     ProviderRequestTelemetryContext, ProviderRequestTelemetryEvent,
     ProviderRequestTelemetryEventKind, ProviderRequestTelemetryTracker,
@@ -78,6 +79,13 @@ pub(crate) struct RuntimeStreamDeltaState {
     /// Host-owned context compaction request captured at a replay-safe boundary.
     /// 在可回放安全边界捕获的宿主上下文压缩请求。
     context_compaction_required: Option<(SessionConversationState, String)>,
+    /// Host-owned exact-route switch captured at a replay-safe boundary.
+    /// 在可回放安全边界捕获的宿主精确路由切换请求。
+    provider_route_switch_required: Option<(
+        SessionConversationState,
+        String,
+        ExecutionProviderRequestContinuation,
+    )>,
     /// Low-frequency physical Provider request telemetry state machine.
     /// 低频真实 Provider 请求遥测状态机。
     provider_request_telemetry: ProviderRequestTelemetryTracker,
@@ -125,6 +133,7 @@ impl RuntimeStreamDeltaState {
             cumulative_usage_accounted_assistant_turns: 0,
             terminal_error: None,
             context_compaction_required: None,
+            provider_route_switch_required: None,
             provider_request_telemetry: ProviderRequestTelemetryTracker::default(),
             provider_retry_pending: false,
             tool_request_stream: ToolRequestStreamCoordinator::default(),
@@ -268,6 +277,18 @@ impl RuntimeStreamDeltaState {
         &mut self,
     ) -> Option<(SessionConversationState, String)> {
         self.context_compaction_required.take()
+    }
+
+    /// Drains a pending host-owned exact Provider-route switch request.
+    /// 提取等待中的宿主精确 Provider 路由切换请求。
+    pub(crate) fn take_provider_route_switch_required(
+        &mut self,
+    ) -> Option<(
+        SessionConversationState,
+        String,
+        ExecutionProviderRequestContinuation,
+    )> {
+        self.provider_route_switch_required.take()
     }
 
     /// Completes the current floating thinking phase exactly once when visible reasoning content exists.
@@ -470,6 +491,21 @@ pub(crate) fn process_provider_stream_delta(
                     return Vec::new();
                 }
             };
+            // checkpointIdentity is optional only for legacy non-durable snapshot projections.
+            // checkpointIdentity 仅对旧式非可靠快照投影可选。
+            let (logical_request_id, logical_turn_id, provider_attempt_index) = state
+                .provider_request_telemetry
+                .active_checkpoint_identity()
+                .map(
+                    |(logical_request_id, logical_turn_id, provider_attempt_index)| {
+                        (
+                            Some(logical_request_id),
+                            logical_turn_id,
+                            Some(provider_attempt_index),
+                        )
+                    },
+                )
+                .unwrap_or((None, None, None));
             let mut events = telemetry_events
                 .into_iter()
                 .map(ExecutionStreamEvent::ProviderRequestTelemetry)
@@ -477,6 +513,9 @@ pub(crate) fn process_provider_stream_delta(
             events.extend([
                 ExecutionStreamEvent::ProviderRequestCheckpoint {
                     session_id,
+                    logical_request_id,
+                    logical_turn_id,
+                    provider_attempt_index,
                     provider_family: state.protocol_profile_id.clone(),
                     snapshot,
                     exact_request: None,
@@ -513,10 +552,26 @@ pub(crate) fn process_provider_stream_delta(
                     return Vec::new();
                 }
             };
+            // checkpointIdentity is the same typed identity that will be emitted by the durable Started boundary.
+            // checkpointIdentity 与可靠 Started 边界随后发出的强类型身份完全一致。
+            let Some((logical_request_id, logical_turn_id, provider_attempt_index)) = state
+                .provider_request_telemetry
+                .active_checkpoint_identity()
+            else {
+                let error = String::from(
+                    "Provider request checkpoint identity was unavailable after request start.",
+                );
+                let _ = completion.complete(Err(error.clone()));
+                state.terminal_error = Some(error);
+                return Vec::new();
+            };
             // checkpoint must reach the host before the telemetry boundary can release network dispatch.
             // checkpoint 必须先到达宿主，随后遥测屏障才可放行网络分派。
             let mut events = vec![ExecutionStreamEvent::ProviderRequestCheckpoint {
                 session_id,
+                logical_request_id: Some(logical_request_id),
+                logical_turn_id,
+                provider_attempt_index: Some(provider_attempt_index),
                 provider_family: state.protocol_profile_id.clone(),
                 snapshot,
                 exact_request: Some(exact_request),
@@ -658,6 +713,31 @@ pub(crate) fn process_provider_stream_delta(
             reason,
         }) => {
             state.context_compaction_required = Some((conversation_state.clone(), reason.clone()));
+            Vec::new()
+        }
+        Ok(ProviderStreamDelta::ProviderRouteSwitchRequired {
+            conversation_state,
+            reason,
+        }) => {
+            // providerRequestContinuation is captured from the telemetry owner after the previous physical request closed.
+            // providerRequestContinuation 在前一次物理请求收口后从遥测所有者捕获。
+            let provider_request_continuation = match state
+                .provider_request_telemetry
+                .next_request_continuation_identity()
+            {
+                Ok(identity) => identity,
+                Err(error) => {
+                    state.terminal_error = Some(format!(
+                        "Provider route-switch continuation identity was unavailable: {error}"
+                    ));
+                    return Vec::new();
+                }
+            };
+            state.provider_route_switch_required = Some((
+                conversation_state.clone(),
+                reason.clone(),
+                provider_request_continuation,
+            ));
             Vec::new()
         }
         Ok(ProviderStreamDelta::FinalConversationState(
@@ -911,6 +991,91 @@ mod tests {
             } if provider_family == vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID
                 && snapshot.provider_id == "mock-provider"
         )));
+    }
+
+    /// Verifies consecutive physical checkpoints retain one logical request identity and advance attempts.
+    /// 验证连续物理检查点保留同一逻辑请求身份并推进 attempt。
+    #[test]
+    fn request_checkpoints_preserve_logical_identity_and_advance_attempts() {
+        // sessionId and state own two sequential physical requests in the same logical execution.
+        // sessionId 与 state 持有同一逻辑执行中的两次连续物理请求。
+        let session_id = Uuid::nil();
+        let mut state = build_delta_state_with_telemetry();
+        // firstEvents contains the first checkpoint at attempt zero.
+        // firstEvents 包含 attempt 为零的首个检查点。
+        let first_events = process_provider_stream_delta(
+            session_id,
+            &mut state,
+            Ok(ProviderStreamDelta::RequestSnapshot(
+                build_request_snapshot(),
+            )),
+        );
+        let first_identity = first_events.iter().find_map(|event| match event {
+            ExecutionStreamEvent::ProviderRequestCheckpoint {
+                logical_request_id,
+                logical_turn_id,
+                provider_attempt_index,
+                ..
+            } => Some((
+                logical_request_id.clone(),
+                logical_turn_id.clone(),
+                *provider_attempt_index,
+            )),
+            _ => None,
+        });
+        assert_eq!(
+            first_identity,
+            Some((
+                Some(String::from("execution-1")),
+                Some(String::from("turn-1")),
+                Some(0),
+            ))
+        );
+
+        // failure closes the first active request without creating another physical attempt.
+        // failure 关闭首个活动请求，且不会创建另一物理 attempt。
+        let _ = process_provider_stream_delta(
+            session_id,
+            &mut state,
+            Ok(ProviderStreamDelta::RequestFailed {
+                will_retry: false,
+                retry_number: 0,
+                max_retries: 0,
+                delay_ms: 0,
+                error_category: String::from("test_terminal"),
+                error: None,
+            }),
+        );
+        // secondEvents must retain the logical identities while advancing only the physical index.
+        // secondEvents 必须保留逻辑身份，同时仅推进物理索引。
+        let second_events = process_provider_stream_delta(
+            session_id,
+            &mut state,
+            Ok(ProviderStreamDelta::RequestSnapshot(
+                build_request_snapshot(),
+            )),
+        );
+        let second_identity = second_events.iter().find_map(|event| match event {
+            ExecutionStreamEvent::ProviderRequestCheckpoint {
+                logical_request_id,
+                logical_turn_id,
+                provider_attempt_index,
+                ..
+            } => Some((
+                logical_request_id.clone(),
+                logical_turn_id.clone(),
+                *provider_attempt_index,
+            )),
+            _ => None,
+        });
+        assert_eq!(
+            second_identity,
+            Some((
+                Some(String::from("execution-1")),
+                Some(String::from("turn-1")),
+                Some(1),
+            ))
+        );
     }
 
     /// Verifies an accumulated usage update survives a later physical request failure.
@@ -1340,5 +1505,75 @@ mod tests {
             state.take_terminal_error().as_deref(),
             Some("provider failed")
         );
+    }
+
+    /// Verifies the exact-route switch delta is retained as host control state rather than a stream failure.
+    /// 验证精确路由切换增量会保留为宿主控制状态，而不是流失败。
+    #[test]
+    fn provider_route_switch_delta_is_buffered_without_terminal_error() {
+        // sessionId and conversationState identify the replay-safe boundary under test.
+        // sessionId 与 conversationState 标识本测试使用的可回放安全边界。
+        let session_id = Uuid::nil();
+        let mut state = build_delta_state_with_telemetry();
+        let conversation_state = build_successful_conversation_state(&["tool result retained"]);
+        // requestEvents advance the same telemetry tracker used by production before the route switch is requested.
+        // requestEvents 在请求路由切换前推进生产环境使用的同一个遥测跟踪器。
+        let request_events = process_provider_stream_delta(
+            session_id,
+            &mut state,
+            Ok(ProviderStreamDelta::RequestSnapshot(
+                build_request_snapshot(),
+            )),
+        );
+        assert!(matches!(
+            request_events.first(),
+            Some(ExecutionStreamEvent::ProviderRequestTelemetry(event))
+                if event.kind == ProviderRequestTelemetryEventKind::Started
+        ));
+        let (completion, _receiver) =
+            crate::agent_runtime::events::provider_request_durability_barrier();
+        let terminal_events = process_provider_stream_delta(
+            session_id,
+            &mut state,
+            Ok(ProviderStreamDelta::RequestSucceeded {
+                usage: None,
+                completion,
+            }),
+        );
+        assert!(matches!(
+            terminal_events.as_slice(),
+            [ExecutionStreamEvent::ProviderRequestDurabilityBoundary { event, .. }]
+                if event.kind == ProviderRequestTelemetryEventKind::Completed
+        ));
+
+        let events = process_provider_stream_delta(
+            session_id,
+            &mut state,
+            Ok(ProviderStreamDelta::ProviderRouteSwitchRequired {
+                conversation_state: conversation_state.clone(),
+                reason: String::from("exact session route changed"),
+            }),
+        );
+
+        assert!(events.is_empty());
+        assert!(!state.has_terminal_error());
+        let (retained_state, retained_reason, retained_continuation) = state
+            .take_provider_route_switch_required()
+            .expect("route switch should remain pending for the host driver");
+        assert_eq!(
+            retained_state.messages.len(),
+            conversation_state.messages.len()
+        );
+        assert_eq!(
+            retained_state.records.len(),
+            conversation_state.records.len()
+        );
+        assert_eq!(retained_reason, "exact session route changed");
+        assert_eq!(retained_continuation.logical_request_id, "execution-1");
+        assert_eq!(
+            retained_continuation.logical_turn_id.as_deref(),
+            Some("turn-1")
+        );
+        assert_eq!(retained_continuation.next_provider_attempt_index, 1);
     }
 }

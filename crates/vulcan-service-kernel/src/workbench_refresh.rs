@@ -353,27 +353,35 @@ pub(crate) fn reconcile_workbench_conversation_lifecycle_projection(
                 session.status.label()
             }
             .to_string();
-        // continuation is recomputed only when the session has a durable continuation ledger.
-        // continuation 仅在会话具有可靠 Continue 账本时重新计算。
-        let continuation = workspace
-            .session_runtime_state
-            .get(&session.id)
-            .filter(|runtime_state| {
-                // stored_continuation avoids fallible live-registry reads for sessions without a recovery boundary.
-                // stored_continuation 避免对没有恢复边界的会话执行可失败的实时注册表读取。
-                let stored_continuation = &runtime_state.provider_call_ledger.continuation;
-                !stored_continuation.is_empty()
-                    && stored_continuation.terminal_reason.as_deref() != Some("completed")
-            })
-            .map(|runtime_state| {
-                session_continuation_runtime_blockers(state, workspace, session.id).map(
-                    |blockers| {
-                        conversation_continuation_summary(runtime_state, run_phase, blockers)
-                    },
+        // runtimeState is optional because failed legacy or damaged sessions still require a disabled problem-turn control.
+        // runtimeState 为可选值，因为失败的旧会话或受损会话仍需显示问题回合禁用控件。
+        let runtime_state = workspace.session_runtime_state.get(&session.id);
+        // hasStoredRecoveryBoundary avoids fallible live-registry reads for normal sessions while retaining restart-recovered abnormal idle boundaries.
+        // hasStoredRecoveryBoundary 避免为正常会话执行可失败的实时注册表读取，同时保留重启恢复出的异常空闲边界。
+        let has_stored_recovery_boundary = runtime_state.is_some_and(|runtime_state| {
+            let stored_continuation = &runtime_state.provider_call_ledger.continuation;
+            !stored_continuation.is_empty()
+                && !matches!(
+                    stored_continuation.terminal_reason.as_deref(),
+                    Some("completed" | "completed_non_assistant_tail")
                 )
-            })
-            .transpose()?
-            .flatten();
+        });
+        // shouldProjectContinuation includes explicit problem phases even when no runtime row or continuation ledger survived.
+        // shouldProjectContinuation 即使未保留运行态记录或 Continue 账本，也会包含显式问题阶段。
+        let should_project_continuation = matches!(
+            run_phase,
+            SessionRunPhase::Failed | SessionRunPhase::Stopped
+        ) || has_stored_recovery_boundary;
+        let continuation = if should_project_continuation {
+            let blockers = session_continuation_runtime_blockers(state, workspace, session.id)?;
+            conversation_continuation_summary_for_session_runtime(
+                runtime_state,
+                run_phase,
+                blockers,
+            )
+        } else {
+            None
+        };
         live_projections.insert(
             session.id.to_string(),
             (status, run_phase.to_string(), continuation),
@@ -802,6 +810,18 @@ pub(crate) fn detached_task_event_trace_detail(event: &DetachedTaskRuntimeEvent)
             conversation_state.records.len(),
             conversation_state.messages.len()
         ),
+        DetachedTaskRuntimeEvent::ChildExecution(
+            ExecutionStreamEvent::ProviderRouteSwitchRequired {
+                session_id,
+                conversation_state,
+                reason,
+                ..
+            },
+        ) => format!(
+            "session={session_id} records={} messages={} reason={reason}",
+            conversation_state.records.len(),
+            conversation_state.messages.len()
+        ),
         DetachedTaskRuntimeEvent::ChildExecution(ExecutionStreamEvent::Finished(report)) => {
             format!(
                 "provider_requests={} output_chars={} error={}",
@@ -875,6 +895,9 @@ pub(crate) fn detached_task_event_label(event: &DetachedTaskRuntimeEvent) -> &'s
         DetachedTaskRuntimeEvent::ChildExecution(
             ExecutionStreamEvent::ContextCompactionRequired { .. },
         ) => "child.context_compaction_required",
+        DetachedTaskRuntimeEvent::ChildExecution(
+            ExecutionStreamEvent::ProviderRouteSwitchRequired { .. },
+        ) => "child.provider_route_switch_required",
         DetachedTaskRuntimeEvent::ChildExecution(ExecutionStreamEvent::Finished(_)) => {
             "child.finished"
         }
@@ -1115,8 +1138,11 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
                 let session_plan_mode = session_plan_mode_summary_from_runtime_state(
                     workspace.session_runtime_state.get(&session.id),
                 );
+                // sessionIdText is shared by the exact Ask, command-session, and child-task blocker checks.
+                // sessionIdText 由精确的 Ask、命令会话与子任务阻断检查共享。
+                let session_id_text = session.id.to_string();
                 ConversationSummary {
-                    id: session.id.to_string(),
+                    id: session_id_text.clone(),
                     title: session.title.clone(),
                     status: if is_running {
                         SessionState::Running.label()
@@ -1137,36 +1163,28 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
                     ),
                     project_id: session_summary_project_id_owned(session),
                     fork_source: conversation_fork_source_summary_from_session(session),
-                    continuation: workspace.session_runtime_state.get(&session.id).and_then(
-                        |runtime_state| {
-                            let session_id_text = session.id.to_string();
-                            conversation_continuation_summary(
-                                runtime_state,
-                                run_phase,
-                                SessionContinuationRuntimeBlockers {
-                                    session_is_running: session.status == SessionState::Running,
-                                    has_pending_question: pending_questions
-                                        .iter()
-                                        .any(|question| question.session_id == session_id_text),
-                                    has_running_command_session: projected_command_sessions
-                                        .iter()
-                                        .any(|command_session| {
-                                            command_session.owner_session_id.as_deref()
-                                                == Some(session_id_text.as_str())
-                                                && command_session.status == "running"
-                                        }),
-                                    has_running_task: subagent_navigation.as_ref().is_some_and(
-                                        |navigation| {
-                                            navigation.parent_conversation_id == session_id_text
-                                                && navigation
-                                                    .tasks
-                                                    .iter()
-                                                    .any(|task| task.is_running)
-                                        },
-                                    ),
-                                    ..SessionContinuationRuntimeBlockers::default()
+                    continuation: conversation_continuation_summary_for_session_runtime(
+                        workspace.session_runtime_state.get(&session.id),
+                        run_phase,
+                        SessionContinuationRuntimeBlockers {
+                            session_is_running: session.status == SessionState::Running,
+                            has_pending_question: pending_questions
+                                .iter()
+                                .any(|question| question.session_id == session_id_text),
+                            has_running_command_session: projected_command_sessions.iter().any(
+                                |command_session| {
+                                    command_session.owner_session_id.as_deref()
+                                        == Some(session_id_text.as_str())
+                                        && command_session.status == "running"
                                 },
-                            )
+                            ),
+                            has_running_task: subagent_navigation.as_ref().is_some_and(
+                                |navigation| {
+                                    navigation.parent_conversation_id == session_id_text
+                                        && navigation.tasks.iter().any(|task| task.is_running)
+                                },
+                            ),
+                            ..SessionContinuationRuntimeBlockers::default()
                         },
                     ),
                 }

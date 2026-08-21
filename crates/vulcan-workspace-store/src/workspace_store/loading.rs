@@ -866,25 +866,60 @@ pub(super) fn sanitize_loaded_runtime_state_for_fresh_process(
     let completed_at_ms = current_unix_millis_text()
         .parse::<i64>()
         .map_err(|error| format!("解析宿主生成的 Unix 毫秒时间失败：{error}"))?;
-    let terminal_execution_id = runtime_state
+    // openProviderExecutionId identifies a physical Provider request that lost its process owner.
+    // openProviderExecutionId 标识失去进程所有者的物理 Provider 请求。
+    let open_provider_execution_id = runtime_state
         .provider_call_ledger
         .active_calls_in_sequence()
         .into_iter()
         .rev()
         .find(|record| !record.status.is_terminal())
-        .map(|record| record.identity.execution_id.clone())
+        .map(|record| record.identity.execution_id.clone());
+    let orphaned_continuation_claim = runtime_state
+        .provider_call_ledger
+        .continuation
+        .claimed_at_ms
+        .is_some();
+    // strandedFrozenRetryExecutionId recovers a normal execution that crashed after its latest
+    // replay boundary was durable but before a terminal Continue generation was published.
+    // strandedFrozenRetryExecutionId 恢复这样一种普通执行：最新可重放边界已经可靠保存，
+    // 但进程在发布终态 Continue 代际之前崩溃。
+    let stranded_frozen_retry_execution_id = runtime_state
+        .execution_retry_snapshot
+        .as_ref()
+        .filter(|reference| {
+            reference.state == vulcan_workbench_model::ExecutionRetrySnapshotState::Frozen
+                && reference.claimed_attempt_id.is_none()
+                && (runtime_state
+                    .provider_call_ledger
+                    .continuation
+                    .terminal_execution_id
+                    .as_deref()
+                    != Some(reference.logical_execution_id.as_str())
+                    || runtime_state
+                        .provider_call_ledger
+                        .continuation
+                        .terminal_at_ms
+                        .is_none()
+                    || runtime_state
+                        .provider_call_ledger
+                        .continuation
+                        .invalidated_at_ms
+                        .is_some())
+        })
+        .map(|reference| reference.logical_execution_id.clone());
+    // terminalExecutionId chooses the exact lost owner without inventing a fallback identity.
+    // terminalExecutionId 选择精确的失效所有者，不凭空构造兜底身份。
+    let terminal_execution_id = open_provider_execution_id
+        .clone()
         .or_else(|| {
             runtime_state
                 .provider_call_ledger
                 .continuation
                 .claimed_execution_id
                 .clone()
-        });
-    let orphaned_continuation_claim = runtime_state
-        .provider_call_ledger
-        .continuation
-        .claimed_at_ms
-        .is_some();
+        })
+        .or_else(|| stranded_frozen_retry_execution_id.clone());
     if (terminal_execution_id.is_some() || orphaned_continuation_claim)
         && runtime_state.provider_call_ledger.revision == u64::MAX
     {
@@ -898,22 +933,31 @@ pub(super) fn sanitize_loaded_runtime_state_for_fresh_process(
     changed |= interrupted_call_count > 0;
     if interrupted_call_count > 0
         && let Some(reference) = runtime_state.execution_retry_snapshot.as_mut()
+        && !reference.retryable
+        && reference.requires_manual_confirmation
         && reference
             .blocked_reason
             .as_deref()
             .is_none_or(|reason| reason.trim().is_empty())
     {
-        // A persisted pre-dispatch checkpoint only proves that transport was allowed to start; after a process loss, it cannot prove that the upstream never accepted the request.
-        // 已持久化的分派前 checkpoint 只能证明传输获准启动；进程丢失后无法证明上游从未接收该请求。
+        // An already unsafe legacy projection still needs one concrete diagnosis, but an exact
+        // replayable Provider request is retained because Provider completion cannot execute host tools.
+        // 已经不安全的旧投影仍需要一个具体诊断；但精确且可重放的 Provider 请求必须保留，
+        // 因为 Provider 完成之前不可能执行宿主工具。
         reference.invalidate_for_safety_reason(
-            String::from("provider_dispatch_outcome_unknown"),
+            String::from("retry_snapshot_transition_failed"),
             String::from(
-                "The previous process ended while a Provider request could already have been accepted; verify the upstream outcome before continuing.",
+                "The retained retry reference was already unsafe and did not contain a concrete blocked reason before restart.",
             ),
             completed_at_ms.to_string(),
         );
     }
-    if interrupted_call_count > 0 || orphaned_continuation_claim {
+    // strandedFrozenRetry records process loss at a durable local recovery boundary even when no
+    // Provider call or Continue claim remained open, such as a crash during a tool batch.
+    // strandedFrozenRetry 记录可靠本地恢复边界上的进程丢失，即使当时没有未闭合 Provider 调用
+    // 或 Continue 领取，例如工具批次执行期间发生崩溃。
+    let stranded_frozen_retry = stranded_frozen_retry_execution_id.is_some();
+    if interrupted_call_count > 0 || orphaned_continuation_claim || stranded_frozen_retry {
         let tail_kind = runtime_state
             .conversation_state
             .records
@@ -925,12 +969,18 @@ pub(super) fn sanitize_loaded_runtime_state_for_fresh_process(
                         record.record_kind,
                         vulcan_workbench_model::SessionMessageRecordKind::Transcript
                             | vulcan_workbench_model::SessionMessageRecordKind::AssistantOutput
+                            | vulcan_workbench_model::SessionMessageRecordKind::ToolCallOutput
+                            | vulcan_workbench_model::SessionMessageRecordKind::ToolResultOutput
                     )
             })
-            .map(|record| match record.kind {
-                vulcan_workbench_model::SessionMessageKind::Assistant => "assistant",
-                vulcan_workbench_model::SessionMessageKind::User => "user",
-                vulcan_workbench_model::SessionMessageKind::Error => "error",
+            .map(|record| match record.record_kind {
+                vulcan_workbench_model::SessionMessageRecordKind::ToolCallOutput
+                | vulcan_workbench_model::SessionMessageRecordKind::ToolResultOutput => "tool",
+                _ => match record.kind {
+                    vulcan_workbench_model::SessionMessageKind::Assistant => "assistant",
+                    vulcan_workbench_model::SessionMessageKind::User => "user",
+                    vulcan_workbench_model::SessionMessageKind::Error => "error",
+                },
             })
             .unwrap_or("empty")
             .to_string();
@@ -945,19 +995,20 @@ pub(super) fn sanitize_loaded_runtime_state_for_fresh_process(
                         && reference.claimed_attempt_id.is_none()
                         && reference.replay_safety_proven()
                 });
-        // Only an exact user or error tail can seed recovery; empty or synthetic labels are diagnostics, not replay proof.
-        // 只有精确的用户或错误尾部可以建立恢复资格；空或合成标签只是诊断，不是重放证明。
-        let eligible = matches!(tail_kind.as_str(), "user" | "error")
-            && runtime_state.provider_call_ledger.in_flight_call_count() == 0
-            && replay_safety_proven;
+        // Replay eligibility comes from the exact sidecar and closed Provider ledger, never from a UI transcript tail label.
+        // 重放资格来自精确 sidecar 与已闭合 Provider 账本，绝不由 UI 转录尾部标签推断。
+        let eligible =
+            runtime_state.provider_call_ledger.in_flight_call_count() == 0 && replay_safety_proven;
         let continuation_changed = runtime_state
             .provider_call_ledger
             .mark_continuation_terminal(
                 terminal_execution_id,
                 if interrupted_call_count > 0 {
                     String::from("interrupted_after_restart")
-                } else {
+                } else if orphaned_continuation_claim {
                     String::from("continuation_interrupted_after_restart")
+                } else {
+                    String::from("execution_interrupted_after_restart")
                 },
                 completed_at_ms,
                 tail_kind,

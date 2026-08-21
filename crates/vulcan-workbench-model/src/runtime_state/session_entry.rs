@@ -1,5 +1,18 @@
 use super::*;
 
+/// Selects the backend family for one session media-understanding capability.
+/// 选择单项会话媒体理解能力使用的后端类型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionMediaUnderstandingMode {
+    /// Use the Manifest-owned provider-specific understanding endpoint.
+    /// 使用由 Manifest 持有的供应商专用理解端点。
+    ProviderTool,
+    /// Use an ordinary structured-output multimodal model as the replacement backend.
+    /// 使用具备结构化输出能力的普通多模态模型作为替代后端。
+    ModelReplacement,
+}
+
 /// Persisted non-secret identity of the provider route leased by one session.
 /// 单个会话租用的供应商路由之持久化非秘密身份。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -37,14 +50,14 @@ pub struct SessionProviderRouteLeaseIdentity {
 /// 当前回合保持冻结路由时接受的精确会话模型选择。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionPendingModelSelection {
-    /// Exact provider identifier selected for the next user submission.
-    /// 为下一次用户提交选择的精确供应商标识。
+    /// Exact provider identifier selected for the next real Provider request.
+    /// 为下一次真实 Provider 请求选择的精确供应商标识。
     pub provider_id: String,
-    /// Exact credential connection identifier selected for the next user submission.
-    /// 为下一次用户提交选择的精确凭据连接标识。
+    /// Exact credential connection identifier selected for the next real Provider request.
+    /// 为下一次真实 Provider 请求选择的精确凭据连接标识。
     pub connection_id: String,
-    /// Exact model identifier selected for the next user submission.
-    /// 为下一次用户提交选择的精确模型标识。
+    /// Exact model identifier selected for the next real Provider request.
+    /// 为下一次真实 Provider 请求选择的精确模型标识。
     pub model_id: String,
 }
 
@@ -166,8 +179,8 @@ pub struct SessionRuntimeStateEntry {
     /// Last active model identifier used by the session.
     /// 最近一次被该会话使用的激活模型标识。
     pub active_model_id: Option<String>,
-    /// Exact model selection waiting for the next user-submission boundary.
-    /// 等待下一次用户提交边界生效的精确模型选择。
+    /// Exact model selection waiting for the next real Provider-request boundary.
+    /// 等待下一次真实 Provider 请求边界生效的精确模型选择。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pending_model_selection: Option<SessionPendingModelSelection>,
     /// Persisted non-secret identity of the session's frozen provider route.
@@ -198,6 +211,10 @@ pub struct SessionRuntimeStateEntry {
     /// 按语义能力索引的会话级供应商工具目标选择。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub provider_tool_selections: BTreeMap<String, SessionProviderToolTargetSelection>,
+    /// Session-selected media backend modes keyed by semantic capability.
+    /// 按语义能力索引的会话级媒体后端模式选择。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub media_understanding_modes: BTreeMap<String, SessionMediaUnderstandingMode>,
     /// Provider tool capabilities enabled only for this session.
     /// 仅为当前会话启用的供应商工具能力。
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]

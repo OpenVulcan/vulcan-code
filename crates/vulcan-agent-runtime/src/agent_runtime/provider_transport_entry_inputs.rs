@@ -2,7 +2,8 @@
 //! 供各 Provider 专用流式入口复用的共享传输入口输入准备辅助模块。
 
 use crate::agent_runtime::provider_transport_request::{
-    ProviderRouteIdentity, ProviderTransportExecutionRequest, ProviderTransportTurnStartMode,
+    ProviderRouteIdentity, ProviderTransportExecutionRequest, ProviderTransportRecoveryAction,
+    ProviderTransportTurnStartMode,
 };
 use crate::agent_runtime::provider_transport_request_budget::ProviderRequestBudgetGuard;
 use crate::agent_runtime::provider_transport_retry::ProviderRetryPolicy;
@@ -75,6 +76,9 @@ pub(crate) struct PreparedProviderTransportStreamLaunch {
     /// Exact first public request restored for retry execution.
     /// 为重试执行恢复的精确首个公共请求。
     pub(crate) initial_provider_request: Option<vulcan_ai_contract::AiExecutionRequest>,
+    /// Optional exact recovery action consumed once by the host-controlled controller.
+    /// 由宿主控制控制器消费一次的可选精确恢复动作。
+    pub(crate) recovery_action: Option<ProviderTransportRecoveryAction>,
     /// Resolved API key passed down to the concrete provider adapter constructor.
     /// 下传给具体 Provider 适配器构造函数的已解析 API Key。
     /// Optional normalized base URL override used by providers that support custom endpoints.
@@ -186,6 +190,7 @@ pub(crate) fn prepare_provider_transport_stream_launch(
         core_snapshot,
         initial_provider_request,
         controller_config_override,
+        recovery_action,
         temperature,
         max_turns,
         tools_manager,
@@ -230,6 +235,7 @@ pub(crate) fn prepare_provider_transport_stream_launch(
         runtime_inputs,
         core_snapshot,
         initial_provider_request,
+        recovery_action,
         prompt_intervention,
     }
 }

@@ -19,6 +19,8 @@ pub(crate) use projection::*;
 pub(crate) use provider_telemetry::*;
 pub(crate) use runtime_hook_dispatch::*;
 #[cfg(test)]
-pub(crate) use stream_task::conversation_checkpoint::refresh_execution_retry_canonical_state;
+pub(crate) use stream_task::conversation_checkpoint::{
+    reconcile_interrupted_execution_retry_canonical_state, refresh_execution_retry_canonical_state,
+};
 pub(crate) use stream_task::*;
 pub(crate) use workbench_sync::*;

@@ -9,6 +9,15 @@ use std::collections::BTreeSet;
 /// 表示一个可以满足助手工具调用的宿主侧工具执行器。
 #[async_trait]
 pub trait VulcanToolExecutor: Send + Sync {
+    /// Persists or validates one complete tool batch before any invocation body may start.
+    /// 在任何调用主体启动前持久化或校验一批完整工具请求。
+    async fn prepare_tool_batch(
+        &self,
+        _requests: &[ToolInvocationRequest],
+    ) -> Result<(), CoreError> {
+        Ok(())
+    }
+
     /// Executes one tool invocation request and returns a structured tool result.
     /// 执行一次工具调用请求并返回结构化工具结果。
     async fn execute_tool(

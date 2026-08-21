@@ -168,6 +168,16 @@ pub(crate) enum ProviderStreamDelta {
         /// 分派前生成的已验证上下文预算诊断。
         reason: String,
     },
+    /// Requests a host-owned restart so a pending exact route governs the next Provider request.
+    /// 请求宿主重启当前循环，使待生效精确路由管辖下一次 Provider 请求。
+    ProviderRouteSwitchRequired {
+        /// Replay-safe canonical conversation state at the completed tool boundary.
+        /// 已完成工具边界处可安全回放的规范会话状态。
+        conversation_state: SessionConversationState,
+        /// Internal diagnostic describing why the frozen transport must be replaced.
+        /// 描述为何必须替换冻结传输的内部诊断。
+        reason: String,
+    },
 }
 
 /// Boxed provider stream used by the runtime to forward thinking and output deltas incrementally.

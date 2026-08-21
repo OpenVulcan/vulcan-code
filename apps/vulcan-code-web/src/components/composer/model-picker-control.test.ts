@@ -7,6 +7,7 @@ import {
   modelAccountProtocolDisplayName,
   modelPickerChoiceKey,
   modelPickerChoicesFromProviders,
+  resolveModelPickerDisplayedChoice,
   resolveModelPickerGroupChoice,
 } from "./model-picker-control";
 import type { ProviderSummary } from "@/types";
@@ -148,6 +149,25 @@ describe("model picker account grouping", () => {
     expect(firstKey).not.toBe(secondKey);
     expect(JSON.parse(firstKey)[2]).toBe(choices[0]?.connectionId);
     expect(JSON.parse(secondKey)[2]).toBe(choices[1]?.connectionId);
+  });
+
+  // Verifies an unavailable exact session route never renders another Provider or account as selected.
+  // 验证不可用的精确会话路由绝不会把其他 Provider 或账号渲染为已选。
+  it("requires reselection instead of displaying the first available route", () => {
+    // choices contains an active row that would previously impersonate an unavailable exact target.
+    // choices 包含一条激活行，旧逻辑会让它冒充不可用的精确目标。
+    const choices = modelPickerChoicesFromProviders(miniMaxProviders());
+    choices[0]!.active = true;
+    // unavailableValue names a different exact Provider, model, and credential tuple.
+    // unavailableValue 命名另一个精确 Provider、模型与凭据三元组。
+    const unavailableValue = JSON.stringify([
+      "command-code",
+      "deepseek-v4-flash",
+      "command-code-account",
+    ]);
+
+    expect(resolveModelPickerDisplayedChoice(choices, unavailableValue)).toBeUndefined();
+    expect(resolveModelPickerDisplayedChoice(choices, "")?.connectionId).toBe("connection-cn");
   });
 });
 

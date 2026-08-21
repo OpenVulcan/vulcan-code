@@ -15,8 +15,8 @@ use vulcan_service_api::{
 };
 use vulcan_workbench_model::{
     PendingSessionPromptSource, SessionId, SessionKnowledgeLibrarySelection,
-    SessionKnowledgeLibrarySelectionMode, SessionProviderToolTargetSelection, SessionRunPhase,
-    SessionState,
+    SessionKnowledgeLibrarySelectionMode, SessionPendingModelSelection,
+    SessionProviderToolTargetSelection, SessionRunPhase, SessionState,
 };
 use vulcan_workspace_store::workspace_store::WorkspaceSnapshot;
 
@@ -310,8 +310,8 @@ pub(super) enum ConversationSubmissionMode {
     /// Normal composer submission authored by the user.
     /// 用户通过输入区发起的普通提交。
     UserPrompt,
-    /// Prompt-free continuation admitted by one exact terminal ledger generation.
-    /// 由精确终态账本代际准入的无提示词 Continue。
+    /// Recovery submission admitted by one exact terminal ledger generation, optionally carrying a user follow-up.
+    /// 由精确终态账本代际准入的恢复提交，可选择携带一条用户补充消息。
     Continuation {
         /// Exact continuation generation projected to the caller.
         /// 投影给调用方的精确 Continue 代际。
@@ -325,6 +325,9 @@ pub(super) enum ConversationSubmissionMode {
         /// Exact frozen execution snapshot loaded and digest-validated before admission.
         /// 准入前加载并完成摘要校验的精确冻结执行快照。
         retry_snapshot: Box<vulcan_workbench_model::ExecutionRetrySnapshot>,
+        /// Optional user-authored follow-up installed only after the original frozen body passes final CAS validation.
+        /// 仅在原始冻结正文通过最终 CAS 校验后安装的可选用户补充消息。
+        user_followup: Option<vulcan_workbench_model::ExecutionRetryUserFollowup>,
     },
 }
 
@@ -344,8 +347,8 @@ impl ConversationSubmissionMode {
         matches!(self, Self::UserPrompt)
     }
 
-    /// Returns whether this submission is a prompt-free continuation.
-    /// 返回本次提交是否为无提示词 Continue。
+    /// Returns whether this submission resumes one retained interrupted execution.
+    /// 返回本次提交是否恢复一项已保留的中断执行。
     fn is_continuation(&self) -> bool {
         matches!(self, Self::Continuation { .. })
     }
@@ -387,6 +390,33 @@ impl ConversationSubmissionMode {
             } => Some(retry_reference),
         }
     }
+
+    /// Returns the optional user follow-up admitted with this recovery claim.
+    /// 返回随本次恢复领取准入的可选用户补充消息。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The exact durable follow-up draft for a recovery submission, otherwise `None`.
+    /// 恢复提交返回精确可靠的补充消息草稿，其他模式返回 `None`。
+    fn user_followup(&self) -> Option<&vulcan_workbench_model::ExecutionRetryUserFollowup> {
+        match self {
+            Self::UserPrompt => None,
+            Self::Continuation { user_followup, .. } => user_followup.as_ref(),
+        }
+    }
+}
+
+/// Revision-bound Continue token optionally attached to a composer submission on a problem turn.
+/// 在问题回合中可选附着到输入区提交的带修订 Continue 令牌。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct ConversationContinuationExpectation {
+    /// Exact continuation generation projected with the selected problem turn.
+    /// 随选中问题回合投影的精确 Continue 代际。
+    pub(super) expected_generation: u64,
+    /// Exact Provider-call ledger revision projected with the selected problem turn.
+    /// 随选中问题回合投影的精确 Provider 调用账本修订号。
+    pub(super) expected_ledger_revision: u64,
 }
 
 /// Validates one frozen retry sidecar against the exact current session state before CAS claim.
@@ -422,28 +452,35 @@ pub(crate) fn validate_execution_retry_snapshot_for_claim(
             "ERR_CONVERSATION_CONTINUE_RETRY_SNAPSHOT_NOT_FROZEN",
         ));
     }
+    if snapshot
+        .user_followup
+        .as_ref()
+        .is_some_and(|followup| !followup.is_structurally_valid())
+    {
+        return Err(String::from(
+            "ERR_CONVERSATION_CONTINUE_RETRY_FOLLOWUP_INVALID",
+        ));
+    }
     if !matches!(
         &snapshot.pending_action,
         vulcan_workbench_model::ExecutionRetryPendingAction::ResumePreparation { .. }
             | vulcan_workbench_model::ExecutionRetryPendingAction::DispatchProviderRequest { .. }
+            | vulcan_workbench_model::ExecutionRetryPendingAction::ExecuteToolBatch { .. }
             | vulcan_workbench_model::ExecutionRetryPendingAction::PrepareNextProviderRequest
+            | vulcan_workbench_model::ExecutionRetryPendingAction::FinalizeAssistant
     ) {
         return Err(String::from(
             "ERR_CONVERSATION_CONTINUE_RETRY_ACTION_UNSUPPORTED",
         ));
     }
-    if let Some(error) = snapshot.error.as_ref() {
+    if let Some(error) = snapshot.error.as_ref()
+        && matches!(
+            snapshot.pending_action,
+            vulcan_workbench_model::ExecutionRetryPendingAction::DispatchProviderRequest { .. }
+        )
+    {
         if error.side_effect_observed {
             return Err(String::from("tool_side_effect_in_flight"));
-        }
-        if error.semantic_output_observed {
-            return Err(String::from("semantic_output_observed"));
-        }
-        if error.dispatch_outcome == vulcan_ai_contract::DispatchOutcome::Unknown {
-            return Err(String::from("provider_dispatch_outcome_unknown"));
-        }
-        if !error.retryable {
-            return Err(String::from("non_retryable"));
         }
     }
     match &snapshot.pending_action {
@@ -458,7 +495,9 @@ pub(crate) fn validate_execution_retry_snapshot_for_claim(
                 ));
             }
         }
-        vulcan_workbench_model::ExecutionRetryPendingAction::DispatchProviderRequest { .. } => {
+        vulcan_workbench_model::ExecutionRetryPendingAction::DispatchProviderRequest { .. }
+        | vulcan_workbench_model::ExecutionRetryPendingAction::ExecuteToolBatch { .. }
+        | vulcan_workbench_model::ExecutionRetryPendingAction::FinalizeAssistant => {
             let provider_route = snapshot
                 .provider_route
                 .as_ref()
@@ -467,6 +506,41 @@ pub(crate) fn validate_execution_retry_snapshot_for_claim(
                 return Err(String::from(
                     "ERR_CONVERSATION_CONTINUE_RETRY_ROUTE_CHANGED",
                 ));
+            }
+            let canonical_snapshot =
+                vulcan_agent_runtime::agent_runtime::provider_request_bridge_conversation::build_core_conversation_snapshot(
+                    &runtime_state.conversation_state,
+                )?;
+            match &snapshot.pending_action {
+                vulcan_workbench_model::ExecutionRetryPendingAction::ExecuteToolBatch { tools }
+                    if !matches!(
+                        canonical_snapshot
+                            .messages
+                            .last()
+                            .map(|message| &message.payload),
+                        Some(vulcan_core::types::ConversationPayload::Assistant { tool_calls, .. })
+                            if !tool_calls.is_empty() && tool_calls.len() == tools.len()
+                    ) =>
+                {
+                    return Err(String::from(
+                        "ERR_CONVERSATION_CONTINUE_RETRY_TOOL_BOUNDARY_MISSING",
+                    ));
+                }
+                vulcan_workbench_model::ExecutionRetryPendingAction::FinalizeAssistant
+                    if !matches!(
+                        canonical_snapshot
+                            .messages
+                            .last()
+                            .map(|message| &message.payload),
+                        Some(vulcan_core::types::ConversationPayload::Assistant { tool_calls, .. })
+                            if tool_calls.is_empty()
+                    ) =>
+                {
+                    return Err(String::from(
+                        "ERR_CONVERSATION_CONTINUE_RETRY_FINAL_ASSISTANT_BOUNDARY_MISSING",
+                    ));
+                }
+                _ => {}
             }
         }
         vulcan_workbench_model::ExecutionRetryPendingAction::PrepareNextProviderRequest => {
@@ -483,22 +557,13 @@ pub(crate) fn validate_execution_retry_snapshot_for_claim(
                 vulcan_agent_runtime::agent_runtime::provider_request_bridge_conversation::build_core_conversation_snapshot(
                     &runtime_state.conversation_state,
                 )?;
-            if !matches!(
-                canonical_snapshot
-                    .messages
-                    .last()
-                    .map(|message| &message.payload),
-                Some(vulcan_core::types::ConversationPayload::ToolResult { .. })
+            if !vulcan_core::controller::conversation_snapshot_has_seeded_provider_input(
+                &canonical_snapshot,
             ) {
                 return Err(String::from(
                     "ERR_CONVERSATION_CONTINUE_RETRY_NEXT_PROVIDER_BOUNDARY_MISSING",
                 ));
             }
-        }
-        _ => {
-            return Err(String::from(
-                "ERR_CONVERSATION_CONTINUE_RETRY_ACTION_UNSUPPORTED",
-            ));
         }
     }
     if runtime_state
@@ -584,6 +649,18 @@ pub(crate) fn execution_retry_claim_failure_blocked_reason(error: &str) -> Optio
         }
         "ERR_CONVERSATION_CONTINUE_RETRY_NEXT_PROVIDER_BOUNDARY_MISSING" => {
             Some("ERR_CONVERSATION_CONTINUE_RETRY_NEXT_PROVIDER_BOUNDARY_MISSING")
+        }
+        "ERR_CONVERSATION_CONTINUE_RETRY_TOOL_BOUNDARY_MISSING" => {
+            Some("ERR_CONVERSATION_CONTINUE_RETRY_TOOL_BOUNDARY_MISSING")
+        }
+        "ERR_CONVERSATION_CONTINUE_RETRY_TOOL_BINDING_MISMATCH" => {
+            Some("ERR_CONVERSATION_CONTINUE_RETRY_TOOL_BINDING_MISMATCH")
+        }
+        "ERR_CONVERSATION_CONTINUE_RETRY_TOOL_RESULT_MISMATCH" => {
+            Some("ERR_CONVERSATION_CONTINUE_RETRY_TOOL_RESULT_MISMATCH")
+        }
+        "ERR_CONVERSATION_CONTINUE_RETRY_FINAL_ASSISTANT_BOUNDARY_MISSING" => {
+            Some("ERR_CONVERSATION_CONTINUE_RETRY_FINAL_ASSISTANT_BOUNDARY_MISSING")
         }
         "ERR_CONVERSATION_CONTINUE_RETRY_CONTEXT_GENERATION_CHANGED" => {
             Some("ERR_CONVERSATION_CONTINUE_RETRY_CONTEXT_GENERATION_CHANGED")
@@ -786,8 +863,9 @@ fn persist_accepted_preparation_retry_checkpoint(
         session_id: session_id.to_string(),
         generation,
         state: vulcan_workbench_model::ExecutionRetrySnapshotState::Frozen,
-        logical_execution_id: physical_attempt_id.to_string(),
+        logical_execution_id: start.preparation_turn_id.clone(),
         logical_turn_id: Some(start.preparation_turn_id.clone()),
+        next_provider_attempt_index: 0,
         physical_attempt_id: physical_attempt_id.to_string(),
         claimed_attempt_id: None,
         provider_route,
@@ -798,6 +876,7 @@ fn persist_accepted_preparation_retry_checkpoint(
         pending_action: vulcan_workbench_model::ExecutionRetryPendingAction::ResumePreparation {
             input: Box::new(start.execution_retry_preparation_input(runtime_state)?),
         },
+        user_followup: None,
         error: None,
         canonical_digest: execution_retry_sha256_hex(&canonical_bytes),
         context_generation_id: runtime_state
@@ -898,6 +977,13 @@ struct SubmissionProviderToolSettings {
     extension_target_sets: BTreeMap<
         vulcan_provider_adapters::ProviderToolCapabilityKind,
         std::collections::BTreeSet<vulcan_provider_adapters::ProviderToolTargetSelection>,
+    >,
+    /// Session-selected provider or model-replacement mode per media capability.
+    /// 当前会话为每项媒体能力选择的供应商专用或模型代替模式。
+    #[serde(default)]
+    media_understanding_modes: BTreeMap<
+        vulcan_provider_adapters::ProviderToolCapabilityKind,
+        vulcan_workbench_model::SessionMediaUnderstandingMode,
     >,
 }
 
@@ -1012,6 +1098,10 @@ async fn apply_submission_session_settings(
     )?;
     let provider_tool_settings =
         settings.and_then(|settings| settings.provider_tool_settings.as_ref());
+    let global_media_understanding_modes =
+        crate::public_ai_settings::session_media_understanding_modes_from_configuration(
+            &configuration,
+        );
     let has_explicit_provider_tool_settings = provider_tool_settings.is_some();
     let preserve_existing_provider_tools = should_preserve_existing_provider_tool_settings(
         has_explicit_provider_tool_settings,
@@ -1034,11 +1124,15 @@ async fn apply_submission_session_settings(
         let provider_extension_target_sets = provider_tool_settings
             .map(|settings| &settings.extension_target_sets)
             .unwrap_or(&configuration.provider_extension_target_sets);
+        let media_understanding_modes = provider_tool_settings
+            .map(|settings| &settings.media_understanding_modes)
+            .unwrap_or(&global_media_understanding_modes);
         crate::public_ai_settings::validate_provider_tool_session_settings(
             runtime,
             &configuration,
             enabled_capabilities,
             provider_tool_selections,
+            media_understanding_modes,
             provider_extension_target_sets,
         )?;
     }
@@ -1111,6 +1205,9 @@ async fn apply_submission_session_settings(
         let provider_extension_target_sets = provider_tool_settings
             .map(|settings| &settings.extension_target_sets)
             .unwrap_or(&configuration.provider_extension_target_sets);
+        let media_understanding_modes = provider_tool_settings
+            .map(|settings| &settings.media_understanding_modes)
+            .unwrap_or(&global_media_understanding_modes);
         runtime_state.provider_tool_selections = provider_tool_selections
             .iter()
             .map(|(capability, selection)| {
@@ -1126,6 +1223,10 @@ async fn apply_submission_session_settings(
         runtime_state.provider_tool_enabled_capabilities = enabled_capabilities
             .iter()
             .map(|capability| provider_tool_capability_key(*capability))
+            .collect();
+        runtime_state.media_understanding_modes = media_understanding_modes
+            .iter()
+            .map(|(capability, mode)| (provider_tool_capability_key(*capability), *mode))
             .collect();
         runtime_state.provider_extension_target_sets = provider_extension_target_sets
             .iter()
@@ -1312,6 +1413,8 @@ fn refresh_resume_preparation_route_after_manifest_change(
 /// `expected_retry_reference` 是无锁加载 sidecar 正文前观察到的精确摘要绑定指针。
 /// `retry_snapshot` is the exact frozen sidecar loaded by the Continue RPC.
 /// `retry_snapshot` 是 Continue RPC 加载的精确冻结 sidecar。
+/// `user_followup` is installed only after the original frozen body passes both validation rounds.
+/// `user_followup` 仅在原始冻结正文通过两轮校验后安装。
 ///
 /// # Returns
 /// 返回值
@@ -1328,6 +1431,7 @@ fn claim_continuation_before_precheck_restore(
     client_submission_id: &str,
     expected_retry_reference: &vulcan_workbench_model::ExecutionRetrySnapshotRef,
     retry_snapshot: &mut vulcan_workbench_model::ExecutionRetrySnapshot,
+    user_followup: Option<&vulcan_workbench_model::ExecutionRetryUserFollowup>,
 ) -> Result<(), String> {
     resolve_session_continuation_eligibility(
         runtime_state,
@@ -1353,6 +1457,18 @@ fn claim_continuation_before_precheck_restore(
     // 刷新会同时修改两份路由身份，因此在领取 Continue 账本前再次使用同一严格守卫证明
     // 刷新后状态一致。
     validate_execution_retry_snapshot_for_claim(runtime_state, session_id, retry_snapshot)?;
+    if user_followup.is_some() && retry_snapshot.user_followup.is_some() {
+        return Err(String::from(
+            "ERR_CONVERSATION_CONTINUE_FOLLOWUP_ALREADY_RETAINED",
+        ));
+    }
+    if user_followup.is_some_and(|followup| !followup.is_structurally_valid()) {
+        return Err(String::from(
+            "ERR_CONVERSATION_CONTINUE_RETRY_FOLLOWUP_INVALID",
+        ));
+    }
+    // claimedAtMs is the single durable claim timestamp shared by the continuation ledger and retry sidecar transition.
+    // claimedAtMs 是 Continue 账本与重试 sidecar 状态迁移共同使用的唯一可靠领取时间戳。
     let claimed_at_ms = i64::try_from(current_unix_millis_value())
         .map_err(|_| String::from("ERR_CONVERSATION_CONTINUE_TIMESTAMP_OUT_OF_RANGE"))?;
     runtime_state.provider_call_ledger.claim_continuation(
@@ -1363,6 +1479,9 @@ fn claim_continuation_before_precheck_restore(
     )?;
     retry_snapshot.state = vulcan_workbench_model::ExecutionRetrySnapshotState::Claimed;
     retry_snapshot.claimed_attempt_id = Some(client_submission_id.to_string());
+    if let Some(user_followup) = user_followup {
+        retry_snapshot.user_followup = Some(user_followup.clone());
+    }
     retry_snapshot.updated_at = current_unix_millis_text();
     Ok(())
 }
@@ -1707,6 +1826,106 @@ pub(crate) fn commit_continuation_preparing_checkpoint(
     Ok(())
 }
 
+/// Loads the current Provider configuration after validating one exact connection ownership tuple.
+/// 校验一个精确连接归属三元组后加载当前 Provider 配置。
+///
+/// # Parameters
+/// 参数
+/// `runtime` owns the current immutable Provider generation and `selection` is the exact requested tuple.
+/// `runtime` 持有当前不可变 Provider 代际，`selection` 是精确请求三元组。
+///
+/// # Returns
+/// 返回值
+/// The authoritative configuration when the connection exists and belongs to the requested Provider.
+/// 当连接存在且属于请求的 Provider 时返回权威配置。
+fn validated_submission_model_selection_configuration(
+    runtime: &vulcan_provider_adapters::PublicAiRuntime,
+    selection: &SubmissionModelSelection,
+) -> Result<vulcan_provider_adapters::PersistedAiConfiguration, String> {
+    // configuration is captured once so connection ownership and later route resolution use one generation.
+    // configuration 只捕获一次，使连接归属与后续路由解析使用同一代际。
+    let configuration = runtime.configuration_snapshot()?;
+    let configured_connection = configuration
+        .connection_graph
+        .connections
+        .get(selection.connection_id.as_str())
+        .ok_or_else(|| {
+            format!(
+                "Connection `{}` is not configured.",
+                selection.connection_id
+            )
+        })?;
+    if configured_connection.provider_id != selection.provider_id {
+        return Err(format!(
+            "Connection `{}` does not belong to provider `{}`.",
+            selection.connection_id, selection.provider_id
+        ));
+    }
+    Ok(configuration)
+}
+
+/// Resolves one enabled exact model tuple against the same effective catalog used by execution.
+/// 根据执行使用的同一有效目录解析一个已启用的精确模型三元组。
+///
+/// # Parameters
+/// 参数
+/// `runtime` owns catalog resolution, `configuration` is one captured generation, and `selection` is exact.
+/// `runtime` 持有目录解析，`configuration` 是一次捕获的代际，`selection` 是精确选择。
+///
+/// # Returns
+/// 返回值
+/// The fully resolved immutable route, or an explicit unavailable/disabled error without fallback.
+/// 返回完整解析的不可变路由；若不可用或被禁用，则返回明确错误且不降级。
+fn resolve_enabled_submission_model_selection(
+    runtime: &vulcan_provider_adapters::PublicAiRuntime,
+    configuration: &vulcan_provider_adapters::PersistedAiConfiguration,
+    selection: &SubmissionModelSelection,
+) -> Result<vulcan_provider_adapters::ResolvedPublicAiSelection, String> {
+    if !runtime.model_is_enabled_for_connection(
+        configuration,
+        selection.connection_id.as_str(),
+        selection.model_id.as_str(),
+    )? {
+        return Err(format!(
+            "Provider `{}` model `{}` is disabled.",
+            selection.provider_id, selection.model_id
+        ));
+    }
+    // resolvedCatalogs reconstruct the same overlay-aware membership used by execution.
+    // resolvedCatalogs 重建执行使用的同一份覆盖感知成员关系。
+    let resolved_catalogs = runtime.resolved_model_catalog_snapshot(configuration)?;
+    let source_catalogs = runtime.source_catalog_snapshot()?;
+    let effective_catalogs = if resolved_catalogs.contains_key(selection.connection_id.as_str())
+        || source_catalogs.contains_key(selection.connection_id.as_str())
+    {
+        resolved_catalogs
+    } else {
+        // Manual catalogs without immutable source tracking retain their process-local authority.
+        // 没有不可变来源跟踪的手工目录继续使用其进程内权威。
+        runtime.catalog_snapshot()?
+    };
+    let connection_exposes_model = effective_catalogs
+        .get(selection.connection_id.as_str())
+        .is_some_and(|catalog| {
+            catalog
+                .models
+                .iter()
+                .any(|model| model.id == selection.model_id)
+        });
+    if !connection_exposes_model {
+        return Err(format!(
+            "Connection `{}` does not expose model `{}`.",
+            selection.connection_id, selection.model_id
+        ));
+    }
+    runtime.resolve_connection_model_selection(
+        configuration,
+        selection.connection_id.as_str(),
+        selection.provider_id.as_str(),
+        selection.model_id.as_str(),
+    )
+}
+
 /// Validates and applies one submission-scoped model selection to session runtime state.
 /// 校验并将单次提交范围的模型选择写入会话运行态。
 ///
@@ -1725,7 +1944,7 @@ pub(crate) fn commit_continuation_preparing_checkpoint(
 /// 返回值
 /// Returns success after an exact configured selection is applied, or a validation error.
 /// 在精确已配置选择写入后返回成功，否则返回校验错误。
-fn apply_submission_model_selection(
+pub(crate) fn apply_submission_model_selection(
     runtime: &vulcan_provider_adapters::PublicAiRuntime,
     workspace_snapshot: &mut WorkspaceSnapshot,
     session_id: SessionId,
@@ -1755,23 +1974,7 @@ fn apply_submission_model_selection(
             "The submitted model does not match the session's pending exact selection. Refresh the model list and reselect explicitly.",
         ));
     }
-    let configuration = runtime.configuration_snapshot()?;
-    let configured_connection = configuration
-        .connection_graph
-        .connections
-        .get(selection.connection_id.as_str())
-        .ok_or_else(|| {
-            format!(
-                "Connection `{}` is not configured.",
-                selection.connection_id
-            )
-        })?;
-    if configured_connection.provider_id != selection.provider_id {
-        return Err(format!(
-            "Connection `{}` does not belong to provider `{}`.",
-            selection.connection_id, selection.provider_id
-        ));
-    }
+    let configuration = validated_submission_model_selection_configuration(runtime, selection)?;
     // sessionLeaseScope is the stable owner key shared by process-local and persisted leases.
     // sessionLeaseScope 是进程内租约与持久化租约共享的稳定所有者键。
     let session_lease_scope = session_id.to_string();
@@ -1814,53 +2017,10 @@ fn apply_submission_model_selection(
         runtime_state.updated_at = current_unix_millis_text();
         return Ok(());
     }
-    if !runtime.model_is_enabled_for_connection(
-        &configuration,
-        selection.connection_id.as_str(),
-        selection.model_id.as_str(),
-    )? {
-        return Err(format!(
-            "Provider `{}` model `{}` is disabled.",
-            selection.provider_id, selection.model_id
-        ));
-    }
-    // Validate against the same reconstructed catalog used by execution so a just-saved
-    // capability override cannot be hidden by a stale process-local catalog copy.
-    // 使用与执行相同的重建目录校验，避免刚保存的能力覆盖被旧进程内目录副本遮蔽。
-    let resolved_catalogs = runtime.resolved_model_catalog_snapshot(&configuration)?;
-    let source_catalogs = runtime.source_catalog_snapshot()?;
-    let effective_catalogs = if resolved_catalogs.contains_key(selection.connection_id.as_str())
-        || source_catalogs.contains_key(selection.connection_id.as_str())
-    {
-        resolved_catalogs
-    } else {
-        // Manual/legacy catalogs without immutable source tracking still use their process-local
-        // snapshot; this fallback does not bypass overlays for source-backed connections.
-        // 没有不可变源跟踪的手工/旧版目录仍使用进程内快照；源目录连接不会绕过覆盖链路。
-        runtime.catalog_snapshot()?
-    };
-    let connection_exposes_model = effective_catalogs
-        .get(selection.connection_id.as_str())
-        .is_some_and(|catalog| {
-            catalog
-                .models
-                .iter()
-                .any(|model| model.id == selection.model_id)
-        });
-    if !connection_exposes_model {
-        return Err(format!(
-            "Connection `{}` does not expose model `{}`.",
-            selection.connection_id, selection.model_id
-        ));
-    }
     // resolvedSelection freezes the exact currently installed route used to validate restart drift.
     // resolvedSelection 冻结用于校验重启漂移的当前已安装精确路由。
-    let resolved_selection = runtime.resolve_connection_model_selection(
-        &configuration,
-        selection.connection_id.as_str(),
-        selection.provider_id.as_str(),
-        selection.model_id.as_str(),
-    )?;
+    let resolved_selection =
+        resolve_enabled_submission_model_selection(runtime, &configuration, selection)?;
     // processRouteLeaseAbsent distinguishes restart restoration from an in-process hot replacement.
     // processRouteLeaseAbsent 区分重启恢复与进程内热替换。
     let process_route_lease_absent = runtime
@@ -1911,6 +2071,145 @@ fn apply_submission_model_selection(
     runtime_state.pending_model_selection = None;
     runtime_state.updated_at = current_unix_millis_text();
     Ok(())
+}
+
+/// Validates a recovery submission's exact future model without mutating the frozen active route.
+/// 校验恢复提交的精确未来模型，同时不修改已冻结的当前活动路由。
+///
+/// # Parameters
+/// 参数
+/// `runtime` owns the authoritative catalog and process-local route lease.
+/// `runtime` 持有权威目录与进程内路由租约。
+/// `workspace_snapshot` contains the retained active and pending session selections.
+/// `workspace_snapshot` 包含保留的活动与待生效会话选择。
+/// `session_id` identifies the interrupted conversation and `selection` is the composer snapshot.
+/// `session_id` 标识被中断会话，`selection` 是输入区快照。
+///
+/// # Returns
+/// 返回值
+/// Success only when the submitted tuple exactly matches the already-authoritative future selection.
+/// 仅当提交三元组精确匹配已有权威未来选择时返回成功。
+fn validate_recovery_submission_model_selection(
+    runtime: &vulcan_provider_adapters::PublicAiRuntime,
+    workspace_snapshot: &WorkspaceSnapshot,
+    session_id: SessionId,
+    selection: Option<&SubmissionModelSelection>,
+) -> Result<(), String> {
+    let Some(selection) = selection else {
+        return Ok(());
+    };
+    let runtime_state = workspace_snapshot
+        .session_runtime_state
+        .get(&session_id)
+        .ok_or_else(|| String::from("ERR_CONVERSATION_CONTINUE_RUNTIME_STATE_MISSING"))?;
+    let expected_provider_id = runtime_state
+        .pending_model_selection
+        .as_ref()
+        .map(|pending| pending.provider_id.as_str())
+        .or(runtime_state.active_provider_id.as_deref());
+    let expected_connection_id = runtime_state
+        .pending_model_selection
+        .as_ref()
+        .map(|pending| pending.connection_id.as_str())
+        .or(runtime_state.active_connection_id.as_deref());
+    let expected_model_id = runtime_state
+        .pending_model_selection
+        .as_ref()
+        .map(|pending| pending.model_id.as_str())
+        .or(runtime_state.active_model_id.as_deref());
+    if expected_provider_id != Some(selection.provider_id.as_str())
+        || expected_connection_id != Some(selection.connection_id.as_str())
+        || expected_model_id != Some(selection.model_id.as_str())
+    {
+        return Err(String::from(
+            "ERR_CONVERSATION_CONTINUE_MODEL_SELECTION_MISMATCH",
+        ));
+    }
+
+    let configuration = validated_submission_model_selection_configuration(runtime, selection)?;
+    let leased_selection =
+        session_process_public_ai_selection(runtime, session_id, Some(runtime_state))?.filter(
+            |leased| {
+                leased.route.provider.id == selection.provider_id
+                    && leased.route.connection.id == selection.connection_id
+                    && leased.model.id == selection.model_id
+            },
+        );
+    if leased_selection.is_some() {
+        let explicitly_disabled = configuration
+            .model_enabled_override(selection.provider_id.as_str(), selection.model_id.as_str())
+            == Some(false)
+            || !configuration.connection_model_is_enabled(
+                selection.connection_id.as_str(),
+                selection.model_id.as_str(),
+            );
+        if explicitly_disabled {
+            return Err(String::from(
+                "ERR_CONVERSATION_CONTINUE_MODEL_SELECTION_MISMATCH",
+            ));
+        }
+        return Ok(());
+    }
+    resolve_enabled_submission_model_selection(runtime, &configuration, selection)
+        .map(|_| ())
+        .map_err(|_| String::from("ERR_CONVERSATION_CONTINUE_MODEL_SELECTION_MISMATCH"))
+}
+
+/// Promotes the exact pending session selection at the boundary immediately before a real Provider request.
+/// 在真实 Provider 请求之前的边界提升精确的会话待生效选择。
+///
+/// # Parameters
+/// 参数
+/// `runtime` owns the installed route catalog, `workspace_snapshot` owns the session authority,
+/// and `session_id` selects the exact pending route.
+/// `runtime` 持有已安装路由目录，`workspace_snapshot` 持有会话权威，`session_id` 选择精确待生效路由。
+///
+/// # Returns
+/// 返回值
+/// The exact promoted selection after validation, or an error that leaves the pending workspace authority unchanged.
+/// 校验通过后返回精确的已提升选择；失败时保持工作区待生效权威不变。
+pub(crate) fn apply_pending_model_selection_for_provider_request(
+    runtime: &vulcan_provider_adapters::PublicAiRuntime,
+    workspace_snapshot: &mut WorkspaceSnapshot,
+    session_id: SessionId,
+) -> Result<SessionPendingModelSelection, String> {
+    // pendingSelection is cloned before validation so the exact tuple remains available for request rebuilding.
+    // pendingSelection 在校验前克隆，使精确三元组可用于重建请求。
+    let pending_selection = workspace_snapshot
+        .session_runtime_state
+        .get(&session_id)
+        .and_then(|runtime_state| runtime_state.pending_model_selection.clone())
+        .ok_or_else(|| {
+            format!(
+                "Conversation `{session_id}` has no pending model selection at the Provider boundary."
+            )
+        })?;
+    let selection = SubmissionModelSelection {
+        provider_id: pending_selection.provider_id.clone(),
+        model_id: pending_selection.model_id.clone(),
+        connection_id: pending_selection.connection_id.clone(),
+    };
+    // configuration validation is pure with respect to both the candidate workspace and process-local leases.
+    // configuration 校验不会修改候选工作区或进程内租约。
+    let configuration = validated_submission_model_selection_configuration(runtime, &selection)?;
+    let _resolved_selection =
+        resolve_enabled_submission_model_selection(runtime, &configuration, &selection)?;
+    let runtime_state = workspace_snapshot
+        .session_runtime_state
+        .get_mut(&session_id)
+        .ok_or_else(|| format!("Conversation `{session_id}` has no runtime state."))?;
+    // A pending picker record is created only for a changed future tuple; promotion therefore clears
+    // the old persisted route identity while leaving process-local lease revocation to the caller's
+    // durability transaction.
+    // 只有未来三元组变化时才会创建待生效选择记录；因此提升会清除旧持久路由身份，
+    // 而进程内租约撤销由调用方的可靠事务负责。
+    runtime_state.active_provider_id = Some(selection.provider_id.clone());
+    runtime_state.active_connection_id = Some(selection.connection_id.clone());
+    runtime_state.active_model_id = Some(selection.model_id.clone());
+    runtime_state.pending_model_selection = None;
+    runtime_state.provider_route_lease = None;
+    runtime_state.updated_at = current_unix_millis_text();
+    Ok(pending_selection)
 }
 
 #[cfg(test)]
@@ -2086,10 +2385,10 @@ mod submission_model_selection_tests {
         );
     }
 
-    /// Verifies only the exact pending tuple can be promoted by the next user submission.
-    /// 验证只有精确的待生效三元组才能由下一次用户提交提升。
+    /// Verifies only the exact pending tuple can be promoted for the next real Provider request.
+    /// 验证只有精确的待生效三元组才能为下一次真实 Provider 请求提升。
     #[test]
-    fn next_submission_promotes_only_the_exact_pending_model_selection() {
+    fn next_provider_request_promotes_only_the_exact_pending_model_selection() {
         // runtime owns both available model identities used by the stale and accepted submissions.
         // runtime 持有过期提交与获准提交使用的两个可用模型身份。
         let runtime = configured_runtime();
@@ -2125,8 +2424,8 @@ mod submission_model_selection_tests {
         };
         ensure_webui_session_runtime_state(&mut workspace_snapshot, session_id, None)
             .expect("session runtime state should initialize");
-        // pendingSelection is the exact picker choice accepted for the next submission.
-        // pendingSelection 是选择器为下一次提交接受的精确选择。
+        // pendingSelection is the exact picker choice accepted for the next Provider request.
+        // pendingSelection 是选择器为下一次 Provider 请求接受的精确选择。
         let pending_selection = vulcan_workbench_model::SessionPendingModelSelection {
             provider_id: String::from("openrouter"),
             connection_id: String::from("openrouter-account"),
@@ -2174,23 +2473,57 @@ mod submission_model_selection_tests {
             Some(&pending_selection)
         );
 
-        // acceptedSelection matches the pending tuple byte-for-byte.
-        // acceptedSelection 与待生效三元组逐字段精确匹配。
-        let accepted_selection = SubmissionModelSelection {
-            provider_id: pending_selection.provider_id.clone(),
-            connection_id: pending_selection.connection_id.clone(),
-            model_id: pending_selection.model_id.clone(),
-        };
-        apply_submission_model_selection(
+        // activeLease models the immutable route already owned by the physical Provider call.
+        // activeLease 模拟当前物理 Provider 调用已经持有的不可变路由。
+        let configuration = runtime
+            .configuration_snapshot()
+            .expect("test configuration should remain readable");
+        let active_lease = runtime
+            .resolve_connection_model_selection(
+                &configuration,
+                "openrouter-account",
+                "openrouter",
+                "openai/gpt-5.6-terra",
+            )
+            .expect("active test route should resolve");
+        runtime
+            .lease_session_selection(session_id.to_string(), active_lease)
+            .expect("active test route should lease");
+        // promotedCandidate is detached so Provider-boundary validation cannot mutate retained memory before persistence.
+        // promotedCandidate 保持分离，使 Provider 边界校验不能在持久化前修改保留内存。
+        let mut promoted_candidate = workspace_snapshot.clone();
+        let promoted_selection = apply_pending_model_selection_for_provider_request(
             &runtime,
-            &mut workspace_snapshot,
+            &mut promoted_candidate,
             session_id,
-            Some(&accepted_selection),
         )
         .expect("exact pending selection should promote");
+        assert_eq!(promoted_selection, pending_selection);
+        // retainedOriginal and processLease prove staging changed neither authority before the caller commits durability.
+        // retainedOriginal 与 processLease 证明调用方提交可靠性前，暂存不会修改任一权威状态。
+        let retained_original = workspace_snapshot
+            .session_runtime_state
+            .get(&session_id)
+            .expect("retained original runtime state should remain present");
+        assert_eq!(
+            retained_original.active_model_id.as_deref(),
+            Some("openai/gpt-5.6-terra")
+        );
+        assert_eq!(
+            retained_original.pending_model_selection.as_ref(),
+            Some(&pending_selection)
+        );
+        assert_eq!(
+            runtime
+                .session_selection_lease(session_id.to_string().as_str())
+                .expect("process route lease should remain readable")
+                .as_ref()
+                .map(|selection| selection.model.id.as_str()),
+            Some("openai/gpt-5.6-terra")
+        );
         // promotedState proves the pending authority became active exactly once.
         // promotedState 证明待生效权威恰好提升为活动选择一次。
-        let promoted_state = workspace_snapshot
+        let promoted_state = promoted_candidate
             .session_runtime_state
             .get(&session_id)
             .expect("promoted runtime state should remain present");
@@ -2737,6 +3070,7 @@ mod submission_model_selection_tests {
             state: vulcan_workbench_model::ExecutionRetrySnapshotState::Frozen,
             logical_execution_id: String::from("logical-a"),
             logical_turn_id: Some(String::from("turn-a")),
+            next_provider_attempt_index: 0,
             physical_attempt_id: String::from("attempt-a"),
             claimed_attempt_id: None,
             provider_route: Some(previous_identity),
@@ -2748,6 +3082,7 @@ mod submission_model_selection_tests {
                 vulcan_workbench_model::ExecutionRetryPendingAction::ResumePreparation {
                     input: Box::new(preparation_input),
                 },
+            user_followup: None,
             error: Some(vulcan_ai_contract::AiExecutionError {
                 category: vulcan_ai_contract::AiErrorCategory::Cancelled,
                 subcategory: Some(String::from("execution_interrupted")),
@@ -2872,6 +3207,7 @@ mod submission_model_selection_tests {
             state: vulcan_workbench_model::ExecutionRetrySnapshotState::Frozen,
             logical_execution_id: String::from("logical-a"),
             logical_turn_id: Some(preparation_turn_id.clone()),
+            next_provider_attempt_index: 0,
             physical_attempt_id: String::from("attempt-a"),
             claimed_attempt_id: None,
             provider_route: None,
@@ -2901,6 +3237,7 @@ mod submission_model_selection_tests {
                         profile_payload: serde_json::json!({}),
                     }),
                 },
+            user_followup: None,
             error: None,
             canonical_digest: execution_retry_sha256_hex(&canonical_bytes),
             context_generation_id: None,
@@ -2985,6 +3322,7 @@ mod submission_model_selection_tests {
             "continue-attempt-stale",
             &expected_retry_reference,
             &mut raced_retry_snapshot,
+            None,
         )
         .expect_err("a replaced retry reference must reject the stale sidecar body");
         assert_eq!(stale_error, "ERR_CONVERSATION_CONTINUE_STALE");
@@ -3000,6 +3338,13 @@ mod submission_model_selection_tests {
             vulcan_workbench_model::ExecutionRetrySnapshotState::Frozen
         );
 
+        // userFollowup is installed only in the claimed sidecar after the original frozen body wins CAS.
+        // userFollowup 仅在原始冻结正文赢得 CAS 后安装到已领取 sidecar。
+        let user_followup = vulcan_workbench_model::ExecutionRetryUserFollowup {
+            visible_prompt: String::from("supplemental instruction"),
+            provider_prompt: String::from("supplemental instruction"),
+            client_submission_id: String::from("continue-attempt-a"),
+        };
         claim_continuation_before_precheck_restore(
             &runtime,
             &mut runtime_state,
@@ -3011,6 +3356,7 @@ mod submission_model_selection_tests {
             "continue-attempt-a",
             &expected_retry_reference,
             &mut retry_snapshot,
+            Some(&user_followup),
         )
         .expect("Continue should claim before retry precheck restoration");
         runtime_state.active_precheck_turn_id = Some(preparation_turn_id);
@@ -3023,6 +3369,7 @@ mod submission_model_selection_tests {
             retry_snapshot.claimed_attempt_id.as_deref(),
             Some("continue-attempt-a")
         );
+        assert_eq!(retry_snapshot.user_followup.as_ref(), Some(&user_followup));
         assert!(
             runtime_state
                 .provider_call_ledger
@@ -3137,8 +3484,104 @@ pub(crate) fn attach_client_submission_id_to_visible_user_record(
     insert_identifier(&mut runtime_record.metadata)
 }
 
+/// User-authored composer fields carried by a recovery submission on a problem turn.
+/// 问题回合恢复提交所携带的用户输入区字段。
+#[derive(Debug, Clone)]
+struct ContinuationUserSubmission {
+    /// User-visible supplemental prompt.
+    /// 用户可见的补充提示词。
+    prompt: String,
+    /// Optional model-only host guidance appended only to Provider-visible text.
+    /// 仅追加到 Provider 可见文本的可选模型专用宿主引导。
+    hidden_model_guidance: Option<String>,
+    /// Optional execution mode selected for the recovered run.
+    /// 为恢复执行选择的可选执行模式。
+    execution_mode: Option<String>,
+    /// Optional reasoning effort selected for the recovered run.
+    /// 为恢复执行选择的可选推理强度。
+    reasoning_effort: Option<String>,
+    /// Exact composer model snapshot, validated without changing the frozen route.
+    /// 不修改冻结路由即可校验的精确输入区模型快照。
+    model_selection: Option<SubmissionModelSelection>,
+    /// Composer attachments retained for explicit unsupported-input rejection.
+    /// 为显式拒绝不支持输入而保留的输入区附件。
+    attachments: Option<Vec<ComposerAttachmentSummary>>,
+}
+
+/// Builds one durable recovery follow-up with distinct visible and Provider prompt text.
+/// 构建一条区分可见文本与 Provider 文本的可靠恢复补充消息。
+///
+/// # Parameters
+/// 参数
+/// `submission` owns the user-authored composer fields and `client_submission_id` owns admission identity.
+/// `submission` 持有用户编写的输入区字段，`client_submission_id` 持有准入身份。
+///
+/// # Returns
+/// 返回值
+/// A structurally valid sidecar follow-up, or an exact request error.
+/// 返回结构有效的 sidecar 补充消息，或精确请求错误。
+fn execution_retry_user_followup_from_submission(
+    submission: &ContinuationUserSubmission,
+    client_submission_id: &str,
+) -> Result<vulcan_workbench_model::ExecutionRetryUserFollowup, String> {
+    // visiblePrompt is the exact trimmed text that will appear in canonical user history.
+    // visiblePrompt 是将出现在规范用户历史中的精确去空白文本。
+    let visible_prompt = submission.prompt.trim();
+    if visible_prompt.is_empty() {
+        return Err(String::from("ERR_CONVERSATION_CONTINUE_FOLLOWUP_EMPTY"));
+    }
+    // providerPrompt may add host-only guidance without leaking it into the visible transcript.
+    // providerPrompt 可以追加仅宿主可见的引导，且不会泄漏到可见转录。
+    let provider_prompt = match submission
+        .hidden_model_guidance
+        .as_deref()
+        .map(str::trim)
+        .filter(|guidance| !guidance.is_empty())
+    {
+        Some(guidance) => format!(
+            "{visible_prompt}\n\n<hidden_host_guidance>\n{guidance}\n</hidden_host_guidance>"
+        ),
+        None => visible_prompt.to_string(),
+    };
+    // followup is the durable pair consumed only after prior tool-call reconciliation.
+    // followup 是仅在旧工具调用完成对账后消费的可靠文本对。
+    let followup = vulcan_workbench_model::ExecutionRetryUserFollowup {
+        visible_prompt: visible_prompt.to_string(),
+        provider_prompt,
+        client_submission_id: client_submission_id.to_string(),
+    };
+    if !followup.is_structurally_valid() {
+        return Err(String::from(
+            "ERR_CONVERSATION_CONTINUE_RETRY_FOLLOWUP_INVALID",
+        ));
+    }
+    Ok(followup)
+}
+
 /// Claims one frozen continuation and starts the exact retained execution without user input.
 /// 领取一份冻结 Continue，并在不追加用户输入的情况下启动精确保留执行。
+pub(super) async fn service_continue_conversation(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    conversation_id: String,
+    expected_generation: u64,
+    expected_ledger_revision: u64,
+    client_continuation_id: String,
+) -> Result<SubmitConversationPromptAck, String> {
+    service_continue_conversation_with_submission(
+        app,
+        state,
+        conversation_id,
+        expected_generation,
+        expected_ledger_revision,
+        client_continuation_id,
+        None,
+    )
+    .await
+}
+
+/// Claims one frozen continuation and starts its retained execution with an optional durable user follow-up.
+/// 领取一份冻结 Continue，并使用可选可靠用户补充消息启动其保留执行。
 ///
 /// # Parameters
 /// 参数
@@ -3154,18 +3597,21 @@ pub(crate) fn attach_client_submission_id_to_visible_user_record(
 /// `expected_ledger_revision` 是投影给 WebUI 的精确 Provider 调用账本修订号。
 /// `client_continuation_id` is the stable idempotency identity for one UI recovery intent.
 /// `client_continuation_id` 是一次 UI 恢复意图使用的稳定幂等标识。
+/// `user_submission` optionally supplies composer text and selections that must be reconciled into the recovery.
+/// `user_submission` 可选提供必须协调进恢复流程的输入区文本与选择项。
 ///
 /// # Returns
 /// 返回值
 /// A lightweight acknowledgement after the retained provider state is admitted for continuation.
 /// 保留的 Provider 状态获准继续后的轻量确认信息。
-pub(super) async fn service_continue_conversation(
+async fn service_continue_conversation_with_submission(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     conversation_id: String,
     expected_generation: u64,
     expected_ledger_revision: u64,
     client_continuation_id: String,
+    user_submission: Option<ContinuationUserSubmission>,
 ) -> Result<SubmitConversationPromptAck, String> {
     let client_continuation_id = client_continuation_id.trim().to_string();
     if client_continuation_id.is_empty() {
@@ -3329,6 +3775,7 @@ pub(super) async fn service_continue_conversation(
         client_continuation_id,
         retry_reference.clone(),
         retry_snapshot,
+        user_submission,
     )
     .await;
     if let Err(retry_error) = retry_result.as_ref()
@@ -3352,8 +3799,24 @@ pub(super) async fn service_continue_conversation(
     retry_result
 }
 
-/// Starts a claimed frozen execution without creating or accepting prompt text.
-/// 在不创建或接收提示词文本的情况下启动一份已领取冻结执行。
+/// Starts a claimed frozen execution with an optional durable user follow-up.
+/// 使用可选的可靠用户补充消息启动一份已领取冻结执行。
+///
+/// # Parameters
+/// 参数
+/// `app` emits accepted recovery state, while `state` owns the authoritative workspace.
+/// `app` 发出已接受的恢复状态，`state` 持有权威工作区。
+/// `conversation_id`, the expected ledger pair, and `client_continuation_id` bind the exact recovery claim.
+/// `conversation_id`、预期账本二元组与 `client_continuation_id` 绑定精确恢复领取。
+/// `retry_reference` and `retry_snapshot` carry the digest-bound frozen execution.
+/// `retry_reference` 与 `retry_snapshot` 携带摘要绑定的冻结执行。
+/// `user_submission` optionally carries the user's supplemental text and current runtime selections.
+/// `user_submission` 可选携带用户补充文本与当前运行时选择。
+///
+/// # Returns
+/// 返回值
+/// A lightweight acknowledgement after service-owned recovery admission, or an exact validation error.
+/// 服务接管恢复准入后返回轻量确认，或返回精确校验错误。
 async fn service_retry_frozen_execution(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
@@ -3363,7 +3826,39 @@ async fn service_retry_frozen_execution(
     client_continuation_id: String,
     retry_reference: vulcan_workbench_model::ExecutionRetrySnapshotRef,
     retry_snapshot: vulcan_workbench_model::ExecutionRetrySnapshot,
+    user_submission: Option<ContinuationUserSubmission>,
 ) -> Result<SubmitConversationPromptAck, String> {
+    // userFollowup separates visible transcript text from Provider-only host guidance.
+    // userFollowup 将可见转录文本与仅 Provider 可见的宿主引导分离。
+    let user_followup = user_submission
+        .as_ref()
+        .map(|submission| {
+            execution_retry_user_followup_from_submission(
+                submission,
+                client_continuation_id.as_str(),
+            )
+        })
+        .transpose()?;
+    // executionMode preserves the user's current execution-mode selection for the recovered run.
+    // executionMode 为恢复执行保留用户当前选择的执行模式。
+    let execution_mode = user_submission
+        .as_ref()
+        .and_then(|submission| submission.execution_mode.clone());
+    // reasoningEffort preserves the user's current reasoning selection for the recovered run.
+    // reasoningEffort 为恢复执行保留用户当前选择的推理强度。
+    let reasoning_effort = user_submission
+        .as_ref()
+        .and_then(|submission| submission.reasoning_effort.clone());
+    // modelSelection validates the future exact model without mutating the frozen active route.
+    // modelSelection 校验未来精确模型，同时不修改已冻结的当前活动路由。
+    let model_selection = user_submission
+        .as_ref()
+        .and_then(|submission| submission.model_selection.clone());
+    // attachments are carried only so the existing explicit unsupported-input guard can reject them.
+    // attachments 仅用于让既有显式不支持输入护栏拒绝附件。
+    let attachments = user_submission
+        .as_ref()
+        .and_then(|submission| submission.attachments.clone());
     // execution_task transfers the accepted Continue transaction to service ownership before the RPC can be cancelled.
     // execution_task 在 RPC 可能被取消前，把已接纳的 Continue 事务转移给服务所有权。
     let execution_task = spawn_service_task(async move {
@@ -3375,11 +3870,11 @@ async fn service_retry_frozen_execution(
             Some(conversation_id),
             None,
             None,
+            execution_mode,
+            reasoning_effort,
+            model_selection,
             None,
-            None,
-            None,
-            None,
-            None,
+            attachments,
             None,
             ExistingSessionHydrationPolicy::TrustRetainedSnapshot,
             ConversationSubmissionMode::Continuation {
@@ -3387,6 +3882,7 @@ async fn service_retry_frozen_execution(
                 expected_ledger_revision,
                 retry_reference: Box::new(retry_reference),
                 retry_snapshot: Box::new(retry_snapshot),
+                user_followup,
             },
         )
         .await
@@ -3394,6 +3890,88 @@ async fn service_retry_frozen_execution(
     execution_task.await.map_err(|join_error| {
         format!("ERR_CONVERSATION_CONTINUE_EXECUTION_TASK_FAILED: {join_error}")
     })?
+}
+
+/// Routes one composer submission through ordinary admission or exact problem-turn recovery.
+/// 将一条输入区提交路由到普通准入或精确的问题回合恢复流程。
+///
+/// # Parameters
+/// 参数
+/// `app` emits accepted workbench changes and `state` owns authoritative runtime state.
+/// `app` 发出已接受的工作台变更，`state` 持有权威运行态。
+/// `client_submission_id`, project/conversation ids, and `prompt` identify the authored submission.
+/// `client_submission_id`、项目/会话标识与 `prompt` 标识用户提交。
+/// `hidden_model_guidance`, execution options, model selection, session settings, and attachments carry the exact composer snapshot.
+/// `hidden_model_guidance`、执行选项、模型选择、会话设置与附件携带精确输入区快照。
+/// `continuation_expectation` binds the submission to the selected problem turn when recovery is required.
+/// `continuation_expectation` 在需要恢复时将提交绑定到选中的问题回合。
+///
+/// # Returns
+/// 返回值
+/// A lightweight acknowledgement after ordinary or recovery admission, or an exact validation error.
+/// 普通或恢复准入后返回轻量确认，或返回精确校验错误。
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn service_submit_conversation_prompt_rpc(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    client_submission_id: String,
+    project_id: Option<String>,
+    conversation_id: Option<String>,
+    prompt: String,
+    hidden_model_guidance: Option<String>,
+    execution_mode: Option<String>,
+    reasoning_effort: Option<String>,
+    model_selection: Option<SubmissionModelSelection>,
+    session_settings: Option<SubmissionSessionSettings>,
+    attachments: Option<Vec<ComposerAttachmentSummary>>,
+    continuation_expectation: Option<ConversationContinuationExpectation>,
+) -> Result<SubmitConversationPromptAck, String> {
+    if let Some(expectation) = continuation_expectation {
+        // conversationId is mandatory because a continuation can never create a new conversation.
+        // conversationId 是必需的，因为 Continue 绝不能创建新会话。
+        let conversation_id = conversation_id
+            .ok_or_else(|| String::from("ERR_CONVERSATION_CONTINUE_INVALID_CONVERSATION"))?;
+        if session_settings.is_some() {
+            return Err(String::from(
+                "ERR_CONVERSATION_CONTINUE_SESSION_SETTINGS_NOT_ALLOWED",
+            ));
+        }
+        return service_continue_conversation_with_submission(
+            app,
+            state,
+            conversation_id,
+            expectation.expected_generation,
+            expectation.expected_ledger_revision,
+            client_submission_id,
+            Some(ContinuationUserSubmission {
+                prompt,
+                hidden_model_guidance,
+                execution_mode,
+                reasoning_effort,
+                model_selection,
+                attachments,
+            }),
+        )
+        .await;
+    }
+    service_submit_conversation_prompt(
+        app,
+        state,
+        client_submission_id,
+        project_id,
+        conversation_id,
+        prompt,
+        hidden_model_guidance,
+        execution_mode,
+        reasoning_effort,
+        model_selection,
+        session_settings,
+        attachments,
+        None,
+        ExistingSessionHydrationPolicy::HydrateIfEmpty,
+        ConversationSubmissionMode::UserPrompt,
+    )
+    .await
 }
 
 /// Starts an ordinary user-authored conversation submission through the shared execution admission path.
@@ -3477,8 +4055,8 @@ async fn cleanup_submission_after_prompt_turn_start(
     })
 }
 
-/// Submits one ordinary user prompt or one prompt-free continuation through the shared conversation pipeline.
-/// 通过共享会话流水线提交普通用户提示词或无提示词 Continue 请求。
+/// Submits one ordinary user prompt or one revision-bound recovery through the shared conversation pipeline.
+/// 通过共享会话流水线提交普通用户提示词或绑定修订号的恢复请求。
 ///
 /// # Parameters
 /// `app` emits accepted workbench updates and runtime events.
@@ -3500,8 +4078,8 @@ async fn cleanup_submission_after_prompt_turn_start(
 /// Returns a lightweight acknowledgement after queuing or starting the submitted prompt.
 /// 返回排队或启动提交提示词后的轻量确认信息。
 ///
-/// `submission_mode` selects ordinary user input or a revision-bound prompt-free continuation.
-/// `submission_mode` 选择普通用户输入或绑定修订号的无提示词 Continue。
+/// `submission_mode` selects ordinary user input or a revision-bound recovery with an optional durable follow-up.
+/// `submission_mode` 选择普通用户输入，或带可选持久补充消息且绑定修订号的恢复请求。
 async fn service_start_conversation_execution(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
@@ -3745,12 +4323,21 @@ async fn service_start_conversation_execution(
     // kernel_reservation_id 将已有会话物化结果绑定到加载前捕获的精确准入所有者。
     let kernel_reservation_id = turn_admission.kernel_reservation_id(&materialized_session)?;
     prepare_materialized_submission_session(&mut workspace_snapshot, &materialized_session)?;
-    apply_submission_model_selection(
-        agent_runtime.public_ai_runtime.as_ref(),
-        &mut workspace_snapshot,
-        materialized_session.session_id,
-        model_selection.as_ref(),
-    )?;
+    if submission_mode.is_continuation() {
+        validate_recovery_submission_model_selection(
+            agent_runtime.public_ai_runtime.as_ref(),
+            &workspace_snapshot,
+            materialized_session.session_id,
+            model_selection.as_ref(),
+        )?;
+    } else {
+        apply_submission_model_selection(
+            agent_runtime.public_ai_runtime.as_ref(),
+            &mut workspace_snapshot,
+            materialized_session.session_id,
+            model_selection.as_ref(),
+        )?;
+    }
     if session_settings.is_some()
         && materialized_session.kind != PromptSessionMaterializationKind::Created
     {
@@ -3883,6 +4470,7 @@ async fn service_start_conversation_execution(
             client_submission_id.as_str(),
             retry_reference,
             retry_snapshot,
+            submission_mode.user_followup(),
         )?;
     }
     let turn_begin_started_at = current_unix_millis_value();

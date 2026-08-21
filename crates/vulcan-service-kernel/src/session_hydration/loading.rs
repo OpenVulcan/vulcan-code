@@ -531,28 +531,43 @@ fn execution_retry_has_live_process_owner(
 ///
 /// # Returns
 /// 返回值
-/// `true` only when the body is replay-safe, the exact user/error tail matches the ledger, and no Provider call remains open.
-/// 仅当正文可安全重放、精确的用户或错误尾部与账本一致且不存在未闭合 Provider 调用时返回 `true`。
+/// `true` only when the body is replay-safe, the exact presentation tail matches the ledger, the claim is released, and no Provider call remains open.
+/// 仅当正文可安全重放、精确展示尾部与账本一致、领取已经释放且不存在未闭合 Provider 调用时返回 `true`。
 fn hydrated_retry_continuation_is_eligible(
     runtime_state: &SessionRuntimeStateEntry,
     replay_safety_proven: bool,
 ) -> bool {
     // canonicalTailKind is derived from the authoritative record stream rather than the cached continuation label.
     // canonicalTailKind 从权威记录流推导，而不是信任 Continue 缓存标签。
-    let canonical_tail_kind = crate::canonical_conversation_tail_kind(runtime_state);
-    // continuationTailMatches requires one exact prompt-free continuation tail and rejects assistant or missing tails.
-    // continuationTailMatches 要求精确的无提示词继续尾部，并拒绝助手或缺失尾部。
-    let continuation_tail_matches = canonical_tail_kind.is_some_and(|tail_kind| {
-        crate::is_prompt_free_continuation_tail_kind(tail_kind)
+    let canonical_tail_kind =
+        crate::canonical_conversation_tail_kind(runtime_state).unwrap_or("empty");
+    // continuationTailMatches detects presentation drift while replay safety remains sidecar-owned.
+    // continuationTailMatches 检测展示漂移，而重放安全仍由 sidecar 决定。
+    let continuation_tail_matches =
+        crate::is_prompt_free_continuation_tail_kind(canonical_tail_kind)
             && runtime_state
                 .provider_call_ledger
                 .continuation
                 .canonical_tail_kind
                 .as_deref()
-                == Some(tail_kind)
-    });
+                == Some(canonical_tail_kind);
     replay_safety_proven
         && continuation_tail_matches
+        && runtime_state
+            .provider_call_ledger
+            .continuation
+            .claimed_at_ms
+            .is_none()
+        && runtime_state
+            .provider_call_ledger
+            .continuation
+            .claimed_execution_id
+            .is_none()
+        && runtime_state
+            .provider_call_ledger
+            .continuation
+            .expected_ledger_revision
+            == runtime_state.provider_call_ledger.revision
         && runtime_state.provider_call_ledger.in_flight_call_count() == 0
 }
 
@@ -634,28 +649,122 @@ async fn recover_interrupted_execution_retry_snapshot(
     if reference.state == vulcan_workbench_model::ExecutionRetrySnapshotState::Frozen {
         return Ok(());
     }
-    // currentGeneration is the post-sanitize continuation generation that owns restart reconciliation.
-    // currentGeneration 是拥有重启收敛过程的净化后 Continue 代际。
-    let current_generation = workspace_snapshot
-        .session_runtime_state
-        .get(&session_id)
-        .map(|runtime_state| runtime_state.provider_call_ledger.continuation.generation)
-        .ok_or_else(|| String::from("Recovered retry runtime state disappeared."))?;
-    // Restart reconciliation binds the sidecar to the post-sanitize ledger generation.
-    // 重启收敛会把 sidecar 绑定到 sanitize 后的账本代际。
+    // claimedAttemptId is the exact cross-document owner that must match the persisted ledger claim.
+    // claimedAttemptId 是必须与持久化账本领取一致的精确跨文档所有者。
+    let claimed_attempt_id = match snapshot
+        .claimed_attempt_id
+        .as_deref()
+        .filter(|attempt_id| !attempt_id.trim().is_empty())
+    {
+        Some(attempt_id) => attempt_id.to_string(),
+        None => {
+            return invalidate_and_persist_hydrated_execution_retry_reference(
+                controller_runtime,
+                workspace_snapshot,
+                session_id,
+                "retry_snapshot_transition_failed",
+                "The crash-interrupted execution retry snapshot has no exact claimed attempt identity.",
+            )
+            .await;
+        }
+    };
+    // currentRecoveryState is the post-sanitize continuation generation and canonical conversation
+    // that jointly own restart reconciliation.
+    // currentRecoveryState 是共同拥有重启收敛过程的净化后 Continue 代际与规范会话。
+    let (current_generation, current_conversation_state, sanitized_claim_matches) =
+        workspace_snapshot
+            .session_runtime_state
+            .get(&session_id)
+            .map(|runtime_state| {
+                // continuation is the fresh-process sanitizer result that supersedes the dead claim owner.
+                // continuation 是取代失效领取所有者的新进程净化结果。
+                let continuation = &runtime_state.provider_call_ledger.continuation;
+                // terminalIdentityMatches accepts the exact orphaned claim identity unless a closed
+                // Provider call is the stronger restart-interruption owner.
+                // terminalIdentityMatches 接受精确孤立领取身份；若已闭合 Provider 调用是更强的
+                // 重启中断所有者，则接受该精确重启分类。
+                let terminal_identity_matches = match continuation.terminal_reason.as_deref() {
+                    Some("continuation_interrupted_after_restart") => {
+                        continuation.terminal_execution_id.as_deref()
+                            == Some(claimed_attempt_id.as_str())
+                    }
+                    Some("interrupted_after_restart") => {
+                        continuation.terminal_execution_id.is_some()
+                    }
+                    _ => false,
+                };
+                (
+                    continuation.generation,
+                    runtime_state.conversation_state.clone(),
+                    snapshot
+                        .generation
+                        .checked_add(1)
+                        .is_some_and(|generation| generation == continuation.generation)
+                        && continuation.claimed_at_ms.is_none()
+                        && continuation.claimed_execution_id.is_none()
+                        && continuation.terminal_at_ms.is_some()
+                        && continuation.invalidated_at_ms.is_none()
+                        && continuation.expected_ledger_revision
+                            == runtime_state.provider_call_ledger.revision
+                        && terminal_identity_matches,
+                )
+            })
+            .ok_or_else(|| String::from("Recovered retry runtime state disappeared."))?;
+    if !sanitized_claim_matches {
+        return invalidate_and_persist_hydrated_execution_retry_reference(
+            controller_runtime,
+            workspace_snapshot,
+            session_id,
+            "retry_snapshot_transition_failed",
+            "The crash-interrupted execution retry snapshot does not match the exact fresh-process claim reconciliation boundary.",
+        )
+        .await;
+    }
+    // Restart reconciliation rebinds the refrozen body to the exact post-sanitize problem generation.
+    // 重启收敛将重新冻结的正文绑定到净化后的精确问题代际。
     snapshot.generation = current_generation;
+    // canonicalActionAdvanced consumes any supplement, tool result, or mailbox input committed
+    // before the crash and selects the exact next safe action without replaying stale input.
+    // canonicalActionAdvanced 消费崩溃前已提交的补充消息、工具结果或 mailbox 输入，并选择
+    // 精确的下一安全动作，避免重放过期输入。
+    let canonical_action_advanced =
+        match crate::agent_stream::reconcile_interrupted_execution_retry_canonical_state(
+            &mut snapshot,
+            &current_conversation_state,
+        ) {
+            Ok(advanced) => advanced,
+            Err(error) => {
+                eprintln!(
+                    "[webui-service] hydrated execution retry canonical reconciliation failed: {error}"
+                );
+                return invalidate_and_persist_hydrated_execution_retry_reference(
+                controller_runtime,
+                workspace_snapshot,
+                session_id,
+                "retry_snapshot_transition_failed",
+                "The crash-interrupted execution retry snapshot could not reconcile its canonical progress.",
+            )
+            .await;
+            }
+        };
     snapshot.state = vulcan_workbench_model::ExecutionRetrySnapshotState::Frozen;
     snapshot.claimed_attempt_id = None;
     snapshot.updated_at = current_unix_millis_value().to_string();
     // Preserve a previously proven non-retryable or side-effect-unknown error; restart is not proof of safety.
     // 保留此前已证明不可重试或副作用未知的错误；重启本身不能证明安全。
-    if should_replace_restart_interruption_error(snapshot.error.as_ref(), &snapshot.pending_action)
+    if !canonical_action_advanced
+        && should_replace_restart_interruption_error(
+            snapshot.error.as_ref(),
+            &snapshot.pending_action,
+        )
     {
         // dispatchOutcome remains unknown for a Provider action and is proven not-dispatched only for local preparation actions.
         // dispatchOutcome 对 Provider 动作保持未知，仅对本地准备动作证明为未分派。
         let dispatch_outcome = match &snapshot.pending_action {
             vulcan_workbench_model::ExecutionRetryPendingAction::ResumePreparation { .. }
-            | vulcan_workbench_model::ExecutionRetryPendingAction::PrepareNextProviderRequest => {
+            | vulcan_workbench_model::ExecutionRetryPendingAction::ExecuteToolBatch { .. }
+            | vulcan_workbench_model::ExecutionRetryPendingAction::PrepareNextProviderRequest
+            | vulcan_workbench_model::ExecutionRetryPendingAction::FinalizeAssistant => {
                 vulcan_ai_contract::DispatchOutcome::NotDispatched
             }
             _ => vulcan_ai_contract::DispatchOutcome::Unknown,
@@ -758,7 +867,9 @@ fn should_replace_restart_interruption_error(
     let action_can_prove_no_dispatch = matches!(
         pending_action,
         vulcan_workbench_model::ExecutionRetryPendingAction::ResumePreparation { .. }
+            | vulcan_workbench_model::ExecutionRetryPendingAction::ExecuteToolBatch { .. }
             | vulcan_workbench_model::ExecutionRetryPendingAction::PrepareNextProviderRequest
+            | vulcan_workbench_model::ExecutionRetryPendingAction::FinalizeAssistant
     );
     error.is_none_or(|error| {
         error.retryable
@@ -793,8 +904,8 @@ mod tests {
     ///
     /// # Returns
     /// 返回值
-    /// A frozen v4 pointer whose mirrored safety summary initially permits replay.
-    /// 返回一个镜像安全摘要初始允许重放的冻结 v4 指针。
+    /// A frozen current-schema pointer whose mirrored safety summary initially permits replay.
+    /// 返回一个镜像安全摘要初始允许重放的当前 Schema 冻结指针。
     fn hydrated_safe_retry_reference() -> ExecutionRetrySnapshotRef {
         ExecutionRetrySnapshotRef {
             schema_version: vulcan_workbench_model::EXECUTION_RETRY_SNAPSHOT_SCHEMA_VERSION,
@@ -936,8 +1047,8 @@ mod tests {
         assert!(!runtime_state.provider_call_ledger.continuation.eligible);
     }
 
-    /// Verifies hydration cannot reopen Continue from a stale cached tail label after the dialogue ends in assistant output or disappears.
-    /// 验证当对话以助手输出结尾或已经缺失时，hydration 不能依据过期缓存尾部标签重新开启 Continue。
+    /// Verifies hydration accepts exact assistant/empty labels but rejects presentation-tail drift or unsafe replay bodies.
+    /// 验证 hydration 接受精确的助手/空标签，但拒绝展示尾部漂移或不安全重放正文。
     #[test]
     fn hydrated_retry_eligibility_requires_exact_retryable_canonical_tail() {
         // runtimeState starts with one exact user tail and a matching terminal ledger cache.
@@ -991,9 +1102,29 @@ mod tests {
             &runtime_state,
             true
         ));
+        // Matching the exact assistant presentation label restores eligibility without changing replay evidence.
+        // 匹配精确的助手展示标签后，无需改变重放证据即可恢复资格。
+        runtime_state
+            .provider_call_ledger
+            .continuation
+            .canonical_tail_kind = Some(String::from("assistant"));
+        assert!(hydrated_retry_continuation_is_eligible(
+            &runtime_state,
+            true
+        ));
 
         runtime_state.conversation_state.records.clear();
         assert!(!hydrated_retry_continuation_is_eligible(
+            &runtime_state,
+            true
+        ));
+        // Matching the normalized empty label proves absence of a presentation row is not itself a safety failure.
+        // 匹配规范化空标签后，证明缺失展示行本身并不是安全失败。
+        runtime_state
+            .provider_call_ledger
+            .continuation
+            .canonical_tail_kind = Some(String::from("empty"));
+        assert!(hydrated_retry_continuation_is_eligible(
             &runtime_state,
             true
         ));
@@ -1040,8 +1171,25 @@ mod tests {
     /// 验证仅在保留错误能够证明重放安全时才允许重启替换。
     #[test]
     fn restart_interruption_replacement_preserves_unsafe_errors() {
+        // nextProviderRequest is a local preparation action whose previous Provider dispatch state is irrelevant.
+        // nextProviderRequest 是本地准备动作，其先前 Provider 分派状态与恢复安全性无关。
         let next_provider_request = ExecutionRetryPendingAction::PrepareNextProviderRequest;
-        let unknown_dispatch_action = ExecutionRetryPendingAction::FinalizeAssistant;
+        // finalizeAssistant is also local and can safely replace an unknown-dispatch restart marker.
+        // finalizeAssistant 同样属于本地动作，可以安全替换分派未知的重启标记。
+        let finalize_assistant = ExecutionRetryPendingAction::FinalizeAssistant;
+        // providerRequest represents the only action whose unknown transport dispatch must remain unsafe.
+        // providerRequest 表示唯一必须把未知传输分派继续视为不安全的动作。
+        let provider_request =
+            serde_json::from_value::<vulcan_ai_contract::AiExecutionRequest>(serde_json::json!({
+                "operation": "conversation_respond",
+                "model_id": "restart-test-model"
+            }))
+            .expect("minimal Provider request fixture should decode");
+        // unknownDispatchAction preserves the exact Provider request whose physical dispatch cannot be proven.
+        // unknownDispatchAction 保留其物理分派无法证明的精确 Provider 请求。
+        let unknown_dispatch_action = ExecutionRetryPendingAction::DispatchProviderRequest {
+            request: Box::new(provider_request),
+        };
         assert!(should_replace_restart_interruption_error(
             None,
             &next_provider_request
@@ -1062,6 +1210,10 @@ mod tests {
         assert!(!should_replace_restart_interruption_error(
             Some(&test_error(true, DispatchOutcome::Unknown, false, false)),
             &unknown_dispatch_action
+        ));
+        assert!(should_replace_restart_interruption_error(
+            Some(&test_error(true, DispatchOutcome::Unknown, false, false)),
+            &finalize_assistant
         ));
         assert!(!should_replace_restart_interruption_error(
             Some(&test_error(true, DispatchOutcome::Dispatched, true, false)),

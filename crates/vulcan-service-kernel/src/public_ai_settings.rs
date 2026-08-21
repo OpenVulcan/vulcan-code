@@ -32,15 +32,16 @@ use vulcan_provider_adapters::{
     CustomProviderModelDefaults, CustomProviderModelDiscoveryMode, CustomProviderProtocol,
     DeclaredProviderToolTemplateModel, InferenceProfile, InferenceRouteBinding,
     InferenceRouteConfiguration, InternalModelOverrides, ManifestSourceLayer,
-    MediaUnderstandingBackendSelection, ModelCapabilityOverrides, ModelDiscoveryKind,
-    ModelExecutionOverrides, OAuthAuthorizationChallenge, OAuthClientConfiguration,
-    OAuthTransactionPhase, OAuthTransactionSnapshot, PersistedAiConfiguration, ProviderDescriptor,
-    ProviderKind, ProviderRegistry, ProviderToolCapabilityKind, ProviderToolExecutionResult,
-    ProviderToolTarget, ProviderToolTargetSelection, PublicAiRuntime,
-    PublicAiRuntimeSettingsCatalogSnapshot, ResponsesRemoteCompactionPolicy,
-    ResponsesRouteFeatures, ResponsesWebsocketPolicy, ServiceEntry, ServiceEntryKind,
-    StagedConnectionCatalogObservation, credential_authorization_binding,
-    registered_native_action_binding_id, validate_custom_provider_identifier,
+    MediaUnderstandingBackendOptions, MediaUnderstandingBackendSelection, ModelCapabilityOverrides,
+    ModelDiscoveryKind, ModelExecutionOverrides, OAuthAuthorizationChallenge,
+    OAuthClientConfiguration, OAuthTransactionPhase, OAuthTransactionSnapshot,
+    PersistedAiConfiguration, ProviderDescriptor, ProviderKind, ProviderRegistry,
+    ProviderToolCapabilityKind, ProviderToolExecutionResult, ProviderToolTarget,
+    ProviderToolTargetSelection, PublicAiRuntime, PublicAiRuntimeSettingsCatalogSnapshot,
+    ResponsesRemoteCompactionPolicy, ResponsesRouteFeatures, ResponsesWebsocketPolicy,
+    ServiceEntry, ServiceEntryKind, StagedConnectionCatalogObservation,
+    credential_authorization_binding, registered_native_action_binding_id,
+    validate_custom_provider_identifier,
 };
 use vulcan_service_api::{
     ContextCompactionWindowNodeSummary, ServiceEventEmitter, WorkbenchSnapshot,
@@ -183,6 +184,10 @@ pub(super) struct PublicAiSettingsSnapshot {
     /// 每项理解能力唯一显式选择的供应商工具或模型代替后端。
     media_understanding_selections:
         BTreeMap<ProviderToolCapabilityKind, MediaUnderstandingBackendSelection>,
+    /// Independently configured provider and model-replacement routes per understanding capability.
+    /// 每项理解能力分别配置的供应商专用与模型代替路由。
+    media_understanding_backend_options:
+        BTreeMap<ProviderToolCapabilityKind, MediaUnderstandingBackendOptions>,
     /// Every currently executable account route eligible for model-replacement understanding.
     /// 当前可执行且符合模型代替理解条件的全部账号路由。
     media_understanding_model_candidates: Vec<PublicAiMediaUnderstandingModelCandidate>,
@@ -443,6 +448,10 @@ pub(super) struct PublicAiSessionProviderToolSettingsSnapshot {
     /// 当前会话选择的精确原生模型扩展目标集合。
     extension_target_sets:
         BTreeMap<ProviderToolCapabilityKind, BTreeSet<ProviderToolTargetSelection>>,
+    /// Session-selected backend mode for each enabled media-understanding capability.
+    /// 当前会话为每项启用的媒体理解能力选择的后端模式。
+    media_understanding_modes:
+        BTreeMap<ProviderToolCapabilityKind, vulcan_workbench_model::SessionMediaUnderstandingMode>,
     /// Invalid retained choices that require explicit user confirmation.
     /// 需要用户显式确认的无效保留选择。
     conflicts: Vec<PublicAiSessionProviderToolConflict>,
@@ -1029,6 +1038,11 @@ pub(super) struct PublicAiSessionProviderToolSelectionsSaveRequest {
     /// 当前会话保留的完整原生模型扩展目标集合。
     extension_target_sets:
         BTreeMap<ProviderToolCapabilityKind, BTreeSet<ProviderToolTargetSelection>>,
+    /// Session-selected provider or model-replacement mode per media capability.
+    /// 当前会话为每项媒体能力选择的供应商专用或模型代替模式。
+    #[serde(default)]
+    media_understanding_modes:
+        BTreeMap<ProviderToolCapabilityKind, vulcan_workbench_model::SessionMediaUnderstandingMode>,
 }
 
 /// Changes the explicit default connection for one provider.
@@ -7358,7 +7372,7 @@ fn append_session_model_switch_record(
         entry.visible = true;
         entry.metadata = Some(serde_json::json!({
             "notice_kind": "model_switch",
-            "activation": "next_submission",
+            "activation": "next_provider_request",
             "provider_id": selection.provider_id,
             "provider_name": provider_display_name,
             "connection_id": selection.connection_id,
@@ -7384,15 +7398,15 @@ fn append_session_model_switch_record(
 /// # Parameters
 /// 参数
 /// `workspace` is the detached transaction candidate; `session_id` identifies its owner;
-/// `selection` and display names identify the exact next-submission route and its audit labels.
+/// `selection` and display names identify the exact next-Provider-request route and its audit labels.
 /// `workspace` 是独立事务候选；`session_id` 标识其所有者；`selection` 与显示名称标识下一次
-/// 用户提交使用的精确路由及其审计标签。
+/// 真实 Provider 请求使用的精确路由及其审计标签。
 ///
 /// # Returns
 /// 返回值
 /// A workspace-only reconciliation when the future selection changes, otherwise an empty plan.
 /// 当未来选择发生变化时返回仅工作区协调，否则返回空计划。
-fn plan_session_model_selection_for_next_submission(
+fn plan_session_model_selection_for_next_provider_request(
     workspace: &mut vulcan_workspace_store::workspace_store::WorkspaceSnapshot,
     session_id: crate::SessionId,
     selection: &SessionPendingModelSelection,
@@ -7635,7 +7649,7 @@ pub(super) async fn service_select_public_ai_model(
                     configuration,
                     |workspace| {
                         if let Some(session_id) = conversation_id {
-                            plan_session_model_selection_for_next_submission(
+                            plan_session_model_selection_for_next_provider_request(
                                 workspace,
                                 session_id,
                                 &pending_target,
@@ -7655,9 +7669,9 @@ pub(super) async fn service_select_public_ai_model(
             },
         )?;
     if let Some(session_id) = conversation_id {
-        // persistenceContext captures the committed transcript record after atomic publication.
-        // persistenceContext 在原子发布后捕获已提交的转录记录。
-        let persistence_context = {
+        // persistenceContext captures the committed pending tuple and transcript record after atomic publication.
+        // persistenceContext 在原子发布后捕获已提交的待生效三元组与转录记录。
+        let (controller_runtime, workspace_snapshot) = {
             // guard reads controller ownership and the matching committed workspace revision together.
             // guard 同时读取控制器所有权与匹配的已提交工作区修订。
             let guard = state
@@ -7667,16 +7681,22 @@ pub(super) async fn service_select_public_ai_model(
                 .controller_runtime
                 .clone()
                 .zip(guard.workspace_snapshot.clone())
+                .ok_or_else(|| {
+                    String::from(
+                        "Session model selection cannot persist because controller workspace storage is unavailable.",
+                    )
+                })?
         };
-        if let Some((controller_runtime, workspace_snapshot)) = persistence_context {
-            crate::spawn_workspace_session_persist_task(
-                state.clone(),
-                controller_runtime,
-                workspace_snapshot,
-                session_id,
-                Some(String::from("model_selection_record")),
-            );
-        }
+        // The authoritative write gate reloads the newest retained session row, so this synchronous
+        // durability boundary cannot overwrite tool, Continue, or terminal mutations committed after publication.
+        // 权威写入闸门会重新加载最新保留会话行，因此该同步可靠边界不会覆盖发布后提交的工具、Continue 或终态变更。
+        crate::persist_workspace_session_update(
+            Some(&state),
+            controller_runtime,
+            &workspace_snapshot,
+            session_id,
+        )
+        .await?;
     }
     drop(transaction);
     Ok(snapshot)
@@ -8907,11 +8927,19 @@ pub(super) async fn service_save_public_ai_media_understanding_selection(
         |configuration| {
             if let Some(selection) = request.selection.clone() {
                 configuration
+                    .media_understanding_backend_options
+                    .entry(request.capability)
+                    .or_default()
+                    .update_from_selection(&selection);
+                configuration
                     .media_understanding_selections
                     .insert(request.capability, selection);
             } else {
                 configuration
                     .media_understanding_selections
+                    .remove(&request.capability);
+                configuration
+                    .media_understanding_backend_options
                     .remove(&request.capability);
             }
             // Remove any legacy global direct target for the same media capability.
@@ -9104,19 +9132,26 @@ pub(super) async fn service_public_ai_session_provider_tool_selections(
                 .get(&session_id)
                 .cloned()
                 .ok_or_else(|| format!("Conversation `{session_id}` has no runtime state."))?;
-        let (enabled_capabilities, selections, extension_target_sets, state_changed) =
-            reconcile_session_provider_tool_settings(&mut planned_runtime_state, &configuration)?;
+        let (
+            enabled_capabilities,
+            selections,
+            media_understanding_modes,
+            extension_target_sets,
+            state_changed,
+        ) = reconcile_session_provider_tool_settings(&mut planned_runtime_state, &configuration)?;
         let conflicts = provider_tool_session_conflicts(
             runtime.as_ref(),
             &configuration,
             &enabled_capabilities,
             &selections,
+            &media_understanding_modes,
             &extension_target_sets,
         )?;
         (
             PublicAiSessionProviderToolSettingsSnapshot {
                 enabled_capabilities,
                 selections,
+                media_understanding_modes,
                 extension_target_sets,
                 conflicts,
             },
@@ -9140,18 +9175,25 @@ pub(super) async fn service_public_ai_session_provider_tool_selections(
                 .session_runtime_state
                 .get_mut(&session_id)
                 .ok_or_else(|| format!("Conversation `{session_id}` has no runtime state."))?;
-            let (enabled_capabilities, selections, extension_target_sets, state_changed) =
-                reconcile_session_provider_tool_settings(runtime_state, &configuration)?;
+            let (
+                enabled_capabilities,
+                selections,
+                media_understanding_modes,
+                extension_target_sets,
+                state_changed,
+            ) = reconcile_session_provider_tool_settings(runtime_state, &configuration)?;
             let conflicts = provider_tool_session_conflicts(
                 runtime.as_ref(),
                 &configuration,
                 &enabled_capabilities,
                 &selections,
+                &media_understanding_modes,
                 &extension_target_sets,
             )?;
             committed_snapshot.replace(Some(PublicAiSessionProviderToolSettingsSnapshot {
                 enabled_capabilities,
                 selections,
+                media_understanding_modes,
                 extension_target_sets,
                 conflicts,
             }));
@@ -9189,6 +9231,7 @@ fn reconcile_session_provider_tool_settings(
     (
         BTreeSet<ProviderToolCapabilityKind>,
         BTreeMap<ProviderToolCapabilityKind, ProviderToolTargetSelection>,
+        BTreeMap<ProviderToolCapabilityKind, vulcan_workbench_model::SessionMediaUnderstandingMode>,
         BTreeMap<ProviderToolCapabilityKind, BTreeSet<ProviderToolTargetSelection>>,
         bool,
     ),
@@ -9232,6 +9275,12 @@ fn reconcile_session_provider_tool_settings(
                 .iter()
                 .map(|capability| provider_tool_capability_key(*capability))
                 .collect();
+            // nextMediaUnderstandingModes mirrors the active global media backend family while
+            // keeping the session field independent from exact model and account selections.
+            // nextMediaUnderstandingModes 镜像活动全局媒体后端类型，同时让会话字段独立于精确模型与账号选择。
+            let next_media_understanding_modes = session_media_understanding_modes_to_runtime(
+                &session_media_understanding_modes_from_configuration(configuration),
+            );
             // nextExtensionTargetSets mirrors the exact current global extension defaults.
             // nextExtensionTargetSets 镜像精确的当前全局扩展目标默认集合。
             let next_extension_target_sets = configuration
@@ -9249,10 +9298,12 @@ fn reconcile_session_provider_tool_settings(
                 .collect();
             if runtime_state.provider_tool_selections != next_selections
                 || runtime_state.provider_tool_enabled_capabilities != next_enabled_capabilities
+                || runtime_state.media_understanding_modes != next_media_understanding_modes
                 || runtime_state.provider_extension_target_sets != next_extension_target_sets
             {
                 runtime_state.provider_tool_selections = next_selections;
                 runtime_state.provider_tool_enabled_capabilities = next_enabled_capabilities;
+                runtime_state.media_understanding_modes = next_media_understanding_modes;
                 runtime_state.provider_extension_target_sets = next_extension_target_sets;
                 state_changed = true;
             }
@@ -9278,6 +9329,9 @@ fn reconcile_session_provider_tool_settings(
             .iter()
             .map(|capability| provider_tool_capability_key(*capability))
             .collect();
+        runtime_state.media_understanding_modes = session_media_understanding_modes_to_runtime(
+            &session_media_understanding_modes_from_configuration(configuration),
+        );
         runtime_state.provider_extension_target_sets = configuration
             .provider_extension_target_sets
             .iter()
@@ -9307,16 +9361,40 @@ fn reconcile_session_provider_tool_settings(
         runtime_state.provider_tool_selections = cleaned_selections;
         state_changed = true;
     }
+    // cleanedMediaModes removes malformed legacy capability keys and fills only missing media
+    // defaults for an explicit session override created before this field existed.
+    // cleanedMediaModes 清理旧的非法能力键，并仅为新增字段之前创建的显式会话补齐缺失媒体默认值。
+    let mut cleaned_media_modes = runtime_state
+        .media_understanding_modes
+        .iter()
+        .filter(|(capability, _)| media_capability_keys.contains(*capability))
+        .map(|(capability, mode)| (capability.clone(), *mode))
+        .collect::<BTreeMap<_, _>>();
+    if runtime_state.provider_tool_selections_overridden {
+        for (capability, mode) in
+            session_media_understanding_modes_from_configuration(configuration)
+        {
+            cleaned_media_modes
+                .entry(provider_tool_capability_key(capability))
+                .or_insert(mode);
+        }
+    }
+    if cleaned_media_modes != runtime_state.media_understanding_modes {
+        runtime_state.media_understanding_modes = cleaned_media_modes;
+        state_changed = true;
+    }
     if state_changed {
         runtime_state.updated_at = crate::current_unix_millis_text();
     }
     let enabled_capabilities =
         session_provider_tool_enabled_capabilities_from_runtime(runtime_state)?;
     let selections = session_provider_tool_selections_from_runtime(runtime_state)?;
+    let media_understanding_modes = session_media_understanding_modes_from_runtime(runtime_state)?;
     let extension_target_sets = session_provider_extension_target_sets_from_runtime(runtime_state)?;
     Ok((
         enabled_capabilities,
         selections,
+        media_understanding_modes,
         extension_target_sets,
         state_changed,
     ))
@@ -9329,12 +9407,15 @@ pub(super) async fn service_save_public_ai_session_provider_tool_selections(
     state: SharedServiceBridgeState,
     request: PublicAiSessionProviderToolSelectionsSaveRequest,
 ) -> Result<PublicAiSessionProviderToolSettingsSnapshot, String> {
-    // normalizedRequest preserves only the session enable switch for media capabilities.
-    // normalizedRequest 对媒体能力只保留会话启用开关。
+    // normalizedRequest preserves only the session enable switch and backend mode for media capabilities.
+    // normalizedRequest 对媒体能力只保留会话启用开关与后端模式。
     let mut request = request;
     request
         .selections
         .retain(|capability, _| media_understanding_resource_kind(*capability).is_none());
+    request
+        .media_understanding_modes
+        .retain(|capability, _| media_understanding_resource_kind(*capability).is_some());
     let session_id = request
         .conversation_id
         .parse::<crate::SessionId>()
@@ -9353,6 +9434,7 @@ pub(super) async fn service_save_public_ai_session_provider_tool_selections(
         &configuration,
         &request.enabled_capabilities,
         &request.selections,
+        &request.media_understanding_modes,
         &request.extension_target_sets,
     )?;
     // snapshot is complete before any browser-visible or authoritative workspace assignment.
@@ -9360,6 +9442,7 @@ pub(super) async fn service_save_public_ai_session_provider_tool_selections(
     let snapshot = PublicAiSessionProviderToolSettingsSnapshot {
         enabled_capabilities: request.enabled_capabilities,
         selections: request.selections,
+        media_understanding_modes: request.media_understanding_modes,
         extension_target_sets: request.extension_target_sets,
         conflicts: Vec::new(),
     };
@@ -9391,6 +9474,8 @@ pub(super) async fn service_save_public_ai_session_provider_tool_selections(
                 .iter()
                 .map(|capability| provider_tool_capability_key(*capability))
                 .collect();
+            runtime_state.media_understanding_modes =
+                session_media_understanding_modes_to_runtime(&snapshot.media_understanding_modes);
             runtime_state.provider_extension_target_sets = snapshot
                 .extension_target_sets
                 .iter()
@@ -9426,6 +9511,10 @@ pub(crate) fn validate_provider_tool_session_settings(
     configuration: &PersistedAiConfiguration,
     enabled_capabilities: &BTreeSet<ProviderToolCapabilityKind>,
     selections: &BTreeMap<ProviderToolCapabilityKind, ProviderToolTargetSelection>,
+    media_understanding_modes: &BTreeMap<
+        ProviderToolCapabilityKind,
+        vulcan_workbench_model::SessionMediaUnderstandingMode,
+    >,
     extension_target_sets: &BTreeMap<
         ProviderToolCapabilityKind,
         BTreeSet<ProviderToolTargetSelection>,
@@ -9436,6 +9525,7 @@ pub(crate) fn validate_provider_tool_session_settings(
         configuration,
         enabled_capabilities,
         selections,
+        media_understanding_modes,
         extension_target_sets,
     )?;
     if conflicts.is_empty() {
@@ -9458,14 +9548,37 @@ fn provider_tool_session_conflicts(
     configuration: &PersistedAiConfiguration,
     enabled_capabilities: &BTreeSet<ProviderToolCapabilityKind>,
     selections: &BTreeMap<ProviderToolCapabilityKind, ProviderToolTargetSelection>,
+    media_understanding_modes: &BTreeMap<
+        ProviderToolCapabilityKind,
+        vulcan_workbench_model::SessionMediaUnderstandingMode,
+    >,
     extension_target_sets: &BTreeMap<
         ProviderToolCapabilityKind,
         BTreeSet<ProviderToolTargetSelection>,
     >,
 ) -> Result<Vec<PublicAiSessionProviderToolConflict>, String> {
-    // settingsCatalog supplies the exact conversation routes needed to validate global media backends.
-    // settingsCatalog 提供校验全局媒体后端所需的精确会话路由。
-    let settings_catalog = runtime.settings_catalog_snapshot(configuration)?;
+    // effectiveConfiguration applies session-selected media modes without mutating global persistence.
+    // effectiveConfiguration 应用会话选定的媒体模式，但不修改全局持久化配置。
+    let mut effective_configuration = configuration.clone();
+    let mut media_mode_errors = BTreeMap::new();
+    for (capability, mode) in media_understanding_modes {
+        let backend_mode = match mode {
+            vulcan_workbench_model::SessionMediaUnderstandingMode::ProviderTool => {
+                vulcan_provider_adapters::MediaUnderstandingBackendMode::ProviderTool
+            }
+            vulcan_workbench_model::SessionMediaUnderstandingMode::ModelReplacement => {
+                vulcan_provider_adapters::MediaUnderstandingBackendMode::ModelReplacement
+            }
+        };
+        if let Err(error) =
+            effective_configuration.apply_media_understanding_mode(*capability, backend_mode)
+        {
+            media_mode_errors.insert(*capability, error);
+        }
+    }
+    // settingsCatalog supplies the exact conversation routes needed to validate session-selected media backends.
+    // settingsCatalog 提供校验会话选定媒体后端所需的精确会话路由。
+    let settings_catalog = runtime.settings_catalog_snapshot(&effective_configuration)?;
     // available belongs to the same immutable catalog generation as every media model candidate.
     // available 与全部媒体模型候选归属于同一份不可变目录代际。
     let available = &settings_catalog.available_provider_tool_targets;
@@ -9501,20 +9614,25 @@ fn provider_tool_session_conflicts(
             continue;
         }
         if media_understanding_resource_kind(capability).is_some() {
-            if !configuration
-                .media_understanding_selections
-                .contains_key(&capability)
-            {
+            let Some(mode) = media_understanding_modes.get(&capability) else {
                 conflicts.push(PublicAiSessionProviderToolConflict {
                     capability,
                     kind: String::from("missing_selection"),
                     message: format!(
-                        "Media-understanding capability `{:?}` is enabled but has no configured backend.",
+                        "Media-understanding capability `{:?}` is enabled but has no selected backend mode.",
                         capability
                     ),
                 });
+                continue;
+            };
+            if let Some(error) = media_mode_errors.get(&capability) {
+                conflicts.push(PublicAiSessionProviderToolConflict {
+                    capability,
+                    kind: String::from("target_unavailable"),
+                    message: error.clone(),
+                });
             } else if !media_understanding_backend_is_available(
-                configuration,
+                &settings_catalog.runtime_configuration,
                 capability,
                 available,
                 &media_model_candidates,
@@ -9523,8 +9641,8 @@ fn provider_tool_session_conflicts(
                     capability,
                     kind: String::from("target_unavailable"),
                     message: format!(
-                        "The configured backend for media-understanding capability `{:?}` is no longer available; configure it again before sending.",
-                        capability
+                        "The `{mode:?}` backend for media-understanding capability `{:?}` is no longer available; configure it again before sending.",
+                        capability,
                     ),
                 });
             }
@@ -9744,6 +9862,90 @@ fn validate_provider_extension_target_sets(
     Ok(())
 }
 
+/// Converts the active global media selections into session backend modes.
+/// 将活动的全局媒体选择转换为会话后端模式。
+///
+/// # Parameters
+/// 参数
+/// `configuration` owns the currently active global media backend selection for each capability.
+/// `configuration` 持有每项能力当前活动的全局媒体后端选择。
+///
+/// # Returns
+/// 返回值
+/// A closed map containing only image, video, and audio understanding modes.
+/// 仅包含图片、视频与音频理解模式的封闭映射。
+pub(crate) fn session_media_understanding_modes_from_configuration(
+    configuration: &PersistedAiConfiguration,
+) -> BTreeMap<ProviderToolCapabilityKind, vulcan_workbench_model::SessionMediaUnderstandingMode> {
+    configuration
+        .media_understanding_selections
+        .iter()
+        .filter_map(|(capability, selection)| {
+            let mode = match selection {
+                MediaUnderstandingBackendSelection::ProviderTool { .. } => {
+                    vulcan_workbench_model::SessionMediaUnderstandingMode::ProviderTool
+                }
+                MediaUnderstandingBackendSelection::ModelReplacement { .. } => {
+                    vulcan_workbench_model::SessionMediaUnderstandingMode::ModelReplacement
+                }
+            };
+            media_understanding_resource_kind(*capability).map(|_| (*capability, mode))
+        })
+        .collect()
+}
+
+/// Converts one session runtime mode map into the typed provider contract.
+/// 将会话运行时模式映射转换为类型化供应商契约。
+///
+/// # Parameters
+/// 参数
+/// `runtime_state` owns the persisted snake_case capability keys and closed mode values.
+/// `runtime_state` 持有持久化的 snake_case 能力键与封闭模式值。
+///
+/// # Returns
+/// 返回值
+/// The typed media mode map, or an explicit invalid-key error.
+/// 类型化媒体模式映射；键非法时返回明确错误。
+fn session_media_understanding_modes_from_runtime(
+    runtime_state: &vulcan_workbench_model::SessionRuntimeStateEntry,
+) -> Result<
+    BTreeMap<ProviderToolCapabilityKind, vulcan_workbench_model::SessionMediaUnderstandingMode>,
+    String,
+> {
+    runtime_state
+        .media_understanding_modes
+        .iter()
+        .map(|(capability, mode)| {
+            let capability = serde_json::from_value(serde_json::Value::String(capability.clone()))
+                .map_err(|error| {
+                    format!(
+                        "Session media-understanding capability `{capability}` is invalid: {error}"
+                    )
+                })?;
+            if media_understanding_resource_kind(capability).is_none() {
+                return Err(format!(
+                    "Session capability `{capability:?}` cannot use a media-understanding mode."
+                ));
+            }
+            Ok((capability, *mode))
+        })
+        .collect()
+}
+
+/// Converts one typed media mode map into the session runtime persistence contract.
+/// 将类型化媒体模式映射转换为会话运行时持久化契约。
+fn session_media_understanding_modes_to_runtime(
+    modes: &BTreeMap<
+        ProviderToolCapabilityKind,
+        vulcan_workbench_model::SessionMediaUnderstandingMode,
+    >,
+) -> BTreeMap<String, vulcan_workbench_model::SessionMediaUnderstandingMode> {
+    modes
+        .iter()
+        .map(|(capability, mode)| (provider_tool_capability_key(*capability), *mode))
+        .collect()
+}
+
 /// Converts one provider-contract selection into the session persistence contract.
 /// 把一个供应商契约选择转换为会话持久化契约。
 fn session_provider_tool_selection_from_contract(
@@ -9856,16 +10058,31 @@ pub(crate) fn public_ai_session_media_understanding_bridge_kinds(
     let explicit_session_settings = runtime_state.is_some_and(|state| {
         state.provider_tool_settings_initialized && state.provider_tool_selections_overridden
     });
-    // enabledCapabilities preserves the session switch layer while backend identity remains the
-    // globally configured closed media-backend selection.
-    // enabledCapabilities 保留会话开关层，而后端身份继续采用全局配置的封闭媒体后端选择。
+    // enabledCapabilities preserves the session switch layer while media modes are applied to a
+    // detached configuration copy for this bridge calculation.
+    // enabledCapabilities 保留会话开关层，同时把媒体模式应用到独立配置副本供本次桥接计算使用。
     let enabled_capabilities = if explicit_session_settings {
         let runtime_state = runtime_state.expect("explicit session settings require runtime state");
         session_provider_tool_enabled_capabilities_from_runtime(runtime_state)?
     } else {
         configuration.provider_tool_enabled_capabilities.clone()
     };
-    let settings_catalog = runtime.settings_catalog_snapshot(configuration)?;
+    let mut effective_configuration = configuration.clone();
+    if explicit_session_settings {
+        let runtime_state = runtime_state.expect("explicit session settings require runtime state");
+        for (capability, mode) in session_media_understanding_modes_from_runtime(runtime_state)? {
+            let backend_mode = match mode {
+                vulcan_workbench_model::SessionMediaUnderstandingMode::ProviderTool => {
+                    vulcan_provider_adapters::MediaUnderstandingBackendMode::ProviderTool
+                }
+                vulcan_workbench_model::SessionMediaUnderstandingMode::ModelReplacement => {
+                    vulcan_provider_adapters::MediaUnderstandingBackendMode::ModelReplacement
+                }
+            };
+            effective_configuration.apply_media_understanding_mode(capability, backend_mode)?;
+        }
+    }
+    let settings_catalog = runtime.settings_catalog_snapshot(&effective_configuration)?;
     // availableProviderTargets shares one immutable generation with modelCandidates.
     // availableProviderTargets 与 modelCandidates 共享同一份不可变目录代际。
     let available_provider_targets = &settings_catalog.available_provider_tool_targets;
@@ -11070,6 +11287,9 @@ fn build_public_ai_settings_snapshot(
         provider_tool_selections,
         multimodal_understanding_candidate_models,
         media_understanding_selections: configuration.media_understanding_selections.clone(),
+        media_understanding_backend_options: configuration
+            .media_understanding_backend_options
+            .clone(),
         media_understanding_model_candidates,
         provider_tool_enabled_capabilities: configuration
             .provider_tool_enabled_capabilities
@@ -12690,6 +12910,25 @@ fn remove_connection_from_configuration(
                 selection.connection_id != connection_id
             }
         });
+    configuration
+        .media_understanding_backend_options
+        .retain(|_, options| {
+            if options
+                .provider_tool
+                .as_ref()
+                .is_some_and(|selection| selection.connection_id == connection_id)
+            {
+                options.provider_tool = None;
+            }
+            if options
+                .model_replacement
+                .as_ref()
+                .is_some_and(|route| route.selection.connection_id == connection_id)
+            {
+                options.model_replacement = None;
+            }
+            !options.is_empty()
+        });
     for selections in configuration.provider_extension_target_sets.values_mut() {
         selections.retain(|selection| selection.connection_id != connection_id);
     }
@@ -13082,6 +13321,36 @@ mod inference_settings_route_tests {
                 selection: retained_target.clone(),
             },
         );
+        configuration.media_understanding_backend_options.insert(
+            ProviderToolCapabilityKind::ImageUnderstand,
+            MediaUnderstandingBackendOptions {
+                provider_tool: Some(removed_target.clone()),
+                ..MediaUnderstandingBackendOptions::default()
+            },
+        );
+        configuration.media_understanding_backend_options.insert(
+            ProviderToolCapabilityKind::VideoUnderstand,
+            MediaUnderstandingBackendOptions {
+                model_replacement: Some(
+                    vulcan_provider_adapters::MediaUnderstandingModelReplacementSelection {
+                        selection: ActiveAiModelSelection {
+                            provider_id: removed_connection.provider_id.clone(),
+                            model_id: String::from("video-model"),
+                            connection_id: removed_connection.id.clone(),
+                        },
+                        reasoning_effort: None,
+                    },
+                ),
+                ..MediaUnderstandingBackendOptions::default()
+            },
+        );
+        configuration.media_understanding_backend_options.insert(
+            ProviderToolCapabilityKind::AudioUnderstand,
+            MediaUnderstandingBackendOptions {
+                provider_tool: Some(retained_target.clone()),
+                ..MediaUnderstandingBackendOptions::default()
+            },
+        );
         configuration.provider_extension_target_sets.insert(
             ProviderToolCapabilityKind::ImageGenerate,
             BTreeSet::from([removed_target, retained_target.clone()]),
@@ -13105,6 +13374,14 @@ mod inference_settings_route_tests {
             configuration
                 .media_understanding_selections
                 .contains_key(&ProviderToolCapabilityKind::AudioUnderstand)
+        );
+        assert_eq!(configuration.media_understanding_backend_options.len(), 1);
+        assert_eq!(
+            configuration
+                .media_understanding_backend_options
+                .get(&ProviderToolCapabilityKind::AudioUnderstand)
+                .and_then(|options| options.provider_tool.as_ref()),
+            Some(&retained_target)
         );
         assert_eq!(
             configuration
@@ -14161,7 +14438,7 @@ mod inference_settings_route_tests {
     /// Verifies a session picker action preserves the frozen route and records one pending selection.
     /// 验证会话选择器操作会保留冻结路由，并记录一个待生效选择。
     #[test]
-    fn session_model_selection_waits_for_next_submission_and_is_idempotent() {
+    fn session_model_selection_waits_for_next_provider_request_and_is_idempotent() {
         // sessionId identifies the sole workspace owner under test.
         // sessionId 标识本测试唯一的工作区所有者。
         let session_id = crate::SessionId::from_u128(0x50f0);
@@ -14205,8 +14482,8 @@ mod inference_settings_route_tests {
             selected_session: session_id,
             hydrated_session_ids: BTreeSet::new(),
         };
-        // target is the exact Command Code account choice that must activate only on submission.
-        // target 是只能在用户提交时激活的精确 Command Code 账号选择。
+        // target is the exact Command Code account choice that must activate only at the next real Provider request.
+        // target 是只能在下一次真实 Provider 请求边界激活的精确 Command Code 账号选择。
         let target = SessionPendingModelSelection {
             provider_id: String::from("command-code"),
             connection_id: String::from("command-account"),
@@ -14215,7 +14492,7 @@ mod inference_settings_route_tests {
 
         // firstPlan records one workspace-only mutation without route revocation.
         // firstPlan 记录一次仅工作区修改，不撤销路由。
-        let first_plan = plan_session_model_selection_for_next_submission(
+        let first_plan = plan_session_model_selection_for_next_provider_request(
             &mut workspace,
             session_id,
             &target,
@@ -14223,7 +14500,7 @@ mod inference_settings_route_tests {
             "Command Code account",
             "DeepSeek",
         )
-        .expect("session selection should be accepted for the next submission");
+        .expect("session selection should be accepted for the next Provider request");
 
         assert_eq!(first_plan.changed_session_ids, BTreeSet::from([session_id]));
         assert!(first_plan.revoked_session_ids.is_empty());
@@ -14266,7 +14543,7 @@ mod inference_settings_route_tests {
 
         // secondPlan proves selecting the same future tuple does not append a second audit row.
         // secondPlan 证明再次选择同一未来三元组不会追加第二条审计记录。
-        let second_plan = plan_session_model_selection_for_next_submission(
+        let second_plan = plan_session_model_selection_for_next_provider_request(
             &mut workspace,
             session_id,
             &target,
@@ -14592,6 +14869,7 @@ mod inference_settings_route_tests {
             &BTreeSet::from([ProviderToolCapabilityKind::WebSearch]),
             &BTreeMap::new(),
             &BTreeMap::new(),
+            &BTreeMap::new(),
         )
         .expect("conflict analysis");
 
@@ -14613,6 +14891,7 @@ mod inference_settings_route_tests {
             &runtime,
             &configuration,
             &BTreeSet::from([ProviderToolCapabilityKind::VideoUnderstand]),
+            &BTreeMap::new(),
             &BTreeMap::new(),
             &BTreeMap::new(),
         )
@@ -14658,9 +14937,14 @@ mod inference_settings_route_tests {
         let mut runtime_state = vulcan_workbench_model::SessionRuntimeStateEntry::default();
         // firstReconciliation must materialize the global defaults exactly once.
         // firstReconciliation 必须且仅须一次物化全局默认值。
-        let (enabled_capabilities, selections, extension_target_sets, first_changed) =
-            reconcile_session_provider_tool_settings(&mut runtime_state, &configuration)
-                .expect("uninitialized session settings should reconcile");
+        let (
+            enabled_capabilities,
+            selections,
+            media_understanding_modes,
+            extension_target_sets,
+            first_changed,
+        ) = reconcile_session_provider_tool_settings(&mut runtime_state, &configuration)
+            .expect("uninitialized session settings should reconcile");
         assert!(first_changed);
         assert_eq!(
             enabled_capabilities,
@@ -14672,15 +14956,21 @@ mod inference_settings_route_tests {
                 .map(|selection| selection.connection_id.as_str()),
             Some("search-connection")
         );
+        assert!(media_understanding_modes.is_empty());
         assert_eq!(
             extension_target_sets.get(&ProviderToolCapabilityKind::ImageGenerate),
             Some(&BTreeSet::from([extension_default]))
         );
         // secondChanged proves an identical generation performs no authoritative state write.
         // secondChanged 证明相同代际不会再次执行权威状态写入。
-        let (_enabled_capabilities, _selections, _extension_target_sets, second_changed) =
-            reconcile_session_provider_tool_settings(&mut runtime_state, &configuration)
-                .expect("initialized session settings should remain readable");
+        let (
+            _enabled_capabilities,
+            _selections,
+            _media_understanding_modes,
+            _extension_target_sets,
+            second_changed,
+        ) = reconcile_session_provider_tool_settings(&mut runtime_state, &configuration)
+            .expect("initialized session settings should remain readable");
         assert!(!second_changed);
     }
 
@@ -14716,9 +15006,14 @@ mod inference_settings_route_tests {
             },
         );
 
-        let (_enabled_capabilities, selections, _extension_target_sets, changed) =
-            reconcile_session_provider_tool_settings(&mut runtime_state, &configuration)
-                .expect("legacy media targets should be normalized");
+        let (
+            _enabled_capabilities,
+            selections,
+            _media_understanding_modes,
+            _extension_target_sets,
+            changed,
+        ) = reconcile_session_provider_tool_settings(&mut runtime_state, &configuration)
+            .expect("legacy media targets should be normalized");
 
         assert!(changed);
         assert!(!runtime_state.provider_tool_selections.contains_key(
@@ -14729,6 +15024,40 @@ mod inference_settings_route_tests {
         ));
         assert!(!selections.contains_key(&ProviderToolCapabilityKind::VideoUnderstand));
         assert!(selections.contains_key(&ProviderToolCapabilityKind::WebSearch));
+    }
+
+    /// Verifies first session materialization persists the active global media backend mode.
+    /// 验证首次物化会话时会持久化当前全局媒体后端模式。
+    #[test]
+    fn session_media_backend_mode_is_materialized_with_session_defaults() {
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration.media_understanding_selections.insert(
+            ProviderToolCapabilityKind::ImageUnderstand,
+            MediaUnderstandingBackendSelection::ProviderTool {
+                selection: ProviderToolTargetSelection {
+                    connection_id: String::from("image-account"),
+                    target_id: String::from("image-target"),
+                },
+            },
+        );
+        let mut runtime_state = vulcan_workbench_model::SessionRuntimeStateEntry::default();
+
+        let (_enabled_capabilities, _selections, modes, _extension_target_sets, changed) =
+            reconcile_session_provider_tool_settings(&mut runtime_state, &configuration)
+                .expect("session defaults should materialize");
+
+        assert!(changed);
+        assert_eq!(
+            modes.get(&ProviderToolCapabilityKind::ImageUnderstand),
+            Some(&vulcan_workbench_model::SessionMediaUnderstandingMode::ProviderTool)
+        );
+        assert_eq!(
+            runtime_state.media_understanding_modes,
+            BTreeMap::from([(
+                String::from("image_understand"),
+                vulcan_workbench_model::SessionMediaUnderstandingMode::ProviderTool,
+            )])
+        );
     }
 
     /// Verifies explicit Codex capability switches survive the custom-provider candidate projection.

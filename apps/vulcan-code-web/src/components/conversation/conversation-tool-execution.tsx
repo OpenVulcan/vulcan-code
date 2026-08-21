@@ -129,6 +129,7 @@ export function ToolExecutionBlock(props: {
   // requestCardProgress 在复用既有卡片的同时，保持请求构造与真实工具执行语义分离。
   const requestCardProgress = requestProgress ? {
     metricsLabel: toolRequestStreamMetricsLabel(requestProgress, t),
+    receiving: requestProgress.state === "receiving",
     revision: requestProgress.revision,
     statusLabel: toolRequestProgressStateLabel(requestProgress, t),
   } : null;

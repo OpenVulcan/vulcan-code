@@ -77,7 +77,8 @@ use vulcan_agent_runtime::{
         SessionStreamingRecordIds, append_runtime_event_projection_to_state,
         append_stream_delta_record_to_state, apply_checkpoint_conversation_state,
         apply_terminal_execution_report_to_state, collapse_streaming_thinking_in_state,
-        seal_active_streaming_records_in_state, seal_streaming_record_in_state,
+        discard_active_streaming_records_in_state, seal_active_streaming_records_in_state,
+        seal_streaming_record_in_state,
     },
     stream_runtime_run_with_intervention_plugins_and_public_ai,
     tooling::{CommandSessionRuntime, command_session_runtime::CommandSessionInputEvent},
@@ -307,7 +308,7 @@ use conversation_history::{
 use conversation_message_projection::*;
 use conversation_run_services::*;
 use conversation_submission::{
-    ConversationSubmissionMode, service_continue_conversation, service_submit_conversation_prompt,
+    service_continue_conversation, service_submit_conversation_prompt_rpc,
     service_submit_user_prompt_edit,
 };
 #[cfg(test)]

@@ -70,8 +70,8 @@ impl SessionContinuationRuntimeBlockers {
 ///
 /// # Returns
 /// 返回值
-/// The lowercase SHA-256 digest and whether the current boundary ends in a tool result.
-/// 返回小写 SHA-256 摘要，以及当前边界是否以工具结果结束。
+/// The lowercase SHA-256 digest and whether the current boundary can seed the next Provider turn.
+/// 返回小写 SHA-256 摘要，以及当前边界是否可启动下一次 Provider 回合。
 fn continuation_canonical_dispatch_state(
     runtime_state: &SessionRuntimeStateEntry,
 ) -> Result<(String, bool), &'static str> {
@@ -88,8 +88,8 @@ fn continuation_canonical_dispatch_state(
         &canonical_snapshot.continuation,
     ))
     .map_err(|_| "ERR_CONVERSATION_CONTINUE_RETRY_CANONICAL_STATE_CHANGED")?;
-    // digest remains lowercase so it can be compared directly with the strict v4 reference.
-    // digest 保持小写，可直接与严格 v4 引用比较。
+    // digest remains lowercase so it can be compared directly with the strict versioned reference.
+    // digest 保持小写，可直接与严格版本化引用比较。
     let digest = {
         use sha2::{Digest, Sha256};
 
@@ -98,18 +98,15 @@ fn continuation_canonical_dispatch_state(
             .map(|byte| format!("{byte:02x}"))
             .collect()
     };
-    let ends_in_tool_result = matches!(
-        canonical_snapshot
-            .messages
-            .last()
-            .map(|message| &message.payload),
-        Some(vulcan_core::types::ConversationPayload::ToolResult { .. })
-    );
-    Ok((digest, ends_in_tool_result))
+    let has_seeded_provider_input =
+        vulcan_core::controller::conversation_snapshot_has_seeded_provider_input(
+            &canonical_snapshot,
+        );
+    Ok((digest, has_seeded_provider_input))
 }
 
-/// Returns the latest visible canonical user, assistant, or error tail that controls prompt-free continuation.
-/// 返回控制无提示词继续资格的最近一条可见规范用户、助手或错误尾部。
+/// Returns the latest visible canonical dialogue or tool tail that controls prompt-free continuation.
+/// 返回控制无提示词继续资格的最近一条可见规范对话或工具尾部。
 ///
 /// # Parameters
 /// 参数
@@ -133,17 +130,25 @@ pub(crate) fn canonical_conversation_tail_kind(
                     record.record_kind,
                     SessionMessageRecordKind::Transcript
                         | SessionMessageRecordKind::AssistantOutput
+                        | SessionMessageRecordKind::ToolCallOutput
+                        | SessionMessageRecordKind::ToolResultOutput
                 )
         })
-        .map(|record| match record.kind {
-            SessionMessageKind::Assistant => "assistant",
-            SessionMessageKind::User => "user",
-            SessionMessageKind::Error => "error",
+        .map(|record| match record.record_kind {
+            // Tool rows describe an exact provider/tool boundary whose replayability is proven separately by the retry sidecar.
+            // 工具行描述精确的 Provider/工具边界，其可重放性由重试 sidecar 独立证明。
+            SessionMessageRecordKind::ToolCallOutput
+            | SessionMessageRecordKind::ToolResultOutput => "tool",
+            _ => match record.kind {
+                SessionMessageKind::Assistant => "assistant",
+                SessionMessageKind::User => "user",
+                SessionMessageKind::Error => "error",
+            },
         })
 }
 
-/// Returns whether one canonical tail kind supports prompt-free continuation.
-/// 返回一个规范尾部类型是否支持无提示词继续。
+/// Returns whether one canonical presentation-tail label belongs to the closed recovery vocabulary.
+/// 返回一个规范展示尾部标签是否属于封闭的恢复词汇表。
 ///
 /// # Parameters
 /// 参数
@@ -152,10 +157,10 @@ pub(crate) fn canonical_conversation_tail_kind(
 ///
 /// # Returns
 /// 返回值
-/// `true` only for user and error tails; assistant, empty, and synthetic labels fail closed.
-/// 仅用户与错误尾部返回 `true`；助手、空值与合成标签均失败关闭。
+/// `true` for every canonical user, assistant, error, tool, or empty label; unknown synthetic labels fail closed.
+/// 对规范的用户、助手、错误、工具或空标签返回 `true`；未知合成标签失败关闭。
 pub(crate) fn is_prompt_free_continuation_tail_kind(tail_kind: &str) -> bool {
-    matches!(tail_kind, "user" | "error")
+    matches!(tail_kind, "user" | "assistant" | "error" | "tool" | "empty")
 }
 
 /// Resolves one continuation opportunity from its persisted terminal boundary and live blockers.
@@ -190,6 +195,9 @@ pub(crate) fn resolve_session_continuation_eligibility(
     }
     if is_active_session_run_phase(run_phase) || blockers.any() {
         return Err("ERR_CONVERSATION_CONTINUE_SESSION_ACTIVE");
+    }
+    if run_phase == SessionRunPhase::Ready {
+        return Err("ERR_CONVERSATION_CONTINUE_NOT_PROBLEM_TURN");
     }
     if runtime_state_has_queued_pending_prompt_work(runtime_state)
         || runtime_state
@@ -238,13 +246,13 @@ pub(crate) fn resolve_session_continuation_eligibility(
     {
         return Err("ERR_CONVERSATION_CONTINUE_RETRY_CONTEXT_GENERATION_CHANGED");
     }
-    let (canonical_dispatch_sha256, ends_in_tool_result) =
+    let (canonical_dispatch_sha256, has_seeded_provider_input) =
         continuation_canonical_dispatch_state(runtime_state)?;
     if canonical_dispatch_sha256 != retry_snapshot.canonical_dispatch_sha256 {
         return Err("ERR_CONVERSATION_CONTINUE_RETRY_CANONICAL_STATE_CHANGED");
     }
     if retry_snapshot.pending_action_label == "prepare_next_provider_request"
-        && !ends_in_tool_result
+        && !has_seeded_provider_input
     {
         return Err("ERR_CONVERSATION_CONTINUE_RETRY_NEXT_PROVIDER_BOUNDARY_MISSING");
     }
@@ -276,8 +284,9 @@ pub(crate) fn resolve_session_continuation_eligibility(
     if ledger.in_flight_call_count() != 0 {
         return Err("ERR_CONVERSATION_CONTINUE_CALL_IN_FLIGHT");
     }
-    let tail_kind = canonical_conversation_tail_kind(runtime_state)
-        .ok_or("ERR_CONVERSATION_CONTINUE_TERMINAL_TAIL_MISSING")?;
+    // tailKind is presentation drift evidence only; an exact empty label remains valid when the sidecar proves the action.
+    // tailKind 仅作为展示漂移证据；当 sidecar 证明动作时，精确的空标签仍然有效。
+    let tail_kind = canonical_conversation_tail_kind(runtime_state).unwrap_or("empty");
     if !is_prompt_free_continuation_tail_kind(tail_kind)
         || continuation.canonical_tail_kind.as_deref() != Some(tail_kind)
     {
@@ -296,17 +305,36 @@ pub(crate) fn resolve_session_continuation_eligibility(
 ///
 /// # Returns
 /// 返回值
-/// A generation-preserving summary, or `None` when no terminal boundary has ever existed.
-/// 返回保留代际的摘要；从未存在终止边界时返回 `None`。
+/// A generation-preserving summary for a problem turn, or `None` outside problem turns.
+/// 返回问题回合中保留代际的摘要；非问题回合返回 `None`。
 pub(crate) fn conversation_continuation_summary(
     runtime_state: &SessionRuntimeStateEntry,
     run_phase: SessionRunPhase,
     blockers: SessionContinuationRuntimeBlockers,
 ) -> Option<ConversationContinuationSummary> {
     let continuation = &runtime_state.provider_call_ledger.continuation;
-    // A normally completed assistant turn has no recovery boundary to expose.
-    // 正常完成的助手回合不存在可恢复边界，不应向 WebUI 投影 Continue 卡片。
-    if continuation.terminal_reason.as_deref() == Some("completed") {
+    // terminalProblemPhase is authoritative for an explicitly failed or stopped current turn; a stale prior completion
+    // must never hide a newer failure that ended before it could materialize its own boundary.
+    // terminalProblemPhase 对显式失败或停止的当前回合具有权威性；先前遗留的完成状态绝不能隐藏一个尚未来得及物化自身边界的新失败。
+    let terminal_problem_phase = matches!(
+        run_phase,
+        SessionRunPhase::Failed | SessionRunPhase::Stopped
+    );
+    // normalCompletionBoundary also recognizes the former non-assistant success label so upgraded workspaces cannot expose a stale Continue action.
+    // normalCompletionBoundary 同时识别旧的非助手成功标签，避免升级后的工作区暴露过期 Continue 操作。
+    let normal_completion_boundary = matches!(
+        continuation.terminal_reason.as_deref(),
+        Some("completed" | "completed_non_assistant_tail")
+    );
+    // idleProblemBoundary preserves a restart-recovered abnormal terminal ledger while excluding a fresh idle draft.
+    // idleProblemBoundary 保留重启恢复出的异常终止账本，同时排除全新的空闲草稿。
+    let idle_problem_boundary = run_phase == SessionRunPhase::Idle
+        && !continuation.is_empty()
+        && !normal_completion_boundary;
+    // problemTurn excludes every active phase and every normal Ready completion, even if stale historical retry state remains.
+    // problemTurn 排除全部活动阶段与全部正常 Ready 完成，即使仍残留历史重试状态也不例外。
+    let problem_turn = terminal_problem_phase || idle_problem_boundary;
+    if !problem_turn {
         return None;
     }
     let eligibility =
@@ -321,12 +349,65 @@ pub(crate) fn conversation_continuation_summary(
         }
         (*error).to_string()
     });
-    (!continuation.is_empty()).then(|| ConversationContinuationSummary {
+    Some(ConversationContinuationSummary {
         eligible: eligibility.is_ok(),
         generation: continuation.generation,
         expected_ledger_revision: continuation.expected_ledger_revision,
-        reason: continuation.terminal_reason.clone(),
+        reason: if terminal_problem_phase && (continuation.is_empty() || normal_completion_boundary)
+        {
+            Some(match run_phase {
+                SessionRunPhase::Failed => String::from("failed_without_continuation_boundary"),
+                SessionRunPhase::Stopped => String::from("stopped_without_continuation_boundary"),
+                _ => unreachable!("problem_phase admits only failed or stopped"),
+            })
+        } else {
+            continuation.terminal_reason.clone()
+        },
         blocked_reason,
+    })
+}
+
+/// Projects one problem-turn recovery summary even when its runtime row is missing.
+/// 即使运行态记录缺失，也为问题回合投影一条恢复摘要。
+///
+/// # Parameters
+/// 参数
+/// `runtime_state` is the optional canonical session runtime row, `run_phase` is the retained phase, and `blockers` are live ownership facts.
+/// `runtime_state` 是可选的规范会话运行态记录，`run_phase` 是保留阶段，`blockers` 是实时所有权事实。
+///
+/// # Returns
+/// 返回值
+/// The authoritative problem-turn projection, including an explicit disabled runtime-missing state, or `None` for normal and active turns.
+/// 返回权威的问题回合投影（包括明确禁用的运行态缺失状态）；正常回合与活动回合返回 `None`。
+pub(crate) fn conversation_continuation_summary_for_session_runtime(
+    runtime_state: Option<&SessionRuntimeStateEntry>,
+    run_phase: SessionRunPhase,
+    blockers: SessionContinuationRuntimeBlockers,
+) -> Option<ConversationContinuationSummary> {
+    if let Some(runtime_state) = runtime_state {
+        return conversation_continuation_summary(runtime_state, run_phase, blockers);
+    }
+    if !matches!(
+        run_phase,
+        SessionRunPhase::Failed | SessionRunPhase::Stopped
+    ) {
+        return None;
+    }
+    // reason preserves the exact problem phase while the missing runtime row supplies the safety blocker.
+    // reason 保留精确的问题阶段，同时由缺失的运行态记录提供安全阻断原因。
+    let reason = match run_phase {
+        SessionRunPhase::Failed => "failed_without_continuation_boundary",
+        SessionRunPhase::Stopped => "stopped_without_continuation_boundary",
+        _ => unreachable!("the explicit problem-phase guard excludes every other phase"),
+    };
+    Some(ConversationContinuationSummary {
+        eligible: false,
+        generation: 0,
+        expected_ledger_revision: 0,
+        reason: Some(String::from(reason)),
+        blocked_reason: Some(String::from(
+            "ERR_CONVERSATION_CONTINUE_RUNTIME_STATE_MISSING",
+        )),
     })
 }
 
@@ -497,14 +578,16 @@ mod tests {
         }
     }
 
-    /// Verifies prompt-free continuation accepts only exact user and error tail labels.
-    /// 验证无提示词继续只接受精确的用户与错误尾部标签。
+    /// Verifies recovery accepts every canonical presentation-tail label and rejects unknown labels.
+    /// 验证恢复接受全部规范展示尾部标签并拒绝未知标签。
     #[test]
-    fn continuation_tail_kind_requires_exact_user_or_error() {
+    fn continuation_tail_kind_requires_exact_recovery_boundary() {
         assert!(is_prompt_free_continuation_tail_kind("user"));
+        assert!(is_prompt_free_continuation_tail_kind("assistant"));
         assert!(is_prompt_free_continuation_tail_kind("error"));
-        assert!(!is_prompt_free_continuation_tail_kind("assistant"));
-        assert!(!is_prompt_free_continuation_tail_kind("empty"));
+        assert!(is_prompt_free_continuation_tail_kind("tool"));
+        assert!(is_prompt_free_continuation_tail_kind("empty"));
+        assert!(!is_prompt_free_continuation_tail_kind("synthetic"));
         assert!(!is_prompt_free_continuation_tail_kind(""));
     }
 
@@ -524,6 +607,99 @@ mod tests {
                     continuation.generation,
                     continuation.expected_ledger_revision,
                 )),
+            ),
+            Ok(())
+        );
+    }
+
+    /// Verifies partial-assistant and empty presentation tails cannot veto an exact replay-safe problem boundary.
+    /// 验证部分助手与空展示尾部不能否决精确且可安全重放的问题边界。
+    #[test]
+    fn continuation_resolver_treats_presentation_tail_as_drift_evidence_only() {
+        // assistantRuntime starts from the same exact retry body while only its presentation tail changes.
+        // assistantRuntime 从同一精确重试正文开始，仅改变展示尾部。
+        let mut assistant_runtime = eligible_runtime_state();
+        // assistantRecord models partial visible output emitted before Provider interruption.
+        // assistantRecord 模拟 Provider 中断前已经发出的部分可见输出。
+        let mut assistant_record =
+            SessionMessageEntry::new(SessionMessageKind::Assistant, "", "partial output")
+                .with_runtime_metadata("assistant-partial-1", "1001");
+        assistant_record.record_kind = SessionMessageRecordKind::AssistantOutput;
+        assistant_runtime.conversation_state.records = vec![conversation_record(assistant_record)];
+        assistant_runtime
+            .provider_call_ledger
+            .continuation
+            .canonical_tail_kind = Some(String::from("assistant"));
+        assert_eq!(
+            resolve_session_continuation_eligibility(
+                &assistant_runtime,
+                SessionRunPhase::Failed,
+                SessionContinuationRuntimeBlockers::default(),
+                None,
+            ),
+            Ok(())
+        );
+
+        // emptyRuntime proves an absent presentation row is normalized to the exact `empty` ledger label.
+        // emptyRuntime 证明缺失展示行会规范化为精确的 `empty` 账本标签。
+        let mut empty_runtime = eligible_runtime_state();
+        empty_runtime.conversation_state.records.clear();
+        empty_runtime
+            .provider_call_ledger
+            .continuation
+            .canonical_tail_kind = Some(String::from("empty"));
+        assert_eq!(
+            resolve_session_continuation_eligibility(
+                &empty_runtime,
+                SessionRunPhase::Failed,
+                SessionContinuationRuntimeBlockers::default(),
+                None,
+            ),
+            Ok(())
+        );
+    }
+
+    /// Verifies an exact tool boundary remains claimable when the retry sidecar proves its recovery action.
+    /// 验证重试 sidecar 证明恢复动作后，精确工具边界仍可被领取。
+    #[test]
+    fn continuation_resolver_accepts_exact_tool_tail() {
+        // runtimeState starts from a fully claimable failed user-tail boundary.
+        // runtimeState 从完整可领取的失败用户尾部边界开始。
+        let mut runtime_state = eligible_runtime_state();
+        // toolRecord models the latest visible tool request after one provider response completed.
+        // toolRecord 模拟一次 Provider 响应完成后的最新可见工具请求。
+        let mut tool_record =
+            SessionMessageEntry::new(SessionMessageKind::Assistant, "", "Read terminal session")
+                .with_runtime_metadata("tool-request-1", "1001");
+        tool_record.record_kind = SessionMessageRecordKind::ToolCallOutput;
+        runtime_state
+            .conversation_state
+            .records
+            .push(conversation_record(tool_record));
+        runtime_state
+            .provider_call_ledger
+            .continuation
+            .canonical_tail_kind = Some(String::from("tool"));
+        // canonicalDispatchSha256 is refreshed after the exact visible boundary changes.
+        // canonicalDispatchSha256 在精确可见边界变化后刷新。
+        let (canonical_dispatch_sha256, _) = continuation_canonical_dispatch_state(&runtime_state)
+            .expect("tool-tail canonical dispatch state should serialize");
+        runtime_state
+            .execution_retry_snapshot
+            .as_mut()
+            .expect("tool-tail fixture must retain a retry snapshot")
+            .canonical_dispatch_sha256 = canonical_dispatch_sha256;
+
+        assert_eq!(
+            canonical_conversation_tail_kind(&runtime_state),
+            Some("tool")
+        );
+        assert_eq!(
+            resolve_session_continuation_eligibility(
+                &runtime_state,
+                SessionRunPhase::Failed,
+                SessionContinuationRuntimeBlockers::default(),
+                None,
             ),
             Ok(())
         );
@@ -556,7 +732,7 @@ mod tests {
         display_record.record_kind = SessionMessageRecordKind::DisplayNote;
         display_record.metadata = Some(serde_json::json!({
             "notice_kind": "model_switch",
-            "activation": "next_submission",
+            "activation": "next_provider_request",
         }));
         runtime_state
             .conversation_state
@@ -876,18 +1052,17 @@ mod tests {
             .as_mut()
             .expect("eligible fixture must retain a retry snapshot")
             .blocked_reason = Some(String::from("tool_side_effect_in_flight"));
-        let active_summary = conversation_continuation_summary(
-            &active_with_stale_block_reason,
-            SessionRunPhase::Requesting,
-            SessionContinuationRuntimeBlockers {
-                has_active_stream_task: true,
-                ..SessionContinuationRuntimeBlockers::default()
-            },
-        )
-        .expect("stored continuation must remain visible for active-state diagnostics");
-        assert_eq!(
-            active_summary.blocked_reason,
-            Some(String::from("ERR_CONVERSATION_CONTINUE_SESSION_ACTIVE"))
+        assert!(
+            conversation_continuation_summary(
+                &active_with_stale_block_reason,
+                SessionRunPhase::Requesting,
+                SessionContinuationRuntimeBlockers {
+                    has_active_stream_task: true,
+                    ..SessionContinuationRuntimeBlockers::default()
+                },
+            )
+            .is_none(),
+            "an active normal turn must never project Continue"
         );
     }
 
@@ -945,6 +1120,144 @@ mod tests {
                 )
         );
 
+        assert!(
+            conversation_continuation_summary(
+                &runtime_state,
+                SessionRunPhase::Ready,
+                SessionContinuationRuntimeBlockers::default(),
+            )
+            .is_none()
+        );
+
+        // staleCompletedRuntime proves a prior successful turn cannot hide the current failed phase.
+        // staleCompletedRuntime 证明先前成功回合不能隐藏当前失败阶段。
+        let mut stale_completed_runtime = SessionRuntimeStateEntry::default();
+        stale_completed_runtime
+            .provider_call_ledger
+            .continuation
+            .terminal_reason = Some(String::from("completed"));
+        let stale_completed_summary = conversation_continuation_summary(
+            &stale_completed_runtime,
+            SessionRunPhase::Failed,
+            SessionContinuationRuntimeBlockers::default(),
+        )
+        .expect("a stale completed boundary must not hide a current failed phase");
+        assert!(!stale_completed_summary.eligible);
+        assert_eq!(
+            stale_completed_summary.reason.as_deref(),
+            Some("failed_without_continuation_boundary")
+        );
+
+        // readyWithStaleFailure proves a prior failed ledger cannot place Continue on a newer normal completion.
+        // readyWithStaleFailure 证明先前失败账本不能在较新的正常完成回合上放置 Continue。
+        let ready_with_stale_failure = eligible_runtime_state();
+        assert!(
+            conversation_continuation_summary(
+                &ready_with_stale_failure,
+                SessionRunPhase::Ready,
+                SessionContinuationRuntimeBlockers::default(),
+            )
+            .is_none()
+        );
+        assert_eq!(
+            resolve_session_continuation_eligibility(
+                &ready_with_stale_failure,
+                SessionRunPhase::Ready,
+                SessionContinuationRuntimeBlockers::default(),
+                None,
+            ),
+            Err("ERR_CONVERSATION_CONTINUE_NOT_PROBLEM_TURN")
+        );
+    }
+
+    /// Verifies a successful non-assistant tail is normal completion rather than a recoverable problem turn.
+    /// 验证成功的非助手尾部属于正常完成，而不是可恢复的问题回合。
+    #[test]
+    fn successful_non_assistant_tail_does_not_create_problem_continuation() {
+        // runtimeState includes an otherwise replay-safe non-assistant tail so success is the only fact that can close recovery.
+        // runtimeState 包含一条原本满足重放安全条件的非助手尾部，因此成功事实是关闭恢复的唯一依据。
+        let mut runtime_state = eligible_runtime_state();
+
+        crate::refresh_terminal_continuation_state(&mut runtime_state, true, "1100")
+            .expect("successful non-assistant terminal projection must close normally");
+
+        // continuation must retain diagnostic tail identity without advertising or allowing Continue.
+        // continuation 必须保留诊断尾部身份，但不得展示或允许 Continue。
+        let continuation = &runtime_state.provider_call_ledger.continuation;
+        assert!(!continuation.eligible);
+        assert_eq!(continuation.terminal_reason.as_deref(), Some("completed"));
+        assert!(
+            conversation_continuation_summary(
+                &runtime_state,
+                SessionRunPhase::Ready,
+                SessionContinuationRuntimeBlockers::default(),
+            )
+            .is_none()
+        );
+    }
+
+    /// Verifies the former successful non-assistant label remains hidden after upgrading persisted state.
+    /// 验证升级持久化状态后，旧的成功非助手标签仍保持隐藏。
+    #[test]
+    fn legacy_successful_non_assistant_boundary_stays_hidden() {
+        // runtimeState models a workspace written by the former success-label contract.
+        // runtimeState 模拟由旧成功标签契约写入的工作区。
+        let mut runtime_state = eligible_runtime_state();
+        runtime_state
+            .provider_call_ledger
+            .continuation
+            .terminal_reason = Some(String::from("completed_non_assistant_tail"));
+
+        assert!(
+            conversation_continuation_summary(
+                &runtime_state,
+                SessionRunPhase::Ready,
+                SessionContinuationRuntimeBlockers::default(),
+            )
+            .is_none()
+        );
+    }
+
+    /// Verifies a problem phase still projects a disabled Continue control when its recovery ledger is missing.
+    /// 验证问题阶段在恢复账本缺失时仍会投影禁用的 Continue 控件。
+    #[test]
+    fn continuation_summary_keeps_problem_phase_visible_without_ledger() {
+        // runtimeState deliberately lacks both a retry snapshot and a continuation boundary.
+        // runtimeState 刻意缺少重试快照与 Continue 边界。
+        let runtime_state = SessionRuntimeStateEntry::default();
+
+        for (run_phase, expected_reason) in [
+            (
+                SessionRunPhase::Failed,
+                "failed_without_continuation_boundary",
+            ),
+            (
+                SessionRunPhase::Stopped,
+                "stopped_without_continuation_boundary",
+            ),
+        ] {
+            let summary = conversation_continuation_summary(
+                &runtime_state,
+                run_phase,
+                SessionContinuationRuntimeBlockers::default(),
+            )
+            .expect("a problem phase must keep one disabled recovery entry");
+            assert!(!summary.eligible);
+            assert_eq!(summary.reason.as_deref(), Some(expected_reason));
+            assert_eq!(
+                summary.blocked_reason.as_deref(),
+                Some("ERR_CONVERSATION_CONTINUE_RETRY_SNAPSHOT_MISSING")
+            );
+        }
+
+        assert!(
+            conversation_continuation_summary(
+                &runtime_state,
+                SessionRunPhase::Idle,
+                SessionContinuationRuntimeBlockers::default(),
+            )
+            .is_none()
+        );
         assert!(
             conversation_continuation_summary(
                 &runtime_state,

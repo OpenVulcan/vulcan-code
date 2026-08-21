@@ -472,6 +472,81 @@ fn external_stop_seals_all_active_stream_records() {
     assert_eq!(runtime_state.updated_at, "1053");
 }
 
+/// Verifies interrupted provider drafts are removed without touching stable transcript rows.
+/// 验证中断的 Provider 草稿会被移除，且不会触碰稳定转录行。
+///
+/// # Parameters
+/// # 参数
+/// This test has no parameters.
+/// 此测试没有参数。
+///
+/// # Returns
+/// # 返回值
+/// This test returns no value and fails when draft cleanup removes or retains the wrong identity.
+/// 此测试无返回值；草稿清理移除或保留错误身份时通过断言失败。
+#[test]
+fn interrupted_provider_drafts_are_discarded_before_retry() {
+    // sessionId owns the streamed and stable records used by this lifecycle test.
+    // sessionId 持有当前生命周期测试使用的流式记录与稳定记录。
+    let session_id = test_session_id();
+    // runtimeState starts with one active thinking draft, one active output draft, and one stable user row.
+    // runtimeState 初始包含一条活跃思考草稿、一条活跃输出草稿与一条稳定用户行。
+    let mut runtime_state = SessionRuntimeStateEntry::default();
+    let mut thinking_record_id = None;
+    let mut output_record_id = None;
+    append_stream_delta_record_to_state(
+        &mut runtime_state,
+        session_id,
+        "1050",
+        &mut thinking_record_id,
+        SessionMessageRecordKind::ThinkingOutput,
+        "思考",
+        "分析中",
+        true,
+    )
+    .expect("valid thinking stream identity");
+    append_stream_delta_record_to_state(
+        &mut runtime_state,
+        session_id,
+        "1051",
+        &mut output_record_id,
+        SessionMessageRecordKind::AssistantOutput,
+        "输出",
+        "未完成回答",
+        false,
+    )
+    .expect("valid output stream identity");
+    append_user_prompt_record(&mut runtime_state, session_id, "1052", "保留稳定记录")
+        .expect("valid stable user record identity");
+
+    // discardedIds prove the exact active identities were removed in deterministic order.
+    // discardedIds 证明精确活跃身份已按确定顺序移除。
+    let discarded_ids = discard_active_streaming_records_in_state(&mut runtime_state, "1053");
+    assert_eq!(discarded_ids.len(), 2);
+    assert!(
+        thinking_record_id
+            .as_ref()
+            .is_some_and(|record_id| discarded_ids.contains(record_id))
+    );
+    assert!(
+        output_record_id
+            .as_ref()
+            .is_some_and(|record_id| discarded_ids.contains(record_id))
+    );
+    assert_eq!(runtime_state.conversation_state.records.len(), 1);
+    assert_eq!(
+        runtime_state.conversation_state.records[0].kind,
+        SessionMessageKind::User
+    );
+    assert_eq!(runtime_state.updated_at, "1053");
+    assert!(discarded_ids.iter().all(|record_id| {
+        !runtime_state
+            .ui_state
+            .collapsed_message_ids
+            .contains(record_id)
+    }));
+}
+
 /// Verifies a stale request-local identity cannot append after authoritative sealing.
 /// 验证过期的请求局部身份无法在权威封口后继续追加。
 ///

@@ -62,6 +62,9 @@ interface ToolRequestCardProgress {
   // Exact character and byte-stream metrics shown after the tool identity.
   // 显示在工具身份后的精确字符与字节流指标。
   metricsLabel: string;
+  // Whether the request is still receiving bytes and should retain its animated state.
+  // 请求是否仍在接收字节并应保留动画状态。
+  receiving: boolean;
   // Monotonic request revision used by assistive live regions.
   // 辅助技术实时区域使用的单调请求修订号。
   revision: number;
@@ -243,7 +246,7 @@ function ProviderToolStructuredPresentationCard(props: {
         type="button"
       >
         <Braces className="markdown-tool-icon" size={15} />
-        <span className={cn("tool-presentation-state", (props.requestProgress || props.presentation.state === "running") && "shimmer")}>{status}</span>
+        <span className={cn("tool-presentation-state", (props.requestProgress?.receiving || props.presentation.state === "running") && "shimmer")}>{status}</span>
         <span className="tool-presentation-command">
           <span className="tool-presentation-command-text">{t(titleKey)}</span>
           <ToolRequestInlineProgress progress={props.requestProgress} />
@@ -315,7 +318,7 @@ function ProviderToolTextPresentationCard(props: {
         type="button"
       >
         <FileText className="markdown-tool-icon" size={15} />
-        <span className={cn("tool-presentation-state", (props.requestProgress || props.presentation.state === "running") && "shimmer")}>{status}</span>
+        <span className={cn("tool-presentation-state", (props.requestProgress?.receiving || props.presentation.state === "running") && "shimmer")}>{status}</span>
         <span className="tool-presentation-command">
           <span className="tool-presentation-command-text">
             {t("toolPresentation.providerText.title")}
@@ -373,7 +376,7 @@ function ProviderToolExtractPresentationCard(props: {
         type="button"
       >
         <FileText className="markdown-tool-icon" size={15} />
-        <span className={cn("tool-presentation-state", (props.requestProgress || props.presentation.state === "running") && "shimmer")}>{status}</span>
+        <span className={cn("tool-presentation-state", (props.requestProgress?.receiving || props.presentation.state === "running") && "shimmer")}>{status}</span>
         <span className="tool-presentation-command">
           <span className="tool-presentation-command-text">
             {t("toolPresentation.providerExtract.title")}
@@ -467,7 +470,7 @@ function ProviderToolSearchPresentationCard(props: {
         type="button"
       >
         <Search className="markdown-tool-icon" size={15} />
-        <span className={cn("tool-presentation-state", (props.requestProgress || props.presentation.state === "running") && "shimmer")}>{status}</span>
+        <span className={cn("tool-presentation-state", (props.requestProgress?.receiving || props.presentation.state === "running") && "shimmer")}>{status}</span>
         <span className="tool-presentation-command">
           <span className="tool-presentation-command-text">
             {t("toolPresentation.providerSearch.title")} · {props.presentation.query}
@@ -643,7 +646,7 @@ function MarkdownToolPresentationCard(props: {
         type="button"
       >
         <MarkdownToolIcon className="markdown-tool-icon" icon={hydratedPresentation.icon} size={15} />
-        <span className={cn("tool-presentation-state", (props.requestProgress || hydratedPresentation.state === "running") && "shimmer")}>{props.requestProgress?.statusLabel ?? markdownToolStatusLabel(hydratedPresentation.state, t)}</span>
+          <span className={cn("tool-presentation-state", (props.requestProgress?.receiving || hydratedPresentation.state === "running") && "shimmer")}>{props.requestProgress?.statusLabel ?? markdownToolStatusLabel(hydratedPresentation.state, t)}</span>
         <span className="tool-presentation-command"><span className="tool-presentation-command-text">{title}</span><ToolRequestInlineProgress progress={props.requestProgress} /></span>
         {expanded ? (
           <ChevronDown className="tool-presentation-toggle" size={15} />
@@ -759,7 +762,7 @@ function LuaExecutionPresentationCard(props: {
         type="button"
       >
         <LuaToolIcon className="lua-execution-icon" />
-        <span className={cn("tool-presentation-command", (props.requestProgress || hydratedPresentation.state === "running") && "shimmer")}>
+        <span className={cn("tool-presentation-command", (props.requestProgress?.receiving || hydratedPresentation.state === "running") && "shimmer")}>
           <span className="tool-presentation-command-text">{props.requestProgress ? `${props.requestProgress.statusLabel} · ${title}` : title}</span>
           <ToolRequestInlineProgress progress={props.requestProgress} />
         </span>
@@ -1246,7 +1249,7 @@ function SubagentOrchestrationPresentationCard(props: {
         type="button"
       >
         <Bot className="subagent-orchestration-icon" size={15} />
-        <span className={cn("tool-presentation-state", (props.requestProgress || hydratedPresentation.state === "running") && "shimmer")}>{props.requestProgress?.statusLabel ?? subagentOperationLabel(hydratedPresentation, t)}</span>
+          <span className={cn("tool-presentation-state", (props.requestProgress?.receiving || hydratedPresentation.state === "running") && "shimmer")}>{props.requestProgress?.statusLabel ?? subagentOperationLabel(hydratedPresentation, t)}</span>
         <span className="tool-presentation-command"><span className="tool-presentation-command-text">{subagentSummaryText(hydratedPresentation, t)}</span><ToolRequestInlineProgress progress={props.requestProgress} /></span>
         {canExpand ? (
           expanded ? (
@@ -1851,7 +1854,7 @@ function CommandExecutionPresentationCard(props: {
         type="button"
       >
         <TerminalSquare className={cn("terminal-session-icon", terminalState && terminalStateClass(terminalState))} size={15} />
-        <span className={cn("tool-presentation-state", (props.requestProgress || hydratedPresentation.state === "running") && "shimmer")}>{props.requestProgress?.statusLabel ?? statusLabel}</span>
+          <span className={cn("tool-presentation-state", (props.requestProgress?.receiving || hydratedPresentation.state === "running") && "shimmer")}>{props.requestProgress?.statusLabel ?? statusLabel}</span>
         {pluginContributions.map((contribution, index) => contribution.badge ? (
           <span
             className="tool-presentation-route-badge"
@@ -2083,7 +2086,7 @@ function AskQuestionPresentationCard(props: {
         type="button"
       >
         <MessageCircleQuestionMark className="ask-question-icon" size={15} />
-        <span className={cn("tool-presentation-state", (props.requestProgress || hydratedPresentation.state === "running") && "shimmer")}>{props.requestProgress?.statusLabel ?? askQuestionStatusLabel(hydratedPresentation.state, t)}</span>
+          <span className={cn("tool-presentation-state", (props.requestProgress?.receiving || hydratedPresentation.state === "running") && "shimmer")}>{props.requestProgress?.statusLabel ?? askQuestionStatusLabel(hydratedPresentation.state, t)}</span>
         <span className="tool-presentation-command"><span className="tool-presentation-command-text">{hydratedPresentation.title}</span><ToolRequestInlineProgress progress={props.requestProgress} /></span>
         {expanded ? (
           <ChevronDown className="tool-presentation-toggle" size={15} />
@@ -2256,7 +2259,7 @@ function FileChangePresentationCard(props: {
         type="button"
       >
         <FileChangeOperationIcon operation={presentation.operation} />
-        <span className={cn("tool-presentation-state", (props.requestProgress || presentation.state === "running") && "shimmer")}>{props.requestProgress?.statusLabel ?? fileChangeStatusLabel(presentation, presentation.operation, t)} {formatTranslation(t, "toolPresentation.file.count", { count: String(presentation.files.length) })}</span>
+          <span className={cn("tool-presentation-state", (props.requestProgress?.receiving || presentation.state === "running") && "shimmer")}>{props.requestProgress?.statusLabel ?? fileChangeStatusLabel(presentation, presentation.operation, t)} {formatTranslation(t, "toolPresentation.file.count", { count: String(presentation.files.length) })}</span>
         <span className="file-change-path multi">
           <span className="file-change-path-text">{t("toolPresentation.file.multiChange")}</span>
           <ToolRequestInlineProgress progress={props.requestProgress} />
@@ -2347,7 +2350,7 @@ function FileChangeSummaryButton(props: {
       type="button"
     >
       {showOperationIcon ? <FileChangeOperationIcon operation={props.file.operation} /> : null}
-      {showStatusLabel ? <span className={cn("tool-presentation-state", (props.requestProgress || props.presentation.state === "running") && "shimmer")}>{props.requestProgress?.statusLabel ?? fileChangeStatusLabel(props.presentation, props.file.operation, props.t)}</span> : null}
+          {showStatusLabel ? <span className={cn("tool-presentation-state", (props.requestProgress?.receiving || props.presentation.state === "running") && "shimmer")}>{props.requestProgress?.statusLabel ?? fileChangeStatusLabel(props.presentation, props.file.operation, props.t)}</span> : null}
       <span className="file-change-path">
         <span className="file-change-icon-stack"><FileTypeIcon icon={props.file.icon} /></span>
         <span className="file-change-path-text">{props.file.displayPath}</span>

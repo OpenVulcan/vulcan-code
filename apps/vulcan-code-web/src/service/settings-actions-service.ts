@@ -21,6 +21,7 @@ import type {
   PublicAiInternalModelOverrides,
   PublicAiOperation,
   PublicAiProviderToolCapabilityKind,
+  PublicAiMediaUnderstandingBackendMode,
   PublicAiMediaUnderstandingBackendSelection,
   PublicAiProviderToolTestResult,
   PublicAiProviderToolTargetSelection,
@@ -610,6 +611,9 @@ export async function savePublicAiSessionProviderToolSelections(request: {
   >;
   extensionTargetSets: Partial<
     Record<PublicAiProviderToolCapabilityKind, PublicAiProviderToolTargetSelection[]>
+  >;
+  mediaUnderstandingModes: Partial<
+    Record<PublicAiProviderToolCapabilityKind, PublicAiMediaUnderstandingBackendMode>
   >;
 }): Promise<PublicAiSessionProviderToolSettings> {
   return serviceClient.request(

@@ -190,9 +190,21 @@ async fn build_runtime_stream_launch_from_prepared_input(
         .with_parent_snapshot(bootstrap.core_snapshot.clone()),
     );
 
-    Ok(build_runtime_stream_launch_payload(
-        &request,
-        bootstrap,
-        task_execution_context,
-    ))
+    build_runtime_stream_launch_payload(&request, bootstrap, task_execution_context).map_err(
+        |error| {
+            ExecutionRunReport::failure(
+                request.session_id,
+                Some(preparation_for_failure),
+                0,
+                None,
+                None,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                None,
+                format!("Provider request continuation validation failed: {error}"),
+            )
+        },
+    )
 }

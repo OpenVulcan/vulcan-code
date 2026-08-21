@@ -127,6 +127,7 @@ pub(crate) fn drive_runtime_stream_provider_loop(
         let core_snapshot = launch.core_snapshot;
         let initial_provider_request = launch.initial_provider_request;
         let controller_config_override = launch.controller_config_override;
+        let recovery_action = launch.recovery_action;
         let mut stream_state = launch.stream_state;
         let provider_usage_budget_baseline = stream_state
             .provider_usage_budget_baseline_handle()
@@ -166,6 +167,7 @@ pub(crate) fn drive_runtime_stream_provider_loop(
             core_snapshot,
             initial_provider_request,
             controller_config_override,
+            recovery_action,
             task_runtime,
             tools_manager,
             resolved_tool_definitions,
@@ -269,6 +271,18 @@ pub(crate) fn drive_runtime_stream_provider_loop(
                 session_id,
                 conversation_state,
                 reason,
+            };
+            return;
+        }
+
+        if let Some((conversation_state, reason, provider_request_continuation)) =
+            stream_state.take_provider_route_switch_required()
+        {
+            yield ExecutionStreamEvent::ProviderRouteSwitchRequired {
+                session_id,
+                conversation_state,
+                reason,
+                provider_request_continuation,
             };
             return;
         }

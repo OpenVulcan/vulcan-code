@@ -24,7 +24,7 @@ fn run_user_turn_streaming_executes_tool_batch_concurrently() {
                         ConversationToolCall {
                             id: String::from("tool-item-b"),
                             tool_call_id: Some(String::from("call-b")),
-                            tool_name: String::from("slow_b"),
+                            tool_name: String::from("fast_b"),
                             arguments: json!({"step": "b"}),
                         },
                     ],
@@ -67,7 +67,500 @@ fn run_user_turn_streaming_executes_tool_batch_concurrently() {
             })
             .collect::<Vec<_>>();
         assert_eq!(completed_tool_call_ids, vec!["call-a", "call-b"]);
+        let finished_event_tool_call_ids = controller
+            .events()
+            .iter()
+            .filter(|event| matches!(&event.kind, CoreEventKind::ToolFinished))
+            .filter_map(|event| {
+                event
+                    .metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.get("tool_call_id"))
+                    .and_then(Value::as_str)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(finished_event_tool_call_ids, vec!["call-b", "call-a"]);
     });
+}
+
+/// Verifies restored batches execute only not-started calls and bind one ordered result to every original call.
+/// 验证恢复批次仅执行未启动调用，并为每个原始调用按顺序绑定一个结果。
+#[test]
+fn restored_tool_batch_reuses_results_and_synthesizes_unknown_outcomes_in_order() {
+    // runtime drives the asynchronous recovery loop.
+    // runtime 驱动异步恢复循环。
+    let runtime = tokio::runtime::Runtime::new().expect("create tokio runtime");
+    runtime.block_on(async {
+        // calls are the exact original Provider batch retained at the assistant tail.
+        // calls 是保留在助手尾部的精确原始 Provider 批次。
+        let calls = vec![
+            ConversationToolCall {
+                id: String::from("item-execute"),
+                tool_call_id: Some(String::from("call-execute")),
+                tool_name: String::from("fresh_tool"),
+                arguments: json!({"index": 1}),
+            },
+            ConversationToolCall {
+                id: String::from("item-reuse"),
+                tool_call_id: Some(String::from("call-reuse")),
+                tool_name: String::from("retained_tool"),
+                arguments: json!({"index": 2}),
+            },
+            ConversationToolCall {
+                id: String::from("item-unknown"),
+                tool_call_id: Some(String::from("call-unknown")),
+                tool_name: String::from("uncertain_tool"),
+                arguments: json!({"index": 3}),
+            },
+        ];
+        // snapshot ends at the exact assistant tool batch that recovery must reconcile.
+        // snapshot 结束于恢复必须协调的精确助手工具批次。
+        let snapshot = ConversationSnapshot {
+            messages: vec![ConversationMessage {
+                id: String::from("assistant-tool-batch"),
+                payload: ConversationPayload::Assistant {
+                    text: String::new(),
+                    reasoning: String::new(),
+                    provider_message_id: Some(String::from("provider-tool-batch")),
+                    provider_message_state: None,
+                    usage: None,
+                    tool_calls: calls.clone(),
+                },
+            }],
+            ..ConversationSnapshot::default()
+        };
+        // restoredTools assigns exactly one authoritative disposition to each original call.
+        // restoredTools 为每个原始调用分配一个权威处置方式。
+        let restored_tools = vec![
+            crate::types::RestoredToolInvocation {
+                request: ToolInvocationRequest {
+                    tool_call_id: String::from("call-execute"),
+                    tool_name: String::from("fresh_tool"),
+                    arguments: json!({"index": 1}),
+                },
+                disposition: crate::types::RestoredToolInvocationDisposition::Execute,
+            },
+            crate::types::RestoredToolInvocation {
+                request: ToolInvocationRequest {
+                    tool_call_id: String::from("call-reuse"),
+                    tool_name: String::from("retained_tool"),
+                    arguments: json!({"index": 2}),
+                },
+                disposition: crate::types::RestoredToolInvocationDisposition::ReuseResult {
+                    result: ToolInvocationResult {
+                        tool_call_id: String::from("call-reuse"),
+                        tool_name: String::from("retained_tool"),
+                        model_output: String::from("retained result"),
+                        host_result: Some(json!({"retained": true})),
+                        is_error: false,
+                    },
+                },
+            },
+            crate::types::RestoredToolInvocation {
+                request: ToolInvocationRequest {
+                    tool_call_id: String::from("call-unknown"),
+                    tool_name: String::from("uncertain_tool"),
+                    arguments: json!({"index": 3}),
+                },
+                disposition: crate::types::RestoredToolInvocationDisposition::OutcomeUnknown,
+            },
+        ];
+        // adapter supplies the single next Provider response after tool reconciliation.
+        // adapter 在工具协调后提供唯一的下一次 Provider 响应。
+        let adapter = MockStreamingProviderAdapter::new(vec![(
+            Vec::new(),
+            ProviderTurnResponse {
+                assistant_text: String::from("recovery completed"),
+                assistant_reasoning: String::new(),
+                provider_message_id: Some(String::from("provider-final")),
+                provider_message_state: None,
+                tool_calls: Vec::new(),
+                continuation: None,
+                usage: None,
+            },
+        )]);
+        // executor exposes one outcome only for the not-started call.
+        // executor 仅为未启动调用提供一个结果。
+        let executor = MockToolExecutor::new().with_outcome(
+            "fresh_tool",
+            "fresh result",
+            Some(json!({"fresh": true})),
+            false,
+        );
+        // controller owns the exact retained assistant tail.
+        // controller 持有精确保留的助手尾部。
+        let mut controller = VulcanCoreController::new(build_test_config(3), snapshot)
+            .expect("valid restored conversation snapshot");
+
+        controller
+            .run_restored_tool_batch_streaming_with_checkpoints_and_interventions(
+                &adapter,
+                &executor,
+                &AllowAllToolPolicy,
+                crate::types::RestoredToolBatchRecovery {
+                    tools: restored_tools,
+                    user_followup: None,
+                },
+                |_, _| {},
+                |_| Ok(false),
+            )
+            .await
+            .expect("restore exact tool batch");
+
+        assert_eq!(
+            executor
+                .executed_requests()
+                .iter()
+                .map(|request| request.tool_call_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["call-execute"]
+        );
+        // results are the three original-call bindings in original model order.
+        // results 是按模型原始顺序排列的三个原始调用绑定结果。
+        let results = controller
+            .snapshot()
+            .messages
+            .iter()
+            .filter_map(|message| match &message.payload {
+                ConversationPayload::ToolResult {
+                    tool_call_id,
+                    is_error,
+                    text,
+                } => Some((tool_call_id.as_deref(), *is_error, text.as_str())),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0], (Some("call-execute"), false, "fresh result"));
+        assert_eq!(results[1], (Some("call-reuse"), false, "retained result"));
+        assert_eq!(results[2].0, Some("call-unknown"));
+        assert!(results[2].1);
+        assert!(results[2].2.contains("no reliable result is available"));
+        assert_eq!(adapter.built_requests().len(), 1);
+    });
+}
+
+/// Verifies a fully reconciled restored batch never enters the host execution boundary with an empty batch.
+/// 验证已经完全协调的恢复批次绝不会以空批次进入宿主执行边界。
+#[test]
+fn restored_tool_batch_without_executable_calls_skips_empty_execution_boundary() {
+    // runtime drives the asynchronous recovery loop through one following Provider response.
+    // runtime 通过一次后续 Provider 响应驱动异步恢复循环。
+    let runtime = tokio::runtime::Runtime::new().expect("create tokio runtime");
+    runtime.block_on(async {
+        // request is the exact original invocation whose result became unknown after interruption.
+        // request 是中断后结果变为未知的精确原始调用。
+        let request = ToolInvocationRequest {
+            tool_call_id: String::from("call-unknown-only"),
+            tool_name: String::from("uncertain_tool"),
+            arguments: json!({"index": 1}),
+        };
+        // snapshot ends at the assistant call that must receive one synthetic result without re-execution.
+        // snapshot 结束于必须在不重新执行的情况下接收一条合成结果的助手调用。
+        let snapshot = ConversationSnapshot {
+            messages: vec![ConversationMessage {
+                id: String::from("assistant-unknown-only"),
+                payload: ConversationPayload::Assistant {
+                    text: String::new(),
+                    reasoning: String::new(),
+                    provider_message_id: Some(String::from("provider-unknown-only")),
+                    provider_message_state: None,
+                    usage: None,
+                    tool_calls: vec![ConversationToolCall {
+                        id: String::from("item-unknown-only"),
+                        tool_call_id: Some(request.tool_call_id.clone()),
+                        tool_name: request.tool_name.clone(),
+                        arguments: request.arguments.clone(),
+                    }],
+                },
+            }],
+            ..ConversationSnapshot::default()
+        };
+        // adapter supplies the next Provider response after the synthetic result is appended.
+        // adapter 在追加合成结果后提供下一次 Provider 响应。
+        let adapter = MockStreamingProviderAdapter::new(vec![(
+            Vec::new(),
+            ProviderTurnResponse {
+                assistant_text: String::from("recovery completed"),
+                assistant_reasoning: String::new(),
+                provider_message_id: Some(String::from("provider-final")),
+                provider_message_state: None,
+                tool_calls: Vec::new(),
+                continuation: None,
+                usage: None,
+            },
+        )]);
+        // executor records every host batch so an accidental empty preparation remains observable.
+        // executor 记录每个宿主批次，使意外的空批次准备保持可观测。
+        let executor = MockToolExecutor::new();
+        // controller owns the exact retained assistant boundary.
+        // controller 持有精确保留的助手边界。
+        let mut controller = VulcanCoreController::new(build_test_config(2), snapshot)
+            .expect("valid restored conversation snapshot");
+
+        controller
+            .run_restored_tool_batch_streaming_with_checkpoints_and_interventions(
+                &adapter,
+                &executor,
+                &AllowAllToolPolicy,
+                crate::types::RestoredToolBatchRecovery {
+                    tools: vec![crate::types::RestoredToolInvocation {
+                        request,
+                        disposition:
+                            crate::types::RestoredToolInvocationDisposition::OutcomeUnknown,
+                    }],
+                    user_followup: None,
+                },
+                |_, _| {},
+                |_| Ok(false),
+            )
+            .await
+            .expect("restore unknown-only tool batch");
+
+        assert!(executor.prepared_batches().is_empty());
+        assert!(executor.executed_requests().is_empty());
+        assert!(controller.snapshot().messages.iter().any(|message| {
+            matches!(
+                &message.payload,
+                ConversationPayload::ToolResult {
+                    tool_call_id: Some(tool_call_id),
+                    is_error: true,
+                    text,
+                } if tool_call_id == "call-unknown-only"
+                    && text.contains("no reliable result is available")
+            )
+        }));
+        // unknownRecord exposes the machine-readable warning that the UI and later recovery audits consume.
+        // unknownRecord 暴露 UI 与后续恢复审计所消费的机器可读警告。
+        let unknown_record = controller
+            .snapshot()
+            .records
+            .iter()
+            .find(|record| {
+                record.metadata.as_ref().and_then(|metadata| {
+                    metadata
+                        .get("tool_call_id")
+                        .and_then(serde_json::Value::as_str)
+                }) == Some("call-unknown-only")
+            })
+            .expect("unknown tool outcome should create one structured record");
+        // unknownMetadata must distinguish possible external effects from a proven unstarted cancellation.
+        // unknownMetadata 必须区分可能存在的外部副作用与已证明未启动的取消。
+        let unknown_metadata = unknown_record
+            .metadata
+            .as_ref()
+            .expect("unknown tool outcome should retain metadata");
+        assert_eq!(
+            unknown_metadata
+                .get("status")
+                .and_then(serde_json::Value::as_str),
+            Some("interrupted_outcome_unknown")
+        );
+        assert_eq!(
+            unknown_metadata
+                .get("possible_external_effects")
+                .and_then(serde_json::Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(adapter.built_requests().len(), 1);
+    });
+}
+
+/// Verifies a recovery follow-up cancels a proven not-started tool and is appended only after its synthetic result.
+/// 验证恢复补充消息会取消已证明未启动的工具，并且仅在其合成结果之后追加。
+#[test]
+fn restored_user_followup_pairs_not_started_tool_before_real_user_text() {
+    // runtime drives the restored tool boundary and following Provider request.
+    // runtime 驱动恢复工具边界及其后的 Provider 请求。
+    let runtime = tokio::runtime::Runtime::new().expect("create tokio runtime");
+    runtime.block_on(async {
+        // request is the exact original tool call that never entered host execution.
+        // request 是从未进入宿主执行的精确原始工具调用。
+        let request = ToolInvocationRequest {
+            tool_call_id: String::from("call-not-started"),
+            tool_name: String::from("write_file"),
+            arguments: json!({"path": "safe.txt"}),
+        };
+        // snapshot ends at the unmatched assistant tool call.
+        // snapshot 结束于尚未配对的助手工具调用。
+        let snapshot = ConversationSnapshot {
+            messages: vec![ConversationMessage {
+                id: String::from("assistant-not-started"),
+                payload: ConversationPayload::Assistant {
+                    text: String::new(),
+                    reasoning: String::new(),
+                    provider_message_id: Some(String::from("provider-not-started")),
+                    provider_message_state: None,
+                    usage: None,
+                    tool_calls: vec![ConversationToolCall {
+                        id: String::from("item-not-started"),
+                        tool_call_id: Some(request.tool_call_id.clone()),
+                        tool_name: request.tool_name.clone(),
+                        arguments: request.arguments.clone(),
+                    }],
+                },
+            }],
+            ..ConversationSnapshot::default()
+        };
+        // adapter exposes the request history used after recovery ordering completes.
+        // adapter 暴露恢复顺序完成后使用的请求历史。
+        let adapter = MockStreamingProviderAdapter::new(vec![(
+            Vec::new(),
+            ProviderTurnResponse {
+                assistant_text: String::from("updated request accepted"),
+                assistant_reasoning: String::new(),
+                provider_message_id: Some(String::from("provider-followup-final")),
+                provider_message_state: None,
+                tool_calls: Vec::new(),
+                continuation: None,
+                usage: None,
+            },
+        )]);
+        // executor must remain untouched because the follow-up supersedes the not-started call.
+        // executor 必须保持未触发，因为补充消息取代了未启动调用。
+        let executor = MockToolExecutor::new();
+        // controller owns the exact unmatched tool boundary.
+        // controller 持有精确的未配对工具边界。
+        let mut controller = VulcanCoreController::new(build_test_config(2), snapshot)
+            .expect("valid restored conversation snapshot");
+        // checkpoints expose the protocol-safe order before Provider dispatch.
+        // checkpoints 暴露 Provider 分派前的协议安全顺序。
+        let mut checkpoints = Vec::<ConversationSnapshot>::new();
+
+        controller
+            .run_restored_tool_batch_streaming_with_checkpoints_and_interventions(
+                &adapter,
+                &executor,
+                &AllowAllToolPolicy,
+                crate::types::RestoredToolBatchRecovery {
+                    tools: vec![crate::types::RestoredToolInvocation {
+                        request,
+                        disposition:
+                            crate::types::RestoredToolInvocationDisposition::CancelledBeforeExecution,
+                    }],
+                    user_followup: Some(crate::types::RestoredUserFollowup {
+                        visible_prompt: String::from("先不要写文件，改为只分析。"),
+                        provider_prompt: String::from(
+                            "先不要写文件，改为只分析。\n\n<hidden_host_guidance>\nUse analysis only.\n</hidden_host_guidance>",
+                        ),
+                        admission_id: String::from("followup-admission-a"),
+                        attachments: Vec::new(),
+                    }),
+                },
+                |snapshot, _| checkpoints.push(snapshot.clone()),
+                |_| Ok(false),
+            )
+            .await
+            .expect("recover with a real user follow-up");
+
+        assert!(executor.prepared_batches().is_empty());
+        assert!(executor.executed_requests().is_empty());
+        let first_checkpoint = checkpoints
+            .first()
+            .expect("reconciled follow-up checkpoint should be emitted");
+        assert!(matches!(
+            first_checkpoint.messages.as_slice(),
+            [
+                ConversationMessage {
+                    payload: ConversationPayload::Assistant { .. },
+                    ..
+                },
+                ConversationMessage {
+                    payload: ConversationPayload::ToolResult { is_error: true, text, .. },
+                    ..
+                },
+                ConversationMessage {
+                    payload: ConversationPayload::UserText { text: prompt, .. },
+                    ..
+                }
+            ] if text.contains("was not executed")
+                && prompt.contains("<hidden_host_guidance>")
+        ));
+        // cancelledRecord proves the obsolete call was closed without claiming possible external effects.
+        // cancelledRecord 证明已过时调用在未声明可能外部副作用的情况下被封闭。
+        let cancelled_record = first_checkpoint
+            .records
+            .iter()
+            .find(|record| {
+                record.metadata.as_ref().and_then(|metadata| {
+                    metadata.get("tool_call_id").and_then(serde_json::Value::as_str)
+                }) == Some("call-not-started")
+            })
+            .expect("cancelled not-started call should create one structured record");
+        // cancelledMetadata carries the exact non-execution status consumed by user-facing projection.
+        // cancelledMetadata 携带用户界面投影所消费的精确未执行状态。
+        let cancelled_metadata = cancelled_record
+            .metadata
+            .as_ref()
+            .expect("cancelled not-started call should retain metadata");
+        assert_eq!(
+            cancelled_metadata
+                .get("status")
+                .and_then(serde_json::Value::as_str),
+            Some("cancelled_before_execution")
+        );
+        assert_eq!(
+            cancelled_metadata
+                .get("possible_external_effects")
+                .and_then(serde_json::Value::as_bool),
+            Some(false)
+        );
+        let visible_user_record = first_checkpoint
+            .records
+            .iter()
+            .rev()
+            .find(|record| record.role == TranscriptRole::User)
+            .expect("follow-up should create one visible user record");
+        assert_eq!(visible_user_record.body, "先不要写文件，改为只分析。");
+        assert!(!visible_user_record.body.contains("hidden_host_guidance"));
+        let built_requests = adapter.built_requests();
+        assert_eq!(built_requests.len(), 1);
+        assert!(matches!(
+            built_requests[0].history.last(),
+            Some(ConversationMessage {
+                payload: ConversationPayload::UserText { text, .. },
+                ..
+            }) if text.contains("<hidden_host_guidance>")
+        ));
+    });
+}
+
+/// Verifies a retained tool-free assistant tail completes locally without another Provider request.
+/// 验证保留的无工具助手尾部会在本地完成，而不会再次请求 Provider。
+#[test]
+fn restored_final_assistant_completes_without_provider_dispatch() {
+    // snapshot contains the Provider-proven tool-free assistant tail.
+    // snapshot 包含已由 Provider 证明的无工具助手尾部。
+    let snapshot = ConversationSnapshot {
+        messages: vec![ConversationMessage {
+            id: String::from("assistant-final"),
+            payload: ConversationPayload::Assistant {
+                text: String::from("complete answer"),
+                reasoning: String::new(),
+                provider_message_id: Some(String::from("provider-final")),
+                provider_message_state: None,
+                usage: None,
+                tool_calls: Vec::new(),
+            },
+        }],
+        ..ConversationSnapshot::default()
+    };
+    // controller finalizes the retained proof without receiving any adapter.
+    // controller 在不接收任何适配器的情况下完成保留证明。
+    let mut controller = VulcanCoreController::new(build_test_config(1), snapshot)
+        .expect("valid final assistant snapshot");
+
+    let result = controller
+        .finalize_restored_assistant()
+        .expect("finalize retained assistant locally");
+
+    assert_eq!(result.provider_turns_executed, 0);
+    assert_eq!(result.tool_calls_processed, 0);
+    assert_eq!(
+        result.final_assistant_message_id.as_deref(),
+        Some("assistant-final")
+    );
+    assert_eq!(controller.phase(), ControllerPhase::Completed);
 }
 
 /// Generates a synthetic skipped tool result when the host policy refuses execution and continues the loop.

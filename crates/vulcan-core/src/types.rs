@@ -39,6 +39,13 @@ pub enum CoreError {
         /// 为宿主重启边界保留的人类可读预算诊断。
         message: String,
     },
+    /// The host accepted a new exact Provider route and must restart before the next request.
+    /// 宿主已接受新的精确 Provider 路由，必须在下一次请求前重启当前循环。
+    ProviderRouteSwitchRequired {
+        /// Human-readable control-boundary diagnostic retained for the host restart.
+        /// 为宿主重启保留的人类可读控制边界诊断。
+        message: String,
+    },
     /// The tool executor failed while running a host-side tool invocation.
     /// 工具执行器在运行宿主侧工具调用时失败。
     ToolFailure {
@@ -62,6 +69,9 @@ impl Display for CoreError {
             } => write!(f, "provider `{provider_id}` failure: {message}"),
             CoreError::ContextCompactionRequired { message } => {
                 write!(f, "context compaction required: {message}")
+            }
+            CoreError::ProviderRouteSwitchRequired { message } => {
+                write!(f, "provider route switch required: {message}")
             }
             CoreError::ToolFailure { tool_name, message } => {
                 write!(f, "tool `{tool_name}` failure: {message}")
@@ -789,7 +799,7 @@ pub enum TranscriptRecordKind {
 
 /// Represents one tool invocation request that can be executed by the host tool runtime.
 /// 表示可由宿主工具运行时执行的一次工具调用请求。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolInvocationRequest {
     /// Stable tool-call identifier associated with the request.
     /// 与请求关联的稳定工具调用标识。
@@ -804,7 +814,7 @@ pub struct ToolInvocationRequest {
 
 /// Represents one tool execution result returned by the host runtime.
 /// 表示由宿主运行时返回的一次工具执行结果。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolInvocationResult {
     /// Stable tool-call identifier associated with the result.
     /// 与结果关联的稳定工具调用标识。
@@ -821,6 +831,71 @@ pub struct ToolInvocationResult {
     /// Whether the tool invocation should be treated as an error by the controller.
     /// 控制器是否应将该工具调用视为错误。
     pub is_error: bool,
+}
+
+/// Defines how one retained tool invocation must be reconciled before the next Provider request.
+/// 定义下一次 Provider 请求前应如何协调一条已保留的工具调用。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RestoredToolInvocationDisposition {
+    /// The tool body never started and may execute once after exact request validation.
+    /// 工具主体从未启动，可在精确请求校验后执行一次。
+    Execute,
+    /// The exact durable result must be reused without executing the tool again.
+    /// 必须复用精确的可靠结果，不得再次执行工具。
+    ReuseResult {
+        /// Exact invocation result durably retained before recovery.
+        /// 恢复前已可靠保留的精确调用结果。
+        result: ToolInvocationResult,
+    },
+    /// Execution may have started but no reliable result exists, so a synthetic error is required.
+    /// 执行可能已经开始但不存在可靠结果，因此必须生成合成错误。
+    OutcomeUnknown,
+    /// The tool was proven not to have started and a user follow-up superseded its original execution.
+    /// 工具已证明尚未启动，且用户补充消息取代了其原始执行。
+    CancelledBeforeExecution,
+}
+
+/// Binds one original tool request to its authoritative recovery disposition.
+/// 将一条原始工具请求绑定到其权威恢复处置方式。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RestoredToolInvocation {
+    /// Exact original tool invocation request in Provider order.
+    /// 按 Provider 原始顺序保存的精确工具调用请求。
+    pub request: ToolInvocationRequest,
+    /// Authoritative recovery disposition for this invocation.
+    /// 当前调用的权威恢复处置方式。
+    pub disposition: RestoredToolInvocationDisposition,
+}
+
+/// One user-authored follow-up that must be appended at a protocol-safe recovery boundary.
+/// 必须在协议安全恢复边界追加的一条用户补充消息。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RestoredUserFollowup {
+    /// User-visible prompt text retained by the transcript record.
+    /// 由转录记录保留的用户可见提示词文本。
+    pub visible_prompt: String,
+    /// Provider-visible prompt text, including optional host-only guidance.
+    /// Provider 可见提示词文本，包含可选的仅宿主可见引导。
+    pub provider_prompt: String,
+    /// Stable admission identity attached to transcript metadata.
+    /// 附着到转录元数据的稳定准入标识。
+    pub admission_id: String,
+    /// Structured attachments appended with the recovered user message.
+    /// 随恢复用户消息一并追加的结构化附件。
+    pub attachments: Vec<ConversationAttachment>,
+}
+
+/// Groups one retained tool batch with the optional user follow-up admitted after reconciliation.
+/// 将一批保留工具调用与仅可在对账后准入的可选用户补充组合为一个恢复输入。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RestoredToolBatchRecovery {
+    /// Exact original tool invocations and their authoritative recovery dispositions in Provider order.
+    /// 按 Provider 原始顺序保存的精确工具调用及其权威恢复处置方式。
+    pub tools: Vec<RestoredToolInvocation>,
+    /// Optional user follow-up appended only after every retained tool call has a paired result.
+    /// 仅在每条保留工具调用都获得配对结果后追加的可选用户补充。
+    pub user_followup: Option<RestoredUserFollowup>,
 }
 
 /// Represents one normalized provider usage snapshot retained for budget calibration and diagnostics.

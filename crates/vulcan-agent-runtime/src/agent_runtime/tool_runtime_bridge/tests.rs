@@ -551,6 +551,57 @@ fn managed_tool_runtime_bridge_executes_core_tool_request() {
     );
 }
 
+/// Verifies an unregistered provider tool receives a stable recovery binding and remains a normal model-visible tool error.
+/// 验证未注册的 Provider 工具会获得稳定恢复绑定，并继续作为普通的模型可见工具错误返回。
+#[test]
+fn managed_tool_runtime_bridge_preserves_unregistered_tool_error_path() {
+    let (manager, definitions) = build_demo_manager();
+    let runtime_bridge =
+        VulcanManagedToolRuntimeBridge::new(Arc::new(manager), &definitions, Uuid::nil(), "Build");
+    let request = ToolInvocationRequest {
+        tool_call_id: String::from("call-unknown-1"),
+        tool_name: String::from("invented_tool"),
+        arguments: json!({ "query": "README" }),
+    };
+    let same_binding_request = ToolInvocationRequest {
+        tool_call_id: String::from("call-unknown-2"),
+        tool_name: request.tool_name.clone(),
+        arguments: json!({ "query": "Cargo.toml" }),
+    };
+    let other_binding_request = ToolInvocationRequest {
+        tool_call_id: String::from("call-unknown-3"),
+        tool_name: String::from("other_invented_tool"),
+        arguments: json!({}),
+    };
+
+    let fingerprint = runtime_bridge
+        .binding_fingerprint_for_request(&request)
+        .expect("unregistered binding should have a recovery fingerprint");
+    assert_eq!(
+        fingerprint,
+        runtime_bridge
+            .binding_fingerprint_for_request(&same_binding_request)
+            .expect("the same unregistered binding should remain stable")
+    );
+    assert_ne!(
+        fingerprint,
+        runtime_bridge
+            .binding_fingerprint_for_request(&other_binding_request)
+            .expect("a different unregistered binding should remain distinguishable")
+    );
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime should build");
+    let result = runtime
+        .block_on(runtime_bridge.execute_tool(&request))
+        .expect("unregistered tool should return one controller-visible result");
+
+    assert!(result.is_error);
+    assert!(result.model_output.contains("invented_tool"));
+}
+
 /// Verifies host-managed tool invocation failures are downgraded into one error result returned to the controller instead of aborting the whole turn.
 /// 验证宿主管理工具调用失败会被降级为回传给控制器的一条错误结果，而不是直接中断整轮执行。
 #[test]
@@ -1359,7 +1410,9 @@ fn streaming_tool_executor_rejects_tool_body_when_safety_barrier_fails() {
             .expect("tool task should join")
             .expect_err("rejected safety barrier must fail the tool call");
         assert!(
-            error.to_string().contains("safety barrier was rejected"),
+            error
+                .to_string()
+                .contains("durability barrier was rejected"),
             "tool failure should retain the controlled safety diagnostic"
         );
         assert!(

@@ -81,8 +81,8 @@ pub struct ConversationSummary {
     /// 纯展示用分叉来源标记。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fork_source: Option<ConversationForkSourceSummary>,
-    /// Prompt-free continuation admission state for the canonical terminal boundary.
-    /// 规范终止边界的无提示词 Continue 准入状态。
+    /// Problem-turn recovery admission state for the canonical terminal boundary.
+    /// 规范终止边界的问题回合恢复准入状态。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub continuation: Option<ConversationContinuationSummary>,
 }
@@ -315,6 +315,9 @@ pub enum ToolRequestProgressState {
     /// The provider is still streaming the tool argument document.
     /// Provider 仍在流式发送工具参数文档。
     Receiving,
+    /// One complete JSON root has been assembled even though the surrounding Provider response remains open.
+    /// 已组装出一个完整 JSON 根值，但外围 Provider 响应仍未结束。
+    ArgumentsAssembled,
 }
 
 /// Carries the latest safe argument-formation snapshot for one tool request.

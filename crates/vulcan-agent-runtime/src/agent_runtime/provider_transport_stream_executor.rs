@@ -1,7 +1,9 @@
 //! Streaming host-owned tool executor used by provider transport wrappers.
 //! 供 Provider 传输包装器使用的流式宿主工具执行器模块。
 
-use crate::agent_runtime::events::{RuntimeEvent, RuntimeEventKind};
+use crate::agent_runtime::events::{
+    RuntimeEvent, RuntimeEventKind, ToolExecutionRecoveryBoundary, ToolExecutionRecoveryRequest,
+};
 use crate::agent_runtime::provider_stream::ProviderStreamDelta;
 use crate::agent_runtime::provider_tool_event_format::{
     attach_tool_name_to_runtime_metadata, build_tool_result_runtime_metadata,
@@ -94,6 +96,43 @@ impl StreamingRuntimeToolExecutor {
 
 #[async_trait]
 impl VulcanToolExecutor for StreamingRuntimeToolExecutor {
+    /// Publishes one complete durable recovery batch before any concurrent tool future starts.
+    /// 在任何并发工具 Future 启动前发布一批完整的可靠恢复请求。
+    async fn prepare_tool_batch(
+        &self,
+        requests: &[CoreToolInvocationRequest],
+    ) -> Result<(), VulcanCoreError> {
+        let recovery_requests = requests
+            .iter()
+            .map(|request| {
+                self.runtime_bridge
+                    .binding_fingerprint_for_request(request)
+                    .map(|binding_fingerprint| ToolExecutionRecoveryRequest {
+                        request: request.clone(),
+                        binding_fingerprint,
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|message| VulcanCoreError::InvalidState { message })?;
+        let (batch_event, projection_barrier) = attach_runtime_event_projection_barrier(
+            RuntimeEvent::new(
+                RuntimeEventKind::ToolBatchPrepared,
+                "Tool batch recovery boundary",
+                "The complete tool batch is waiting for durable recovery persistence.",
+            )
+            .with_tool_execution_boundary(
+                ToolExecutionRecoveryBoundary::BatchPrepared(recovery_requests),
+            ),
+        )
+        .map_err(|message| VulcanCoreError::InvalidState { message })?;
+        let _ = self
+            .live_sender
+            .send(Ok(ProviderStreamDelta::RuntimeEvent(batch_event)));
+        wait_runtime_event_projection_barrier(projection_barrier)
+            .await
+            .map_err(|message| VulcanCoreError::InvalidState { message })
+    }
+
     /// Executes one host-managed tool request, forwards start and finish runtime events, and returns the normalized tool result to the controller.
     /// 执行一次宿主管理工具请求，转发开始与完成运行时事件，并将规范化工具结果返回给控制器。
     async fn execute_tool(
@@ -109,6 +148,13 @@ impl VulcanToolExecutor for StreamingRuntimeToolExecutor {
                 ),
                 format_tool_call_runtime_detail(&request.tool_name, &request.arguments),
             )
+            .with_tool_execution_boundary(ToolExecutionRecoveryBoundary::Started {
+                request: request.clone(),
+                binding_fingerprint: self
+                    .runtime_bridge
+                    .binding_fingerprint_for_request(request)
+                    .map_err(|message| VulcanCoreError::InvalidState { message })?,
+            })
             .with_metadata(Some(json!({
                 "tool_call_id": request.tool_call_id,
                 "tool_name": request.tool_name,
@@ -177,6 +223,7 @@ impl VulcanToolExecutor for StreamingRuntimeToolExecutor {
                 format!("工具返回 · {}", request.tool_call_id),
                 format_host_tool_result_runtime_detail(&result.model_output),
             )
+            .with_tool_execution_boundary(ToolExecutionRecoveryBoundary::Finished(result.clone()))
             .with_metadata(event_metadata),
         )
         .map_err(|message| VulcanCoreError::InvalidState { message })?;

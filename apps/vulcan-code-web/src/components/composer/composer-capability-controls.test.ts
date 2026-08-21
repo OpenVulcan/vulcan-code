@@ -124,6 +124,14 @@ function settingsFixture(): PublicAiSettingsSnapshot {
         },
       },
     },
+    mediaUnderstandingBackendOptions: {
+      video_understand: {
+        provider_tool: {
+          connection_id: "media-account",
+          target_id: "entry.video-01",
+        },
+      },
+    },
     providerExtensionTargetSets: {},
     internalInferenceCandidates: [],
     inferenceProfiles: {},
@@ -144,6 +152,7 @@ describe("providerToolSettingsConflicts", () => {
         },
       },
       extensionTargetSets: {},
+      mediaUnderstandingModes: {},
     });
 
     expect(conflicts).toMatchObject([{
@@ -162,6 +171,7 @@ describe("providerToolSettingsConflicts", () => {
         },
       },
       extensionTargetSets: {},
+      mediaUnderstandingModes: {},
     });
 
     expect(conflicts).toEqual([]);
@@ -174,6 +184,7 @@ describe("providerToolSettingsConflicts", () => {
       enabledCapabilities: ["video_understand"],
       selections: {},
       extensionTargetSets: {},
+      mediaUnderstandingModes: { video_understand: "provider_tool" },
     });
 
     expect(conflicts).toEqual([]);
@@ -192,6 +203,7 @@ describe("providerToolSettingsConflicts", () => {
       enabledCapabilities: ["video_understand"],
       selections: {},
       extensionTargetSets: {},
+      mediaUnderstandingModes: { video_understand: "provider_tool" },
     });
 
     expect(conflicts).toMatchObject([{
@@ -249,12 +261,25 @@ describe("providerToolSettingsConflicts", () => {
         reasoning_effort: "none",
       },
     };
+    snapshot.mediaUnderstandingBackendOptions = {
+      video_understand: {
+        model_replacement: {
+          selection: {
+            provider_id: "provider",
+            model_id: "video-model",
+            connection_id: "media-account",
+          },
+          reasoning_effort: "none",
+        },
+      },
+    };
     // conflicts proves the exact fixed-off selection stays executable after persistence.
     // conflicts 证明精确固定关闭选择在持久化后仍保持可执行。
     const conflicts = providerToolSettingsConflicts(snapshot, {
       enabledCapabilities: ["video_understand"],
       selections: {},
       extensionTargetSets: {},
+      mediaUnderstandingModes: { video_understand: "model_replacement" },
     });
 
     expect(conflicts).toEqual([]);
@@ -269,6 +294,7 @@ describe("composerCapabilityIsEnabled", () => {
       extensionTargetSets: {
         image_generate: [{ connection_id: "image-account", target_id: "image-model" }],
       },
+      mediaUnderstandingModes: {},
     };
 
     expect(composerCapabilityIsEnabled(settings, "web_search")).toBe(true);

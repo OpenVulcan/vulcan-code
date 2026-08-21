@@ -274,6 +274,9 @@ struct MockToolExecutor {
     /// Recorded tool invocation requests received by the executor.
     /// 被执行器收到并记录下来的工具调用请求集合。
     executed_requests: Arc<Mutex<Vec<ToolInvocationRequest>>>,
+    /// Complete execution batches prepared before any tool body starts.
+    /// 在任何工具主体启动前准备的完整执行批次。
+    prepared_batches: Arc<Mutex<Vec<Vec<ToolInvocationRequest>>>>,
 }
 
 impl MockToolExecutor {
@@ -315,10 +318,32 @@ impl MockToolExecutor {
             .expect("lock executed requests")
             .clone()
     }
+
+    /// Returns every complete batch presented to the execution durability boundary.
+    /// 返回提交给执行可靠性边界的每个完整批次。
+    fn prepared_batches(&self) -> Vec<Vec<ToolInvocationRequest>> {
+        self.prepared_batches
+            .lock()
+            .expect("lock prepared batches")
+            .clone()
+    }
 }
 
 #[async_trait]
 impl VulcanToolExecutor for MockToolExecutor {
+    /// Records one non-empty batch before its tool bodies may start.
+    /// 在工具主体可以启动前记录一个非空批次。
+    async fn prepare_tool_batch(
+        &self,
+        requests: &[ToolInvocationRequest],
+    ) -> Result<(), CoreError> {
+        self.prepared_batches
+            .lock()
+            .expect("lock prepared batches")
+            .push(requests.to_vec());
+        Ok(())
+    }
+
     /// Executes one tool request by looking up the pre-planned result for the requested tool.
     /// 通过查找被请求工具的预设结果来执行一次工具请求。
     async fn execute_tool(
@@ -372,7 +397,14 @@ impl VulcanToolExecutor for ConcurrentToolExecutor {
     ) -> Result<ToolInvocationResult, CoreError> {
         let current = self.current_running.fetch_add(1, Ordering::SeqCst) + 1;
         self.max_running.fetch_max(current, Ordering::SeqCst);
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        // Deliberately finish the second batch item first so event order and replay order can be asserted separately.
+        // 刻意让批次中的第二项先完成，以便分别断言事件顺序与回放顺序。
+        let delay_ms = match request.tool_name.as_str() {
+            "slow_a" => 80,
+            "fast_b" => 10,
+            _ => 50,
+        };
+        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
         self.current_running.fetch_sub(1, Ordering::SeqCst);
         Ok(ToolInvocationResult {
             tool_call_id: request.tool_call_id.clone(),

@@ -5,15 +5,21 @@ use super::segmented_session_store::write_file_bytes_atomic;
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::PathBuf;
-use vulcan_ai_contract::DispatchOutcome;
 use vulcan_workbench_model::{
     EXECUTION_RETRY_SNAPSHOT_SCHEMA_VERSION, ExecutionRetryPendingAction,
     ExecutionRetryPreparationRouteSelection, ExecutionRetrySnapshot, ExecutionRetrySnapshotRef,
+    ExecutionRetryToolProgress, ExecutionRetryToolState,
 };
 
 /// Directory name containing retry sidecars below one segmented session.
 /// 单个分段会话下保存重试 sidecar 的目录名。
 const EXECUTION_RETRY_DIRECTORY: &str = "execution_retry";
+
+/// Builds the content-addressed file suffix from the only accepted retry Schema generation.
+/// 根据唯一接受的重试 Schema 代际构建内容寻址文件后缀。
+fn execution_retry_snapshot_file_suffix() -> String {
+    format!(".v{EXECUTION_RETRY_SNAPSHOT_SCHEMA_VERSION}.json")
+}
 
 /// Owns strict read, write, validation, and deletion of retry sidecars for one session directory.
 /// 负责单个会话目录中重试 sidecar 的严格读写、校验与删除。
@@ -211,10 +217,10 @@ impl ExecutionRetrySnapshotStore {
                 ));
             }
         };
-        // filePrefix and fileSuffix restrict cleanup to v4 bodies owned by this exact UUID.
-        // filePrefix 与 fileSuffix 将清理限制为该精确 UUID 所属的 v4 正文。
+        // filePrefix and fileSuffix restrict cleanup to current-Schema bodies owned by this exact UUID.
+        // filePrefix 与 fileSuffix 将清理限制为该精确 UUID 所属的当前 Schema 正文。
         let file_prefix = format!("{snapshot_id}.");
-        let file_suffix = ".v4.json";
+        let file_suffix = execution_retry_snapshot_file_suffix();
         for entry in entries {
             // entry is one direct child of the validated retry directory.
             // entry 是已校验重试目录的一个直接子项。
@@ -230,7 +236,9 @@ impl ExecutionRetrySnapshotStore {
             let Some(file_name) = file_name.to_str() else {
                 continue;
             };
-            if !file_name.starts_with(file_prefix.as_str()) || !file_name.ends_with(file_suffix) {
+            if !file_name.starts_with(file_prefix.as_str())
+                || !file_name.ends_with(file_suffix.as_str())
+            {
                 continue;
             }
             // path comes directly from this directory entry and never from string concatenation.
@@ -251,10 +259,11 @@ impl ExecutionRetrySnapshotStore {
     fn snapshot_path(&self, snapshot_id: &str, content_sha256: &str) -> Result<PathBuf, String> {
         validate_snapshot_id(snapshot_id)?;
         validate_sha256_hex(content_sha256)?;
+        let file_suffix = execution_retry_snapshot_file_suffix();
         Ok(self
             .session_directory
             .join(EXECUTION_RETRY_DIRECTORY)
-            .join(format!("{snapshot_id}.{content_sha256}.v4.json")))
+            .join(format!("{snapshot_id}.{content_sha256}{file_suffix}")))
     }
 }
 
@@ -277,6 +286,15 @@ fn validate_snapshot_identity(snapshot: &ExecutionRetrySnapshot) -> Result<(), S
             "Execution retry snapshot is missing a required stable identity or digest.",
         ));
     }
+    if snapshot
+        .user_followup
+        .as_ref()
+        .is_some_and(|followup| !followup.is_structurally_valid())
+    {
+        return Err(String::from(
+            "Execution retry snapshot contains an invalid user follow-up boundary.",
+        ));
+    }
     Ok(())
 }
 
@@ -287,20 +305,21 @@ fn snapshot_safety_summary(snapshot: &ExecutionRetrySnapshot) -> (bool, bool, Op
         &snapshot.pending_action,
         ExecutionRetryPendingAction::ResumePreparation { .. }
             | ExecutionRetryPendingAction::DispatchProviderRequest { .. }
+            | ExecutionRetryPendingAction::ExecuteToolBatch { .. }
             | ExecutionRetryPendingAction::PrepareNextProviderRequest
+            | ExecutionRetryPendingAction::FinalizeAssistant
     );
     let action_boundary_blocked_reason = pending_action_boundary_blocked_reason(snapshot);
     let error_blocked_reason = snapshot.error.as_ref().and_then(|error| {
-        if error.side_effect_observed {
+        if error.side_effect_observed
+            && matches!(
+                snapshot.pending_action,
+                ExecutionRetryPendingAction::DispatchProviderRequest { .. }
+            )
+        {
             return Some(String::from("tool_side_effect_in_flight"));
         }
-        if error.semantic_output_observed {
-            return Some(String::from("semantic_output_observed"));
-        }
-        if error.dispatch_outcome == DispatchOutcome::Unknown {
-            return Some(String::from("provider_dispatch_outcome_unknown"));
-        }
-        (!error.retryable).then(|| String::from("non_retryable"))
+        None
     });
     let blocked_reason = if !pending_action_supported {
         Some(String::from("pending_action_executor_unavailable"))
@@ -308,13 +327,7 @@ fn snapshot_safety_summary(snapshot: &ExecutionRetrySnapshot) -> (bool, bool, Op
         error_blocked_reason.or(action_boundary_blocked_reason)
     };
     let retryable = blocked_reason.is_none();
-    let requires_manual_confirmation = !pending_action_supported
-        || snapshot.error.as_ref().is_some_and(|error| {
-            error.semantic_output_observed
-                || error.side_effect_observed
-                || !error.retryable
-                || error.dispatch_outcome == DispatchOutcome::Unknown
-        });
+    let requires_manual_confirmation = blocked_reason.is_some();
     (retryable, requires_manual_confirmation, blocked_reason)
 }
 
@@ -373,22 +386,127 @@ fn pending_action_boundary_blocked_reason(snapshot: &ExecutionRetrySnapshot) -> 
                 "ERR_CONVERSATION_CONTINUE_RETRY_ROUTE_MISSING",
             ))
         }
+        ExecutionRetryPendingAction::ExecuteToolBatch { .. }
+            if snapshot.provider_route.is_none() =>
+        {
+            Some(String::from(
+                "ERR_CONVERSATION_CONTINUE_RETRY_ROUTE_MISSING",
+            ))
+        }
+        ExecutionRetryPendingAction::FinalizeAssistant if snapshot.provider_route.is_none() => {
+            Some(String::from(
+                "ERR_CONVERSATION_CONTINUE_RETRY_ROUTE_MISSING",
+            ))
+        }
+        ExecutionRetryPendingAction::ExecuteToolBatch { tools } => {
+            execute_tool_batch_boundary_blocked_reason(snapshot, tools)
+        }
         ExecutionRetryPendingAction::PrepareNextProviderRequest
-            if !matches!(
-                snapshot
-                    .controller_snapshot
-                    .messages
-                    .last()
-                    .map(|message| &message.payload),
-                Some(vulcan_core::types::ConversationPayload::ToolResult { .. })
+            if !vulcan_core::controller::conversation_snapshot_has_seeded_provider_input(
+                &snapshot.controller_snapshot,
             ) =>
         {
             Some(String::from(
                 "ERR_CONVERSATION_CONTINUE_RETRY_NEXT_PROVIDER_BOUNDARY_MISSING",
             ))
         }
+        ExecutionRetryPendingAction::FinalizeAssistant
+            if !matches!(
+                snapshot
+                    .controller_snapshot
+                    .messages
+                    .last()
+                    .map(|message| &message.payload),
+                Some(vulcan_core::types::ConversationPayload::Assistant { tool_calls, .. })
+                    if tool_calls.is_empty()
+            ) =>
+        {
+            Some(String::from(
+                "ERR_CONVERSATION_CONTINUE_RETRY_FINAL_ASSISTANT_BOUNDARY_MISSING",
+            ))
+        }
         _ => None,
     }
+}
+
+/// Validates an exact retained assistant tool batch and every per-tool recovery slot.
+/// 校验精确保留的助手工具批次及每个逐工具恢复槽位。
+fn execute_tool_batch_boundary_blocked_reason(
+    snapshot: &ExecutionRetrySnapshot,
+    tools: &[ExecutionRetryToolProgress],
+) -> Option<String> {
+    let Some(vulcan_core::types::ConversationPayload::Assistant {
+        tool_calls: assistant_calls,
+        ..
+    }) = snapshot
+        .controller_snapshot
+        .messages
+        .last()
+        .map(|message| &message.payload)
+    else {
+        return Some(String::from(
+            "ERR_CONVERSATION_CONTINUE_RETRY_TOOL_BOUNDARY_MISSING",
+        ));
+    };
+    if assistant_calls.is_empty() || assistant_calls.len() != tools.len() {
+        return Some(String::from(
+            "ERR_CONVERSATION_CONTINUE_RETRY_TOOL_BOUNDARY_MISSING",
+        ));
+    }
+
+    let mut observed_tool_call_ids = std::collections::HashSet::new();
+    for (assistant_call, progress) in assistant_calls.iter().zip(tools) {
+        // expectedToolCallId uses the same canonical resolver as normal execution and crash-gap reconstruction.
+        // expectedToolCallId 使用与正常执行及崩溃窗口重建相同的规范解析器。
+        let expected_tool_call_id = vulcan_core::controller::resolved_tool_call_id(assistant_call);
+        // An unresolved binding is valid only for a proven-unstarted slot. The mandatory
+        // BatchPrepared durability barrier must replace it before any Started transition.
+        // 未解析绑定仅对已证明未启动的槽位有效。强制 BatchPrepared 可靠屏障必须在任何
+        // Started 迁移前填充该绑定。
+        let binding_fingerprint_valid =
+            match (&progress.state, progress.binding_fingerprint.as_deref()) {
+                (ExecutionRetryToolState::NotStarted, None) => true,
+                (_, Some(binding_fingerprint)) => {
+                    binding_fingerprint.len() == 64
+                        && binding_fingerprint
+                            .bytes()
+                            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                }
+                (_, None) => false,
+            };
+        if !observed_tool_call_ids.insert(progress.request.tool_call_id.as_str())
+            || progress.request.tool_call_id != expected_tool_call_id
+            || progress.request.tool_name != assistant_call.tool_name
+            || progress.request.arguments != assistant_call.arguments
+            || !binding_fingerprint_valid
+        {
+            return Some(String::from(
+                "ERR_CONVERSATION_CONTINUE_RETRY_TOOL_BINDING_MISMATCH",
+            ));
+        }
+
+        let result_matches_request = progress.result.as_ref().is_none_or(|result| {
+            result.tool_call_id == progress.request.tool_call_id
+                && result.tool_name == progress.request.tool_name
+        });
+        let state_matches_result = match (&progress.state, &progress.result) {
+            (
+                ExecutionRetryToolState::NotStarted
+                | ExecutionRetryToolState::Running
+                | ExecutionRetryToolState::OutcomeUnknown,
+                None,
+            ) => true,
+            (ExecutionRetryToolState::Completed, Some(result)) => !result.is_error,
+            (ExecutionRetryToolState::Failed, Some(result)) => result.is_error,
+            _ => false,
+        };
+        if !result_matches_request || !state_matches_result {
+            return Some(String::from(
+                "ERR_CONVERSATION_CONTINUE_RETRY_TOOL_RESULT_MISMATCH",
+            ));
+        }
+    }
+    None
 }
 
 /// Computes the claim-equivalent digest of provider-visible messages and continuation state.
@@ -487,6 +605,7 @@ mod tests {
             state: ExecutionRetrySnapshotState::Frozen,
             logical_execution_id: String::from("logical-execution-1"),
             logical_turn_id: Some(String::from("turn-1")),
+            next_provider_attempt_index: 0,
             physical_attempt_id: String::from("attempt-1"),
             claimed_attempt_id: None,
             provider_route: Some(SessionProviderRouteLeaseIdentity {
@@ -505,12 +624,55 @@ mod tests {
             controller_config: Some(vulcan_core::types::ControllerConfig::default()),
             controller_snapshot,
             pending_action: ExecutionRetryPendingAction::PrepareNextProviderRequest,
+            user_followup: None,
             error: None,
             canonical_digest: String::from("canonical-digest-a"),
             context_generation_id: Some(String::from("context-generation-a")),
             created_at: String::from("1000"),
             updated_at: String::from("1000"),
         }
+    }
+
+    /// Builds one valid interrupted assistant tool batch with an exact not-started recovery slot.
+    /// 构建一个有效的中断助手工具批次，并包含精确的未启动恢复槽位。
+    fn test_execute_tool_batch_snapshot(snapshot_id: String) -> ExecutionRetrySnapshot {
+        // snapshot reuses the complete route and identity fixture before replacing its canonical tail.
+        // snapshot 在替换规范尾部前复用完整的路由与身份测试夹具。
+        let mut snapshot = test_snapshot(snapshot_id);
+        // request is the exact model-issued invocation retained by the recovery slot.
+        // request 是恢复槽位保留的模型原始精确调用。
+        let request = vulcan_core::types::ToolInvocationRequest {
+            tool_call_id: String::from("tool-item-1"),
+            tool_name: String::from("read_file"),
+            arguments: serde_json::json!({"path": "README.md"}),
+        };
+        snapshot.controller_snapshot.messages = vec![vulcan_core::types::ConversationMessage {
+            id: String::from("assistant-tool-batch-1"),
+            payload: vulcan_core::types::ConversationPayload::Assistant {
+                text: String::new(),
+                reasoning: String::new(),
+                provider_message_id: Some(String::from("provider-message-1")),
+                provider_message_state: None,
+                usage: None,
+                tool_calls: vec![vulcan_core::types::ConversationToolCall {
+                    id: String::from("tool-item-1"),
+                    // The fixture proves storage resolves a blank Provider id exactly like normal Core execution.
+                    // 该测试夹具证明存储层与 Core 正常执行使用同一空白 Provider 标识解析规则。
+                    tool_call_id: Some(String::from("   ")),
+                    tool_name: request.tool_name.clone(),
+                    arguments: request.arguments.clone(),
+                }],
+            },
+        }];
+        snapshot.pending_action = ExecutionRetryPendingAction::ExecuteToolBatch {
+            tools: vec![ExecutionRetryToolProgress {
+                request,
+                result: None,
+                binding_fingerprint: Some("a".repeat(64)),
+                state: ExecutionRetryToolState::NotStarted,
+            }],
+        };
+        snapshot
     }
 
     /// Verifies atomic publication round-trips through a digest-bound lightweight reference.
@@ -528,6 +690,23 @@ mod tests {
         let reference = store.write(&snapshot).expect("snapshot should persist");
         let restored = store.read(&reference).expect("snapshot should restore");
 
+        // sidecarPath proves the storage filename generation cannot drift from the accepted Schema version.
+        // sidecarPath 证明存储文件名代际不会偏离当前接受的 Schema 版本。
+        let sidecar_path = store
+            .snapshot_path(
+                snapshot.snapshot_id.as_str(),
+                reference.content_sha256.as_str(),
+            )
+            .expect("snapshot path should remain valid");
+        let expected_suffix = format!(".v{EXECUTION_RETRY_SNAPSHOT_SCHEMA_VERSION}.json");
+        assert!(
+            sidecar_path
+                .file_name()
+                .and_then(std::ffi::OsStr::to_str)
+                .is_some_and(|file_name| file_name.ends_with(expected_suffix.as_str()))
+        );
+        assert!(sidecar_path.is_file());
+
         assert_eq!(restored.snapshot_id, snapshot.snapshot_id);
         assert_eq!(restored.generation, snapshot.generation);
         assert_eq!(restored.canonical_digest, snapshot.canonical_digest);
@@ -543,6 +722,69 @@ mod tests {
         assert_eq!(reference.canonical_dispatch_sha256.len(), 64);
         assert_eq!(reference.content_sha256.len(), 64);
         assert!(reference.content_bytes > 0);
+    }
+
+    /// Verifies every Core-authorized Provider seed produces a replay-safe PrepareNext reference.
+    /// 验证 Core 授权的每种 Provider 播种输入都会生成可安全重放的 PrepareNext 引用。
+    ///
+    /// # Parameters
+    /// 参数
+    /// This test has no parameters.
+    /// 此测试没有参数。
+    ///
+    /// # Returns
+    /// 返回值
+    /// This test returns no value and fails if storage projection narrows the shared Core boundary contract.
+    /// 此测试无返回值；若存储投影缩窄共享 Core 边界契约，则测试失败。
+    #[test]
+    fn prepare_next_reference_accepts_every_core_provider_seed() {
+        // providerSeeds enumerate the complete shared Core contract used by runtime interventions.
+        // providerSeeds 枚举运行时干预使用的完整共享 Core 契约。
+        let provider_seeds = vec![
+            vulcan_core::types::ConversationPayload::UserText {
+                text: String::from("continue with the user supplement"),
+                attachments: Vec::new(),
+            },
+            vulcan_core::types::ConversationPayload::AgentMessage {
+                message_type: String::from("message"),
+                task_name: String::from("/root"),
+                sender: String::from("/root/reviewer"),
+                recipient: String::from("/root"),
+                payload: String::from("continue after mailbox delivery"),
+                trigger_turn: true,
+                metadata: None,
+            },
+            vulcan_core::types::ConversationPayload::ToolResult {
+                tool_call_id: Some(String::from("tool-call-1")),
+                is_error: false,
+                text: String::from("completed tool result"),
+            },
+        ];
+
+        for (seed_index, payload) in provider_seeds.into_iter().enumerate() {
+            // tempRoot isolates the immutable sidecar body for this exact seed kind.
+            // tempRoot 隔离当前精确播种输入类型的不可变 sidecar 正文。
+            let temp_root = tempfile::tempdir().expect("temporary session directory should exist");
+            // store derives the lightweight replay proof from the complete body.
+            // store 从完整正文派生轻量重放证明。
+            let store = ExecutionRetrySnapshotStore::new(temp_root.path());
+            // snapshot replaces only the canonical tail while preserving the valid route and action fixture.
+            // snapshot 仅替换规范尾部，同时保留有效路由与动作夹具。
+            let mut snapshot = test_snapshot(uuid::Uuid::new_v4().to_string());
+            snapshot.controller_snapshot.messages = vec![vulcan_core::types::ConversationMessage {
+                id: format!("provider-seed-{seed_index}"),
+                payload,
+            }];
+
+            let reference = store
+                .write(&snapshot)
+                .expect("authorized Provider seed should persist");
+
+            assert!(reference.retryable);
+            assert!(!reference.requires_manual_confirmation);
+            assert_eq!(reference.blocked_reason, None);
+            assert!(reference.replay_safety_proven());
+        }
     }
 
     /// Verifies a successful lifecycle cleanup removes the sidecar instead of retaining a consumed snapshot.
@@ -719,6 +961,17 @@ mod tests {
         let temp_root = tempfile::tempdir().expect("temporary session directory should exist");
         let store = ExecutionRetrySnapshotStore::new(temp_root.path());
         let mut snapshot = test_snapshot(uuid::Uuid::new_v4().to_string());
+        // request represents the still-dispatched Provider request whose side effect lacks any per-tool boundary.
+        // request 表示已分派但其副作用缺少逐工具边界的 Provider 请求。
+        let request =
+            serde_json::from_value::<vulcan_ai_contract::AiExecutionRequest>(serde_json::json!({
+                "operation": "conversation_respond",
+                "model_id": "model-a"
+            }))
+            .expect("minimal provider request should decode through defaulted fields");
+        snapshot.pending_action = ExecutionRetryPendingAction::DispatchProviderRequest {
+            request: Box::new(request),
+        };
         snapshot.error = Some(AiExecutionError {
             category: AiErrorCategory::Unclassified,
             subcategory: Some(String::from("provider_specific_tool_state")),
@@ -755,13 +1008,24 @@ mod tests {
         );
     }
 
-    /// Verifies unknown Provider dispatch remains blocked even when the adapter marks the error retryable.
-    /// 验证即使适配器把错误标记为可重试，未知 Provider 分派结果仍然必须阻断。
+    /// Verifies an unknown Provider dispatch remains retryable when no tool side effect was observed.
+    /// 验证未观察到工具副作用时，分派结果未知的 Provider 请求仍可重试。
     #[test]
-    fn retry_snapshot_marks_unknown_dispatch_blocked() {
+    fn retry_snapshot_allows_unknown_provider_dispatch_without_tool_side_effect() {
         let temp_root = tempfile::tempdir().expect("temporary session directory should exist");
         let store = ExecutionRetrySnapshotStore::new(temp_root.path());
         let mut snapshot = test_snapshot(uuid::Uuid::new_v4().to_string());
+        // request is the exact logical Provider request that Continue may reissue as a new physical attempt.
+        // request 是 Continue 可作为新物理尝试重新发出的精确逻辑 Provider 请求。
+        let request =
+            serde_json::from_value::<vulcan_ai_contract::AiExecutionRequest>(serde_json::json!({
+                "operation": "conversation_respond",
+                "model_id": "model-a"
+            }))
+            .expect("minimal provider request should decode through defaulted fields");
+        snapshot.pending_action = ExecutionRetryPendingAction::DispatchProviderRequest {
+            request: Box::new(request),
+        };
         snapshot.error = Some(AiExecutionError {
             category: AiErrorCategory::ProviderUnavailable,
             subcategory: Some(String::from("transport_interrupted")),
@@ -790,35 +1054,120 @@ mod tests {
             .write(&snapshot)
             .expect("unknown dispatch snapshot should persist for audit");
 
+        assert!(reference.retryable);
+        assert!(!reference.requires_manual_confirmation);
+        assert_eq!(reference.blocked_reason, None);
+        assert!(reference.replay_safety_proven());
+    }
+
+    /// Verifies retained tool-batch and final-assistant actions are both claimable when exact.
+    /// 验证保留工具批次与最终助手动作在边界精确时均可领取。
+    #[test]
+    fn retry_snapshot_supports_tool_batch_and_final_assistant_actions() {
+        let temp_root = tempfile::tempdir().expect("temporary session directory should exist");
+        let store = ExecutionRetrySnapshotStore::new(temp_root.path());
+        // toolSnapshot represents a Provider-completed batch whose tool body has not started.
+        // toolSnapshot 表示 Provider 已完成但工具主体尚未启动的批次。
+        let tool_snapshot = test_execute_tool_batch_snapshot(uuid::Uuid::new_v4().to_string());
+        let tool_reference = store
+            .write(&tool_snapshot)
+            .expect("exact tool batch should persist");
+        assert!(tool_reference.replay_safety_proven());
+        assert_eq!(tool_reference.blocked_reason, None);
+
+        // finalSnapshot represents a tool-free assistant tail already proven by the Provider.
+        // finalSnapshot 表示已由 Provider 证明的无工具助手尾部。
+        let mut final_snapshot = test_snapshot(uuid::Uuid::new_v4().to_string());
+        final_snapshot.controller_snapshot.messages =
+            vec![vulcan_core::types::ConversationMessage {
+                id: String::from("assistant-final-1"),
+                payload: vulcan_core::types::ConversationPayload::Assistant {
+                    text: String::from("completed answer"),
+                    reasoning: String::new(),
+                    provider_message_id: Some(String::from("provider-message-final-1")),
+                    provider_message_state: None,
+                    usage: None,
+                    tool_calls: Vec::new(),
+                },
+            }];
+        final_snapshot.pending_action = ExecutionRetryPendingAction::FinalizeAssistant;
+        let final_reference = store
+            .write(&final_snapshot)
+            .expect("exact final assistant boundary should persist");
+        assert!(final_reference.replay_safety_proven());
+        assert_eq!(final_reference.blocked_reason, None);
+    }
+
+    /// Verifies a changed tool binding is retained for audit but exposed as a precise blocker.
+    /// 验证变化后的工具绑定会保留用于审计，但投影为精确阻断原因。
+    #[test]
+    fn retry_snapshot_blocks_changed_tool_binding_with_exact_reason() {
+        let temp_root = tempfile::tempdir().expect("temporary session directory should exist");
+        let store = ExecutionRetrySnapshotStore::new(temp_root.path());
+        let mut snapshot = test_execute_tool_batch_snapshot(uuid::Uuid::new_v4().to_string());
+        let ExecutionRetryPendingAction::ExecuteToolBatch { tools } = &mut snapshot.pending_action
+        else {
+            panic!("tool batch fixture must retain tool progress");
+        };
+        tools[0].binding_fingerprint = Some(String::from("changed"));
+
+        let reference = store
+            .write(&snapshot)
+            .expect("corrupt tool binding should persist for audit");
+
         assert!(!reference.retryable);
         assert!(reference.requires_manual_confirmation);
         assert_eq!(
             reference.blocked_reason.as_deref(),
-            Some("provider_dispatch_outcome_unknown")
+            Some("ERR_CONVERSATION_CONTINUE_RETRY_TOOL_BINDING_MISMATCH")
         );
         assert!(!reference.replay_safety_proven());
     }
 
-    /// Verifies a declared action without a runtime executor is never projected as claimable.
-    /// 验证声明但没有运行时执行器的动作绝不会被投影为可领取。
+    /// Verifies an unresolved binding is claimable only while its exact tool slot is proven unstarted.
+    /// 验证未解析绑定仅在精确工具槽位已证明未启动时才可领取。
     #[test]
-    fn retry_snapshot_marks_unsupported_action_blocked() {
+    fn retry_snapshot_allows_unprepared_binding_only_for_not_started_tool() {
+        // tempRoot owns the isolated immutable sidecars for both state classifications.
+        // tempRoot 持有两种状态分类使用的隔离不可变 sidecar。
         let temp_root = tempfile::tempdir().expect("temporary session directory should exist");
+        // store applies the production structural blocker calculation.
+        // store 应用生产环境的结构性阻断计算。
         let store = ExecutionRetrySnapshotStore::new(temp_root.path());
-        let mut snapshot = test_snapshot(uuid::Uuid::new_v4().to_string());
-        snapshot.pending_action = ExecutionRetryPendingAction::FinalizeAssistant;
+        // notStarted retains the exact assistant call while deferring binding freeze to BatchPrepared.
+        // notStarted 保留精确助手调用，并把绑定冻结延迟到 BatchPrepared。
+        let mut not_started = test_execute_tool_batch_snapshot(uuid::Uuid::new_v4().to_string());
+        let ExecutionRetryPendingAction::ExecuteToolBatch { tools } =
+            &mut not_started.pending_action
+        else {
+            panic!("tool batch fixture must retain tool progress");
+        };
+        tools[0].binding_fingerprint = None;
 
-        let reference = store
-            .write(&snapshot)
-            .expect("unsupported action should persist for audit");
+        let not_started_reference = store
+            .write(&not_started)
+            .expect("unprepared not-started slot should persist");
+        assert!(not_started_reference.replay_safety_proven());
+        assert_eq!(not_started_reference.blocked_reason, None);
 
-        assert!(!reference.retryable);
-        assert!(reference.requires_manual_confirmation);
+        // running proves a body cannot cross Started without one exact frozen binding.
+        // running 证明工具主体不能在缺少精确冻结绑定时跨过 Started。
+        let mut running = not_started;
+        running.snapshot_id = uuid::Uuid::new_v4().to_string();
+        let ExecutionRetryPendingAction::ExecuteToolBatch { tools } = &mut running.pending_action
+        else {
+            panic!("tool batch fixture must retain tool progress");
+        };
+        tools[0].state = ExecutionRetryToolState::Running;
+
+        let running_reference = store
+            .write(&running)
+            .expect("invalid running slot should persist for audit");
+        assert!(!running_reference.replay_safety_proven());
         assert_eq!(
-            reference.blocked_reason.as_deref(),
-            Some("pending_action_executor_unavailable")
+            running_reference.blocked_reason.as_deref(),
+            Some("ERR_CONVERSATION_CONTINUE_RETRY_TOOL_BINDING_MISMATCH")
         );
-        assert!(!reference.replay_safety_proven());
     }
 
     /// Verifies unknown schemas and path-like identities are rejected before publication.
@@ -834,5 +1183,31 @@ mod tests {
         snapshot.schema_version = EXECUTION_RETRY_SNAPSHOT_SCHEMA_VERSION;
         snapshot.snapshot_id = String::from("../escape");
         assert!(store.write(&snapshot).is_err());
+    }
+
+    /// Verifies a malformed durable user follow-up is rejected before any sidecar is published.
+    /// 验证格式错误的持久用户补充消息会在发布任何 sidecar 前被拒绝。
+    #[test]
+    fn retry_snapshot_rejects_invalid_user_followup() {
+        // tempRoot owns the isolated directory that must remain free of an invalid sidecar.
+        // tempRoot 持有不得写入无效 sidecar 的隔离目录。
+        let temp_root = tempfile::tempdir().expect("temporary session directory should exist");
+        // store applies the same structural validation to every write and subsequent read.
+        // store 对每次写入及后续读取应用相同的结构校验。
+        let store = ExecutionRetrySnapshotStore::new(temp_root.path());
+        // snapshot carries an empty visible prompt that cannot form a real transcript record.
+        // snapshot 携带无法形成真实转录记录的空白可见提示词。
+        let mut snapshot = test_snapshot(uuid::Uuid::new_v4().to_string());
+        snapshot.user_followup = Some(vulcan_workbench_model::ExecutionRetryUserFollowup {
+            visible_prompt: String::from("   "),
+            provider_prompt: String::from("provider prompt"),
+            client_submission_id: String::from("submission-1"),
+        });
+
+        let error = store
+            .write(&snapshot)
+            .expect_err("invalid user follow-up must fail closed");
+
+        assert!(error.contains("invalid user follow-up boundary"));
     }
 }

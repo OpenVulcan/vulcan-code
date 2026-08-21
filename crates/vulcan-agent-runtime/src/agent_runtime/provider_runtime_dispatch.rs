@@ -8,7 +8,7 @@ use crate::agent_runtime::provider_runtime_inputs::one_shot_provider_error_strea
 use crate::agent_runtime::provider_stream::ProviderDeltaStream;
 use crate::agent_runtime::provider_transport::build_provider_transport_execution_request;
 use crate::agent_runtime::provider_transport_request::{
-    ProviderRouteIdentity, ProviderTransportTurnStartMode,
+    ProviderRouteIdentity, ProviderTransportRecoveryAction, ProviderTransportTurnStartMode,
 };
 use crate::agent_runtime::provider_transport_request_budget::{
     ProviderRequestBudgetGuard, ProviderUsageBudgetBaselineHandle,
@@ -149,6 +149,7 @@ pub(crate) fn execute_provider_prompt_stream(
     core_snapshot: CoreConversationSnapshot,
     initial_provider_request: Option<vulcan_ai_contract::AiExecutionRequest>,
     controller_config_override: Option<vulcan_core::types::ControllerConfig>,
+    recovery_action: Option<ProviderTransportRecoveryAction>,
     task_runtime: Arc<TaskRuntime>,
     tools_manager: VulcanToolsManager,
     resolved_tools: Vec<ResolvedToolDefinition>,
@@ -166,6 +167,7 @@ pub(crate) fn execute_provider_prompt_stream(
         core_snapshot,
         initial_provider_request,
         controller_config_override,
+        recovery_action,
         task_runtime,
         tools_manager,
         resolved_tools,
@@ -199,6 +201,7 @@ pub(crate) fn execute_provider_prompt_capture_stream(
         prompt,
         turn_start_mode,
         core_snapshot,
+        None,
         None,
         None,
         task_runtime,
@@ -288,6 +291,7 @@ fn execute_provider_prompt_stream_with_capture_mode(
     core_snapshot: CoreConversationSnapshot,
     initial_provider_request: Option<vulcan_ai_contract::AiExecutionRequest>,
     controller_config_override: Option<vulcan_core::types::ControllerConfig>,
+    recovery_action: Option<ProviderTransportRecoveryAction>,
     task_runtime: Arc<TaskRuntime>,
     tools_manager: VulcanToolsManager,
     resolved_tools: Vec<ResolvedToolDefinition>,
@@ -365,6 +369,7 @@ fn execute_provider_prompt_stream_with_capture_mode(
         core_snapshot,
         initial_provider_request,
         controller_config_override,
+        recovery_action,
         temperature,
         max_turns,
         task_runtime,

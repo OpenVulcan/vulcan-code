@@ -2,8 +2,6 @@
 //! 会话运行时 RPC 路由。
 
 use super::*;
-use crate::conversation_submission::ExistingSessionHydrationPolicy;
-
 /// Exact public RPC wire names owned by this domain router.
 /// 本领域路由持有的精确公开 RPC 线协议名称。
 #[cfg(test)]
@@ -102,7 +100,7 @@ pub(super) async fn dispatch(
             .await,
         ),
         "service_submit_conversation_prompt" => rpc_json_result(
-            service_submit_conversation_prompt(
+            service_submit_conversation_prompt_rpc(
                 app,
                 state,
                 rpc_required_param(params, "clientSubmissionId")?,
@@ -115,9 +113,7 @@ pub(super) async fn dispatch(
                 rpc_optional_param(params, "modelSelection")?,
                 rpc_optional_param(params, "sessionSettings")?,
                 rpc_optional_param(params, "attachments")?,
-                None,
-                ExistingSessionHydrationPolicy::HydrateIfEmpty,
-                ConversationSubmissionMode::UserPrompt,
+                rpc_optional_param(params, "continuationExpectation")?,
             )
             .await,
         ),

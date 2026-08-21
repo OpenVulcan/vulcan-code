@@ -968,6 +968,26 @@ export type PublicAiMediaUnderstandingBackendSelection =
       reasoning_effort?: PublicAiReasoningEffort;
     };
 
+// PublicAiMediaUnderstandingBackendMode is the session-selectable backend family.
+// PublicAiMediaUnderstandingBackendMode 是会话可选择的后端类型。
+export type PublicAiMediaUnderstandingBackendMode =
+  | "provider_tool"
+  | "model_replacement";
+
+// PublicAiMediaUnderstandingBackendOptions keeps exact global routes for both backend families.
+// PublicAiMediaUnderstandingBackendOptions 分别保存两种后端类型的全局精确路由。
+export interface PublicAiMediaUnderstandingBackendOptions {
+  // Exact provider-specific target configured for this capability.
+  // 为该能力配置的精确供应商专用目标。
+  provider_tool?: PublicAiProviderToolTargetSelection;
+  // Exact structured-output model route configured for this capability.
+  // 为该能力配置的精确结构化输出模型路由。
+  model_replacement?: {
+    selection: PublicAiActiveSelection;
+    reasoning_effort?: PublicAiReasoningEffort;
+  };
+}
+
 // PublicAiMultimodalUnderstandingCandidateRecord exposes one shared provider-model admission switch.
 // PublicAiMultimodalUnderstandingCandidateRecord 公开一个共享供应商模型准入开关。
 export interface PublicAiMultimodalUnderstandingCandidateRecord {
@@ -1008,6 +1028,11 @@ export interface PublicAiSessionProviderToolSettings {
   >;
   extensionTargetSets: Partial<
     Record<PublicAiProviderToolCapabilityKind, PublicAiProviderToolTargetSelection[]>
+  >;
+  // Session-selected backend mode for each retained media-understanding capability.
+  // 当前会话为每项保留的媒体理解能力选择的后端模式。
+  mediaUnderstandingModes: Partial<
+    Record<PublicAiProviderToolCapabilityKind, PublicAiMediaUnderstandingBackendMode>
   >;
   conflicts: PublicAiSessionProviderToolConflict[];
 }
@@ -1264,6 +1289,11 @@ export interface PublicAiSettingsSnapshot {
   multimodalUnderstandingCandidateModels?: PublicAiMultimodalUnderstandingCandidateRecord[];
   mediaUnderstandingSelections?: Partial<
     Record<PublicAiProviderToolCapabilityKind, PublicAiMediaUnderstandingBackendSelection>
+  >;
+  // Exact globally configured routes for both media-understanding backend families.
+  // 两种媒体理解后端类型的全局精确配置路由。
+  mediaUnderstandingBackendOptions?: Partial<
+    Record<PublicAiProviderToolCapabilityKind, PublicAiMediaUnderstandingBackendOptions>
   >;
   mediaUnderstandingModelCandidates?: PublicAiMediaUnderstandingModelCandidate[];
   providerToolEnabledCapabilities: PublicAiProviderToolCapabilityKind[];

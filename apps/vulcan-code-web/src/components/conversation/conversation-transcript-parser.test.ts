@@ -51,9 +51,9 @@ describe("conversation transcript parser source identity", () => {
     expect(block?.rawMetadata).toEqual(message.metadata);
   });
 
-  // Verifies persisted route identities are localized at render time and keep next-submission semantics.
-  // 验证持久化路由身份会在渲染时本地化，并保持下次用户提交语义。
-  it("projects model selection records as localized next-submission notices", () => {
+  // Verifies persisted route identities are localized at render time and keep next-Provider-request semantics.
+  // 验证持久化路由身份会在渲染时本地化，并保持下一次 Provider 请求语义。
+  it("projects model selection records as localized next-Provider-request notices", () => {
     // message contains only language-neutral backend metadata and exact frozen labels.
     // message 仅包含与语言无关的后端元数据及精确冻结标签。
     const message: ConversationMessage = {
@@ -64,7 +64,7 @@ describe("conversation transcript parser source identity", () => {
       body: "provider_id=command-code\nconnection_id=command-code-account\nmodel_id=deepseek",
       metadata: {
         notice_kind: "model_switch",
-        activation: "next_submission",
+        activation: "next_provider_request",
         provider_id: "command-code",
         provider_name: "Command Code",
         connection_id: "command-code-account",
@@ -77,7 +77,7 @@ describe("conversation transcript parser source identity", () => {
     // translations 证明历史记录使用当前界面语言，而不是持久化文案。
     const translations: Partial<Record<TranslationKey, string>> = {
       "conversation.modelSwitch.title": "模型选择",
-      "conversation.modelSwitch.nextSubmission": "已选择 {provider} / {account} / {model}；下次提交生效。",
+      "conversation.modelSwitch.nextProviderRequest": "已选择 {provider} / {account} / {model}；下一次真实 Provider 请求生效。",
     };
 
     const [block] = parseConversationBlocks(
@@ -87,7 +87,7 @@ describe("conversation transcript parser source identity", () => {
 
     expect(block?.kind).toBe("notice");
     expect(block?.title).toBe("模型选择");
-    expect(block?.summary).toBe("已选择 Command Code / 主账号 / DeepSeek；下次提交生效。");
+    expect(block?.summary).toBe("已选择 Command Code / 主账号 / DeepSeek；下一次真实 Provider 请求生效。");
     expect(block?.sourceMessageId).toBe("model-switch-1");
   });
 });

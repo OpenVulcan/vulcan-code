@@ -3,6 +3,7 @@ import type {
   ComposerAttachmentCapabilitySummary,
   ComposerAttachmentSummary,
   ComposerSlashCommandSummary,
+  PublicAiMediaUnderstandingBackendMode,
   PublicAiProviderToolCapabilityKind,
   PublicAiProviderToolTargetSelection,
 } from "@/types";
@@ -22,6 +23,11 @@ export interface ComposerProviderToolSettingsSnapshot {
   // 每项生成类能力保留的原生模型扩展目标集合。
   extensionTargetSets: Partial<
     Record<PublicAiProviderToolCapabilityKind, PublicAiProviderToolTargetSelection[]>
+  >;
+  // Session-selected backend family for each media-understanding capability.
+  // 当前会话为每项媒体理解能力选择的后端类型。
+  mediaUnderstandingModes: Partial<
+    Record<PublicAiProviderToolCapabilityKind, PublicAiMediaUnderstandingBackendMode>
   >;
 }
 

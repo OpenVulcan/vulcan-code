@@ -21,6 +21,7 @@ import {
 } from "@/service/settings-actions-service";
 import type {
   PublicAiProviderToolCapabilityKind,
+  PublicAiMediaUnderstandingBackendOptions,
   PublicAiMediaUnderstandingBackendSelection,
   PublicAiMediaUnderstandingModelCandidate,
   PublicAiReasoningEffort,
@@ -69,6 +70,9 @@ export function ProviderToolSelectionSettingsArea(props: {
   // mediaUnderstandingMode identifies the three fixed-schema understanding capabilities.
   // mediaUnderstandingMode 标识三项固定 Schema 理解能力。
   const mediaUnderstandingMode = isMediaUnderstandingCapability(props.capability);
+  // mediaBackendOptions retains the inactive global route so mode changes do not reset it to the first candidate.
+  // mediaBackendOptions 保留未激活的全局路由，避免切换模式时重置为首个候选。
+  const mediaBackendOptions = snapshot?.mediaUnderstandingBackendOptions?.[props.capability];
   // extensionMode selects stable native multi-model configuration for generative capabilities.
   // extensionMode 为生成类能力选择稳定原生多模型配置。
   const extensionMode = isModelExtensionCapability(props.capability);
@@ -250,9 +254,10 @@ export function ProviderToolSelectionSettingsArea(props: {
           enabled={enabled}
           onEnabledChange={(checked) => void saveEnabled(checked)}
           onProviderTargetChange={(target) => void saveSelection(target)}
-          onSelectionChange={(selection) => void saveMediaBackendSelection(selection)}
-          pending={pending}
-          selection={mediaBackendSelection}
+           onSelectionChange={(selection) => void saveMediaBackendSelection(selection)}
+           pending={pending}
+           backendOptions={mediaBackendOptions}
+           selection={mediaBackendSelection}
           targets={targets}
         />
       ) : targets.length === 0 ? (
@@ -461,6 +466,9 @@ function MediaUnderstandingDefaults(props: {
   // Current persisted backend selection.
   // 当前持久化后端选择。
   selection?: PublicAiMediaUnderstandingBackendSelection;
+  // Independently retained global routes for the inactive backend family.
+  // 未激活后端类型的独立全局保留路由。
+  backendOptions?: PublicAiMediaUnderstandingBackendOptions;
   // Exact provider-tool targets available for the media kind.
   // 当前媒体类型可用的精确供应商工具目标。
   targets: PublicAiProviderToolTargetSnapshot[];
@@ -469,12 +477,16 @@ function MediaUnderstandingDefaults(props: {
   // mode follows persistence and otherwise shows the first actually available backend family.
   // mode 遵循持久化状态；缺失时展示首个实际可用的后端类型。
   const mode = props.selection?.mode
-    ?? (props.targets.length > 0 ? "provider_tool" : "model_replacement");
+    ?? (props.backendOptions?.provider_tool
+      ? "provider_tool"
+      : props.backendOptions?.model_replacement
+        ? "model_replacement"
+        : (props.targets.length > 0 ? "provider_tool" : "model_replacement"));
   // providerSelection exists only while the provider-specific mode is selected.
   // providerSelection 仅在选择供应商专用模式时存在。
   const providerSelection = props.selection?.mode === "provider_tool"
     ? props.selection.selection
-    : undefined;
+    : props.backendOptions?.provider_tool;
   // selectedProviderTarget resolves the exact persisted account target without silent rebinding.
   // selectedProviderTarget 解析精确持久化账号目标，不静默重新绑定。
   const selectedProviderTarget = props.targets.find((target) => (
@@ -499,9 +511,10 @@ function MediaUnderstandingDefaults(props: {
   const modelChoices = uniqueMediaUnderstandingModels(props.candidates);
   // persistedModelSelection exists only while model replacement is selected.
   // persistedModelSelection 仅在选择模型代替模式时存在。
-  const persistedModelSelection = props.selection?.mode === "model_replacement"
-    ? props.selection.selection
-    : undefined;
+  const persistedModelRoute = props.selection?.mode === "model_replacement"
+    ? props.selection
+    : props.backendOptions?.model_replacement;
+  const persistedModelSelection = persistedModelRoute?.selection;
   // selectedModelCandidate resolves the exact persisted route without account fallback.
   // selectedModelCandidate 解析精确持久化路由，不做账号回退。
   const selectedModelCandidate = props.candidates.find((candidate) => (
@@ -528,7 +541,7 @@ function MediaUnderstandingDefaults(props: {
   // selectedReasoningEffort 保留可选的持久化思考档位。
   const selectedReasoningEffort = props.selection?.mode === "model_replacement"
     ? props.selection.reasoning_effort ?? "__default__"
-    : "__default__";
+    : props.backendOptions?.model_replacement?.reasoning_effort ?? "__default__";
   // backendAvailable prevents enabling a capability with no concrete execution route.
   // backendAvailable 防止在没有具体执行路由时启用能力。
   const backendAvailable = props.targets.length > 0 || props.candidates.length > 0;
@@ -563,10 +576,27 @@ function MediaUnderstandingDefaults(props: {
             <Select
               disabled={props.pending}
               onValueChange={(nextMode) => {
-                if (nextMode === "provider_tool" && props.targets[0]) {
-                  props.onProviderTargetChange(props.targets[0]);
-                } else if (nextMode === "model_replacement" && props.candidates[0]) {
-                  props.onSelectionChange(modelReplacementSelection(props.candidates[0]));
+                if (nextMode === "provider_tool") {
+                  const retainedTarget = props.targets.find((target) => (
+                    target.connectionId === props.backendOptions?.provider_tool?.connection_id
+                    && target.target.target_id === props.backendOptions?.provider_tool?.target_id
+                  )) ?? props.targets[0];
+                  if (retainedTarget) props.onProviderTargetChange(retainedTarget);
+                } else if (nextMode === "model_replacement") {
+                  const retainedCandidate = props.candidates.find((candidate) => (
+                    candidate.selection.provider_id === props.backendOptions?.model_replacement?.selection.provider_id
+                    && candidate.selection.model_id === props.backendOptions?.model_replacement?.selection.model_id
+                    && candidate.selection.connection_id === props.backendOptions?.model_replacement?.selection.connection_id
+                  ));
+                  const candidate = retainedCandidate ?? props.candidates[0];
+                  if (candidate) {
+                    props.onSelectionChange(modelReplacementSelection(
+                      candidate,
+                      retainedCandidate
+                        ? props.backendOptions?.model_replacement?.reasoning_effort
+                        : undefined,
+                    ));
+                  }
                 }
               }}
               value={mode}

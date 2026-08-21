@@ -39,8 +39,8 @@ pub(super) enum FinishedStreamEventOutcome {
 /// `stream_task_started_at` 是用于目标耗时计量的任务入口时间戳。
 /// `execution_goal_id` is the latest Goal identity bound at a physical Provider boundary.
 /// `execution_goal_id` 是在物理 Provider 边界绑定的最新目标身份。
-/// `provider_call_id` is the latest exact physical Provider call bound to this stream owner.
-/// `provider_call_id` 是绑定到当前流所有者的最近一个精确物理 Provider 调用。
+/// `retry_evidence` proves either a pre-dispatch failure or the latest exact physical Provider call bound to this stream owner.
+/// `retry_evidence` 证明分派前失败，或标识绑定到当前流所有者的最近一个精确物理 Provider 调用。
 /// `report` is the authoritative terminal report emitted by the Agent runtime.
 /// `report` 是 Agent 运行时发送的权威终态报告。
 ///
@@ -56,7 +56,7 @@ pub(super) async fn handle_finished_stream_event(
     active_stream_task_id: Uuid,
     stream_task_started_at: i128,
     execution_goal_id: Option<&str>,
-    provider_call_id: Option<&str>,
+    retry_evidence: FailedExecutionStreamRetryEvidence,
     report: ExecutionRunReport,
 ) -> FinishedStreamEventOutcome {
     // The report session is the sole owner key for all terminal mutations.
@@ -280,14 +280,25 @@ pub(super) async fn handle_finished_stream_event(
     // clearedRetrySnapshotId 仅在主引用清除状态可靠提交后才允许执行物理清理。
     let mut cleared_retry_snapshot_id = None;
     let retry_lifecycle_result = match (terminal_error.as_deref(), final_report_apply.is_some()) {
-        (Some(error), _) => refreeze_claimed_execution_retry_snapshot(
-            task_state,
-            controller_runtime,
-            finished_session_id,
-            provider_call_id
-                .map(|provider_call_id| (active_stream_task_id, provider_call_id.to_string())),
-            error,
-        )
+        (Some(error), _) => match retry_evidence {
+            FailedExecutionStreamRetryEvidence::ProvenNotDispatchedBeforeProviderDispatch => {
+                refreeze_claimed_execution_retry_snapshot_before_provider_dispatch(
+                    task_state,
+                    controller_runtime,
+                    finished_session_id,
+                    error,
+                )
+            }
+            FailedExecutionStreamRetryEvidence::RuntimeBoundary(provider_call_binding) => {
+                refreeze_claimed_execution_retry_snapshot(
+                    task_state,
+                    controller_runtime,
+                    finished_session_id,
+                    provider_call_binding,
+                    error,
+                )
+            }
+        }
         .map_err(|error| error.to_string()),
         (None, true) => {
             clear_execution_retry_snapshot_after_success(task_state, finished_session_id).map(

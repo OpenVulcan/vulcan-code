@@ -1,7 +1,9 @@
 //! Runtime event definitions used by future agent execution surfaces.
 //! 供后续代理执行界面使用的运行时事件定义。
 
-use crate::agent_runtime::execution_models::{ExecutionPreparation, ExecutionRunReport};
+use crate::agent_runtime::execution_models::{
+    ExecutionPreparation, ExecutionProviderRequestContinuation, ExecutionRunReport,
+};
 use crate::agent_runtime::provider_request_telemetry::ProviderRequestTelemetryEvent;
 use crate::conversation_protocol::SessionConversationState;
 use crate::model::SessionId;
@@ -137,6 +139,9 @@ pub enum RuntimeEventKind {
     /// Model-side tool request stopped before host execution began.
     /// 模型侧工具请求在宿主执行开始前停止。
     ToolRequestAborted,
+    /// One complete tool batch is waiting for its durable recovery boundary.
+    /// 一批完整工具请求正在等待可靠恢复边界。
+    ToolBatchPrepared,
     /// Native or MCP tool invocation started.
     /// 原生工具或 MCP 工具调用开始事件。
     ToolStarted,
@@ -163,6 +168,40 @@ pub enum RuntimeEventKind {
     ProviderWaiting,
 }
 
+/// Binds one exact tool request to the resolved definition fingerprint used by its original batch.
+/// 将一条精确工具请求绑定到其原始批次使用的已解析定义指纹。
+#[derive(Debug, Clone)]
+pub struct ToolExecutionRecoveryRequest {
+    /// Exact original tool invocation request.
+    /// 精确原始工具调用请求。
+    pub request: vulcan_core::types::ToolInvocationRequest,
+    /// Stable resolved descriptor, schema, and execution-policy fingerprint.
+    /// 稳定的已解析描述、Schema 与执行策略指纹。
+    pub binding_fingerprint: String,
+}
+
+/// Carries an internal exact tool boundary without exposing model output through UI metadata.
+/// 携带内部精确工具边界，同时避免通过 UI 元数据暴露模型输出。
+#[derive(Debug, Clone)]
+pub enum ToolExecutionRecoveryBoundary {
+    /// The complete original Provider batch is durable before any tool body starts.
+    /// 在任何工具主体启动前可靠保留的完整原始 Provider 批次。
+    BatchPrepared(Vec<ToolExecutionRecoveryRequest>),
+    /// The exact request is durable and the tool body has not started yet.
+    /// 精确请求已经可靠保留，工具主体尚未启动。
+    Started {
+        /// Exact original invocation request.
+        /// 精确原始调用请求。
+        request: vulcan_core::types::ToolInvocationRequest,
+        /// Stable fingerprint of the resolved tool descriptor, schema, and execution policy.
+        /// 已解析工具描述、Schema 与执行策略的稳定指纹。
+        binding_fingerprint: String,
+    },
+    /// The exact terminal result must become durable before Core may advance.
+    /// Core 推进前必须可靠保留的精确终态结果。
+    Finished(vulcan_core::types::ToolInvocationResult),
+}
+
 /// Structured runtime event record reserved for future telemetry surfaces.
 /// 为后续遥测界面预留的结构化运行时事件记录。
 #[derive(Debug, Clone)]
@@ -179,6 +218,9 @@ pub struct RuntimeEvent {
     /// Optional structured metadata reserved for transcript projection and host-side UI enrichments.
     /// 为转录投影与宿主侧界面增强保留的可选结构化元数据。
     pub metadata: Option<Value>,
+    /// Optional internal tool-recovery boundary consumed only by the host service.
+    /// 仅由宿主服务消费的可选内部工具恢复边界。
+    pub tool_execution_boundary: Option<ToolExecutionRecoveryBoundary>,
 }
 
 impl RuntimeEvent {
@@ -194,6 +236,7 @@ impl RuntimeEvent {
             title: title.into(),
             detail: detail.into(),
             metadata: None,
+            tool_execution_boundary: None,
         }
     }
 
@@ -201,6 +244,13 @@ impl RuntimeEvent {
     /// 在不改变可见运行时标题与正文的前提下附着可选结构化元数据。
     pub fn with_metadata(mut self, metadata: Option<Value>) -> Self {
         self.metadata = metadata;
+        self
+    }
+
+    /// Attaches one exact internal tool boundary without changing user-visible projection metadata.
+    /// 附着一条精确内部工具边界，而不改变用户可见的投影元数据。
+    pub fn with_tool_execution_boundary(mut self, boundary: ToolExecutionRecoveryBoundary) -> Self {
+        self.tool_execution_boundary = Some(boundary);
         self
     }
 }
@@ -225,6 +275,15 @@ pub enum ExecutionStreamEvent {
         /// Session identifier owning the provider request checkpoint.
         /// 拥有该 Provider 请求检查点的会话标识。
         session_id: SessionId,
+        /// Stable logical request identity shared across restored physical attempts.
+        /// 跨恢复物理 attempt 共享的稳定逻辑请求身份。
+        logical_request_id: Option<String>,
+        /// Stable logical conversation-turn identity when one exists.
+        /// 存在时的稳定逻辑会话回合身份。
+        logical_turn_id: Option<String>,
+        /// Zero-based index of the exact physical Provider attempt being checkpointed.
+        /// 当前检查点对应精确物理 Provider attempt 的从零开始索引。
+        provider_attempt_index: Option<u32>,
         /// Canonical provider API family resolved by execution preparation.
         /// 执行准备解析出的规范 Provider API 协议族。
         provider_family: String,
@@ -353,6 +412,22 @@ pub enum ExecutionStreamEvent {
         /// Verified context-budget diagnostic produced before dispatch.
         /// 分派前生成的已验证上下文预算诊断。
         reason: String,
+    },
+    /// Requests the host to activate a pending exact model route and restart the active turn.
+    /// 请求宿主激活待生效精确模型路由并重启当前活动回合。
+    ProviderRouteSwitchRequired {
+        /// Session identifier owning the active turn.
+        /// 拥有当前活动回合的会话标识。
+        session_id: SessionId,
+        /// Replay-safe conversation state produced after the complete tool batch.
+        /// 完整工具批次之后生成的可安全回放会话状态。
+        conversation_state: SessionConversationState,
+        /// Internal diagnostic produced at the pre-Provider intervention boundary.
+        /// 在 Provider 前干预边界生成的内部诊断。
+        reason: String,
+        /// Exact logical identity and physical attempt reserved for the replacement Provider stream.
+        /// 为替代 Provider 流保留的精确逻辑身份与物理尝试索引。
+        provider_request_continuation: ExecutionProviderRequestContinuation,
     },
     /// Terminal execution report emitted exactly once at the end of the run.
     /// 在运行结束时恰好发出一次的最终执行报告。

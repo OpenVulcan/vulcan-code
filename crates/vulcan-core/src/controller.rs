@@ -9,9 +9,11 @@ use crate::types::{
     ControllerConfig, ControllerRunResult, ConversationAttachment, ConversationMessage,
     ConversationPayload, ConversationRecord, ConversationSnapshot, CoreError, CoreEvent,
     CoreEventKind, ProviderTurnDelta, ProviderTurnResponse, ProviderUsageSnapshot,
-    ToolInvocationRequest, ToolInvocationResult, TranscriptRecordKind, TranscriptRole,
+    RestoredToolBatchRecovery, RestoredToolInvocation, RestoredToolInvocationDisposition,
+    RestoredUserFollowup, ToolInvocationRequest, ToolInvocationResult, TranscriptRecordKind,
+    TranscriptRole,
 };
-use futures_util::future::join_all;
+use futures_util::{StreamExt, stream::FuturesUnordered};
 use serde_json::{Map as JsonMap, Value, json};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -90,7 +92,36 @@ pub use transcript::{AgentMessageAppendRequest, DisplayRecordAppendRequest};
 /// 将已接纳提示词投影与后续规范记录绑定的稳定元数据键。
 pub const INTERJECTED_PROMPT_ADMISSION_ID_KEY: &str = "prompt_admission_id";
 
-use metadata::*;
+/// Returns whether one canonical snapshot ends in exact input that can seed a Provider turn.
+/// 返回一个规范快照是否以可启动 Provider 回合的精确输入结束。
+///
+/// # Parameters
+/// 参数
+/// `snapshot` is the canonical controller state inspected immediately before request construction.
+/// `snapshot` 是请求构建前立即检查的规范控制器状态。
+///
+/// # Returns
+/// 返回值
+/// `true` for a non-empty user message, agent message, or tool result at the canonical tail.
+/// 当规范尾部为非空用户消息、智能体消息或工具结果时返回 `true`。
+pub fn conversation_snapshot_has_seeded_provider_input(snapshot: &ConversationSnapshot) -> bool {
+    matches!(
+        snapshot.messages.last().map(|message| &message.payload),
+        Some(ConversationPayload::UserText { text, .. }) if !text.trim().is_empty()
+    ) || matches!(
+        snapshot.messages.last().map(|message| &message.payload),
+        Some(ConversationPayload::AgentMessage { payload, .. }) if !payload.trim().is_empty()
+    ) || matches!(
+        snapshot.messages.last().map(|message| &message.payload),
+        Some(ConversationPayload::ToolResult { text, .. }) if !text.trim().is_empty()
+    )
+}
+
+pub use metadata::resolved_tool_call_id;
+use metadata::{
+    build_tool_result_metadata, current_unix_millis_text, interjected_user_turn_record_metadata,
+    render_json_pretty, user_turn_record_metadata, validate_conversation_snapshot_identities,
+};
 
 #[cfg(test)]
 mod tests;

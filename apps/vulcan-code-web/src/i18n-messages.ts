@@ -371,7 +371,7 @@ export type TranslationKey =
   | "conversation.providerRetry.failed"
   | "conversation.modelSwitch.title"
   | "conversation.modelSwitch.immediate"
-  | "conversation.modelSwitch.nextSubmission"
+  | "conversation.modelSwitch.nextProviderRequest"
   | "conversation.continue"
   | "conversation.continuing"
   | "conversation.continuation.claimFailed"
@@ -392,6 +392,10 @@ export type TranslationKey =
   | "conversation.continuation.blocked.routeChanged"
   | "conversation.continuation.blocked.routeMissing"
   | "conversation.continuation.blocked.nextProviderBoundaryMissing"
+  | "conversation.continuation.blocked.toolBoundaryMissing"
+  | "conversation.continuation.blocked.toolBindingMismatch"
+  | "conversation.continuation.blocked.toolResultMismatch"
+  | "conversation.continuation.blocked.finalAssistantBoundaryMissing"
   | "conversation.continuation.blocked.contextGenerationChanged"
   | "conversation.continuation.blocked.canonicalStateChanged"
   | "conversation.continuation.blocked.logicalTurnChanged"
@@ -399,6 +403,7 @@ export type TranslationKey =
   | "conversation.continuation.blocked.admissionInFlight"
   | "conversation.continuation.blocked.terminalPersistenceInFlight"
   | "conversation.continuation.blocked.sessionActive"
+  | "conversation.continuation.blocked.notProblemTurn"
   | "conversation.continuation.blocked.sessionBusy"
   | "conversation.continuation.blocked.stale"
   | "conversation.continuation.blocked.callInFlight"
@@ -422,6 +427,7 @@ export type TranslationKey =
   | "conversation.metadata.result"
   | "conversation.metadata.returned"
   | "conversation.toolRequest.receiving"
+  | "conversation.toolRequest.argumentsAssembled"
   | "conversation.toolRequest.ready"
   | "conversation.toolRequest.characters"
   | "conversation.stats.providerCalls"
@@ -3215,13 +3221,13 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.providerRetry.failed": "重试失败",
     "conversation.modelSwitch.title": "模型选择",
     "conversation.modelSwitch.immediate": "已选择 {provider} / {account} / {model}。",
-    "conversation.modelSwitch.nextSubmission": "已选择 {provider} / {account} / {model}；如有正在执行的任务，它会继续使用冻结模型，该选择从下一次用户提交开始生效。",
+    "conversation.modelSwitch.nextProviderRequest": "已选择 {provider} / {account} / {model}；当前正在进行的 Provider 请求保持冻结，该选择从下一次真实 Provider 请求开始生效。",
     "conversation.continue": "继续",
     "conversation.continuing": "继续中",
     "conversation.continuation.claimFailed": "继续失败，请查看会话状态后重试。",
     "conversation.continuation.blocked": "当前终止边界不可安全继续",
     "conversation.continuation.blocked.default": "恢复边界未通过安全校验，当前不能继续。",
-    "conversation.continuation.blocked.toolSideEffect": "工具已经执行或可能产生外部副作用；为避免重复执行，当前不能继续。",
+    "conversation.continuation.blocked.toolSideEffect": "已经观察到工具副作用，但恢复快照没有可协调的逐工具边界，无法判断哪些调用可复用或必须返回中断结果。",
     "conversation.continuation.blocked.providerDispatchUnknown": "Provider 请求是否已经发出无法确认；为避免重复请求，当前不能继续。",
     "conversation.continuation.blocked.semanticOutput": "已经收到部分模型输出；继续可能造成重复生成，当前不能继续。",
     "conversation.continuation.blocked.pendingActionExecutor": "当前恢复动作没有可用执行器，无法安全继续。",
@@ -3236,6 +3242,10 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.continuation.blocked.routeChanged": "恢复所需的 Provider 路由已变化；为避免使用错误模型或重复请求，当前不能继续。",
     "conversation.continuation.blocked.routeMissing": "恢复快照缺少 Provider 路由，无法安全继续。",
     "conversation.continuation.blocked.nextProviderBoundaryMissing": "已保存的工具结果边界不存在，无法安全构建下一次 Provider 请求。",
+    "conversation.continuation.blocked.toolBoundaryMissing": "恢复快照中的工具批次与最后一条助手工具调用不完整或数量不一致。",
+    "conversation.continuation.blocked.toolBindingMismatch": "恢复快照中的工具名称、参数、调用标识或工具定义指纹与当前精确边界不一致。",
+    "conversation.continuation.blocked.toolResultMismatch": "恢复快照中的工具状态与可靠结果不一致，无法确定应复用结果还是补回中断结果。",
+    "conversation.continuation.blocked.finalAssistantBoundaryMissing": "恢复快照没有可直接提交的无工具助手终态，无法完成本地终结。",
     "conversation.continuation.blocked.contextGenerationChanged": "会话上下文代际已变化，恢复快照不再对应当前上下文。",
     "conversation.continuation.blocked.canonicalStateChanged": "会话的 Provider 可见状态已变化，恢复快照不再对应当前会话内容。",
     "conversation.continuation.blocked.logicalTurnChanged": "原始逻辑回合或提示词已发生变化，无法安全恢复；请重新发送消息。",
@@ -3243,6 +3253,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.continuation.blocked.admissionInFlight": "会话正在完成停止、提交或状态切换；该操作结束前不能继续。",
     "conversation.continuation.blocked.terminalPersistenceInFlight": "会话终止状态仍在可靠保存中；保存完成前不能继续，以避免重复执行。",
     "conversation.continuation.blocked.sessionActive": "会话仍在运行，请等待当前执行结束后再继续。",
+    "conversation.continuation.blocked.notProblemTurn": "当前回合已正常完成，不存在需要恢复的异常中断边界。",
     "conversation.continuation.blocked.sessionBusy": "会话仍有排队任务，当前不能继续。",
     "conversation.continuation.blocked.stale": "恢复边界已过期，请刷新会话状态后再试。",
     "conversation.continuation.blocked.callInFlight": "仍有 Provider 请求进行中，当前不能继续。",
@@ -3266,6 +3277,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.metadata.result": "结果",
     "conversation.metadata.returned": "已返回",
     "conversation.toolRequest.receiving": "正在接收数据",
+    "conversation.toolRequest.argumentsAssembled": "参数已接收完成",
     "conversation.toolRequest.ready": "数据接收完成",
     "conversation.toolRequest.characters": "个字符",
     "conversation.stats.providerCalls": "{count} 次调用",
@@ -3546,7 +3558,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversationActions.previewCannotSend": "浏览器预览模式下无法发送真实会话。",
     "conversationActions.previewCannotCompact": "浏览器预览模式下无法执行真实上下文压缩。",
     "conversationActions.previewCannotContinue": "浏览器预览模式下无法继续真实会话。",
-    "conversationActions.modelSwitched": "已选择 {model}（{provider}）；该选择从下一次用户提交开始生效。",
+    "conversationActions.modelSwitched": "已选择 {model}（{provider}）；该选择从下一次真实 Provider 请求开始生效。",
     "projectActions.vmmSaved": "已保存项目 VMM 设置。",
     "projectActions.openRequested": "已请求打开项目目录：{project}",
     "projectActions.unpinned": "已取消置顶项目：{project}",
@@ -5574,8 +5586,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.contextUsage.totalTokens": "总 Tokens",
     "composer.capability.mediaBackendMode": "后端模式",
     "composer.capability.mediaFixedRoute": "固定路由",
-    "composer.capability.mediaBackendNote": "模型、账号与思考级别由模型设置统一配置；当前会话只控制是否启用，工具参数结构不会变化。",
-    "composer.capability.mediaBackendMissing": "请先在模型设置中配置此媒体理解能力的固定后端。",
+    "composer.capability.mediaBackendNote": "当前会话可以选择后端模式；具体模型、账号与思考级别由全局对应模式统一配置，工具参数结构不会变化。",
+    "composer.capability.mediaBackendMissing": "请先在模型设置中配置此媒体理解能力的可用后端模式。",
     "composer.capability.extensionHint": "选择可供 AI 通过模型扩展参数查询后按需调用的模型。切换此集合不会改变已注册工具名。",
     "composer.capability.extensionProfileMissing": "缺少已审核模型扩展说明，当前不可选择。",
     "composer.capability.extensionConstraints": "约束：{value}",
@@ -6057,13 +6069,13 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.providerRetry.failed": "Retry failed",
     "conversation.modelSwitch.title": "Model selection",
     "conversation.modelSwitch.immediate": "Selected {provider} / {account} / {model}.",
-    "conversation.modelSwitch.nextSubmission": "Selected {provider} / {account} / {model}; any current execution keeps its frozen model, and this selection applies on the next user submission.",
+    "conversation.modelSwitch.nextProviderRequest": "Selected {provider} / {account} / {model}; the current Provider request keeps its frozen route, and this selection applies to the next real Provider request.",
     "conversation.continue": "Continue",
     "conversation.continuing": "Continuing",
     "conversation.continuation.claimFailed": "Continue failed. Check the session state and try again.",
     "conversation.continuation.blocked": "This terminal boundary is not safe to continue",
     "conversation.continuation.blocked.default": "The recovery boundary did not pass the safety checks and cannot continue.",
-    "conversation.continuation.blocked.toolSideEffect": "The tool has run or may have caused an external side effect; continuing is blocked to prevent duplicate execution.",
+    "conversation.continuation.blocked.toolSideEffect": "A tool side effect was observed, but the snapshot has no reconcilable per-tool boundary, so reusable and interrupted calls cannot be distinguished.",
     "conversation.continuation.blocked.providerDispatchUnknown": "It is unknown whether the provider request was sent; continuing is blocked to prevent a duplicate request.",
     "conversation.continuation.blocked.semanticOutput": "Partial model output was already received; continuing could generate duplicate output and is blocked.",
     "conversation.continuation.blocked.pendingActionExecutor": "No executor is available for the pending recovery action, so it cannot continue safely.",
@@ -6078,6 +6090,10 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.continuation.blocked.routeChanged": "The Provider route required by the recovery changed; continuing is blocked to avoid using the wrong model or sending a duplicate request.",
     "conversation.continuation.blocked.routeMissing": "The recovery snapshot has no Provider route, so it cannot continue safely.",
     "conversation.continuation.blocked.nextProviderBoundaryMissing": "The retained tool-result boundary is missing, so the next Provider request cannot be built safely.",
+    "conversation.continuation.blocked.toolBoundaryMissing": "The retained tool batch is incomplete or does not match the final assistant tool-call count.",
+    "conversation.continuation.blocked.toolBindingMismatch": "A retained tool name, argument payload, call identity, or resolved definition fingerprint does not match the exact current boundary.",
+    "conversation.continuation.blocked.toolResultMismatch": "A retained tool state conflicts with its durable result, so recovery cannot decide whether to reuse or synthesize the result.",
+    "conversation.continuation.blocked.finalAssistantBoundaryMissing": "The snapshot has no tool-free assistant terminal that can be finalized locally.",
     "conversation.continuation.blocked.contextGenerationChanged": "The conversation context generation changed, so the recovery snapshot no longer matches the current context.",
     "conversation.continuation.blocked.canonicalStateChanged": "The Provider-visible conversation state changed, so the recovery snapshot no longer matches the current conversation.",
     "conversation.continuation.blocked.logicalTurnChanged": "The original logical turn or prompt changed, so it cannot be resumed safely. Send the message again.",
@@ -6085,6 +6101,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.continuation.blocked.admissionInFlight": "The session is finishing a Stop, submission, or lifecycle transition. It cannot continue until that operation completes.",
     "conversation.continuation.blocked.terminalPersistenceInFlight": "The terminal session state is still being committed durably. Continuing is blocked until it finishes to prevent duplicate execution.",
     "conversation.continuation.blocked.sessionActive": "The session is still running. Wait for the current execution to finish before continuing.",
+    "conversation.continuation.blocked.notProblemTurn": "The current turn completed normally and has no interrupted recovery boundary.",
     "conversation.continuation.blocked.sessionBusy": "The session still has queued work, so it cannot continue now.",
     "conversation.continuation.blocked.stale": "The recovery boundary is stale. Refresh the session state and try again.",
     "conversation.continuation.blocked.callInFlight": "A provider request is still in flight, so it cannot continue now.",
@@ -6108,6 +6125,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.metadata.result": "Result",
     "conversation.metadata.returned": "Returned",
     "conversation.toolRequest.receiving": "Receiving data",
+    "conversation.toolRequest.argumentsAssembled": "Arguments assembled",
     "conversation.toolRequest.ready": "Data received",
     "conversation.toolRequest.characters": "characters",
     "conversation.stats.providerCalls": "{count} calls",
@@ -6388,7 +6406,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversationActions.previewCannotSend": "Real conversations cannot be sent in browser preview mode.",
     "conversationActions.previewCannotCompact": "Real context compaction cannot run in browser preview mode.",
     "conversationActions.previewCannotContinue": "Real conversations cannot be continued in browser preview mode.",
-    "conversationActions.modelSwitched": "Selected {model} ({provider}); this selection applies on the next user submission.",
+    "conversationActions.modelSwitched": "Selected {model} ({provider}); this selection applies to the next real Provider request.",
     "projectActions.vmmSaved": "Project VMM settings saved.",
     "projectActions.openRequested": "Requested to open project directory: {project}",
     "projectActions.unpinned": "Unpinned project: {project}",
@@ -8416,8 +8434,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.contextUsage.totalTokens": "Total tokens",
     "composer.capability.mediaBackendMode": "Backend mode",
     "composer.capability.mediaFixedRoute": "Fixed route",
-    "composer.capability.mediaBackendNote": "The model, account, and reasoning level are configured in Model settings; this session only controls whether the capability is enabled, and tool parameter schemas do not change.",
-    "composer.capability.mediaBackendMissing": "Configure a fixed backend for this media-understanding capability in Model settings first.",
+    "composer.capability.mediaBackendNote": "This session can choose the backend mode; the model, account, and reasoning level come from the global configuration for that mode, and tool parameter schemas do not change.",
+    "composer.capability.mediaBackendMissing": "Configure at least one available backend mode for this media-understanding capability in Model settings first.",
     "composer.capability.extensionHint": "Choose models that AI can query for extension parameters and call on demand. Changing this set does not change registered tool names.",
     "composer.capability.extensionProfileMissing": "No reviewed model-extension description is available, so this model cannot be selected.",
     "composer.capability.extensionConstraints": "Constraints: {value}",

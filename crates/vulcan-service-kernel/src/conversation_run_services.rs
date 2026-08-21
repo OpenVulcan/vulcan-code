@@ -458,6 +458,21 @@ async fn service_stop_conversation_run_owned(
     } else {
         None
     };
+    // Active provider drafts were produced by the aborted physical request and must disappear before Continue can retry it.
+    // 活跃 Provider 草稿由已中止的物理请求产生，必须在 Continue 重试前移除。
+    let active_stream_drafts_discarded = match discard_active_stream_content_records(
+        &app,
+        &state,
+        target_session_id,
+    ) {
+        Ok(_) => true,
+        Err(error) => {
+            eprintln!(
+                "[webui-service] stopped conversation draft cleanup failed; sealing fallback will run: {error}"
+            );
+            false
+        }
+    };
     // The immediate stopped phase removes the stale running affordance before slower settlement can fail.
     // 即时停止阶段会在较慢结算可能失败前移除过期的运行中操作入口。
     commit_retained_workspace_session_phase_mutation_and_emit_delta(
@@ -470,6 +485,7 @@ async fn service_stop_conversation_run_owned(
             if let Some(runtime_state) = workspace_snapshot
                 .session_runtime_state
                 .get_mut(&target_session_id)
+                && !active_stream_drafts_discarded
             {
                 seal_active_streaming_records_in_state(runtime_state, &now);
             }

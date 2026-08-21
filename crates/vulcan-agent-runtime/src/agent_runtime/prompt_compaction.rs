@@ -121,6 +121,10 @@ pub struct PromptCompactionLaunchContext {
     /// 按语义能力索引的可选供应商工具选择。
     pub provider_tool_selections_override:
         Option<BTreeMap<String, SessionProviderToolTargetSelection>>,
+    /// Optional session-selected media backend modes captured from the source turn.
+    /// 从来源回合捕获的可选会话级媒体后端模式。
+    pub provider_tool_media_understanding_modes_override:
+        Option<BTreeMap<String, vulcan_workbench_model::SessionMediaUnderstandingMode>>,
     /// Optional enabled direct and media capability keys captured from the source turn.
     /// 从来源回合捕获的可选已启用直连及媒体能力键。
     pub provider_tool_enabled_capabilities_override: Option<BTreeSet<String>>,
@@ -180,6 +184,7 @@ impl Default for PromptCompactionLaunchContext {
             runtime_policy: ExecutionRuntimePolicy::main_session(),
             agent_prompt_snapshot: None,
             provider_tool_selections_override: None,
+            provider_tool_media_understanding_modes_override: None,
             provider_tool_enabled_capabilities_override: None,
             provider_extension_target_sets_override: None,
             subagent_prompt_context: None,
@@ -217,6 +222,9 @@ impl PromptCompactionLaunchContext {
             runtime_policy: request.runtime_policy,
             agent_prompt_snapshot: request.agent_prompt_snapshot.clone(),
             provider_tool_selections_override: request.provider_tool_selections_override.clone(),
+            provider_tool_media_understanding_modes_override: request
+                .provider_tool_media_understanding_modes_override
+                .clone(),
             provider_tool_enabled_capabilities_override: request
                 .provider_tool_enabled_capabilities_override
                 .clone(),
@@ -569,6 +577,7 @@ fn prompt_compaction_progress_for_runtime_event(
         | ExecutionStreamEvent::RuntimeEvent { .. }
         | ExecutionStreamEvent::ConversationCheckpoint { .. }
         | ExecutionStreamEvent::ContextCompactionRequired { .. }
+        | ExecutionStreamEvent::ProviderRouteSwitchRequired { .. }
         | ExecutionStreamEvent::ThinkingCompleted { .. }
         | ExecutionStreamEvent::TransientReasoningStatusChanged { .. }
         | ExecutionStreamEvent::Finished(_) => None,
@@ -1129,6 +1138,12 @@ pub fn stream_prompt_compaction_job(
                         terminal_error = Some(prompt_compaction_request_budget_error(&reason));
                         break;
                     }
+                    ExecutionStreamEvent::ProviderRouteSwitchRequired { reason, .. } => {
+                        terminal_error = Some(format!(
+                            "Prompt compaction cannot change Provider route mid-operation: {reason}"
+                        ));
+                        break;
+                    }
                     event => {
                         if let Some(progress) = prompt_compaction_progress_for_runtime_event(&event)
                         {
@@ -1323,7 +1338,16 @@ pub fn stream_prompt_compaction_foundation_job(
                     }
                 }
             };
-            let launch = build_runtime_stream_launch_payload(&launch_request, bootstrap, None);
+            let launch = match build_runtime_stream_launch_payload(&launch_request, bootstrap, None)
+            {
+                Ok(launch) => launch,
+                Err(error) => {
+                    yield PromptCompactionStreamEvent::Finished(Err(format!(
+                        "Prompt compaction Provider request continuation validation failed: {error}"
+                    )));
+                    return;
+                }
+            };
 
             let runtime_stream =
                 drive_runtime_stream_launch(request.provider_configuration.clone(), launch, None);
@@ -1355,6 +1379,12 @@ pub fn stream_prompt_compaction_foundation_job(
                     }
                     ExecutionStreamEvent::ContextCompactionRequired { reason, .. } => {
                         terminal_error = Some(prompt_compaction_request_budget_error(&reason));
+                        break;
+                    }
+                    ExecutionStreamEvent::ProviderRouteSwitchRequired { reason, .. } => {
+                        terminal_error = Some(format!(
+                            "Prompt compaction cannot change Provider route mid-operation: {reason}"
+                        ));
                         break;
                     }
                     event => {
@@ -1426,6 +1456,7 @@ fn build_prompt_compaction_launch_request(
         runtime_policy: vulcan_session_core::ExecutionRuntimePolicy::context_compaction(),
         conversation_hook_turn_id: None,
         execution_retry_snapshot: None,
+        provider_request_continuation: None,
         execution_agent_id: execution_agent_id.map(str::to_string),
         agent_prompt_snapshot: launch_context.agent_prompt_snapshot.clone(),
         provider_id_override: model_target.map(|target| target.provider_id.clone()),
@@ -1436,6 +1467,9 @@ fn build_prompt_compaction_launch_request(
         provider_usage_budget_baseline: None,
         provider_usage_context_generation_id: None,
         provider_tool_selections_override: launch_context.provider_tool_selections_override.clone(),
+        provider_tool_media_understanding_modes_override: launch_context
+            .provider_tool_media_understanding_modes_override
+            .clone(),
         provider_tool_enabled_capabilities_override: launch_context
             .provider_tool_enabled_capabilities_override
             .clone(),

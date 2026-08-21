@@ -226,6 +226,106 @@ pub enum MediaUnderstandingBackendSelection {
     },
 }
 
+/// Identifies one of the two supported media-understanding backend families.
+/// 标识两种受支持的媒体理解后端类型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MediaUnderstandingBackendMode {
+    /// Use the provider-specific Manifest-owned understanding endpoint.
+    /// 使用供应商专用的 Manifest 理解端点。
+    ProviderTool,
+    /// Use an ordinary structured-output multimodal model as the replacement backend.
+    /// 使用具备结构化输出能力的普通多模态模型作为替代后端。
+    ModelReplacement,
+}
+
+/// Stores one exact model-replacement route independently from the active backend mode.
+/// 独立保存一条模型代替路由，不受当前活动后端模式影响。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MediaUnderstandingModelReplacementSelection {
+    /// Exact provider, model, and credential route.
+    /// 精确的供应商、模型与凭据路由。
+    pub selection: ActiveAiModelSelection,
+    /// Optional reasoning effort for the replacement model.
+    /// 替代模型可选的思考级别。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<ReasoningEffort>,
+}
+
+/// Stores the independently configured provider and replacement routes for one media capability.
+/// 保存一项媒体能力分别配置的供应商专用与模型代替路由。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct MediaUnderstandingBackendOptions {
+    /// Exact provider-specific target, when configured.
+    /// 已配置的精确供应商专用目标。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_tool: Option<ProviderToolTargetSelection>,
+    /// Exact structured-output model route, when configured.
+    /// 已配置的精确结构化输出模型路由。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_replacement: Option<MediaUnderstandingModelReplacementSelection>,
+}
+
+impl MediaUnderstandingBackendOptions {
+    /// Records one complete backend selection in its matching mode slot.
+    /// 将一条完整后端选择写入对应的模式槽位。
+    pub fn update_from_selection(&mut self, selection: &MediaUnderstandingBackendSelection) {
+        match selection {
+            MediaUnderstandingBackendSelection::ProviderTool { selection } => {
+                self.provider_tool = Some(selection.clone());
+            }
+            MediaUnderstandingBackendSelection::ModelReplacement {
+                selection,
+                reasoning_effort,
+            } => {
+                self.model_replacement = Some(MediaUnderstandingModelReplacementSelection {
+                    selection: selection.clone(),
+                    reasoning_effort: reasoning_effort.clone(),
+                });
+            }
+        }
+    }
+
+    /// Builds the exact backend selection stored for one backend mode.
+    /// 构建指定后端模式中保存的精确后端选择。
+    pub fn selection_for_mode(
+        &self,
+        mode: MediaUnderstandingBackendMode,
+    ) -> Option<MediaUnderstandingBackendSelection> {
+        match mode {
+            MediaUnderstandingBackendMode::ProviderTool => self
+                .provider_tool
+                .clone()
+                .map(|selection| MediaUnderstandingBackendSelection::ProviderTool { selection }),
+            MediaUnderstandingBackendMode::ModelReplacement => {
+                self.model_replacement.clone().map(|route| {
+                    MediaUnderstandingBackendSelection::ModelReplacement {
+                        selection: route.selection,
+                        reasoning_effort: route.reasoning_effort,
+                    }
+                })
+            }
+        }
+    }
+
+    /// Reports whether no backend route has been configured for this capability.
+    /// 报告该能力是否尚未配置任何后端路由。
+    pub fn is_empty(&self) -> bool {
+        self.provider_tool.is_none() && self.model_replacement.is_none()
+    }
+}
+
+impl MediaUnderstandingBackendSelection {
+    /// Returns the backend family represented by this exact selection.
+    /// 返回该精确后端选择所属的后端类型。
+    pub fn mode(&self) -> MediaUnderstandingBackendMode {
+        match self {
+            Self::ProviderTool { .. } => MediaUnderstandingBackendMode::ProviderTool,
+            Self::ModelReplacement { .. } => MediaUnderstandingBackendMode::ModelReplacement,
+        }
+    }
+}
+
 /// Stores protocol-specific cache and adapter parameter choices for one provider model.
 /// 保存一个供应商模型的协议专属缓存与适配器参数选择。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -755,6 +855,11 @@ pub struct PersistedAiConfiguration {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub media_understanding_selections:
         BTreeMap<ProviderToolCapabilityKind, MediaUnderstandingBackendSelection>,
+    /// Independently configured provider and model-replacement routes per media capability.
+    /// 每项媒体能力分别配置的供应商专用与模型代替路由。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub media_understanding_backend_options:
+        BTreeMap<ProviderToolCapabilityKind, MediaUnderstandingBackendOptions>,
     /// Explicit native model-extension targets selected per extension capability.
     /// 按扩展能力显式选择的原生模型扩展目标。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -877,6 +982,7 @@ impl Default for PersistedAiConfiguration {
             provider_tool_enabled_capabilities: BTreeSet::new(),
             multimodal_understanding_candidate_models: BTreeSet::new(),
             media_understanding_selections: BTreeMap::new(),
+            media_understanding_backend_options: BTreeMap::new(),
             provider_extension_target_sets: BTreeMap::new(),
             provider_tool_disabled_targets: BTreeMap::new(),
         }
@@ -884,6 +990,91 @@ impl Default for PersistedAiConfiguration {
 }
 
 impl PersistedAiConfiguration {
+    /// Applies one session-selected media backend mode to this per-turn configuration copy.
+    /// 将会话选定的媒体后端模式应用到当前回合配置副本。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `capability` identifies one fixed media-understanding facade and `mode` selects its
+    /// independently configured provider or model-replacement route.
+    /// `capability` 标识一个固定媒体理解外壳，`mode` 选择其分别配置的供应商或模型代替路由。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `Ok(())` when the exact mode route exists; otherwise an explicit configuration error.
+    /// 精确模式路由存在时返回 `Ok(())`；否则返回明确配置错误。
+    pub fn apply_media_understanding_mode(
+        &mut self,
+        capability: ProviderToolCapabilityKind,
+        mode: MediaUnderstandingBackendMode,
+    ) -> Result<(), String> {
+        if !matches!(
+            capability,
+            ProviderToolCapabilityKind::ImageUnderstand
+                | ProviderToolCapabilityKind::VideoUnderstand
+                | ProviderToolCapabilityKind::AudioUnderstand
+        ) {
+            return Err(format!(
+                "Capability `{capability:?}` is not a media-understanding capability."
+            ));
+        }
+        let selection = self
+            .media_understanding_backend_options
+            .get(&capability)
+            .and_then(|options| options.selection_for_mode(mode))
+            .ok_or_else(|| {
+                format!(
+                    "Media-understanding capability `{capability:?}` has no configured `{mode:?}` backend."
+                )
+            })?;
+        self.media_understanding_selections
+            .insert(capability, selection);
+        Ok(())
+    }
+
+    /// Copies active media selections into missing independent backend mode slots.
+    /// 将活动媒体选择补入缺失的独立后端模式槽位。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` when persisted configuration data was normalized.
+    /// 持久化配置数据发生归一化时返回 `true`。
+    fn normalize_media_understanding_backend_options(&mut self) -> bool {
+        let active_selections = self.media_understanding_selections.clone();
+        let mut changed = false;
+        for (capability, selection) in active_selections {
+            if !matches!(
+                capability,
+                ProviderToolCapabilityKind::ImageUnderstand
+                    | ProviderToolCapabilityKind::VideoUnderstand
+                    | ProviderToolCapabilityKind::AudioUnderstand
+            ) {
+                continue;
+            }
+            let options = self
+                .media_understanding_backend_options
+                .entry(capability)
+                .or_default();
+            let previous = options.clone();
+            options.update_from_selection(&selection);
+            changed |= *options != previous;
+        }
+        self.media_understanding_backend_options
+            .retain(|capability, options| {
+                let keep = matches!(
+                    capability,
+                    ProviderToolCapabilityKind::ImageUnderstand
+                        | ProviderToolCapabilityKind::VideoUnderstand
+                        | ProviderToolCapabilityKind::AudioUnderstand
+                ) && !options.is_empty();
+                if !keep {
+                    changed = true;
+                }
+                keep
+            });
+        changed
+    }
+
     /// Reports whether one standalone custom-provider source is currently isolated.
     /// 报告一个独立自定义供应商源当前是否已被隔离。
     ///
@@ -1028,7 +1219,7 @@ impl PersistedAiConfiguration {
     /// 返回配置是否变化，或明确的不支持版本错误。
     pub fn migrate_to_current_schema(&mut self) -> Result<bool, String> {
         let source_schema_version = self.schema_version;
-        let changed = match self.schema_version {
+        let mut changed = match self.schema_version {
             PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION => {
                 // normalized records whether a current-version file still carried ignored legacy output fields.
                 // normalized 记录当前版本文件是否仍携带已忽略的旧版输出字段。
@@ -1177,6 +1368,10 @@ impl PersistedAiConfiguration {
             self.provider_tool_enabled_capabilities
                 .remove(&ProviderToolCapabilityKind::AudioUnderstand);
         }
+        // normalizedMediaBackends preserves the active legacy selection while creating the
+        // independent mode slot required by session-level backend selection.
+        // normalizedMediaBackends 在保留旧活动选择的同时，创建会话级后端选择所需的独立模式槽位。
+        changed |= self.normalize_media_understanding_backend_options();
         self.context_compaction_window_nodes.validate()?;
         self.validate_context_window_policy_layers()?;
         Ok(changed)
@@ -1513,6 +1708,16 @@ impl PersistedAiConfiguration {
                         if selection.provider_id == provider_id && selection.model_id == model_id
                 )
             });
+            self.media_understanding_backend_options
+                .retain(|_, options| {
+                    if options.model_replacement.as_ref().is_some_and(|route| {
+                        route.selection.provider_id == provider_id
+                            && route.selection.model_id == model_id
+                    }) {
+                        options.model_replacement = None;
+                    }
+                    !options.is_empty()
+                });
         }
     }
 
@@ -2239,6 +2444,16 @@ impl PersistedAiConfiguration {
                     if selection.provider_id == provider_id && selection.model_id == model_id
             )
         });
+        self.media_understanding_backend_options
+            .retain(|_, options| {
+                if options.model_replacement.as_ref().is_some_and(|route| {
+                    route.selection.provider_id == provider_id
+                        && route.selection.model_id == model_id
+                }) {
+                    options.model_replacement = None;
+                }
+                !options.is_empty()
+            });
         self.model_context_window_policy_overrides
             .remove(provider_model_key.as_str());
         self.custom_model_template_decisions
@@ -2348,6 +2563,20 @@ impl PersistedAiConfiguration {
                     MediaUnderstandingBackendSelection::ModelReplacement { selection, .. } => {
                         selection.provider_id == provider_id
                     }
+                })
+            || self
+                .media_understanding_backend_options
+                .values()
+                .any(|options| {
+                    options.provider_tool.as_ref().is_some_and(|selection| {
+                        self.connection_graph
+                            .connections
+                            .get(selection.connection_id.as_str())
+                            .is_some_and(|connection| connection.provider_id == provider_id)
+                    }) || options
+                        .model_replacement
+                        .as_ref()
+                        .is_some_and(|route| route.selection.provider_id == provider_id)
                 })
         {
             return true;
@@ -2550,6 +2779,22 @@ impl PersistedAiConfiguration {
                 MediaUnderstandingBackendSelection::ModelReplacement { selection, .. } => {
                     selection.provider_id != provider_id
                 }
+            });
+        self.media_understanding_backend_options
+            .retain(|_, options| {
+                if options.provider_tool.as_ref().is_some_and(|selection| {
+                    provider_connection_ids.contains(selection.connection_id.as_str())
+                }) {
+                    options.provider_tool = None;
+                }
+                if options
+                    .model_replacement
+                    .as_ref()
+                    .is_some_and(|route| route.selection.provider_id == provider_id)
+                {
+                    options.model_replacement = None;
+                }
+                !options.is_empty()
             });
         self.model_context_window_policy_overrides
             .retain(|key, _| !key.starts_with(provider_model_prefix.as_str()));
@@ -3341,6 +3586,64 @@ mod tests {
             !historical
                 .provider_tool_selections
                 .contains_key(&ProviderToolCapabilityKind::VideoUnderstand)
+        );
+    }
+
+    /// Verifies provider and replacement routes remain independently reusable when the active mode changes.
+    /// 验证切换当前模式时供应商专用与模型代替路由仍可独立复用。
+    #[test]
+    fn media_understanding_backend_modes_keep_independent_routes() {
+        let capability = ProviderToolCapabilityKind::VideoUnderstand;
+        let provider_selection = ProviderToolTargetSelection {
+            connection_id: String::from("provider-account"),
+            target_id: String::from("provider-video"),
+        };
+        let replacement_selection = ActiveAiModelSelection {
+            provider_id: String::from("replacement-provider"),
+            model_id: String::from("replacement-video-model"),
+            connection_id: String::from("replacement-account"),
+        };
+        let mut configuration = PersistedAiConfiguration::default();
+        let mut backend_options = MediaUnderstandingBackendOptions::default();
+        backend_options.update_from_selection(&MediaUnderstandingBackendSelection::ProviderTool {
+            selection: provider_selection.clone(),
+        });
+        backend_options.update_from_selection(
+            &MediaUnderstandingBackendSelection::ModelReplacement {
+                selection: replacement_selection.clone(),
+                reasoning_effort: Some(ReasoningEffort::Medium),
+            },
+        );
+        configuration
+            .media_understanding_backend_options
+            .insert(capability, backend_options);
+
+        configuration
+            .apply_media_understanding_mode(
+                capability,
+                MediaUnderstandingBackendMode::ModelReplacement,
+            )
+            .expect("replacement route should be selectable");
+        assert_eq!(
+            configuration
+                .media_understanding_selections
+                .get(&capability),
+            Some(&MediaUnderstandingBackendSelection::ModelReplacement {
+                selection: replacement_selection,
+                reasoning_effort: Some(ReasoningEffort::Medium),
+            })
+        );
+
+        configuration
+            .apply_media_understanding_mode(capability, MediaUnderstandingBackendMode::ProviderTool)
+            .expect("provider route should remain selectable");
+        assert_eq!(
+            configuration
+                .media_understanding_selections
+                .get(&capability),
+            Some(&MediaUnderstandingBackendSelection::ProviderTool {
+                selection: provider_selection,
+            })
         );
     }
 
@@ -4190,6 +4493,32 @@ mod tests {
             PersistedAiConfiguration::provider_model_key(provider_id, model_id),
             CustomModelProtocolPreference::Explicit {
                 protocol: CustomProviderProtocol::AnthropicMessages,
+            },
+        );
+
+        assert!(configuration.provider_has_model_customizations(provider_id));
+        assert!(!configuration.provider_has_model_customizations("custom:peer"));
+    }
+
+    /// Verifies an inactive media backend route is disclosed before provider cascade cleanup.
+    /// 验证未激活的媒体后端路由会在供应商级联清理前被披露。
+    #[test]
+    fn provider_model_customization_detection_includes_inactive_media_backend_route() {
+        let provider_id = "custom:media-route";
+        let model_id = "video-model";
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration.media_understanding_backend_options.insert(
+            ProviderToolCapabilityKind::VideoUnderstand,
+            MediaUnderstandingBackendOptions {
+                model_replacement: Some(MediaUnderstandingModelReplacementSelection {
+                    selection: ActiveAiModelSelection {
+                        provider_id: String::from(provider_id),
+                        model_id: String::from(model_id),
+                        connection_id: String::from("media-account"),
+                    },
+                    reasoning_effort: None,
+                }),
+                ..MediaUnderstandingBackendOptions::default()
             },
         );
 

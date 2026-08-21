@@ -186,6 +186,60 @@ pub fn seal_active_streaming_records_in_state(
     sealed_count
 }
 
+/// Discards every active provider-content draft before an interrupted request is retried.
+/// 在中断请求重试前丢弃全部活跃的 Provider 内容草稿。
+///
+/// # Parameters
+/// # 参数
+/// `runtime_state` owns the authoritative runtime conversation records.
+/// `runtime_state` 持有权威运行时会话记录。
+/// `now` is the retained-state update timestamp.
+/// `now` 是保留状态更新时间戳。
+///
+/// # Returns
+/// # 返回值
+/// The exact record identifiers removed from the retained transcript.
+/// 返回从保留转录中移除的精确记录标识。
+pub fn discard_active_streaming_records_in_state(
+    runtime_state: &mut SessionRuntimeStateEntry,
+    now: &str,
+) -> Vec<String> {
+    // discardedIds are selected only by the lifecycle contract written when provider content begins streaming.
+    // discardedIds 仅依据 Provider 内容开始流式传输时写入的生命周期契约进行选择。
+    let discarded_ids = runtime_state
+        .conversation_state
+        .records
+        .iter()
+        .filter(|record| {
+            matches!(
+                record.record_kind,
+                SessionMessageRecordKind::ThinkingOutput
+                    | SessionMessageRecordKind::AssistantOutput
+            ) && record
+                .metadata
+                .as_ref()
+                .and_then(serde_json::Value::as_object)
+                .and_then(|metadata| metadata.get(STREAMING_RECORD_STATE_METADATA_KEY))
+                .and_then(serde_json::Value::as_str)
+                == Some(STREAMING_RECORD_STATE_ACTIVE)
+        })
+        .map(|record| record.id.clone())
+        .collect::<BTreeSet<_>>();
+    if discarded_ids.is_empty() {
+        return Vec::new();
+    }
+    runtime_state
+        .conversation_state
+        .records
+        .retain(|record| !discarded_ids.contains(&record.id));
+    runtime_state
+        .ui_state
+        .collapsed_message_ids
+        .retain(|record_id| !discarded_ids.contains(record_id));
+    runtime_state.updated_at = now.to_string();
+    discarded_ids.into_iter().collect()
+}
+
 /// Keeps the active streaming thinking record collapsed after the thinking phase completes.
 /// 在思考阶段完成后保持当前流式思考记录折叠。
 pub fn collapse_streaming_thinking_in_state(

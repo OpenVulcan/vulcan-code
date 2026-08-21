@@ -169,6 +169,9 @@ struct ToolRequestDraft {
     /// Strict incremental lexical state for this exact argument stream.
     /// 当前精确参数流使用的严格增量词法状态。
     json_lexer: IncrementalJsonLexer,
+    /// Whether the strict lexer already proved one closed JSON root for immediate card finalization.
+    /// 严格词法器是否已经证明存在一个已封闭 JSON 根值，以便立即结束卡片接收态。
+    arguments_assembled: bool,
     /// Optional isolated tool-owned parser session.
     /// 可选的隔离工具自有解析器会话。
     parser: Option<Box<dyn ToolRequestParserSession>>,
@@ -404,6 +407,7 @@ impl ToolRequestStreamCoordinator {
             revision: 1,
             last_emitted_at: Instant::now(),
             json_lexer: IncrementalJsonLexer::default(),
+            arguments_assembled: false,
             parser,
             last_preview_revision: 0,
             progress_policy,
@@ -431,18 +435,30 @@ impl ToolRequestStreamCoordinator {
         };
         match initial_preview {
             Ok(Some(preview)) => {
+                // displayState reflects a lexer-proven closed root even before the Provider response ends.
+                // displayState 即使在 Provider 响应结束前，也会反映词法器已证明封闭的根值。
+                let display_state = if draft.json_lexer.is_root_complete() {
+                    draft.arguments_assembled = true;
+                    "arguments_assembled"
+                } else {
+                    "receiving"
+                };
                 draft.revision = draft.revision.saturating_add(1);
                 events.push(self.runtime_event_for_draft(
                     RuntimeEventKind::ToolRequestPreviewUpdated,
                     &request_stream_id,
                     &draft,
-                    "receiving",
+                    display_state,
                     None,
                     Some(&preview),
                     None,
                 ));
             }
-            Ok(None) => {}
+            Ok(None) => {
+                if draft.json_lexer.is_root_complete() {
+                    draft.arguments_assembled = true;
+                }
+            }
             Err(()) => {
                 draft.revision = draft.revision.saturating_add(1);
                 events.push(self.runtime_event_for_draft(
@@ -456,6 +472,18 @@ impl ToolRequestStreamCoordinator {
                 ));
                 return events;
             }
+        }
+        if draft.arguments_assembled {
+            draft.revision = draft.revision.saturating_add(1);
+            events.push(self.runtime_event_for_draft(
+                RuntimeEventKind::ToolRequestProgress,
+                &request_stream_id,
+                &draft,
+                "arguments_assembled",
+                None,
+                None,
+                None,
+            ));
         }
         self.drafts.insert(request_stream_id.clone(), draft);
         events
@@ -503,16 +531,32 @@ impl ToolRequestStreamCoordinator {
                     draft.last_emitted_bytes = received_bytes;
                     draft.last_emitted_at = now;
                 }
-                Some((should_emit_progress, preview.unwrap_or_default()))
+                // newlyAssembled bypasses cadence throttling exactly once when one JSON root closes.
+                // newlyAssembled 在一个 JSON 根值封闭时恰好一次绕过节奏节流。
+                let newly_assembled =
+                    !draft.arguments_assembled && draft.json_lexer.is_root_complete();
+                if newly_assembled {
+                    draft.arguments_assembled = true;
+                    draft.last_emitted_bytes = received_bytes;
+                    draft.last_emitted_at = now;
+                }
+                Some((
+                    should_emit_progress,
+                    preview.unwrap_or_default(),
+                    newly_assembled,
+                    draft.arguments_assembled,
+                ))
             }
         };
-        let Some((should_emit_progress, preview)) = mutation_result else {
+        let Some((should_emit_progress, preview, newly_assembled, arguments_assembled)) =
+            mutation_result
+        else {
             return self.invalidate_request(request_stream_id, "invalid_json");
         };
         // events contains at most one throttled progress and one semantic preview update.
         // events 最多包含一条节流进度与一条语义预览更新。
         let mut events = Vec::new();
-        if should_emit_progress {
+        if should_emit_progress || newly_assembled {
             if let Some(draft) = self.drafts.get_mut(request_stream_id) {
                 draft.revision = draft.revision.saturating_add(1);
             }
@@ -521,7 +565,11 @@ impl ToolRequestStreamCoordinator {
                     RuntimeEventKind::ToolRequestProgress,
                     request_stream_id,
                     progress_draft,
-                    "receiving",
+                    if arguments_assembled {
+                        "arguments_assembled"
+                    } else {
+                        "receiving"
+                    },
                     None,
                     None,
                     None,
@@ -537,7 +585,11 @@ impl ToolRequestStreamCoordinator {
                     RuntimeEventKind::ToolRequestPreviewUpdated,
                     request_stream_id,
                     preview_draft,
-                    "receiving",
+                    if arguments_assembled {
+                        "arguments_assembled"
+                    } else {
+                        "receiving"
+                    },
                     None,
                     Some(&preview),
                     None,
@@ -661,7 +713,7 @@ impl ToolRequestStreamCoordinator {
                 RuntimeEventKind::ToolRequestPreviewUpdated,
                 request_stream_id,
                 &draft,
-                "receiving",
+                "arguments_assembled",
                 None,
                 Some(&preview),
                 preview_diagnostic,
@@ -1022,6 +1074,44 @@ mod tests {
         coordinator
     }
 
+    /// Parser fixture that emits a safe preview only at authoritative completion.
+    /// 仅在权威完成边界发出安全预览的解析器夹具。
+    #[derive(Default)]
+    struct FinalPreviewOnlyParser;
+
+    impl ToolRequestParserSession for FinalPreviewOnlyParser {
+        /// Accepts semantic fragments without exposing an intermediate preview.
+        /// 接受语义碎片，但不暴露中间预览。
+        fn push_json_event(
+            &mut self,
+            _event: &vulcan_tools_manager::IncrementalJsonEvent,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+
+        /// Returns no preview before the authoritative completion boundary.
+        /// 在权威完成边界之前不返回预览。
+        fn snapshot(&self) -> Option<ToolRequestPreview> {
+            None
+        }
+
+        /// Returns one final safe preview for the fully parsed arguments.
+        /// 为完整解析后的参数返回一份最终安全预览。
+        fn finish(
+            &mut self,
+            _arguments: &serde_json::Value,
+        ) -> Result<Option<ToolRequestPreview>, String> {
+            Ok(Some(ToolRequestPreview {
+                revision: 1,
+                ..ToolRequestPreview::default()
+            }))
+        }
+
+        /// Releases no resources because this fixture owns no staging state.
+        /// 不释放任何资源，因为该夹具不持有暂存状态。
+        fn abort(&mut self) {}
+    }
+
     /// Verifies immediate progress reports Unicode scalar counts without tokenization.
     /// 验证即时进度在不分词的情况下报告 Unicode 标量数量。
     #[test]
@@ -1043,6 +1133,219 @@ mod tests {
                 .and_then(|metadata| metadata.get("received_characters"))
                 .and_then(serde_json::Value::as_u64),
             Some("{\"text\":\"hello 世界\"}".chars().count() as u64)
+        );
+    }
+
+    /// Verifies a closed JSON root leaves the receiving state before the Provider response terminates.
+    /// 验证已封闭 JSON 根值会在 Provider 响应终止前离开接收状态。
+    #[test]
+    fn closed_argument_root_emits_immediate_assembled_state() {
+        let mut coordinator = test_coordinator();
+        let started = coordinator.apply(ToolRequestFragment::Detected {
+            request_stream_id: String::from("stream-assembled"),
+            tool_call_id: String::from("call-assembled"),
+            tool_name: String::from("test_tool"),
+            initial_arguments: String::from("{\"text\":"),
+            argument_assembler: None,
+        });
+        assert!(started.iter().all(|event| {
+            event
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("tool_display_state"))
+                .and_then(serde_json::Value::as_str)
+                != Some("arguments_assembled")
+        }));
+
+        let assembled = coordinator.apply(ToolRequestFragment::ArgumentsDelta {
+            request_stream_id: String::from("stream-assembled"),
+            delta: String::from("\"done\"}"),
+        });
+        assert!(assembled.iter().any(|event| {
+            event.kind == RuntimeEventKind::ToolRequestProgress
+                && event
+                    .metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.get("tool_display_state"))
+                    .and_then(serde_json::Value::as_str)
+                    == Some("arguments_assembled")
+        }));
+        assert!(
+            coordinator
+                .drafts
+                .get("stream-assembled")
+                .is_some_and(|draft| draft.arguments_assembled)
+        );
+    }
+
+    /// Verifies interleaved tool streams close and advance independently before the Provider response ends.
+    /// 验证交错工具流会在 Provider 响应结束前分别封闭并独立推进。
+    #[test]
+    fn interleaved_tool_streams_emit_independent_assembled_and_ready_boundaries() {
+        // coordinator owns four simultaneously active request identities from the same Provider response.
+        // coordinator 持有同一 Provider 响应中的四个并行活动请求身份。
+        let mut coordinator = test_coordinator();
+        for index in 1..=4 {
+            coordinator.apply(ToolRequestFragment::Detected {
+                request_stream_id: format!("stream-{index}"),
+                tool_call_id: format!("call-{index}"),
+                tool_name: String::from("test_tool"),
+                initial_arguments: String::from("{\"index\":"),
+                argument_assembler: None,
+            });
+        }
+
+        // firstAssembled closes only stream 1 while streams 2 through 4 remain lexically incomplete.
+        // firstAssembled 仅封闭流 1，而流 2 至流 4 仍保持词法未完成。
+        let first_assembled = coordinator.apply(ToolRequestFragment::ArgumentsDelta {
+            request_stream_id: String::from("stream-1"),
+            delta: String::from("1}"),
+        });
+        assert!(first_assembled.iter().any(|event| {
+            event.kind == RuntimeEventKind::ToolRequestProgress
+                && event
+                    .metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.get("request_stream_id"))
+                    .and_then(serde_json::Value::as_str)
+                    == Some("stream-1")
+                && event
+                    .metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.get("tool_display_state"))
+                    .and_then(serde_json::Value::as_str)
+                    == Some("arguments_assembled")
+        }));
+        assert!(
+            coordinator
+                .drafts
+                .get("stream-1")
+                .is_some_and(|draft| draft.arguments_assembled)
+        );
+        for request_stream_id in ["stream-2", "stream-3", "stream-4"] {
+            assert!(
+                coordinator
+                    .drafts
+                    .get(request_stream_id)
+                    .is_some_and(|draft| !draft.arguments_assembled)
+            );
+        }
+
+        // firstReady proves a Provider completion removes and advances only the named request.
+        // firstReady 证明 Provider 完成事件只移除并推进被点名的请求。
+        let first_ready = coordinator.apply(ToolRequestFragment::Completed {
+            request_stream_id: String::from("stream-1"),
+            canonical_tool_call_id: Some(String::from("call-1")),
+            final_arguments: Some(String::from("{\"index\":1}")),
+        });
+        assert!(first_ready.iter().any(|event| {
+            event.kind == RuntimeEventKind::ToolRequestReady
+                && event
+                    .metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.get("request_stream_id"))
+                    .and_then(serde_json::Value::as_str)
+                    == Some("stream-1")
+        }));
+        assert!(!coordinator.drafts.contains_key("stream-1"));
+        assert!(coordinator.drafts.contains_key("stream-2"));
+        assert!(coordinator.drafts.contains_key("stream-3"));
+        assert!(coordinator.drafts.contains_key("stream-4"));
+
+        // secondAssembled demonstrates the next sibling can close without waiting for the remaining pair.
+        // secondAssembled 证明下一个同级请求无需等待其余两个请求即可封闭。
+        let second_assembled = coordinator.apply(ToolRequestFragment::ArgumentsDelta {
+            request_stream_id: String::from("stream-2"),
+            delta: String::from("2}"),
+        });
+        assert!(second_assembled.iter().any(|event| {
+            event.kind == RuntimeEventKind::ToolRequestProgress
+                && event
+                    .metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.get("request_stream_id"))
+                    .and_then(serde_json::Value::as_str)
+                    == Some("stream-2")
+                && event
+                    .metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.get("tool_display_state"))
+                    .and_then(serde_json::Value::as_str)
+                    == Some("arguments_assembled")
+        }));
+        assert!(
+            coordinator
+                .drafts
+                .get("stream-2")
+                .is_some_and(|draft| draft.arguments_assembled)
+        );
+        assert!(
+            coordinator
+                .drafts
+                .get("stream-3")
+                .is_some_and(|draft| !draft.arguments_assembled)
+        );
+        assert!(
+            coordinator
+                .drafts
+                .get("stream-4")
+                .is_some_and(|draft| !draft.arguments_assembled)
+        );
+    }
+
+    /// Verifies a completion-only preview cannot regress an assembled card to receiving.
+    /// 验证仅在完成时产生的预览不会把已组装卡片回退为接收中。
+    #[test]
+    fn final_preview_preserves_assembled_display_state() {
+        // coordinator receives one lexically incomplete request before its closing fragment.
+        // coordinator 先接收一条词法未完成请求，再接收其封闭碎片。
+        let mut coordinator = test_coordinator();
+        coordinator.apply(ToolRequestFragment::Detected {
+            request_stream_id: String::from("stream-final-preview"),
+            tool_call_id: String::from("call-final-preview"),
+            tool_name: String::from("test_tool"),
+            initial_arguments: String::from("{\"index\":"),
+            argument_assembler: None,
+        });
+        let assembled = coordinator.apply(ToolRequestFragment::ArgumentsDelta {
+            request_stream_id: String::from("stream-final-preview"),
+            delta: String::from("1}"),
+        });
+        assert!(assembled.iter().any(|event| {
+            event
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("tool_display_state"))
+                .and_then(serde_json::Value::as_str)
+                == Some("arguments_assembled")
+        }));
+
+        // parser simulates a tool that publishes its first safe semantic preview during finish.
+        // parser 模拟首次在完成阶段发布安全语义预览的工具。
+        coordinator
+            .drafts
+            .get_mut("stream-final-preview")
+            .expect("assembled request should remain active before completion")
+            .parser = Some(Box::<FinalPreviewOnlyParser>::default());
+        let completed = coordinator.apply(ToolRequestFragment::Completed {
+            request_stream_id: String::from("stream-final-preview"),
+            canonical_tool_call_id: Some(String::from("call-final-preview")),
+            final_arguments: Some(String::from("{\"index\":1}")),
+        });
+
+        // finalPreviewState must remain monotonic until the subsequent ready event.
+        // finalPreviewState 必须保持单调，直至后续 ready 事件。
+        let final_preview_state = completed
+            .iter()
+            .find(|event| event.kind == RuntimeEventKind::ToolRequestPreviewUpdated)
+            .and_then(|event| event.metadata.as_ref())
+            .and_then(|metadata| metadata.get("tool_display_state"))
+            .and_then(serde_json::Value::as_str);
+        assert_eq!(final_preview_state, Some("arguments_assembled"));
+        assert!(
+            completed
+                .iter()
+                .any(|event| event.kind == RuntimeEventKind::ToolRequestReady)
         );
     }
 
@@ -1093,6 +1396,7 @@ mod tests {
             received_characters: 0,
             last_emitted_at: Instant::now(),
             json_lexer: IncrementalJsonLexer::default(),
+            arguments_assembled: false,
             parser: None,
             last_preview_revision: 0,
             progress_policy: ToolRequestProgressPolicy::default(),

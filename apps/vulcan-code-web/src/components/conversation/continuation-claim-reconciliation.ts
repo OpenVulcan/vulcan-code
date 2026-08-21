@@ -28,8 +28,8 @@ function conversationStillExposesClaim(
   conversation: ConversationSummary,
   expectation: ContinuationClaimExpectation,
 ): boolean {
-  // continuation is the backend-owned prompt-free admission projection.
-  // continuation 是后端拥有的无提示词准入投影。
+  // continuation is the backend-owned problem-turn recovery admission projection.
+  // continuation 是后端拥有的问题回合恢复准入投影。
   const continuation = conversation.continuation;
   return continuation?.eligible === true
     && continuation.generation === expectation.expectedGeneration

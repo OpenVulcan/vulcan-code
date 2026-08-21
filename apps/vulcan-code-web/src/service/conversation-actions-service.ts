@@ -20,6 +20,17 @@ import {
 } from "@/service/webui-service-runtime";
 import { updateBrowserFallbackWorkbench } from "@/service/browser-fallback-workbench";
 
+// ConversationContinuationExpectation binds a problem-turn composer submission to one exact recovery generation.
+// ConversationContinuationExpectation 将问题回合的输入区提交绑定到一个精确恢复代际。
+export interface ConversationContinuationExpectation {
+  // Exact continuation generation projected by the backend.
+  // 后端投影的精确 Continue 代际。
+  expectedGeneration: number;
+  // Exact Provider-call ledger revision projected by the backend.
+  // 后端投影的精确 Provider 调用账本修订号。
+  expectedLedgerRevision: number;
+}
+
 // submitConversationPrompt sends one composer prompt to the desktop conversation runtime.
 // submitConversationPrompt 将单条输入区提示词发送到桌面会话运行时。
 export async function submitConversationPrompt(
@@ -33,6 +44,7 @@ export async function submitConversationPrompt(
   reasoningEffort: string | null,
   modelSelection: ComposerModelSelectionSnapshot | null,
   sessionSettings: ComposerSessionSettingsSnapshot | null,
+  continuationExpectation: ConversationContinuationExpectation | null = null,
 ): Promise<SubmitConversationPromptAck | null> {
   if (!hasServiceRuntime()) {
     return null;
@@ -48,6 +60,7 @@ export async function submitConversationPrompt(
     reasoningEffort,
     modelSelection,
     sessionSettings,
+    continuationExpectation,
   });
 }
 

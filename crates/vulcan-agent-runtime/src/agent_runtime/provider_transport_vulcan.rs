@@ -262,6 +262,7 @@ pub(crate) fn execute_vulcan_public_stream(
         runtime_inputs,
         core_snapshot,
         initial_provider_request,
+        recovery_action,
         prompt_intervention,
     } = prepare_provider_transport_stream_launch(request);
     execute_host_controlled_stream_with_prepared_inputs(
@@ -290,6 +291,7 @@ pub(crate) fn execute_vulcan_public_stream(
         },
         "Vulcan 公共契约",
         prompt_intervention,
+        recovery_action,
     )
 }
 

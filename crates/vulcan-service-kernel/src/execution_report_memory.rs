@@ -31,7 +31,7 @@ use super::{
     apply_terminal_execution_report_to_state, apply_vmm_writeback_effects_to_runtime_state,
     build_conversation_messages_patched_delta, build_vmm_hook_config_snapshot,
     canonical_conversation_tail_kind, context_usage_snapshot_from_runtime_state,
-    conversation_continuation_summary, conversation_messages_from_session,
+    conversation_continuation_summary_for_session_runtime, conversation_messages_from_session,
     current_unix_millis_text, current_unix_millis_value, emit_service_event_with_trace,
     is_prompt_free_continuation_tail_kind, merge_runtime_state_records_into_display_messages,
     owning_project_id_for_session, persist_workspace_session_update,
@@ -967,18 +967,17 @@ pub(crate) fn refresh_terminal_continuation_state(
                 reference.schema_version == EXECUTION_RETRY_SNAPSHOT_SCHEMA_VERSION
                     && reference.replay_safety_proven()
             });
-    // A prompt-free retry needs an exact user or error tail; synthetic or missing tail labels are diagnostic only.
-    // 无提示词重试必须拥有精确的用户或错误尾部；合成或缺失尾部标签只用于诊断。
-    let eligible = is_prompt_free_continuation_tail_kind(tail_kind.as_str())
+    // A prompt-free retry belongs only to a problem turn; every successful terminal report closes normally even when its last visible row is a tool.
+    // 无提示词重试只属于问题回合；即使最后一条可见记录是工具，任何成功终态报告也必须正常闭合。
+    let eligible = !is_success
+        && is_prompt_free_continuation_tail_kind(tail_kind.as_str())
         && runtime_state.provider_call_ledger.in_flight_call_count() == 0
         && replay_safety_proven;
     if !runtime_state
         .provider_call_ledger
         .mark_continuation_terminal(
             terminal_execution_id,
-            if is_success && eligible {
-                String::from("completed_non_assistant_tail")
-            } else if is_success {
+            if is_success {
                 String::from("completed")
             } else {
                 String::from("failed")
@@ -1075,17 +1074,11 @@ fn emit_terminal_execution_report_workbench_deltas(
         };
         let continuation_blockers =
             session_continuation_runtime_blockers(&guard, workspace, session_id)?;
-        let continuation =
-            workspace
-                .session_runtime_state
-                .get(&session_id)
-                .and_then(|runtime_state| {
-                    conversation_continuation_summary(
-                        runtime_state,
-                        run_phase,
-                        continuation_blockers,
-                    )
-                });
+        let continuation = conversation_continuation_summary_for_session_runtime(
+            workspace.session_runtime_state.get(&session_id),
+            run_phase,
+            continuation_blockers,
+        );
         let mut events = Vec::new();
         let phase_event = terminal_report_workbench_delta_envelope(
             &mut guard,
@@ -1195,17 +1188,11 @@ pub(crate) fn emit_conversation_continuation_summary_changed(
             })?;
         let continuation_blockers =
             session_continuation_runtime_blockers(&guard, workspace, session_id)?;
-        let continuation =
-            workspace
-                .session_runtime_state
-                .get(&session_id)
-                .and_then(|runtime_state| {
-                    conversation_continuation_summary(
-                        runtime_state,
-                        run_phase,
-                        continuation_blockers,
-                    )
-                });
+        let continuation = conversation_continuation_summary_for_session_runtime(
+            workspace.session_runtime_state.get(&session_id),
+            run_phase,
+            continuation_blockers,
+        );
         let selected_conversation_id = guard.workbench.selected_conversation_id.clone();
         let changed_conversation = guard
             .workbench

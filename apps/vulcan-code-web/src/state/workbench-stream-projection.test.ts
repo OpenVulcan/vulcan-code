@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { AppendMessageBodyDelta, WorkbenchDeltaEnvelope } from "@/types";
-import { workbenchEnvelopeRequiresReactProjection } from "./workbench-stream-projection";
+import {
+  workbenchEnvelopeRequiresImmediateLiveFlush,
+  workbenchEnvelopeRequiresReactProjection,
+} from "./workbench-stream-projection";
 
 // appendEnvelope builds one streamed message event for projection classification tests.
 // appendEnvelope 为投影分类测试构建一条流式消息事件。
@@ -99,5 +102,92 @@ describe("workbench stream projection", () => {
         },
       },
     })).toBe(false);
+  });
+
+  it("flushes assembled and cleared tool request boundaries immediately", () => {
+    const basePayload = {
+      conversationId: "conversation",
+      requestStreamId: "request-1",
+    };
+    const assembledProgress = {
+      requestStreamId: "request-1",
+      toolCallId: "call-1",
+      toolName: "terminal_session",
+      state: "arguments_assembled" as const,
+      receivedBytes: 512,
+      receivedCharacters: 500,
+      requestRevision: 4,
+    };
+    const assembledEnvelope: WorkbenchDeltaEnvelope = {
+      generation: 7,
+      delta: {
+        kind: "toolRequestProgressChanged",
+        payload: {
+          ...basePayload,
+          progress: assembledProgress,
+        },
+      },
+    };
+    const receivingEnvelope: WorkbenchDeltaEnvelope = {
+      ...assembledEnvelope,
+      generation: 6,
+      delta: {
+        kind: "toolRequestProgressChanged",
+        payload: {
+          ...basePayload,
+          progress: {
+            ...assembledProgress,
+            state: "receiving",
+            requestRevision: 3,
+          },
+        },
+      },
+    };
+    const clearedEnvelope: WorkbenchDeltaEnvelope = {
+      generation: 8,
+      delta: {
+        kind: "toolRequestProgressChanged",
+        payload: { ...basePayload, progress: null },
+      },
+    };
+
+    expect(workbenchEnvelopeRequiresImmediateLiveFlush(receivingEnvelope)).toBe(false);
+    expect(workbenchEnvelopeRequiresImmediateLiveFlush(assembledEnvelope)).toBe(true);
+    expect(workbenchEnvelopeRequiresImmediateLiveFlush(clearedEnvelope)).toBe(true);
+  });
+
+  it("flushes structural tool lifecycle message patches immediately", () => {
+    const lifecyclePhases = ["ToolCalling", "ToolRunning", "Requesting"];
+    for (const [index, runPhase] of lifecyclePhases.entries()) {
+      const envelope: WorkbenchDeltaEnvelope = {
+        generation: index + 9,
+        delta: {
+          kind: "conversationMessagesPatched",
+          payload: {
+            conversationId: "conversation",
+            upsertMessages: [],
+            removeMessageIds: [],
+            runPhase,
+          },
+        },
+      };
+      expect(workbenchEnvelopeRequiresImmediateLiveFlush(envelope)).toBe(true);
+    }
+  });
+
+  it("keeps ordinary transcript patches in the batching path", () => {
+    const envelope: WorkbenchDeltaEnvelope = {
+      generation: 12,
+      delta: {
+        kind: "conversationMessagesPatched",
+        payload: {
+          conversationId: "conversation",
+          upsertMessages: [],
+          removeMessageIds: [],
+        },
+      },
+    };
+
+    expect(workbenchEnvelopeRequiresImmediateLiveFlush(envelope)).toBe(false);
   });
 });

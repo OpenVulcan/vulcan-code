@@ -257,6 +257,21 @@ pub struct ExecutionKnowledgeAccessContext {
     pub knowledge_search_handler: Option<KnowledgeSearchHandler>,
 }
 
+/// Exact logical Provider-request identity retained across one host-owned stream restart.
+/// 跨一次宿主拥有的流重启保留的精确逻辑 Provider 请求身份。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecutionProviderRequestContinuation {
+    /// Stable logical Provider request identifier shared by every physical attempt.
+    /// 由全部物理尝试共享的稳定逻辑 Provider 请求标识。
+    pub logical_request_id: String,
+    /// Optional canonical conversation-turn identifier retained by the logical request.
+    /// 由该逻辑请求保留的可选规范会话回合标识。
+    pub logical_turn_id: Option<String>,
+    /// Zero-based physical Provider attempt index assigned to the replacement stream's first request.
+    /// 分配给替代流首次请求的从零开始物理 Provider 尝试索引。
+    pub next_provider_attempt_index: u32,
+}
+
 /// Minimal execution request captured from the current workbench state.
 /// 从当前工作台状态捕获的最小执行请求。
 #[derive(Debug, Clone)]
@@ -279,6 +294,9 @@ pub struct ExecutionPreparationRequest {
     /// Exact claimed execution snapshot that replaces prompt reconstruction for manual retry.
     /// 在手动重试时替代提示词重构的精确已领取执行快照。
     pub execution_retry_snapshot: Option<Box<vulcan_workbench_model::ExecutionRetrySnapshot>>,
+    /// Exact logical Provider-request continuation installed after a replay-safe host restart.
+    /// 在可安全回放的宿主重启后安装的精确逻辑 Provider 请求延续身份。
+    pub provider_request_continuation: Option<ExecutionProviderRequestContinuation>,
     /// Optional agent identifier that should own this execution instead of the globally active agent.
     /// 可选的本次执行代理标识，用于替代全局激活代理。
     pub execution_agent_id: Option<String>,
@@ -311,6 +329,11 @@ pub struct ExecutionPreparationRequest {
             String,
             vulcan_workbench_model::SessionProviderToolTargetSelection,
         >,
+    >,
+    /// Optional session-selected media backend modes keyed by capability.
+    /// 按能力索引的可选会话级媒体后端模式选择。
+    pub provider_tool_media_understanding_modes_override: Option<
+        std::collections::BTreeMap<String, vulcan_workbench_model::SessionMediaUnderstandingMode>,
     >,
     /// Optional session-enabled direct and media capability keys, independent from backend identity.
     /// 与后端身份分离的可选会话级已启用直连及媒体能力键。
@@ -437,6 +460,28 @@ pub struct ExecutionPreparationRequest {
     pub embedded_turn_usage_segments: Vec<SessionTurnUsageSegment>,
 }
 
+impl ExecutionPreparationRequest {
+    /// Replaces an already-consumed replay action with the exact next Provider-request identity.
+    /// 使用精确的下一 Provider 请求身份替换已经消费的重放动作。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `continuation` is captured from the active telemetry state at a replay-safe stream boundary.
+    /// `continuation` 是在可安全回放的流边界从活动遥测状态捕获的身份。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns no value; the request becomes mutually exclusive between replay and stream continuation.
+    /// 不返回值；该请求会在重放动作与流延续身份之间保持互斥。
+    pub fn replace_retry_replay_with_provider_request_continuation(
+        &mut self,
+        continuation: ExecutionProviderRequestContinuation,
+    ) {
+        self.execution_retry_snapshot = None;
+        self.provider_request_continuation = Some(continuation);
+    }
+}
+
 /// Explicit controller turn-start mode requested by the host for one execution.
 /// 宿主为单次执行请求指定的显式控制器回合启动模式。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -456,8 +501,8 @@ pub enum ExecutionPromptPurpose {
     /// Normal user-authored conversation turn.
     /// 普通用户发起的会话回合。
     UserTurn,
-    /// Prompt-free continuation of retained provider-visible state without opening a new user-authored turn.
-    /// 在不打开新用户编写回合的前提下，无提示词继续保留的 Provider 可见状态。
+    /// Recovery of retained provider-visible state, optionally followed by one reconciled user-authored message.
+    /// 恢复保留的 Provider 可见状态，并可在完成对账后追加一条用户编写消息。
     ExecutionRetry,
     /// Cache-preserving internal context-compaction summary request.
     /// 保持缓存的内部上下文压缩摘要请求。

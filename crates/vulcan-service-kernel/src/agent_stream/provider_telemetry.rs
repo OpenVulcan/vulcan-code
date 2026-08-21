@@ -87,8 +87,24 @@ impl ProviderTelemetryHookGuard {
         self.cancellation.observe_semantic_output();
     }
 
-    /// Observes and forwards one exact ordered telemetry event.
-    /// 观测并转发一条精确有序遥测事件。
+    /// Records one Provider lifecycle boundary only after its authoritative session state is durable.
+    /// 仅在权威会话状态可靠持久化后记录一条 Provider 生命周期边界。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `event` is the exact started or terminal boundary whose durable write already succeeded.
+    /// `event` 是可靠写入已经成功的精确开始或终态边界。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns no value after advancing the drop-cancellation tracker.
+    /// 推进 Drop 取消跟踪器后不返回值。
+    pub(crate) fn observe_durable_boundary(&mut self, event: &ProviderRequestTelemetryEvent) {
+        self.cancellation.observe(event);
+    }
+
+    /// Forwards one exact ordered telemetry event to the best-effort Hook worker.
+    /// 将一条精确有序遥测事件转发到尽力而为的 Hook Worker。
     ///
     /// # Parameters
     /// 参数
@@ -100,10 +116,6 @@ impl ProviderTelemetryHookGuard {
     /// Returns no value because Effect Hook dispatch remains non-blocking.
     /// 不返回值，因为 Effect Hook 调度保持非阻塞。
     pub(crate) fn forward(&mut self, event: ProviderRequestTelemetryEvent) {
-        // Track lifecycle state before best-effort Hook delivery so queue backpressure cannot
-        // erase the cancellation terminal needed for authoritative usage accounting.
-        // 先记录生命周期，再尽力投递 Hook，避免队列背压抹掉权威用量记账所需的取消终态。
-        self.cancellation.observe(&event);
         if self.sender.try_send(event).is_err() {
             eprintln!("[webui-service] provider telemetry Hook queue is saturated or closed");
         }
@@ -222,5 +234,67 @@ async fn dispatch_provider_request_telemetry_hook(
         .await
     {
         eprintln!("[webui-service] provider telemetry hook dispatch failed: {error}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Regression tests for durable Provider lifecycle ownership.
+    //! Provider 生命周期可靠所有权回归测试。
+
+    use super::*;
+
+    /// Verifies best-effort Hook forwarding cannot arm cancellation before Started is durable.
+    /// 验证 Started 可靠持久化前，尽力 Hook 转发不能激活取消跟踪。
+    #[tokio::test(flavor = "current_thread")]
+    async fn forwarded_started_event_does_not_arm_cancellation_without_durable_boundary() {
+        // sessionId owns the isolated service-state fixture and telemetry event.
+        // sessionId 持有隔离的服务状态夹具与遥测事件。
+        let session_id = uuid::Uuid::new_v4();
+        // state provides the production-shaped Hook worker with a valid retained session.
+        // state 为生产形态 Hook Worker 提供有效保留会话。
+        let state = std::sync::Arc::new(std::sync::Mutex::new(
+            crate::tests::test_support::test_service_state_with_parent_session(session_id),
+        ));
+        // guard owns an empty cancellation tracker and a best-effort forwarding queue.
+        // guard 持有空取消跟踪器与尽力转发队列。
+        let mut guard = ProviderTelemetryHookGuard::new_with_persistence(state, None, None);
+        // started is the exact event whose Hook copy may race ahead of durable accounting.
+        // started 是 Hook 副本可能早于可靠记账的精确事件。
+        let started = ProviderRequestTelemetryEvent::detached(
+            vulcan_agent_runtime::agent_runtime::provider_request_telemetry::ProviderRequestTelemetryEventKind::Started,
+            session_id,
+            serde_json::json!({
+                "request_id": "provider-call-1",
+                "started_at_ms": 1000,
+                "semantic_output_observed": false
+            }),
+            None,
+        );
+
+        guard.forward(started.clone());
+
+        assert!(guard.take_cancelled_event().is_none());
+
+        guard.observe_durable_boundary(&started);
+        // cancelled proves the same event becomes active only through the durable observer.
+        // cancelled 证明同一事件仅通过可靠观察器进入活动状态。
+        let cancelled = guard
+            .take_cancelled_event()
+            .expect("durable Started boundary should arm cancellation");
+        assert_eq!(
+            cancelled
+                .payload
+                .get("request_id")
+                .and_then(serde_json::Value::as_str),
+            Some("provider-call-1")
+        );
+        assert_eq!(
+            cancelled
+                .payload
+                .get("status")
+                .and_then(serde_json::Value::as_str),
+            Some("cancelled")
+        );
     }
 }

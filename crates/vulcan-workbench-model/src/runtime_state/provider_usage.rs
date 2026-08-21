@@ -506,8 +506,8 @@ pub struct SessionProviderContextBaselineRef {
     pub ledger_revision: u64,
 }
 
-/// Durable eligibility cache for prompt-free continuation.
-/// 无提示词继续操作的可靠资格缓存。
+/// Durable eligibility cache for problem-turn recovery admission.
+/// 问题回合恢复准入的可靠资格缓存。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionContinuationState {
     /// Monotonic continuation generation.
@@ -673,8 +673,8 @@ pub struct SessionProviderCallLedger {
     /// 最近可用上下文基线指针。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_stable_context_baseline: Option<SessionProviderContextBaselineRef>,
-    /// Prompt-free continuation lifecycle.
-    /// 无提示词 Continue 生命周期。
+    /// Problem-turn recovery admission lifecycle.
+    /// 问题回合恢复准入生命周期。
     #[serde(default, skip_serializing_if = "SessionContinuationState::is_empty")]
     pub continuation: SessionContinuationState,
     /// Child-agent contributions keyed by task and execution identity.

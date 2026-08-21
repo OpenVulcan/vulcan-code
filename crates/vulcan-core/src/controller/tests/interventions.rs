@@ -408,3 +408,86 @@ fn run_user_turn_streaming_intervention_waits_for_full_tool_batch() {
         )));
     });
 }
+
+/// Verifies a route-switch control boundary preserves the stable tool checkpoint without failing Core.
+/// 验证路由切换控制边界会保留稳定工具检查点，并且不会把 Core 标记为失败。
+#[test]
+fn provider_route_switch_stops_before_next_request_without_marking_controller_failed() {
+    // runtime drives the asynchronous Provider and tool loop.
+    // runtime 驱动异步 Provider 与工具循环。
+    let runtime = tokio::runtime::Runtime::new().expect("create tokio runtime");
+    runtime.block_on(async {
+        // adapter contains a second response that must remain undispatched after the switch signal.
+        // adapter 包含第二条响应；切换信号产生后不得分派该响应。
+        let adapter = MockStreamingProviderAdapter::new(vec![
+            (
+                Vec::new(),
+                ProviderTurnResponse {
+                    assistant_text: String::new(),
+                    assistant_reasoning: String::new(),
+                    provider_message_id: Some(String::from("route-switch-tool")),
+                    provider_message_state: None,
+                    tool_calls: vec![ConversationToolCall {
+                        id: String::from("route-switch-item"),
+                        tool_call_id: Some(String::from("route-switch-call")),
+                        tool_name: String::from("read_state"),
+                        arguments: json!({"scope": "current"}),
+                    }],
+                    continuation: None,
+                    usage: None,
+                },
+            ),
+            (
+                Vec::new(),
+                ProviderTurnResponse {
+                    assistant_text: String::from("must not run on old route"),
+                    assistant_reasoning: String::new(),
+                    provider_message_id: Some(String::from("old-route-final")),
+                    provider_message_state: None,
+                    tool_calls: Vec::new(),
+                    continuation: None,
+                    usage: None,
+                },
+            ),
+        ]);
+        let executor = MockToolExecutor::new().with_outcome(
+            "read_state",
+            "state read",
+            Some(json!({"ok": true})),
+            false,
+        );
+        let mut controller =
+            VulcanCoreController::new(build_test_config(4), ConversationSnapshot::default())
+                .expect("valid core conversation snapshot");
+
+        let error = controller
+            .run_user_turn_streaming_with_checkpoints_and_interventions(
+                &adapter,
+                &executor,
+                &AllowAllToolPolicy,
+                "read then continue",
+                |_, _| {},
+                |_| {
+                    Err(CoreError::ProviderRouteSwitchRequired {
+                        message: String::from("exact route changed"),
+                    })
+                },
+            )
+            .await
+            .expect_err("route switch must return a host control boundary");
+
+        assert!(matches!(
+            error,
+            CoreError::ProviderRouteSwitchRequired { .. }
+        ));
+        assert_ne!(controller.phase(), ControllerPhase::Failed);
+        assert_eq!(adapter.built_requests().len(), 1);
+        assert!(matches!(
+            controller.snapshot().messages.last(),
+            Some(ConversationMessage {
+                payload: ConversationPayload::ToolResult { tool_call_id, .. },
+                ..
+            }) if tool_call_id.as_deref() == Some("route-switch-call")
+        ));
+    });
+}

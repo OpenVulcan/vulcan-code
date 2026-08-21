@@ -83,13 +83,39 @@ impl VulcanCoreController {
         attachments: Vec<ConversationAttachment>,
         metadata: Option<Value>,
     ) -> String {
+        self.append_user_turn_with_record_body_and_metadata(prompt, prompt, attachments, metadata)
+    }
+
+    /// Appends one provider-visible user turn while retaining an independently controlled visible record body.
+    /// 追加一条 Provider 可见用户回合，同时保留独立控制的可见记录正文。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `provider_prompt` is the exact text sent in Provider-visible history.
+    /// `provider_prompt` 是发送到 Provider 可见历史的精确文本。
+    /// `record_body` is the user-visible transcript body without host-only guidance.
+    /// `record_body` 是不含仅宿主可见引导的用户可见转录正文。
+    /// `attachments` and `metadata` retain the structured user-input projection.
+    /// `attachments` 与 `metadata` 保留结构化用户输入投影。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The generated provider-visible message id.
+    /// 返回生成的 Provider 可见消息标识。
+    fn append_user_turn_with_record_body_and_metadata(
+        &mut self,
+        provider_prompt: &str,
+        record_body: &str,
+        attachments: Vec<ConversationAttachment>,
+        metadata: Option<Value>,
+    ) -> String {
         let message_id = self.next_local_id("user-message");
         let record_id = self.next_local_id("user-record");
         let timestamp = current_unix_millis_text();
         self.snapshot.messages.push(ConversationMessage {
             id: message_id.clone(),
             payload: ConversationPayload::UserText {
-                text: prompt.to_string(),
+                text: provider_prompt.to_string(),
                 attachments: attachments.clone(),
             },
         });
@@ -99,11 +125,50 @@ impl VulcanCoreController {
             record_kind: TranscriptRecordKind::Visible,
             visible: true,
             title: String::from("用户指令"),
-            body: prompt.to_string(),
+            body: record_body.to_string(),
             metadata,
             created_at: timestamp,
         });
         message_id
+    }
+
+    /// Appends one durable recovery follow-up after all preceding tool calls are paired with results.
+    /// 在前序工具调用全部与结果配对后追加一条可靠恢复补充消息。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `followup` contains distinct visible and Provider prompt text plus its stable admission identity.
+    /// `followup` 包含相互区分的可见文本、Provider 文本及其稳定准入身份。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The appended message id, or an explicit invalid-state error for malformed input.
+    /// 返回追加后的消息标识；输入不合法时返回显式状态错误。
+    pub fn append_restored_user_followup(
+        &mut self,
+        followup: RestoredUserFollowup,
+    ) -> Result<String, CoreError> {
+        let visible_prompt = followup.visible_prompt.trim();
+        let provider_prompt = followup.provider_prompt.trim();
+        let admission_id = followup.admission_id.trim();
+        if visible_prompt.is_empty() || provider_prompt.is_empty() || admission_id.is_empty() {
+            return Err(CoreError::InvalidState {
+                message: String::from(
+                    "Restored user follow-up requires non-empty visible text, provider text, and admission identity.",
+                ),
+            });
+        }
+        let metadata = interjected_user_turn_record_metadata(
+            visible_prompt,
+            &followup.attachments,
+            Some(admission_id),
+        );
+        Ok(self.append_user_turn_with_record_body_and_metadata(
+            provider_prompt,
+            visible_prompt,
+            followup.attachments,
+            metadata,
+        ))
     }
 
     /// Appends a host-guidance user turn that should be visible to the next provider request.

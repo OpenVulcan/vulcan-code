@@ -18,7 +18,7 @@ export interface ToolRequestProgress {
   requestStreamId: string;
   // Current request formation state.
   // 当前请求形成状态。
-  state: "receiving" | "ready";
+  state: "receiving" | "arguments_assembled" | "ready";
   // Exact Unicode character count received for the argument document.
   // 参数文档已接收的精确 Unicode 字符数量。
   receivedCharacters: number;
@@ -103,7 +103,10 @@ export function toolRequestProgress(blocks: ToolExecutionConversationBlock[]): T
   for (const block of blocks) {
     const requestStreamId = metadataString(block.rawMetadata, ["request_stream_id"]);
     const state = metadataString(block.rawMetadata, ["tool_display_state"]);
-    if (!requestStreamId || (state !== "receiving" && state !== "ready")) {
+    if (
+      !requestStreamId
+      || (state !== "receiving" && state !== "arguments_assembled" && state !== "ready")
+    ) {
       continue;
     }
     const receivedCharacters = numericMetadata(metadataValue(block.rawMetadata, ["received_characters"]));
@@ -191,9 +194,13 @@ export function toolRequestProgressStateLabel(
   progress: ToolRequestProgress,
   t?: (key: TranslationKey) => string,
 ): string {
-  return progress.state === "ready"
-    ? (t ? t("conversation.toolRequest.ready") : "Data received")
-    : (t ? t("conversation.toolRequest.receiving") : "Receiving data");
+  if (progress.state === "ready") {
+    return t ? t("conversation.toolRequest.ready") : "Data received";
+  }
+  if (progress.state === "arguments_assembled") {
+    return t ? t("conversation.toolRequest.argumentsAssembled") : "Arguments assembled";
+  }
+  return t ? t("conversation.toolRequest.receiving") : "Receiving data";
 }
 
 // toolRequestStreamMetricsLabel formats character and UTF-8 byte progress for any tool card.

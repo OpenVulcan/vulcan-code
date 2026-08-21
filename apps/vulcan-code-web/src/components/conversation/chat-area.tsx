@@ -1,5 +1,4 @@
 import React from "react";
-import { Play } from "lucide-react";
 import {
   ChatAreaComposerDockLayer,
   composerAttachmentMedia,
@@ -54,6 +53,7 @@ import { useConversationSurfaceLayoutMemory } from "@/components/conversation/ch
 import { useConversationScrollController } from "@/components/conversation/chat-area/conversation-scroll-controller";
 import { hasAuthoritativeSubmissionCorrelation } from "@/components/workspace/draft-submission-state";
 import { conversationContinuationBlockedReasonText } from "@/components/conversation/continuation-blocked-reason";
+import { ConversationContinueControl } from "@/components/conversation/conversation-continue-control";
 
 // ChatArea renders the conversation workspace and composer.
 // ChatArea 渲染会话工作区与输入区域。
@@ -536,38 +536,23 @@ export function ChatArea(props: ChatAreaProps) {
            && continuation
            && !conversationIsRunning(selectedConversation)
            && props.onContinueConversation ? (
-             <div className="conversation-continue-footer" role="status" aria-live="polite">
-               {continuation.eligible ? (
-                 <button
-                   className="conversation-continue-button"
-                   disabled={continuationClaimKey === activeContinuationKey}
-                   onClick={() => void handleContinueConversation()}
-                   type="button"
-                 >
-                   <Play aria-hidden="true" size={15} />
-                   {continuationClaimKey === activeContinuationKey
-                     ? t("conversation.continuing")
-                     : t("conversation.continue")}
-                 </button>
-               ) : (
-                 <span className="conversation-continue-status conversation-continue-status-blocked">
-                   {t("conversation.continuation.blocked")}
-                   {t("global.labelSeparator")}
-                   {conversationContinuationBlockedReasonText(continuation.blockedReason, t)}
-                 </span>
-               )}
-               {continuationFeedback?.key === activeContinuationKey && continuationFeedback.kind === "failed" ? (
-                 <span className="conversation-continue-status conversation-continue-status-failed">
-                   {t("conversation.continuation.claimFailed")}
-                 </span>
-               ) : null}
-               {continuationFeedback?.key === activeContinuationKey && continuationFeedback.kind === "accepted" ? (
-                 <span className="conversation-continue-status">
-                   {t("conversation.continuing")}
-                 </span>
-               ) : null}
-             </div>
-           ) : null}
+              <ConversationContinueControl
+                blockedLabel={t("conversation.continuation.blocked")}
+                blockedReason={conversationContinuationBlockedReasonText(continuation.blockedReason, t)}
+                claiming={continuationClaimKey === activeContinuationKey}
+                continueLabel={t("conversation.continue")}
+                continuingLabel={t("conversation.continuing")}
+                eligible={continuation.eligible}
+                feedback={continuationFeedback?.key === activeContinuationKey
+                  && continuationFeedback.kind !== "claiming" ? {
+                    kind: continuationFeedback.kind,
+                    label: continuationFeedback.kind === "failed"
+                      ? t("conversation.continuation.claimFailed")
+                      : t("conversation.continuing"),
+                  } : null}
+                onContinue={() => void handleContinueConversation()}
+              />
+            ) : null}
         suppressEmptyPlaceholder={isEmptyConversation || isMaterializingConversationSurface}
         onCopyText={props.onCopyText}
         onEditUserPrompt={userPromptEdit.open}

@@ -19,8 +19,8 @@ use vulcan_context::{
 use vulcan_workbench_model::{
     EXECUTION_RETRY_SNAPSHOT_SCHEMA_VERSION, ExecutionRetryPendingAction,
     ExecutionRetryPreparationInput, ExecutionRetrySnapshot, ExecutionRetrySnapshotRef,
-    ExecutionRetrySnapshotState, PendingSessionPromptSource, SessionMessageKind,
-    SessionMessageRecordKind, SessionProviderRouteLeaseIdentity,
+    ExecutionRetrySnapshotState, ExecutionRetryUserFollowup, PendingSessionPromptSource,
+    SessionMessageKind, SessionMessageRecordKind, SessionProviderRouteLeaseIdentity,
 };
 
 /// Builds one route identity shared by the retained state and sidecar fixture.
@@ -75,6 +75,7 @@ fn retry_snapshot(session_id: SessionId) -> ExecutionRetrySnapshot {
         state: ExecutionRetrySnapshotState::Frozen,
         logical_execution_id: String::from("logical-a"),
         logical_turn_id: Some(String::from("turn-a")),
+        next_provider_attempt_index: 0,
         physical_attempt_id: String::from("attempt-a"),
         claimed_attempt_id: None,
         provider_route: Some(retry_route()),
@@ -85,12 +86,41 @@ fn retry_snapshot(session_id: SessionId) -> ExecutionRetrySnapshot {
         pending_action: ExecutionRetryPendingAction::DispatchProviderRequest {
             request: Box::new(request),
         },
+        user_followup: None,
         error: None,
         canonical_digest,
         context_generation_id: Some(String::from("context-a")),
         created_at: String::from("1000"),
         updated_at: String::from("1000"),
     }
+}
+
+/// Reads the exact retry reference currently retained by one shared test session.
+/// 读取一个共享测试会话当前保留的精确重试引用。
+///
+/// # Parameters
+/// 参数
+/// `shared_state` owns the production-shaped retained workspace fixture.
+/// `shared_state` 持有生产形态的保留工作区测试夹具。
+/// `session_id` selects the exact fixture conversation.
+/// `session_id` 选择精确的测试会话。
+///
+/// # Returns
+/// 返回值
+/// The full immutable retry reference currently owning the session.
+/// 返回当前拥有该会话的完整不可变重试引用。
+fn retained_execution_retry_reference(
+    shared_state: &SharedServiceBridgeState,
+    session_id: SessionId,
+) -> ExecutionRetrySnapshotRef {
+    shared_state
+        .lock()
+        .expect("shared test state should lock")
+        .workspace_snapshot
+        .as_ref()
+        .and_then(|workspace| workspace.session_runtime_state.get(&session_id))
+        .and_then(|runtime_state| runtime_state.execution_retry_snapshot.clone())
+        .expect("retained execution retry reference should exist")
 }
 
 /// Builds one Provider ledger identity that exactly matches the frozen retry route.
@@ -102,8 +132,8 @@ fn retry_snapshot(session_id: SessionId) -> ExecutionRetrySnapshot {
 /// 返回适用于精确停止/错误关联测试的主智能体会话身份。
 fn retry_provider_call_identity() -> vulcan_workbench_model::SessionProviderCallIdentity {
     vulcan_workbench_model::SessionProviderCallIdentity {
-        logical_request_id: String::from("logical-provider-request-a"),
-        execution_id: String::from("provider-execution-a"),
+        logical_request_id: String::from("logical-a"),
+        execution_id: String::from("logical-a"),
         turn_id: Some(String::from("turn-a")),
         attempt_index: 0,
         retry_number: 0,
@@ -128,8 +158,223 @@ fn retry_provider_call_identity() -> vulcan_workbench_model::SessionProviderCall
     }
 }
 
-/// Verifies final workbench reconciliation closes a stale Continue button for an exact live stream owner.
-/// 验证最终工作台协调会针对精确实时流所有者关闭过期 Continue 按钮。
+/// Verifies startup recovery consumes an already committed supplement and releases its exact orphaned Continue claim.
+/// 验证启动恢复会消费已经提交的补充消息，并释放其精确的孤立 Continue 领取。
+///
+/// # Parameters
+/// 参数
+/// This test has no parameters.
+/// 此测试没有参数。
+///
+/// # Returns
+/// 返回值
+/// This asynchronous test returns no value and fails if the supplement can be appended twice or the persisted claim remains locked.
+/// 此异步测试无返回值；若补充消息可能被重复追加，或持久化领取仍被锁定，则测试失败。
+#[tokio::test]
+async fn startup_recovery_consumes_committed_followup_and_releases_claim() {
+    // sessionId identifies the isolated segmented conversation and its detached startup projection.
+    // sessionId 标识隔离的分段会话及其分离启动投影。
+    let session_id = SessionId::new_v4();
+    // controllerRoot owns both immutable retry sidecars and the durable runtime-state revision.
+    // controllerRoot 同时持有不可变重试 sidecar 与可靠运行态修订。
+    let controller_root = TestControllerRuntimeRoot::new(session_id);
+    // controllerRuntime exposes the production startup-recovery persistence path without external I/O.
+    // controllerRuntime 在不进行外部 I/O 的情况下暴露生产启动恢复持久化路径。
+    let controller_runtime = controller_root.controller_runtime_handle();
+    // clientSubmissionId is the exact cross-document owner shared by the claim and transcript admission.
+    // clientSubmissionId 是领取与转录准入共享的精确跨文档所有者。
+    let client_submission_id = String::from("continue-followup-crash-1");
+    // visiblePrompt remains user-visible while providerPrompt includes the hidden recovery guidance.
+    // visiblePrompt 保持用户可见，而 providerPrompt 包含隐藏的恢复引导。
+    let visible_prompt = String::from("改用新的模型继续");
+    let provider_prompt = String::from(
+        "改用新的模型继续\n\n[Recovery guidance: continue the interrupted task after reconciling prior tool outcomes.]",
+    );
+    // claimedSnapshot models a crash after Core committed the supplement but before the next Provider request checkpoint.
+    // claimedSnapshot 模拟 Core 已提交补充消息、但下一次 Provider 请求检查点尚未建立时发生崩溃。
+    let mut claimed_snapshot = retry_snapshot(session_id);
+    claimed_snapshot.state = ExecutionRetrySnapshotState::Claimed;
+    claimed_snapshot.claimed_attempt_id = Some(client_submission_id.clone());
+    claimed_snapshot.user_followup = Some(ExecutionRetryUserFollowup {
+        visible_prompt: visible_prompt.clone(),
+        provider_prompt: provider_prompt.clone(),
+        client_submission_id: client_submission_id.clone(),
+    });
+    // claimedReference binds the retained runtime row to the exact claimed body.
+    // claimedReference 将保留运行态记录绑定到精确的已领取正文。
+    let claimed_reference =
+        vulcan_workspace_store::workspace_store::persist_execution_retry_snapshot(
+            &controller_runtime.data_root,
+            session_id,
+            &claimed_snapshot,
+        )
+        .expect("claimed retry sidecar should persist");
+    // runtimeState contains the canonical supplement already committed immediately before the crash.
+    // runtimeState 包含崩溃前一刻已经提交的规范补充消息。
+    let mut runtime_state = retry_runtime_state();
+    runtime_state.conversation_state.messages = vec![SessionConversationMessage {
+        id: String::from("committed-followup-message-1"),
+        payload: SessionConversationPayload::UserText {
+            text: provider_prompt,
+            attachments: Vec::new(),
+        },
+    }];
+    runtime_state
+        .conversation_state
+        .records
+        .push(SessionConversationRecord {
+            id: String::from("committed-followup-record-1"),
+            kind: SessionMessageKind::User,
+            record_kind: SessionMessageRecordKind::Transcript,
+            visible: true,
+            title: String::from("用户指令"),
+            body: visible_prompt.clone(),
+            metadata: Some(serde_json::json!({
+                "canonical_text": visible_prompt,
+                "canonical_user_text": visible_prompt,
+                "source": "user_interrupt",
+                "prompt_admission_id": client_submission_id,
+            })),
+            created_at: String::from("1001"),
+        });
+    assert!(
+        runtime_state
+            .provider_call_ledger
+            .mark_continuation_terminal(
+                Some(String::from("logical-a")),
+                String::from("stopped"),
+                1000,
+                String::from("user"),
+                true,
+            )
+    );
+    // claimBoundary is the exact terminal generation and pre-claim ledger revision retained by the UI token.
+    // claimBoundary 是界面令牌保留的精确终态代际与领取前账本修订。
+    let claim_boundary = runtime_state.provider_call_ledger.continuation.clone();
+    runtime_state
+        .provider_call_ledger
+        .claim_continuation(
+            claim_boundary.generation,
+            claim_boundary.expected_ledger_revision,
+            client_submission_id.clone(),
+            1001,
+        )
+        .expect("fixture continuation should claim");
+    // Fresh-process sanitization closes the dead process owner under a new non-eligible problem generation before sidecar hydration.
+    // 新进程净化会在 sidecar 水合前，以新的暂不可用问题代际闭合失效的进程所有者。
+    assert!(
+        runtime_state
+            .provider_call_ledger
+            .mark_continuation_terminal(
+                Some(client_submission_id.clone()),
+                String::from("continuation_interrupted_after_restart"),
+                1002,
+                String::from("user"),
+                false,
+            )
+    );
+    runtime_state.execution_retry_snapshot = Some(claimed_reference);
+    // detachedWorkspace models the fully loaded startup candidate before it is republished to the live service.
+    // detachedWorkspace 模拟完整加载、但尚未重新发布到实时服务的启动候选。
+    let mut service_state = test_service_state_with_parent_session(session_id);
+    let mut detached_workspace = service_state
+        .workspace_snapshot
+        .clone()
+        .expect("test workspace should exist");
+    detached_workspace
+        .session_runtime_state
+        .insert(session_id, runtime_state);
+    // sharedState intentionally has no live admission, stream, or kernel owner after the simulated restart.
+    // sharedState 在模拟重启后故意不保留任何实时准入、流或 kernel 所有者。
+    service_state.active_stream_tasks.remove(&session_id);
+    let shared_state: SharedServiceBridgeState = Arc::new(Mutex::new(service_state));
+
+    hydrate_selected_session_runtime_if_needed(
+        &shared_state,
+        controller_runtime.clone(),
+        &mut detached_workspace,
+        session_id,
+    )
+    .await
+    .expect("startup recovery should refreeze the committed supplement");
+
+    // recoveredRuntime proves both the sidecar reference and ledger claim were advanced as one safe recovery result.
+    // recoveredRuntime 证明 sidecar 引用与账本领取已经作为一个安全恢复结果共同推进。
+    let recovered_runtime = detached_workspace
+        .session_runtime_state
+        .get(&session_id)
+        .expect("recovered runtime should remain available");
+    let recovered_reference = recovered_runtime
+        .execution_retry_snapshot
+        .as_ref()
+        .expect("recovered retry reference should remain available");
+    assert_eq!(
+        recovered_reference.state,
+        ExecutionRetrySnapshotState::Frozen
+    );
+    assert!(
+        recovered_reference.replay_safety_proven(),
+        "recovered reference did not retain a complete replay proof: {recovered_reference:#?}"
+    );
+    // recoveredTailKind must still match the fresh-process terminal label after canonical refresh.
+    // recoveredTailKind 在规范刷新后仍必须匹配新进程终态标签。
+    let recovered_tail_kind = canonical_conversation_tail_kind(recovered_runtime);
+    assert_eq!(recovered_tail_kind, Some("user"));
+    assert_eq!(
+        recovered_runtime
+            .provider_call_ledger
+            .continuation
+            .canonical_tail_kind
+            .as_deref(),
+        recovered_tail_kind
+    );
+    assert!(
+        recovered_runtime
+            .provider_call_ledger
+            .continuation
+            .claimed_at_ms
+            .is_none()
+    );
+    assert!(
+        recovered_runtime
+            .provider_call_ledger
+            .continuation
+            .claimed_execution_id
+            .is_none()
+    );
+    assert_eq!(
+        recovered_runtime
+            .provider_call_ledger
+            .continuation
+            .expected_ledger_revision,
+        recovered_runtime.provider_call_ledger.revision
+    );
+    assert_eq!(
+        recovered_runtime
+            .provider_call_ledger
+            .in_flight_call_count(),
+        0
+    );
+    assert!(recovered_runtime.provider_call_ledger.continuation.eligible);
+    // recoveredSnapshot must consume the durable supplement and rebuild only the next Provider request.
+    // recoveredSnapshot 必须消费可靠补充消息，并且只重建下一次 Provider 请求。
+    let recovered_snapshot =
+        vulcan_workspace_store::workspace_store::load_execution_retry_snapshot(
+            &controller_runtime.data_root,
+            session_id,
+            recovered_reference,
+        )
+        .expect("recovered retry sidecar should remain readable");
+    assert!(recovered_snapshot.user_followup.is_none());
+    assert!(matches!(
+        recovered_snapshot.pending_action,
+        ExecutionRetryPendingAction::PrepareNextProviderRequest
+    ));
+    assert!(recovered_snapshot.error.is_none());
+}
+
+/// Verifies final workbench reconciliation disables stale Continue eligibility for an exact live stream owner.
+/// 验证最终工作台协调会针对精确实时流所有者禁用过期 Continue 资格。
 #[tokio::test]
 async fn workbench_reconciliation_blocks_stale_continue_for_live_stream_owner() {
     // session_id identifies the terminal conversation whose stale UI projection is under test.
@@ -156,6 +401,12 @@ async fn workbench_reconciliation_blocks_stale_continue_for_live_stream_owner() 
         .expect("workspace snapshot")
         .session_runtime_state
         .insert(session_id, runtime_state);
+    service_state
+        .workspace_snapshot
+        .as_mut()
+        .expect("workspace snapshot")
+        .session_run_phases
+        .insert(session_id, SessionRunPhase::Failed);
     service_state.active_stream_tasks.insert(
         session_id,
         ActiveStreamTask::new(Uuid::new_v4(), spawn_service_task(async {}), None),
@@ -206,6 +457,96 @@ async fn workbench_reconciliation_blocks_stale_continue_for_live_stream_owner() 
     assert_eq!(
         continuation.blocked_reason.as_deref(),
         Some("ERR_CONVERSATION_CONTINUE_SESSION_ACTIVE")
+    );
+}
+
+/// Verifies a failed problem turn keeps a disabled Continue control when its runtime row is missing.
+/// 验证失败问题回合在运行态记录缺失时仍保留禁用的 Continue 控件。
+#[test]
+fn workbench_reconciliation_keeps_problem_turn_visible_without_runtime_state() {
+    // sessionId identifies the damaged problem turn whose runtime row did not survive.
+    // sessionId 标识运行态记录未保留下来的受损问题回合。
+    let session_id = SessionId::new_v4();
+    // serviceState carries the authoritative failed phase while deliberately omitting session runtime state.
+    // serviceState 携带权威失败阶段，同时刻意省略会话运行态记录。
+    let mut service_state = test_service_state_with_parent_session(session_id);
+    service_state
+        .workspace_snapshot
+        .as_mut()
+        .expect("workspace snapshot")
+        .session_run_phases
+        .insert(session_id, SessionRunPhase::Failed);
+    // workspace is the exact retained revision reconciled into the WebUI snapshot.
+    // workspace 是协调进 WebUI 快照的精确保留修订。
+    let workspace = service_state
+        .workspace_snapshot
+        .clone()
+        .expect("workspace snapshot");
+    assert!(!workspace.session_runtime_state.contains_key(&session_id));
+    // workbench begins without any Continue projection to prove reconciliation creates the disabled problem-turn state.
+    // workbench 初始不含任何 Continue 投影，以证明协调过程会创建问题回合禁用状态。
+    let mut workbench = fallback_workbench_snapshot(&[]);
+    workbench.conversations.push(ConversationSummary {
+        id: session_id.to_string(),
+        title: String::from("Missing recovery runtime"),
+        status: SessionState::Completed.label().to_string(),
+        run_phase: SessionRunPhase::Failed.to_string(),
+        last_updated_label: String::from("刚刚"),
+        last_updated_at: String::from("1000"),
+        unread: false,
+        attention: None,
+        project_id: Some(String::from("project-a")),
+        fork_source: None,
+        continuation: None,
+    });
+
+    reconcile_workbench_conversation_lifecycle_projection(
+        &mut workbench,
+        &service_state,
+        &workspace,
+    )
+    .expect("live lifecycle reconciliation should succeed");
+
+    // continuation proves the problem turn remains visible but cannot be claimed without authoritative runtime state.
+    // continuation 证明问题回合仍然可见，但缺少权威运行态时不能领取。
+    let continuation = workbench.conversations[0]
+        .continuation
+        .as_ref()
+        .expect("failed problem turn should retain a disabled Continue projection");
+    assert!(!continuation.eligible);
+    assert_eq!(continuation.generation, 0);
+    assert_eq!(continuation.expected_ledger_revision, 0);
+    assert_eq!(
+        continuation.blocked_reason.as_deref(),
+        Some("ERR_CONVERSATION_CONTINUE_RUNTIME_STATE_MISSING")
+    );
+}
+
+/// Verifies a normal completed turn never projects Continue even when stale abnormal recovery facts remain.
+/// 验证正常完成回合即使残留过期异常恢复事实，也绝不投影 Continue。
+#[test]
+fn continuation_summary_omits_normal_completed_turn() {
+    // runtimeState deliberately retains a stale failed boundary to prove the current Ready phase is authoritative.
+    // runtimeState 刻意保留过期失败边界，以证明当前 Ready 阶段具有权威性。
+    let mut runtime_state = retry_runtime_state();
+    runtime_state.provider_call_ledger.continuation.generation = 9;
+    runtime_state
+        .provider_call_ledger
+        .continuation
+        .terminal_reason = Some(String::from("failed"));
+    runtime_state
+        .provider_call_ledger
+        .continuation
+        .terminal_at_ms = Some(1000);
+
+    assert!(
+        conversation_continuation_summary(
+            &runtime_state,
+            SessionRunPhase::Ready,
+            SessionContinuationRuntimeBlockers::default(),
+        )
+        .is_none(),
+        "normal completed turns must not expose a Continue control"
     );
 }
 
@@ -683,8 +1024,8 @@ fn execution_retry_unreadable_sidecar_invalidates_visible_reference() {
     );
     assert!(!runtime_state.provider_call_ledger.continuation.eligible);
     assert_eq!(runtime_state.updated_at, "2000");
-    // continuationSummary proves the corrected Workbench projection exposes the concrete reason without a button.
-    // continuationSummary 证明修正后的 Workbench 投影会显示具体原因且不再显示按钮。
+    // continuationSummary proves the corrected Workbench projection keeps a disabled problem-turn control with the concrete reason.
+    // continuationSummary 证明修正后的 Workbench 投影会保留问题回合的禁用控件及其具体原因。
     let continuation_summary = conversation_continuation_summary(
         &runtime_state,
         vulcan_workbench_model::SessionRunPhase::Failed,
@@ -794,6 +1135,40 @@ fn execution_retry_claim_accepts_next_provider_boundary_after_tool_result() {
 
     validate_execution_retry_snapshot_for_claim(&runtime_state, session_id, &snapshot)
         .expect("completed tool result should admit the next provider request");
+}
+
+/// Verifies a committed recovery supplement is also an exact next-Provider seed boundary.
+/// 验证已提交的恢复补充消息同样是精确的下一 Provider 播种边界。
+#[test]
+fn execution_retry_claim_accepts_next_provider_boundary_after_user_followup() {
+    let session_id = Uuid::new_v4();
+    let mut runtime_state = retry_runtime_state();
+    runtime_state
+        .conversation_state
+        .messages
+        .push(SessionConversationMessage {
+            id: String::from("user-followup-1"),
+            payload: SessionConversationPayload::UserText {
+                text: String::from("Apply the additional user constraint before continuing."),
+                attachments: Vec::new(),
+            },
+        });
+    let mut snapshot = retry_snapshot(session_id);
+    snapshot.pending_action = ExecutionRetryPendingAction::PrepareNextProviderRequest;
+    snapshot.controller_snapshot =
+        vulcan_agent_runtime::agent_runtime::provider_request_bridge_conversation::build_core_conversation_snapshot(
+            &runtime_state.conversation_state,
+        )
+        .expect("user follow-up should project to the Core snapshot");
+    let canonical_bytes = serde_json::to_vec(&snapshot.controller_snapshot)
+        .expect("projected Core snapshot should serialize");
+    snapshot.canonical_digest = Sha256::digest(&canonical_bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+
+    validate_execution_retry_snapshot_for_claim(&runtime_state, session_id, &snapshot)
+        .expect("committed user follow-up should admit the next provider request");
 }
 
 /// Verifies the next-provider boundary cannot bypass the frozen route contract.
@@ -1104,22 +1479,125 @@ fn execution_retry_refreeze_reopens_matching_terminal_eligibility() {
     assert_eq!(refreshed_runtime.updated_at, refreshed_reference.updated_at);
 }
 
-/// Verifies a claimed Continue snapshot becomes durably non-replayable before a tool body may start.
-/// 验证已领取的 Continue 快照会在工具主体允许开始前可靠转为不可重放。
+/// Verifies a retained assistant tool tail replaces stale Provider replay with unprepared local recovery slots.
+/// 验证已保留的助手工具尾部会用未准备的本地恢复槽位替换过期 Provider 重放。
 #[test]
-fn execution_retry_tool_start_durably_blocks_claimed_snapshot() {
-    // sessionId identifies the exact main-session runtime document used by the durability assertion.
-    // sessionId 标识可靠性断言使用的精确主会话运行态文档。
+fn retained_assistant_tool_tail_selects_unprepared_tool_batch_recovery() {
+    // sessionId owns the exact retry snapshot whose Provider action became stale after completion.
+    // sessionId 持有 Provider 完成后其动作已过期的精确重试快照。
     let session_id = Uuid::new_v4();
-    // controllerRoot owns both the immutable sidecar and segmented runtime-state files.
-    // controllerRoot 同时持有不可变 sidecar 与分段运行态文件。
+    // request is the exact canonical assistant invocation that must never trigger Provider replay.
+    // request 是绝不能触发 Provider 重放的精确规范助手调用。
+    let request = vulcan_core::types::ToolInvocationRequest {
+        tool_call_id: String::from("tool-item-crash-gap-1"),
+        tool_name: String::from("read_file"),
+        arguments: serde_json::json!({"path": "README.md"}),
+    };
+    // snapshot still carries the pre-completion dispatch action from the last durable checkpoint.
+    // snapshot 仍携带上一可靠检查点留下的 Provider 完成前分派动作。
+    let mut snapshot = retry_snapshot(session_id);
+    // conversationState proves the Provider completed and retained the exact assistant tool batch.
+    // conversationState 证明 Provider 已完成并保留精确助手工具批次。
+    let mut conversation_state = retry_runtime_state().conversation_state;
+    conversation_state.messages = vec![SessionConversationMessage {
+        id: String::from("assistant-crash-gap-1"),
+        payload: SessionConversationPayload::Assistant {
+            text: String::new(),
+            reasoning: String::new(),
+            provider_message_id: Some(String::from("provider-message-crash-gap-1")),
+            provider_message_state: None,
+            usage: None,
+            tool_calls: vec![vulcan_context::SessionConversationToolCall {
+                id: String::from("tool-item-crash-gap-1"),
+                // An empty Provider-visible call id must resolve through the same canonical Core path during normal execution and crash recovery.
+                // 空白 Provider 可见调用标识在正常执行与崩溃恢复中必须通过同一 Core 规范路径解析。
+                tool_call_id: Some(String::from("   ")),
+                tool_name: request.tool_name.clone(),
+                arguments: request.arguments.clone(),
+            }],
+        },
+    }];
+
+    assert!(
+        crate::reconcile_interrupted_execution_retry_canonical_state(
+            &mut snapshot,
+            &conversation_state,
+        )
+        .expect("retained assistant batch should reconcile")
+    );
+
+    let ExecutionRetryPendingAction::ExecuteToolBatch { tools } = snapshot.pending_action else {
+        panic!("retained assistant batch must replace stale Provider replay");
+    };
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0].request, request);
+    assert_eq!(
+        tools[0].state,
+        vulcan_workbench_model::ExecutionRetryToolState::NotStarted
+    );
+    assert!(tools[0].binding_fingerprint.is_none());
+    assert!(tools[0].result.is_none());
+    assert!(snapshot.error.is_none());
+}
+
+/// Verifies a claimed Continue snapshot durably retains the batch, start, and exact result boundaries.
+/// 验证已领取的 Continue 快照会可靠保留批次、启动与精确结果边界。
+#[test]
+fn execution_retry_tool_boundaries_durably_retain_batch_start_and_result() {
+    // sessionId identifies the exact retained conversation used by every durability assertion.
+    // sessionId 标识每项可靠性断言使用的精确保留会话。
+    let session_id = Uuid::new_v4();
+    // controllerRoot owns the immutable retry bodies and segmented session state.
+    // controllerRoot 持有不可变重试正文与分段会话状态。
     let controller_root = TestControllerRuntimeRoot::new(session_id);
+    // controllerRuntime exposes the production persistence implementation.
+    // controllerRuntime 暴露生产持久化实现。
     let controller_runtime = controller_root.controller_runtime_handle();
-    // claimedSnapshot models an active Continue attempt waiting to dispatch its first external tool body.
-    // claimedSnapshot 模拟正在等待分派首个外部工具主体的活跃 Continue 尝试。
+    // request is the exact original model-issued tool invocation.
+    // request 是模型发出的精确原始工具调用。
+    let request = vulcan_core::types::ToolInvocationRequest {
+        tool_call_id: String::from("tool-item-1"),
+        tool_name: String::from("read_file"),
+        arguments: serde_json::json!({"path": "README.md"}),
+    };
+    // bindingFingerprint identifies the resolved descriptor, schema, and execution policy.
+    // bindingFingerprint 标识已解析的描述、Schema 与执行策略。
+    let binding_fingerprint = "a".repeat(64);
+    // claimedSnapshot models a Continue attempt after the Provider completed a tool batch.
+    // claimedSnapshot 模拟 Provider 完成工具批次后的 Continue 尝试。
     let mut claimed_snapshot = retry_snapshot(session_id);
     claimed_snapshot.state = ExecutionRetrySnapshotState::Claimed;
     claimed_snapshot.claimed_attempt_id = Some(String::from("claimed-tool-attempt"));
+    claimed_snapshot.controller_snapshot.messages = vec![vulcan_core::types::ConversationMessage {
+        id: String::from("assistant-tool-batch-1"),
+        payload: vulcan_core::types::ConversationPayload::Assistant {
+            text: String::new(),
+            reasoning: String::new(),
+            provider_message_id: Some(String::from("provider-message-1")),
+            provider_message_state: None,
+            usage: None,
+            tool_calls: vec![vulcan_core::types::ConversationToolCall {
+                id: String::from("tool-item-1"),
+                tool_call_id: Some(String::from("   ")),
+                tool_name: request.tool_name.clone(),
+                arguments: request.arguments.clone(),
+            }],
+        },
+    }];
+    // pendingAction represents the hard-crash window after the assistant batch was retained but
+    // before the runtime could resolve and publish its complete BatchPrepared binding set.
+    // pendingAction 表示助手批次已经保留、但运行时尚未来得及解析并发布完整 BatchPrepared
+    // 绑定集合的硬崩溃窗口。
+    claimed_snapshot.pending_action = ExecutionRetryPendingAction::ExecuteToolBatch {
+        tools: vec![vulcan_workbench_model::ExecutionRetryToolProgress {
+            request: request.clone(),
+            result: None,
+            binding_fingerprint: None,
+            state: vulcan_workbench_model::ExecutionRetryToolState::NotStarted,
+        }],
+    };
+    // claimedReference is the lightweight exact pointer owned by the retained session.
+    // claimedReference 是保留会话持有的轻量精确指针。
     let claimed_reference =
         vulcan_workspace_store::workspace_store::persist_execution_retry_snapshot(
             &controller_runtime.data_root,
@@ -1127,10 +1605,26 @@ fn execution_retry_tool_start_durably_blocks_claimed_snapshot() {
             &claimed_snapshot,
         )
         .expect("claimed tool retry sidecar should persist");
-    // runtimeState deliberately starts eligible so the gate must close both the reference and mirror.
-    // runtimeState 刻意以可继续状态开始，以验证门禁会同时关闭引用与镜像。
+    // runtimeState mirrors the canonical assistant batch refreshed before tool execution.
+    // runtimeState 镜像工具执行前刷新的规范助手批次。
     let mut runtime_state = retry_runtime_state();
     runtime_state.execution_retry_snapshot = Some(claimed_reference);
+    runtime_state.conversation_state.messages = vec![SessionConversationMessage {
+        id: String::from("assistant-tool-batch-1"),
+        payload: SessionConversationPayload::Assistant {
+            text: String::new(),
+            reasoning: String::new(),
+            provider_message_id: Some(String::from("provider-message-1")),
+            provider_message_state: None,
+            usage: None,
+            tool_calls: vec![vulcan_context::SessionConversationToolCall {
+                id: String::from("tool-item-1"),
+                tool_call_id: Some(String::from("   ")),
+                tool_name: request.tool_name.clone(),
+                arguments: request.arguments.clone(),
+            }],
+        },
+    }];
     assert!(
         runtime_state
             .provider_call_ledger
@@ -1142,6 +1636,8 @@ fn execution_retry_tool_start_durably_blocks_claimed_snapshot() {
                 true,
             )
     );
+    // serviceState installs the retained runtime under the production shared-state lock.
+    // serviceState 在生产共享状态锁下安装保留运行态。
     let mut service_state = test_service_state_with_parent_session(session_id);
     service_state
         .workspace_snapshot
@@ -1149,104 +1645,189 @@ fn execution_retry_tool_start_durably_blocks_claimed_snapshot() {
         .expect("test workspace should exist")
         .session_runtime_state
         .insert(session_id, runtime_state);
+    // sharedState is consumed by the same boundary publisher used in production.
+    // sharedState 由生产环境使用的同一边界发布器消费。
     let shared_state = Arc::new(Mutex::new(service_state));
+    // runtime deterministically drives durable asynchronous publication.
+    // runtime 以确定方式驱动可靠异步发布。
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .expect("runtime should build");
 
     runtime.block_on(async {
-        // writeGate holds the process-wide persistence lane so a newer retained mutation can race after the safety reference is published.
-        // writeGate 持有进程级持久化通道，使较新保留态变更可以在安全引用发布后参与竞争。
-        let persist_lock = crate::webui_workspace_persist_lock();
-        let write_gate = persist_lock.lock().await;
-        // safetyTask runs the exact production barrier until it waits for writeGate.
-        // safetyTask 运行精确生产门禁，直至等待 writeGate。
-        let safety_state = shared_state.clone();
-        let safety_runtime = controller_runtime.clone();
-        let safety_task = tokio::spawn(async move {
-            crate::mark_execution_retry_snapshot_tool_execution_unsafe(
-                &safety_state,
-                &safety_runtime,
+        // preparedBoundary proves the whole batch is durable before any tool body starts.
+        // preparedBoundary 证明任何工具主体启动前完整批次已经可靠保留。
+        let prepared_boundary =
+            vulcan_agent_runtime::agent_runtime::events::ToolExecutionRecoveryBoundary::BatchPrepared(
+                vec![vulcan_agent_runtime::agent_runtime::events::ToolExecutionRecoveryRequest {
+                    request: request.clone(),
+                    binding_fingerprint: binding_fingerprint.clone(),
+                }],
+            );
+        // preparedOwner is the immutable reference that must still own the batch transition.
+        // preparedOwner 是仍必须拥有批次迁移的不可变引用。
+        let prepared_owner = retained_execution_retry_reference(&shared_state, session_id);
+        crate::persist_execution_retry_tool_recovery_boundary(
+            &shared_state,
+            &controller_runtime,
+            session_id,
+            &prepared_owner,
+            &prepared_boundary,
+        )
+        .await
+        .expect("complete tool batch should become durable");
+
+        // preparedReference selects the exact immutable body published by the batch boundary.
+        // preparedReference 选择批次边界发布的精确不可变正文。
+        let prepared_reference = shared_state
+            .lock()
+            .expect("shared test state should lock")
+            .workspace_snapshot
+            .as_ref()
+            .and_then(|workspace| workspace.session_runtime_state.get(&session_id))
+            .and_then(|state| state.execution_retry_snapshot.clone())
+            .expect("prepared retry reference should exist");
+        let prepared_snapshot =
+            vulcan_workspace_store::workspace_store::load_execution_retry_snapshot(
+                &controller_runtime.data_root,
                 session_id,
+                &prepared_reference,
             )
-            .await
-        });
-        // safetyBoundaryObserved proves both the in-memory blocker and persistence-version fence exist before the concurrent mutation.
-        // safetyBoundaryObserved 证明并发变更前内存阻断与持久化版本隔离均已存在。
-        loop {
-            let safety_boundary_observed = {
-                let guard = shared_state.lock().expect("shared test state should lock");
-                let blocked_reason = guard
-                    .workspace_snapshot
-                    .as_ref()
-                    .and_then(|workspace| workspace.session_runtime_state.get(&session_id))
-                    .and_then(|runtime_state| runtime_state.execution_retry_snapshot.as_ref())
-                    .and_then(|reference| reference.blocked_reason.as_deref());
-                blocked_reason == Some("tool_side_effect_in_flight")
-                    && guard.session_persist_versions.contains_key(&session_id)
+            .expect("prepared retry sidecar should be readable");
+        let ExecutionRetryPendingAction::ExecuteToolBatch { tools } =
+            &prepared_snapshot.pending_action
+        else {
+            panic!("prepared boundary must materialize a tool batch");
+        };
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].request, request);
+        assert_eq!(
+            tools[0].binding_fingerprint.as_deref(),
+            Some(binding_fingerprint.as_str())
+        );
+        assert_eq!(
+            tools[0].state,
+            vulcan_workbench_model::ExecutionRetryToolState::NotStarted
+        );
+        assert!(tools[0].result.is_none());
+        assert!(prepared_reference.replay_safety_proven());
+
+        // startedBoundary records that the exact external body may now have side effects.
+        // startedBoundary 记录精确外部工具主体现在可能产生副作用。
+        let started_boundary =
+            vulcan_agent_runtime::agent_runtime::events::ToolExecutionRecoveryBoundary::Started {
+                request: request.clone(),
+                binding_fingerprint: binding_fingerprint.clone(),
             };
-            if safety_boundary_observed {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
-        {
-            // runtimeState simulates a newer same-session UI mutation that must not be erased by the delayed safety write.
-            // runtimeState 模拟不得被延迟安全写入清除的较新同会话界面变更。
-            let mut guard = shared_state.lock().expect("shared test state should lock");
-            let runtime_state = guard
-                .workspace_snapshot
-                .as_mut()
-                .and_then(|workspace| workspace.session_runtime_state.get_mut(&session_id))
-                .expect("test runtime should remain available");
-            runtime_state.updated_at = String::from("concurrent-after-tool-safety");
-        }
-        drop(write_gate);
-        safety_task
-            .await
-            .expect("tool safety task should join")
-            .expect("tool safety boundary should become durable");
+        // startedOwner is the exact reference published by the preceding batch transition.
+        // startedOwner 是前一批次迁移发布的精确引用。
+        let started_owner = retained_execution_retry_reference(&shared_state, session_id);
+        crate::persist_execution_retry_tool_recovery_boundary(
+            &shared_state,
+            &controller_runtime,
+            session_id,
+            &started_owner,
+            &started_boundary,
+        )
+        .await
+        .expect("tool start should become durable");
+
+        // startedReference proves side-effect uncertainty remains reconcilable.
+        // startedReference 证明副作用不确定性仍可协调。
+        let started_reference = shared_state
+            .lock()
+            .expect("shared test state should lock")
+            .workspace_snapshot
+            .as_ref()
+            .and_then(|workspace| workspace.session_runtime_state.get(&session_id))
+            .and_then(|state| state.execution_retry_snapshot.clone())
+            .expect("started retry reference should exist");
+        let started_snapshot =
+            vulcan_workspace_store::workspace_store::load_execution_retry_snapshot(
+                &controller_runtime.data_root,
+                session_id,
+                &started_reference,
+            )
+            .expect("started retry sidecar should be readable");
+        let ExecutionRetryPendingAction::ExecuteToolBatch { tools } =
+            &started_snapshot.pending_action
+        else {
+            panic!("started boundary must retain the tool batch");
+        };
+        assert_eq!(
+            tools[0].state,
+            vulcan_workbench_model::ExecutionRetryToolState::Running
+        );
+        assert!(
+            started_snapshot
+                .error
+                .as_ref()
+                .is_some_and(|error| error.side_effect_observed)
+        );
+        assert!(started_reference.replay_safety_proven());
+
+        // result is the exact terminal value retained for later recovery reuse.
+        // result 是为后续恢复复用而保留的精确终态值。
+        let result = vulcan_core::types::ToolInvocationResult {
+            tool_call_id: request.tool_call_id.clone(),
+            tool_name: request.tool_name.clone(),
+            model_output: String::from("file contents"),
+            host_result: Some(serde_json::json!({"bytes": 13})),
+            is_error: false,
+        };
+        // finishedBoundary durably replaces running uncertainty with the exact result.
+        // finishedBoundary 用精确结果可靠替换运行中不确定性。
+        let finished_boundary =
+            vulcan_agent_runtime::agent_runtime::events::ToolExecutionRecoveryBoundary::Finished(
+                result.clone(),
+            );
+        // finishedOwner is the exact running reference that may receive this terminal result.
+        // finishedOwner 是可以接收该终态结果的精确运行中引用。
+        let finished_owner = retained_execution_retry_reference(&shared_state, session_id);
+        crate::persist_execution_retry_tool_recovery_boundary(
+            &shared_state,
+            &controller_runtime,
+            session_id,
+            &finished_owner,
+            &finished_boundary,
+        )
+        .await
+        .expect("tool result should become durable");
+
+        // finishedReference selects the final exact tool state.
+        // finishedReference 选择最终精确工具状态。
+        let finished_reference = shared_state
+            .lock()
+            .expect("shared test state should lock")
+            .workspace_snapshot
+            .as_ref()
+            .and_then(|workspace| workspace.session_runtime_state.get(&session_id))
+            .and_then(|state| state.execution_retry_snapshot.clone())
+            .expect("finished retry reference should exist");
+        let finished_snapshot =
+            vulcan_workspace_store::workspace_store::load_execution_retry_snapshot(
+                &controller_runtime.data_root,
+                session_id,
+                &finished_reference,
+            )
+            .expect("finished retry sidecar should be readable");
+        let ExecutionRetryPendingAction::ExecuteToolBatch { tools } =
+            &finished_snapshot.pending_action
+        else {
+            panic!("finished boundary must retain the tool batch");
+        };
+        assert_eq!(
+            tools[0].state,
+            vulcan_workbench_model::ExecutionRetryToolState::Completed
+        );
+        assert_eq!(tools[0].result.as_ref(), Some(&result));
+        assert!(finished_snapshot.error.is_none());
+        assert!(finished_reference.replay_safety_proven());
     });
 
-    // blockedReference is the authoritative post-gate pointer published in memory.
-    // blockedReference 是门禁后发布到内存的权威指针。
-    let blocked_reference = shared_state
-        .lock()
-        .expect("shared test state should lock")
-        .workspace_snapshot
-        .as_ref()
-        .expect("test workspace should remain available")
-        .session_runtime_state
-        .get(&session_id)
-        .expect("test runtime should remain available")
-        .execution_retry_snapshot
-        .clone()
-        .expect("blocked retry reference should remain available");
-    assert_eq!(
-        blocked_reference.state,
-        ExecutionRetrySnapshotState::Claimed
-    );
-    assert!(!blocked_reference.retryable);
-    assert_eq!(
-        blocked_reference.blocked_reason.as_deref(),
-        Some("tool_side_effect_in_flight")
-    );
-    let blocked_snapshot = vulcan_workspace_store::workspace_store::load_execution_retry_snapshot(
-        &controller_runtime.data_root,
-        session_id,
-        &blocked_reference,
-    )
-    .expect("blocked tool retry sidecar should remain readable");
-    assert!(
-        blocked_snapshot
-            .error
-            .as_ref()
-            .is_some_and(|error| error.side_effect_observed && !error.retryable)
-    );
-
-    // persistedState proves the exact blocked reason and closed ledger reached state.json before acknowledgement.
-    // persistedState 证明精确阻断原因与已关闭账本会在确认前到达 state.json。
+    // persistedState proves the latest exact reference reached the main session file.
+    // persistedState 证明最新精确引用已经到达主会话文件。
     let state_path = controller_root
         .data_root()
         .join("sessions")
@@ -1259,9 +1840,9 @@ fn execution_retry_tool_start_durably_blocks_claimed_snapshot() {
     .expect("durable runtime state should decode");
     assert_eq!(
         persisted_state
-            .pointer("/runtime_state/execution_retry_snapshot/blocked_reason")
+            .pointer("/runtime_state/execution_retry_snapshot/pending_action_label")
             .and_then(serde_json::Value::as_str),
-        Some("tool_side_effect_in_flight")
+        Some("execute_tool_batch")
     );
     assert_eq!(
         persisted_state
@@ -1269,18 +1850,336 @@ fn execution_retry_tool_start_durably_blocks_claimed_snapshot() {
             .and_then(serde_json::Value::as_bool),
         Some(false)
     );
+}
+
+/// Verifies a late tool event cannot mutate or invalidate a concurrently replaced recovery reference.
+/// 验证较晚到达的工具事件不能修改或失效并发替换后的恢复引用。
+#[test]
+fn execution_retry_tool_boundary_preserves_concurrent_replacement() {
+    // sessionId identifies the isolated retained conversation used by the stale-owner assertion.
+    // sessionId 标识过期所有者断言使用的隔离保留会话。
+    let session_id = Uuid::new_v4();
+    // controllerRoot owns the immutable sidecars required by the production boundary function.
+    // controllerRoot 持有生产边界函数所需的不可变 sidecar。
+    let controller_root = TestControllerRuntimeRoot::new(session_id);
+    // controllerRuntime exposes the exact production persistence handle.
+    // controllerRuntime 暴露精确的生产持久化句柄。
+    let controller_runtime = controller_root.controller_runtime_handle();
+    // staleSnapshot is the body owned when an older tool event was emitted.
+    // staleSnapshot 是较旧工具事件发出时拥有的正文。
+    let stale_snapshot = retry_snapshot(session_id);
+    // staleReference is the immutable owner captured by that older event.
+    // staleReference 是该较旧事件捕获的不可变所有者。
+    let stale_reference =
+        vulcan_workspace_store::workspace_store::persist_execution_retry_snapshot(
+            &controller_runtime.data_root,
+            session_id,
+            &stale_snapshot,
+        )
+        .expect("stale retry sidecar should persist");
+    // replacementSnapshot represents the newer stop/restart recovery generation.
+    // replacementSnapshot 表示更新的停止或重启恢复代际。
+    let mut replacement_snapshot = retry_snapshot(session_id);
+    replacement_snapshot.generation = stale_snapshot.generation + 1;
+    // replacementReference is the only owner allowed to remain after the stale event fails.
+    // replacementReference 是过期事件失败后唯一允许保留的所有者。
+    let replacement_reference =
+        vulcan_workspace_store::workspace_store::persist_execution_retry_snapshot(
+            &controller_runtime.data_root,
+            session_id,
+            &replacement_snapshot,
+        )
+        .expect("replacement retry sidecar should persist");
+    // runtimeState exposes only the replacement before the stale boundary is processed.
+    // runtimeState 在处理过期边界前只暴露替代引用。
+    let mut runtime_state = retry_runtime_state();
+    runtime_state.execution_retry_snapshot = Some(replacement_reference.clone());
+    // serviceState installs the replacement under the production shared lock.
+    // serviceState 在生产共享锁下安装替代引用。
+    let mut service_state = test_service_state_with_parent_session(session_id);
+    service_state
+        .workspace_snapshot
+        .as_mut()
+        .expect("test workspace should exist")
+        .session_runtime_state
+        .insert(session_id, runtime_state);
+    // sharedState is consumed by both exact persistence and exact invalidation.
+    // sharedState 由精确持久化与精确失效共同消费。
+    let shared_state = Arc::new(Mutex::new(service_state));
+    // request gives the stale batch a syntactically complete tool identity.
+    // request 为过期批次提供结构完整的工具身份。
+    let request = vulcan_core::types::ToolInvocationRequest {
+        tool_call_id: String::from("stale-tool-call"),
+        tool_name: String::from("read_file"),
+        arguments: serde_json::json!({"path": "README.md"}),
+    };
+    // boundary is the late prepared event still bound to staleReference.
+    // boundary 是仍绑定到 staleReference 的较晚已准备事件。
+    let boundary =
+        vulcan_agent_runtime::agent_runtime::events::ToolExecutionRecoveryBoundary::BatchPrepared(
+            vec![
+                vulcan_agent_runtime::agent_runtime::events::ToolExecutionRecoveryRequest {
+                    request,
+                    binding_fingerprint: "a".repeat(64),
+                },
+            ],
+        );
+    // runtime drives the asynchronous persistence rejection deterministically.
+    // runtime 以确定方式驱动异步持久化拒绝。
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime should build");
+    // error proves the stale immutable owner is rejected before the replacement can be loaded or changed.
+    // error 证明过期不可变所有者会在替代引用被加载或修改前遭到拒绝。
+    let error = runtime
+        .block_on(crate::persist_execution_retry_tool_recovery_boundary(
+            &shared_state,
+            &controller_runtime,
+            session_id,
+            &stale_reference,
+            &boundary,
+        ))
+        .expect_err("stale tool boundary owner must be rejected");
+    assert!(error.starts_with("ERR_CONVERSATION_CONTINUE_RETRY_TOOL_BOUNDARY_MISSING"));
+
+    // invalidated proves the caller's exact failure cleanup cannot target the replacement.
+    // invalidated 证明调用方的精确失败清理不能作用到替代引用。
+    let invalidated = invalidate_execution_retry_reference_if_matches(
+        &shared_state,
+        session_id,
+        &stale_reference,
+        "ERR_CONVERSATION_CONTINUE_RETRY_TOOL_BOUNDARY_MISSING",
+        "The stale tool recovery boundary was rejected.",
+    )
+    .expect("exact stale-owner invalidation should complete");
+    assert!(!invalidated);
     assert_eq!(
-        persisted_state
-            .get("updated_at")
-            .and_then(serde_json::Value::as_str),
-        Some("concurrent-after-tool-safety")
+        retained_execution_retry_reference(&shared_state, session_id),
+        replacement_reference
     );
 }
 
-/// Verifies an early stream exit replaces a claimed ledger token with one real failed terminal generation.
-/// 验证流提前退出会用真实失败终态代际替换已领取的账本令牌。
+/// Verifies stopping a started tool converts it to outcome-unknown and reopens the problem turn.
+/// 验证停止已启动工具会将其转换为结果未知，并重新开放问题回合。
 #[test]
-fn execution_retry_early_stream_terminal_closes_claimed_ledger() {
+fn execution_retry_stop_refreeze_reconciles_running_tool_without_reexecution() {
+    // sessionId identifies the isolated retained conversation used by the stop transition.
+    // sessionId 标识停止状态转换使用的隔离保留会话。
+    let session_id = Uuid::new_v4();
+    // controllerRoot owns the immutable retry sidecars and durable main-session state.
+    // controllerRoot 持有不可变重试 sidecar 与可靠主会话状态。
+    let controller_root = TestControllerRuntimeRoot::new(session_id);
+    // controllerRuntime exposes the exact production persistence path.
+    // controllerRuntime 暴露精确的生产持久化路径。
+    let controller_runtime = controller_root.controller_runtime_handle();
+    // request is the original invocation whose body crossed the Started boundary.
+    // request 是主体已经跨过 Started 边界的原始调用。
+    let request = vulcan_core::types::ToolInvocationRequest {
+        tool_call_id: String::from("tool-call-stop-1"),
+        tool_name: String::from("write_file"),
+        arguments: serde_json::json!({"path": "result.txt", "content": "value"}),
+    };
+    // bindingFingerprint freezes the exact resolved tool implementation used by the interrupted attempt.
+    // bindingFingerprint 冻结被中断尝试使用的精确已解析工具实现。
+    let binding_fingerprint = "b".repeat(64);
+    // claimedSnapshot represents the live Continue attempt before its tool batch is materialized.
+    // claimedSnapshot 表示工具批次物化前的实时 Continue 尝试。
+    let mut claimed_snapshot = retry_snapshot(session_id);
+    claimed_snapshot.state = ExecutionRetrySnapshotState::Claimed;
+    claimed_snapshot.claimed_attempt_id = Some(String::from("claimed-stop-attempt"));
+    claimed_snapshot.controller_snapshot.messages = vec![vulcan_core::types::ConversationMessage {
+        id: String::from("assistant-tool-stop-1"),
+        payload: vulcan_core::types::ConversationPayload::Assistant {
+            text: String::new(),
+            reasoning: String::new(),
+            provider_message_id: Some(String::from("provider-message-stop-1")),
+            provider_message_state: None,
+            usage: None,
+            tool_calls: vec![vulcan_core::types::ConversationToolCall {
+                id: String::from("tool-item-stop-1"),
+                tool_call_id: Some(request.tool_call_id.clone()),
+                tool_name: request.tool_name.clone(),
+                arguments: request.arguments.clone(),
+            }],
+        },
+    }];
+    // claimedReference binds the retained runtime to the immutable claimed body.
+    // claimedReference 将保留运行态绑定到不可变的已领取正文。
+    let claimed_reference =
+        vulcan_workspace_store::workspace_store::persist_execution_retry_snapshot(
+            &controller_runtime.data_root,
+            session_id,
+            &claimed_snapshot,
+        )
+        .expect("claimed stop retry sidecar should persist");
+    // runtimeState carries both the canonical tool batch and a visible problem-turn error tail.
+    // runtimeState 同时携带规范工具批次与用户可见的问题回合错误尾部。
+    let mut runtime_state = retry_runtime_state();
+    runtime_state.execution_retry_snapshot = Some(claimed_reference);
+    runtime_state.conversation_state.messages = vec![SessionConversationMessage {
+        id: String::from("assistant-tool-stop-1"),
+        payload: SessionConversationPayload::Assistant {
+            text: String::new(),
+            reasoning: String::new(),
+            provider_message_id: Some(String::from("provider-message-stop-1")),
+            provider_message_state: None,
+            usage: None,
+            tool_calls: vec![vulcan_context::SessionConversationToolCall {
+                id: String::from("tool-item-stop-1"),
+                tool_call_id: Some(request.tool_call_id.clone()),
+                tool_name: request.tool_name.clone(),
+                arguments: request.arguments.clone(),
+            }],
+        },
+    }];
+    runtime_state
+        .conversation_state
+        .records
+        .push(SessionConversationRecord {
+            id: String::from("error-stop-1"),
+            kind: SessionMessageKind::Error,
+            record_kind: SessionMessageRecordKind::Transcript,
+            visible: true,
+            title: String::from("Interrupted"),
+            body: String::from("Tool execution was interrupted."),
+            metadata: None,
+            created_at: String::from("1000"),
+        });
+    assert!(
+        runtime_state
+            .provider_call_ledger
+            .mark_continuation_terminal(
+                Some(String::from("logical-a")),
+                String::from("stopped"),
+                1000,
+                String::from("error"),
+                true,
+            )
+    );
+    // canonicalState is the exact post-stop dialogue state used for refreeze.
+    // canonicalState 是重冻结使用的精确停止后对话状态。
+    let canonical_state = runtime_state.conversation_state.clone();
+    // serviceState installs the fixture under the production shared-state lock.
+    // serviceState 在生产共享状态锁下安装测试夹具。
+    let mut service_state = test_service_state_with_parent_session(session_id);
+    service_state
+        .workspace_snapshot
+        .as_mut()
+        .expect("test workspace should exist")
+        .session_runtime_state
+        .insert(session_id, runtime_state);
+    // sharedState is consumed by the exact live boundary and refreeze implementations.
+    // sharedState 由精确的实时边界与重冻结实现消费。
+    let shared_state = Arc::new(Mutex::new(service_state));
+    // runtime drives the two durable tool transitions before the synchronous refreeze.
+    // runtime 在同步重冻结前驱动两次可靠工具状态转换。
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime should build");
+
+    runtime.block_on(async {
+        // preparedBoundary retains the entire original tool batch before execution.
+        // preparedBoundary 在执行前保留完整原始工具批次。
+        let prepared_boundary =
+            vulcan_agent_runtime::agent_runtime::events::ToolExecutionRecoveryBoundary::BatchPrepared(
+                vec![vulcan_agent_runtime::agent_runtime::events::ToolExecutionRecoveryRequest {
+                    request: request.clone(),
+                    binding_fingerprint: binding_fingerprint.clone(),
+                }],
+            );
+        // preparedOwner is the immutable reference that must still own the stop-test batch transition.
+        // preparedOwner 是仍必须拥有停止测试批次迁移的不可变引用。
+        let prepared_owner = retained_execution_retry_reference(&shared_state, session_id);
+        crate::persist_execution_retry_tool_recovery_boundary(
+            &shared_state,
+            &controller_runtime,
+            session_id,
+            &prepared_owner,
+            &prepared_boundary,
+        )
+        .await
+        .expect("tool batch should become durable before start");
+        // startedBoundary proves the external body may have executed before the stop.
+        // startedBoundary 证明外部工具主体可能已在停止前执行。
+        let started_boundary =
+            vulcan_agent_runtime::agent_runtime::events::ToolExecutionRecoveryBoundary::Started {
+                request: request.clone(),
+                binding_fingerprint: binding_fingerprint.clone(),
+            };
+        // startedOwner is the exact prepared reference that may cross into side-effect uncertainty.
+        // startedOwner 是可以跨入副作用不确定状态的精确已准备引用。
+        let started_owner = retained_execution_retry_reference(&shared_state, session_id);
+        crate::persist_execution_retry_tool_recovery_boundary(
+            &shared_state,
+            &controller_runtime,
+            session_id,
+            &started_owner,
+            &started_boundary,
+        )
+        .await
+        .expect("tool start should become durable");
+    });
+
+    refreeze_claimed_execution_retry_snapshot_with_canonical_state(
+        &shared_state,
+        &controller_runtime,
+        session_id,
+        &canonical_state,
+        None,
+        "test user stop after tool start",
+    )
+    .expect("started tool should refreeze into a reconcilable outcome");
+
+    // frozenRuntime is the authoritative problem-turn state after the stop transaction.
+    // frozenRuntime 是停止事务后的权威问题回合状态。
+    let frozen_runtime = shared_state
+        .lock()
+        .expect("shared test state should lock")
+        .workspace_snapshot
+        .as_ref()
+        .and_then(|workspace| workspace.session_runtime_state.get(&session_id))
+        .cloned()
+        .expect("frozen runtime should remain available");
+    // frozenReference selects the exact reconciled immutable body.
+    // frozenReference 选择精确协调后的不可变正文。
+    let frozen_reference = frozen_runtime
+        .execution_retry_snapshot
+        .as_ref()
+        .expect("frozen retry reference should remain available");
+    assert_eq!(frozen_reference.state, ExecutionRetrySnapshotState::Frozen);
+    assert!(frozen_reference.replay_safety_proven());
+    assert!(frozen_runtime.provider_call_ledger.continuation.eligible);
+    // frozenSnapshot proves Continue will synthesize an unknown-result ToolResult instead of re-executing.
+    // frozenSnapshot 证明 Continue 将合成结果未知的 ToolResult，而不是重新执行。
+    let frozen_snapshot = vulcan_workspace_store::workspace_store::load_execution_retry_snapshot(
+        &controller_runtime.data_root,
+        session_id,
+        frozen_reference,
+    )
+    .expect("frozen retry sidecar should remain readable");
+    let ExecutionRetryPendingAction::ExecuteToolBatch { tools } = &frozen_snapshot.pending_action
+    else {
+        panic!("stopped tool must retain its recovery batch");
+    };
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0].request, request);
+    assert_eq!(
+        tools[0].binding_fingerprint.as_deref(),
+        Some(binding_fingerprint.as_str())
+    );
+    assert_eq!(
+        tools[0].state,
+        vulcan_workbench_model::ExecutionRetryToolState::OutcomeUnknown
+    );
+    assert!(tools[0].result.is_none());
+}
+
+/// Verifies an early stream exit replaces a claimed token and reopens its safety-proven failed boundary.
+/// 验证流提前退出会替换已领取令牌，并重新开放已证明安全的失败边界。
+#[test]
+fn execution_retry_early_stream_terminal_reopens_safe_failed_ledger() {
     // sessionId owns the minimal retained workspace used by the early-exit transaction.
     // sessionId 持有提前退出事务使用的最小保留工作区。
     let session_id = Uuid::new_v4();
@@ -1367,7 +2266,7 @@ fn execution_retry_early_stream_terminal_closes_claimed_ledger() {
             .claimed_execution_id,
         None
     );
-    assert!(!terminal_runtime.provider_call_ledger.continuation.eligible);
+    assert!(terminal_runtime.provider_call_ledger.continuation.eligible);
 }
 
 /// Verifies stop refreeze preserves a proven dispatched/no-output Provider boundary as claimable.

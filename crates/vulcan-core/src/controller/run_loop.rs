@@ -1,6 +1,201 @@
 use super::*;
 
 impl VulcanCoreController {
+    /// Reconciles a retained tool batch, appends exactly one result per original call, and resumes the Provider loop.
+    /// 协调已保留工具批次，为每条原始调用精确追加一个结果，然后恢复 Provider 循环。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `adapter`, `executor`, and `policy` own the resumed Provider and tool execution loop.
+    /// `adapter`、`executor` 与 `policy` 持有恢复后的 Provider 与工具执行循环。
+    /// `recovery` binds the exact retained tool batch to the optional user follow-up admitted after reconciliation.
+    /// `recovery` 将精确保留的工具批次与仅在对账后准入的可选用户补充绑定。
+    /// `on_safe_checkpoint` publishes each canonical recovery boundary and `on_before_next_provider_turn` applies route or mailbox changes.
+    /// `on_safe_checkpoint` 发布每个规范恢复边界，`on_before_next_provider_turn` 应用路由或 mailbox 变更。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The completed controller result, or the first exact recovery, Provider, or tool error.
+    /// 返回控制器完成结果，或首个精确的恢复、Provider 或工具错误。
+    pub async fn run_restored_tool_batch_streaming_with_checkpoints_and_interventions<
+        A,
+        E,
+        P,
+        F,
+        I,
+    >(
+        &mut self,
+        adapter: &A,
+        executor: &E,
+        policy: &P,
+        recovery: RestoredToolBatchRecovery,
+        mut on_safe_checkpoint: F,
+        mut on_before_next_provider_turn: I,
+    ) -> Result<ControllerRunResult, CoreError>
+    where
+        A: VulcanStreamingProviderAdapter<Response = ProviderTurnResponse>,
+        E: VulcanToolExecutor,
+        P: VulcanToolPolicy,
+        F: FnMut(&ConversationSnapshot, Option<&ProviderUsageSnapshot>) + Send,
+        I: FnMut(&mut Self) -> Result<bool, CoreError> + Send,
+    {
+        // results contains exactly one reconciled output for every retained tool call in original Provider order.
+        // results 按原始 Provider 顺序为每条保留工具调用保存且仅保存一条对账输出。
+        let results = match self
+            .execute_restored_tool_batch(executor, policy, recovery.tools)
+            .await
+        {
+            Ok(results) => results,
+            Err(error) => {
+                self.mark_failed(error.to_string());
+                return Err(error);
+            }
+        };
+        for result in results {
+            self.append_tool_result_message(&result);
+        }
+        // restoredUserFollowup is appended only after every old tool call has received a paired result.
+        // restoredUserFollowup 仅在所有旧工具调用都获得配对结果后追加。
+        if let Some(followup) = recovery.user_followup
+            && let Err(error) = self.append_restored_user_followup(followup)
+        {
+            self.mark_failed(error.to_string());
+            return Err(error);
+        }
+        on_safe_checkpoint(&self.snapshot, self.last_successful_provider_usage.as_ref());
+
+        // interventionDraft makes route or mailbox intervention transactional against Core state.
+        // interventionDraft 使路由或 mailbox 干预相对于 Core 状态具备事务性。
+        let mut intervention_draft = self.clone();
+        // interventionChanged records whether the host committed a Provider-visible mutation before dispatch.
+        // interventionChanged 记录宿主是否在分派前提交了 Provider 可见变更。
+        let intervention_changed = match on_before_next_provider_turn(&mut intervention_draft) {
+            Ok(changed) => changed,
+            Err(error) => {
+                if !matches!(&error, CoreError::ProviderRouteSwitchRequired { .. }) {
+                    self.mark_failed(error.to_string());
+                }
+                return Err(error);
+            }
+        };
+        if intervention_changed {
+            *self = intervention_draft;
+            on_safe_checkpoint(&self.snapshot, self.last_successful_provider_usage.as_ref());
+        }
+        self.run_provider_tool_streaming_loop(
+            adapter,
+            executor,
+            policy,
+            on_safe_checkpoint,
+            on_before_next_provider_turn,
+        )
+        .await
+    }
+
+    /// Resumes a retained Provider boundary after applying a user follow-up and runtime interventions in protocol-safe order.
+    /// 在按协议安全顺序应用用户补充消息与运行时干预后恢复保留的 Provider 边界。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `adapter`, `executor`, and `policy` own the next Provider/tool loop.
+    /// `adapter`、`executor` 与 `policy` 持有下一段 Provider/工具循环。
+    /// `restored_user_followup` is appended before any new Provider request but after already-reconciled tool results.
+    /// `restored_user_followup` 会在任何新 Provider 请求前、且在已对账工具结果后追加。
+    /// `on_safe_checkpoint` publishes canonical recovery state and `on_before_next_provider_turn` applies route or mailbox changes.
+    /// `on_safe_checkpoint` 发布规范恢复状态，`on_before_next_provider_turn` 应用路由或 mailbox 变更。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The completed controller result, or the first exact recovery/provider/tool error.
+    /// 返回控制器完成结果，或首个精确恢复、Provider 或工具错误。
+    pub async fn run_restored_provider_loop_streaming_with_checkpoints_and_interventions<
+        A,
+        E,
+        P,
+        F,
+        I,
+    >(
+        &mut self,
+        adapter: &A,
+        executor: &E,
+        policy: &P,
+        restored_user_followup: Option<RestoredUserFollowup>,
+        mut on_safe_checkpoint: F,
+        mut on_before_next_provider_turn: I,
+    ) -> Result<ControllerRunResult, CoreError>
+    where
+        A: VulcanStreamingProviderAdapter<Response = ProviderTurnResponse>,
+        E: VulcanToolExecutor,
+        P: VulcanToolPolicy,
+        F: FnMut(&ConversationSnapshot, Option<&ProviderUsageSnapshot>) + Send,
+        I: FnMut(&mut Self) -> Result<bool, CoreError> + Send,
+    {
+        // restoredUserFollowup is the only new user-authored boundary admitted into this retained Provider loop.
+        // restoredUserFollowup 是获准进入该保留 Provider 循环的唯一新用户输入边界。
+        if let Some(followup) = restored_user_followup {
+            if let Err(error) = self.append_restored_user_followup(followup) {
+                self.mark_failed(error.to_string());
+                return Err(error);
+            }
+            on_safe_checkpoint(&self.snapshot, self.last_successful_provider_usage.as_ref());
+        }
+
+        // interventionDraft makes the pending model route or mailbox change atomic before the next real Provider request.
+        // interventionDraft 使待生效模型路由或 mailbox 变更在下一次真实 Provider 请求前原子应用。
+        let mut intervention_draft = self.clone();
+        // interventionChanged controls whether the validated draft becomes the new canonical checkpoint.
+        // interventionChanged 控制已校验草稿是否成为新的规范检查点。
+        let intervention_changed = match on_before_next_provider_turn(&mut intervention_draft) {
+            Ok(changed) => changed,
+            Err(error) => {
+                if !matches!(&error, CoreError::ProviderRouteSwitchRequired { .. }) {
+                    self.mark_failed(error.to_string());
+                }
+                return Err(error);
+            }
+        };
+        if intervention_changed {
+            *self = intervention_draft;
+            on_safe_checkpoint(&self.snapshot, self.last_successful_provider_usage.as_ref());
+        }
+        self.ensure_seeded_provider_turn()?;
+        self.run_provider_tool_streaming_loop(
+            adapter,
+            executor,
+            policy,
+            on_safe_checkpoint,
+            on_before_next_provider_turn,
+        )
+        .await
+    }
+
+    /// Commits a Provider-proven final assistant tail without dispatching another Provider request.
+    /// 在不再次分派 Provider 请求的情况下提交已由 Provider 证明的最终助手尾部。
+    pub fn finalize_restored_assistant(&mut self) -> Result<ControllerRunResult, CoreError> {
+        let assistant_message_id = match self.snapshot.messages.last() {
+            Some(ConversationMessage {
+                id,
+                payload: ConversationPayload::Assistant { tool_calls, .. },
+            }) if tool_calls.is_empty() => id.clone(),
+            _ => {
+                let error = CoreError::InvalidState {
+                    message: String::from(
+                        "Restored assistant finalization requires a tool-free assistant message at the canonical tail.",
+                    ),
+                };
+                self.mark_failed(error.to_string());
+                return Err(error);
+            }
+        };
+        self.phase = ControllerPhase::Completed;
+        self.push_final_event(0, 0, Some(assistant_message_id.as_str()));
+        Ok(ControllerRunResult {
+            provider_turns_executed: 0,
+            tool_calls_processed: 0,
+            final_assistant_message_id: Some(assistant_message_id),
+        })
+    }
+
     /// Executes one provider turn and updates the controller phase according to the outcome.
     /// 执行一次 Provider 回合，并根据结果更新控制器阶段。
     pub async fn execute_once<A>(&mut self, adapter: &A) -> Result<A::Response, CoreError>
@@ -261,16 +456,8 @@ impl VulcanCoreController {
     /// Ensures the snapshot already contains a provider-visible message that can start a seeded turn.
     /// 确认快照中已经存在可启动播种回合的 Provider 可见消息。
     fn ensure_seeded_provider_turn(&mut self) -> Result<(), CoreError> {
-        let has_seeded_provider_input = matches!(
-            self.snapshot.messages.last().map(|message| &message.payload),
-            Some(ConversationPayload::UserText { text, .. }) if !text.trim().is_empty()
-        ) || matches!(
-            self.snapshot.messages.last().map(|message| &message.payload),
-            Some(ConversationPayload::AgentMessage { payload, .. }) if !payload.trim().is_empty()
-        ) || matches!(
-            self.snapshot.messages.last().map(|message| &message.payload),
-            Some(ConversationPayload::ToolResult { text, .. }) if !text.trim().is_empty()
-        );
+        let has_seeded_provider_input =
+            conversation_snapshot_has_seeded_provider_input(&self.snapshot);
         if has_seeded_provider_input {
             return Ok(());
         }
@@ -371,7 +558,9 @@ impl VulcanCoreController {
             let intervention_changed = match on_before_next_provider_turn(&mut intervention_draft) {
                 Ok(changed) => changed,
                 Err(error) => {
-                    self.mark_failed(error.to_string());
+                    if !matches!(&error, CoreError::ProviderRouteSwitchRequired { .. }) {
+                        self.mark_failed(error.to_string());
+                    }
                     return Err(error);
                 }
             };

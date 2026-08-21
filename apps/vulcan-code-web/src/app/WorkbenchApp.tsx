@@ -29,7 +29,10 @@ import {
 } from "@/service/workbench-snapshot-service";
 import { ConversationLiveStreamProvider } from "@/state/conversation-live-stream-context";
 import { ConversationLiveStreamStore } from "@/state/conversation-live-stream-store";
-import { workbenchEnvelopeRequiresReactProjection } from "@/state/workbench-stream-projection";
+import {
+  workbenchEnvelopeRequiresImmediateLiveFlush,
+  workbenchEnvelopeRequiresReactProjection,
+} from "@/state/workbench-stream-projection";
 import { coalesceWorkbenchDeltaEnvelopes } from "@/state/workbench-state";
 import type {
   StartupSnapshot,
@@ -252,6 +255,9 @@ export function WorkbenchApp(props: {
         return;
       }
       let drained = false;
+      // immediateLiveFlush becomes true when a request closes one lifecycle state in this contiguous batch.
+      // immediateLiveFlush 在当前连续批次中有请求封闭一个生命周期状态时变为 true。
+      let immediateLiveFlush = false;
       let nextGeneration = workbenchRevisionRef.current + 1;
       while (workbenchDeltaPendingRef.current.has(nextGeneration)) {
         const envelope = workbenchDeltaPendingRef.current.get(nextGeneration);
@@ -259,13 +265,22 @@ export function WorkbenchApp(props: {
         if (envelope) {
           liveStreamStore.applyEnvelope(envelope);
           workbenchDeltaBufferRef.current.push(envelope);
+          immediateLiveFlush = immediateLiveFlush
+            || workbenchEnvelopeRequiresImmediateLiveFlush(envelope);
           workbenchRevisionRef.current = nextGeneration;
           drained = true;
         }
         nextGeneration = workbenchRevisionRef.current + 1;
       }
       if (drained) {
-        scheduleReadyDeltaFlush();
+        if (immediateLiveFlush) {
+          if (workbenchDeltaTimerRef.current !== null) {
+            window.clearTimeout(workbenchDeltaTimerRef.current);
+          }
+          flushReadyDeltas();
+        } else {
+          scheduleReadyDeltaFlush();
+        }
       }
       if (!hasDeltaGap()) {
         clearDeltaGapTimer();

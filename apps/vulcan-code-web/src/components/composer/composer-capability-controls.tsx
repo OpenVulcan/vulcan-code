@@ -57,6 +57,8 @@ import type {
   ContextUsageSnapshot,
   PublicAiContextCompactionWindowNode,
   PublicAiModelCapabilities,
+  PublicAiMediaUnderstandingBackendMode,
+  PublicAiMediaUnderstandingBackendSelection,
   PublicAiProviderToolCapabilityKind,
   PublicAiReasoningEffort,
   PublicAiProviderToolTargetSnapshot,
@@ -483,6 +485,7 @@ export function ComposerAiCapabilityControl(props: {
     enabledCapabilities: [],
     selections: {},
     extensionTargetSets: {},
+    mediaUnderstandingModes: {},
   });
   const [baselineSignature, setBaselineSignature] = React.useState("{}");
   const [saving, setSaving] = React.useState(false);
@@ -505,11 +508,13 @@ export function ComposerAiCapabilityControl(props: {
               enabledCapabilities: sessionSettings.enabledCapabilities,
               selections: sessionSettings.selections,
               extensionTargetSets: sessionSettings.extensionTargetSets,
+              mediaUnderstandingModes: sessionSettings.mediaUnderstandingModes,
             }
           : props.draftSettings ?? {
               enabledCapabilities: nextSnapshot.providerToolEnabledCapabilities,
               selections: nextSnapshot.providerToolSelections,
               extensionTargetSets: nextSnapshot.providerExtensionTargetSets,
+              mediaUnderstandingModes: mediaUnderstandingModesFromSnapshot(nextSnapshot),
             };
         const capabilities = orderedProviderToolCapabilities(nextSnapshot);
         setSnapshot(nextSnapshot);
@@ -553,10 +558,16 @@ export function ComposerAiCapabilityControl(props: {
   const selectedAccount = selectedAccounts.find(
     (target) => target.connectionId === selectedSelection?.connection_id,
   ) ?? null;
-  // selectedMediaBackendSummary describes the globally configured fixed backend without exposing session route controls.
-  // selectedMediaBackendSummary 描述全局配置的固定后端，不暴露会话级路由控件。
+  // selectedMediaMode is the session-selected backend family, defaulting to the global active mode.
+  // selectedMediaMode 是会话选择的后端类型，缺省时使用全局当前活动模式。
+  const selectedMediaMode = snapshot && isMediaUnderstandingCapability(selectedCapability)
+    ? draft.mediaUnderstandingModes[selectedCapability]
+      ?? snapshot.mediaUnderstandingSelections?.[selectedCapability]?.mode
+    : undefined;
+  // selectedMediaBackendSummary describes the selected global route without exposing session model controls.
+  // selectedMediaBackendSummary 描述会话模式对应的全局路由，不暴露会话级模型控件。
   const selectedMediaBackendSummary = snapshot && isMediaUnderstandingCapability(selectedCapability)
-    ? mediaUnderstandingBackendSummary(snapshot, selectedCapability, t)
+    ? mediaUnderstandingBackendSummary(snapshot, selectedCapability, t, selectedMediaMode)
     : null;
   const localConflicts = snapshot ? providerToolSettingsConflicts(snapshot, draft) : [];
   const conflicts = localConflicts;
@@ -583,11 +594,13 @@ export function ComposerAiCapabilityControl(props: {
         enabledCapabilities: draft.enabledCapabilities,
         selections: draft.selections,
         extensionTargetSets: draft.extensionTargetSets,
+        mediaUnderstandingModes: draft.mediaUnderstandingModes,
       });
       const nextDraft = {
         enabledCapabilities: next.enabledCapabilities,
         selections: next.selections,
         extensionTargetSets: next.extensionTargetSets,
+        mediaUnderstandingModes: next.mediaUnderstandingModes,
       };
       setDraft(nextDraft);
       setBaselineSignature(providerToolSettingsSignature(nextDraft));
@@ -678,15 +691,24 @@ export function ComposerAiCapabilityControl(props: {
                   && (!isModelExtensionCapability(capability)
                     || target.manifestSourceLayer !== "custom"),
               ) ?? [];
-              // mediaBackendSummary resolves the one global backend used by this session switch.
-              // mediaBackendSummary 解析此会话开关使用的唯一全局后端。
+              // mediaBackendOptions exposes only the backend families configured globally for this capability.
+              // mediaBackendOptions 只暴露该能力已在全局配置的后端类型。
+              const mediaBackendOptions = snapshot?.mediaUnderstandingBackendOptions?.[capability];
               const mediaBackendSummary = snapshot && isMediaUnderstandingCapability(capability)
-                ? mediaUnderstandingBackendSummary(snapshot, capability, t)
+                ? mediaUnderstandingBackendSummary(
+                  snapshot,
+                  capability,
+                  t,
+                  draft.mediaUnderstandingModes[capability]
+                    ?? snapshot.mediaUnderstandingSelections?.[capability]?.mode,
+                )
                 : null;
-              // targetCount reports one fixed executable media backend or the regular selectable model count.
-              // targetCount 对媒体能力报告一个固定可执行后端，否则报告常规可选模型数量。
+              const mediaBackendModeCount = Number(mediaBackendOptions?.provider_tool !== undefined)
+                + Number(mediaBackendOptions?.model_replacement !== undefined);
+              // targetCount reports configured media backend modes or the regular selectable model count.
+              // targetCount 对媒体能力报告已配置后端类型数量，否则报告常规可选模型数量。
               const targetCount = isMediaUnderstandingCapability(capability)
-                ? Number(mediaBackendSummary?.available === true)
+                ? mediaBackendModeCount
                 : uniqueProviderToolModels(targets).length;
               const conflict = conflicts.find((item) => item.capability === capability);
               return (
@@ -770,7 +792,48 @@ export function ComposerAiCapabilityControl(props: {
                 <div className="composer-capability-route-selectors">
                   <label>
                     <span>{t("composer.capability.mediaBackendMode")}</span>
-                    <strong>{selectedMediaBackendSummary.modeLabel}</strong>
+                    <Select
+                      disabled={saving}
+                      value={selectedMediaBackendSummary.mode}
+                      onValueChange={(value) => {
+                        const mode = value as PublicAiMediaUnderstandingBackendMode;
+                        setDraft((current) => ({
+                          ...current,
+                          mediaUnderstandingModes: {
+                            ...current.mediaUnderstandingModes,
+                            [selectedCapability]: mode,
+                          },
+                        }));
+                      }}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {selectedMediaBackendSummary.mode === "provider_tool"
+                          && !snapshot?.mediaUnderstandingBackendOptions?.[selectedCapability]?.provider_tool ? (
+                          <SelectItem disabled value="provider_tool">
+                            {t("composer.capability.mode.provider")}
+                          </SelectItem>
+                        ) : null}
+                        {snapshot?.mediaUnderstandingBackendOptions?.[selectedCapability]?.provider_tool ? (
+                          <SelectItem value="provider_tool">
+                            {t("composer.capability.mode.provider")}
+                          </SelectItem>
+                        ) : null}
+                        {selectedMediaBackendSummary.mode === "model_replacement"
+                          && !snapshot?.mediaUnderstandingBackendOptions?.[selectedCapability]?.model_replacement ? (
+                          <SelectItem disabled value="model_replacement">
+                            {t("composer.capability.mode.model")}
+                          </SelectItem>
+                        ) : null}
+                        {snapshot?.mediaUnderstandingBackendOptions?.[selectedCapability]?.model_replacement ? (
+                          <SelectItem value="model_replacement">
+                            {t("composer.capability.mode.model")}
+                          </SelectItem>
+                        ) : null}
+                      </SelectContent>
+                    </Select>
                   </label>
                   <label>
                     <span>{t("composer.capability.mediaFixedRoute")}</span>
@@ -998,6 +1061,9 @@ function providerToolSettingsSignature(
             .map((selection) => `${selection.connection_id.length}:${selection.connection_id}:${selection.target_id.length}:${selection.target_id}`)
             .sort(),
         ]),
+      Object.entries(settings.mediaUnderstandingModes)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([capability, mode]) => [capability, mode ?? ""]),
     ],
   );
 }
@@ -1029,7 +1095,10 @@ export function orderedProviderToolCapabilities(
 ): PublicAiProviderToolCapabilityKind[] {
   // mediaCapabilities keeps configured replacement backends visible even without a provider-tool target.
   // mediaCapabilities 让已配置的模型代替后端在没有供应商工具目标时仍然可见。
-  const mediaCapabilities = Object.keys(snapshot.mediaUnderstandingSelections ?? {})
+  const mediaCapabilities = Array.from(new Set([
+    ...Object.keys(snapshot.mediaUnderstandingSelections ?? {}),
+    ...Object.keys(snapshot.mediaUnderstandingBackendOptions ?? {}),
+  ]))
     .filter(isMediaUnderstandingCapability);
   return orderProviderToolCapabilities(
     [
@@ -1056,6 +1125,22 @@ export function isMediaUnderstandingCapability(
     || capability === "audio_understand";
 }
 
+// mediaUnderstandingModesFromSnapshot derives the default session mode from the active global route.
+// mediaUnderstandingModesFromSnapshot 从全局活动路由派生新会话的默认后端模式。
+function mediaUnderstandingModesFromSnapshot(
+  snapshot: PublicAiSettingsSnapshot,
+): Partial<Record<PublicAiMediaUnderstandingCapabilityKind, PublicAiMediaUnderstandingBackendMode>> {
+  return Object.entries(snapshot.mediaUnderstandingSelections ?? {}).reduce(
+    (result, [capability, backend]) => {
+      if (isMediaUnderstandingCapability(capability)) {
+        result[capability] = backend.mode;
+      }
+      return result;
+    },
+    {} as Partial<Record<PublicAiMediaUnderstandingCapabilityKind, PublicAiMediaUnderstandingBackendMode>>,
+  );
+}
+
 // mediaUnderstandingBackendSummary resolves one fixed backend and its current executable state.
 // mediaUnderstandingBackendSummary 解析一个固定后端及其当前可执行状态。
 function mediaUnderstandingBackendSummary(
@@ -1064,12 +1149,51 @@ function mediaUnderstandingBackendSummary(
   // t is omitted only by the pure conflict validator, which consumes availability and never renders mode labels.
   // t 仅在纯冲突校验器中省略；该校验器只消费可用性，不渲染模式标签。
   t?: ReturnType<typeof useI18n>["t"],
-): { modeLabel: string; routeLabel: string; available: boolean } | null {
-  // backend is the global closed choice shared by every session switch for this capability.
-  // backend 是此能力全部会话开关共享的全局封闭选择。
-  const backend = snapshot.mediaUnderstandingSelections?.[capability];
-  if (!backend) {
+  requestedMode?: PublicAiMediaUnderstandingBackendMode,
+): {
+  mode: PublicAiMediaUnderstandingBackendMode;
+  modeLabel: string;
+  routeLabel: string;
+  available: boolean;
+} | null {
+  // activeBackend remains the legacy/global active choice used when a session has no mode override.
+  // activeBackend 是会话没有模式覆盖时使用的旧版/全局活动选择。
+  const activeBackend = snapshot.mediaUnderstandingSelections?.[capability];
+  const mode = requestedMode ?? activeBackend?.mode;
+  if (!mode) {
     return null;
+  }
+  // backend resolves the exact independent route stored for the selected session mode.
+  // backend 解析会话选定模式中保存的精确独立路由。
+  const options = snapshot.mediaUnderstandingBackendOptions?.[capability];
+  const backend: PublicAiMediaUnderstandingBackendSelection | null = mode === "provider_tool"
+    ? options?.provider_tool
+      ? { mode, selection: options.provider_tool }
+      : activeBackend?.mode === mode
+        ? activeBackend
+        : null
+    : options?.model_replacement
+      ? {
+          mode,
+          selection: options.model_replacement.selection,
+          reasoning_effort: options.model_replacement.reasoning_effort,
+        }
+      : activeBackend?.mode === mode
+        ? activeBackend
+        : null;
+  if (!backend) {
+    // unavailableRoute preserves the selected mode as a recoverable session choice when its global route was removed.
+    // unavailableRoute 在全局路由被移除时保留会话模式，使用户仍可切换到其他可用模式。
+    return {
+      mode,
+      modeLabel: t
+        ? mode === "provider_tool"
+          ? t("composer.capability.mode.provider")
+          : t("composer.capability.mode.model")
+        : "",
+      routeLabel: t ? t("composer.capability.mediaBackendMissing") : "",
+      available: false,
+    };
   }
   if (backend.mode === "provider_tool") {
     // target resolves the exact persisted account and target without substituting another account.
@@ -1080,6 +1204,7 @@ function mediaUnderstandingBackendSummary(
       && candidate.target.contract.capability === capability
     ));
     return {
+      mode: backend.mode,
       modeLabel: t ? t("composer.capability.mode.provider") : "",
       routeLabel: target
         ? `${target.target.display_name} · ${target.connectionDisplayName}`
@@ -1125,6 +1250,7 @@ function mediaUnderstandingBackendSummary(
     ? ` · ${t("composer.capability.reasoning").replace("{effort}", backend.reasoning_effort)}`
     : "";
   return {
+    mode: backend.mode,
     modeLabel: t ? t("composer.capability.mode.model") : "",
     routeLabel: candidate
       ? `${candidate.providerDisplayName} · ${candidate.modelDisplayName} · ${candidate.connectionDisplayName}${reasoningLabel}`
@@ -1195,20 +1321,23 @@ export function providerToolSettingsConflicts(
   const conflicts: PublicAiSessionProviderToolConflict[] = [];
   for (const capability of capabilities) {
     if (isMediaUnderstandingCapability(capability)) {
-      // backendSummary validates the dedicated global media backend instead of legacy session selections.
-      // backendSummary 校验专用全局媒体后端，而不是旧会话选择。
-      const backendSummary = mediaUnderstandingBackendSummary(snapshot, capability);
-      if (!backendSummary) {
+      // mediaMode is the only session-owned media backend identity; model and account remain global.
+      // mediaMode 是会话唯一持有的媒体后端身份；模型与账号仍由全局配置持有。
+      const mediaMode = settings.mediaUnderstandingModes[capability];
+      if (!mediaMode) {
         conflicts.push({
           capability,
           kind: "missing_selection",
-          message: `Capability ${capability} has no configured media-understanding backend.`,
+          message: `Capability ${capability} has no selected media-understanding backend mode.`,
         });
-      } else if (!backendSummary.available) {
+        continue;
+      }
+      const backendSummary = mediaUnderstandingBackendSummary(snapshot, capability, undefined, mediaMode);
+      if (!backendSummary || !backendSummary.available) {
         conflicts.push({
           capability,
           kind: "target_unavailable",
-          message: `The configured media-understanding backend for ${capability} is no longer available.`,
+          message: `The selected media-understanding backend mode for ${capability} is no longer available.`,
         });
       }
       continue;

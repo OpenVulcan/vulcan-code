@@ -17564,6 +17564,7 @@ mod tests {
             )
             .expect("existing DeepSeek connection should register");
         configuration.set_model_enabled("deepseek", "deepseek-v4-flash", true);
+        configuration.set_model_enabled("deepseek", "deepseek-v4-flash-vision-exp", true);
         configuration.set_model_enabled("deepseek", "deepseek-v4-pro", true);
         runtime
             .reapply_model_catalog_overlays(&configuration)
@@ -17578,7 +17579,7 @@ mod tests {
         let catalog = catalogs
             .get("deepseek-existing-account")
             .expect("existing DeepSeek account catalog should exist");
-        assert_eq!(catalog.models.len(), 2);
+        assert_eq!(catalog.models.len(), 3);
         // flash must bind Responses and retain all three protocol variants.
         // flash 必须绑定 Responses 并保留全部三个协议变体。
         let flash = catalog
@@ -17604,6 +17605,36 @@ mod tests {
                 OPENAI_CHAT_PROFILE_ID,
                 OPENAI_RESPONSES_PROFILE_ID,
             ])
+        );
+        // vision must retain the Flash protocol contract while adding exact image input support.
+        // vision 必须保留 Flash 协议契约，同时增加精确的图片输入支持。
+        let vision = catalog
+            .models
+            .iter()
+            .find(|model| model.id == "deepseek-v4-flash-vision-exp")
+            .expect("DeepSeek V4 Flash Vision Exp must exist");
+        assert_eq!(
+            vision
+                .resolved_protocol_binding
+                .as_ref()
+                .map(|binding| binding.protocol_profile_id.as_str()),
+            Some(OPENAI_RESPONSES_PROFILE_ID)
+        );
+        assert_eq!(
+            vision
+                .protocol_variants
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                ANTHROPIC_MESSAGES_PROFILE_ID,
+                OPENAI_CHAT_PROFILE_ID,
+                OPENAI_RESPONSES_PROFILE_ID,
+            ])
+        );
+        assert_eq!(
+            vision.capabilities.input_resources,
+            vec![vulcan_ai_contract::ResourceKind::Image]
         );
         // pro must bind Responses and retain the same three protocol variants as flash.
         // pro 必须绑定 Responses，并保留与 flash 相同的三个协议变体。
@@ -17648,6 +17679,48 @@ mod tests {
             vec![vulcan_ai_contract::NativeToolKind::WebSearch],
             "the executable Flash Responses route must carry native web search"
         );
+        // visionSelection proves the executable route carries both image constraints and web search.
+        // visionSelection 证明可执行路由同时携带图片约束与联网搜索能力。
+        let vision_selection = runtime
+            .resolve_connection_model_selection(
+                &configuration,
+                "deepseek-existing-account",
+                "deepseek",
+                "deepseek-v4-flash-vision-exp",
+            )
+            .expect("existing DeepSeek account should execute Vision through Responses");
+        assert_eq!(
+            vision_selection.route.protocol_route.protocol_profile_id,
+            OPENAI_RESPONSES_PROFILE_ID
+        );
+        assert_eq!(
+            vision_selection.model.capabilities.input_resources,
+            vec![vulcan_ai_contract::ResourceKind::Image]
+        );
+        assert_eq!(
+            vision_selection.model.capabilities.provider_native_tools,
+            vec![vulcan_ai_contract::NativeToolKind::WebSearch],
+            "the executable Vision Responses route must carry native web search"
+        );
+        // imageConstraint is the route-level attachment contract consumed by request preparation.
+        // imageConstraint 是请求准备阶段消费的路由级附件契约。
+        let image_constraint = vision_selection
+            .route
+            .protocol_route
+            .input_resource_constraints
+            .first()
+            .expect("Vision route must carry its image input constraint");
+        assert_eq!(
+            image_constraint.resource_kind,
+            vulcan_ai_contract::ResourceKind::Image
+        );
+        assert_eq!(image_constraint.max_bytes, Some(32 * 1024 * 1024));
+        assert_eq!(image_constraint.max_count, Some(600));
+        assert_eq!(
+            image_constraint.reference_policy,
+            crate::ResourceReferencePolicy::LocalOnly
+        );
+        assert!(image_constraint.upload_channel_refs.is_empty());
         // proSelection proves V4 Pro now follows the exact same Responses route contract.
         // proSelection 证明 V4 Pro 现在遵循完全相同的 Responses 路由契约。
         let pro_selection = runtime

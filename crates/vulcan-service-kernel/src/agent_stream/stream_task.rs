@@ -8,13 +8,14 @@ pub(crate) mod conversation_checkpoint;
 mod finished;
 mod launch_failure;
 mod prepared;
+mod provider_route_switch;
 mod request_phase;
 mod request_trace;
 mod runtime_event;
 mod stream_exit;
 
 #[cfg(test)]
-pub(crate) use conversation_checkpoint::mark_execution_retry_snapshot_tool_execution_unsafe;
+pub(crate) use conversation_checkpoint::persist_execution_retry_tool_recovery_boundary;
 use conversation_checkpoint::{
     handle_conversation_checkpoint_stream_event, persist_prepared_execution_retry_checkpoint,
 };
@@ -35,6 +36,7 @@ pub(crate) use launch_failure::{
 pub(crate) use prepared::PreparedStreamFailureCommit;
 pub(crate) use prepared::commit_prepared_stream_failure;
 use prepared::{PreparedStreamEventAction, handle_prepared_stream_event};
+use provider_route_switch::refreshed_execution_request_after_pending_provider_route_switch;
 use request_phase::{RequestPhaseStreamEvent, handle_request_phase_stream_event};
 use request_trace::StreamRequestTraceState;
 use runtime_event::{handle_runtime_stream_event, runtime_event_hook_policy_for_execution_scope};
@@ -98,6 +100,36 @@ mod rejected_provider_boundary_tests {
         );
         assert!(retained_error.is_none());
     }
+
+    /// Verifies an unreleased Started gate remains an exact pre-dispatch retry boundary.
+    /// 验证尚未释放的 Started 闸门保持为精确的分派前重试边界。
+    #[test]
+    fn unreleased_started_gate_proves_provider_was_not_dispatched() {
+        // taskId is irrelevant when the stronger pre-dispatch proof is present.
+        // 存在更强的分派前证明时，taskId 不参与证据选择。
+        let task_id = Uuid::new_v4();
+
+        assert!(matches!(
+            failed_execution_stream_retry_evidence(true, task_id, None),
+            FailedExecutionStreamRetryEvidence::ProvenNotDispatchedBeforeProviderDispatch
+        ));
+    }
+
+    /// Verifies a released Started gate falls back to the exact durable physical-call binding.
+    /// 验证已释放的 Started 闸门会回退到精确的可靠物理调用绑定。
+    #[test]
+    fn released_started_gate_uses_exact_provider_call_binding() {
+        // taskId and providerCallId form the only accepted runtime-bound identity pair.
+        // taskId 与 providerCallId 构成唯一可接受的运行时绑定身份对。
+        let task_id = Uuid::new_v4();
+        let provider_call_id = String::from("provider-call-1");
+
+        assert!(matches!(
+            failed_execution_stream_retry_evidence(false, task_id, Some(&provider_call_id)),
+            FailedExecutionStreamRetryEvidence::RuntimeBoundary(Some((bound_task_id, bound_provider_call_id)))
+                if bound_task_id == task_id && bound_provider_call_id == provider_call_id
+        ));
+    }
 }
 
 /// Materializes and returns the durable workspace boundary for an owned stream exit without `Finished`.
@@ -151,6 +183,35 @@ enum FailedExecutionStreamRetryEvidence {
     /// The stream ran and supplies its latest exact stream-to-provider-call binding when available.
     /// 流已经运行，并在可用时提供最近一次精确的流到 Provider 调用绑定。
     RuntimeBoundary(Option<(Uuid, String)>),
+}
+
+/// Selects terminal retry evidence from the exact pre-dispatch gate state.
+/// 根据精确的分派前闸门状态选择终态重试证据。
+///
+/// # Parameters
+/// 参数
+/// `provider_dispatch_proven_absent` is true only while the current request remains before a successful durable Started release.
+/// `provider_dispatch_proven_absent` 仅在当前请求尚未成功释放可靠 Started 闸门时为 true。
+/// `active_stream_task_id` and `active_provider_call_id` identify the latest durably started physical request otherwise.
+/// `active_stream_task_id` 与 `active_provider_call_id` 在其他情况下标识最近一次可靠启动的物理请求。
+///
+/// # Returns
+/// 返回值
+/// Exact pre-dispatch proof or the strongest available runtime Provider-call binding.
+/// 返回精确的分派前证明，或当前可用的最强运行时 Provider 调用绑定。
+fn failed_execution_stream_retry_evidence(
+    provider_dispatch_proven_absent: bool,
+    active_stream_task_id: Uuid,
+    active_provider_call_id: Option<&String>,
+) -> FailedExecutionStreamRetryEvidence {
+    if provider_dispatch_proven_absent {
+        FailedExecutionStreamRetryEvidence::ProvenNotDispatchedBeforeProviderDispatch
+    } else {
+        FailedExecutionStreamRetryEvidence::RuntimeBoundary(
+            active_provider_call_id
+                .map(|provider_call_id| (active_stream_task_id, provider_call_id.clone())),
+        )
+    }
 }
 
 /// Reads the exact retained execution-retry reference for one session.
@@ -223,6 +284,13 @@ async fn finalize_failed_execution_stream_retry_lifecycle(
             return;
         }
     };
+    // Active provider drafts belong to the failed physical request and must not survive its same-request retry.
+    // 活跃 Provider 草稿属于失败的物理请求，不得在同请求重试后继续保留。
+    if let Err(error) = discard_active_stream_content_records(&app, &task_state, session_id) {
+        eprintln!(
+            "[webui-service] terminal stream failure draft cleanup failed: session={session_id} error={error}"
+        );
+    }
     // expectedReference binds every compensation step to the retry identity owned by the failed launch.
     // expectedReference 将每个补偿步骤绑定到启动失败所拥有的重试身份。
     let expected_reference = match retained_execution_retry_reference(&task_state, session_id) {
@@ -578,6 +646,9 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
         // preparedRetryCheckpointError blocks the next network-dispatch durability boundary fail closed.
         // preparedRetryCheckpointError 以失败关闭方式阻止下一次网络分派持久化屏障。
         let mut prepared_retry_checkpoint_error: Option<String> = None;
+        // providerDispatchProvenAbsent remains true from an exact request checkpoint until durable Started releases network dispatch.
+        // providerDispatchProvenAbsent 从精确请求检查点起保持 true，直到可靠 Started 放行网络分派。
+        let mut provider_dispatch_proven_absent = false;
         let intervention_started_at = current_unix_millis_value();
         let prompt_intervention = build_webui_prompt_intervention(app.clone(), task_state.clone());
         webui_after_precheck_trace(
@@ -693,12 +764,18 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                 }
                 ExecutionStreamEvent::ProviderRequestCheckpoint {
                     session_id,
+                    logical_request_id,
+                    logical_turn_id,
+                    provider_attempt_index,
                     provider_family,
                     snapshot,
                     exact_request,
                     controller_config,
                     controller_snapshot,
                 } => {
+                    // A request checkpoint is emitted before the Started durability gate and therefore proves that this attempt has not dispatched yet.
+                    // 请求检查点在 Started 可靠闸门之前发出，因此证明当前 attempt 尚未分派。
+                    provider_dispatch_proven_absent = true;
                     if let Err(error) = record_webui_provider_request_checkpoint(
                         &controller_runtime,
                         session_id,
@@ -707,12 +784,24 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                     ) {
                         eprintln!("[webui-service] provider request checkpoint failed: {error}");
                     }
+                    // retryCheckpointExpected distinguishes legacy display-only snapshots from exact pre-dispatch checkpoints.
+                    // retryCheckpointExpected 区分旧式仅展示快照与精确分派前检查点。
+                    let retry_checkpoint_expected = exact_request.is_some()
+                        || controller_config.is_some()
+                        || controller_snapshot.is_some();
                     if let (
+                        Some(logical_request_id),
+                        Some(provider_attempt_index),
                         Some(exact_request),
                         Some(controller_config),
                         Some(controller_snapshot),
-                    ) = (exact_request, controller_config, controller_snapshot)
-                    {
+                    ) = (
+                        logical_request_id,
+                        provider_attempt_index,
+                        exact_request,
+                        controller_config,
+                        controller_snapshot,
+                    ) {
                         let checkpoint_result = active_preparation
                             .as_ref()
                             .ok_or_else(|| {
@@ -726,6 +815,9 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                                     &controller_runtime,
                                     session_id,
                                     active_stream_task_id,
+                                    logical_request_id,
+                                    logical_turn_id,
+                                    provider_attempt_index,
                                     preparation,
                                     exact_request,
                                     controller_config,
@@ -738,9 +830,22 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                             );
                             prepared_retry_checkpoint_error = Some(error);
                         }
+                    } else if retry_checkpoint_expected {
+                        let error = String::from(
+                            "Exact Provider request checkpoint is missing its typed logical identity or canonical body.",
+                        );
+                        eprintln!(
+                            "[webui-service] execution retry checkpoint persistence failed: {error}"
+                        );
+                        prepared_retry_checkpoint_error = Some(error);
                     }
                 }
                 ExecutionStreamEvent::ProviderRequestTelemetry(event) => {
+                    // Legacy non-gated Started telemetry cannot retain pre-dispatch proof because the network is not waiting on a completion handle.
+                    // 旧式无闸门 Started 遥测没有完成句柄阻塞网络，因此不能保留分派前证明。
+                    if event.kind == ProviderRequestTelemetryEventKind::Started {
+                        provider_dispatch_proven_absent = false;
+                    }
                     if prepared_retry_checkpoint_error.is_some() {
                         // A rejected Started boundary owns no ledger row, so later non-durable
                         // telemetry from that physical attempt must remain outside the ledger.
@@ -768,14 +873,17 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                     }
                 }
                 ExecutionStreamEvent::ProviderRequestDurabilityBoundary { event, completion } => {
+                    // eventKind is retained across the accounting call so Started can update the exact dispatch gate state.
+                    // eventKind 跨记账调用保留，使 Started 能更新精确的分派闸门状态。
+                    let event_kind = event.kind;
                     if let Some(error) = rejected_provider_boundary_error(
                         &mut prepared_retry_checkpoint_error,
-                        event.kind,
+                        event_kind,
                     ) {
                         let _ = completion.complete(Err(error));
                         continue;
                     }
-                    if let Err(error) = handle_stream_provider_request_telemetry(
+                    let boundary_result = handle_stream_provider_request_telemetry(
                         &task_state,
                         &controller_runtime,
                         &app,
@@ -787,11 +895,25 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                         active_stream_task_id,
                         Some(completion),
                     )
-                    .await
-                    {
-                        eprintln!(
-                            "[webui-service] durable provider usage boundary failed: {error}"
-                        );
+                    .await;
+                    match boundary_result {
+                        Ok(()) => {
+                            if event_kind == ProviderRequestTelemetryEventKind::Started {
+                                // Returning success releases the Provider runtime, after which dispatch may begin immediately.
+                                // 返回成功会释放 Provider 运行时，此后网络分派可能立即开始。
+                                provider_dispatch_proven_absent = false;
+                            }
+                        }
+                        Err(error) => {
+                            if event_kind == ProviderRequestTelemetryEventKind::Started {
+                                // Failed durable Started completion proves the Provider runtime never received permission to dispatch.
+                                // 可靠 Started 完成失败证明 Provider 运行时从未获得分派许可。
+                                prepared_retry_checkpoint_error = Some(error.clone());
+                            }
+                            eprintln!(
+                                "[webui-service] durable provider usage boundary failed: {error}"
+                            );
+                        }
                     }
                 }
                 ExecutionStreamEvent::ProviderLoweringRepair { session_id, event } => {
@@ -886,39 +1008,89 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                         // 首条工具请求事件是纯工具 Provider 输出即使没有可见 Token 也开始影响重放的服务边界。
                         provider_telemetry_guard.observe_semantic_output();
                     }
-                    if vulcan_agent_runtime::agent_runtime::tool_runtime_bridge::runtime_event_requires_tool_execution_safety_barrier(&event)
-                        && let Err(error) = conversation_checkpoint::mark_execution_retry_snapshot_tool_execution_unsafe(
-                            &task_state,
-                            &controller_runtime,
-                            session_id,
-                        )
-                        .await
+                    if let Some(boundary) = event.tool_execution_boundary.as_ref() {
+                        // expectedToolRetryReference binds both persistence and failure invalidation to the same immutable owner.
+                        // expectedToolRetryReference 将持久化与失败失效都绑定到同一个不可变所有者。
+                        let expected_tool_retry_reference =
+                            conversation_checkpoint::execution_retry_reference_for_tool_boundary(
+                                &task_state,
+                                session_id,
+                            );
+                        // toolBoundaryPersistence cannot apply a late event to a concurrently replaced stop/restart snapshot.
+                        // toolBoundaryPersistence 不允许较晚事件作用到并发替换后的停止或重启快照。
+                        let tool_boundary_persistence =
+                            match expected_tool_retry_reference.as_ref() {
+                                Ok(expected_reference) => {
+                                    conversation_checkpoint::persist_execution_retry_tool_recovery_boundary(
+                                        &task_state,
+                                        &controller_runtime,
+                                        session_id,
+                                        expected_reference,
+                                        boundary,
+                                    )
+                                    .await
+                                }
+                                Err(error) => Err(error.clone()),
+                            };
+                        if let Err(error) = tool_boundary_persistence {
+                            eprintln!(
+                                "[webui-service] persist exact tool recovery boundary failed: {error}"
+                            );
+                            // blockedReason preserves the exact structural reason for the localized disabled Continue tooltip.
+                            // blockedReason 为本地化的禁用 Continue 提示保留精确结构原因。
+                            let blocked_reason =
+                                conversation_checkpoint::tool_recovery_boundary_blocked_reason(
+                                    &error,
+                                );
+                            // errorSummary retains a controlled audit message without exposing internal diagnostics to the user.
+                            // errorSummary 保留受控审计说明，同时不向用户暴露内部诊断细节。
+                            let error_summary =
+                                conversation_checkpoint::tool_recovery_boundary_error_summary(
+                                    blocked_reason,
+                                );
+                            // barrierRejected wakes the exact waiting executor with failure, so Core cannot advance after a durability error.
+                            // barrierRejected 以失败唤醒精确等待中的执行器，确保可靠性错误后 Core 无法继续推进。
+                            if let Err(rejection_error) = vulcan_agent_runtime::agent_runtime::tool_runtime_bridge::reject_runtime_event_projection_barrier_from_event(&event) {
+                            eprintln!(
+                                "[webui-service] reject tool recovery durability barrier failed: {rejection_error}"
+                            );
+                        }
+                            if let Ok(expected_reference) = expected_tool_retry_reference.as_ref() {
+                                match invalidate_execution_retry_reference_if_matches(
+                                    &task_state,
+                                    session_id,
+                                    expected_reference,
+                                    blocked_reason,
+                                    error_summary,
+                                ) {
+                                    Ok(_) => {}
+                                    Err(invalidation_error) => {
+                                        eprintln!(
+                                            "[webui-service] invalidate failed tool recovery boundary failed: {invalidation_error}"
+                                        );
+                                    }
+                                }
+                            }
+                            if let Err(summary_error) =
+                                emit_conversation_continuation_summary_changed(
+                                    &app,
+                                    &task_state,
+                                    session_id,
+                                )
+                            {
+                                eprintln!(
+                                    "[webui-service] emit failed tool recovery boundary summary failed: {summary_error}"
+                                );
+                            }
+                            continue;
+                        }
+                    }
+                    if event.kind
+                        == vulcan_agent_runtime::agent_runtime::events::RuntimeEventKind::ToolBatchPrepared
                     {
-                        eprintln!("[webui-service] mark tool retry boundary unsafe failed: {error}");
-                        // barrierRejected wakes the exact waiting executor with failure, so the external tool body cannot begin after a durability error.
-                        // barrierRejected 以失败唤醒精确等待中的执行器，确保可靠性错误后外部工具主体无法开始。
-                        if let Err(rejection_error) = vulcan_agent_runtime::agent_runtime::tool_runtime_bridge::reject_runtime_event_projection_barrier_from_event(&event) {
+                        if let Err(error) = vulcan_agent_runtime::agent_runtime::tool_runtime_bridge::acknowledge_runtime_event_projection_barrier_from_event(&event) {
                             eprintln!(
-                                "[webui-service] reject tool execution safety barrier failed: {rejection_error}"
-                            );
-                        }
-                        if let Err(invalidation_error) = invalidate_execution_retry_reference(
-                            &task_state,
-                            session_id,
-                            "retry_snapshot_transition_failed",
-                            "The tool execution safety boundary could not be durably published before dispatch.",
-                        ) {
-                            eprintln!(
-                                "[webui-service] invalidate failed tool execution safety boundary failed: {invalidation_error}"
-                            );
-                        }
-                        if let Err(summary_error) = emit_conversation_continuation_summary_changed(
-                            &app,
-                            &task_state,
-                            session_id,
-                        ) {
-                            eprintln!(
-                                "[webui-service] emit failed tool execution safety boundary summary failed: {summary_error}"
+                                "[webui-service] acknowledge durable tool batch boundary failed: {error}"
                             );
                         }
                         continue;
@@ -950,6 +1122,85 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                     conversation_state,
                     last_successful_provider_usage,
                 ),
+                ExecutionStreamEvent::ProviderRouteSwitchRequired {
+                    session_id,
+                    conversation_state,
+                    reason,
+                    provider_request_continuation,
+                } => {
+                    match refreshed_execution_request_after_pending_provider_route_switch(
+                        &task_state,
+                        &controller_runtime,
+                        &agent_runtime,
+                        active_stream_task_id,
+                        &request,
+                        conversation_state,
+                        provider_request_continuation,
+                    )
+                    .await
+                    {
+                        Ok(updated_request) => {
+                            webui_trace(
+                                "stream_pending_provider_route_restarting",
+                                format!("session={session_id} reason={reason}"),
+                            );
+                            let owns_active_stream_entry = task_state
+                                .lock()
+                                .ok()
+                                .and_then(|mut guard| {
+                                    remove_active_stream_task_if_id(
+                                        &mut guard,
+                                        session_id,
+                                        active_stream_task_id,
+                                    )
+                                })
+                                .is_some();
+                            if !owns_active_stream_entry {
+                                return;
+                            }
+                            spawn_agent_stream_task_with_auto_compaction_state(
+                                app.clone(),
+                                task_state.clone(),
+                                controller_runtime.clone(),
+                                agent_runtime.clone(),
+                                updated_request,
+                                expected_kernel_generation,
+                                expected_kernel_turn_id.clone(),
+                                false,
+                            );
+                            return;
+                        }
+                        Err(error) => {
+                            eprintln!(
+                                "[webui-service] pending Provider route activation failed: session={session_id} reason={reason} error={error}"
+                            );
+                            let failure_commit = commit_prepared_stream_failure(
+                                &app,
+                                &task_state,
+                                session_id,
+                                active_stream_task_id,
+                                "pending Provider route activation failed",
+                            );
+                            if failure_commit == PreparedStreamFailureCommit::Committed {
+                                finalize_failed_execution_stream_retry_lifecycle(
+                                    app.clone(),
+                                    task_state.clone(),
+                                    controller_runtime.clone(),
+                                    session_id,
+                                    SessionTerminalPersistenceOwner::StreamTask(
+                                        active_stream_task_id,
+                                    ),
+                                    FailedExecutionStreamRetryEvidence::ProvenNotDispatchedBeforeProviderDispatch,
+                                    format!(
+                                        "The exact pending Provider route could not be activated before the next request: {error}"
+                                    ),
+                                )
+                                .await;
+                            }
+                            return;
+                        }
+                    }
+                }
                 ExecutionStreamEvent::ContextCompactionRequired {
                     session_id,
                     conversation_state,
@@ -1132,7 +1383,32 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                     // finished_session_id keeps the exact owner available before the report moves into terminal handling.
                     // finished_session_id 在报告移入终态处理前保留精确所属会话。
                     let finished_session_id = report.session_id;
-                    if let Err(error) = seal_stream_content_records(
+                    if report.error.is_some() {
+                        // A failed physical request cannot retain partial output that the exact retry will generate again.
+                        // 失败的物理请求不能保留精确重试会再次生成的局部输出。
+                        match discard_active_stream_content_records(
+                            &app,
+                            &task_state,
+                            finished_session_id,
+                        ) {
+                            Ok(_) => record_ids = SessionStreamingRecordIds::default(),
+                            Err(error) => {
+                                eprintln!(
+                                    "[webui-service] discard failed content records failed: {error}"
+                                );
+                                if let Err(seal_error) = seal_stream_content_records(
+                                    &app,
+                                    &task_state,
+                                    finished_session_id,
+                                    &mut record_ids,
+                                ) {
+                                    eprintln!(
+                                        "[webui-service] seal failed content records fallback failed: {seal_error}"
+                                    );
+                                }
+                            }
+                        }
+                    } else if let Err(error) = seal_stream_content_records(
                         &app,
                         &task_state,
                         finished_session_id,
@@ -1148,7 +1424,11 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                         active_stream_task_id,
                         stream_task_started_at,
                         execution_provider_goal_id.as_deref(),
-                        active_provider_call_id.as_deref(),
+                        failed_execution_stream_retry_evidence(
+                            provider_dispatch_proven_absent,
+                            active_stream_task_id,
+                            active_provider_call_id.as_ref(),
+                        ),
                         report,
                     )
                     .await
@@ -1180,12 +1460,20 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
         {
             eprintln!("[webui-service] transient reasoning status clear failed: {error}");
         }
-        // Remaining identities belong to non-Finished exits such as exhaustion or stale ownership and must not remain active.
-        // 剩余身份属于流耗尽或旧所有权等非 Finished 退出路径，不能继续保持活跃状态。
-        if let Err(error) =
-            seal_stream_content_records(&app, &task_state, session_id, &mut record_ids)
-        {
-            eprintln!("[webui-service] seal exiting content records failed: {error}");
+        // Remaining identities belong to an incomplete physical request and must not become duplicate visible output after retry.
+        // 剩余身份属于未完成的物理请求，重试后不得成为重复的可见输出。
+        match discard_active_stream_content_records(&app, &task_state, session_id) {
+            Ok(_) => {}
+            Err(error) => {
+                eprintln!("[webui-service] discard exiting content records failed: {error}");
+                if let Err(seal_error) =
+                    seal_stream_content_records(&app, &task_state, session_id, &mut record_ids)
+                {
+                    eprintln!(
+                        "[webui-service] seal exiting content records fallback failed: {seal_error}"
+                    );
+                }
+            }
         }
         // stream_exit_outcome records the exact ownership decision made after polling stops.
         // stream_exit_outcome 记录轮询停止后作出的精确所有权决策。
@@ -1220,16 +1508,29 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                 };
             // refreezeResult closes the claimed sidecar before a new terminal continuation generation is published.
             // refreezeResult 在发布新的终态 Continue 代际前关闭已领取 sidecar。
-            let refreeze_result =
-                conversation_checkpoint::refreeze_claimed_execution_retry_snapshot(
-                    &task_state,
-                    &controller_runtime,
-                    session_id,
-                    active_provider_call_id
-                        .as_ref()
-                        .map(|provider_call_id| (active_stream_task_id, provider_call_id.clone())),
-                    "The execution stream ended before an authoritative Finished event.",
-                );
+            let refreeze_result = match failed_execution_stream_retry_evidence(
+                provider_dispatch_proven_absent,
+                active_stream_task_id,
+                active_provider_call_id.as_ref(),
+            ) {
+                FailedExecutionStreamRetryEvidence::ProvenNotDispatchedBeforeProviderDispatch => {
+                    refreeze_claimed_execution_retry_snapshot_before_provider_dispatch(
+                        &task_state,
+                        &controller_runtime,
+                        session_id,
+                        "The execution stream ended before an authoritative Finished event.",
+                    )
+                }
+                FailedExecutionStreamRetryEvidence::RuntimeBoundary(provider_call_binding) => {
+                    conversation_checkpoint::refreeze_claimed_execution_retry_snapshot(
+                        &task_state,
+                        &controller_runtime,
+                        session_id,
+                        provider_call_binding,
+                        "The execution stream ended before an authoritative Finished event.",
+                    )
+                }
+            };
             if let Err(error) = refreeze_result {
                 eprintln!("[webui-service] refreeze interrupted execution retry failed: {error}");
                 // A failed refreeze must invalidate the exact in-memory claim before any later duplicate can classify it as admission-in-flight.
@@ -1424,90 +1725,16 @@ async fn handle_stream_provider_request_telemetry(
     active_stream_task_id: Uuid,
     completion: Option<ProviderRequestDurabilityCompletion>,
 ) -> Result<(), String> {
-    // providerCallBindingResult atomically binds the typed Started identity to both stream-local and retained task ownership.
-    // providerCallBindingResult 将强类型 Started 身份原子绑定到流局部状态与保留任务所有权。
-    let provider_call_binding_result = if event.kind == ProviderRequestTelemetryEventKind::Started {
-        event
-            .provider_call_id()
-            .map(str::to_string)
-            .and_then(|provider_call_id| {
-                let mut guard = state
-                    .lock()
-                    .map_err(|error| format!("failed to lock service state: {error}"))?;
-                if !bind_active_stream_task_provider_call_if_id(
-                    &mut guard,
-                    event.session_id,
-                    active_stream_task_id,
-                    provider_call_id.clone(),
-                ) {
-                    return Err(String::from(
-                        "Provider Started boundary lost exact active-stream ownership.",
-                    ));
-                }
-                *active_provider_call_id = Some(provider_call_id);
-                Ok(())
-            })
+    // eventKind and payload facts survive ownership transfer into durable accounting.
+    // eventKind 与载荷事实会在事件所有权移入可靠记账后继续使用。
+    let event_kind = event.kind;
+    let event_session_id = event.session_id;
+    let started_provider_call_id = if event_kind == ProviderRequestTelemetryEventKind::Started {
+        event.provider_call_id().map(str::to_string).map(Some)
     } else {
-        Ok(())
+        Ok(None)
     };
-    match event.kind {
-        ProviderRequestTelemetryEventKind::Started => {
-            *active_provider_goal_id = match session_goal_id_for_provider_request(
-                state,
-                event.session_id,
-                execution_provider_goal_id.as_deref(),
-            ) {
-                Ok(goal_id) => {
-                    if let Some(goal_id) = goal_id.as_ref() {
-                        *execution_provider_goal_id = Some(goal_id.clone());
-                        // The retained task binding lets an immediate user stop pause a Goal created during this execution.
-                        // 保留任务绑定使用户立即停止时也能暂停当前执行期间创建的目标。
-                        match state.lock() {
-                            Ok(mut guard) => {
-                                let _ = bind_active_stream_task_goal_if_id(
-                                    &mut guard,
-                                    event.session_id,
-                                    active_stream_task_id,
-                                    goal_id.clone(),
-                                );
-                            }
-                            Err(error) => {
-                                eprintln!(
-                                    "[webui-service] provider request goal task binding failed: {error}"
-                                );
-                            }
-                        }
-                    }
-                    goal_id
-                }
-                Err(error) => {
-                    eprintln!("[webui-service] provider request goal binding failed: {error}");
-                    None
-                }
-            };
-        }
-        ProviderRequestTelemetryEventKind::Completed => {
-            // completedGoalId is consumed exactly once with the physical request terminal event.
-            // completedGoalId 随物理请求终态事件恰好消费一次。
-            let completed_goal_id = active_provider_goal_id.take();
-            if let (Some(goal_id), Some(usage)) =
-                (completed_goal_id.as_deref(), event.completed_usage.as_ref())
-                && let Err(error) = account_session_goal_provider_usage(
-                    state,
-                    controller_runtime,
-                    event.session_id,
-                    goal_id,
-                    usage,
-                )
-                .await
-            {
-                eprintln!("[webui-service] provider goal usage accounting failed: {error}");
-            }
-        }
-        ProviderRequestTelemetryEventKind::Dispatched
-        | ProviderRequestTelemetryEventKind::FirstToken
-        | ProviderRequestTelemetryEventKind::Retrying => {}
-    }
+    let completed_usage = event.completed_usage.clone();
     // accountingResult owns authoritative ledger mutation and its durable boundary.
     // accountingResult 持有权威账本变更及其可靠边界。
     let accounting_result = process_provider_request_telemetry_event(
@@ -1519,6 +1746,96 @@ async fn handle_stream_provider_request_telemetry(
         "provider_usage_telemetry",
     )
     .await;
+    // providerCallBindingResult binds Started identity only after its authoritative ledger boundary is durable.
+    // providerCallBindingResult 仅在 Started 权威账本边界可靠持久化后绑定调用身份。
+    let provider_call_binding_result = if accounting_result.is_ok() {
+        started_provider_call_id.and_then(|provider_call_id| {
+            let Some(provider_call_id) = provider_call_id else {
+                return Ok(());
+            };
+            // The stream-local identity is retained after durability even if the registry ownership check fails closed.
+            // 即使注册表所有权校验失败关闭，流局部身份也会在可靠持久化后保留。
+            *active_provider_call_id = Some(provider_call_id.clone());
+            let mut guard = state
+                .lock()
+                .map_err(|error| format!("failed to lock service state: {error}"))?;
+            if !bind_active_stream_task_provider_call_if_id(
+                &mut guard,
+                event_session_id,
+                active_stream_task_id,
+                provider_call_id,
+            ) {
+                return Err(String::from(
+                    "Provider Started boundary lost exact active-stream ownership.",
+                ));
+            }
+            Ok(())
+        })
+    } else {
+        Ok(())
+    };
+    // Durable owner-side lifecycle state must never get ahead of the authoritative Provider ledger.
+    // 所有者侧生命周期状态绝不能领先于权威 Provider 账本。
+    if accounting_result.is_ok() && provider_call_binding_result.is_ok() {
+        match event_kind {
+            ProviderRequestTelemetryEventKind::Started => {
+                *active_provider_goal_id = match session_goal_id_for_provider_request(
+                    state,
+                    event_session_id,
+                    execution_provider_goal_id.as_deref(),
+                ) {
+                    Ok(goal_id) => {
+                        if let Some(goal_id) = goal_id.as_ref() {
+                            *execution_provider_goal_id = Some(goal_id.clone());
+                            // The retained task binding lets an immediate user stop pause a Goal created during this execution.
+                            // 保留任务绑定使用户立即停止时也能暂停当前执行期间创建的目标。
+                            match state.lock() {
+                                Ok(mut guard) => {
+                                    let _ = bind_active_stream_task_goal_if_id(
+                                        &mut guard,
+                                        event_session_id,
+                                        active_stream_task_id,
+                                        goal_id.clone(),
+                                    );
+                                }
+                                Err(error) => {
+                                    eprintln!(
+                                        "[webui-service] provider request goal task binding failed: {error}"
+                                    );
+                                }
+                            }
+                        }
+                        goal_id
+                    }
+                    Err(error) => {
+                        eprintln!("[webui-service] provider request goal binding failed: {error}");
+                        None
+                    }
+                };
+            }
+            ProviderRequestTelemetryEventKind::Completed => {
+                // completedGoalId is consumed exactly once with the durably retained physical request terminal event.
+                // completedGoalId 随可靠保留的物理请求终态事件恰好消费一次。
+                let completed_goal_id = active_provider_goal_id.take();
+                if let (Some(goal_id), Some(usage)) =
+                    (completed_goal_id.as_deref(), completed_usage.as_ref())
+                    && let Err(error) = account_session_goal_provider_usage(
+                        state,
+                        controller_runtime,
+                        event_session_id,
+                        goal_id,
+                        usage,
+                    )
+                    .await
+                {
+                    eprintln!("[webui-service] provider goal usage accounting failed: {error}");
+                }
+            }
+            ProviderRequestTelemetryEventKind::Dispatched
+            | ProviderRequestTelemetryEventKind::FirstToken
+            | ProviderRequestTelemetryEventKind::Retrying => {}
+        }
+    }
     // result keeps ownership binding failures fail-closed without hiding a simultaneous accounting failure.
     // result 以失败关闭方式保留所有权绑定失败，同时不隐藏并发发生的记账失败。
     let result = match (provider_call_binding_result, accounting_result) {

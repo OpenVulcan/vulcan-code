@@ -5,6 +5,7 @@ use super::*;
 use vulcan_agent_runtime::agent_runtime::prompt_compaction::PromptCompactionExecutionProfile;
 use vulcan_agent_runtime::conversation_protocol::conversation_state_from_session_messages;
 use vulcan_agent_runtime::provider_config::PersistedPromptOutputStyleSelection;
+use vulcan_context::SessionConversationRecord;
 use vulcan_context_injection::{InjectionInsert, InjectionKind};
 use vulcan_workbench_model::SessionTurnStats;
 
@@ -148,17 +149,38 @@ fn refreshed_auto_compaction_request_uses_restored_checkpoint_start_mode() {
     // sessionId identifies the exact compacted runtime state and request owner.
     // sessionId 标识精确的已压缩运行态与请求所有者。
     let session_id = SessionId::new_v4();
-    // compactedState contains the internal continuation seed already produced by the compaction draft.
-    // compactedState 包含压缩候选已经生成的内部续接种子。
+    // compactedState contains one real visible user record plus a different Provider-only continuation tail.
+    // compactedState 包含一条真实可见用户记录，以及正文不同的仅 Provider 可见续接尾项。
     let compacted_state = SessionConversationState {
-        messages: vec![SessionConversationMessage {
-            id: String::from("compacted-continuation-seed"),
-            payload: SessionConversationPayload::UserText {
-                text: String::from("继续"),
-                attachments: Vec::new(),
+        messages: vec![
+            SessionConversationMessage {
+                id: String::from("original-user-message"),
+                payload: SessionConversationPayload::UserText {
+                    text: String::from("继续"),
+                    attachments: Vec::new(),
+                },
             },
+            SessionConversationMessage {
+                id: String::from("compacted-continuation-seed"),
+                payload: SessionConversationPayload::UserText {
+                    text: String::from(
+                        "Automatic context compaction was applied while the current task was in progress.",
+                    ),
+                    attachments: Vec::new(),
+                },
+            },
+        ],
+        records: vec![SessionConversationRecord {
+            id: String::from("original-user-record"),
+            kind: SessionMessageKind::User,
+            record_kind: SessionMessageRecordKind::Transcript,
+            visible: true,
+            title: String::from("用户指令"),
+            body: String::from("继续"),
+            metadata: None,
+            created_at: String::from("1780000000000"),
         }],
-        ..SessionConversationState::default()
+        continuation: Default::default(),
     };
     // serviceState provides the retained post-compaction runtime row read by the refresh helper.
     // serviceState 提供刷新辅助函数读取的压缩后保留运行态行。
@@ -190,6 +212,7 @@ fn refreshed_auto_compaction_request_uses_restored_checkpoint_start_mode() {
         runtime_policy: vulcan_session_core::ExecutionRuntimePolicy::context_compaction(),
         conversation_hook_turn_id: None,
         execution_retry_snapshot: None,
+        provider_request_continuation: None,
         execution_agent_id: None,
         agent_prompt_snapshot: None,
         provider_id_override: None,
@@ -199,6 +222,7 @@ fn refreshed_auto_compaction_request_uses_restored_checkpoint_start_mode() {
         provider_usage_budget_baseline: None,
         provider_usage_context_generation_id: None,
         provider_tool_selections_override: Default::default(),
+        provider_tool_media_understanding_modes_override: Default::default(),
         provider_tool_enabled_capabilities_override: Default::default(),
         provider_extension_target_sets_override: Default::default(),
         subagent_prompt_context: None,
@@ -254,11 +278,14 @@ fn refreshed_auto_compaction_request_uses_restored_checkpoint_start_mode() {
     )
     .expect("post-compaction request should refresh");
 
-    assert_eq!(refreshed.conversation_state.messages.len(), 1);
+    assert_eq!(refreshed.conversation_state.messages.len(), 2);
     assert_eq!(
-        refreshed.conversation_state.messages[0].id,
+        refreshed.conversation_state.messages[1].id,
         "compacted-continuation-seed"
     );
+    assert_eq!(refreshed.conversation_state.records.len(), 1);
+    assert_eq!(refreshed.conversation_state.records[0].body, "继续");
+    assert!(refreshed.conversation_state.records[0].visible);
     assert_eq!(
         refreshed.turn_start_mode,
         Some(
@@ -436,7 +463,7 @@ fn webui_context_compaction_draft_preserves_pending_model_switch_audit() {
     model_switch_entry.visible = true;
     model_switch_entry.metadata = Some(json!({
         "notice_kind": "model_switch",
-        "activation": "next_submission",
+        "activation": "next_provider_request",
         "provider_id": "command-code",
         "provider_name": "Command Code",
         "connection_id": "command-code-account",

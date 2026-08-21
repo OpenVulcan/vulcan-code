@@ -1161,6 +1161,7 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
             .runs_completed_turn_hooks()
             .then_some(expected_turn_id),
         execution_retry_snapshot: input.start.execution_retry_snapshot,
+        provider_request_continuation: None,
         execution_agent_id: None,
         agent_prompt_snapshot: None,
         provider_id_override: None,
@@ -1186,6 +1187,9 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
                     .collect()
             },
         ),
+        provider_tool_media_understanding_modes_override: runtime_state
+            .provider_tool_settings_initialized
+            .then(|| runtime_state.media_understanding_modes.clone()),
         provider_tool_enabled_capabilities_override: runtime_state
             .provider_tool_settings_initialized
             .then(|| runtime_state.provider_tool_enabled_capabilities.clone()),

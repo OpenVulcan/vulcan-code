@@ -326,7 +326,11 @@ fn deepseek_manifest_declares_only_current_official_models_and_protocols() {
         .collect::<BTreeSet<_>>();
     assert_eq!(
         declared_model_ids,
-        BTreeSet::from(["deepseek-v4-flash", "deepseek-v4-pro"])
+        BTreeSet::from([
+            "deepseek-v4-flash",
+            "deepseek-v4-flash-vision-exp",
+            "deepseek-v4-pro",
+        ])
     );
     assert_eq!(
         compiled.catalog_membership_policy,
@@ -414,6 +418,100 @@ fn deepseek_manifest_declares_only_current_official_models_and_protocols() {
             .provider_native_tools
             .is_empty(),
         "Flash Chat must not declare provider-native web search"
+    );
+    // vision owns the Flash contract plus one exact image-input capability and constraint set.
+    // vision 持有 Flash 契约，并额外声明一组精确的图片输入能力与约束。
+    let vision = compiled
+        .rule_for_model("official-api", None, "deepseek-v4-flash-vision-exp")
+        .expect("DeepSeek V4 Flash Vision Exp rule must exist");
+    // visionCapabilities is the model-level authority that makes image understanding selectable.
+    // visionCapabilities 是使图片理解可被选择的模型级权威声明。
+    let vision_capabilities = vision
+        .capabilities
+        .as_ref()
+        .expect("DeepSeek V4 Flash Vision Exp capabilities must exist");
+    assert_eq!(
+        vision.display_name.as_deref(),
+        Some("DeepSeek-V4-Flash-Vision-Exp")
+    );
+    assert_eq!(
+        vision
+            .supported_protocols
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            "anthropic-messages.v1",
+            "openai-chat-completions.v1",
+            "openai-responses.v1",
+        ])
+    );
+    assert_eq!(
+        vision.selected_protocol.as_deref(),
+        Some("openai-responses.v1")
+    );
+    assert_eq!(
+        vision_capabilities.input_resources,
+        vec![vulcan_ai_contract::ResourceKind::Image]
+    );
+    assert_eq!(
+        vision_capabilities.reasoning_efforts,
+        flash_capabilities.reasoning_efforts
+    );
+    assert_eq!(
+        vision_capabilities.context_limit,
+        flash_capabilities.context_limit
+    );
+    assert_eq!(
+        vision_capabilities.output_limit,
+        flash_capabilities.output_limit
+    );
+    // visionImageConstraint freezes the limits representable by the current attachment contract.
+    // visionImageConstraint 冻结当前附件契约能够表达的图片限制。
+    let vision_image_constraint = vision
+        .input_resource_constraints
+        .first()
+        .expect("Vision model must declare an image input constraint");
+    assert_eq!(vision.input_resource_constraints.len(), 1);
+    assert_eq!(
+        vision_image_constraint.resource_kind,
+        vulcan_ai_contract::ResourceKind::Image
+    );
+    assert_eq!(
+        vision_image_constraint.accepted_mime_types,
+        vec!["image/jpeg", "image/png", "image/gif", "image/webp",]
+    );
+    assert_eq!(vision_image_constraint.max_bytes, Some(32 * 1024 * 1024));
+    assert_eq!(vision_image_constraint.max_count, Some(600));
+    assert_eq!(
+        vision_image_constraint.reference_policy,
+        vulcan_provider_adapters::ResourceReferencePolicy::LocalOnly
+    );
+    assert!(vision_image_constraint.upload_channel_refs.is_empty());
+    assert_eq!(
+        vision
+            .protocol_capabilities
+            .get("anthropic-messages.v1")
+            .expect("Vision Anthropic capabilities must exist")
+            .provider_native_tools,
+        vec![vulcan_ai_contract::NativeToolKind::WebSearch]
+    );
+    assert_eq!(
+        vision
+            .protocol_capabilities
+            .get("openai-responses.v1")
+            .expect("Vision Responses capabilities must exist")
+            .provider_native_tools,
+        vec![vulcan_ai_contract::NativeToolKind::WebSearch]
+    );
+    assert!(
+        vision
+            .protocol_capabilities
+            .get("openai-chat-completions.v1")
+            .expect("Vision Chat capabilities must exist")
+            .provider_native_tools
+            .is_empty(),
+        "Vision Chat must not declare provider-native web search"
     );
     // pro owns the same protocol set and selected Responses route as flash.
     // pro 持有与 flash 相同的协议集合，并同样选定 Responses 路由。

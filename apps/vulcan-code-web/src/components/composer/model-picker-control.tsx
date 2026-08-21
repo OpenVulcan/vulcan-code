@@ -99,6 +99,22 @@ export interface ModelPickerModelGroup {
   accounts: ModelPickerChoice[];
 }
 
+// resolveModelPickerDisplayedChoice preserves an exact requested route and uses an active row only when no exact value is requested.
+// resolveModelPickerDisplayedChoice 保留精确请求路由，仅在未请求精确值时使用激活行。
+// Parameters: choices contains authoritative executable rows and value is the exact provider, model, and connection key.
+// 参数：choices 包含权威可执行行，value 是精确 Provider、模型与连接键。
+// Returns: the exact requested row, the backend-active row for an empty value, or undefined when explicit reselection is required.
+// 返回值：返回精确请求行、空值时的后端激活行，或在必须显式重新选择时返回 undefined。
+export function resolveModelPickerDisplayedChoice(
+  choices: ModelPickerChoice[],
+  value: string,
+): ModelPickerChoice | undefined {
+  if (value) {
+    return choices.find((choice) => modelPickerChoiceKey(choice) === value);
+  }
+  return choices.find((choice) => choice.active);
+}
+
 // ModelPickerControl renders the shared workbench model filter trigger and list.
 // ModelPickerControl 渲染共享的工作台模型筛选触发器与列表。
 export function ModelPickerControl(props: {
@@ -149,12 +165,11 @@ export function ModelPickerControl(props: {
       providerName: localizedProviderName(choice.providerId, choice.providerName, t),
     }))
   ), [props.providers, t]);
-  const exactChoice = choices.find((choice) => modelPickerChoiceKey(choice) === props.value);
-  // selectedChoice degrades from an obsolete exact account to the backend-resolved active row.
-  // selectedChoice 从已失效的精确账号降级到后端解析出的当前行。
-  const selectedChoice = exactChoice ?? choices.find((choice) => choice.active) ?? choices[0];
+  // selectedChoice never substitutes another provider, model, or account for an unavailable exact value.
+  // selectedChoice 绝不会用其他 Provider、模型或账号替代不可用的精确值。
+  const selectedChoice = resolveModelPickerDisplayedChoice(choices, props.value);
   const selectedModelLabel = selectedChoice?.modelName ?? props.unavailableValueLabel ?? props.fallbackLabel;
-  const selectedProviderLabel = selectedChoice?.providerName ?? (props.value ? props.value.split("/")[0] : "-");
+  const selectedProviderLabel = selectedChoice?.providerName ?? "-";
   // selectedAccountLabel is the exact credential label owned by the selected connection.
   // selectedAccountLabel 是所选连接拥有的精确凭据标签。
   const selectedAccountLabel = selectedChoice?.accountName ?? "-";

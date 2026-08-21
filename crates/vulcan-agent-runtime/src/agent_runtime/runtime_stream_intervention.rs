@@ -10,6 +10,13 @@ use vulcan_core::controller::VulcanCoreController;
 /// 应用可回放安全的运行时提示词干预时产生的类型化宿主错误。
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RuntimePromptInterventionError {
+    /// A session-scoped exact model selection must replace the frozen route before the next Provider request.
+    /// 会话级精确模型选择必须在下一次 Provider 请求前替换当前冻结路由。
+    ProviderRouteSwitchRequired {
+        /// Human-readable control-boundary diagnostic for the service-owned restart.
+        /// 供服务层重启使用的人类可读控制边界诊断。
+        message: String,
+    },
     /// Shared retained state could not be locked or accessed.
     /// 无法锁定或访问共享保留状态。
     StateAccess {
@@ -62,6 +69,12 @@ impl Display for RuntimePromptInterventionError {
     /// 为 Core 与用户可见诊断格式化一条类型化干预错误。
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::ProviderRouteSwitchRequired { message } => {
+                write!(
+                    formatter,
+                    "Provider route switch is required before the next request: {message}"
+                )
+            }
             Self::StateAccess { message } => {
                 write!(
                     formatter,

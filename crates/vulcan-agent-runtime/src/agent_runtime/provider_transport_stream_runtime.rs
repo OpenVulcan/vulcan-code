@@ -10,7 +10,7 @@ use crate::agent_runtime::provider_transport_entry_inputs::{
 };
 use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
 use crate::agent_runtime::provider_transport_request::{
-    ProviderRouteIdentity, ProviderTransportTurnStartMode,
+    ProviderRouteIdentity, ProviderTransportRecoveryAction, ProviderTransportTurnStartMode,
 };
 use crate::agent_runtime::provider_transport_request_budget::{
     BudgetCheckedStreamingAdapter, ProviderBudgetRequest, ProviderRequestBudgetGuard,
@@ -39,8 +39,130 @@ use vulcan_core::provider::VulcanStreamingProviderAdapter;
 use vulcan_core::tool::AllowAllToolPolicy;
 use vulcan_core::types::{
     ControllerConfig as CoreControllerConfig, ConversationSnapshot as CoreConversationSnapshot,
-    CoreError, ProviderTurnResponse as CoreProviderTurnResponse,
+    CoreError, ProviderTurnResponse as CoreProviderTurnResponse, RestoredToolBatchRecovery,
+    RestoredToolInvocation, RestoredToolInvocationDisposition, RestoredUserFollowup,
 };
+use vulcan_workbench_model::ExecutionRetryToolState;
+
+/// Core-owned recovery action resolved from one strictly validated retry sidecar.
+/// 从一份经过严格校验的重试 sidecar 解析出的 Core 自有恢复动作。
+enum CoreControllerRecoveryAction {
+    /// Reconcile one exact retained tool batch.
+    /// 协调一批精确保留的工具调用。
+    ExecuteToolBatch {
+        /// Exact tool dispositions resolved from durable retry slots.
+        /// 从可靠重试槽位解析出的精确工具处置集合。
+        tools: Vec<RestoredToolInvocation>,
+        /// Optional user follow-up appended after tool reconciliation.
+        /// 在工具对账后追加的可选用户补充消息。
+        user_followup: Option<RestoredUserFollowup>,
+    },
+    /// Resume one retained Provider loop, optionally after a user follow-up.
+    /// 恢复一段保留的 Provider 循环，并可先追加用户补充消息。
+    ResumeProviderLoop {
+        /// Optional user follow-up appended before the next Provider request.
+        /// 在下一次 Provider 请求前追加的可选用户补充消息。
+        user_followup: Option<RestoredUserFollowup>,
+    },
+    /// Finalize one retained tool-free assistant tail.
+    /// 完成一条已保留的无工具助手尾部。
+    FinalizeAssistant,
+}
+
+/// Resolves workbench retry slots into Core dispositions before the durable batch boundary validates bindings.
+/// 在持久化批次边界校验工具绑定前，将工作台重试槽位解析为 Core 处置方式。
+fn resolve_core_controller_recovery_action(
+    action: ProviderTransportRecoveryAction,
+) -> Result<CoreControllerRecoveryAction, String> {
+    match action {
+        ProviderTransportRecoveryAction::FinalizeAssistant => {
+            Ok(CoreControllerRecoveryAction::FinalizeAssistant)
+        }
+        ProviderTransportRecoveryAction::ResumeProviderLoop { user_followup } => {
+            Ok(CoreControllerRecoveryAction::ResumeProviderLoop {
+                user_followup: resolve_restored_user_followup(user_followup)?,
+            })
+        }
+        ProviderTransportRecoveryAction::ExecuteToolBatch {
+            tools,
+            user_followup,
+        } => {
+            // followupSupersedesNotStartedTools prevents an obsolete, proven-unstarted call from running before the user's newer instruction.
+            // followupSupersedesNotStartedTools 防止已被新用户指令取代且确认未启动的旧调用在补充消息前执行。
+            let followup_supersedes_not_started_tools = user_followup.is_some();
+            // restoredTools preserves original Provider call order while assigning one exact recovery disposition per durable slot.
+            // restoredTools 保持原始 Provider 调用顺序，并为每个可靠槽位分配一种精确恢复处置。
+            let mut restored_tools = Vec::with_capacity(tools.len());
+            for progress in tools {
+                // disposition is derived only from the durable per-tool state and the explicit user-follow-up boundary.
+                // disposition 仅由可靠逐工具状态与显式用户补充边界推导。
+                let disposition = match progress.state {
+                    ExecutionRetryToolState::NotStarted
+                        if followup_supersedes_not_started_tools =>
+                    {
+                        RestoredToolInvocationDisposition::CancelledBeforeExecution
+                    }
+                    ExecutionRetryToolState::NotStarted => {
+                        RestoredToolInvocationDisposition::Execute
+                    }
+                    ExecutionRetryToolState::Running | ExecutionRetryToolState::OutcomeUnknown => {
+                        RestoredToolInvocationDisposition::OutcomeUnknown
+                    }
+                    ExecutionRetryToolState::Completed | ExecutionRetryToolState::Failed => {
+                        // result is mandatory for both terminal tool states because replay must reuse the exact retained output.
+                        // result 对两种工具终态都是必需的，因为恢复必须复用精确保留输出。
+                        let result = progress.result.ok_or_else(|| {
+                            format!(
+                                "Durable tool result is missing for `{}`.",
+                                progress.request.tool_call_id
+                            )
+                        })?;
+                        RestoredToolInvocationDisposition::ReuseResult { result }
+                    }
+                };
+                restored_tools.push(RestoredToolInvocation {
+                    request: progress.request,
+                    disposition,
+                });
+            }
+            Ok(CoreControllerRecoveryAction::ExecuteToolBatch {
+                tools: restored_tools,
+                user_followup: resolve_restored_user_followup(user_followup)?,
+            })
+        }
+    }
+}
+
+/// Converts one durable workbench follow-up into the Core recovery contract.
+/// 将一条可靠工作台补充消息转换为 Core 恢复契约。
+///
+/// # Parameters
+/// 参数
+/// `followup` is the optional sidecar-owned user input admitted with the recovery claim.
+/// `followup` 是随恢复领取一并准入、由 sidecar 持有的可选用户输入。
+///
+/// # Returns
+/// 返回值
+/// A structurally valid Core follow-up, no value, or an explicit malformed-sidecar error.
+/// 返回结构有效的 Core 补充消息、空值，或显式的 sidecar 格式错误。
+fn resolve_restored_user_followup(
+    followup: Option<vulcan_workbench_model::ExecutionRetryUserFollowup>,
+) -> Result<Option<RestoredUserFollowup>, String> {
+    let Some(followup) = followup else {
+        return Ok(None);
+    };
+    if !followup.is_structurally_valid() {
+        return Err(String::from(
+            "The execution retry user follow-up is structurally invalid.",
+        ));
+    }
+    Ok(Some(RestoredUserFollowup {
+        visible_prompt: followup.visible_prompt,
+        provider_prompt: followup.provider_prompt,
+        admission_id: followup.client_submission_id,
+        attachments: Vec::new(),
+    }))
+}
 
 /// Emits one failed physical-call boundary only while a Provider request is still active.
 /// 仅在 Provider 请求仍处于活动状态时发出失败物理调用边界。
@@ -180,6 +302,7 @@ pub(crate) fn execute_host_controlled_stream<A, F>(
     tool_request_rejection_all_tools: bool,
     tool_request_rejection_tool_ids: Vec<String>,
     route_identity: crate::agent_runtime::provider_transport_request::ProviderRouteIdentity,
+    recovery_action: Option<ProviderTransportRecoveryAction>,
 ) -> ProviderDeltaStream
 where
     A: VulcanStreamingProviderAdapter<Response = CoreProviderTurnResponse>
@@ -194,6 +317,7 @@ where
         let provider_factory = Arc::new(provider_factory);
         let provider_label_for_join = provider_label.clone();
         let prompt_intervention = prompt_intervention.clone();
+        let mut recovery_action = recovery_action;
         let (live_sender, mut live_receiver) =
             unbounded_channel::<Result<ProviderStreamDelta, String>>();
         let task_sender = live_sender.clone();
@@ -257,6 +381,16 @@ where
                     }
                 };
                 let tool_policy = AllowAllToolPolicy;
+                let attempt_recovery_action = match recovery_action.take() {
+                    Some(action) => match resolve_core_controller_recovery_action(action) {
+                        Ok(action) => Some(action),
+                        Err(error) => {
+                            let _ = task_sender.send(Err(error));
+                            break;
+                        }
+                    },
+                    None => None,
+                };
                 let mut unsafe_delta_seen = false;
                 // physicalRequestSeen distinguishes the retry attempt's first request from a later request reached after success.
                 // physicalRequestSeen 区分本次重试尝试的首个请求与成功后继续到达的后续请求。
@@ -289,10 +423,13 @@ where
                         let Some(intervention) = prompt_intervention.as_ref() else {
                             return Ok(false);
                         };
-                            intervention(session_id, controller).map_err(|error| {
-                                CoreError::InvalidState {
-                                    message: error.to_string(),
+                            intervention(session_id, controller).map_err(|error| match error {
+                                crate::agent_runtime::runtime_stream_intervention::RuntimePromptInterventionError::ProviderRouteSwitchRequired { message } => {
+                                    CoreError::ProviderRouteSwitchRequired { message }
                                 }
+                                other => CoreError::InvalidState {
+                                    message: other.to_string(),
+                                },
                             })
                     };
                     let run_future = async {
@@ -301,7 +438,43 @@ where
                         } else {
                             turn_start_mode
                         };
-                        match effective_turn_start_mode {
+                        match attempt_recovery_action {
+                            Some(CoreControllerRecoveryAction::ExecuteToolBatch {
+                                tools: restored_tools,
+                                user_followup,
+                            }) => {
+                                controller
+                                    .run_restored_tool_batch_streaming_with_checkpoints_and_interventions(
+                                        &provider_adapter,
+                                        &tool_executor,
+                                        &tool_policy,
+                                        RestoredToolBatchRecovery {
+                                            tools: restored_tools,
+                                            user_followup,
+                                        },
+                                        checkpoint,
+                                        intervention,
+                                    )
+                                    .await
+                            }
+                            Some(CoreControllerRecoveryAction::ResumeProviderLoop {
+                                user_followup,
+                            }) => {
+                                controller
+                                    .run_restored_provider_loop_streaming_with_checkpoints_and_interventions(
+                                        &provider_adapter,
+                                        &tool_executor,
+                                        &tool_policy,
+                                        user_followup,
+                                        checkpoint,
+                                        intervention,
+                                    )
+                                    .await
+                            }
+                            Some(CoreControllerRecoveryAction::FinalizeAssistant) => {
+                                controller.finalize_restored_assistant()
+                            }
+                            None => match effective_turn_start_mode {
                             ProviderTransportTurnStartMode::UserPrompt => {
                                 controller.run_user_turn_streaming_with_checkpoints_and_interventions(
                                     &provider_adapter,
@@ -323,6 +496,7 @@ where
                                 )
                                 .await
                             }
+                            },
                         }
                     };
                     tokio::pin!(run_future);
@@ -413,6 +587,37 @@ where
                         break;
                     }
                     Err(error) => {
+                        if let CoreError::ProviderRouteSwitchRequired { message } = &error {
+                            abort_active_tool_request_streams(
+                                &task_sender,
+                                &mut active_tool_request_streams,
+                                "provider_route_switch_required",
+                            );
+                            let last_successful_provider_usage =
+                                controller.last_successful_provider_usage().cloned();
+                            match core_snapshot_to_session_conversation_state(controller.snapshot()) {
+                                Ok(conversation_state) => {
+                                    let _ = task_sender.send(Ok(
+                                        ProviderStreamDelta::FinalConversationState(
+                                            conversation_state.clone(),
+                                            last_successful_provider_usage,
+                                        ),
+                                    ));
+                                    let _ = task_sender.send(Ok(
+                                        ProviderStreamDelta::ProviderRouteSwitchRequired {
+                                            conversation_state,
+                                            reason: message.clone(),
+                                        },
+                                    ));
+                                }
+                                Err(conversion_error) => {
+                                    let _ = task_sender.send(Err(format!(
+                                        "Provider route-switch boundary could not be serialized: {conversion_error}"
+                                    )));
+                                }
+                            }
+                            break;
+                        }
                         if let CoreError::ContextCompactionRequired { message } = &error {
                             abort_active_tool_request_streams(
                                 &task_sender,
@@ -744,6 +949,7 @@ fn structured_provider_failure(
         CoreError::ProviderFailure { details, .. } => details.clone(),
         CoreError::InvalidState { .. }
         | CoreError::ContextCompactionRequired { .. }
+        | CoreError::ProviderRouteSwitchRequired { .. }
         | CoreError::ToolFailure { .. } => None,
     }
 }
@@ -935,6 +1141,7 @@ pub(crate) fn execute_host_controlled_stream_with_prepared_inputs<A, F>(
     provider_factory: F,
     provider_label: impl Into<String>,
     prompt_intervention: Option<RuntimePromptIntervention>,
+    recovery_action: Option<ProviderTransportRecoveryAction>,
 ) -> ProviderDeltaStream
 where
     A: VulcanStreamingProviderAdapter<Response = CoreProviderTurnResponse>
@@ -993,6 +1200,7 @@ where
         tool_request_rejection_all_tools,
         tool_request_rejection_tool_ids,
         route_identity,
+        recovery_action,
     )
 }
 
@@ -1003,6 +1211,58 @@ mod tests {
 
     use super::*;
     use tokio::sync::Notify;
+
+    /// Verifies a durable user follow-up prevents execution of every proven not-started tool slot.
+    /// 验证可靠用户补充消息会阻止执行所有已证明未启动的工具槽位。
+    #[test]
+    fn recovery_followup_converts_not_started_tool_into_cancellation_result() {
+        // request is the exact frozen Provider tool invocation.
+        // request 是精确冻结的 Provider 工具调用。
+        let request = vulcan_core::types::ToolInvocationRequest {
+            tool_call_id: String::from("call-a"),
+            tool_name: String::from("write_file"),
+            arguments: serde_json::json!({"path": "a.txt"}),
+        };
+        // action binds the not-started slot and durable follow-up in one recovery decision.
+        // action 在同一个恢复决策中绑定未启动槽位与可靠补充消息。
+        let action = ProviderTransportRecoveryAction::ExecuteToolBatch {
+            tools: vec![vulcan_workbench_model::ExecutionRetryToolProgress {
+                request,
+                result: None,
+                binding_fingerprint: Some(String::from("binding-a")),
+                state: ExecutionRetryToolState::NotStarted,
+            }],
+            user_followup: Some(vulcan_workbench_model::ExecutionRetryUserFollowup {
+                visible_prompt: String::from("do not write"),
+                provider_prompt: String::from("do not write"),
+                client_submission_id: String::from("submission-a"),
+            }),
+        };
+
+        let resolved =
+            resolve_core_controller_recovery_action(action).expect("resolve recovery action");
+
+        let CoreControllerRecoveryAction::ExecuteToolBatch {
+            tools,
+            user_followup,
+        } = resolved
+        else {
+            panic!("tool recovery should remain a tool-batch action");
+        };
+        assert!(matches!(
+            tools.as_slice(),
+            [RestoredToolInvocation {
+                disposition: RestoredToolInvocationDisposition::CancelledBeforeExecution,
+                ..
+            }]
+        ));
+        assert_eq!(
+            user_followup
+                .expect("follow-up should reach Core")
+                .admission_id,
+            "submission-a"
+        );
+    }
 
     /// Verifies retry telemetry carries every field that defines the immutable resolved route.
     /// 验证重试遥测携带定义不可变已解析路由的全部字段。
