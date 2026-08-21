@@ -324,13 +324,6 @@
   white-space: nowrap;
 }
 
-.work-process-provider-usage {
-  color: var(--muted-foreground);
-  font-size: 11px;
-  font-weight: 500;
-  opacity: 0.82;
-}
-
 .work-process-icon {
   flex: 0 0 auto;
   color: currentColor;

@@ -1,5 +1,5 @@
 use super::*;
-use crate::SessionOutputStyleState;
+use crate::{SessionOutputStyleState, SessionPendingModelSelection};
 #[test]
 fn session_addon_revision_changes_only_when_namespace_value_changes() {
     let session_id = SessionId::new_v4();
@@ -30,7 +30,13 @@ fn session_addon_extracts_runtime_controls_and_work_mode() {
     let session_id = SessionId::new_v4();
     let runtime_state = SessionRuntimeStateEntry {
         active_provider_id: Some(String::from("minimax")),
+        active_connection_id: Some(String::from("minimax-current-account")),
         active_model_id: Some(String::from("minimax-text")),
+        pending_model_selection: Some(SessionPendingModelSelection {
+            provider_id: String::from("command-code"),
+            connection_id: String::from("command-code-account"),
+            model_id: String::from("deepseek"),
+        }),
         active_reasoning_effort: Some(ReasoningEffortLevel::None),
         active_reasoning_effort_explicit: true,
         context_compaction_window_node_id: Some(ContextCompactionWindowNodeId::CompressionWindow2),
@@ -74,6 +80,10 @@ fn session_addon_extracts_runtime_controls_and_work_mode() {
     assert_eq!(
         restored_runtime_state.context_compaction_window_node_id,
         Some(ContextCompactionWindowNodeId::CompressionWindow2)
+    );
+    assert_eq!(
+        restored_runtime_state.pending_model_selection,
+        runtime_state.pending_model_selection
     );
 }
 

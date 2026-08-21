@@ -6656,7 +6656,80 @@ impl PublicAiRuntime {
             )
         })?
         .map_err(|error| diagnose_provider_tool_failure(error, diagnostic_context.as_str()))?;
-        let arguments = match resolved.operation.as_ref() {
+        // The model-extension video tool has no conversation ledger; its upload manager only
+        // reuses a provider object for the same source and upload contract within one day.
+        // 模型扩展视频工具没有会话账本；上传管理器只在一天内按同一源与上传契约复用供应商对象。
+        let mut arguments = arguments;
+        let mut operation_for_upload = resolved.operation.clone();
+        let mut video_upload_preflight = None;
+        if capability == ProviderToolCapabilityKind::VideoUnderstand
+            && let Some(operation) = operation_for_upload.as_ref()
+            && !operation.upload_bindings.is_empty()
+        {
+            let credential_profile = resolved
+                .entry
+                .credential_profiles
+                .iter()
+                .find(|profile| profile.id == resolved.connection.credential_profile_id)
+                .ok_or_else(|| {
+                    diagnose_provider_tool_failure(
+                        format!(
+                            "Provider tool credential profile `{}` is absent from service entry `{}`.",
+                            resolved.connection.credential_profile_id, resolved.entry.id
+                        ),
+                        diagnostic_context.as_str(),
+                    )
+                })?;
+            let preflight = tokio::time::timeout(
+                remaining_provider_operation_timeout(
+                    operation_deadline,
+                    "Provider tool upload cache preflight",
+                )?,
+                prepare_provider_tool_video_upload(
+                    &self.execution_client,
+                    &resolved,
+                    operation,
+                    &arguments,
+                    credential_profile,
+                    workspace_root,
+                ),
+            )
+            .await
+            .map_err(|_| {
+                diagnose_provider_tool_failure(
+                    "Provider tool upload cache preflight exceeded the frozen operation timeout."
+                        .to_owned(),
+                    diagnostic_context.as_str(),
+                )
+            })?
+            .map_err(|error| diagnose_provider_tool_failure(error, diagnostic_context.as_str()))?;
+            if let Some((preflight, cached_reference)) = preflight {
+                if let Some(cached_reference) = cached_reference {
+                    arguments = crate::upload_engine::materialize_cached_scalar_operation_upload(
+                        &preflight.binding,
+                        &preflight.inspection.resource,
+                        arguments,
+                        cached_reference.provider_reference,
+                    )
+                    .map_err(|error| {
+                        diagnose_provider_tool_failure(error, diagnostic_context.as_str())
+                    })?;
+                    operation_for_upload
+                        .as_mut()
+                        .ok_or_else(|| {
+                            diagnose_provider_tool_failure(
+                                "Video upload cache hit lost its owning operation.".to_owned(),
+                                diagnostic_context.as_str(),
+                            )
+                        })?
+                        .upload_bindings
+                        .clear();
+                } else {
+                    video_upload_preflight = Some(preflight);
+                }
+            }
+        }
+        let arguments = match operation_for_upload.as_ref() {
             Some(operation) if !operation.upload_bindings.is_empty() => {
                 // credentialProfile is shared by upload authorization and exact progress routing.
                 // credentialProfile 由上传鉴权与精确进度路由共同使用。
@@ -6762,6 +6835,48 @@ impl PublicAiRuntime {
                 };
                 match upload_result {
                     Ok(arguments) => {
+                        if let Some(preflight) = video_upload_preflight.as_ref() {
+                            let local_path = preflight
+                                .inspection
+                                .resource
+                                .local_path
+                                .as_ref()
+                                .ok_or_else(|| {
+                                    diagnose_provider_tool_failure(
+                                        "Video upload cache preflight lost its local source path."
+                                            .to_owned(),
+                                        diagnostic_context.as_str(),
+                                    )
+                                })?;
+                            let provider_reference = provider_tool_materialized_reference(
+                                &arguments,
+                                &preflight.binding,
+                            )
+                            .map_err(|error| {
+                                diagnose_provider_tool_failure(error, diagnostic_context.as_str())
+                            })?;
+                            self.execution_client
+                                .remember_provider_tool_media_reference(
+                                    resolved.connection.provider_id.as_str(),
+                                    resolved.entry.id.as_str(),
+                                    resolved.connection.id.as_str(),
+                                    &preflight.inspection.channel,
+                                    local_path,
+                                    ResourceKind::Video,
+                                    preflight.inspection.resource.mime_type.as_str(),
+                                    &preflight.source_identity,
+                                    provider_reference,
+                                    preflight.first_used_at_unix_millis,
+                                )
+                                .await
+                                .map_err(|error| {
+                                    diagnose_provider_tool_failure_with_secret(
+                                        error,
+                                        diagnostic_context.as_str(),
+                                        &secret,
+                                    )
+                                })?;
+                        }
                         if let Some(context) = progress_context.as_ref() {
                             context.emit(
                                 crate::RuntimeMediaUploadPhase::Completed,
@@ -8517,6 +8632,48 @@ impl PublicAiRuntime {
         progress: Option<crate::MediaUploadProgressCallback>,
         cancellation: &crate::MediaUploadCancellation,
     ) -> Result<String, String> {
+        if cancellation.is_cancelled() {
+            return Err(String::from("media upload cancelled"));
+        }
+        if kind == ResourceKind::Video {
+            let upload_contract = self
+                .execution_client
+                .conversation_media_upload_contract(&selection.route, kind, mime_type)?
+                .ok_or_else(|| {
+                    format!(
+                        "Video resource `{}` has no declared provider upload channel; refusing Base64 fallback.",
+                        local_path.display()
+                    )
+                })?;
+            if upload_contract.reference_scope == crate::UploadReferenceScope::Session
+                && owner_session_id.is_none()
+            {
+                return Err(format!(
+                    "Upload channel `{}` requires a session identity before media preparation.",
+                    upload_contract.upload_channel_id
+                ));
+            }
+        }
+        // cachedReference proves the exact source bytes already have a live provider reference;
+        // cachedReference 证明精确源字节已经拥有仍有效的供应商引用；
+        // a cache hit must not create a synthetic upload-progress row.
+        // 命中缓存时不得创建伪造的上传进度行。
+        if kind == ResourceKind::Video {
+            if let Some(cached_reference) = self
+                .execution_client
+                .prepared_media_url(
+                    &selection.route,
+                    local_path,
+                    kind,
+                    mime_type,
+                    owner_session_id,
+                    Some(cancellation),
+                )
+                .await
+            {
+                return Ok(cached_reference);
+            }
+        }
         // observer is cloned before any callback invocation to avoid retaining the registry lock.
         // observer 在任何回调调用前完成克隆，避免占用注册表锁。
         let observer = self
@@ -8524,73 +8681,80 @@ impl PublicAiRuntime {
             .read()
             .map_err(|_| String::from("The runtime media upload observer lock is poisoned."))?
             .clone();
-        // progressContext exists only for an owned image, video, or audio preparation.
-        // progressContext 仅在有所有者的图片、视频或音频准备中存在。
-        let progress_context = if let (Some(observer), Some(owner_session_id)) =
-            (observer, owner_session_id)
-        {
-            // mediaKind is the stable UI-facing category for this provider-neutral resource.
-            // mediaKind 是当前供应商中立资源面向界面的稳定类别。
-            let media_kind = match kind {
-                ResourceKind::Image => "image",
-                ResourceKind::Video => "video",
-                ResourceKind::Audio => "audio",
-                ResourceKind::File => {
-                    return Err(String::from(
-                        "Model-replacement media progress does not accept generic files.",
-                    ));
-                }
-            };
-            // uploadChannelId is resolved by the same route function used by media preparation.
-            // uploadChannelId 由媒体准备使用的同一路由函数解析。
-            let upload_channel_id = self
-                .execution_client
-                .conversation_media_upload_channel_id(&selection.route, kind, mime_type)?
-                .unwrap_or_else(|| String::from("host-inline"));
-            // totalBytes is verified before progress starts and rechecked by preparation.
-            // totalBytes 在进度开始前完成校验，并由准备流程再次检查。
-            let total_bytes = tokio::fs::metadata(local_path)
-                .await
-                .map_err(|error| {
-                    format!(
-                        "Media-understanding source `{}` could not be inspected: {error}",
-                        local_path.display()
-                    )
-                })?
-                .len();
-            // fileName is derived only from the canonical workspace path.
-            // fileName 仅从规范工作区路径派生。
-            let file_name = local_path
-                .file_name()
-                .and_then(|value| value.to_str())
-                .filter(|value| !value.is_empty())
-                .ok_or_else(|| {
-                    String::from("Media-understanding source has no valid file name.")
-                })?;
-            Some(RuntimeMediaUploadProgressContext {
-                observer,
-                base: crate::RuntimeMediaUploadProgressEvent {
-                    transfer_id: format!("media-tool:{}", Uuid::new_v4()),
-                    owner_session_id: owner_session_id.to_string(),
-                    provider_id: selection.route.provider.id.clone(),
-                    service_entry_id: selection.route.entry.id.clone(),
-                    connection_id: selection.route.connection.id.clone(),
-                    model_id: selection.model.id.clone(),
-                    protocol_profile_id: selection.route.protocol_route.protocol_profile_id.clone(),
-                    manifest_revision: selection.route.manifest_revision,
-                    manifest_generation: selection.manifest_generation,
-                    route_revision: selection.route_revision.clone(),
-                    operation_id: operation_id.to_string(),
-                    upload_channel_id,
-                    file_name: file_name.to_string(),
-                    media_kind: media_kind.to_string(),
-                    phase: crate::RuntimeMediaUploadPhase::Preparing,
-                    bytes_sent: 0,
-                    total_bytes: Some(total_bytes),
-                    error: None,
-                },
-                last_bytes_sent: Arc::new(AtomicU64::new(0)),
-            })
+        // progressContext exists only for a real provider upload; Base64 image and audio
+        // materialization must not look like a network transfer in the UI.
+        // progressContext 仅在真实供应商上传时存在；图片与音频 Base64 物化不得在界面上伪装成网络传输。
+        let progress_context = if kind == ResourceKind::Video {
+            if let (Some(observer), Some(owner_session_id)) = (observer, owner_session_id) {
+                // mediaKind is the stable UI-facing category for this provider-neutral resource.
+                // mediaKind 是当前供应商中立资源面向界面的稳定类别。
+                let media_kind = match kind {
+                    ResourceKind::Image => "image",
+                    ResourceKind::Video => "video",
+                    ResourceKind::Audio => "audio",
+                    ResourceKind::File => {
+                        return Err(String::from(
+                            "Model-replacement media progress does not accept generic files.",
+                        ));
+                    }
+                };
+                // uploadChannelId is resolved by the same route function used by media preparation.
+                // uploadChannelId 由媒体准备使用的同一路由函数解析。
+                let upload_channel_id = self
+                    .execution_client
+                    .conversation_media_upload_channel_id(&selection.route, kind, mime_type)?
+                    .unwrap_or_else(|| String::from("host-inline"));
+                // totalBytes is verified before progress starts and rechecked by preparation.
+                // totalBytes 在进度开始前完成校验，并由准备流程再次检查。
+                let total_bytes = tokio::fs::metadata(local_path)
+                    .await
+                    .map_err(|error| {
+                        format!(
+                            "Media-understanding source `{}` could not be inspected: {error}",
+                            local_path.display()
+                        )
+                    })?
+                    .len();
+                // fileName is derived only from the canonical workspace path.
+                // fileName 仅从规范工作区路径派生。
+                let file_name = local_path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| {
+                        String::from("Media-understanding source has no valid file name.")
+                    })?;
+                Some(RuntimeMediaUploadProgressContext {
+                    observer,
+                    base: crate::RuntimeMediaUploadProgressEvent {
+                        transfer_id: format!("media-tool:{}", Uuid::new_v4()),
+                        owner_session_id: owner_session_id.to_string(),
+                        provider_id: selection.route.provider.id.clone(),
+                        service_entry_id: selection.route.entry.id.clone(),
+                        connection_id: selection.route.connection.id.clone(),
+                        model_id: selection.model.id.clone(),
+                        protocol_profile_id: selection
+                            .route
+                            .protocol_route
+                            .protocol_profile_id
+                            .clone(),
+                        manifest_revision: selection.route.manifest_revision,
+                        manifest_generation: selection.manifest_generation,
+                        route_revision: selection.route_revision.clone(),
+                        operation_id: operation_id.to_string(),
+                        upload_channel_id,
+                        file_name: file_name.to_string(),
+                        media_kind: media_kind.to_string(),
+                        phase: crate::RuntimeMediaUploadPhase::Preparing,
+                        bytes_sent: 0,
+                        total_bytes: Some(total_bytes),
+                        error: None,
+                    },
+                    last_bytes_sent: Arc::new(AtomicU64::new(0)),
+                })
+            } else {
+                None
+            }
         } else {
             None
         };
@@ -8608,17 +8772,21 @@ impl PublicAiRuntime {
             RuntimeMediaUploadTerminalGuard::new(progress_context.as_ref());
         // observedProgress composes a caller callback with the service-owned progress observer.
         // observedProgress 组合调用方回调与服务持有的进度观察器。
-        let observed_progress = match (progress, progress_context.as_ref()) {
-            (Some(progress), Some(context)) => {
-                let observed = context.byte_callback();
-                Some(Arc::new(move |bytes_sent, total_bytes| {
-                    progress(bytes_sent, total_bytes);
-                    observed(bytes_sent, total_bytes);
-                }) as crate::MediaUploadProgressCallback)
+        let observed_progress = if kind == ResourceKind::Video {
+            match (progress, progress_context.as_ref()) {
+                (Some(progress), Some(context)) => {
+                    let observed = context.byte_callback();
+                    Some(Arc::new(move |bytes_sent, total_bytes| {
+                        progress(bytes_sent, total_bytes);
+                        observed(bytes_sent, total_bytes);
+                    }) as crate::MediaUploadProgressCallback)
+                }
+                (Some(progress), None) => Some(progress),
+                (None, Some(context)) => Some(context.byte_callback()),
+                (None, None) => None,
             }
-            (Some(progress), None) => Some(progress),
-            (None, Some(context)) => Some(context.byte_callback()),
-            (None, None) => None,
+        } else {
+            None
         };
         // preparationResult keeps all terminal errors available for a failed progress event.
         // preparationResult 保留全部终态错误，以便发出失败进度事件。
@@ -8642,6 +8810,7 @@ impl PublicAiRuntime {
                     kind,
                     mime_type,
                     true,
+                    kind == ResourceKind::Video,
                     observed_progress,
                     cancellation,
                 )
@@ -8679,14 +8848,16 @@ impl PublicAiRuntime {
                 String::from("Media-understanding preparation did not produce a request reference.")
             })?
             .to_string();
-        self.execution_client.remember_prepared_media(
-            &selection.route,
-            selection.model.id.as_str(),
-            local_path,
-            kind,
-            mime_type,
-            prepared,
-        );
+        if kind == ResourceKind::Video {
+            self.execution_client.remember_prepared_media(
+                &selection.route,
+                local_path,
+                kind,
+                mime_type,
+                prepared,
+                owner_session_id,
+            );
+        }
         if let Some(context) = progress_context.as_ref() {
             context.emit(
                 crate::RuntimeMediaUploadPhase::Completed,
@@ -11565,6 +11736,156 @@ pub struct DeclaredProviderToolTemplateModel {
 /// 返回值
 /// `None` when no host observer or owner exists; otherwise a fully preflighted emitter context.
 /// 未安装宿主观察器或不存在所有者时返回 `None`；否则返回完成全部预检的发射上下文。
+/// Carries one local video upload preflight for the process-local model-extension cache.
+/// 携带一次模型扩展进程级视频缓存所需的本地视频上传预检结果。
+#[derive(Debug, Clone)]
+struct ProviderToolVideoUploadPreflight {
+    /// Exact scalar binding that maps the fixed video facade into the provider operation.
+    /// 将固定视频外壳映射到供应商操作的精确标量绑定。
+    binding: crate::OperationUploadBinding,
+    /// Validated resource and upload channel selected from the frozen manifest.
+    /// 从冻结 Manifest 选出的已校验资源与上传通道。
+    inspection: crate::upload_engine::OperationUploadRouteInspection,
+    /// Source bytes identity captured before the network upload.
+    /// 网络上传前捕获的源字节身份。
+    source_identity: crate::PreparedMediaSourceIdentity,
+    /// Wall-clock timestamp that anchors the one-day reuse window.
+    /// 锚定一天复用窗口的墙钟首次使用时间。
+    first_used_at_unix_millis: u64,
+}
+
+/// Preflights one fixed video-understanding call for a one-day process-local reference reuse.
+/// 为一次固定视频理解调用预检一天内的进程级引用复用。
+///
+/// The model-extension tool has no conversation media ledger. This cache is deliberately scoped
+/// only by the provider upload contract and source bytes, so a later independent tool call can
+/// reuse a still-valid provider object without pretending that a session context exists.
+/// 模型扩展工具没有会话媒体账本。本缓存只按供应商上传契约与源字节作用域，后续独立工具调用
+/// 可以复用仍有效的供应商对象，但不会伪造会话上下文。
+async fn prepare_provider_tool_video_upload(
+    execution_client: &ProviderExecutionClient,
+    resolved: &ResolvedProviderToolTarget,
+    operation: &crate::OperationDeclaration,
+    arguments: &serde_json::Value,
+    credential_profile: &crate::CredentialProfile,
+    workspace_root: Option<&Path>,
+) -> Result<
+    Option<(
+        ProviderToolVideoUploadPreflight,
+        Option<crate::PreparedMediaReferenceSnapshot>,
+    )>,
+    String,
+> {
+    let first_used_at_unix_millis = current_unix_millis()?;
+    let projection = resolved
+        .target
+        .contract
+        .media_input_projection
+        .as_ref()
+        .ok_or_else(|| {
+            format!(
+                "Video-understanding target `{}` has no input projection.",
+                resolved.target.target_id
+            )
+        })?;
+    let source_pointer = format!("/{}", projection.path_field);
+    let mut matching_bindings = operation
+        .upload_bindings
+        .iter()
+        .filter(|binding| binding.source_path == source_pointer);
+    let binding = matching_bindings.next().ok_or_else(|| {
+        format!(
+            "Video-understanding operation `{}` has no upload binding for `{source_pointer}`.",
+            operation.operation_id
+        )
+    })?;
+    if matching_bindings.next().is_some() {
+        return Err(format!(
+            "Video-understanding operation `{}` has ambiguous upload bindings for `{source_pointer}`.",
+            operation.operation_id
+        ));
+    }
+    let source_reference = arguments
+        .pointer(source_pointer.as_str())
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| {
+            format!(
+                "Video-understanding upload source `{source_pointer}` must be one non-empty local path."
+            )
+        })?;
+    let inspection = crate::upload_engine::inspect_operation_upload_route(
+        binding,
+        source_reference,
+        1,
+        workspace_root,
+        &resolved.upload_channels,
+        credential_profile.credential_role.as_deref(),
+    )
+    .await?;
+    if matches!(
+        inspection.channel.primitive,
+        Some(crate::UploadPrimitiveKind::InlineDataUrl | crate::UploadPrimitiveKind::InlineBase64)
+    ) {
+        return Err(String::from(
+            "Video-understanding tool uploads must use a provider resource channel; Base64 is forbidden.",
+        ));
+    }
+    let Some(local_path) = inspection.resource.local_path.as_ref() else {
+        return Ok(None);
+    };
+    let source_identity = execution_client
+        .read_media_source_identity(local_path, None)
+        .await?;
+    let cached_reference = execution_client
+        .prepared_provider_tool_media_reference(
+            resolved.connection.provider_id.as_str(),
+            resolved.entry.id.as_str(),
+            resolved.connection.id.as_str(),
+            &inspection.channel,
+            local_path,
+            ResourceKind::Video,
+            inspection.resource.mime_type.as_str(),
+            None,
+        )
+        .await?;
+    Ok(Some((
+        ProviderToolVideoUploadPreflight {
+            binding: binding.clone(),
+            inspection,
+            source_identity,
+            first_used_at_unix_millis,
+        },
+        cached_reference,
+    )))
+}
+
+/// Extracts one scalar provider reference written by a fixed operation upload binding.
+/// 提取固定操作上传绑定写入的一个标量供应商引用。
+fn provider_tool_materialized_reference(
+    arguments: &serde_json::Value,
+    binding: &crate::OperationUploadBinding,
+) -> Result<String, String> {
+    if binding.item_source_path.is_some() || binding.item_target_path.is_some() {
+        return Err(String::from(
+            "Video-understanding upload cache requires a scalar upload binding.",
+        ));
+    }
+    arguments
+        .pointer(&binding.target_path)
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| {
+            format!(
+                "Video-understanding upload target `{}` did not contain one scalar provider reference.",
+                binding.target_path
+            )
+        })
+}
+
+/// Builds one progress context only for an actual provider-backed video upload.
+/// 仅为实际使用供应商上传通道的视频上传构建进度上下文。
 #[allow(clippy::too_many_arguments)]
 async fn provider_tool_media_upload_progress_context(
     observer: Option<crate::RuntimeMediaUploadProgressObserver>,
@@ -11581,14 +11902,13 @@ async fn provider_tool_media_upload_progress_context(
     let (Some(observer), Some(owner_session_id)) = (observer, owner_session_id) else {
         return Ok(None);
     };
-    // mediaKind closes reporting to the three fixed understanding capabilities.
-    // mediaKind 将报告范围限定到三个固定理解能力。
-    let media_kind = match capability {
-        ProviderToolCapabilityKind::ImageUnderstand => "image",
-        ProviderToolCapabilityKind::VideoUnderstand => "video",
-        ProviderToolCapabilityKind::AudioUnderstand => "audio",
-        _ => return Ok(None),
-    };
+    // Provider-tool cache and progress are only defined for uploaded videos; image and audio
+    // understanding remain request-scoped inline/data conversions without transfer progress.
+    // 供应商工具缓存与进度只定义于视频上传；图片与音频理解保持请求级内联/数据转换，不显示传输进度。
+    if capability != ProviderToolCapabilityKind::VideoUnderstand {
+        return Ok(None);
+    }
+    let media_kind = "video";
     // projection identifies the exact provider-native source field generated from the facade.
     // projection 标识由固定外壳生成的精确供应商原生来源字段。
     let projection = resolved
@@ -11653,18 +11973,23 @@ async fn provider_tool_media_upload_progress_context(
             ));
         }
     };
-    // uploadRoute repeats the generic engine preflight to obtain its exact channel and byte facts.
-    // uploadRoute 重复通用引擎预检，以取得其精确通道与字节事实。
-    let (upload_channel_id, total_bytes) =
-        crate::upload_engine::inspect_local_operation_upload_progress_route(
-            binding,
-            &resolved.upload_channels,
-            source_reference,
-            item_count,
-            workspace_root,
-            credential_profile.credential_role.as_deref(),
-        )
-        .await?;
+    // uploadRoute repeats the generic engine preflight and suppresses progress for non-reporting
+    // channels such as inline data conversion.
+    // uploadRoute 重复通用引擎预检，并对不报告进度的通道（例如内联数据转换）抑制进度。
+    let inspection = crate::upload_engine::inspect_operation_upload_route(
+        binding,
+        source_reference,
+        item_count,
+        workspace_root,
+        &resolved.upload_channels,
+        credential_profile.credential_role.as_deref(),
+    )
+    .await?;
+    if !inspection.channel.progress_supported {
+        return Ok(None);
+    }
+    let upload_channel_id = inspection.channel.upload_channel_id;
+    let total_bytes = inspection.resource.byte_len;
     // fileName is derived only from the already validated local path argument.
     // fileName 仅从已校验的本地路径参数派生。
     let file_name = Path::new(source_reference)

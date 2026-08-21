@@ -1,9 +1,12 @@
 use super::{
     RuntimeEventProjectionBarrierRegistry, VulcanManagedToolRuntimeBridge,
     acknowledge_runtime_event_projection_barrier_from_event,
-    attach_runtime_event_projection_barrier, clear_runtime_event_projection_barriers,
-    insert_runtime_event_projection_barrier, remove_runtime_event_projection_barrier,
-    runtime_event_projection_barriers_enabled, set_runtime_event_projection_barriers_test_override,
+    attach_runtime_event_projection_barrier, cancel_runtime_event_projection_barrier,
+    clear_runtime_event_projection_barriers, insert_runtime_event_projection_barrier,
+    reject_runtime_event_projection_barrier_from_event, remove_runtime_event_projection_barrier,
+    runtime_event_projection_barriers_enabled,
+    runtime_event_requires_tool_execution_safety_barrier,
+    set_runtime_event_projection_barriers_test_override,
 };
 use crate::agent_runtime::events::RuntimeEventKind;
 use crate::agent_runtime::provider_stream::ProviderStreamDelta;
@@ -362,6 +365,53 @@ fn projection_barrier_acknowledgement_preserves_legitimate_absence() {
         !acknowledge_runtime_event_projection_barrier_from_event(&event)
             .expect("abandoned waiter should remain a valid late acknowledgement")
     );
+}
+
+/// Verifies only an executor-owned ToolStarted barrier is classified as a real tool side-effect gate.
+/// 验证只有执行器持有屏障的 ToolStarted 才会被分类为真实工具副作用门禁。
+#[test]
+fn tool_execution_safety_classification_rejects_synthetic_tool_started_events() {
+    // syntheticContextEvent mirrors startup and discovery events that historically reuse ToolStarted for display.
+    // syntheticContextEvent 模拟历史上为展示而复用 ToolStarted 的启动与发现事件。
+    let synthetic_context_event = crate::agent_runtime::events::RuntimeEvent::new(
+        RuntimeEventKind::ToolStarted,
+        "执行上下文",
+        "已进入真实执行阶段",
+    );
+    assert!(!runtime_event_requires_tool_execution_safety_barrier(
+        &synthetic_context_event
+    ));
+
+    // barrierOverride enables the production ownership marker for an actual executor-owned start event.
+    // barrierOverride 为真实执行器持有的开始事件启用生产所有权标记。
+    let _barrier_override = RuntimeProjectionBarrierTestOverrideGuard::enabled();
+    let (executor_event, executor_barrier) =
+        attach_runtime_event_projection_barrier(crate::agent_runtime::events::RuntimeEvent::new(
+            RuntimeEventKind::ToolStarted,
+            "工具调用 · call-1 · shell_command",
+            "started",
+        ))
+        .expect("tool-start barrier should attach");
+    assert!(runtime_event_requires_tool_execution_safety_barrier(
+        &executor_event
+    ));
+    cancel_runtime_event_projection_barrier(executor_barrier)
+        .expect("tool-start test barrier should be cancelled");
+
+    // terminalEvent proves a display-order barrier never becomes a pre-side-effect gate.
+    // terminalEvent 证明仅用于显示排序的终态屏障绝不会变成副作用前置门禁。
+    let (terminal_event, terminal_barrier) =
+        attach_runtime_event_projection_barrier(crate::agent_runtime::events::RuntimeEvent::new(
+            RuntimeEventKind::ToolFinished,
+            "工具返回 · call-1 · shell_command",
+            "completed",
+        ))
+        .expect("tool-finished barrier should attach");
+    assert!(!runtime_event_requires_tool_execution_safety_barrier(
+        &terminal_event
+    ));
+    cancel_runtime_event_projection_barrier(terminal_barrier)
+        .expect("tool-finished test barrier should be cancelled");
 }
 
 /// Captures pre-planned provider turn responses and records the built request history for assertions.
@@ -1243,6 +1293,79 @@ fn streaming_tool_executor_yields_tool_started_before_tool_body_runs() {
             .expect("tool task should join")
             .expect("tool call should complete");
         assert_eq!(result.model_output, "gated done");
+    });
+}
+
+/// Verifies a host-side safety rejection fails the tool call before the external tool body can run.
+/// 验证宿主侧安全拒绝会在外部工具主体运行前让工具调用失败。
+#[test]
+fn streaming_tool_executor_rejects_tool_body_when_safety_barrier_fails() {
+    // enteredToolBody records the only externally observable body-entry boundary.
+    // enteredToolBody 记录唯一可从外部观察的主体进入边界。
+    let entered_tool_body = Arc::new(AtomicBool::new(false));
+    // releaseToolBody would unblock the body if the safety regression accidentally allowed it to start.
+    // releaseToolBody 会在安全回归意外放行主体时解除其阻塞。
+    let release_tool_body = Arc::new(Notify::new());
+    let (manager, definitions) = build_gated_demo_manager(
+        Arc::clone(&entered_tool_body),
+        Arc::clone(&release_tool_body),
+    );
+    let runtime_bridge = Arc::new(VulcanManagedToolRuntimeBridge::new(
+        Arc::new(manager),
+        &definitions,
+        Uuid::nil(),
+        "Build",
+    ));
+    let (sender, mut receiver): (
+        ProviderLiveDeltaSender,
+        tokio::sync::mpsc::UnboundedReceiver<Result<ProviderStreamDelta, String>>,
+    ) = tokio::sync::mpsc::unbounded_channel();
+    let executor =
+        StreamingRuntimeToolExecutor::new(runtime_bridge, sender, None, false, Vec::new());
+    let request = ToolInvocationRequest {
+        tool_call_id: String::from("gated-rejected-call-1"),
+        tool_name: String::from("gated_tool"),
+        arguments: json!({ "query": "拒绝不安全工具边界" }),
+    };
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime should build");
+
+    runtime.block_on(async {
+        // barrierOverride enables the production-shaped mandatory gate for this current-thread test.
+        // barrierOverride 为当前线程测试启用生产形态的强制门禁。
+        let _barrier_override = RuntimeProjectionBarrierTestOverrideGuard::enabled();
+        // task waits on the ToolStarted barrier before it can enter the gated manager.
+        // task 在进入受控管理器前等待 ToolStarted 屏障。
+        let task = tokio::spawn(async move { executor.execute_tool(&request).await });
+        let started_event = receiver
+            .recv()
+            .await
+            .expect("tool-start event should be sent")
+            .expect("tool-start event should be ok");
+        let ProviderStreamDelta::RuntimeEvent(started_event) = started_event else {
+            panic!("first delta should be a tool-start runtime event");
+        };
+        assert_eq!(started_event.kind, RuntimeEventKind::ToolStarted);
+        assert!(
+            reject_runtime_event_projection_barrier_from_event(&started_event)
+                .expect("tool-start barrier rejection should reach the registry"),
+            "tool-start barrier should reject the exact waiter"
+        );
+
+        let error = task
+            .await
+            .expect("tool task should join")
+            .expect_err("rejected safety barrier must fail the tool call");
+        assert!(
+            error.to_string().contains("safety barrier was rejected"),
+            "tool failure should retain the controlled safety diagnostic"
+        );
+        assert!(
+            !entered_tool_body.load(Ordering::SeqCst),
+            "rejected safety barrier must prevent tool-body entry"
+        );
     });
 }
 

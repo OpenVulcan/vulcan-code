@@ -50,6 +50,15 @@ import type {
   WorkbenchSnapshot,
 } from "@/types";
 import type { TranslationKey } from "@/i18n-messages";
+import {
+  conversationContinuationBlockedReasonText,
+  conversationContinuationBlockedReasonTextFromError,
+} from "@/components/conversation/continuation-blocked-reason";
+import {
+  continuationClaimSnapshotHasConverged,
+  reconcileContinuationClaimSnapshot,
+  type ContinuationClaimExpectation,
+} from "@/components/conversation/continuation-claim-reconciliation";
 import { toast } from "sonner";
 import {
   webuiClickTrace,
@@ -327,29 +336,162 @@ const handleStopConversationRun = React.useCallback(async (): Promise<boolean> =
   }
 }, [mergeWorkbenchWithLocalCaches, requestStopConversationRunChoice, selectedConversation?.id, setWorkbenchState]);
 
+// continuationRequestTimeoutMs bounds one Continue claim so the UI never stays silently locked.
+// continuationRequestTimeoutMs 限制单次 Continue 领取请求，避免界面无提示地长期锁定。
+const continuationRequestTimeoutMs = 15_000;
+
+// continuationReconciliationTimeoutMs bounds one authoritative state read after a Continue claim.
+// continuationReconciliationTimeoutMs 限制 Continue 领取后的单次权威状态回读。
+const continuationReconciliationTimeoutMs = 5_000;
+
+// loadContinuationReconciliationSnapshot reads one bounded authoritative snapshot for claim convergence.
+// loadContinuationReconciliationSnapshot 为领取收敛读取一次有界权威快照。
+//
+// Returns: the authoritative snapshot, or null when the read fails or reaches its timeout.
+// 返回值：权威快照；读取失败或达到超时上限时返回 null。
+async function loadContinuationReconciliationSnapshot(): Promise<WorkbenchSnapshot | null> {
+  // controller owns only this reconciliation request and never aborts the accepted claim.
+  // controller 只控制本次对账请求，绝不会中止已经接受的领取。
+  const controller = new AbortController();
+  // timeoutId releases a reconciliation request that cannot produce an authoritative state.
+  // timeoutId 解除无法产生权威状态的对账请求。
+  const timeoutId = setTimeout(() => controller.abort(), continuationReconciliationTimeoutMs);
+  try {
+    return await loadWorkbenchSnapshot(controller.signal);
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+// continuationErrorMessage maps stable Continue failures to persistent user-facing feedback.
+// continuationErrorMessage 将稳定 Continue 错误映射为用户可见反馈。
+//
+// Parameters: error is the service or transport failure and translate resolves the active locale.
+// 参数：error 是服务或传输错误，translate 解析当前语言。
+// Returns: localized user-facing text that never relies on a raw machine code alone.
+// 返回值：不只依赖原始机器错误码的本地化用户文案。
+function continuationErrorMessage(error: unknown, translate: (key: TranslationKey) => string): string {
+  // message is the stable diagnostic text used only for exact error classification.
+  // message 是仅用于精确错误分类的稳定诊断文本。
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes("ERR_CONVERSATION_CONTINUE_TIMEOUT")) {
+    return translate("conversation.continuation.timeout");
+  }
+  if (message.includes("ERR_CONVERSATION_CONTINUE_STATE_RECONCILIATION_FAILED")) {
+    return translate("conversation.continuation.stateSyncFailed");
+  }
+  if (message.includes("ERR_CONVERSATION_CONTINUE_ACK_MISMATCH")) {
+    return translate("conversation.continuation.ackMismatch");
+  }
+  if (
+    message.includes("ERR_CONTROLLER_RUNTIME_NOT_READY")
+    || message.includes("ERR_WORKSPACE_SNAPSHOT_NOT_READY")
+  ) {
+    return conversationContinuationBlockedReasonText(
+      "ERR_CONVERSATION_CONTINUE_RUNTIME_STATE_MISSING",
+      translate,
+    );
+  }
+  // blockedReason is the concrete localized safety explanation carried by a stable backend reason.
+  // blockedReason 是稳定后端原因对应的具体本地化安全说明。
+  const blockedReason = conversationContinuationBlockedReasonTextFromError(message, translate);
+  if (blockedReason) {
+    return `${translate("conversation.continuation.blocked")}${translate("global.labelSeparator")}${blockedReason}`;
+  }
+  return `${translate("conversation.continuation.claimFailed")} (${message})`;
+}
+
 // handleContinueConversation continues a terminated conversation through the revision-bound retained state.
 // handleContinueConversation 通过绑定修订号的保留状态继续已终止会话。
 const handleContinueConversation = React.useCallback(async (
   conversationId: string,
   expectedGeneration: number,
   expectedLedgerRevision: number,
+  clientContinuationId: string,
 ): Promise<boolean> => {
+  // controller owns the claim request timeout before any post-ACK state reconciliation begins.
+  // controller 在 ACK 后状态对账开始前控制领取请求超时。
+  const controller = new AbortController();
+  // timedOut distinguishes a local timeout from an immediate service rejection.
+  // timedOut 区分本地超时与服务立即拒绝。
+  let timedOut = false;
+  // timeoutId guarantees the transport claim cannot lock the Continue button indefinitely.
+  // timeoutId 保证传输领取不会无限期锁定 Continue 按钮。
+  const timeoutId = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, continuationRequestTimeoutMs);
+  // response remains null until an identity-validated service ACK is received.
+  // response 在收到通过身份校验的服务 ACK 前保持为空。
+  let response: Awaited<ReturnType<typeof continueConversation>> = null;
   try {
-    const response = await continueConversation(
+    response = await continueConversation(
       conversationId,
       expectedGeneration,
       expectedLedgerRevision,
+      clientContinuationId,
+      controller.signal,
     );
     if (!response) {
       toast.info(translate("conversationActions.previewCannotContinue"));
       return false;
     }
-    return true;
+    if (
+      response.clientSubmissionId !== clientContinuationId
+      || response.conversationId !== conversationId
+    ) {
+      throw new Error("ERR_CONVERSATION_CONTINUE_ACK_MISMATCH");
+    }
   } catch (nextError) {
-    toast.error(nextError instanceof Error ? nextError.message : String(nextError));
+    // normalizedError gives a timed-out transport one stable user-facing classification.
+    // normalizedError 为超时传输提供一个稳定的用户可见分类。
+    const normalizedError = timedOut
+      ? new Error("ERR_CONVERSATION_CONTINUE_TIMEOUT")
+      : nextError;
+    // Reconcile every failed claim so stale eligibility cannot leave the same dead button visible.
+    // 每次领取失败都回读权威状态，避免过期资格让同一个无效按钮继续显示。
+    // snapshot is optional because the persistent failure status must remain visible during outages.
+    // snapshot 是可选值，因为服务中断期间仍必须保留持久失败状态。
+    const snapshot = await loadContinuationReconciliationSnapshot();
+    if (snapshot) {
+      setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
+    }
+    toast.error(continuationErrorMessage(normalizedError, translate));
+    return false;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+  if (!response) {
     return false;
   }
-}, [translate]);
+  // expectation binds the post-ACK snapshot to the exact token and durable revision just accepted.
+  // expectation 将 ACK 后快照绑定到刚刚接受的精确令牌与持久修订。
+  const expectation: ContinuationClaimExpectation = {
+    conversationId,
+    expectedGeneration,
+    expectedLedgerRevision,
+    acceptedRevision: response.revision,
+  };
+  // reconciliationSnapshot closes the success path even when the preceding broadcast delta was lost.
+  // reconciliationSnapshot 即使前置广播增量丢失，也会闭合成功路径。
+  const reconciliationSnapshot = await loadContinuationReconciliationSnapshot();
+  if (
+    !reconciliationSnapshot
+    || !continuationClaimSnapshotHasConverged(reconciliationSnapshot, expectation)
+  ) {
+    toast.error(translate("conversation.continuation.stateSyncFailed"));
+    return false;
+  }
+  setWorkbenchState((current) => {
+    // merged applies the normal full-snapshot ordering rule before the target-only loss repair.
+    // merged 在目标级丢失修复前先应用常规全量快照排序规则。
+    const merged = mergeWorkbenchWithLocalCaches(current, reconciliationSnapshot);
+    return reconcileContinuationClaimSnapshot(merged, reconciliationSnapshot, expectation);
+  });
+  return true;
+}, [mergeWorkbenchWithLocalCaches, setWorkbenchState, translate]);
 
 // handleCancelConversationSubmission aborts a pending upload before the backend materializes the prompt.
 // handleCancelConversationSubmission 在后端物化提示词前中止待处理上传。
@@ -715,7 +857,7 @@ const handleForkConversation = React.useCallback(async (conversationId: string, 
     const errorMessage = nextError instanceof Error ? nextError.message.trim() : "";
     toast.error(
       errorMessage
-        ? `${translate("conversation.action.forkFailed")}：${errorMessage}`
+        ? `${translate("conversation.action.forkFailed")}${translate("global.labelSeparator")}${errorMessage}`
         : translate("conversation.action.forkFailed"),
     );
     return false;

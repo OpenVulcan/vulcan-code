@@ -141,6 +141,132 @@ fn contains_cjk_text(text: &str) -> bool {
     })
 }
 
+/// Verifies an auto-compaction restart consumes the seeded checkpoint without appending another user prompt.
+/// 验证自动压缩重启会消费已播种 checkpoint，而不会追加另一条用户提示词。
+#[test]
+fn refreshed_auto_compaction_request_uses_restored_checkpoint_start_mode() {
+    // sessionId identifies the exact compacted runtime state and request owner.
+    // sessionId 标识精确的已压缩运行态与请求所有者。
+    let session_id = SessionId::new_v4();
+    // compactedState contains the internal continuation seed already produced by the compaction draft.
+    // compactedState 包含压缩候选已经生成的内部续接种子。
+    let compacted_state = SessionConversationState {
+        messages: vec![SessionConversationMessage {
+            id: String::from("compacted-continuation-seed"),
+            payload: SessionConversationPayload::UserText {
+                text: String::from("继续"),
+                attachments: Vec::new(),
+            },
+        }],
+        ..SessionConversationState::default()
+    };
+    // serviceState provides the retained post-compaction runtime row read by the refresh helper.
+    // serviceState 提供刷新辅助函数读取的压缩后保留运行态行。
+    let mut service_state =
+        crate::tests::test_support::test_service_state_with_parent_session(session_id);
+    service_state
+        .workspace_snapshot
+        .as_mut()
+        .expect("test workspace should exist")
+        .session_runtime_state
+        .insert(
+            session_id,
+            SessionRuntimeStateEntry {
+                conversation_state: compacted_state.clone(),
+                ..SessionRuntimeStateEntry::default()
+            },
+        );
+    // sharedState exposes the same retained revision through the production locking contract.
+    // sharedState 通过生产锁契约暴露同一份保留修订。
+    let shared_state = std::sync::Arc::new(std::sync::Mutex::new(service_state));
+    // request deliberately begins as a normal user prompt to prove refresh overrides that mode.
+    // request 刻意从普通用户提示词模式开始，以证明刷新会覆盖该模式。
+    let request = ExecutionPreparationRequest {
+        session_id,
+        managed_codebase_memory: None,
+        execution_scope: vulcan_session_core::ExecutionScope::ContextCompaction {
+            node_id: vulcan_session_core::SessionNodeId::from(session_id),
+        },
+        runtime_policy: vulcan_session_core::ExecutionRuntimePolicy::context_compaction(),
+        conversation_hook_turn_id: None,
+        execution_retry_snapshot: None,
+        execution_agent_id: None,
+        agent_prompt_snapshot: None,
+        provider_id_override: None,
+        model_id_override: None,
+        connection_id_override: None,
+        provider_route_lease_identity: None,
+        provider_usage_budget_baseline: None,
+        provider_usage_context_generation_id: None,
+        provider_tool_selections_override: Default::default(),
+        provider_tool_enabled_capabilities_override: Default::default(),
+        provider_extension_target_sets_override: Default::default(),
+        subagent_prompt_context: None,
+        task_session_store_root: None,
+        session_title: String::from("Compacted conversation"),
+        workspace_path: String::from("D:/workspace"),
+        prompt: String::from("继续"),
+        output_style_snapshot: None,
+        provider_visible_agent_messages: Vec::new(),
+        turn_start_mode: Some(
+            vulcan_agent_runtime::agent_runtime::execution_models::ExecutionTurnStartMode::UserPrompt,
+        ),
+        conversation_state: SessionConversationState::default(),
+        context_compaction_policy: None,
+        context_compaction_window_node_id: None,
+        context_budget_override: None,
+        context_window_prefill_input_tokens: None,
+        execution_mode: String::from("Build"),
+        temperature: None,
+        reasoning_effort: ReasoningEffortLevel::None,
+        tool_exposure_override: Default::default(),
+        tool_request_rejection_reason: None,
+        tool_request_rejection_all_tools: false,
+        tool_request_rejection_tool_ids: Vec::new(),
+        tool_request_hidden_tool_ids: Vec::new(),
+        prompt_purpose: ExecutionPromptPurpose::UserTurn,
+        prompt_skill_policy_override: Default::default(),
+        project_prompt_skills: Default::default(),
+        session_prompt_skill_overrides: Default::default(),
+        context_injection: None,
+        system_prompt_hook_blocks: Vec::new(),
+        project_vmm: Default::default(),
+        session_vmm: Default::default(),
+        vmm_runtime_ready: false,
+        boundary_events: Vec::new(),
+        runtime_system_updates: Vec::new(),
+        controller_runtime: None,
+        knowledge_access: None,
+        session_goal_context: None,
+        session_plan_context: None,
+        embedded_turn_usage_segments: Vec::new(),
+    };
+    // vmmSessionMemory supplies the exact empty injection owner required by the refresh boundary.
+    // vmmSessionMemory 提供刷新边界所需的精确空注入所有者。
+    let vmm_session_memory = test_vmm_session_memory(session_id);
+
+    // refreshed must start from the retained checkpoint, never from a second UserPrompt append.
+    // refreshed 必须从保留 checkpoint 启动，绝不能再次追加 UserPrompt。
+    let refreshed = refreshed_execution_request_after_context_compaction(
+        &shared_state,
+        &request,
+        &vmm_session_memory,
+    )
+    .expect("post-compaction request should refresh");
+
+    assert_eq!(refreshed.conversation_state.messages.len(), 1);
+    assert_eq!(
+        refreshed.conversation_state.messages[0].id,
+        "compacted-continuation-seed"
+    );
+    assert_eq!(
+        refreshed.turn_start_mode,
+        Some(
+            vulcan_agent_runtime::agent_runtime::execution_models::ExecutionTurnStartMode::RestoredCheckpoint,
+        )
+    );
+}
+
 /// Verifies a style override change invalidates an in-flight compaction draft.
 /// 验证压缩进行中修改输出风格覆盖会使旧候选失效。
 #[test]
@@ -288,6 +414,143 @@ fn webui_context_compaction_draft_prunes_expired_transient_injections_transactio
     assert_eq!(
         draft.checkpoint.context_budget_fingerprint.as_deref(),
         Some("budget-live")
+    );
+}
+
+/// Verifies a compaction draft built after a concurrent picker action preserves both pending authority and its audit record.
+/// 验证在并发模型选择操作后构建的压缩候选会同时保留待生效权威及其审计记录。
+#[test]
+fn webui_context_compaction_draft_preserves_pending_model_switch_audit() {
+    // sessionId identifies the exact runtime row participating in the compaction transaction.
+    // sessionId 标识参与压缩事务的精确运行态行。
+    let session_id = SessionId::new_v4();
+    // modelSwitchEntry models the display-only record appended while summary generation is in flight.
+    // modelSwitchEntry 模拟摘要生成期间追加的仅展示记录。
+    let mut model_switch_entry = SessionMessageEntry::new(
+        SessionMessageKind::Assistant,
+        "",
+        "provider_id=command-code\nconnection_id=command-code-account\nmodel_id=deepseek",
+    )
+    .with_runtime_metadata("model-switch-audit", "1780000000002");
+    model_switch_entry.record_kind = SessionMessageRecordKind::DisplayNote;
+    model_switch_entry.visible = true;
+    model_switch_entry.metadata = Some(json!({
+        "notice_kind": "model_switch",
+        "activation": "next_submission",
+        "provider_id": "command-code",
+        "provider_name": "Command Code",
+        "connection_id": "command-code-account",
+        "connection_name": "Command Code Account",
+        "model_id": "deepseek",
+        "model_name": "DeepSeek",
+    }));
+    // messages contain the provider-visible history plus the concurrent display-only audit row.
+    // messages 包含 Provider 可见历史以及并发写入的仅展示审计行。
+    let messages = vec![
+        SessionMessageEntry::new(SessionMessageKind::User, "用户指令", "请实现上下文压缩")
+            .with_runtime_metadata("user-1", "1780000000000"),
+        SessionMessageEntry::new(SessionMessageKind::Assistant, "助手", "已开始实现")
+            .with_runtime_metadata("assistant-1", "1780000000001"),
+        model_switch_entry,
+    ];
+    // pendingSelection is the future route selected by the user while the active route remains frozen.
+    // pendingSelection 是用户选择的未来路由，而当前活动路由仍保持冻结。
+    let pending_selection = vulcan_workbench_model::SessionPendingModelSelection {
+        provider_id: String::from("command-code"),
+        connection_id: String::from("command-code-account"),
+        model_id: String::from("deepseek"),
+    };
+    // activeRuntimeState is the lock-current state from which the compaction draft must clone.
+    // activeRuntimeState 是压缩候选必须克隆的锁内最新状态。
+    let mut active_runtime_state = SessionRuntimeStateEntry {
+        conversation_state: conversation_state_from_session_messages(&messages)
+            .expect("valid replayed conversation identities"),
+        pending_model_selection: Some(pending_selection.clone()),
+        live_context_budget_fingerprint: Some(String::from("budget-live")),
+        live_context_assembly_fingerprint: Some(String::from("assembly-live")),
+        ..SessionRuntimeStateEntry::default()
+    };
+    record_context_compaction_provider_call(
+        &mut active_runtime_state,
+        "test-compaction-pending-model-switch",
+    );
+    // policy is shared by the frozen plan and its compaction result.
+    // policy 由冻结计划及其压缩结果共同使用。
+    let policy = vulcan_context::ContextCompactionPolicy::default();
+    // plan summarizes only the older user row and retains the assistant suffix.
+    // plan 仅摘要较早的用户行，并保留 Assistant 后缀。
+    let plan = CompactionPlan {
+        source_messages: vec![messages[0].clone()],
+        source_until_message_id: Some(String::from("user-1")),
+        source_until_turn_index: Some(0),
+        retained_tail_start_turn_index: Some(1),
+        compaction_id: String::from("test-compaction-pending-model-switch"),
+        created_at: String::from("1780000000100"),
+        policy,
+        tail_selection: test_tail_selection(policy, &["assistant-1"]),
+    };
+    // execution carries the immutable model-produced summary used by the draft builder.
+    // execution 携带候选构建器使用的不可变模型摘要。
+    let execution = PromptCompactionExecution {
+        compaction_result: vulcan_context_compaction::CompactionResult::from_model_summary(
+            &plan,
+            "## Goal\n- 保留上下文压缩升级目标。",
+        ),
+        fallback_used: false,
+        provider_request_count: 1,
+        last_successful_provider_usage: None,
+        provider_id: None,
+        model_id: None,
+        execution_profile: PromptCompactionExecutionProfile::CachePreservingFullFidelity,
+        input_prune_report: None,
+    };
+    // vmmSessionMemory models the isolated controller candidate committed with the same draft.
+    // vmmSessionMemory 模拟与同一候选共同提交的独立控制器状态。
+    let mut vmm_session_memory = test_vmm_session_memory(session_id);
+    // draft is built from the latest serialized runtime state, including the picker mutation.
+    // draft 基于包含模型选择变更的最新串行运行态构建。
+    let draft = build_webui_context_compaction_draft(
+        &active_runtime_state,
+        &mut vmm_session_memory,
+        session_id,
+        "section-pending-model-switch",
+        "预算快照",
+        MANUAL_CONTEXT_COMPACTION_TRIGGER,
+        1,
+        "## Goal\n- 保留上下文压缩升级目标。",
+        &execution,
+        PersistedPromptOutputStyleSelection::default(),
+    )
+    .expect("draft should preserve the pending model switch");
+    // retainedAudit is the exact localized-display source after record compaction.
+    // retainedAudit 是记录压缩后用于本地化展示的精确来源。
+    let retained_audit = draft
+        .runtime_state
+        .conversation_state
+        .records
+        .iter()
+        .find(|record| record.id == "model-switch-audit")
+        .expect("model-switch audit must remain visible after compaction");
+
+    assert_eq!(
+        draft.runtime_state.pending_model_selection,
+        Some(pending_selection)
+    );
+    assert_eq!(
+        retained_audit
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("notice_kind"))
+            .and_then(Value::as_str),
+        Some("model_switch")
+    );
+    assert_eq!(
+        retained_audit
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("provider_name"))
+            .and_then(Value::as_str),
+        Some("Command Code")
     );
 }
 

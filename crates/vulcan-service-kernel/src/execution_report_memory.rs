@@ -11,7 +11,10 @@ use vulcan_agent_runtime::{
 use vulcan_service_api::{
     ConversationRunOutcome, ConversationSummaryChangedDelta, ServiceEventEmitter,
 };
-use vulcan_workbench_model::{SessionId, SessionRunPhase, SessionRuntimeStateEntry, SessionState};
+use vulcan_workbench_model::{
+    EXECUTION_RETRY_SNAPSHOT_SCHEMA_VERSION, SessionId, SessionRunPhase, SessionRuntimeStateEntry,
+    SessionState,
+};
 use vulcan_workspace_store::{
     data_plane::ControllerRuntimeHandle, workspace_store::WorkspaceSnapshot,
 };
@@ -30,8 +33,9 @@ use super::{
     canonical_conversation_tail_kind, context_usage_snapshot_from_runtime_state,
     conversation_continuation_summary, conversation_messages_from_session,
     current_unix_millis_text, current_unix_millis_value, emit_service_event_with_trace,
-    merge_runtime_state_records_into_display_messages, owning_project_id_for_session,
-    persist_workspace_session_update, replace_conversation_messages_in_workbench_window,
+    is_prompt_free_continuation_tail_kind, merge_runtime_state_records_into_display_messages,
+    owning_project_id_for_session, persist_workspace_session_update,
+    replace_conversation_messages_in_workbench_window,
     replace_task_display_messages_with_runtime_state_records,
     session_continuation_runtime_blockers, spawn_service_task,
     spawn_workspace_session_persist_task, sync_hydrated_session_dialogue_ready_marker,
@@ -936,7 +940,7 @@ pub(super) fn apply_execution_report_to_memory(
 
 /// Rebuilds prompt-free continuation eligibility from the canonical terminal state.
 /// 根据规范终止状态重建无提示词 Continue 资格。
-fn refresh_terminal_continuation_state(
+pub(crate) fn refresh_terminal_continuation_state(
     runtime_state: &mut SessionRuntimeStateEntry,
     is_success: bool,
     terminal_at: &str,
@@ -953,8 +957,21 @@ fn refresh_terminal_continuation_state(
         .into_iter()
         .next_back()
         .map(|record| record.identity.execution_id.clone());
-    let eligible =
-        tail_kind != "assistant" && runtime_state.provider_call_ledger.in_flight_call_count() == 0;
+    // replaySafety is authoritative for terminal Continue admission; a successful tail alone cannot prove replay safety.
+    // replaySafety 是终态 Continue 准入的权威事实；仅凭尾部类型不能证明重放安全。
+    let replay_safety_proven =
+        runtime_state
+            .execution_retry_snapshot
+            .as_ref()
+            .is_some_and(|reference| {
+                reference.schema_version == EXECUTION_RETRY_SNAPSHOT_SCHEMA_VERSION
+                    && reference.replay_safety_proven()
+            });
+    // A prompt-free retry needs an exact user or error tail; synthetic or missing tail labels are diagnostic only.
+    // 无提示词重试必须拥有精确的用户或错误尾部；合成或缺失尾部标签只用于诊断。
+    let eligible = is_prompt_free_continuation_tail_kind(tail_kind.as_str())
+        && runtime_state.provider_call_ledger.in_flight_call_count() == 0
+        && replay_safety_proven;
     if !runtime_state
         .provider_call_ledger
         .mark_continuation_terminal(

@@ -418,14 +418,14 @@ pub(crate) async fn service_mark_conversation_read(
     let session_id = conversation_id
         .parse::<SessionId>()
         .map_err(|error| format!("invalid session id '{conversation_id}': {error}"))?;
-    let (controller_runtime, runtime_state_update, workbench) = {
+    let (controller_runtime, runtime_state_changed, workbench) = {
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
         let controller_runtime = guard.controller_runtime.clone().ok_or_else(|| {
             String::from("service is still starting; controller runtime is not ready")
         })?;
-        let mut runtime_state_update = None;
+        let mut runtime_state_changed = false;
         if let Some(runtime_state) =
             guard
                 .workspace_snapshot
@@ -438,7 +438,7 @@ pub(crate) async fn service_mark_conversation_read(
         {
             runtime_state.ui_state.unread = false;
             runtime_state.updated_at = current_unix_millis_text();
-            runtime_state_update = Some(runtime_state.clone());
+            runtime_state_changed = true;
         }
         for conversation in guard
             .workbench
@@ -452,23 +452,24 @@ pub(crate) async fn service_mark_conversation_read(
         guard.workbench.revision = guard.workbench_generation;
         let mut workbench = guard.workbench.clone();
         refresh_selected_workbench_messages_from_runtime(&guard, &mut workbench);
-        (controller_runtime, runtime_state_update, workbench)
+        (controller_runtime, runtime_state_changed, workbench)
     };
 
-    if let Some(runtime_state_update) = runtime_state_update {
-        // Advancing both runtime persistence lanes prevents queued snapshots from following this direct write.
-        // 同时推进两个运行态持久化通道，可阻止排队快照在本次直接写入后落盘。
-        invalidate_webui_session_persist_version(&state, session_id)?;
-        // persist_lock serializes this direct runtime/VMM checkpoint with every background writer.
-        // persist_lock 将本次直接运行态/VMM 检查点与全部后台写入者串行化。
-        let persist_lock = webui_workspace_persist_lock();
-        // persist_guard remains held until the coordinated checkpoint is fully durable.
-        // persist_guard 持有至协调检查点完全持久化。
-        let _persist_guard = persist_lock.lock().await;
+    if runtime_state_changed {
+        // authoritativeSnapshot is loaded after the shared write gate so marking a conversation read cannot overwrite a newer Stop or Continue terminal revision.
+        // authoritativeSnapshot 在取得共享写入闸门后加载，使会话已读标记无法覆盖更新的 Stop 或 Continue 终态修订。
+        let (_persist_guard, authoritative_snapshot) =
+            lock_latest_retained_workspace_session_persistence_snapshot(&state, session_id).await?;
+        // runtimeStateUpdate carries the newest retained session revision, including the unread mutation committed above.
+        // runtimeStateUpdate 携带最新保留会话修订，并包含上方已提交的未读状态变更。
+        let runtime_state_update = authoritative_snapshot
+            .session_runtime_state
+            .get(&session_id)
+            .ok_or_else(|| format!("会话 `{session_id}` 的运行态在已读持久化前消失。"))?;
         vulcan_workspace_store::workspace_store::persist_single_session_runtime_state_update(
             controller_runtime,
             session_id,
-            &runtime_state_update,
+            runtime_state_update,
         )
         .await?;
     }
@@ -668,27 +669,24 @@ fn retained_selected_conversation_messages(
     )
 }
 
-/// Replaces one workbench snapshot's selected messages with same-lock authoritative runtime projection.
-/// 使用同一锁内的权威运行时投影替换工作台快照的当前会话消息。
+/// Replaces one workbench snapshot's selected messages from an explicit workspace candidate.
+/// 从一份显式工作区候选替换工作台快照的当前会话消息。
 ///
 /// # Parameters
 /// # 参数
-/// `guard` owns the retained workspace and runtime records at one consistent revision.
-/// `guard` 在同一一致 revision 下持有保留工作区与运行时记录。
-/// `workbench` is the snapshot being prepared for a full-response or recovery boundary.
-/// `workbench` 是正在为全量响应或恢复边界准备的快照。
+/// `workspace_snapshot` owns the retained transcript and runtime records at one consistent revision.
+/// `workspace_snapshot` 在同一一致 revision 下持有保留转录与运行时记录。
+/// `workbench` is the snapshot being prepared for publication.
+/// `workbench` 是正在准备发布的快照。
 ///
 /// # Returns
 /// # 返回值
-/// Nothing; invalid draft selections or unavailable workspaces leave the snapshot unchanged.
-/// 无返回值；草稿选择无效或工作区不可用时保持快照不变。
-pub(crate) fn refresh_selected_workbench_messages_from_runtime(
-    guard: &ServiceBridgeState,
+/// Nothing; invalid draft selections leave the snapshot unchanged.
+/// 无返回值；草稿选择无效时保持快照不变。
+pub(crate) fn refresh_selected_workbench_messages_from_workspace(
+    workspace_snapshot: &WorkspaceSnapshot,
     workbench: &mut WorkbenchSnapshot,
 ) {
-    let Some(workspace_snapshot) = guard.workspace_snapshot.as_ref() else {
-        return;
-    };
     let Some(conversation_id) = workbench.selected_conversation_id.as_deref() else {
         return;
     };
@@ -743,6 +741,30 @@ pub(crate) fn refresh_selected_workbench_messages_from_runtime(
             workbench.messages.push(runtime_message);
         }
     }
+}
+
+/// Replaces one workbench snapshot's selected messages with same-lock authoritative runtime projection.
+/// 使用同一锁内的权威运行时投影替换工作台快照的当前会话消息。
+///
+/// # Parameters
+/// # 参数
+/// `guard` owns the retained workspace and runtime records at one consistent revision.
+/// `guard` 在同一一致 revision 下持有保留工作区与运行时记录。
+/// `workbench` is the snapshot being prepared for a full-response or recovery boundary.
+/// `workbench` 是正在为全量响应或恢复边界准备的快照。
+///
+/// # Returns
+/// # 返回值
+/// Nothing; invalid draft selections or unavailable workspaces leave the snapshot unchanged.
+/// 无返回值；草稿选择无效或工作区不可用时保持快照不变。
+pub(crate) fn refresh_selected_workbench_messages_from_runtime(
+    guard: &ServiceBridgeState,
+    workbench: &mut WorkbenchSnapshot,
+) {
+    let Some(workspace_snapshot) = guard.workspace_snapshot.as_ref() else {
+        return;
+    };
+    refresh_selected_workbench_messages_from_workspace(workspace_snapshot, workbench);
 }
 
 /// Reprojects selected-only workbench fields from retained per-conversation caches.

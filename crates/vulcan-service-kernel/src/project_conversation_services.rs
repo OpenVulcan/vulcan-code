@@ -7,7 +7,8 @@ mod conversation_services;
 mod project_services;
 
 pub(super) use conversation_services::{
-    refresh_selected_workbench_messages_from_runtime, service_archive_conversation,
+    refresh_selected_workbench_messages_from_runtime,
+    refresh_selected_workbench_messages_from_workspace, service_archive_conversation,
     service_delete_archived_conversations, service_mark_conversation_read,
     service_rename_conversation, service_restore_archived_conversations,
     service_select_conversation,
@@ -163,6 +164,55 @@ pub(super) fn begin_session_turn_start_exclusion(
         reservation_id,
         SessionTurnAdmissionReservationKind::GoalMutation,
         action_label,
+    )?;
+    drop(guard);
+    Ok(SessionTurnAdmissionGuard {
+        state: state.clone(),
+        reservation_id,
+        session_ids: reserved_session_ids,
+        project_scopes: BTreeSet::new(),
+    })
+}
+
+/// Reserves one exact session while Stop tears down its current run and commits the stopped state.
+/// 在 Stop 拆除当前运行并提交停止状态期间预留一个精确会话。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the typed admission reservation table shared with prompt submission.
+/// `state` 持有与提示词提交共享的类型化准入预留表。
+/// `session_id` is the exact conversation whose replacement turns must remain blocked.
+/// `session_id` 是替代回合必须继续被阻止的精确会话。
+///
+/// # Returns
+/// 返回值
+/// A guard that blocks new turns until Stop persistence and projection finish.
+/// 返回一个在 Stop 持久化与投影完成前阻止新回合的守卫。
+pub(super) fn begin_session_run_stop_exclusion(
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+) -> Result<SessionTurnAdmissionGuard, String> {
+    // reservationId uniquely owns the stop row so stale cleanup cannot release a successor transaction.
+    // reservationId 唯一拥有停止预留行，使过期清理无法释放后继事务。
+    let reservation_id = Uuid::new_v4();
+    let reserved_session_ids = BTreeSet::from([session_id]);
+    let mut guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    if guard
+        .session_terminal_persistence_owners
+        .contains_key(&session_id)
+    {
+        return Err(format!(
+            "会话 `{session_id}` 正在可靠提交终态，暂时不能重复停止。"
+        ));
+    }
+    reserve_session_turn_admission(
+        &mut guard,
+        &reserved_session_ids,
+        reservation_id,
+        SessionTurnAdmissionReservationKind::RunStop,
+        "停止",
     )?;
     drop(guard);
     Ok(SessionTurnAdmissionGuard {
@@ -613,6 +663,44 @@ mod tests {
                 kind: SessionTurnAdmissionReservationKind::LifecycleTransition,
             })
         );
+    }
+
+    /// Verifies a Stop reservation blocks replacement turns and exposes its precise reservation kind.
+    /// 验证 Stop 预留会阻止替代回合，并暴露精确的预留类型。
+    #[test]
+    fn run_stop_exclusion_blocks_replacement_turn_until_release() {
+        // sessionId identifies the exact conversation crossing the Stop teardown boundary.
+        // sessionId 标识正在跨越 Stop 拆除边界的精确会话。
+        let session_id = SessionId::from_u128(0x996);
+        // state owns the runtime kernel and typed reservation under test.
+        // state 持有被测运行时内核与类型化预留。
+        let state = create_service_bridge_state(Arc::new(LifecycleTransitionTestShellHost));
+        // stopGuard holds admission closed through the simulated teardown and persistence window.
+        // stopGuard 在模拟的拆除与持久化窗口内持续关闭准入。
+        let stop_guard = begin_session_run_stop_exclusion(&state, session_id)
+            .expect("Stop should reserve an unowned session");
+        {
+            let mut guard = state.lock().expect("service state should lock");
+            assert_eq!(
+                guard
+                    .session_turn_admission_reservations
+                    .get(&session_id)
+                    .map(|reservation| reservation.kind),
+                Some(SessionTurnAdmissionReservationKind::RunStop)
+            );
+            assert!(
+                start_webui_session_kernel_user_turn(&mut guard, session_id, "replacement-turn")
+                    .is_err()
+            );
+        }
+
+        drop(stop_guard);
+
+        let mut guard = state
+            .lock()
+            .expect("service state should lock after Stop release");
+        start_webui_session_kernel_user_turn(&mut guard, session_id, "replacement-turn")
+            .expect("replacement turn should start after Stop finishes");
     }
 
     /// Verifies project conflicts leave no partial session reservation behind.

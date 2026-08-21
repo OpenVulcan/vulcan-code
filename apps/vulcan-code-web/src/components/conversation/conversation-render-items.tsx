@@ -44,7 +44,6 @@ import { metadataValue } from "@/components/conversation/conversation-metadata";
 import type {
   CommandSessionSummary,
   ComposerAttachmentSummary,
-  SessionProviderUsageSummary,
 } from "@/types";
 import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
@@ -517,9 +516,6 @@ export function ConversationProcessGroup(props: {
   // Whether the owning session is currently running.
   // 所属会话是否正在运行。
   sessionRunning: boolean;
-  // Live physical Provider request accounting shown without waiting for turn completion.
-  // 不等待整轮结束即可显示的实时物理 Provider 请求统计。
-  sessionProviderUsage?: SessionProviderUsageSummary | null;
   // WebUI-session expansion memory for long user prompt bubbles.
   // 长用户提示词气泡使用的当前 WebUI 会话展开记忆。
   expandedUserPromptIds: Set<string>;
@@ -625,38 +621,6 @@ export function ConversationProcessGroup(props: {
   const displayedDurationMs = props.process.durationMs ?? liveDurationMs;
   const durationLabel = formatWorkProcessDuration(displayedDurationMs, locale);
   const headerText = durationLabel ? `${t("conversation.process.header")} ${durationLabel}` : t("conversation.process.header");
-  const providerUsage = props.sessionProviderUsage;
-  // activeProviderUsage keeps the legacy projection readable while new snapshots expose explicit scopes.
-  // activeProviderUsage 在新快照暴露明确口径的同时保持旧投影可读。
-  const activeProviderUsage = providerUsage?.activeBranch ?? (providerUsage
-    ? {
-        providerCallCount: providerUsage.providerCallCount,
-        unknownUsageCallCount: providerUsage.unknownUsageCallCount,
-        usage: providerUsage.cumulativeUsage,
-      }
-    : null);
-  const providerUsageTotal = activeProviderUsage?.usage?.totalTokens ?? providerUsage?.lastUsage?.totalTokens;
-  const providerUsageUnknown = t("conversation.process.providerUsageUnknown");
-  const providerUsageLabel = providerUsage
-    ? t("conversation.process.providerUsageBadge")
-      .replace("{calls}", String(activeProviderUsage?.providerCallCount ?? 0))
-      .replace("{inFlight}", String(providerUsage.inFlightCallCount))
-      .replace("{tokens}", String(providerUsageTotal ?? providerUsageUnknown))
-    : null;
-  const providerUsageTitle = providerUsage
-    ? [
-        t("conversation.process.providerUsageActive")
-          .replace("{calls}", String(activeProviderUsage?.providerCallCount ?? 0))
-          .replace("{tokens}", String(providerUsageTotal ?? providerUsageUnknown))
-          .replace("{unknown}", String(activeProviderUsage?.unknownUsageCallCount ?? 0)),
-        t("conversation.process.providerUsageLifetime")
-          .replace("{calls}", String(providerUsage.lifetime?.providerCallCount ?? activeProviderUsage?.providerCallCount ?? 0))
-          .replace("{tokens}", String(providerUsage.lifetime?.usage?.totalTokens ?? providerUsageTotal ?? providerUsageUnknown)),
-        t("conversation.process.providerUsageInherited")
-          .replace("{calls}", String(providerUsage.inherited?.providerCallCount ?? 0))
-          .replace("{tokens}", String(providerUsage.inherited?.usage?.totalTokens ?? 0)),
-      ].join("\n")
-    : undefined;
   const stoppedText = durationLabel
     ? t("conversation.process.stoppedAfter").replace("{duration}", durationLabel)
     : t("conversation.process.stopped");
@@ -722,11 +686,6 @@ export function ConversationProcessGroup(props: {
       >
         <Clock3 className="work-process-icon" size={14} />
         <span>{headerText}</span>
-        {providerUsageLabel ? (
-          <span className="work-process-provider-usage" title={providerUsageTitle}>
-            {providerUsageLabel}
-          </span>
-        ) : null}
         {props.process.collapsible ? (collapsed ? <ChevronRight className="work-process-toggle-icon" size={13} /> : <ChevronDown className="work-process-toggle-icon" size={13} />) : null}
       </button>
       <div className="work-process-guidance">

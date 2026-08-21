@@ -47,7 +47,6 @@ import type {
   ComposerAttachmentSummary,
   ConversationMessage,
   ConversationSummary,
-  SessionProviderUsageSummary,
 } from "@/types";
 import { useI18n } from "@/i18n";
 import { ConversationTurnSeatList } from "@/components/conversation/conversation-turn-seat";
@@ -65,9 +64,6 @@ export function ConversationWorkspace(props: {
   // Whether the owning conversation is currently running.
   // 所属会话当前是否正在运行。
   sessionRunning: boolean;
-  // Live physical Provider request accounting projected by the selected session.
-  // 选中会话投影出的实时物理 Provider 请求统计。
-  sessionProviderUsage?: SessionProviderUsageSummary | null;
   // Whether the latest streaming thinking block may automatically expand in the inline transcript.
   // 最新流式思考块是否允许在内联会话中自动展开。
   autoExpandStreamingThinking?: boolean;
@@ -313,17 +309,6 @@ export function ConversationWorkspace(props: {
     timelineProjectionStore.invalidateRows(conversationTurnProjectionOwnsCommandSession);
     timelineProjectionStore.flushNotifications();
   }, [props.commandSessions, timelineProjectionStore]);
-  // previousSessionProviderUsageRef limits live usage refreshes to the active process Turn.
-  // previousSessionProviderUsageRef 将实时用量刷新限制在活动过程 Turn。
-  const previousSessionProviderUsageRef = React.useRef(props.sessionProviderUsage);
-  React.useLayoutEffect(() => {
-    if (previousSessionProviderUsageRef.current === props.sessionProviderUsage) {
-      return;
-    }
-    previousSessionProviderUsageRef.current = props.sessionProviderUsage;
-    timelineProjectionStore.invalidateRows(conversationTurnGroupIsRunning);
-    timelineProjectionStore.flushNotifications();
-  }, [props.sessionProviderUsage, timelineProjectionStore]);
   const autoExpandThinkingBlockId = (props.autoExpandStreamingThinking ?? true)
     && props.sessionRunning
     && props.hiddenThinkingBlockIds.size === 0
@@ -468,10 +453,6 @@ export function ConversationWorkspace(props: {
   // commandSessionsRef 提供当前运行时真值，同时不使无关历史 Seat 失效。
   const commandSessionsRef = React.useRef(props.commandSessions);
   commandSessionsRef.current = props.commandSessions;
-  // sessionProviderUsageRef supplies live usage to the exact active process Turn.
-  // sessionProviderUsageRef 向精确活动过程 Turn 提供实时用量。
-  const sessionProviderUsageRef = React.useRef(props.sessionProviderUsage);
-  sessionProviderUsageRef.current = props.sessionProviderUsage;
 
   const renderTimelineItem = React.useCallback((
     timelineItem: ConversationTimelineItem,
@@ -548,7 +529,6 @@ export function ConversationWorkspace(props: {
         parentConversationId={props.parentConversationId}
         process={timelineItem.process}
         sessionRunning={props.sessionRunning}
-        sessionProviderUsage={sessionProviderUsageRef.current}
         expandedUserPromptIds={userPromptExpansionOverridesRef.current}
         expandedToolPresentationIds={toolPresentationExpansionOverridesRef.current}
         workspacePath={props.workspacePath}
@@ -807,16 +787,6 @@ function groupConversationTimelineItems(items: ConversationTimelineItem[]): Conv
 // timelineItemStartsConversationTurn 判断单条投影行是否开启新的可见轮次。
 function timelineItemStartsConversationTurn(item: ConversationTimelineItem): boolean {
   return item.kind === "item" && item.item.role === "user";
-}
-
-// conversationTurnGroupIsRunning reports whether one Turn owns a live process clock.
-// conversationTurnGroupIsRunning 判断单个 Turn 是否拥有正在运行的过程计时器。
-// Parameters: group is the exact ordered timeline projection for one visible Turn.
-// 参数：group 是单个可见 Turn 的精确有序时间线投影。
-// Returns: true only when the Turn contains a process row marked as running.
-// 返回值：仅当该 Turn 包含标记为运行中的过程行时返回 true。
-function conversationTurnGroupIsRunning(group: ConversationTurnProjection): boolean {
-  return group.items.some((item) => item.kind === "process" && item.process.running);
 }
 
 // conversationTurnProjectionOwnsCommandSession reports whether one Turn renders live terminal state.

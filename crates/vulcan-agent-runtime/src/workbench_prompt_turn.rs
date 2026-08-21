@@ -445,6 +445,7 @@ pub struct SharedPromptTurnRuntimeBeginInput<'a> {
 
 /// Input required to continue one shared prompt turn after independent preparation lines finish.
 /// 独立准备线路完成后继续一个共享提示词回合所需的输入。
+#[derive(Clone)]
 pub struct SharedPromptTurnContinueInput {
     /// Started prompt turn waiting for both independent preparation outcomes.
     /// 正在等待两条独立准备线路结果的已启动提示词回合。

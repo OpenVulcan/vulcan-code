@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::pending_prompts::dispatch_queued_pending_prompt_hook;
+use crate::webui_prompt_lifecycle::commit_prompt_preparation_failure_boundary;
 use vulcan_session_boundary::{
     SessionBoundaryEventKind, SessionEventScope, SessionEventVisibility,
 };
@@ -579,6 +580,78 @@ async fn active_stream_task_cleanup_preserves_replacement_identity() {
     assert!(!state.active_stream_tasks.contains_key(&session_id));
 }
 
+/// Verifies terminal-persistence admission remains blocked until the exact owner explicitly releases it.
+/// 验证终态持久化准入会持续阻塞，直至精确所有者显式释放。
+///
+/// # Parameters
+/// # 参数
+/// This test has no parameters.
+/// 此测试没有参数。
+///
+/// # Returns
+/// # 返回值
+/// This test returns no value and fails if an implicit drop opens admission or an exact release does not.
+/// 此测试无返回值；若隐式析构开放准入，或精确释放未开放准入，则测试失败。
+#[test]
+fn terminal_persistence_owner_requires_explicit_release_before_kernel_start() {
+    // session_id identifies the exact regular conversation protected by the terminal boundary.
+    // session_id 标识受终态边界保护的精确普通会话。
+    let session_id = SessionId::new_v4();
+    // stream_task_id identifies the only terminal owner permitted to release the marker.
+    // stream_task_id 标识唯一获准释放标记的终态所有者。
+    let stream_task_id = Uuid::new_v4();
+    // terminal_owner is the typed identity shared by registration, adoption, and release.
+    // terminal_owner 是登记、接管与释放共同使用的类型化身份。
+    let terminal_owner = SessionTerminalPersistenceOwner::StreamTask(stream_task_id);
+    // service_state begins idle so the terminal marker is the sole admission blocker.
+    // service_state 初始为空闲状态，使终态标记成为唯一准入阻塞项。
+    let mut service_state = test_service_state_with_parent_session(session_id);
+    register_session_terminal_persistence_owner(&mut service_state, session_id, terminal_owner)
+        .expect("terminal owner should register");
+    // state exposes the same owner table to the guard and kernel admission gate.
+    // state 向守卫与 kernel 准入闸门暴露同一所有者表。
+    let state: SharedServiceBridgeState = Arc::new(Mutex::new(service_state));
+
+    // unreleased_guard simulates cancellation or an early error after ownership adoption.
+    // unreleased_guard 模拟所有权接管后的取消或提前错误。
+    let unreleased_guard = SessionTerminalPersistenceOwnerGuard::adopt_registered(
+        state.clone(),
+        session_id,
+        terminal_owner,
+    )
+    .expect("registered owner should be adoptable");
+    drop(unreleased_guard);
+    {
+        // guard proves ordinary drop retained the blocker and kernel admission reports the concrete boundary.
+        // guard 证明普通析构保留阻塞项，且 kernel 准入报告具体边界。
+        let mut guard = state.lock().expect("service state lock");
+        let error = start_webui_session_kernel_user_turn(
+            &mut guard,
+            session_id,
+            "blocked-before-persistence",
+        )
+        .expect_err("unreleased terminal persistence must block kernel start");
+        assert!(error.contains("committing its terminal state"));
+    }
+
+    // releasing_guard represents a successfully persisted exact terminal boundary.
+    // releasing_guard 表示已经可靠持久化的精确终态边界。
+    let releasing_guard = SessionTerminalPersistenceOwnerGuard::adopt_registered(
+        state.clone(),
+        session_id,
+        terminal_owner,
+    )
+    .expect("retained owner should remain adoptable");
+    releasing_guard
+        .release()
+        .expect("exact owner should release its marker");
+    // guard proves the same session can start only after explicit release.
+    // guard 证明同一会话只能在显式释放后启动。
+    let mut guard = state.lock().expect("service state lock");
+    start_webui_session_kernel_user_turn(&mut guard, session_id, "after-persistence")
+        .expect("kernel start should succeed after exact release");
+}
+
 /// Verifies early stream exhaustion removes the exact owner and stops its active kernel turn.
 /// 验证流提前耗尽会移除精确所有者并停止其活动内核回合。
 ///
@@ -648,6 +721,10 @@ async fn early_stream_exhaustion_cleans_exact_owner_and_kernel_turn() {
             .and_then(|workspace| workspace_session_summary_for_session(workspace, session_id))
             .map(|session| session.status),
         Some(SessionState::Blocked)
+    );
+    assert_eq!(
+        guard.session_terminal_persistence_owners.get(&session_id),
+        Some(&SessionTerminalPersistenceOwner::StreamTask(task_id))
     );
 }
 
@@ -779,6 +856,12 @@ fn owned_registration_failure_finalizes_failed_phase_and_kernel_turn() {
             .and_then(|workspace| workspace.session_run_phases.get(&session_id)),
         Some(&SessionRunPhase::Failed)
     );
+    assert_eq!(
+        guard.session_terminal_persistence_owners.get(&session_id),
+        Some(&SessionTerminalPersistenceOwner::KernelGeneration(
+            expected_generation
+        ))
+    );
     assert!(
         !guard
             .session_runtime_kernels
@@ -786,6 +869,20 @@ fn owned_registration_failure_finalizes_failed_phase_and_kernel_turn() {
             .expect("kernel should exist")
             .has_active_turn()
     );
+    // continuation records a real failed terminal generation instead of leaving an ownerless admission claim.
+    // continuation 记录真实失败终态代际，而不是遗留无所有者的准入领取。
+    let continuation = &guard
+        .workspace_snapshot
+        .as_ref()
+        .expect("workspace should remain available")
+        .session_runtime_state
+        .get(&session_id)
+        .expect("runtime state should remain available")
+        .provider_call_ledger
+        .continuation;
+    assert_eq!(continuation.terminal_reason.as_deref(), Some("failed"));
+    assert!(continuation.terminal_at_ms.is_some());
+    assert!(continuation.claimed_at_ms.is_none());
 }
 
 /// Verifies a pre-registration compaction failure closes its exact kernel turn and phase.
@@ -854,6 +951,20 @@ fn pre_registration_compaction_failure_finalizes_owned_kernel_turn() {
             .get(&session_id)
             .expect("kernel should exist")
             .has_active_turn()
+    );
+    // Compaction is not a resumable execution and must not manufacture a Continue generation.
+    // 压缩不是可恢复执行，绝不能凭空创建 Continue 代际。
+    assert!(
+        guard
+            .workspace_snapshot
+            .as_ref()
+            .expect("workspace should remain available")
+            .session_runtime_state
+            .get(&session_id)
+            .expect("runtime state should remain available")
+            .provider_call_ledger
+            .continuation
+            .is_empty()
     );
 }
 
@@ -942,6 +1053,147 @@ async fn prepared_failure_terminalizes_exact_active_stream_owner() {
             .get(&session_id)
             .expect("kernel should exist")
             .has_active_turn()
+    );
+    assert_eq!(
+        guard.session_terminal_persistence_owners.get(&session_id),
+        Some(&SessionTerminalPersistenceOwner::StreamTask(
+            active_stream_task_id
+        ))
+    );
+    // continuation closes the failed generation before the exact stream owner disappears.
+    // continuation 在精确流所有者消失前闭合失败代际。
+    let continuation = &guard
+        .workspace_snapshot
+        .as_ref()
+        .expect("workspace should remain available")
+        .session_runtime_state
+        .get(&session_id)
+        .expect("runtime state should remain available")
+        .provider_call_ledger
+        .continuation;
+    assert_eq!(continuation.terminal_reason.as_deref(), Some("failed"));
+    assert!(continuation.terminal_at_ms.is_some());
+}
+
+/// Verifies an exhausted continuation ledger invalidates the exact retry token without abandoning terminal cleanup.
+/// 验证 Continue 账本耗尽时会失效精确重试令牌，而不会放弃终态清理。
+///
+/// # Parameters
+/// 参数
+/// This test has no parameters.
+/// 此测试没有参数。
+///
+/// # Returns
+/// 返回值
+/// This test returns no value and fails if the claimed token or active owner survives the terminal transaction.
+/// 此测试无返回值；若已领取令牌或活动所有者在终态事务后仍然存活，则测试失败。
+#[tokio::test]
+async fn prepared_failure_invalidates_claim_when_continuation_revision_is_exhausted() {
+    // session_id identifies the exact retry owner whose continuation revision cannot advance.
+    // session_id 标识 Continue 修订无法推进的精确重试所有者。
+    let session_id = SessionId::new_v4();
+    // active_stream_task_id identifies the exact failing Prepared stream generation.
+    // active_stream_task_id 标识失败的精确 Prepared 流代次。
+    let active_stream_task_id = Uuid::new_v4();
+    // claimed_attempt_id identifies the Continue claim that must not remain ownerless.
+    // claimed_attempt_id 标识不得遗留为无所有者状态的 Continue 领取。
+    let claimed_attempt_id = Uuid::new_v4().to_string();
+    // service_state owns the exhausted ledger, claimed retry reference, kernel, and stream owner.
+    // service_state 持有耗尽账本、已领取重试引用、kernel 与流所有者。
+    let mut service_state = test_service_state_with_parent_session(session_id);
+    insert_test_workbench_conversation(&mut service_state, session_id);
+    start_webui_session_kernel_user_turn(&mut service_state, session_id, "prepared-exhausted")
+        .expect("kernel turn should start");
+    service_state.active_stream_tasks.insert(
+        session_id,
+        ActiveStreamTask::new(active_stream_task_id, spawn_service_task(async {}), None),
+    );
+    // runtime_state is the unique owner of both continuation revision and retry claim state.
+    // runtime_state 是 Continue 修订与重试领取状态的唯一所有者。
+    let runtime_state = service_state
+        .workspace_snapshot
+        .as_mut()
+        .expect("workspace should exist")
+        .session_runtime_state
+        .get_mut(&session_id)
+        .expect("runtime state should exist");
+    runtime_state.provider_call_ledger.revision = u64::MAX;
+    runtime_state.execution_retry_snapshot =
+        Some(vulcan_workbench_model::ExecutionRetrySnapshotRef {
+            schema_version: vulcan_workbench_model::EXECUTION_RETRY_SNAPSHOT_SCHEMA_VERSION,
+            snapshot_id: Uuid::new_v4().to_string(),
+            generation: 7,
+            state: vulcan_workbench_model::ExecutionRetrySnapshotState::Claimed,
+            content_sha256: "0".repeat(64),
+            content_bytes: 128,
+            logical_execution_id: String::from("logical-exhausted"),
+            pending_action_label: String::from("dispatch_provider_request"),
+            provider_route: None,
+            preparation_route_selection: None,
+            context_generation_id: None,
+            canonical_dispatch_sha256: "1".repeat(64),
+            retryable: false,
+            requires_manual_confirmation: false,
+            blocked_reason: None,
+            claimed_attempt_id: Some(claimed_attempt_id),
+            error_summary: None,
+            updated_at: String::from("1000"),
+        });
+    // state exposes the exact Prepared terminal transaction under test.
+    // state 提供被测的精确 Prepared 终态事务。
+    let state: SharedServiceBridgeState = Arc::new(Mutex::new(service_state));
+    // app discards emitted deltas because retained state is authoritative in this test.
+    // app 丢弃发送的增量，因为本测试以保留状态为权威。
+    let app = ServiceEventEmitter::new(Vec::new());
+
+    assert_eq!(
+        commit_prepared_stream_failure(
+            &app,
+            &state,
+            session_id,
+            active_stream_task_id,
+            "test exhausted Prepared failure",
+        ),
+        PreparedStreamFailureCommit::Committed
+    );
+
+    // guard exposes the atomically failed-closed token and completed owner cleanup.
+    // guard 提供原子失败关闭后的令牌与已完成的所有者清理。
+    let guard = state.lock().expect("service state lock");
+    assert!(!guard.active_stream_tasks.contains_key(&session_id));
+    assert!(
+        !guard
+            .session_runtime_kernels
+            .get(&session_id)
+            .expect("kernel should exist")
+            .has_active_turn()
+    );
+    // retry_reference proves the old Claimed owner became an explicit localized blocker.
+    // retry_reference 证明旧 Claimed 所有者已转为显式可本地化阻断项。
+    let retry_reference = guard
+        .workspace_snapshot
+        .as_ref()
+        .expect("workspace should remain available")
+        .session_runtime_state
+        .get(&session_id)
+        .expect("runtime state should remain available")
+        .execution_retry_snapshot
+        .as_ref()
+        .expect("invalidated retry reference should remain visible");
+    assert_eq!(
+        retry_reference.state,
+        vulcan_workbench_model::ExecutionRetrySnapshotState::Invalidated
+    );
+    assert_eq!(
+        retry_reference.blocked_reason.as_deref(),
+        Some("retry_snapshot_transition_failed")
+    );
+    assert!(retry_reference.claimed_attempt_id.is_none());
+    assert_eq!(
+        guard.session_terminal_persistence_owners.get(&session_id),
+        Some(&SessionTerminalPersistenceOwner::StreamTask(
+            active_stream_task_id
+        ))
     );
 }
 
@@ -1421,8 +1673,8 @@ async fn prepared_failure_preserves_replacement_stream_owner() {
     );
 }
 
-/// Verifies missing retained phase state is reported explicitly while the exact ending owner is still cleaned.
-/// 验证缺失保留阶段状态会被显式报告，同时仍清理精确的结束中所有者。
+/// Verifies missing retained phase state still closes the exact owner behind a persistence marker.
+/// 验证缺失保留阶段状态时仍会在持久化标记后闭合精确所有者。
 ///
 /// # Parameters
 /// # 参数
@@ -1431,10 +1683,10 @@ async fn prepared_failure_preserves_replacement_stream_owner() {
 ///
 /// # Returns
 /// # 返回值
-/// This test returns no value and fails if unavailable state is misclassified or leaks task ownership.
-/// 此测试无返回值；若不可用状态被错误分类或泄漏任务所有权则失败。
+/// This test returns no value and fails if fail-closed cleanup leaks task ownership or omits its marker.
+/// 此测试无返回值；若失败关闭清理泄漏任务所有权或遗漏其标记则失败。
 #[tokio::test]
-async fn prepared_failure_classifies_missing_workspace_as_state_unavailable() {
+async fn prepared_failure_missing_workspace_retains_terminal_persistence_owner() {
     // session_id identifies the exact Prepared stream whose retained workspace disappears.
     // session_id 标识保留工作区消失的精确 Prepared 流。
     let session_id = SessionId::new_v4();
@@ -1469,7 +1721,7 @@ async fn prepared_failure_classifies_missing_workspace_as_state_unavailable() {
             active_stream_task_id,
             "missing workspace Prepared failure",
         ),
-        PreparedStreamFailureCommit::StateUnavailable
+        PreparedStreamFailureCommit::Committed
     );
 
     // guard proves cleanup completed without fabricating a retained phase revision.
@@ -1483,6 +1735,12 @@ async fn prepared_failure_classifies_missing_workspace_as_state_unavailable() {
             .get(&session_id)
             .expect("kernel should exist")
             .has_active_turn()
+    );
+    assert_eq!(
+        guard.session_terminal_persistence_owners.get(&session_id),
+        Some(&SessionTerminalPersistenceOwner::StreamTask(
+            active_stream_task_id
+        ))
     );
 }
 
@@ -1714,6 +1972,409 @@ async fn active_stream_task_rejects_second_owner_without_replacement() {
         Some(first_task_id)
     );
     assert!(remove_active_stream_task_if_id(&mut guard, session_id, first_task_id).is_some());
+}
+
+/// Verifies direct stream registration cannot bypass an exact terminal-persistence owner.
+/// 验证直接流登记无法绕过精确终态持久化所有者。
+///
+/// # Parameters
+/// # 参数
+/// This test has no parameters.
+/// 此测试没有参数。
+///
+/// # Returns
+/// # 返回值
+/// This asynchronous test returns no value and fails if a replacement entry appears before terminal settlement.
+/// 此异步测试无返回值；若终态结算前出现替代条目则测试失败。
+#[tokio::test]
+async fn active_stream_registration_rejects_terminal_persistence_owner() {
+    // session_id identifies the stream registry slot protected by terminal settlement.
+    // session_id 标识受终态结算保护的流注册表槽位。
+    let session_id = SessionId::new_v4();
+    // terminal_task_id identifies the completed stream that still owns persistence.
+    // terminal_task_id 标识仍拥有持久化权的已完成流。
+    let terminal_task_id = Uuid::new_v4();
+    // replacement_task_id identifies the unauthorized direct registration attempt.
+    // replacement_task_id 标识未获授权的直接登记尝试。
+    let replacement_task_id = Uuid::new_v4();
+    // terminal_owner is the exact typed boundary expected in the registration error.
+    // terminal_owner 是登记错误中预期的精确类型化边界。
+    let terminal_owner = SessionTerminalPersistenceOwner::StreamTask(terminal_task_id);
+    // service_state contains no active stream, making terminal persistence the sole registry blocker.
+    // service_state 不含活动流，使终态持久化成为唯一注册表阻塞项。
+    let mut service_state = test_service_state_with_parent_session(session_id);
+    register_session_terminal_persistence_owner(&mut service_state, session_id, terminal_owner)
+        .expect("terminal owner should register");
+    // state exposes the protected registry to the production registration gate.
+    // state 向生产登记闸门暴露受保护注册表。
+    let state: SharedServiceBridgeState = Arc::new(Mutex::new(service_state));
+
+    let error = spawn_registered_active_stream_task_with_mode(
+        &state,
+        session_id,
+        replacement_task_id,
+        None,
+        ActiveStreamTaskRegistrationMode::RejectIfOccupied,
+        async {},
+    )
+    .expect_err("terminal persistence must reject replacement registration");
+    assert!(matches!(
+        error,
+        ActiveStreamTaskRegistrationError::TerminalPersistenceInFlight { owner }
+            if owner == terminal_owner
+    ));
+    // guard proves rejection did not mutate either the terminal owner or active registry.
+    // guard 证明拒绝未修改终态所有者或活动注册表。
+    let guard = state.lock().expect("service state lock");
+    assert_eq!(
+        guard.session_terminal_persistence_owners.get(&session_id),
+        Some(&terminal_owner)
+    );
+    assert!(!guard.active_stream_tasks.contains_key(&session_id));
+}
+
+/// Verifies RunStop wins the pre-registration gap without allowing stale preparation state or a stream owner to reappear.
+/// 验证 RunStop 会赢得流登记前窗口，且不允许过期准备状态或流所有者重新出现。
+///
+/// # Parameters
+/// # 参数
+/// This test has no parameters.
+/// 此测试没有参数。
+///
+/// # Returns
+/// # 返回值
+/// This asynchronous test returns no value and fails if any owner-checked write bypasses the Stop reservation.
+/// 此异步测试无返回值；若任一所有者校验写入绕过 Stop 预留则测试失败。
+#[tokio::test]
+async fn run_stop_reservation_blocks_stale_preparation_commit_and_stream_registration() {
+    // sessionId identifies the exact preparation/Stop race under test.
+    // sessionId 标识被测的精确准备/Stop 竞态。
+    let session_id = SessionId::new_v4();
+    // serviceState begins with one accepted kernel turn and a visible Ready projection.
+    // serviceState 从一个已接纳 kernel 回合与可见 Ready 投影开始。
+    let mut service_state = test_service_state_with_parent_session(session_id);
+    insert_test_workbench_conversation(&mut service_state, session_id);
+    start_webui_session_kernel_user_turn(&mut service_state, session_id, "turn-stop-race")
+        .expect("kernel turn should start");
+    // expectedGeneration is the immutable generation captured by deferred preparation.
+    // expectedGeneration 是延迟准备捕获的不可变代际。
+    let expected_generation = webui_session_kernel_generation(&service_state, session_id)
+        .expect("kernel generation should exist");
+    service_state
+        .workspace_snapshot
+        .as_mut()
+        .expect("workspace should exist")
+        .session_run_phases
+        .insert(session_id, SessionRunPhase::Ready);
+    // staleCandidate simulates the detached workspace produced just before Stop acquired admission.
+    // staleCandidate 模拟 Stop 取得准入前刚生成的分离工作区。
+    let mut stale_candidate = service_state
+        .workspace_snapshot
+        .clone()
+        .expect("workspace should exist");
+    stale_candidate
+        .session_run_phases
+        .insert(session_id, SessionRunPhase::Preparing);
+    service_state.session_turn_admission_reservations.insert(
+        session_id,
+        SessionTurnAdmissionReservation {
+            reservation_id: Uuid::new_v4(),
+            kind: SessionTurnAdmissionReservationKind::RunStop,
+        },
+    );
+    // state exposes the exact gap where Stop owns admission but has not yet stopped the kernel.
+    // state 暴露 Stop 已拥有准入但尚未停止 kernel 的精确窗口。
+    let state: SharedServiceBridgeState = Arc::new(Mutex::new(service_state));
+    // initialRevision proves rejected stale work does not even advance the visible event clock.
+    // initialRevision 证明被拒绝的过期工作甚至不会推进可见事件时钟。
+    let initial_revision = state
+        .lock()
+        .expect("service state lock")
+        .workbench_generation;
+
+    // app would receive a phase delta only if the stale checked commit bypassed RunStop.
+    // app 仅会在过期校验提交绕过 RunStop 时收到阶段增量。
+    let app = ServiceEventEmitter::new(Vec::new());
+    assert!(
+        !commit_workspace_snapshot_and_emit_session_phase_delta_if_prompt_owner_current(
+            &app,
+            &state,
+            stale_candidate,
+            session_id,
+            SessionRunPhase::Preparing,
+            expected_generation,
+            "turn-stop-race",
+        )
+        .expect("stale phase commit should be rejected cleanly")
+    );
+    // registrationError must name the concrete admission owner rather than falling through to an occupied/no-op state.
+    // registrationError 必须指出具体准入所有者，不能退化为占用或无操作状态。
+    let registration_error = spawn_registered_kernel_stream_task_with_mode(
+        &state,
+        session_id,
+        Uuid::new_v4(),
+        None,
+        ActiveStreamTaskRegistrationMode::RejectIfOccupied,
+        expected_generation,
+        "turn-stop-race",
+        async {},
+    )
+    .expect_err("RunStop admission should reject stale stream registration");
+    assert!(matches!(
+        registration_error,
+        ActiveStreamTaskRegistrationError::AdmissionInFlight {
+            kind: SessionTurnAdmissionReservationKind::RunStop
+        }
+    ));
+
+    // guard proves every authoritative surface still reflects the pre-candidate state.
+    // guard 证明每个权威界面仍反映候选提交前状态。
+    let guard = state.lock().expect("service state lock");
+    assert_eq!(guard.workbench_generation, initial_revision);
+    assert_eq!(
+        guard
+            .workspace_snapshot
+            .as_ref()
+            .and_then(|workspace| workspace.session_run_phases.get(&session_id)),
+        Some(&SessionRunPhase::Ready)
+    );
+    assert!(!guard.active_stream_tasks.contains_key(&session_id));
+}
+
+/// Verifies a checked preparation phase commit preserves newer transcript UI state from the retained workspace.
+/// 验证经过所有者校验的准备阶段提交会保留工作区中更新的转录 UI 状态。
+///
+/// # Parameters
+/// # 参数
+/// This test has no parameters.
+/// 此测试没有参数。
+///
+/// # Returns
+/// # 返回值
+/// This test returns no value and fails if a detached preparation candidate erases concurrent UI state.
+/// 此测试无返回值；若分离准备候选擦除并发 UI 状态则测试失败。
+#[test]
+fn prompt_preparation_phase_commit_preserves_newer_transcript_ui_state() {
+    // sessionId identifies the exact preparation owner and UI-state target.
+    // sessionId 标识精确准备所有者与 UI 状态目标。
+    let session_id = SessionId::new_v4();
+    // serviceState starts one accepted kernel turn before the detached candidate is cloned.
+    // serviceState 在克隆分离候选前启动一个已接纳 kernel 回合。
+    let mut service_state = test_service_state_with_parent_session(session_id);
+    insert_test_workbench_conversation(&mut service_state, session_id);
+    start_webui_session_kernel_user_turn(&mut service_state, session_id, "turn-ui-merge")
+        .expect("kernel turn should start");
+    // expectedGeneration is the immutable owner required by the checked phase commit.
+    // expectedGeneration 是校验阶段提交所需的不可变所有者。
+    let expected_generation = webui_session_kernel_generation(&service_state, session_id)
+        .expect("kernel generation should exist");
+    // detachedCandidate intentionally predates the concurrent transcript UI mutation.
+    // detachedCandidate 特意早于并发转录 UI 变更创建。
+    let mut detached_candidate = service_state
+        .workspace_snapshot
+        .clone()
+        .expect("workspace should exist");
+    detached_candidate
+        .session_run_phases
+        .insert(session_id, SessionRunPhase::Preparing);
+    // latestRuntimeState receives one UI-owned fact after the detached clone was captured.
+    // latestRuntimeState 在分离克隆捕获后接收一个由 UI 拥有的事实。
+    let latest_runtime_state = service_state
+        .workspace_snapshot
+        .as_mut()
+        .expect("workspace should exist")
+        .session_runtime_state
+        .get_mut(&session_id)
+        .expect("runtime state should exist");
+    latest_runtime_state
+        .ui_state
+        .collapsed_message_ids
+        .insert(String::from("newer-ui-state"));
+    // state exposes both the current owner and newer UI state to the atomic production commit.
+    // state 向原子生产提交暴露当前所有者与更新的 UI 状态。
+    let state: SharedServiceBridgeState = Arc::new(Mutex::new(service_state));
+    // app records the phase event emitted only after the merged workspace commits.
+    // app 记录仅在合并工作区提交后发出的阶段事件。
+    let app = ServiceEventEmitter::new(Vec::new());
+
+    assert!(
+        commit_workspace_snapshot_and_emit_session_phase_delta_if_prompt_owner_current(
+            &app,
+            &state,
+            detached_candidate,
+            session_id,
+            SessionRunPhase::Preparing,
+            expected_generation,
+            "turn-ui-merge",
+        )
+        .expect("checked phase commit should succeed")
+    );
+
+    // guard proves the preparation phase and the independent UI fact committed together.
+    // guard 证明准备阶段与独立 UI 事实一同提交。
+    let guard = state.lock().expect("service state lock");
+    let workspace = guard
+        .workspace_snapshot
+        .as_ref()
+        .expect("workspace should remain available");
+    assert_eq!(
+        workspace.session_run_phases.get(&session_id),
+        Some(&SessionRunPhase::Preparing)
+    );
+    assert!(
+        workspace
+            .session_runtime_state
+            .get(&session_id)
+            .expect("runtime state should remain available")
+            .ui_state
+            .collapsed_message_ids
+            .contains("newer-ui-state")
+    );
+}
+
+/// Verifies Stop's immediate phase mutation operates on the latest retained workspace instead of replacing it with a detached clone.
+/// 验证 Stop 的即时阶段变更作用于最新保留工作区，而不是使用分离克隆替换它。
+#[test]
+fn stop_phase_commit_mutates_latest_retained_workspace_atomically() {
+    // sessionId selects the stopped session and its retained UI state.
+    // sessionId 选择被停止的会话及其保留 UI 状态。
+    let session_id = SessionId::new_v4();
+    // serviceState carries a UI-owned fact that the Stop phase transaction must preserve.
+    // serviceState 携带 Stop 阶段事务必须保留的 UI 所有事实。
+    let mut service_state = test_service_state_with_parent_session(session_id);
+    insert_test_workbench_conversation(&mut service_state, session_id);
+    // retainedWorkspace materializes the target runtime entry before adding its independent UI fact.
+    // retainedWorkspace 在添加独立 UI 事实前物化目标运行态条目。
+    let retained_workspace = service_state
+        .workspace_snapshot
+        .as_mut()
+        .expect("workspace should exist");
+    retained_workspace
+        .session_runtime_state
+        .entry(session_id)
+        .or_default()
+        .ui_state
+        .collapsed_message_ids
+        .insert(String::from("latest-before-stop"));
+    // state exposes the retained workspace to the production in-lock mutation helper.
+    // state 向生产锁内变更辅助函数暴露保留工作区。
+    let state: SharedServiceBridgeState = Arc::new(Mutex::new(service_state));
+    // app accepts the phase delta without requiring a runtime transport.
+    // app 接收阶段增量且不要求运行时传输。
+    let app = ServiceEventEmitter::new(Vec::new());
+
+    commit_retained_workspace_session_phase_mutation_and_emit_delta(
+        &app,
+        &state,
+        session_id,
+        SessionRunPhase::Stopped,
+        |workspace| {
+            workspace
+                .session_runtime_state
+                .get_mut(&session_id)
+                .expect("runtime state should exist")
+                .ui_state
+                .collapsed_message_ids
+                .insert(String::from("stop-mutation"));
+            Ok(())
+        },
+    )
+    .expect("retained Stop phase mutation should commit");
+
+    // guard proves both the prior retained fact and the Stop-owned fact survived one atomic phase commit.
+    // guard 证明先前保留事实与 Stop 所有事实均在一次原子阶段提交后存活。
+    let guard = state.lock().expect("service state lock");
+    let workspace = guard
+        .workspace_snapshot
+        .as_ref()
+        .expect("workspace should remain available");
+    let collapsed_message_ids = &workspace
+        .session_runtime_state
+        .get(&session_id)
+        .expect("runtime state should remain available")
+        .ui_state
+        .collapsed_message_ids;
+    assert!(collapsed_message_ids.contains("latest-before-stop"));
+    assert!(collapsed_message_ids.contains("stop-mutation"));
+    assert_eq!(
+        workspace.session_run_phases.get(&session_id),
+        Some(&SessionRunPhase::Stopped)
+    );
+}
+
+/// Verifies a same-turn-id restart cannot create an ABA match for stale stream registration.
+/// 验证相同回合标识的重启无法为过期流登记制造 ABA 匹配。
+///
+/// # Parameters
+/// # 参数
+/// This test has no parameters.
+/// 此测试没有参数。
+///
+/// # Returns
+/// # 返回值
+/// This asynchronous test returns no value and fails if generation identity is ignored.
+/// 此异步测试无返回值；若代际身份被忽略则测试失败。
+#[tokio::test]
+async fn kernel_bound_stream_registration_rejects_same_turn_id_aba_generation() {
+    // sessionId owns both the stale and replacement generations.
+    // sessionId 同时拥有过期代际与替代代际。
+    let session_id = SessionId::new_v4();
+    // serviceState starts and completes the original logical turn.
+    // serviceState 启动并完成原始逻辑回合。
+    let mut service_state = test_service_state_with_parent_session(session_id);
+    start_webui_session_kernel_user_turn(&mut service_state, session_id, "same-turn")
+        .expect("original kernel turn should start");
+    // staleGeneration is retained by the delayed original preparation task.
+    // staleGeneration 由延迟的原始准备任务保留。
+    let stale_generation = webui_session_kernel_generation(&service_state, session_id)
+        .expect("original generation should exist");
+    finish_webui_session_kernel_turn(
+        &mut service_state,
+        session_id,
+        TurnTerminalStatus::Completed,
+    );
+    start_webui_session_kernel_user_turn(&mut service_state, session_id, "same-turn")
+        .expect("replacement kernel turn should start");
+    // currentGeneration proves the logical id was reused under a distinct owner generation.
+    // currentGeneration 证明逻辑标识在不同所有者代际下被复用。
+    let current_generation = webui_session_kernel_generation(&service_state, session_id)
+        .expect("replacement generation should exist");
+    assert_ne!(stale_generation, current_generation);
+    // state exposes the replacement owner to the production registration fence.
+    // state 向生产登记栅栏暴露替代所有者。
+    let state: SharedServiceBridgeState = Arc::new(Mutex::new(service_state));
+
+    let error = spawn_registered_kernel_stream_task_with_mode(
+        &state,
+        session_id,
+        Uuid::new_v4(),
+        None,
+        ActiveStreamTaskRegistrationMode::RejectIfOccupied,
+        stale_generation,
+        "same-turn",
+        async {},
+    )
+    .expect_err("stale generation should not register under the reused logical turn id");
+    assert!(matches!(
+        error,
+        ActiveStreamTaskRegistrationError::KernelOwnerStale {
+            expected_generation,
+            current_generation: Some(observed_generation),
+            ref expected_turn_id,
+            ref current_turn_id,
+            stopped: false,
+        } if expected_generation == stale_generation
+            && observed_generation == current_generation
+            && expected_turn_id == "same-turn"
+            && current_turn_id.as_deref() == Some("same-turn")
+    ));
+    assert!(
+        !state
+            .lock()
+            .expect("service state lock")
+            .active_stream_tasks
+            .contains_key(&session_id)
+    );
 }
 
 /// Verifies a stopped kernel suppresses stale legacy stream handles for active-run decisions.
@@ -2000,4 +2661,129 @@ fn persisted_session_kernel_restores_consumed_mailbox_cursor() {
     assert_eq!(kernel.input_queue().mailbox_len(), 1);
     assert_eq!(kernel.input_queue().unconsumed_mailbox_len(), 0);
     assert!(!kernel.input_queue().has_trigger_turn_mailbox_items());
+}
+
+/// Verifies preparation failure cleanup atomically stops its exact kernel and blocks admission until persistence release.
+/// 验证准备失败清理会原子停止精确 kernel，并在持久化释放前阻止准入。
+#[test]
+fn preparation_failure_boundary_holds_terminal_owner_until_explicit_release() {
+    // session_id identifies the exact preparation failure transaction.
+    // session_id 标识精确的准备失败事务。
+    let session_id = SessionId::new_v4();
+    // failed_turn_id is shared by the active kernel and cleanup ownership proof.
+    // failed_turn_id 由活动 kernel 与清理所有权证明共享。
+    let failed_turn_id = "preparation-turn-a";
+    // state contains one active preparation kernel and its mirrored runtime state.
+    // state 包含一个活动准备 kernel 及其镜像运行态。
+    let mut state = test_service_state_with_parent_session(session_id);
+    insert_test_workbench_conversation(&mut state, session_id);
+    start_webui_session_kernel_user_turn(&mut state, session_id, failed_turn_id)
+        .expect("preparation kernel should start");
+    // shared_state exposes the production-shaped atomic owner transaction.
+    // shared_state 暴露生产形态的原子所有者事务。
+    let shared_state = Arc::new(Mutex::new(state));
+
+    commit_prompt_preparation_failure_boundary(
+        &shared_state,
+        session_id,
+        failed_turn_id,
+        "controlled preparation failure",
+        false,
+    )
+    .expect("failure boundary should commit");
+
+    // terminal_owner is the unique marker that must survive until durable settlement releases it.
+    // terminal_owner 是必须存续到可靠结算显式释放的唯一标记。
+    let terminal_owner = {
+        let guard = shared_state.lock().expect("inspect failure boundary");
+        assert!(!webui_session_kernel_has_active_turn(&guard, session_id));
+        assert_eq!(
+            guard
+                .workspace_snapshot
+                .as_ref()
+                .and_then(|workspace| workspace.session_run_phases.get(&session_id)),
+            Some(&SessionRunPhase::Stopped)
+        );
+        let runtime_state = guard
+            .workspace_snapshot
+            .as_ref()
+            .and_then(|workspace| workspace.session_runtime_state.get(&session_id))
+            .expect("failure runtime state");
+        assert!(
+            runtime_state
+                .conversation_state
+                .records
+                .iter()
+                .any(|record| {
+                    record.kind == SessionMessageKind::Error
+                        && record.body.contains("controlled preparation failure")
+                })
+        );
+        let owner = *guard
+            .session_terminal_persistence_owners
+            .get(&session_id)
+            .expect("terminal persistence owner");
+        assert!(matches!(
+            owner,
+            SessionTerminalPersistenceOwner::PromptPreparation(_)
+        ));
+        owner
+    };
+    {
+        let mut guard = shared_state.lock().expect("reject replacement turn");
+        assert!(
+            start_webui_session_kernel_user_turn(&mut guard, session_id, "replacement-turn")
+                .is_err()
+        );
+    }
+    // terminal_guard models successful durable settlement and opens admission only for the exact owner.
+    // terminal_guard 模拟可靠结算成功，并且仅为精确所有者开放准入。
+    let terminal_guard = SessionTerminalPersistenceOwnerGuard::adopt_registered(
+        shared_state.clone(),
+        session_id,
+        terminal_owner,
+    )
+    .expect("adopt preparation terminal owner");
+    terminal_guard
+        .release()
+        .expect("release preparation terminal owner");
+    let mut guard = shared_state.lock().expect("start replacement turn");
+    start_webui_session_kernel_user_turn(&mut guard, session_id, "replacement-turn")
+        .expect("replacement turn should start after durable release");
+}
+
+/// Verifies stale preparation cleanup cannot stop a replacement kernel turn.
+/// 验证过期准备清理不能停止替代 kernel 回合。
+#[test]
+fn preparation_failure_boundary_rejects_replacement_kernel_turn() {
+    // session_id identifies the session whose replacement owner must survive.
+    // session_id 标识替代所有者必须存续的会话。
+    let session_id = SessionId::new_v4();
+    // state contains a newer active turn than the failed cleanup attempts to terminalize.
+    // state 包含一个比失败清理目标更新的活动回合。
+    let mut state = test_service_state_with_parent_session(session_id);
+    start_webui_session_kernel_user_turn(&mut state, session_id, "replacement-turn")
+        .expect("replacement kernel should start");
+    // shared_state exposes the concurrent replacement facts to cleanup.
+    // shared_state 向清理暴露并发替代事实。
+    let shared_state = Arc::new(Mutex::new(state));
+
+    let error = commit_prompt_preparation_failure_boundary(
+        &shared_state,
+        session_id,
+        "stale-turn",
+        "stale preparation failure",
+        false,
+    )
+    .expect_err("stale cleanup should be rejected");
+
+    assert!(error.contains("turn mismatch"));
+    let guard = shared_state.lock().expect("inspect replacement owner");
+    assert!(webui_session_kernel_has_active_turn(&guard, session_id));
+    assert!(
+        guard
+            .session_terminal_persistence_owners
+            .get(&session_id)
+            .is_none()
+    );
 }

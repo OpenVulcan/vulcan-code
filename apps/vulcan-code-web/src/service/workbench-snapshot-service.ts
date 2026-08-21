@@ -71,11 +71,11 @@ export async function rebuildStartupSessionVmm(): Promise<StartupSnapshot> {
 
 // loadWorkbenchSnapshot loads workbench state from the local service or fallback data.
 // loadWorkbenchSnapshot 从本地服务或回退数据加载工作台状态。
-export async function loadWorkbenchSnapshot(): Promise<WorkbenchSnapshot> {
+export async function loadWorkbenchSnapshot(signal?: AbortSignal): Promise<WorkbenchSnapshot> {
   if (!hasServiceRuntime()) {
     return browserFallbackSnapshot();
   }
-  return serviceClient.request<WorkbenchSnapshot>("workbench.snapshot");
+  return serviceClient.request<WorkbenchSnapshot>("workbench.snapshot", undefined, { signal });
 }
 
 // loadWorkspaceDiffSnapshot loads a fresh Git diff snapshot for one project path.

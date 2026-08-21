@@ -255,10 +255,10 @@ fn loaded_runtime_state_migrates_top_level_usage_into_ledger_audit_evidence() {
     );
 }
 
-/// Verifies restart recovery closes in-flight calls once and exposes Continue only for a non-assistant tail.
-/// 验证重启恢复只闭合一次未完成调用，并且仅对非 Assistant 尾部开放 Continue。
+/// Verifies restart recovery invalidates a previously safe retry reference when Provider dispatch may have occurred.
+/// 验证 Provider 分派可能已经发生时，重启恢复会使此前安全的重试引用失效。
 #[test]
-fn loaded_runtime_state_closes_in_flight_calls_and_restores_continuation_once() {
+fn loaded_runtime_state_invalidates_retry_when_provider_dispatch_outcome_is_unknown() {
     let mut runtime_state = SessionRuntimeStateEntry::default();
     runtime_state
         .conversation_state
@@ -312,6 +312,83 @@ fn loaded_runtime_state_closes_in_flight_calls_and_restores_continuation_once() 
             budget_accounting: None,
         }
     ));
+    runtime_state.execution_retry_snapshot =
+        Some(vulcan_workbench_model::ExecutionRetrySnapshotRef {
+            schema_version: vulcan_workbench_model::EXECUTION_RETRY_SNAPSHOT_SCHEMA_VERSION,
+            snapshot_id: String::from("00000000-0000-0000-0000-000000000001"),
+            generation: 1,
+            state: vulcan_workbench_model::ExecutionRetrySnapshotState::Frozen,
+            content_sha256: "0".repeat(64),
+            content_bytes: 1,
+            logical_execution_id: String::from("execution-restart"),
+            pending_action_label: String::from("dispatch_provider_request"),
+            provider_route: Some(vulcan_workbench_model::SessionProviderRouteLeaseIdentity {
+                schema_version: 1,
+                provider_id: String::from("provider"),
+                connection_id: String::from("connection"),
+                model_id: String::from("model"),
+                protocol_profile_id: String::from("responses"),
+                manifest_revision: 1,
+                manifest_generation: 1,
+                catalog_revision: String::from("catalog-1"),
+                route_revision: String::from("route-1"),
+            }),
+            preparation_route_selection: None,
+            context_generation_id: None,
+            canonical_dispatch_sha256: "0".repeat(64),
+            retryable: true,
+            requires_manual_confirmation: false,
+            blocked_reason: None,
+            claimed_attempt_id: None,
+            error_summary: None,
+            updated_at: String::from("100"),
+        });
+    // previouslyBlockedRuntimeState proves restart recovery preserves an earlier, more specific safety reason.
+    // previouslyBlockedRuntimeState 证明重启恢复会保留更早且更具体的安全原因。
+    let mut previously_blocked_runtime_state = runtime_state.clone();
+    // previouslyBlockedReference models a tool-side-effect boundary that is already more specific than dispatch uncertainty.
+    // previouslyBlockedReference 模拟已经比“分派未知”更具体的工具副作用边界。
+    let previously_blocked_reference = previously_blocked_runtime_state
+        .execution_retry_snapshot
+        .as_mut()
+        .expect("previously blocked retry reference should exist");
+    previously_blocked_reference.retryable = false;
+    previously_blocked_reference.requires_manual_confirmation = true;
+    previously_blocked_reference.blocked_reason = Some(String::from("tool_side_effect_in_flight"));
+    assert!(
+        sanitize_loaded_runtime_state_for_fresh_process(&mut previously_blocked_runtime_state)
+            .expect("previously blocked restart reconciliation should succeed")
+    );
+    assert_eq!(
+        previously_blocked_runtime_state
+            .execution_retry_snapshot
+            .as_ref()
+            .and_then(|reference| reference.blocked_reason.as_deref()),
+        Some("tool_side_effect_in_flight")
+    );
+    // emptyReasonRuntimeState proves a blank legacy reason is replaced by the exact restart diagnosis.
+    // emptyReasonRuntimeState 证明空白旧原因会被精确的重启诊断替换。
+    let mut empty_reason_runtime_state = runtime_state.clone();
+    // emptyReasonReference models an unsafe legacy projection that did not retain a usable reason.
+    // emptyReasonReference 模拟未保留可用原因的不安全旧投影。
+    let empty_reason_reference = empty_reason_runtime_state
+        .execution_retry_snapshot
+        .as_mut()
+        .expect("empty-reason retry reference should exist");
+    empty_reason_reference.retryable = false;
+    empty_reason_reference.requires_manual_confirmation = true;
+    empty_reason_reference.blocked_reason = Some(String::from("   "));
+    assert!(
+        sanitize_loaded_runtime_state_for_fresh_process(&mut empty_reason_runtime_state)
+            .expect("empty-reason restart reconciliation should succeed")
+    );
+    assert_eq!(
+        empty_reason_runtime_state
+            .execution_retry_snapshot
+            .as_ref()
+            .and_then(|reference| reference.blocked_reason.as_deref()),
+        Some("provider_dispatch_outcome_unknown")
+    );
 
     assert!(
         sanitize_loaded_runtime_state_for_fresh_process(&mut runtime_state)
@@ -326,7 +403,33 @@ fn loaded_runtime_state_closes_in_flight_calls_and_restores_continuation_once() 
         recovered.error_category.as_deref(),
         Some("process_interrupted")
     );
-    assert!(runtime_state.provider_call_ledger.continuation.eligible);
+    // retryReference is the fail-closed projection that explains why replay now requires manual verification.
+    // retryReference 是解释重放为何必须转为人工核验的失败关闭投影。
+    let retry_reference = runtime_state
+        .execution_retry_snapshot
+        .as_ref()
+        .expect("interrupted retry reference should remain available for diagnostics");
+    assert_eq!(
+        retry_reference.state,
+        vulcan_workbench_model::ExecutionRetrySnapshotState::Invalidated
+    );
+    assert!(!retry_reference.retryable);
+    assert!(retry_reference.requires_manual_confirmation);
+    assert_eq!(
+        retry_reference.blocked_reason.as_deref(),
+        Some("provider_dispatch_outcome_unknown")
+    );
+    assert!(retry_reference.claimed_attempt_id.is_none());
+    assert_eq!(
+        retry_reference.error_summary.as_deref(),
+        Some(
+            "The previous process ended while a Provider request could already have been accepted; verify the upstream outcome before continuing."
+        )
+    );
+    assert!(!retry_reference.replay_safety_proven());
+    // An unknown external outcome must never expose Continue, even though the old reference was safe before restart.
+    // 外部结果未知时绝不能暴露 Continue，即使旧引用在重启前曾经安全。
+    assert!(!runtime_state.provider_call_ledger.continuation.eligible);
     assert_eq!(
         runtime_state
             .provider_call_ledger
@@ -346,8 +449,8 @@ fn loaded_runtime_state_closes_in_flight_calls_and_restores_continuation_once() 
     );
 }
 
-/// Verifies restart recovery converts a persisted Continue claim with no dispatched Provider call into a fresh terminal generation.
-/// 验证重启恢复会把已持久化但未派发 Provider 调用的 Continue 领取转换为新的终止代际。
+/// Verifies restart recovery converts a persisted Continue claim with no dispatched Provider call into a blocked fresh terminal generation when no sidecar is retained.
+/// 验证重启恢复在没有保留 sidecar 时，会把已持久化但未派发 Provider 调用的 Continue 领取转换为阻断的新终止代际。
 #[test]
 fn loaded_runtime_state_recovers_orphaned_continuation_claim_once() {
     let mut runtime_state = SessionRuntimeStateEntry::default();
@@ -395,7 +498,9 @@ fn loaded_runtime_state_recovers_orphaned_continuation_claim_once() {
             .expect("orphaned continuation recovery should succeed")
     );
     let recovered = &runtime_state.provider_call_ledger.continuation;
-    assert!(recovered.eligible);
+    // The ledger must not advertise a claimable boundary that has no sidecar safety proof.
+    // 账本不能宣传没有 sidecar 安全证明的可领取边界。
+    assert!(!recovered.eligible);
     assert_eq!(recovered.generation, claimed_generation + 1);
     assert_eq!(
         recovered.terminal_reason.as_deref(),
@@ -414,6 +519,209 @@ fn loaded_runtime_state_recovers_orphaned_continuation_claim_once() {
     assert_eq!(
         runtime_state.provider_call_ledger.continuation.generation,
         recovery_generation
+    );
+}
+
+/// Verifies restart reconciliation treats assistant-output and empty tails as non-retryable dialogue boundaries.
+/// 验证重启收敛会把助手输出尾部与空尾部视为不可重试的对话边界。
+#[test]
+fn loaded_runtime_state_rejects_assistant_output_and_empty_continuation_tails() {
+    // assistantTailState starts with a stale claim whose actual latest canonical record is assistant output.
+    // assistantTailState 初始持有一个过期领取，而其真实最新规范记录是助手输出。
+    let mut assistant_tail_state = SessionRuntimeStateEntry::default();
+    assistant_tail_state.conversation_state.records.extend([
+        SessionConversationRecord {
+            id: String::from("user-before-assistant"),
+            kind: SessionMessageKind::User,
+            record_kind: SessionMessageRecordKind::Transcript,
+            visible: true,
+            title: String::from("用户"),
+            body: String::from("继续处理"),
+            metadata: None,
+            created_at: String::from("100"),
+        },
+        SessionConversationRecord {
+            id: String::from("assistant-tail"),
+            kind: SessionMessageKind::Assistant,
+            record_kind: SessionMessageRecordKind::AssistantOutput,
+            visible: true,
+            title: String::from("AI"),
+            body: String::from("处理完成"),
+            metadata: None,
+            created_at: String::from("101"),
+        },
+    ]);
+    assert!(
+        assistant_tail_state
+            .provider_call_ledger
+            .mark_continuation_terminal(
+                Some(String::from("completed-execution")),
+                String::from("completed"),
+                101,
+                String::from("user"),
+                true,
+            )
+    );
+    // staleContinuation captures the claim token persisted before the process ended.
+    // staleContinuation 捕获进程结束前持久化的领取令牌。
+    let stale_continuation = assistant_tail_state
+        .provider_call_ledger
+        .continuation
+        .clone();
+    assistant_tail_state
+        .provider_call_ledger
+        .claim_continuation(
+            stale_continuation.generation,
+            stale_continuation.expected_ledger_revision,
+            String::from("stale-assistant-claim"),
+            102,
+        )
+        .expect("stale assistant-tail claim should be constructed");
+
+    assert!(
+        sanitize_loaded_runtime_state_for_fresh_process(&mut assistant_tail_state)
+            .expect("assistant-tail restart reconciliation should succeed")
+    );
+    assert_eq!(
+        assistant_tail_state
+            .provider_call_ledger
+            .continuation
+            .canonical_tail_kind
+            .as_deref(),
+        Some("assistant")
+    );
+    assert!(
+        !assistant_tail_state
+            .provider_call_ledger
+            .continuation
+            .eligible
+    );
+
+    // emptyTailState models the same stale claim when no canonical dialogue record exists at all.
+    // emptyTailState 模拟完全不存在规范对话记录时的同类过期领取。
+    let mut empty_tail_state = SessionRuntimeStateEntry::default();
+    assert!(
+        empty_tail_state
+            .provider_call_ledger
+            .mark_continuation_terminal(
+                Some(String::from("missing-dialogue-execution")),
+                String::from("failed"),
+                200,
+                String::from("user"),
+                true,
+            )
+    );
+    // emptyContinuation captures the exact claim generation and ledger revision before restart.
+    // emptyContinuation 捕获重启前精确的领取代际与账本修订号。
+    let empty_continuation = empty_tail_state.provider_call_ledger.continuation.clone();
+    empty_tail_state
+        .provider_call_ledger
+        .claim_continuation(
+            empty_continuation.generation,
+            empty_continuation.expected_ledger_revision,
+            String::from("stale-empty-claim"),
+            201,
+        )
+        .expect("stale empty-tail claim should be constructed");
+
+    assert!(
+        sanitize_loaded_runtime_state_for_fresh_process(&mut empty_tail_state)
+            .expect("empty-tail restart reconciliation should succeed")
+    );
+    assert_eq!(
+        empty_tail_state
+            .provider_call_ledger
+            .continuation
+            .canonical_tail_kind
+            .as_deref(),
+        Some("empty")
+    );
+    assert!(!empty_tail_state.provider_call_ledger.continuation.eligible);
+}
+
+/// Verifies an orphaned claimed sidecar cannot publish ledger eligibility before hydration refreezes it.
+/// 验证孤立的已领取 sidecar 在 hydration 重冻前不能发布账本资格。
+#[test]
+fn loaded_runtime_state_keeps_orphaned_claim_ineligible_until_refreeze() {
+    // runtimeState owns one exact error tail and a previously claimable terminal boundary.
+    // runtimeState 持有一条精确错误尾部与一个此前可领取的终止边界。
+    let mut runtime_state = SessionRuntimeStateEntry::default();
+    runtime_state
+        .conversation_state
+        .records
+        .push(SessionConversationRecord {
+            id: String::from("error-tail-with-sidecar"),
+            kind: SessionMessageKind::Error,
+            record_kind: SessionMessageRecordKind::Transcript,
+            visible: true,
+            title: String::from("执行中断"),
+            body: String::from("领取后服务重启"),
+            metadata: None,
+            created_at: String::from("100"),
+        });
+    assert!(
+        runtime_state
+            .provider_call_ledger
+            .mark_continuation_terminal(
+                Some(String::from("failed-execution")),
+                String::from("failed"),
+                100,
+                String::from("error"),
+                true,
+            )
+    );
+    // continuation freezes the exact generation and revision that the old process claimed.
+    // continuation 冻结旧进程领取的精确代际与修订号。
+    let continuation = runtime_state.provider_call_ledger.continuation.clone();
+    runtime_state
+        .provider_call_ledger
+        .claim_continuation(
+            continuation.generation,
+            continuation.expected_ledger_revision,
+            String::from("continue-submission"),
+            101,
+        )
+        .expect("continuation claim should succeed");
+    runtime_state.execution_retry_snapshot =
+        Some(vulcan_workbench_model::ExecutionRetrySnapshotRef {
+            schema_version: vulcan_workbench_model::EXECUTION_RETRY_SNAPSHOT_SCHEMA_VERSION,
+            snapshot_id: String::from("00000000-0000-0000-0000-000000000001"),
+            generation: continuation.generation,
+            state: vulcan_workbench_model::ExecutionRetrySnapshotState::Claimed,
+            content_sha256: "0".repeat(64),
+            content_bytes: 1,
+            logical_execution_id: String::from("failed-execution"),
+            pending_action_label: String::from("resume_preparation"),
+            provider_route: None,
+            preparation_route_selection: Some(
+                vulcan_workbench_model::ExecutionRetryPreparationRouteSelection {
+                    active_provider_id: None,
+                    active_connection_id: None,
+                    active_model_id: None,
+                },
+            ),
+            context_generation_id: None,
+            canonical_dispatch_sha256: "0".repeat(64),
+            retryable: true,
+            requires_manual_confirmation: false,
+            blocked_reason: None,
+            claimed_attempt_id: Some(String::from("continue-submission")),
+            error_summary: None,
+            updated_at: String::from("101"),
+        });
+
+    assert!(
+        sanitize_loaded_runtime_state_for_fresh_process(&mut runtime_state)
+            .expect("orphaned claimed sidecar reconciliation should succeed")
+    );
+
+    assert!(!runtime_state.provider_call_ledger.continuation.eligible);
+    assert_eq!(
+        runtime_state
+            .execution_retry_snapshot
+            .as_ref()
+            .map(|reference| reference.state),
+        Some(vulcan_workbench_model::ExecutionRetrySnapshotState::Claimed)
     );
 }
 
@@ -476,9 +784,11 @@ fn session_addon_state_write_does_not_rewrite_segmented_state_document() {
             active_provider_id: Some(String::from("new-provider")),
             active_connection_id: Some(String::from("new-connection")),
             active_model_id: Some(String::from("new-model")),
+            pending_model_selection: None,
             active_reasoning_effort: None,
             active_reasoning_effort_explicit: false,
             active_temperature: None,
+            context_compaction_window_node_id: None,
             provider_route_lease: None,
             provider_tool_selections: Default::default(),
             provider_tool_enabled_capabilities: Default::default(),

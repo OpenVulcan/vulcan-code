@@ -1073,7 +1073,7 @@
       "fixed_fields": {
         "purpose": "video"
       },
-      "cache_duration_ms": 1800000,
+      "cache_duration_ms": 86400000,
       "reference_encoding": "template"
     },
     {
@@ -1110,7 +1110,7 @@
       "fixed_fields": {
         "purpose": "video"
       },
-      "cache_duration_ms": 1800000,
+      "cache_duration_ms": 86400000,
       "reference_encoding": "template"
     },
     {
@@ -1144,7 +1144,7 @@
       "fixed_fields": {
         "purpose": "video"
       },
-      "cache_duration_ms": 1800000,
+      "cache_duration_ms": 86400000,
       "reference_encoding": "template"
     }
   ],

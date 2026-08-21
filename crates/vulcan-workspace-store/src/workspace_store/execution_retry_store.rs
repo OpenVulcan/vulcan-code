@@ -5,9 +5,10 @@ use super::segmented_session_store::write_file_bytes_atomic;
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::PathBuf;
+use vulcan_ai_contract::DispatchOutcome;
 use vulcan_workbench_model::{
-    EXECUTION_RETRY_SNAPSHOT_SCHEMA_VERSION, ExecutionRetryPendingAction, ExecutionRetrySnapshot,
-    ExecutionRetrySnapshotRef,
+    EXECUTION_RETRY_SNAPSHOT_SCHEMA_VERSION, ExecutionRetryPendingAction,
+    ExecutionRetryPreparationRouteSelection, ExecutionRetrySnapshot, ExecutionRetrySnapshotRef,
 };
 
 /// Directory name containing retry sidecars below one segmented session.
@@ -69,7 +70,17 @@ impl ExecutionRetrySnapshotStore {
         let content_bytes = u64::try_from(encoded.len()).map_err(|_| {
             String::from("Execution retry snapshot size exceeds the supported u64 range.")
         })?;
-        let path = self.snapshot_path(snapshot.snapshot_id.as_str())?;
+        // replaySafety is copied into the lightweight reference so UI admission never guesses from ledger state alone.
+        // replaySafety 写入轻量引用，使 UI 准入不会只根据账本状态猜测。
+        let (retryable, requires_manual_confirmation, blocked_reason) =
+            snapshot_safety_summary(snapshot);
+        // preparationRouteSelection mirrors the exact pre-resolution selection only for preparation replay.
+        // preparationRouteSelection 仅为准备阶段重放镜像精确的解析前选择。
+        let preparation_route_selection = preparation_route_selection(&snapshot.pending_action);
+        // canonicalDispatchSha256 mirrors the exact provider-visible state accepted by claim validation.
+        // canonicalDispatchSha256 镜像领取校验接受的精确 Provider 可见状态。
+        let canonical_dispatch_sha256 = snapshot_canonical_dispatch_sha256(snapshot)?;
+        let path = self.snapshot_path(snapshot.snapshot_id.as_str(), content_sha256.as_str())?;
         write_file_bytes_atomic(&path, &encoded, "execution retry snapshot")?;
         Ok(ExecutionRetrySnapshotRef {
             schema_version: EXECUTION_RETRY_SNAPSHOT_SCHEMA_VERSION,
@@ -80,6 +91,13 @@ impl ExecutionRetrySnapshotStore {
             content_bytes,
             logical_execution_id: snapshot.logical_execution_id.clone(),
             pending_action_label: pending_action_label(&snapshot.pending_action).to_string(),
+            provider_route: snapshot.provider_route.clone(),
+            preparation_route_selection,
+            context_generation_id: snapshot.context_generation_id.clone(),
+            canonical_dispatch_sha256,
+            retryable,
+            requires_manual_confirmation,
+            blocked_reason,
             claimed_attempt_id: snapshot.claimed_attempt_id.clone(),
             error_summary: snapshot.error.as_ref().map(|error| error.message.clone()),
             updated_at: snapshot.updated_at.clone(),
@@ -108,7 +126,10 @@ impl ExecutionRetrySnapshotStore {
                 reference.schema_version, EXECUTION_RETRY_SNAPSHOT_SCHEMA_VERSION
             ));
         }
-        let path = self.snapshot_path(reference.snapshot_id.as_str())?;
+        let path = self.snapshot_path(
+            reference.snapshot_id.as_str(),
+            reference.content_sha256.as_str(),
+        )?;
         let encoded = fs::read(&path).map_err(|error| {
             format!(
                 "Failed to read execution retry snapshot `{}`: {error}",
@@ -133,21 +154,36 @@ impl ExecutionRetrySnapshotStore {
         let snapshot = serde_json::from_slice::<ExecutionRetrySnapshot>(&encoded)
             .map_err(|error| format!("Failed to decode execution retry snapshot: {error}"))?;
         validate_snapshot_identity(&snapshot)?;
+        let (retryable, requires_manual_confirmation, blocked_reason) =
+            snapshot_safety_summary(&snapshot);
+        let pending_action_label = pending_action_label(&snapshot.pending_action);
+        let preparation_route_selection = preparation_route_selection(&snapshot.pending_action);
+        let canonical_dispatch_sha256 = snapshot_canonical_dispatch_sha256(&snapshot)?;
+        let error_summary = snapshot.error.as_ref().map(|error| error.message.clone());
         if snapshot.snapshot_id != reference.snapshot_id
             || snapshot.generation != reference.generation
             || snapshot.state != reference.state
             || snapshot.logical_execution_id != reference.logical_execution_id
             || snapshot.claimed_attempt_id != reference.claimed_attempt_id
+            || pending_action_label != reference.pending_action_label
+            || snapshot.provider_route != reference.provider_route
+            || preparation_route_selection != reference.preparation_route_selection
+            || snapshot.context_generation_id != reference.context_generation_id
+            || canonical_dispatch_sha256 != reference.canonical_dispatch_sha256
+            || retryable != reference.retryable
+            || requires_manual_confirmation != reference.requires_manual_confirmation
+            || blocked_reason != reference.blocked_reason
+            || error_summary != reference.error_summary
         {
             return Err(String::from(
-                "Execution retry snapshot identity or lifecycle state does not match its reference.",
+                "Execution retry snapshot identity, safety summary, or lifecycle state does not match its reference.",
             ));
         }
         Ok(snapshot)
     }
 
-    /// Deletes one exact sidecar after its replacement or successful consumption is durably referenced.
-    /// 在替代快照或成功消费状态被可靠引用后删除一个精确 sidecar。
+    /// Deletes every immutable body belonging to one snapshot identity after successful consumption.
+    /// 在成功消费后删除属于一个快照身份的全部不可变正文。
     ///
     /// # Parameters
     /// 参数
@@ -156,28 +192,69 @@ impl ExecutionRetrySnapshotStore {
     ///
     /// # Returns
     /// 返回值
-    /// Success when the file is absent or removed, otherwise an exact filesystem error.
-    /// 文件不存在或已删除时返回成功，否则返回精确文件系统错误。
+    /// Success when all matching bodies are absent or removed, otherwise an exact filesystem error.
+    /// 所有匹配正文均不存在或已删除时返回成功，否则返回精确文件系统错误。
     pub fn delete(&self, snapshot_id: &str) -> Result<(), String> {
-        let path = self.snapshot_path(snapshot_id)?;
-        match fs::remove_file(&path) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(format!(
-                "Failed to delete execution retry snapshot `{}`: {error}",
-                path.display()
-            )),
+        validate_snapshot_id(snapshot_id)?;
+        // retryDirectory is the only directory scanned for immutable bodies of this exact snapshot.
+        // retryDirectory 是扫描该精确快照不可变正文的唯一目录。
+        let retry_directory = self.session_directory.join(EXECUTION_RETRY_DIRECTORY);
+        // entries treats an absent directory as an already-completed cleanup.
+        // entries 将目录不存在视为清理已经完成。
+        let entries = match fs::read_dir(&retry_directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => {
+                return Err(format!(
+                    "Failed to inspect execution retry directory `{}`: {error}",
+                    retry_directory.display()
+                ));
+            }
+        };
+        // filePrefix and fileSuffix restrict cleanup to v4 bodies owned by this exact UUID.
+        // filePrefix 与 fileSuffix 将清理限制为该精确 UUID 所属的 v4 正文。
+        let file_prefix = format!("{snapshot_id}.");
+        let file_suffix = ".v4.json";
+        for entry in entries {
+            // entry is one direct child of the validated retry directory.
+            // entry 是已校验重试目录的一个直接子项。
+            let entry = entry.map_err(|error| {
+                format!(
+                    "Failed to enumerate execution retry directory `{}`: {error}",
+                    retry_directory.display()
+                )
+            })?;
+            // fileName remains opaque unless it matches the exact content-addressed body pattern.
+            // fileName 在匹配精确内容寻址正文模式前保持不透明。
+            let file_name = entry.file_name();
+            let Some(file_name) = file_name.to_str() else {
+                continue;
+            };
+            if !file_name.starts_with(file_prefix.as_str()) || !file_name.ends_with(file_suffix) {
+                continue;
+            }
+            // path comes directly from this directory entry and never from string concatenation.
+            // path 直接来自当前目录项，不通过字符串拼接生成。
+            let path = entry.path();
+            fs::remove_file(&path).map_err(|error| {
+                format!(
+                    "Failed to delete execution retry snapshot `{}`: {error}",
+                    path.display()
+                )
+            })?;
         }
+        Ok(())
     }
 
-    /// Resolves one validated snapshot identity below the session-owned retry directory.
-    /// 在会话所属重试目录下解析一个已校验快照身份。
-    fn snapshot_path(&self, snapshot_id: &str) -> Result<PathBuf, String> {
+    /// Resolves one validated content-addressed body below the session-owned retry directory.
+    /// 在会话所属重试目录下解析一个已校验的内容寻址正文。
+    fn snapshot_path(&self, snapshot_id: &str, content_sha256: &str) -> Result<PathBuf, String> {
         validate_snapshot_id(snapshot_id)?;
+        validate_sha256_hex(content_sha256)?;
         Ok(self
             .session_directory
             .join(EXECUTION_RETRY_DIRECTORY)
-            .join(format!("{snapshot_id}.v1.json")))
+            .join(format!("{snapshot_id}.{content_sha256}.v4.json")))
     }
 }
 
@@ -203,12 +280,159 @@ fn validate_snapshot_identity(snapshot: &ExecutionRetrySnapshot) -> Result<(), S
     Ok(())
 }
 
+/// Derives the safety summary copied into the lightweight reference.
+/// 推导写入轻量引用的安全摘要。
+fn snapshot_safety_summary(snapshot: &ExecutionRetrySnapshot) -> (bool, bool, Option<String>) {
+    let pending_action_supported = matches!(
+        &snapshot.pending_action,
+        ExecutionRetryPendingAction::ResumePreparation { .. }
+            | ExecutionRetryPendingAction::DispatchProviderRequest { .. }
+            | ExecutionRetryPendingAction::PrepareNextProviderRequest
+    );
+    let action_boundary_blocked_reason = pending_action_boundary_blocked_reason(snapshot);
+    let error_blocked_reason = snapshot.error.as_ref().and_then(|error| {
+        if error.side_effect_observed {
+            return Some(String::from("tool_side_effect_in_flight"));
+        }
+        if error.semantic_output_observed {
+            return Some(String::from("semantic_output_observed"));
+        }
+        if error.dispatch_outcome == DispatchOutcome::Unknown {
+            return Some(String::from("provider_dispatch_outcome_unknown"));
+        }
+        (!error.retryable).then(|| String::from("non_retryable"))
+    });
+    let blocked_reason = if !pending_action_supported {
+        Some(String::from("pending_action_executor_unavailable"))
+    } else {
+        error_blocked_reason.or(action_boundary_blocked_reason)
+    };
+    let retryable = blocked_reason.is_none();
+    let requires_manual_confirmation = !pending_action_supported
+        || snapshot.error.as_ref().is_some_and(|error| {
+            error.semantic_output_observed
+                || error.side_effect_observed
+                || !error.retryable
+                || error.dispatch_outcome == DispatchOutcome::Unknown
+        });
+    (retryable, requires_manual_confirmation, blocked_reason)
+}
+
+/// Returns the exact pre-resolution route selection mirrored by one preparation action.
+/// 返回一个准备动作镜像的精确解析前路由选择。
+///
+/// # Parameters
+/// 参数
+/// `action` is the complete frozen pending action stored in the sidecar.
+/// `action` 是 sidecar 中保存的完整冻结待执行动作。
+///
+/// # Returns
+/// 返回值
+/// A present selection for `ResumePreparation`, otherwise `None`.
+/// 对 `ResumePreparation` 返回存在的选择，其他动作返回 `None`。
+fn preparation_route_selection(
+    action: &ExecutionRetryPendingAction,
+) -> Option<ExecutionRetryPreparationRouteSelection> {
+    match action {
+        ExecutionRetryPendingAction::ResumePreparation { input } => {
+            Some(ExecutionRetryPreparationRouteSelection {
+                active_provider_id: input.active_provider_id.clone(),
+                active_connection_id: input.active_connection_id.clone(),
+                active_model_id: input.active_model_id.clone(),
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Returns a stable structural blocker when the frozen action lacks its required route boundary.
+/// 当冻结动作缺少所需路由边界时返回稳定的结构性阻断原因。
+///
+/// # Parameters
+/// 参数
+/// `snapshot` is the complete sidecar whose action and controller boundary are inspected together.
+/// `snapshot` 是同时检查动作与控制器边界的完整 sidecar。
+///
+/// # Returns
+/// 返回值
+/// A stable WebUI-localized reason, or `None` when the action boundary is complete.
+/// 返回稳定的 WebUI 本地化原因；动作边界完整时返回 `None`。
+fn pending_action_boundary_blocked_reason(snapshot: &ExecutionRetrySnapshot) -> Option<String> {
+    match &snapshot.pending_action {
+        ExecutionRetryPendingAction::DispatchProviderRequest { .. }
+            if snapshot.provider_route.is_none() =>
+        {
+            Some(String::from(
+                "ERR_CONVERSATION_CONTINUE_RETRY_ROUTE_MISSING",
+            ))
+        }
+        ExecutionRetryPendingAction::PrepareNextProviderRequest
+            if snapshot.provider_route.is_none() =>
+        {
+            Some(String::from(
+                "ERR_CONVERSATION_CONTINUE_RETRY_ROUTE_MISSING",
+            ))
+        }
+        ExecutionRetryPendingAction::PrepareNextProviderRequest
+            if !matches!(
+                snapshot
+                    .controller_snapshot
+                    .messages
+                    .last()
+                    .map(|message| &message.payload),
+                Some(vulcan_core::types::ConversationPayload::ToolResult { .. })
+            ) =>
+        {
+            Some(String::from(
+                "ERR_CONVERSATION_CONTINUE_RETRY_NEXT_PROVIDER_BOUNDARY_MISSING",
+            ))
+        }
+        _ => None,
+    }
+}
+
+/// Computes the claim-equivalent digest of provider-visible messages and continuation state.
+/// 计算 Provider 可见消息与 continuation 状态的领取等价摘要。
+///
+/// # Parameters
+/// 参数
+/// `snapshot` owns the frozen canonical controller state.
+/// `snapshot` 持有冻结的规范控制器状态。
+///
+/// # Returns
+/// 返回值
+/// A lowercase SHA-256 digest, or an exact serialization error.
+/// 返回小写 SHA-256 摘要，或精确的序列化错误。
+fn snapshot_canonical_dispatch_sha256(snapshot: &ExecutionRetrySnapshot) -> Result<String, String> {
+    let encoded = serde_json::to_vec(&(
+        &snapshot.controller_snapshot.messages,
+        &snapshot.controller_snapshot.continuation,
+    ))
+    .map_err(|error| format!("Failed to serialize execution retry dispatch state: {error}"))?;
+    Ok(sha256_hex(&encoded))
+}
+
 /// Rejects path separators and non-UUID snapshot identities before filesystem resolution.
 /// 在文件系统解析前拒绝路径分隔符与非 UUID 快照身份。
 fn validate_snapshot_id(snapshot_id: &str) -> Result<(), String> {
     uuid::Uuid::parse_str(snapshot_id)
         .map(|_| ())
         .map_err(|_| String::from("Execution retry snapshot id must be an exact UUID."))
+}
+
+/// Rejects malformed or path-like digest text before resolving a content-addressed body.
+/// 在解析内容寻址正文前拒绝格式错误或路径式摘要文本。
+fn validate_sha256_hex(content_sha256: &str) -> Result<(), String> {
+    if content_sha256.len() == 64
+        && content_sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Ok(());
+    }
+    Err(String::from(
+        "Execution retry snapshot digest must be exactly 64 lowercase hexadecimal characters.",
+    ))
 }
 
 /// Returns the stable lightweight label for one exact pending action.
@@ -236,11 +460,25 @@ mod tests {
     //! 严格原子执行重试 sidecar 存储测试。
 
     use super::*;
+    use vulcan_ai_contract::{AiErrorCategory, AiExecutionError, DispatchOutcome};
     use vulcan_workbench_model::{ExecutionRetrySnapshotState, SessionProviderRouteLeaseIdentity};
 
     /// Builds one complete minimal retry snapshot for storage contract tests.
     /// 为存储契约测试构建一份完整的最小重试快照。
     fn test_snapshot(snapshot_id: String) -> ExecutionRetrySnapshot {
+        // controllerSnapshot ends at the exact completed tool boundary required by the pending action.
+        // controllerSnapshot 结束于待执行动作要求的精确已完成工具边界。
+        let controller_snapshot = vulcan_core::types::ConversationSnapshot {
+            messages: vec![vulcan_core::types::ConversationMessage {
+                id: String::from("tool-result-1"),
+                payload: vulcan_core::types::ConversationPayload::ToolResult {
+                    tool_call_id: Some(String::from("tool-call-1")),
+                    is_error: false,
+                    text: String::from("completed tool result"),
+                },
+            }],
+            ..vulcan_core::types::ConversationSnapshot::default()
+        };
         ExecutionRetrySnapshot {
             schema_version: EXECUTION_RETRY_SNAPSHOT_SCHEMA_VERSION,
             snapshot_id,
@@ -265,7 +503,7 @@ mod tests {
             provider_service_entry_id: Some(String::from("entry-a")),
             credential_profile_id: Some(String::from("credential-a")),
             controller_config: Some(vulcan_core::types::ControllerConfig::default()),
-            controller_snapshot: vulcan_core::types::ConversationSnapshot::default(),
+            controller_snapshot,
             pending_action: ExecutionRetryPendingAction::PrepareNextProviderRequest,
             error: None,
             canonical_digest: String::from("canonical-digest-a"),
@@ -293,6 +531,16 @@ mod tests {
         assert_eq!(restored.snapshot_id, snapshot.snapshot_id);
         assert_eq!(restored.generation, snapshot.generation);
         assert_eq!(restored.canonical_digest, snapshot.canonical_digest);
+        assert!(reference.retryable);
+        assert!(!reference.requires_manual_confirmation);
+        assert_eq!(reference.blocked_reason, None);
+        assert_eq!(reference.provider_route, snapshot.provider_route);
+        assert_eq!(reference.preparation_route_selection, None);
+        assert_eq!(
+            reference.context_generation_id,
+            snapshot.context_generation_id
+        );
+        assert_eq!(reference.canonical_dispatch_sha256.len(), 64);
         assert_eq!(reference.content_sha256.len(), 64);
         assert!(reference.content_bytes > 0);
     }
@@ -306,7 +554,10 @@ mod tests {
         let snapshot = test_snapshot(uuid::Uuid::new_v4().to_string());
         let reference = store.write(&snapshot).expect("snapshot should persist");
         let path = store
-            .snapshot_path(reference.snapshot_id.as_str())
+            .snapshot_path(
+                reference.snapshot_id.as_str(),
+                reference.content_sha256.as_str(),
+            )
             .expect("snapshot path should resolve");
 
         store
@@ -327,7 +578,10 @@ mod tests {
         // path is resolved by the same validated UUID rule used by normal reads.
         // path 使用与正常读取相同的已校验 UUID 规则解析。
         let path = store
-            .snapshot_path(reference.snapshot_id.as_str())
+            .snapshot_path(
+                reference.snapshot_id.as_str(),
+                reference.content_sha256.as_str(),
+            )
             .expect("snapshot path should resolve");
         let mut bytes = fs::read(&path).expect("snapshot bytes should exist");
         bytes.push(b' ');
@@ -338,6 +592,233 @@ mod tests {
             .expect_err("changed bytes must fail closed");
 
         assert!(error.contains("byte length mismatch") || error.contains("digest mismatch"));
+    }
+
+    /// Verifies publishing a new body never destroys the body named by the prior durable reference.
+    /// 验证发布新正文绝不会破坏旧持久引用所命名的正文。
+    #[test]
+    fn retry_snapshot_replacement_preserves_prior_digest_body() {
+        // tempRoot owns both immutable generations under one exact snapshot identity.
+        // tempRoot 在同一精确快照身份下持有两个不可变代际。
+        let temp_root = tempfile::tempdir().expect("temporary session directory should exist");
+        // store publishes each serialized body at its own digest-addressed path.
+        // store 将每份序列化正文发布到各自的摘要寻址路径。
+        let store = ExecutionRetrySnapshotStore::new(temp_root.path());
+        // snapshot changes lifecycle and generation while preserving the logical snapshot identity.
+        // snapshot 在保留逻辑快照身份的同时改变生命周期与代际。
+        let mut snapshot = test_snapshot(uuid::Uuid::new_v4().to_string());
+        // priorReference models the reference already durable in state.json.
+        // priorReference 模拟已经持久化到 state.json 的引用。
+        let prior_reference = store.write(&snapshot).expect("prior body should persist");
+        snapshot.generation += 1;
+        snapshot.state = ExecutionRetrySnapshotState::Claimed;
+        snapshot.claimed_attempt_id = Some(String::from("attempt-2"));
+        snapshot.updated_at = String::from("2000");
+        // replacementReference models the new in-memory reference before state.json commits.
+        // replacementReference 模拟 state.json 提交前的新内存引用。
+        let replacement_reference = store.write(&snapshot).expect("replacement should persist");
+
+        assert_ne!(
+            prior_reference.content_sha256,
+            replacement_reference.content_sha256
+        );
+        assert_eq!(
+            store
+                .read(&prior_reference)
+                .expect("prior durable reference must remain readable")
+                .generation,
+            3
+        );
+        assert_eq!(
+            store
+                .read(&replacement_reference)
+                .expect("replacement reference must be readable")
+                .generation,
+            4
+        );
+        store
+            .delete(snapshot.snapshot_id.as_str())
+            .expect("consumption should delete every immutable body");
+        assert!(store.read(&prior_reference).is_err());
+        assert!(store.read(&replacement_reference).is_err());
+    }
+
+    /// Verifies a lightweight reference cannot remain readable after its exact sidecar disappears.
+    /// 验证精确 sidecar 消失后，轻量引用不能继续被读取。
+    #[test]
+    fn retry_snapshot_rejects_missing_sidecar_body() {
+        // tempRoot owns the isolated segmented-session directory for the missing-body case.
+        // tempRoot 持有缺失正文场景使用的隔离分段会话目录。
+        let temp_root = tempfile::tempdir().expect("temporary session directory should exist");
+        // store publishes and reads the same digest-bound sidecar identity.
+        // store 发布并读取同一个摘要绑定 sidecar 身份。
+        let store = ExecutionRetrySnapshotStore::new(temp_root.path());
+        // snapshot is the complete body removed after its reference is published.
+        // snapshot 是引用发布后被移除的完整正文。
+        let snapshot = test_snapshot(uuid::Uuid::new_v4().to_string());
+        // reference remains in main state after the simulated external body loss.
+        // reference 在模拟外部正文丢失后仍保留在主状态中。
+        let reference = store.write(&snapshot).expect("snapshot should persist");
+        store
+            .delete(reference.snapshot_id.as_str())
+            .expect("test setup should remove the exact sidecar");
+
+        let error = store
+            .read(&reference)
+            .expect_err("a missing sidecar body must fail closed");
+
+        assert!(error.contains("Failed to read execution retry snapshot"));
+    }
+
+    /// Verifies a lightweight safety summary cannot diverge from the sidecar body.
+    /// 验证轻量安全摘要不能与 sidecar 正文发生分歧。
+    #[test]
+    fn retry_snapshot_rejects_reference_safety_drift() {
+        let temp_root = tempfile::tempdir().expect("temporary session directory should exist");
+        let store = ExecutionRetrySnapshotStore::new(temp_root.path());
+        let snapshot = test_snapshot(uuid::Uuid::new_v4().to_string());
+        let mut reference = store.write(&snapshot).expect("snapshot should persist");
+        reference.pending_action_label = String::from("finalize_assistant");
+
+        let error = store
+            .read(&reference)
+            .expect_err("reference safety drift must fail closed");
+
+        assert!(error.contains("safety summary"));
+    }
+
+    /// Verifies an omitted lightweight route cannot bypass the exact sidecar route identity.
+    /// 验证轻量引用缺失路由时不能绕过 sidecar 的精确路由身份。
+    #[test]
+    fn retry_snapshot_rejects_reference_route_omission() {
+        // tempRoot isolates the exact digest-bound body used by this route-drift case.
+        // tempRoot 隔离当前路由漂移场景使用的精确摘要绑定正文。
+        let temp_root = tempfile::tempdir().expect("temporary session directory should exist");
+        // store derives the authoritative lightweight route from the persisted body.
+        // store 从持久化正文推导权威轻量路由。
+        let store = ExecutionRetrySnapshotStore::new(temp_root.path());
+        // snapshot contains the frozen provider route that Continue must preserve.
+        // snapshot 包含 Continue 必须保留的冻结供应商路由。
+        let snapshot = test_snapshot(uuid::Uuid::new_v4().to_string());
+        // reference simulates a truncated main-state pointer with its route removed.
+        // reference 模拟路由字段被移除的截断主状态指针。
+        let mut reference = store.write(&snapshot).expect("snapshot should persist");
+        reference.provider_route = None;
+
+        let error = store
+            .read(&reference)
+            .expect_err("route omission must fail closed");
+
+        assert!(error.contains("safety summary"));
+    }
+
+    /// Verifies side-effect uncertainty is copied into the lightweight blocked reference.
+    /// 验证副作用结果未知会被复制为轻量阻断引用。
+    #[test]
+    fn retry_snapshot_marks_non_retryable_side_effect_blocked() {
+        let temp_root = tempfile::tempdir().expect("temporary session directory should exist");
+        let store = ExecutionRetrySnapshotStore::new(temp_root.path());
+        let mut snapshot = test_snapshot(uuid::Uuid::new_v4().to_string());
+        snapshot.error = Some(AiExecutionError {
+            category: AiErrorCategory::Unclassified,
+            subcategory: Some(String::from("provider_specific_tool_state")),
+            stage: String::from("tool_execution"),
+            http_status: None,
+            transport: None,
+            websocket_close_code: None,
+            upstream_code: None,
+            upstream_type: None,
+            upstream_parameter: None,
+            upstream_message: None,
+            request_id: None,
+            provider_id: None,
+            entry_id: None,
+            model_id: None,
+            message: String::from("tool outcome is unknown"),
+            dispatch_outcome: DispatchOutcome::Dispatched,
+            semantic_output_observed: true,
+            side_effect_observed: true,
+            terminal: false,
+            retryable: false,
+            retry_after: None,
+        });
+
+        let reference = store
+            .write(&snapshot)
+            .expect("unsafe snapshot should persist for audit");
+
+        assert!(!reference.retryable);
+        assert!(reference.requires_manual_confirmation);
+        assert_eq!(
+            reference.blocked_reason.as_deref(),
+            Some("tool_side_effect_in_flight")
+        );
+    }
+
+    /// Verifies unknown Provider dispatch remains blocked even when the adapter marks the error retryable.
+    /// 验证即使适配器把错误标记为可重试，未知 Provider 分派结果仍然必须阻断。
+    #[test]
+    fn retry_snapshot_marks_unknown_dispatch_blocked() {
+        let temp_root = tempfile::tempdir().expect("temporary session directory should exist");
+        let store = ExecutionRetrySnapshotStore::new(temp_root.path());
+        let mut snapshot = test_snapshot(uuid::Uuid::new_v4().to_string());
+        snapshot.error = Some(AiExecutionError {
+            category: AiErrorCategory::ProviderUnavailable,
+            subcategory: Some(String::from("transport_interrupted")),
+            stage: String::from("provider_request"),
+            http_status: None,
+            transport: None,
+            websocket_close_code: None,
+            upstream_code: None,
+            upstream_type: None,
+            upstream_parameter: None,
+            upstream_message: None,
+            request_id: None,
+            provider_id: None,
+            entry_id: None,
+            model_id: None,
+            message: String::from("dispatch outcome is unknown"),
+            dispatch_outcome: DispatchOutcome::Unknown,
+            semantic_output_observed: false,
+            side_effect_observed: false,
+            terminal: true,
+            retryable: true,
+            retry_after: None,
+        });
+
+        let reference = store
+            .write(&snapshot)
+            .expect("unknown dispatch snapshot should persist for audit");
+
+        assert!(!reference.retryable);
+        assert!(reference.requires_manual_confirmation);
+        assert_eq!(
+            reference.blocked_reason.as_deref(),
+            Some("provider_dispatch_outcome_unknown")
+        );
+        assert!(!reference.replay_safety_proven());
+    }
+
+    /// Verifies a declared action without a runtime executor is never projected as claimable.
+    /// 验证声明但没有运行时执行器的动作绝不会被投影为可领取。
+    #[test]
+    fn retry_snapshot_marks_unsupported_action_blocked() {
+        let temp_root = tempfile::tempdir().expect("temporary session directory should exist");
+        let store = ExecutionRetrySnapshotStore::new(temp_root.path());
+        let mut snapshot = test_snapshot(uuid::Uuid::new_v4().to_string());
+        snapshot.pending_action = ExecutionRetryPendingAction::FinalizeAssistant;
+
+        let reference = store
+            .write(&snapshot)
+            .expect("unsupported action should persist for audit");
+
+        assert!(!reference.retryable);
+        assert!(reference.requires_manual_confirmation);
+        assert_eq!(
+            reference.blocked_reason.as_deref(),
+            Some("pending_action_executor_unavailable")
+        );
+        assert!(!reference.replay_safety_proven());
     }
 
     /// Verifies unknown schemas and path-like identities are rejected before publication.

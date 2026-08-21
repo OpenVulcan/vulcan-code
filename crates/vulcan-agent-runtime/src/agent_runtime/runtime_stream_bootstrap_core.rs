@@ -123,16 +123,16 @@ pub(crate) fn build_runtime_bootstrap_core(
     request: &ExecutionPreparationRequest,
     active_agent: Option<&RuntimeAgentDefinition>,
 ) -> Result<RuntimeBootstrapCore, String> {
-    let dispatch_retry_snapshot = request
+    let restored_retry_snapshot = request
         .execution_retry_snapshot
         .as_ref()
         .filter(|snapshot| {
-            matches!(
+            !matches!(
                 &snapshot.pending_action,
-                vulcan_workbench_model::ExecutionRetryPendingAction::DispatchProviderRequest { .. }
+                vulcan_workbench_model::ExecutionRetryPendingAction::ResumePreparation { .. }
             )
         });
-    if let Some(snapshot) = dispatch_retry_snapshot {
+    if let Some(snapshot) = restored_retry_snapshot {
         let provider_route = snapshot.provider_route.as_ref().ok_or_else(|| {
             String::from("The claimed provider retry has no frozen provider route.")
         })?;
@@ -193,7 +193,7 @@ pub(crate) fn build_runtime_bootstrap_core(
     )?;
     // retryControllerState restores the exact controller boundary; ordinary turns retain the rebuilt state.
     // retryControllerState 恢复精确控制器边界；普通回合继续使用重建状态。
-    let (controller_config, core_snapshot) = if let Some(snapshot) = dispatch_retry_snapshot {
+    let (controller_config, core_snapshot) = if let Some(snapshot) = restored_retry_snapshot {
         (
             snapshot.controller_config.clone().ok_or_else(|| {
                 String::from("The claimed provider retry has no frozen controller configuration.")

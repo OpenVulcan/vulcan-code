@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::{
+    commit_prepared_submission_media_ledger,
     conversation_submission::effective_pending_prompt_reasoning_effort,
     ensure_webui_goal_session_kernel_turn_start_allowed, prepare_submission_media,
     project_conversation_services::try_begin_pending_prompt_dispatch_exclusion,
@@ -232,7 +233,7 @@ pub(crate) async fn maybe_prepare_next_webui_pending_prompt(
     // pendingRuntimeState supplies the exact persisted lease identity captured for this queue owner.
     // pendingRuntimeState 提供为该队列所有者捕获的精确持久化租约身份。
     let pending_runtime_state = workspace_snapshot.session_runtime_state.get(&session_id);
-    if let Err(error) = prepare_submission_media(
+    let prepared_submission_media = match prepare_submission_media(
         app,
         state,
         &entry_agent_runtime,
@@ -244,29 +245,32 @@ pub(crate) async fn maybe_prepare_next_webui_pending_prompt(
     )
     .await
     {
-        // Restore before returning so cancellation or upload failure never discards the unsent queued prompt.
-        // 返回前先恢复队列，确保取消或上传失败不会丢失尚未发送的排队提示词。
-        restore_webui_pending_prompt(&mut workspace_snapshot, session_id, entry)?;
-        store_workspace_snapshot_without_workbench_rebuild(state, workspace_snapshot)?;
-        emit_pending_prompts_changed_delta(app, state, session_id)?;
-        if let Ok(Some(snapshot)) = current_workspace_snapshot_from_state(state) {
-            spawn_workspace_session_persist_task(
-                state.clone(),
-                controller_runtime.clone(),
-                snapshot,
-                session_id,
-                Some(String::from("queued_media_prepare_failed")),
-            );
+        Ok(prepared_submission_media) => prepared_submission_media,
+        Err(error) => {
+            // Restore before returning so cancellation or upload failure never discards the unsent queued prompt.
+            // 返回前先恢复队列，确保取消或上传失败不会丢失尚未发送的排队提示词。
+            restore_webui_pending_prompt(&mut workspace_snapshot, session_id, entry)?;
+            store_workspace_snapshot_without_workbench_rebuild(state, workspace_snapshot)?;
+            emit_pending_prompts_changed_delta(app, state, session_id)?;
+            if let Ok(Some(snapshot)) = current_workspace_snapshot_from_state(state) {
+                spawn_workspace_session_persist_task(
+                    state.clone(),
+                    controller_runtime.clone(),
+                    snapshot,
+                    session_id,
+                    Some(String::from("queued_media_prepare_failed")),
+                );
+            }
+            if error.starts_with("submission_cancelled:") {
+                webui_trace(
+                    "pending_prompt_media_prepare_cancelled",
+                    format!("session={session_id}"),
+                );
+                return Ok(false);
+            }
+            return Err(error);
         }
-        if error.starts_with("submission_cancelled:") {
-            webui_trace(
-                "pending_prompt_media_prepare_cancelled",
-                format!("session={session_id}"),
-            );
-            return Ok(false);
-        }
-        return Err(error);
-    }
+    };
     let panel_entry_id = entry.panel_entry_id.clone();
     // reasoning_effort prevents a neutral internal queue placeholder from changing the active reasoning selection.
     // reasoning_effort 防止中性的内部队列占位值改变当前推理强度选择。
@@ -359,6 +363,12 @@ pub(crate) async fn maybe_prepare_next_webui_pending_prompt(
         }
         precheck_start
     };
+    commit_prepared_submission_media_ledger(
+        &mut workspace_snapshot,
+        session_id,
+        precheck_start.canonical_user_message_id.as_deref(),
+        prepared_submission_media,
+    )?;
     apply_webui_prompt_begin_outer_steps(
         controller_runtime,
         &mut workspace_snapshot,

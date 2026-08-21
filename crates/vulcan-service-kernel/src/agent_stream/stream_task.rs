@@ -13,22 +13,25 @@ mod request_trace;
 mod runtime_event;
 mod stream_exit;
 
+#[cfg(test)]
+pub(crate) use conversation_checkpoint::mark_execution_retry_snapshot_tool_execution_unsafe;
 use conversation_checkpoint::{
     handle_conversation_checkpoint_stream_event, persist_prepared_execution_retry_checkpoint,
 };
 pub(crate) use conversation_checkpoint::{
-    refreeze_claimed_execution_retry_snapshot,
+    invalidate_execution_retry_reference, invalidate_execution_retry_reference_if_matches,
+    invalidate_execution_retry_runtime_state,
+    mark_execution_retry_snapshot_provider_dispatch_unknown,
+    refreeze_claimed_execution_retry_snapshot_before_provider_dispatch,
     refreeze_claimed_execution_retry_snapshot_with_canonical_state,
 };
 use finished::{FinishedStreamEventOutcome, handle_finished_stream_event};
 pub(crate) use launch_failure::StreamTaskLaunchFailureCommit;
-#[cfg(test)]
-pub(crate) use launch_failure::StreamTaskLaunchFailureOutcome;
 pub(crate) use launch_failure::{
-    commit_stream_task_registration_failure, handle_pre_registration_stream_task_launch_failure,
-    handle_stream_task_registration_failure,
+    StreamTaskLaunchFailureOutcome, commit_stream_task_registration_failure,
+    handle_pre_registration_execution_stream_task_launch_failure,
+    handle_pre_registration_stream_task_launch_failure, handle_stream_task_registration_failure,
 };
-#[cfg(test)]
 pub(crate) use prepared::PreparedStreamFailureCommit;
 pub(crate) use prepared::commit_prepared_stream_failure;
 use prepared::{PreparedStreamEventAction, handle_prepared_stream_event};
@@ -38,6 +41,362 @@ use runtime_event::{handle_runtime_stream_event, runtime_event_hook_policy_for_e
 pub(crate) use stream_exit::StreamTaskExitOutcome;
 pub(crate) use stream_exit::{StreamTaskExitReason, handle_stream_task_exit};
 
+/// Returns the original checkpoint failure for one rejected Provider durability boundary.
+/// 为一个已拒绝的 Provider 可靠边界返回原始 checkpoint 失败。
+///
+/// # Parameters
+/// 参数
+/// `retained_error` owns the request-local failure; `event_kind` identifies whether the rejected
+/// attempt has reached its terminal boundary.
+/// `retained_error` 持有请求局部失败；`event_kind` 标识被拒绝尝试是否已经到达终态边界。
+///
+/// # Returns
+/// 返回值
+/// The cloned original error while present; a terminal boundary also releases retained ownership.
+/// 存在时返回克隆的原始错误；终态边界还会释放已保留所有权。
+fn rejected_provider_boundary_error(
+    retained_error: &mut Option<String>,
+    event_kind: ProviderRequestTelemetryEventKind,
+) -> Option<String> {
+    // error is cloned before terminal release so Started and Completed receive the same diagnosis.
+    // error 在终态释放前克隆，确保 Started 与 Completed 收到同一个诊断。
+    let error = retained_error.as_ref().cloned()?;
+    if event_kind == ProviderRequestTelemetryEventKind::Completed {
+        *retained_error = None;
+    }
+    Some(error)
+}
+
+#[cfg(test)]
+mod rejected_provider_boundary_tests {
+    use super::*;
+
+    /// Verifies a rejected Started boundary retains its original error through terminal cleanup.
+    /// 验证被拒绝的 Started 边界会把原始错误保留到终态清理。
+    #[test]
+    fn checkpoint_error_survives_started_and_closes_on_completed() {
+        // retainedError models one retry-checkpoint persistence failure before Provider dispatch.
+        // retainedError 模拟 Provider 分派前的一次重试 checkpoint 持久化失败。
+        let mut retained_error = Some(String::from("exact checkpoint failure"));
+
+        assert_eq!(
+            rejected_provider_boundary_error(
+                &mut retained_error,
+                ProviderRequestTelemetryEventKind::Started,
+            )
+            .as_deref(),
+            Some("exact checkpoint failure")
+        );
+        assert_eq!(retained_error.as_deref(), Some("exact checkpoint failure"));
+        assert_eq!(
+            rejected_provider_boundary_error(
+                &mut retained_error,
+                ProviderRequestTelemetryEventKind::Completed,
+            )
+            .as_deref(),
+            Some("exact checkpoint failure")
+        );
+        assert!(retained_error.is_none());
+    }
+}
+
+/// Materializes and returns the durable workspace boundary for an owned stream exit without `Finished`.
+/// 为未产生 `Finished` 的自有流退出物化并返回可靠工作区边界。
+///
+/// # Parameters
+/// 参数
+/// `task_state` owns the retained session, and `session_id` selects the exact early-exit owner.
+/// `task_state` 持有保留会话，`session_id` 选择精确的提前退出所有者。
+///
+/// # Returns
+/// 返回值
+/// A detached workspace snapshot after the failed terminal continuation ledger is committed in memory.
+/// 在失败终态 Continue 账本写入内存后返回一份分离工作区快照。
+pub(crate) fn materialize_early_stream_terminal_snapshot(
+    task_state: &SharedServiceBridgeState,
+    session_id: SessionId,
+) -> Result<WorkspaceSnapshot, String> {
+    // terminalAt is shared by the continuation ledger and retained runtime update.
+    // terminalAt 由 Continue 账本与保留运行态更新时间共同使用。
+    let terminal_at = current_unix_millis_text();
+    let mut guard = task_state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    // workspace is the authoritative state whose exact revision will be persisted after this lock is released.
+    // workspace 是当前权威状态；释放锁后会持久化其精确修订。
+    let workspace = guard
+        .workspace_snapshot
+        .as_mut()
+        .ok_or_else(|| String::from("Early stream terminal workspace state is missing."))?;
+    {
+        // runtimeState receives a real terminal ledger boundary instead of remaining as an ownerless claim.
+        // runtimeState 接收真实终态账本边界，避免继续停留在无所有者的领取状态。
+        let runtime_state = workspace
+            .session_runtime_state
+            .get_mut(&session_id)
+            .ok_or_else(|| String::from("Early stream terminal runtime state is missing."))?;
+        refresh_terminal_continuation_state(runtime_state, false, terminal_at.as_str())?;
+        runtime_state.updated_at = terminal_at;
+    }
+    Ok(workspace.clone())
+}
+
+/// Describes the exact dispatch evidence owned by a terminal stream failure cleanup.
+/// 描述终态流失败清理所拥有的精确分派证据。
+#[derive(Clone, Debug)]
+enum FailedExecutionStreamRetryEvidence {
+    /// The failure boundary precedes Provider dispatch, so the failed attempt provably dispatched nothing.
+    /// 失败边界位于 Provider 分派之前，因此能够证明失败尝试没有分派任何内容。
+    ProvenNotDispatchedBeforeProviderDispatch,
+    /// The stream ran and supplies its latest exact stream-to-provider-call binding when available.
+    /// 流已经运行，并在可用时提供最近一次精确的流到 Provider 调用绑定。
+    RuntimeBoundary(Option<(Uuid, String)>),
+}
+
+/// Reads the exact retained execution-retry reference for one session.
+/// 读取一个会话精确保留的执行重试引用。
+///
+/// # Parameters
+/// 参数
+/// `task_state` owns the authoritative workspace and `session_id` selects the target runtime state.
+/// `task_state` 持有权威工作区，`session_id` 选择目标运行态。
+///
+/// # Returns
+/// 返回值
+/// The current immutable reference, `None` when no retry exists, or an explicit state-lock failure.
+/// 返回当前不可变引用；不存在重试时返回 `None`；状态锁失败时返回明确错误。
+fn retained_execution_retry_reference(
+    task_state: &SharedServiceBridgeState,
+    session_id: SessionId,
+) -> Result<Option<vulcan_workbench_model::ExecutionRetrySnapshotRef>, String> {
+    // guard protects the authoritative workspace and retry reference read.
+    // guard 保护权威工作区与重试引用读取。
+    let guard = task_state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    Ok(guard
+        .workspace_snapshot
+        .as_ref()
+        .and_then(|workspace| workspace.session_runtime_state.get(&session_id))
+        .and_then(|runtime_state| runtime_state.execution_retry_snapshot.clone()))
+}
+
+/// Completes retry refreeze, Continue projection, and durable persistence after an owned terminal stream failure.
+/// 在自有终态流失败后完成重试重冻、Continue 投影与可靠持久化。
+///
+/// # Parameters
+/// 参数
+/// `app` emits the authoritative continuation projection and `task_state` owns the exact failed session state.
+/// `app` 发送权威 Continue 投影，`task_state` 持有精确失败会话状态。
+/// `controller_runtime` owns immutable retry storage and session persistence, while `session_id` selects the failed launch.
+/// `controller_runtime` 持有不可变重试存储与会话持久化能力，`session_id` 选择启动失败的会话。
+/// `terminal_persistence_owner` binds cleanup to the exact marker installed before active ownership was released.
+/// `terminal_persistence_owner` 将清理绑定到释放活动所有权前安装的精确标记。
+/// `evidence` fixes the exact dispatch boundary and `message` is retained when a new interruption error is required.
+/// `evidence` 固定精确分派边界，`message` 在需要创建新中断错误时保留。
+///
+/// # Returns
+/// 返回值
+/// This asynchronous cleanup reports failures through service diagnostics and always leaves the in-process token fail-closed when its exact owner remains current.
+/// 此异步清理通过服务诊断报告失败，并在精确所有者仍为当前所有者时始终使进程内令牌保持失败关闭。
+async fn finalize_failed_execution_stream_retry_lifecycle(
+    app: ServiceEventEmitter,
+    task_state: SharedServiceBridgeState,
+    controller_runtime: ControllerRuntimeHandle,
+    session_id: SessionId,
+    terminal_persistence_owner: SessionTerminalPersistenceOwner,
+    evidence: FailedExecutionStreamRetryEvidence,
+    message: String,
+) {
+    // terminal_persistence_guard keeps Continue, prompts, Stop, and kernel turns closed through every early return.
+    // terminal_persistence_guard 在所有提前返回路径中持续阻塞 Continue、提示词、Stop 与 kernel 回合。
+    let terminal_persistence_guard = match SessionTerminalPersistenceOwnerGuard::adopt_registered(
+        task_state.clone(),
+        session_id,
+        terminal_persistence_owner,
+    ) {
+        Ok(guard) => guard,
+        Err(error) => {
+            eprintln!(
+                "[webui-service] terminal stream failure persistence ownership unavailable: session={session_id} owner={terminal_persistence_owner:?} error={error}"
+            );
+            return;
+        }
+    };
+    // expectedReference binds every compensation step to the retry identity owned by the failed launch.
+    // expectedReference 将每个补偿步骤绑定到启动失败所拥有的重试身份。
+    let expected_reference = match retained_execution_retry_reference(&task_state, session_id) {
+        Ok(reference) => reference,
+        Err(error) => {
+            eprintln!(
+                "[webui-service] terminal stream failure initial retry reference read failed: session={session_id} error={error}"
+            );
+            None
+        }
+    };
+    // refreezeResult applies only the dispatch evidence proven by the exact failure boundary.
+    // refreezeResult 仅应用精确失败边界已经证明的分派证据。
+    let refreeze_result = match evidence {
+        FailedExecutionStreamRetryEvidence::ProvenNotDispatchedBeforeProviderDispatch => {
+            refreeze_claimed_execution_retry_snapshot_before_provider_dispatch(
+                &task_state,
+                &controller_runtime,
+                session_id,
+                &message,
+            )
+        }
+        FailedExecutionStreamRetryEvidence::RuntimeBoundary(provider_call_binding) => {
+            conversation_checkpoint::refreeze_claimed_execution_retry_snapshot(
+                &task_state,
+                &controller_runtime,
+                session_id,
+                provider_call_binding,
+                &message,
+            )
+        }
+    };
+    if let Err(error) = refreeze_result {
+        eprintln!(
+            "[webui-service] terminal stream failure retry refreeze failed: session={session_id} error={error}"
+        );
+        if let Some(expected_reference) = expected_reference.as_ref()
+            && let Err(invalidation_error) = invalidate_execution_retry_reference_if_matches(
+                &task_state,
+                session_id,
+                expected_reference,
+                error.blocked_reason(),
+                error.error_summary(),
+            )
+        {
+            eprintln!(
+                "[webui-service] terminal stream failure exact retry invalidation failed: session={session_id} error={invalidation_error}"
+            );
+        }
+    }
+    // settledReference is retained only when it is the unclaimed terminal successor of the failed launch identity.
+    // settledReference 仅在其为启动失败身份的未领取终态后继时保留。
+    let settled_reference = match retained_execution_retry_reference(&task_state, session_id) {
+        Ok(Some(current)) => expected_reference.as_ref().and_then(|expected| {
+            (current.snapshot_id == expected.snapshot_id
+                && current.generation == expected.generation
+                && current.logical_execution_id == expected.logical_execution_id
+                && current.claimed_attempt_id.is_none()
+                && matches!(
+                    current.state,
+                    vulcan_workbench_model::ExecutionRetrySnapshotState::Frozen
+                        | vulcan_workbench_model::ExecutionRetrySnapshotState::Invalidated
+                ))
+            .then_some(current)
+        }),
+        Ok(None) => None,
+        Err(error) => {
+            eprintln!(
+                "[webui-service] terminal stream failure settled retry reference read failed: session={session_id} error={error}"
+            );
+            None
+        }
+    };
+    if let Err(error) =
+        emit_conversation_continuation_summary_changed(&app, &task_state, session_id)
+    {
+        eprintln!(
+            "[webui-service] terminal stream failure continuation projection failed: session={session_id} error={error}"
+        );
+    }
+    // persistenceSnapshot freezes the latest terminal revision after refreeze and projection.
+    // persistenceSnapshot 在重冻与投影后冻结最新终态修订。
+    let persistence_snapshot = match current_workspace_snapshot_from_shared_state(&task_state) {
+        Ok(Some(snapshot)) => Some(snapshot),
+        Ok(None) => {
+            eprintln!(
+                "[webui-service] terminal stream failure persistence skipped: session={session_id} workspace unavailable"
+            );
+            None
+        }
+        Err(error) => {
+            eprintln!(
+                "[webui-service] terminal stream failure persistence snapshot failed: session={session_id} error={error}"
+            );
+            None
+        }
+    };
+    // terminal_state_persisted is the only condition that may reopen admission after this failed launch.
+    // terminal_state_persisted 是当前失败启动后允许重新开放准入的唯一条件。
+    let mut terminal_state_persisted = false;
+    if let Some(persistence_snapshot) = persistence_snapshot {
+        match persist_workspace_session_update(
+            Some(&task_state),
+            controller_runtime.clone(),
+            &persistence_snapshot,
+            session_id,
+        )
+        .await
+        {
+            Ok(()) => terminal_state_persisted = true,
+            Err(error) => {
+                eprintln!(
+                    "[webui-service] terminal stream failure persistence failed: session={session_id} error={error}"
+                );
+                // Exact invalidation cannot damage a replacement Continue claim or a newer user turn.
+                // 精确失效不会损坏替代 Continue 领取或更新的用户回合。
+                if let Some(settled_reference) = settled_reference.as_ref()
+                    && invalidate_execution_retry_reference_if_matches(
+                        &task_state,
+                        session_id,
+                        settled_reference,
+                        "retry_snapshot_transition_failed",
+                        "The terminal stream failure boundary could not be persisted and was invalidated.",
+                    )
+                    .unwrap_or(false)
+                {
+                    let _ = emit_conversation_continuation_summary_changed(
+                        &app,
+                        &task_state,
+                        session_id,
+                    );
+                    if let Ok(Some(blocked_snapshot)) =
+                        current_workspace_snapshot_from_shared_state(&task_state)
+                    {
+                        match persist_workspace_session_update(
+                            Some(&task_state),
+                            controller_runtime.clone(),
+                            &blocked_snapshot,
+                            session_id,
+                        )
+                        .await
+                        {
+                            Ok(()) => terminal_state_persisted = true,
+                            Err(fallback_error) => eprintln!(
+                                "[webui-service] terminal stream failure blocked fallback persistence failed: session={session_id} error={fallback_error}"
+                            ),
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // The guard opens admission only after the latest terminal or fail-closed replacement state is durable.
+    // 该守卫仅在最新终态或失败关闭替代状态可靠落盘后开放准入。
+    if terminal_state_persisted {
+        if let Err(error) = terminal_persistence_guard.release() {
+            eprintln!(
+                "[webui-service] terminal stream failure persistence owner release failed: session={session_id} error={error}"
+            );
+        }
+    } else {
+        // Unreleased drop deliberately retains the in-process admission block after an uncertain write.
+        // 未释放即丢弃会在写入结果不确定后有意保留进程内准入阻塞。
+        drop(terminal_persistence_guard);
+    }
+    if let Err(error) =
+        emit_conversation_continuation_summary_changed(&app, &task_state, session_id)
+    {
+        eprintln!(
+            "[webui-service] terminal stream failure post-persistence continuation projection failed: session={session_id} error={error}"
+        );
+    }
+}
+
 /// Spawns one background task that forwards agent runtime stream events into the WebUI state.
 /// 启动一个后台任务，将 Agent 运行时流事件转发到 WebUI 状态。
 pub(crate) fn spawn_agent_stream_task(
@@ -46,6 +405,8 @@ pub(crate) fn spawn_agent_stream_task(
     controller_runtime: ControllerRuntimeHandle,
     agent_runtime: AgentRuntimeBridge,
     request: ExecutionPreparationRequest,
+    expected_kernel_generation: u64,
+    expected_kernel_turn_id: String,
 ) {
     spawn_agent_stream_task_with_auto_compaction_state(
         app,
@@ -53,6 +414,8 @@ pub(crate) fn spawn_agent_stream_task(
         controller_runtime,
         agent_runtime,
         request,
+        expected_kernel_generation,
+        expected_kernel_turn_id,
         false,
     );
 }
@@ -72,6 +435,8 @@ pub(crate) fn spawn_agent_stream_task(
 /// `agent_runtime` 提供 Provider、工具、hook 与压缩运行时。
 /// `request` is the prepared execution request for the current user turn.
 /// `request` 是当前用户回合的待执行请求。
+/// `expected_kernel_generation` and `expected_kernel_turn_id` preserve exact ownership across compaction restarts.
+/// `expected_kernel_generation` 与 `expected_kernel_turn_id` 跨压缩重启保留精确所有权。
 /// `auto_compaction_already_attempted` prevents repeated automatic compaction loops for one user request.
 /// `auto_compaction_already_attempted` 防止单个用户请求反复进入自动压缩循环。
 pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
@@ -80,15 +445,14 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
     controller_runtime: ControllerRuntimeHandle,
     agent_runtime: AgentRuntimeBridge,
     request: ExecutionPreparationRequest,
+    expected_kernel_generation: u64,
+    expected_kernel_turn_id: String,
     auto_compaction_already_attempted: bool,
 ) {
     let session_id = request.session_id;
-    // expected_kernel_generation binds any pre-registration contract failure to the exact active turn.
-    // expected_kernel_generation 将任意预注册契约失败绑定到精确活动回合。
-    let expected_kernel_generation = state
-        .lock()
-        .ok()
-        .and_then(|guard| webui_session_kernel_generation(&guard, session_id));
+    // expectedKernelGenerationOption retains the existing terminalization interface while registration uses the required generation directly.
+    // expectedKernelGenerationOption 保留现有终态化接口，同时登记直接使用必需代际。
+    let expected_kernel_generation_option = Some(expected_kernel_generation);
     // runtime_event_hook_policy captures the request-authoritative Hook scope before the request moves into the task.
     // runtime_event_hook_policy 在请求移入任务前捕获由请求权威确定的 Hook 范围。
     let runtime_event_hook_policy = runtime_event_hook_policy_for_execution_scope(
@@ -102,17 +466,40 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
             eprintln!("[webui-service] runtime event Hook correlation rejected: {error}");
             // cleanup_outcome records how the pre-registration contract failure terminalized the session.
             // cleanup_outcome 记录预注册契约失败如何终态化该会话。
-            let cleanup_outcome = handle_pre_registration_stream_task_launch_failure(
+            let cleanup_outcome = handle_pre_registration_execution_stream_task_launch_failure(
                 &app,
                 &state,
                 session_id,
-                expected_kernel_generation,
+                expected_kernel_generation_option,
             );
             match cleanup_outcome {
-                Ok(outcome) => webui_trace(
-                    "stream_hook_correlation_rejected",
-                    format!("session={session_id} cleanup={outcome:?} error={error}"),
-                ),
+                Ok(outcome) => {
+                    webui_trace(
+                        "stream_hook_correlation_rejected",
+                        format!("session={session_id} cleanup={outcome:?} error={error}"),
+                    );
+                    if outcome == StreamTaskLaunchFailureOutcome::FailedOwnerFinalized {
+                        if let Some(kernel_generation) = expected_kernel_generation_option {
+                            spawn_service_task(finalize_failed_execution_stream_retry_lifecycle(
+                                app.clone(),
+                                state.clone(),
+                                controller_runtime.clone(),
+                                session_id,
+                                SessionTerminalPersistenceOwner::KernelGeneration(
+                                    kernel_generation,
+                                ),
+                                FailedExecutionStreamRetryEvidence::ProvenNotDispatchedBeforeProviderDispatch,
+                                format!(
+                                    "The execution stream failed before launch because its Hook correlation was rejected: {error}"
+                                ),
+                            ));
+                        } else {
+                            eprintln!(
+                                "[webui-service] finalized Hook correlation failure lacks its kernel generation: session={session_id}"
+                            );
+                        }
+                    }
+                }
                 Err(cleanup_error) => eprintln!(
                     "[webui-service] runtime event Hook correlation cleanup failed: {cleanup_error}; original error: {error}"
                 ),
@@ -133,6 +520,12 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
     let task_state = state.clone();
     let registration_failure_app = app.clone();
     let registration_failure_state = state.clone();
+    // registrationFailureControllerRuntime remains available if the gated task never starts and therefore cannot own terminal persistence.
+    // registrationFailureControllerRuntime 在闸门任务从未启动、因而无法负责终态持久化时继续可用。
+    let registration_failure_controller_runtime = controller_runtime.clone();
+    // registrationExpectedKernelTurnId remains outside the moved task so registration validates the same immutable owner.
+    // registrationExpectedKernelTurnId 保留在被移动任务之外，使登记校验同一不可变所有者。
+    let registration_expected_kernel_turn_id = expected_kernel_turn_id.clone();
     let task_future = async move {
         // request is enriched exactly once with the authorized session selection before tool resolution.
         // request 在工具解析前仅使用已授权会话选择增强一次。
@@ -176,6 +569,9 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
         // activeProviderGoalId binds exactly one physical request to its resolved goal owner.
         // activeProviderGoalId 将恰好一次物理请求绑定到其解析后的目标所有者。
         let mut active_provider_goal_id: Option<String> = None;
+        // activeProviderCallId retains the latest exact physical call for terminal retry classification.
+        // activeProviderCallId 保留最近一个精确物理调用，用于终态重试分类。
+        let mut active_provider_call_id: Option<String> = None;
         // active_preparation preserves the exact provider/model budget facts for a mid-turn compaction restart.
         // active_preparation 保留中途回合压缩重启所需的精确 Provider/模型预算事实。
         let mut active_preparation: Option<ExecutionPreparation> = None;
@@ -255,14 +651,14 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
             if !webui_stream_event_matches_kernel_generation(
                 &task_state,
                 &event,
-                expected_kernel_generation,
+                expected_kernel_generation_option,
             ) {
                 webui_trace(
                     "stream_event_skipped_stale_generation",
                     format!(
                         "session={} expected_generation={}",
                         execution_stream_event_session_id(&event),
-                        expected_kernel_generation
+                        expected_kernel_generation_option
                             .map(|generation| generation.to_string())
                             .unwrap_or_else(|| String::from("<none>"))
                     ),
@@ -283,6 +679,8 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                         stream_task_started_at,
                         auto_compaction_already_attempted,
                         active_stream_task_id,
+                        expected_kernel_generation,
+                        &expected_kernel_turn_id,
                     )
                     .await
                     {
@@ -343,6 +741,13 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                     }
                 }
                 ExecutionStreamEvent::ProviderRequestTelemetry(event) => {
+                    if prepared_retry_checkpoint_error.is_some() {
+                        // A rejected Started boundary owns no ledger row, so later non-durable
+                        // telemetry from that physical attempt must remain outside the ledger.
+                        // 被拒绝的 Started 边界不拥有账本行，因此该物理尝试后续的非可靠遥测
+                        // 必须保持在账本之外。
+                        continue;
+                    }
                     if let Err(error) = handle_stream_provider_request_telemetry(
                         &task_state,
                         &controller_runtime,
@@ -351,6 +756,7 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                         event,
                         &mut active_provider_goal_id,
                         &mut execution_provider_goal_id,
+                        &mut active_provider_call_id,
                         active_stream_task_id,
                         None,
                     )
@@ -362,7 +768,10 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                     }
                 }
                 ExecutionStreamEvent::ProviderRequestDurabilityBoundary { event, completion } => {
-                    if let Some(error) = prepared_retry_checkpoint_error.take() {
+                    if let Some(error) = rejected_provider_boundary_error(
+                        &mut prepared_retry_checkpoint_error,
+                        event.kind,
+                    ) {
                         let _ = completion.complete(Err(error));
                         continue;
                     }
@@ -374,6 +783,7 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                         event,
                         &mut active_provider_goal_id,
                         &mut execution_provider_goal_id,
+                        &mut active_provider_call_id,
                         active_stream_task_id,
                         Some(completion),
                     )
@@ -470,14 +880,48 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                 }
                 ExecutionStreamEvent::RuntimeEvent { session_id, event } => {
                     if event.kind
-                        == vulcan_agent_runtime::agent_runtime::events::RuntimeEventKind::ToolStarted
+                        == vulcan_agent_runtime::agent_runtime::events::RuntimeEventKind::ToolRequestStarted
+                    {
+                        // The first tool-request event is the service boundary where tool-only Provider output becomes replay-relevant even without a visible token.
+                        // 首条工具请求事件是纯工具 Provider 输出即使没有可见 Token 也开始影响重放的服务边界。
+                        provider_telemetry_guard.observe_semantic_output();
+                    }
+                    if vulcan_agent_runtime::agent_runtime::tool_runtime_bridge::runtime_event_requires_tool_execution_safety_barrier(&event)
                         && let Err(error) = conversation_checkpoint::mark_execution_retry_snapshot_tool_execution_unsafe(
                             &task_state,
                             &controller_runtime,
                             session_id,
                         )
+                        .await
                     {
                         eprintln!("[webui-service] mark tool retry boundary unsafe failed: {error}");
+                        // barrierRejected wakes the exact waiting executor with failure, so the external tool body cannot begin after a durability error.
+                        // barrierRejected 以失败唤醒精确等待中的执行器，确保可靠性错误后外部工具主体无法开始。
+                        if let Err(rejection_error) = vulcan_agent_runtime::agent_runtime::tool_runtime_bridge::reject_runtime_event_projection_barrier_from_event(&event) {
+                            eprintln!(
+                                "[webui-service] reject tool execution safety barrier failed: {rejection_error}"
+                            );
+                        }
+                        if let Err(invalidation_error) = invalidate_execution_retry_reference(
+                            &task_state,
+                            session_id,
+                            "retry_snapshot_transition_failed",
+                            "The tool execution safety boundary could not be durably published before dispatch.",
+                        ) {
+                            eprintln!(
+                                "[webui-service] invalidate failed tool execution safety boundary failed: {invalidation_error}"
+                            );
+                        }
+                        if let Err(summary_error) = emit_conversation_continuation_summary_changed(
+                            &app,
+                            &task_state,
+                            session_id,
+                        ) {
+                            eprintln!(
+                                "[webui-service] emit failed tool execution safety boundary summary failed: {summary_error}"
+                            );
+                        }
+                        continue;
                     }
                     handle_runtime_stream_event(
                         &app,
@@ -515,23 +959,61 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                         eprintln!(
                             "[webui-service] repeated mid-turn context compaction rejected: session={session_id} reason={reason}"
                         );
-                        let _ = commit_prepared_stream_failure(
+                        let failure_commit = commit_prepared_stream_failure(
                             &app,
                             &task_state,
                             session_id,
                             active_stream_task_id,
                             "mid-turn context compaction retry limit reached",
                         );
+                        if failure_commit == PreparedStreamFailureCommit::Committed {
+                            finalize_failed_execution_stream_retry_lifecycle(
+                                app.clone(),
+                                task_state.clone(),
+                                controller_runtime.clone(),
+                                session_id,
+                                SessionTerminalPersistenceOwner::StreamTask(active_stream_task_id),
+                                FailedExecutionStreamRetryEvidence::RuntimeBoundary(
+                                    active_provider_call_id.as_ref().map(|provider_call_id| {
+                                        (active_stream_task_id, provider_call_id.clone())
+                                    }),
+                                ),
+                                format!(
+                                    "Mid-turn context compaction was requested repeatedly: {reason}"
+                                ),
+                            )
+                            .await;
+                        }
                         return;
                     }
                     let Some(preparation) = active_preparation.as_ref() else {
-                        let _ = commit_prepared_stream_failure(
+                        let failure_commit = commit_prepared_stream_failure(
                             &app,
                             &task_state,
                             session_id,
                             active_stream_task_id,
                             "mid-turn context compaction preparation missing",
                         );
+                        if failure_commit == PreparedStreamFailureCommit::Committed {
+                            finalize_failed_execution_stream_retry_lifecycle(
+                                app.clone(),
+                                task_state.clone(),
+                                controller_runtime.clone(),
+                                session_id,
+                                SessionTerminalPersistenceOwner::StreamTask(
+                                    active_stream_task_id,
+                                ),
+                                FailedExecutionStreamRetryEvidence::RuntimeBoundary(
+                                    active_provider_call_id.as_ref().map(|provider_call_id| {
+                                        (active_stream_task_id, provider_call_id.clone())
+                                    }),
+                                ),
+                                format!(
+                                    "Mid-turn context compaction lacked its prepared execution state: {reason}"
+                                ),
+                            )
+                            .await;
+                        }
                         return;
                     };
                     let mut compaction_request = request.clone();
@@ -573,6 +1055,8 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                                 controller_runtime.clone(),
                                 agent_runtime.clone(),
                                 updated_request,
+                                expected_kernel_generation,
+                                expected_kernel_turn_id.clone(),
                                 true,
                             );
                             return;
@@ -584,26 +1068,62 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                             eprintln!(
                                 "[webui-service] {error}: session={session_id} reason={reason}"
                             );
-                            let _ = commit_prepared_stream_failure(
+                            let failure_commit = commit_prepared_stream_failure(
                                 &app,
                                 &task_state,
                                 session_id,
                                 active_stream_task_id,
                                 "mid-turn context compaction produced no request",
                             );
+                            if failure_commit == PreparedStreamFailureCommit::Committed {
+                                finalize_failed_execution_stream_retry_lifecycle(
+                                    app.clone(),
+                                    task_state.clone(),
+                                    controller_runtime.clone(),
+                                    session_id,
+                                    SessionTerminalPersistenceOwner::StreamTask(
+                                        active_stream_task_id,
+                                    ),
+                                    FailedExecutionStreamRetryEvidence::RuntimeBoundary(
+                                        active_provider_call_id.as_ref().map(|provider_call_id| {
+                                            (active_stream_task_id, provider_call_id.clone())
+                                        }),
+                                    ),
+                                    error,
+                                )
+                                .await;
+                            }
                             return;
                         }
                         Err(error) => {
                             eprintln!(
                                 "[webui-service] mid-turn context compaction failed: session={session_id} reason={reason} error={error}"
                             );
-                            let _ = commit_prepared_stream_failure(
+                            let failure_commit = commit_prepared_stream_failure(
                                 &app,
                                 &task_state,
                                 session_id,
                                 active_stream_task_id,
                                 "mid-turn context compaction failure",
                             );
+                            if failure_commit == PreparedStreamFailureCommit::Committed {
+                                finalize_failed_execution_stream_retry_lifecycle(
+                                    app.clone(),
+                                    task_state.clone(),
+                                    controller_runtime.clone(),
+                                    session_id,
+                                    SessionTerminalPersistenceOwner::StreamTask(
+                                        active_stream_task_id,
+                                    ),
+                                    FailedExecutionStreamRetryEvidence::RuntimeBoundary(
+                                        active_provider_call_id.as_ref().map(|provider_call_id| {
+                                            (active_stream_task_id, provider_call_id.clone())
+                                        }),
+                                    ),
+                                    format!("Mid-turn context compaction failed: {error}"),
+                                )
+                                .await;
+                            }
                             return;
                         }
                     }
@@ -628,6 +1148,7 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                         active_stream_task_id,
                         stream_task_started_at,
                         execution_provider_goal_id.as_deref(),
+                        active_provider_call_id.as_deref(),
                         report,
                     )
                     .await
@@ -675,15 +1196,150 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
             active_stream_task_id,
             stream_exit_reason,
         );
-        if stream_exit_outcome == StreamTaskExitOutcome::EarlyTerminationCleaned
-            && let Err(error) = conversation_checkpoint::refreeze_claimed_execution_retry_snapshot(
+        if stream_exit_outcome == StreamTaskExitOutcome::EarlyTerminationCleaned {
+            // terminal_persistence_guard binds this asynchronous settlement to the exact removed stream task.
+            // terminal_persistence_guard 将当前异步结算绑定到已移除的精确流任务。
+            let terminal_persistence_guard =
+                match SessionTerminalPersistenceOwnerGuard::adopt_registered(
+                    task_state.clone(),
+                    session_id,
+                    SessionTerminalPersistenceOwner::StreamTask(active_stream_task_id),
+                ) {
+                    Ok(guard) => guard,
+                    Err(error) => {
+                        eprintln!(
+                            "[webui-service] early stream terminal-persistence ownership unavailable: session={session_id} task={active_stream_task_id} error={error}"
+                        );
+                        let _ = emit_conversation_continuation_summary_changed(
+                            &app,
+                            &task_state,
+                            session_id,
+                        );
+                        return;
+                    }
+                };
+            // refreezeResult closes the claimed sidecar before a new terminal continuation generation is published.
+            // refreezeResult 在发布新的终态 Continue 代际前关闭已领取 sidecar。
+            let refreeze_result =
+                conversation_checkpoint::refreeze_claimed_execution_retry_snapshot(
+                    &task_state,
+                    &controller_runtime,
+                    session_id,
+                    active_provider_call_id
+                        .as_ref()
+                        .map(|provider_call_id| (active_stream_task_id, provider_call_id.clone())),
+                    "The execution stream ended before an authoritative Finished event.",
+                );
+            if let Err(error) = refreeze_result {
+                eprintln!("[webui-service] refreeze interrupted execution retry failed: {error}");
+                // A failed refreeze must invalidate the exact in-memory claim before any later duplicate can classify it as admission-in-flight.
+                // 重冻失败时必须先使精确内存领取失效，避免后续重复请求继续被判定为准入进行中。
+                if let Err(invalidation_error) = invalidate_execution_retry_reference(
+                    &task_state,
+                    session_id,
+                    error.blocked_reason(),
+                    error.error_summary(),
+                ) {
+                    eprintln!(
+                        "[webui-service] interrupted execution retry invalidation failed: {invalidation_error}"
+                    );
+                }
+            }
+            // terminalSnapshot records a real failed continuation boundary for both ordinary and resumed executions.
+            // terminalSnapshot 为普通执行与恢复执行同时记录真实的失败 Continue 边界。
+            let terminal_snapshot = match materialize_early_stream_terminal_snapshot(
                 &task_state,
-                &controller_runtime,
                 session_id,
-                "The execution stream ended before an authoritative Finished event.",
-            )
-        {
-            eprintln!("[webui-service] refreeze interrupted execution retry failed: {error}");
+            ) {
+                Ok(snapshot) => Some(snapshot),
+                Err(error) => {
+                    eprintln!(
+                        "[webui-service] materialize early stream terminal boundary failed: {error}"
+                    );
+                    if let Err(invalidation_error) = invalidate_execution_retry_reference(
+                        &task_state,
+                        session_id,
+                        "retry_snapshot_transition_failed",
+                        "The early stream terminal boundary could not be materialized and was invalidated.",
+                    ) {
+                        eprintln!(
+                            "[webui-service] early stream terminal invalidation failed: {invalidation_error}"
+                        );
+                    }
+                    current_workspace_snapshot_from_shared_state(&task_state)
+                        .ok()
+                        .flatten()
+                }
+            };
+            // terminal_state_persisted is the only condition that may reopen admission after an early exit.
+            // terminal_state_persisted 是提前退出后允许重新开放准入的唯一条件。
+            let mut terminal_state_persisted = false;
+            if let Some(terminal_snapshot) = terminal_snapshot {
+                match persist_workspace_session_update(
+                    Some(&task_state),
+                    controller_runtime.clone(),
+                    &terminal_snapshot,
+                    session_id,
+                )
+                .await
+                {
+                    Ok(()) => terminal_state_persisted = true,
+                    Err(error) => {
+                        eprintln!(
+                            "[webui-service] persist early stream terminal boundary failed: {error}"
+                        );
+                        // A continuation whose main-state terminal boundary was not durable must remain blocked in this process.
+                        // 主状态终态边界未可靠落盘的 Continue 在当前进程中必须保持阻断。
+                        match invalidate_execution_retry_reference(
+                            &task_state,
+                            session_id,
+                            "retry_snapshot_transition_failed",
+                            "The early stream terminal boundary could not be persisted and was invalidated.",
+                        ) {
+                            Ok(()) => {
+                                if let Ok(Some(blocked_snapshot)) =
+                                    current_workspace_snapshot_from_shared_state(&task_state)
+                                {
+                                    match persist_workspace_session_update(
+                                        Some(&task_state),
+                                        controller_runtime.clone(),
+                                        &blocked_snapshot,
+                                        session_id,
+                                    )
+                                    .await
+                                    {
+                                        Ok(()) => terminal_state_persisted = true,
+                                        Err(fallback_error) => eprintln!(
+                                            "[webui-service] persist blocked early stream fallback failed: {fallback_error}"
+                                        ),
+                                    }
+                                }
+                            }
+                            Err(invalidation_error) => eprintln!(
+                                "[webui-service] early stream persistence invalidation failed: {invalidation_error}"
+                            ),
+                        }
+                    }
+                }
+            }
+            // Admission opens only after the latest terminal or fail-closed replacement revision is durable.
+            // 仅在最新终态或失败关闭替代修订可靠落盘后开放准入。
+            if terminal_state_persisted {
+                if let Err(error) = terminal_persistence_guard.release() {
+                    eprintln!(
+                        "[webui-service] early stream terminal-persistence owner release failed: session={session_id} error={error}"
+                    );
+                }
+            } else {
+                // Unreleased drop deliberately retains the in-process admission block after an uncertain write.
+                // 未释放即丢弃会在写入结果不确定后有意保留进程内准入阻塞。
+                drop(terminal_persistence_guard);
+            }
+            if let Err(error) =
+                emit_conversation_continuation_summary_changed(&app, &task_state, session_id)
+            {
+                eprintln!("[webui-service] emit early stream continuation summary failed: {error}");
+            }
         }
         webui_trace(
             "stream_task_exit_handled",
@@ -692,26 +1348,50 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
             ),
         );
     };
-    if let Err(error) = spawn_registered_active_stream_task_with_mode(
+    if let Err(error) = spawn_registered_kernel_stream_task_with_mode(
         &state,
         session_id,
         active_stream_task_id,
         session_goal_id,
         ActiveStreamTaskRegistrationMode::RejectIfOccupied,
+        expected_kernel_generation,
+        &registration_expected_kernel_turn_id,
         task_future,
     ) {
         eprintln!("[webui-service] register stream task failed: {error}");
-        match handle_stream_task_registration_failure(
+        let cleanup_outcome = handle_stream_task_registration_failure(
             &registration_failure_app,
             &registration_failure_state,
             session_id,
-            expected_kernel_generation,
+            expected_kernel_generation_option,
             &error,
-        ) {
-            Ok(outcome) => webui_trace(
-                "stream_task_registration_failure_handled",
-                format!("session={session_id} outcome={outcome:?}"),
-            ),
+        );
+        match cleanup_outcome {
+            Ok(outcome) => {
+                webui_trace(
+                    "stream_task_registration_failure_handled",
+                    format!("session={session_id} outcome={outcome:?}"),
+                );
+                if outcome == StreamTaskLaunchFailureOutcome::FailedOwnerFinalized {
+                    if let Some(kernel_generation) = expected_kernel_generation_option {
+                        spawn_service_task(finalize_failed_execution_stream_retry_lifecycle(
+                            registration_failure_app,
+                            registration_failure_state,
+                            registration_failure_controller_runtime,
+                            session_id,
+                            SessionTerminalPersistenceOwner::KernelGeneration(kernel_generation),
+                            FailedExecutionStreamRetryEvidence::ProvenNotDispatchedBeforeProviderDispatch,
+                            format!(
+                                "The execution stream failed before its registered start gate opened: {error}"
+                            ),
+                        ));
+                    } else {
+                        eprintln!(
+                            "[webui-service] finalized registration failure lacks its kernel generation: session={session_id}"
+                        );
+                    }
+                }
+            }
             Err(cleanup_error) => eprintln!(
                 "[webui-service] register stream task failure projection failed: {cleanup_error}"
             ),
@@ -740,9 +1420,36 @@ async fn handle_stream_provider_request_telemetry(
     event: ProviderRequestTelemetryEvent,
     active_provider_goal_id: &mut Option<String>,
     execution_provider_goal_id: &mut Option<String>,
+    active_provider_call_id: &mut Option<String>,
     active_stream_task_id: Uuid,
     completion: Option<ProviderRequestDurabilityCompletion>,
 ) -> Result<(), String> {
+    // providerCallBindingResult atomically binds the typed Started identity to both stream-local and retained task ownership.
+    // providerCallBindingResult 将强类型 Started 身份原子绑定到流局部状态与保留任务所有权。
+    let provider_call_binding_result = if event.kind == ProviderRequestTelemetryEventKind::Started {
+        event
+            .provider_call_id()
+            .map(str::to_string)
+            .and_then(|provider_call_id| {
+                let mut guard = state
+                    .lock()
+                    .map_err(|error| format!("failed to lock service state: {error}"))?;
+                if !bind_active_stream_task_provider_call_if_id(
+                    &mut guard,
+                    event.session_id,
+                    active_stream_task_id,
+                    provider_call_id.clone(),
+                ) {
+                    return Err(String::from(
+                        "Provider Started boundary lost exact active-stream ownership.",
+                    ));
+                }
+                *active_provider_call_id = Some(provider_call_id);
+                Ok(())
+            })
+    } else {
+        Ok(())
+    };
     match event.kind {
         ProviderRequestTelemetryEventKind::Started => {
             *active_provider_goal_id = match session_goal_id_for_provider_request(
@@ -801,7 +1508,9 @@ async fn handle_stream_provider_request_telemetry(
         | ProviderRequestTelemetryEventKind::FirstToken
         | ProviderRequestTelemetryEventKind::Retrying => {}
     }
-    let result = process_provider_request_telemetry_event(
+    // accountingResult owns authoritative ledger mutation and its durable boundary.
+    // accountingResult 持有权威账本变更及其可靠边界。
+    let accounting_result = process_provider_request_telemetry_event(
         state,
         controller_runtime,
         Some(app),
@@ -810,6 +1519,15 @@ async fn handle_stream_provider_request_telemetry(
         "provider_usage_telemetry",
     )
     .await;
+    // result keeps ownership binding failures fail-closed without hiding a simultaneous accounting failure.
+    // result 以失败关闭方式保留所有权绑定失败，同时不隐藏并发发生的记账失败。
+    let result = match (provider_call_binding_result, accounting_result) {
+        (Ok(()), result) => result,
+        (Err(binding_error), Ok(())) => Err(binding_error),
+        (Err(binding_error), Err(accounting_error)) => Err(format!(
+            "{binding_error}; Provider telemetry accounting also failed: {accounting_error}"
+        )),
+    };
     if let Some(completion) = completion {
         let _ = completion.complete(result.clone());
     }

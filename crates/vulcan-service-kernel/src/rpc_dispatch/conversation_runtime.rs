@@ -128,6 +128,7 @@ pub(super) async fn dispatch(
                 rpc_required_param(params, "conversationId")?,
                 rpc_required_param(params, "expectedGeneration")?,
                 rpc_required_param(params, "expectedLedgerRevision")?,
+                rpc_required_param(params, "clientContinuationId")?,
             )
             .await,
         ),

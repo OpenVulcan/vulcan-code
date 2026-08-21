@@ -1,12 +1,13 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "minimax",
-  "revision": 12,
+  "revision": 14,
   "published_at": "2026-08-19T00:00:00Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
       "anthropic-messages.v1",
+      "anthropic-messages-video.v1",
       "openai-chat-completions.v1"
     ],
     "required_execution_primitives": [
@@ -91,6 +92,28 @@
       "protocol_routes": [
         {
           "protocol_profile_id": "anthropic-messages.v1",
+          "endpoint_path": "/anthropic/v1/messages",
+          "model_discovery_base_url_override": "https://api.minimax.io/anthropic/v1",
+          "input_resource_constraints": [
+            {
+              "resource_kind": "video",
+              "max_bytes": 50000000,
+              "reference_policy": "local_only",
+              "upload_channel_refs": [
+                "global.video-file"
+              ]
+            }
+          ],
+          "usage_profile_refs": [],
+          "request_profile_refs": [
+            "minimax.anthropic.thinking.v1"
+          ],
+          "response_profile_refs": [],
+          "provider_request_id_headers": [],
+          "verified": true
+        },
+        {
+          "protocol_profile_id": "anthropic-messages-video.v1",
           "endpoint_path": "/anthropic/v1/messages",
           "model_discovery_base_url_override": "https://api.minimax.io/anthropic/v1",
           "input_resource_constraints": [
@@ -215,6 +238,28 @@
           "verified": true
         },
         {
+          "protocol_profile_id": "anthropic-messages-video.v1",
+          "endpoint_path": "/anthropic/v1/messages",
+          "model_discovery_base_url_override": "https://api.minimaxi.com/anthropic/v1",
+          "input_resource_constraints": [
+            {
+              "resource_kind": "video",
+              "max_bytes": 50000000,
+              "reference_policy": "local_only",
+              "upload_channel_refs": [
+                "cn.video-file"
+              ]
+            }
+          ],
+          "usage_profile_refs": [],
+          "request_profile_refs": [
+            "minimax.anthropic.thinking.v1"
+          ],
+          "response_profile_refs": [],
+          "provider_request_id_headers": [],
+          "verified": true
+        },
+        {
           "protocol_profile_id": "openai-chat-completions.v1",
           "endpoint_path": "/v1/chat/completions",
           "authentication": "bearer_authorization",
@@ -268,13 +313,15 @@
       },
       "supported_protocols": [
         "anthropic-messages.v1",
+        "anthropic-messages-video.v1",
         "openai-chat-completions.v1"
       ],
+      "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
         "operations": [
           "conversation_respond"
         ],
-        "input_resources": [],
+        "input_resources": ["image", "video"],
         "output_resources": [],
         "reasoning": "native",
         "provider_native_tools": [],
@@ -933,9 +980,9 @@
       "progress_supported": true,
       "cancellation_supported": true,
       "fixed_fields": {
-        "purpose": "retrieval"
+        "purpose": "video_understanding"
       },
-      "cache_duration_ms": 1800000,
+      "cache_duration_ms": 86400000,
       "reference_encoding": "template"
     },
     {
@@ -961,9 +1008,9 @@
       "progress_supported": true,
       "cancellation_supported": true,
       "fixed_fields": {
-        "purpose": "retrieval"
+        "purpose": "video_understanding"
       },
-      "cache_duration_ms": 1800000,
+      "cache_duration_ms": 86400000,
       "reference_encoding": "template"
     },
     {

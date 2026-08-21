@@ -54,7 +54,7 @@ export function projectConversationTimelineItems(
     const running = forceRunning && !terminal;
     const planArtifactItems = latestPlanArtifactRenderItems(currentTurn.bodyItems);
     const bodyItems = currentTurn.bodyItems.filter((item) => !isPlanArtifactRenderItem(item));
-    const finalItem = !running && !stopped ? popFinalAssistantItem(bodyItems) : null;
+    const finalItem = !running && !stopped ? popTrailingFinalAssistantItem(bodyItems) : null;
     const processItems = bodyItems.filter((item) => !isTurnStatsRenderItem(item) || isSubagentTurnStatsRenderItem(item));
     const turnUserItem = currentTurn.userItem;
     const shouldDefaultCollapse = Boolean(turnUserItem) && Boolean(finalItem) && !running && !stopped && turnStartIdsWithLaterTurn.has(turnUserItem?.id ?? "");
@@ -474,15 +474,19 @@ function latestPlanArtifactRenderItems(items: ConversationRenderItem[]): Convers
 
 // popFinalAssistantItem removes and returns the final assistant markdown row when present.
 // popFinalAssistantItem 在存在最终助手 Markdown 行时移除并返回它。
-function popFinalAssistantItem(items: ConversationRenderItem[]): ConversationRenderItem | null {
-  for (let index = items.length - 1; index >= 0; index -= 1) {
-    const item = items[index];
-    if (isAssistantMarkdownRenderItem(item)) {
-      items.splice(index, 1);
-      return item;
-    }
+// popTrailingFinalAssistantItem extracts an assistant Markdown row only when it is chronologically last.
+// popTrailingFinalAssistantItem 仅在 Assistant Markdown 行按时间顺序确实位于末尾时提取它。
+// Parameters: items is the mutable turn body after plan artifacts have been removed.
+// 参数：items 是移除计划产物后的可变回合正文集合。
+// Returns: the trailing final assistant row, or null when later process or failure events exist.
+// 返回值：末尾的最终 Assistant 行；若其后存在处理或失败事件则返回 null。
+function popTrailingFinalAssistantItem(items: ConversationRenderItem[]): ConversationRenderItem | null {
+  const item = items.at(-1);
+  if (!item || !isAssistantMarkdownRenderItem(item)) {
+    return null;
   }
-  return null;
+  items.pop();
+  return item;
 }
 
 // turnStatsDurationMs reads the total turn duration from structured turn statistics.

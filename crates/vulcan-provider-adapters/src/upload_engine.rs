@@ -87,6 +87,18 @@ struct PreparedOperationUpload {
     resource: UploadResource,
 }
 
+/// Carries the exact local operation upload resource and selected channel after bounded preflight.
+/// 携带完成有界预检后的精确本地操作上传资源与选中通道。
+#[derive(Debug, Clone)]
+pub(crate) struct OperationUploadRouteInspection {
+    /// The immutable upload channel selected by MIME, limits, references, and credential role.
+    /// 由 MIME、限制、引用与凭据角色共同选出的不可变上传通道。
+    pub channel: crate::UploadChannelDeclaration,
+    /// The validated source resource whose local path and byte length are stable for this phase.
+    /// 当前阶段本地路径与字节长度均已校验稳定的源资源。
+    pub resource: UploadResource,
+}
+
 /// Frozen host dependencies used to materialize one operation's uploads.
 /// 用于物化一次操作上传的冻结宿主依赖。
 pub(crate) struct OperationUploadExecutionContext<'a> {
@@ -451,6 +463,59 @@ fn operation_upload_target_value(
     }
 }
 
+/// Applies one already-uploaded reference to a scalar media-understanding binding.
+/// 将一条已经上传的引用应用到一个标量媒体理解绑定。
+///
+/// # Parameters
+/// 参数
+/// `binding` defines the exact source/target pointers; `resource` carries the verified MIME;
+/// `arguments` is the canonical fixed-tool input; `provider_reference` is already validated by
+/// the selected upload channel.
+/// `binding` 定义精确源/目标指针；`resource` 携带已校验 MIME；`arguments` 是规范固定工具输入；
+/// `provider_reference` 已由选中上传通道校验。
+///
+/// # Returns
+/// 返回值
+/// The canonical arguments with the provider reference written and the source removed when the
+/// binding requires it, or an explicit shape error for non-scalar bindings.
+/// 写入供应商引用并按绑定要求移除规范源字段后的参数；非标量绑定返回明确结构错误。
+pub(crate) fn materialize_cached_scalar_operation_upload(
+    binding: &crate::OperationUploadBinding,
+    resource: &UploadResource,
+    mut arguments: Value,
+    provider_reference: String,
+) -> Result<Value, String> {
+    if binding.item_source_path.is_some() || binding.item_target_path.is_some() {
+        return Err(String::from(
+            "Cached media-understanding upload does not support item-field bindings.",
+        ));
+    }
+    let source = arguments.pointer(&binding.source_path).ok_or_else(|| {
+        format!(
+            "Cached operation upload source `{}` is missing.",
+            binding.source_path
+        )
+    })?;
+    if !source.is_string() {
+        return Err(format!(
+            "Cached operation upload source `{}` must be a scalar string.",
+            binding.source_path
+        ));
+    }
+    let uploaded = UploadedResourceReference {
+        reference: provider_reference,
+        encoding: UploadReferenceEncoding::ResponseUrl,
+        response_id: None,
+        response_url: None,
+    };
+    let value = operation_upload_target_value(binding, resource, &uploaded)?;
+    write_operation_argument_pointer(&mut arguments, &binding.target_path, value)?;
+    if binding.remove_source && binding.source_path != binding.target_path {
+        remove_operation_argument_pointer(&mut arguments, &binding.source_path)?;
+    }
+    Ok(arguments)
+}
+
 /// Prepares one canonical upload resource without issuing any network request.
 /// 在不发出任何网络请求的情况下准备一项规范上传资源。
 ///
@@ -567,6 +632,48 @@ async fn prepare_operation_upload_resource(
         remote_url: None,
         item_count: item_count as u64,
     })
+}
+
+/// Preflights one operation upload source and returns its exact channel/resource pair.
+/// 预检一个操作上传源并返回精确的通道/资源组合。
+///
+/// # Parameters
+/// 参数
+/// The arguments are identical to `prepare_operation_upload_resource`; no network request is
+/// issued and the returned channel is cloned from the frozen manifest snapshot.
+/// 参数与 `prepare_operation_upload_resource` 相同；不会发出网络请求，返回通道来自冻结
+/// Manifest 快照的克隆。
+///
+/// # Returns
+/// 返回值
+/// A fully validated operation upload route inspection.
+/// 完成全部校验的操作上传路由预检结果。
+pub(crate) async fn inspect_operation_upload_route(
+    binding: &crate::OperationUploadBinding,
+    reference: &str,
+    item_count: usize,
+    workspace_root: Option<&Path>,
+    channels: &[crate::UploadChannelDeclaration],
+    credential_role: Option<&str>,
+) -> Result<OperationUploadRouteInspection, String> {
+    let resource = prepare_operation_upload_resource(
+        binding,
+        reference,
+        item_count,
+        workspace_root,
+        channels,
+        credential_role,
+    )
+    .await?;
+    let channel = resolve_upload_channel(
+        channels,
+        &binding.upload_channel_refs,
+        &resource,
+        credential_role,
+    )?
+    .clone();
+    validate_upload_resource(&channel, &resource)?;
+    Ok(OperationUploadRouteInspection { channel, resource })
 }
 
 /// Computes the exact decoded byte length of one canonical standard-Base64 value.
@@ -890,51 +997,6 @@ pub(crate) fn resolve_upload_channel<'a>(
     ))
 }
 
-/// Resolves the exact channel and byte length used to report one local operation upload.
-/// 解析用于报告单个本地操作上传的精确通道与字节长度。
-///
-/// # Parameters
-/// 参数
-/// `binding` and `channels` are frozen Manifest declarations; `reference` is the canonical local
-/// path argument; `item_count`, `workspace_root`, and `credential_role` preserve execution limits.
-/// `binding` 与 `channels` 是冻结的 Manifest 声明；`reference` 是规范本地路径参数；
-/// `item_count`、`workspace_root` 与 `credential_role` 保留执行限制。
-///
-/// # Returns
-/// 返回值
-/// The exact selected upload channel id and verified source byte length.
-/// 返回精确选中的上传通道标识与已验证源字节长度。
-pub(crate) async fn inspect_local_operation_upload_progress_route(
-    binding: &crate::OperationUploadBinding,
-    channels: &[crate::UploadChannelDeclaration],
-    reference: &str,
-    item_count: usize,
-    workspace_root: Option<&Path>,
-    credential_role: Option<&str>,
-) -> Result<(String, u64), String> {
-    // resource repeats the same bounded preflight used by materialization without network effects.
-    // resource 重用物化阶段相同的有界预检，且不产生网络副作用。
-    let resource = prepare_operation_upload_resource(
-        binding,
-        reference,
-        item_count,
-        workspace_root,
-        channels,
-        credential_role,
-    )
-    .await?;
-    // channel is selected by the authoritative reference, MIME, and credential-role algorithm.
-    // channel 由权威引用、MIME 与凭据角色算法选择。
-    let channel = resolve_upload_channel(
-        channels,
-        &binding.upload_channel_refs,
-        &resource,
-        credential_role,
-    )?;
-    validate_upload_resource(channel, &resource)?;
-    Ok((channel.upload_channel_id.clone(), resource.byte_len))
-}
-
 /// Enforces every bounded upload limit before any network call (plan §R9.5).
 /// 在任何网络调用前强制全部有界上传限制（方案 §R9.5）。
 ///
@@ -962,6 +1024,17 @@ pub(crate) fn validate_upload_resource(
             channel.upload_channel_id,
             resource.mime_type,
             channel.accepted_mime_types.join(", ")
+        ));
+    }
+    if resource.mime_type.starts_with("video/")
+        && matches!(
+            channel.primitive,
+            Some(UploadPrimitiveKind::InlineDataUrl | UploadPrimitiveKind::InlineBase64)
+        )
+    {
+        return Err(format!(
+            "Upload channel `{}` cannot materialize video as Base64; a provider resource upload channel is required.",
+            channel.upload_channel_id
         ));
     }
     if let Some(max_bytes) = channel.max_bytes
@@ -1853,6 +1926,202 @@ fn read_response_reference(
     Ok((response_id, response_url))
 }
 
+/// Validates a provider reference against the upload channel that produced it.
+/// 按生成该引用的上传通道校验一个供应商引用。
+///
+/// # Parameters
+/// 参数
+/// `channel` owns the declared reference encoding and host policy; `reference` is the exact
+/// value persisted or placed into a provider request.
+/// `channel` 持有声明的引用编码与宿主策略；`reference` 是要持久化或放入供应商请求的精确值。
+///
+/// # Returns
+/// 返回值
+/// `Ok` only when the value has the declared shape and cannot cross the channel's URI boundary.
+/// 仅当该值符合声明形状且不能越过通道 URI 边界时返回 `Ok`。
+pub(crate) fn validate_prepared_reference(
+    channel: &crate::UploadChannelDeclaration,
+    reference: &str,
+) -> Result<(), String> {
+    if reference.trim().is_empty()
+        || reference != reference.trim()
+        || reference.chars().any(char::is_control)
+    {
+        return Err(format!(
+            "Upload channel `{}` produced an empty or malformed provider reference.",
+            channel.upload_channel_id
+        ));
+    }
+    let encoding = channel
+        .reference_encoding
+        .unwrap_or(UploadReferenceEncoding::ProviderFileId);
+    match encoding {
+        UploadReferenceEncoding::ProviderFileId => {
+            if reference.contains("://") {
+                return Err(format!(
+                    "Upload channel `{}` provider file id must not carry a URI scheme.",
+                    channel.upload_channel_id
+                ));
+            }
+            Ok(())
+        }
+        UploadReferenceEncoding::ResponseUrl => validate_provider_response_url(channel, reference),
+        UploadReferenceEncoding::Template => {
+            let template = channel.reference_template.as_deref().ok_or_else(|| {
+                format!(
+                    "Upload channel `{}` uses template encoding without a template.",
+                    channel.upload_channel_id
+                )
+            })?;
+            let values = template_reference_values(template, reference).ok_or_else(|| {
+                format!(
+                    "Upload channel `{}` provider reference does not match its declared template.",
+                    channel.upload_channel_id
+                )
+            })?;
+            for (placeholder, value) in values {
+                if placeholder == "url" {
+                    validate_provider_response_url(channel, value.as_str())?;
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
+/// Validates a response URL against the upload channel's closed HTTPS host policy.
+/// 按上传通道的封闭 HTTPS 宿主策略校验响应 URL。
+fn validate_provider_response_url(
+    channel: &crate::UploadChannelDeclaration,
+    candidate: &str,
+) -> Result<(), String> {
+    let parsed = reqwest::Url::parse(candidate).map_err(|_| {
+        format!(
+            "Upload channel `{}` produced an invalid provider reference URL.",
+            channel.upload_channel_id
+        )
+    })?;
+    let host = parsed.host_str().ok_or_else(|| {
+        format!(
+            "Upload channel `{}` provider reference URL has no host.",
+            channel.upload_channel_id
+        )
+    })?;
+    if parsed.scheme() != "https"
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.port().is_some()
+        || parsed.fragment().is_some()
+        || (!channel.response_host_suffixes.is_empty()
+            && !response_host_matches_suffixes(host, &channel.response_host_suffixes))
+    {
+        return Err(format!(
+            "Upload channel `{}` provider reference URL is outside its declared HTTPS host policy.",
+            channel.upload_channel_id
+        ));
+    }
+    Ok(())
+}
+
+/// Represents one bounded literal or placeholder in a provider reference template.
+/// 表示供应商引用模板中的一个有界字面量或占位符。
+#[derive(Debug, Clone, Copy)]
+enum PreparedReferenceTemplatePart<'a> {
+    /// Literal bytes that must appear exactly in the rendered reference.
+    /// 必须在渲染引用中精确出现的字面量字节。
+    Literal(&'a str),
+    /// One supported placeholder name, either `id` or `url`.
+    /// 一个受支持的占位符名称，可以是 `id` 或 `url`。
+    Placeholder(&'a str),
+}
+
+/// Parses a validated `{id}`/`{url}` template into ordered literal and placeholder parts.
+/// 将已校验的 `{id}`/`{url}` 模板解析为有序字面量与占位符部分。
+fn parse_prepared_reference_template(
+    template: &str,
+) -> Option<Vec<PreparedReferenceTemplatePart<'_>>> {
+    let mut parts = Vec::new();
+    let mut cursor = 0;
+    while cursor < template.len() {
+        let next_id = template[cursor..].find("{id}");
+        let next_url = template[cursor..].find("{url}");
+        let Some((offset, placeholder, placeholder_len)) = (match (next_id, next_url) {
+            (None, None) => {
+                parts.push(PreparedReferenceTemplatePart::Literal(&template[cursor..]));
+                cursor = template.len();
+                None
+            }
+            (Some(id), None) => Some((id, "id", 4)),
+            (None, Some(url)) => Some((url, "url", 5)),
+            (Some(id), Some(url)) if id <= url => Some((id, "id", 4)),
+            (Some(_), Some(url)) => Some((url, "url", 5)),
+        }) else {
+            break;
+        };
+        if offset > 0 {
+            parts.push(PreparedReferenceTemplatePart::Literal(
+                &template[cursor..cursor + offset],
+            ));
+        }
+        parts.push(PreparedReferenceTemplatePart::Placeholder(placeholder));
+        cursor += offset + placeholder_len;
+    }
+    if parts.is_empty()
+        || !parts
+            .iter()
+            .any(|part| matches!(part, PreparedReferenceTemplatePart::Placeholder(_)))
+    {
+        return None;
+    }
+    Some(parts)
+}
+
+/// Extracts non-empty values from a bounded provider reference template.
+/// 从有界供应商引用模板中提取非空占位符值。
+fn template_reference_values<'a>(
+    template: &'a str,
+    reference: &str,
+) -> Option<Vec<(&'a str, String)>> {
+    let parts = parse_prepared_reference_template(template)?;
+    let mut values = Vec::new();
+    let mut position = 0_usize;
+    for (index, part) in parts.iter().enumerate() {
+        match part {
+            PreparedReferenceTemplatePart::Literal(literal) => {
+                let remaining = reference.get(position..)?;
+                if !remaining.starts_with(literal) {
+                    return None;
+                }
+                position += literal.len();
+            }
+            PreparedReferenceTemplatePart::Placeholder(name) => {
+                let next_literal = parts[index + 1..].iter().find_map(|part| match part {
+                    PreparedReferenceTemplatePart::Literal(literal) if !literal.is_empty() => {
+                        Some(*literal)
+                    }
+                    _ => None,
+                });
+                let end = if let Some(next_literal) = next_literal {
+                    let remaining = reference.get(position..)?;
+                    let offset = remaining.find(next_literal)?;
+                    if offset == 0 {
+                        return None;
+                    }
+                    position + offset
+                } else {
+                    reference.len()
+                };
+                if end <= position {
+                    return None;
+                }
+                values.push((*name, reference.get(position..end)?.to_string()));
+                position = end;
+            }
+        }
+    }
+    (position == reference.len()).then_some(values)
+}
+
 /// Renders the final provider reference from the declared encoding.
 /// 按声明编码渲染最终供应商引用。
 fn render_reference(
@@ -1863,7 +2132,7 @@ fn render_reference(
     let encoding = channel
         .reference_encoding
         .unwrap_or(UploadReferenceEncoding::ProviderFileId);
-    match encoding {
+    let reference = match encoding {
         UploadReferenceEncoding::ProviderFileId => response_id.ok_or_else(|| {
             format!(
                 "Upload channel `{}` requires a response id but the response carried none.",
@@ -1887,7 +2156,9 @@ fn render_reference(
             let url = response_url.as_deref().unwrap_or_default();
             Ok(template.replace("{id}", id).replace("{url}", url))
         }
-    }
+    }?;
+    validate_prepared_reference(channel, reference.as_str())?;
+    Ok(reference)
 }
 
 /// Performs one bounded multipart file upload through a declared channel.
@@ -2257,6 +2528,7 @@ mod tests {
             fixed_fields: BTreeMap::new(),
             cache_duration_ms: None,
             reference_encoding: None,
+            reference_scope: Default::default(),
         }
     }
 
@@ -2617,6 +2889,69 @@ mod tests {
         )
         .expect("template must render");
         assert_eq!(reference, "file://file-123");
+    }
+
+    /// Verifies persisted references cannot cross the declared encoding or URI boundary.
+    /// 验证持久化引用不能越过声明的编码或 URI 边界。
+    #[test]
+    fn prepared_reference_validation_is_closed_by_channel_contract() {
+        let channel = channel(
+            UploadPrimitiveKind::ProviderFileCreate,
+            vec![String::from("video/mp4")],
+            None,
+            None,
+        );
+        assert!(validate_prepared_reference(&channel, "file-123").is_ok());
+        assert!(validate_prepared_reference(&channel, "https://other.invalid/file-123").is_err());
+
+        let mut template_channel = channel.clone();
+        template_channel.reference_encoding = Some(UploadReferenceEncoding::Template);
+        template_channel.reference_template = Some(String::from("mm_file://{id}"));
+        assert!(validate_prepared_reference(&template_channel, "mm_file://file-123").is_ok());
+        assert!(validate_prepared_reference(&template_channel, "ms://file-123").is_err());
+
+        let mut url_channel = channel;
+        url_channel.reference_encoding = Some(UploadReferenceEncoding::ResponseUrl);
+        url_channel.response_host_suffixes = vec![String::from(".example.invalid")];
+        assert!(
+            validate_prepared_reference(&url_channel, "https://cdn.example.invalid/file").is_ok()
+        );
+        assert!(
+            validate_prepared_reference(&url_channel, "https://cdn.other.invalid/file").is_err()
+        );
+
+        let mut template_url_channel = url_channel;
+        template_url_channel.reference_encoding = Some(UploadReferenceEncoding::Template);
+        template_url_channel.reference_template = Some(String::from("provider://{url}"));
+        assert!(
+            validate_prepared_reference(
+                &template_url_channel,
+                "provider://https://cdn.example.invalid/file"
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_prepared_reference(
+                &template_url_channel,
+                "provider://https://cdn.other.invalid/file"
+            )
+            .is_err()
+        );
+    }
+
+    /// Verifies a video resource cannot select an inline Base64 upload primitive.
+    /// 验证视频资源不能选择内联 Base64 上传原语。
+    #[test]
+    fn video_upload_rejects_inline_base64_channels() {
+        let channel = channel(
+            UploadPrimitiveKind::InlineDataUrl,
+            vec![String::from("video/mp4")],
+            None,
+            None,
+        );
+        let error = validate_upload_resource(&channel, &resource("video/mp4", 4))
+            .expect_err("video Base64 materialization must be rejected");
+        assert!(error.contains("Base64"));
     }
 
     /// Verifies the signed primitives refuse to guess a signature contract.

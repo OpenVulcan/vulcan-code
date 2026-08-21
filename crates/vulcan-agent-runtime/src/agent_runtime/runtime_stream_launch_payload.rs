@@ -142,20 +142,17 @@ pub(crate) fn build_runtime_stream_launch_payload(
         discovery_errors: bootstrap.discovery_errors,
         warnings: bootstrap.warnings,
         system_preamble: bootstrap.system_preamble,
-        core_snapshot:
-            request
-                .execution_retry_snapshot
-                .as_ref()
-                .filter(|snapshot| {
-                    matches!(
+        core_snapshot: request
+            .execution_retry_snapshot
+            .as_ref()
+            .filter(|snapshot| {
+                !matches!(
                     &snapshot.pending_action,
-                    vulcan_workbench_model::ExecutionRetryPendingAction::DispatchProviderRequest {
-                        ..
-                    }
+                    vulcan_workbench_model::ExecutionRetryPendingAction::ResumePreparation { .. }
                 )
-                })
-                .map(|snapshot| snapshot.controller_snapshot.clone())
-                .unwrap_or(bootstrap.core_snapshot),
+            })
+            .map(|snapshot| snapshot.controller_snapshot.clone())
+            .unwrap_or(bootstrap.core_snapshot),
         initial_provider_request: request
             .execution_retry_snapshot
             .as_ref()

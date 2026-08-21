@@ -1029,6 +1029,12 @@ fn run_service_bootstrap(
             agent_runtime.public_ai_runtime.as_ref(),
         )
         .map_err(|error| ServiceBootstrapError::new("workspace", "Workspace", error))?;
+        crate::reconcile_workbench_conversation_lifecycle_projection(
+            &mut workbench,
+            &guard,
+            &workspace_snapshot,
+        )
+        .map_err(|error| ServiceBootstrapError::new("workspace", "Workspace", error))?;
         crate::preserve_project_settings_revisions(&mut workbench, &guard.workbench);
         guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
         workbench.revision = guard.workbench_generation;

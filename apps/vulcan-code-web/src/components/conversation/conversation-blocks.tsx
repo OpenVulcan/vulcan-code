@@ -275,7 +275,7 @@ function localizedContextCompactionTrigger(
   trigger: string | undefined,
   t: ReturnType<typeof useI18n>["t"],
 ): string {
-  if (trigger === "auto") {
+  if (trigger === "auto_budget") {
     return t("contextCompaction.trigger.auto");
   }
   return t("contextCompaction.trigger.manual");

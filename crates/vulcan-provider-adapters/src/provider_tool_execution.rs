@@ -3772,7 +3772,10 @@ mod tests {
         });
         let sensitive_url =
             format!("http://{address}/tasks/provider-task-secret?signature=signed-query-secret");
-        let error = reqwest::Client::new()
+        let error = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("loopback test client should build")
             .get(sensitive_url.as_str())
             .send()
             .await

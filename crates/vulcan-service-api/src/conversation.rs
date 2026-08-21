@@ -105,6 +105,10 @@ pub struct ConversationContinuationSummary {
     /// 终止 Continue 边界记录的稳定原因。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// Stable safety reason when the terminal boundary cannot be continued.
+    /// 终止边界无法继续时的稳定安全原因。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocked_reason: Option<String>,
 }
 
 /// Describes one conversation-level action marker for cross-session navigation.

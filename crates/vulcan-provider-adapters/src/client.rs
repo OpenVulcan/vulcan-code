@@ -5626,7 +5626,7 @@ mod tests {
         let manifest = catalog
             .manifest_arc("minimax")
             .expect("MiniMax manifest must exist");
-        assert_eq!(manifest.revision, 12);
+        assert_eq!(manifest.revision, 14);
         // expectations bind each region to its exact reviewed discovery origins.
         // expectations 把每个地区绑定到其精确已审核发现来源。
         let expectations = [

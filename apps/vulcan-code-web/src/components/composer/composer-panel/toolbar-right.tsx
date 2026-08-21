@@ -11,6 +11,7 @@ import type {
   ContextCompactionWindowNodeId,
   ContextUsageSnapshot,
   PublicAiContextCompactionWindowNode,
+  SessionProviderUsageSummary,
 } from "@/types";
 
 // ComposerPanelToolbarRightProps carries the send/stop and reasoning controls for the composer toolbar.
@@ -31,6 +32,9 @@ export interface ComposerPanelToolbarRightProps {
   // Current context usage snapshot.
   // 当前上下文用量快照。
   contextUsage: ContextUsageSnapshot | null;
+  // Session-level Provider accounting shown inside the context-usage card.
+  // 会话级 Provider 统计在上下文占用卡片内展示。
+  sessionProviderUsage?: SessionProviderUsageSummary | null;
   // Fixed context-compaction nodes projected by the backend.
   // 后端投影出的固定上下文压缩节点。
   contextCompactionWindowNodes: PublicAiContextCompactionWindowNode[];
@@ -90,6 +94,7 @@ export function ComposerPanelToolbarRight(props: ComposerPanelToolbarRightProps)
         onNodeChange={props.onSetSessionContextCompactionWindow}
         selectedNodeId={props.sessionContextCompactionWindowNodeId}
         snapshot={props.contextUsage}
+        sessionProviderUsage={props.sessionProviderUsage}
       />
       {props.reasoningEffortOptions.length > 0 ? (
         <ComposerSelectControl

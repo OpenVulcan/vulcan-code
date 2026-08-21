@@ -42,21 +42,24 @@ use vulcan_core::types::{
     CoreError, ProviderTurnResponse as CoreProviderTurnResponse,
 };
 
-/// Emits one failed physical-call boundary and waits for durable session persistence.
-/// 发出一个失败物理调用边界并等待会话可靠持久化。
+/// Emits one failed physical-call boundary only while a Provider request is still active.
+/// 仅在 Provider 请求仍处于活动状态时发出失败物理调用边界。
 ///
 /// # Parameters
 /// 参数
-/// All fields are exact retry and failure facts already produced by the host retry state machine.
-/// 全部字段均为宿主重试状态机已经产生的精确重试与失败事实。
+/// `physical_request_active` is the lifecycle state observed from typed Provider deltas; all remaining
+/// fields are exact retry and failure facts already produced by the host retry state machine.
+/// `physical_request_active` 是从强类型 Provider 增量观测到的生命周期状态；其余字段均为
+/// 宿主重试状态机已经产生的精确重试与失败事实。
 ///
 /// # Returns
 /// 返回值
-/// Success only after the service durably persists the terminal call record.
-/// 仅在服务可靠持久化终态调用记录后返回成功。
+/// Success immediately when no physical request is active, or after durable terminal persistence.
+/// 没有活动物理请求时立即成功；否则仅在终态记录可靠持久化后成功。
 #[allow(clippy::too_many_arguments)]
 async fn send_durable_request_failure(
     sender: &ProviderLiveDeltaSender,
+    physical_request_active: bool,
     will_retry: bool,
     retry_number: u32,
     max_retries: u32,
@@ -64,6 +67,9 @@ async fn send_durable_request_failure(
     error_category: String,
     error: Option<Box<AiExecutionError>>,
 ) -> Result<(), String> {
+    if !physical_request_active {
+        return Ok(());
+    }
     let (completion, receiver) = provider_request_durability_barrier();
     sender
         .send(Ok(ProviderStreamDelta::RequestFailedDurable {
@@ -255,6 +261,9 @@ where
                 // physicalRequestSeen distinguishes the retry attempt's first request from a later request reached after success.
                 // physicalRequestSeen 区分本次重试尝试的首个请求与成功后继续到达的后续请求。
                 let mut physical_request_seen = false;
+                // physicalRequestActive prevents post-Provider tool failures from closing an already durable request again.
+                // physicalRequestActive 防止 Provider 成功后的工具失败再次关闭已经持久化的请求。
+                let mut physical_request_active = false;
                 // activeToolRequestStreams tracks visible request drafts for attempt-scoped terminal cleanup.
                 // activeToolRequestStreams 跟踪可见请求草稿，用于按尝试执行终态清理。
                 let mut active_tool_request_streams = BTreeSet::<String>::new();
@@ -331,6 +340,10 @@ where
                                             &mut completed_retries,
                                             delta,
                                         );
+                                        observe_physical_request_activity(
+                                            &mut physical_request_active,
+                                            delta,
+                                        );
                                         observe_active_tool_request_streams(
                                             &mut active_tool_request_streams,
                                             delta,
@@ -355,6 +368,10 @@ where
                         observe_provider_request_retry_reset(
                             &mut physical_request_seen,
                             &mut completed_retries,
+                            delta,
+                        );
+                        observe_physical_request_activity(
+                            &mut physical_request_active,
                             delta,
                         );
                         observe_active_tool_request_streams(
@@ -415,6 +432,7 @@ where
                             });
                             if let Err(persist_error) = send_durable_request_failure(
                                 &task_sender,
+                                physical_request_active,
                                 false,
                                 0,
                                 completed_retries,
@@ -469,6 +487,7 @@ where
                             });
                             if let Err(persist_error) = send_durable_request_failure(
                                 &task_sender,
+                                physical_request_active,
                                 false,
                                 0,
                                 completed_retries,
@@ -540,6 +559,7 @@ where
                             // failedRequestDelta 在重试等待开始前关闭精确的真实请求。
                             if send_durable_request_failure(
                                 &task_sender,
+                                physical_request_active,
                                 true,
                                 decision.retry_number,
                                 decision.max_retries,
@@ -594,6 +614,7 @@ where
                         // failedRequestDelta 在终态流清理前关闭精确的真实请求。
                         if let Err(persist_error) = send_durable_request_failure(
                             &task_sender,
+                            physical_request_active,
                             false,
                             0,
                             completed_retries,
@@ -667,6 +688,29 @@ fn provider_delta_starts_physical_request(delta: &ProviderStreamDelta) -> bool {
         delta,
         ProviderStreamDelta::RequestPrepared { .. } | ProviderStreamDelta::RequestSnapshot(_)
     )
+}
+
+/// Tracks whether the typed Provider stream currently owns one unterminated physical request.
+/// 跟踪强类型 Provider 流当前是否持有一个尚未终结的物理请求。
+///
+/// # Parameters
+/// 参数
+/// `physical_request_active` stores the lifecycle state and `delta` is the next ordered Provider delta.
+/// `physical_request_active` 保存生命周期状态，`delta` 是下一条有序 Provider 增量。
+fn observe_physical_request_activity(
+    physical_request_active: &mut bool,
+    delta: &ProviderStreamDelta,
+) {
+    if provider_delta_starts_physical_request(delta) {
+        *physical_request_active = true;
+    } else if matches!(
+        delta,
+        ProviderStreamDelta::RequestSucceeded { .. }
+            | ProviderStreamDelta::RequestFailed { .. }
+            | ProviderStreamDelta::RequestFailedDurable { .. }
+    ) {
+        *physical_request_active = false;
+    }
 }
 
 /// Updates retry safety at the boundary of each physical Provider request.
@@ -1194,6 +1238,54 @@ mod tests {
             &test_request_prepared_delta(),
         );
         assert_eq!(completed_retries, 0);
+    }
+
+    /// Verifies a successful Provider boundary clears the active physical-request lifecycle marker.
+    /// 验证 Provider 成功边界会清除活动物理请求生命周期标记。
+    #[test]
+    fn successful_provider_boundary_clears_active_physical_request() {
+        // physicalRequestActive begins without an in-flight Provider call.
+        // physicalRequestActive 初始时不存在正在进行的 Provider 调用。
+        let mut physical_request_active = false;
+        observe_physical_request_activity(
+            &mut physical_request_active,
+            &test_request_prepared_delta(),
+        );
+        assert!(physical_request_active);
+
+        // completion supplies the typed success boundary without requiring host persistence in this state-only test.
+        // completion 为纯状态测试提供强类型成功边界，无需执行宿主持久化。
+        let (completion, _receiver) = provider_request_durability_barrier();
+        observe_physical_request_activity(
+            &mut physical_request_active,
+            &ProviderStreamDelta::RequestSucceeded {
+                usage: None,
+                completion,
+            },
+        );
+        assert!(!physical_request_active);
+    }
+
+    /// Verifies a post-Provider controller failure emits no duplicate durable request terminal.
+    /// 验证 Provider 成功后的控制器失败不会发出重复的可靠请求终态。
+    #[tokio::test]
+    async fn inactive_physical_request_skips_duplicate_failure_boundary() {
+        // sender and receiver expose whether the helper incorrectly emits a terminal delta.
+        // sender 与 receiver 用于观测辅助函数是否错误发出终态增量。
+        let (sender, mut receiver) = unbounded_channel();
+        send_durable_request_failure(
+            &sender,
+            false,
+            false,
+            0,
+            0,
+            0,
+            String::from("tool_execution_error"),
+            None,
+        )
+        .await
+        .expect("an inactive request must not require another durability boundary");
+        assert!(receiver.try_recv().is_err());
     }
 
     /// Verifies dropping the stream-scoped guard cancels its still-running controller task.

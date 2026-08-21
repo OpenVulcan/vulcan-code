@@ -3,11 +3,7 @@
 
 use vulcan_agent_runtime::{
     ExecutionPreparationRequest,
-    agent_runtime::{
-        conversation_hooks::{ConversationPrecheckOutcome, ConversationProfileOutcome},
-        events::{RuntimeEvent, RuntimeEventKind},
-    },
-    session_event_runtime::append_runtime_event_projection_to_state,
+    agent_runtime::conversation_hooks::{ConversationPrecheckOutcome, ConversationProfileOutcome},
     workbench_prompt_turn::{
         SharedPromptPrecheckPlan, SharedPromptTurnBeginInput, SharedPromptTurnContinueInput,
         SharedPromptTurnStart, begin_shared_prompt_turn,
@@ -41,9 +37,13 @@ use super::{
     active_reasoning_selection_effort, append_goal_turn_usage_context,
     apply_webui_prompt_begin_outer_steps, attach_goal_context_to_provider_visible_agent_messages,
     build_vmm_hook_config_snapshot, cached_project_vmm_layer,
-    commit_workspace_snapshot_and_emit_session_phase_delta, current_unix_millis_text,
-    current_unix_millis_value, current_workspace_snapshot_from_shared_state,
-    current_workspace_snapshot_from_state, emit_materialized_session_message_delta,
+    capture_webui_prompt_preparation_workspace,
+    commit_workspace_snapshot_and_emit_session_phase_delta,
+    commit_workspace_snapshot_and_emit_session_phase_delta_if_prompt_owner_current,
+    current_unix_millis_text, current_unix_millis_value,
+    current_workspace_snapshot_from_shared_state, current_workspace_snapshot_from_state,
+    emit_materialized_session_message_delta,
+    emit_materialized_session_message_delta_if_prompt_owner_current,
     ensure_webui_session_runtime_state, load_project_configuration,
     merge_runtime_state_records_into_display_messages, persist_webui_context_current_document,
     prepend_goal_context_to_current_prompt, push_webui_service_diagnostic,

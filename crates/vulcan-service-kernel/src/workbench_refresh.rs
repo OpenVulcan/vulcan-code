@@ -160,6 +160,7 @@ async fn refresh_workbench_snapshot_with_selected_session(
     refreshed_snapshot.selected_session = selected_session_id;
     if selected_session_id != SessionId::nil() {
         hydrate_selected_session_runtime_if_needed(
+            &state,
             controller_runtime.clone(),
             &mut refreshed_snapshot,
             selected_session_id,
@@ -292,6 +293,11 @@ async fn refresh_workbench_snapshot_with_selected_session(
             final_preserved_run_state.as_ref(),
             &mut refreshed_snapshot,
         );
+        reconcile_workbench_conversation_lifecycle_projection(
+            &mut workbench,
+            &guard,
+            &refreshed_snapshot,
+        )?;
         preserve_focused_catalog_domains_after_concurrent_refresh(
             &mut workbench,
             &guard.workbench,
@@ -304,6 +310,84 @@ async fn refresh_workbench_snapshot_with_selected_session(
         guard.workspace_snapshot = Some(refreshed_snapshot);
     }
     Ok(workbench)
+}
+
+/// Reconciles every visible conversation with one lock-consistent live lifecycle revision.
+/// 使用同一份锁一致的实时生命周期修订协调全部可见会话。
+///
+/// # Parameters
+/// 参数
+/// `workbench` is the already-built WebUI projection that may predate the final state lock.
+/// `workbench` 是已经构建、但可能早于最终状态锁的 WebUI 投影。
+/// `state` owns exact stream, kernel, Ask, terminal-session, and child-task facts.
+/// `state` 持有精确的流、内核、Ask、终端会话与子任务事实。
+/// `workspace` is the canonical workspace snapshot committed with the reconciled workbench.
+/// `workspace` 是与协调后工作台一同提交的规范工作区快照。
+///
+/// # Returns
+/// 返回值
+/// `Ok(())` after every matching conversation is refreshed, or an exact live-registry read error.
+/// 全部匹配会话刷新后返回 `Ok(())`，实时注册表读取失败时返回精确错误。
+pub(crate) fn reconcile_workbench_conversation_lifecycle_projection(
+    workbench: &mut WorkbenchSnapshot,
+    state: &ServiceBridgeState,
+    workspace: &WorkspaceSnapshot,
+) -> Result<(), String> {
+    // live_projections keeps status, phase, and Continue state sourced from the same final lock revision.
+    // live_projections 保留来自同一最终锁修订的状态、阶段与 Continue 状态。
+    let mut live_projections = BTreeMap::new();
+    for session in &workspace.sessions {
+        // run_phase is the exact workspace phase after the final active-run preservation pass.
+        // run_phase 是最终活动运行态保留完成后的精确工作区阶段。
+        let run_phase = workspace
+            .session_run_phases
+            .get(&session.id)
+            .copied()
+            .unwrap_or(SessionRunPhase::Idle);
+        // status mirrors the same running precedence used by the initial full projection.
+        // status 镜像初始全量投影使用的同一运行中优先级。
+        let status =
+            if session.status == SessionState::Running || is_active_session_run_phase(run_phase) {
+                SessionState::Running.label()
+            } else {
+                session.status.label()
+            }
+            .to_string();
+        // continuation is recomputed only when the session has a durable continuation ledger.
+        // continuation 仅在会话具有可靠 Continue 账本时重新计算。
+        let continuation = workspace
+            .session_runtime_state
+            .get(&session.id)
+            .filter(|runtime_state| {
+                // stored_continuation avoids fallible live-registry reads for sessions without a recovery boundary.
+                // stored_continuation 避免对没有恢复边界的会话执行可失败的实时注册表读取。
+                let stored_continuation = &runtime_state.provider_call_ledger.continuation;
+                !stored_continuation.is_empty()
+                    && stored_continuation.terminal_reason.as_deref() != Some("completed")
+            })
+            .map(|runtime_state| {
+                session_continuation_runtime_blockers(state, workspace, session.id).map(
+                    |blockers| {
+                        conversation_continuation_summary(runtime_state, run_phase, blockers)
+                    },
+                )
+            })
+            .transpose()?
+            .flatten();
+        live_projections.insert(
+            session.id.to_string(),
+            (status, run_phase.to_string(), continuation),
+        );
+    }
+    for conversation in &mut workbench.conversations {
+        let Some((status, run_phase, continuation)) = live_projections.get(&conversation.id) else {
+            continue;
+        };
+        conversation.status.clone_from(status);
+        conversation.run_phase.clone_from(run_phase);
+        conversation.continuation.clone_from(continuation);
+    }
+    Ok(())
 }
 
 /// Copies retained project-settings revisions into a newly rebuilt workbench.

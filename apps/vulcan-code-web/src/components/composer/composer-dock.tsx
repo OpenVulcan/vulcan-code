@@ -27,6 +27,7 @@ import type {
   ComposerSlashCommandSummary,
   ContextCompactionWindowNodeId,
   ContextUsageSnapshot,
+  SessionProviderUsageSummary,
   PublicAiContextCompactionWindowNode,
   PendingPromptSummary,
   ProviderSummary,
@@ -59,6 +60,9 @@ export function ComposerDock(props: {
   // Context usage snapshot shown by the composer orb.
   // 输入区圆盘展示的上下文占用快照。
   contextUsage: ContextUsageSnapshot | null;
+  // Session-level Provider accounting shown inside the context-usage card.
+  // 会话级 Provider 统计在上下文占用卡片内展示。
+  sessionProviderUsage?: SessionProviderUsageSummary | null;
   // Fixed context-compaction nodes available to this composer.
   // 当前输入区可用的固定上下文压缩节点。
   contextCompactionWindowNodes: PublicAiContextCompactionWindowNode[];
@@ -268,6 +272,7 @@ export function ComposerDock(props: {
         projectId={props.projectId}
         conversationId={props.conversationId}
         contextUsage={props.contextUsage}
+        sessionProviderUsage={props.sessionProviderUsage}
         contextCompactionWindowNodes={props.contextCompactionWindowNodes}
         sessionContextCompactionWindowNodeId={props.sessionContextCompactionWindowNodeId}
         slashCommands={props.slashCommands}

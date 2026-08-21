@@ -63,6 +63,7 @@ import type {
   PublicAiProviderToolTargetSelection,
   PublicAiSessionProviderToolConflict,
   PublicAiSettingsSnapshot,
+  SessionProviderUsageSummary,
 } from "@/types";
 
 // ContextUsageOrb renders a compact context budget indicator beside the composer.
@@ -71,6 +72,9 @@ export function ContextUsageOrb(props: {
   // Context usage snapshot projected by the service.
   // 服务投影出的上下文占用快照。
   snapshot: ContextUsageSnapshot | null;
+  // Session-level Provider accounting shown inside the context-usage card.
+  // 会话级 Provider 统计在上下文占用卡片内展示。
+  sessionProviderUsage?: SessionProviderUsageSummary | null;
   // Fixed backend-owned compression-window nodes.
   // 后端持有的固定压缩窗口节点。
   contextCompactionWindowNodes: PublicAiContextCompactionWindowNode[];
@@ -99,6 +103,39 @@ export function ContextUsageOrb(props: {
   const percent = usageBasisPoints / 100;
   const title = snapshot.tooltipTitle || t("contextUsage.title");
   const detailVisible = breakdown.length > 0;
+  // providerUsage keeps session-level accounting out of repeated process headers.
+  // providerUsage 将会话级统计从重复的过程标题中移出。
+  const providerUsage = props.sessionProviderUsage;
+  // activeProviderUsage is the authoritative active-branch accounting scope.
+  // activeProviderUsage 是权威的当前活动分支统计口径。
+  const activeProviderUsage = providerUsage?.activeBranch ?? null;
+  // providerUsageTotal prefers the active-branch cumulative total shown by the backend.
+  // providerUsageTotal 优先使用后端提供的活动分支累计总量。
+  const providerUsageTotal = activeProviderUsage?.usage?.totalTokens ?? providerUsage?.lastUsage?.totalTokens;
+  // providerUsageUnknown keeps missing Provider usage explicit in the diagnostic row.
+  // providerUsageUnknown 在 Provider 用量缺失时保持诊断行显式可见。
+  const providerUsageUnknown = t("conversation.process.providerUsageUnknown");
+  // providerUsageTitle retains the detailed scope breakdown without adding more card rows.
+  // providerUsageTitle 保留详细统计口径，但不再增加更多卡片行。
+  const providerUsageTitle = providerUsage
+    ? [
+        t("conversation.process.providerUsageActive")
+          .replace("{calls}", formatCompactProviderCount(activeProviderUsage?.providerCallCount ?? 0, providerUsageUnknown))
+          .replace("{tokens}", formatCompactProviderCount(providerUsageTotal, providerUsageUnknown))
+          .replace("{unknown}", String(activeProviderUsage?.unknownUsageCallCount ?? 0)),
+        t("conversation.process.providerUsageLifetime")
+          .replace("{calls}", formatCompactProviderCount(providerUsage.lifetime.providerCallCount, providerUsageUnknown))
+          .replace("{tokens}", formatCompactProviderCount(providerUsage.lifetime.usage?.totalTokens, providerUsageUnknown)),
+        t("conversation.process.providerUsageInherited")
+          .replace("{calls}", formatCompactProviderCount(providerUsage.inherited.providerCallCount, providerUsageUnknown))
+          .replace("{tokens}", formatCompactProviderCount(providerUsage.inherited.usage?.totalTokens, providerUsageUnknown)),
+      ].join("\n")
+    : undefined;
+  // providerUsageAriaLabel exposes the two compact metrics through the capacity control.
+  // providerUsageAriaLabel 通过上下文容量控件公开两项紧凑统计。
+  const providerUsageAriaLabel = providerUsage
+    ? `${t("composer.contextUsage.totalRequests")}: ${formatCompactProviderCount(activeProviderUsage?.providerCallCount ?? 0, providerUsageUnknown)} · ${t("composer.contextUsage.totalTokens")}: ${formatCompactProviderCount(providerUsageTotal, providerUsageUnknown)}`
+    : null;
   // selectedNode resolves the persisted id against the current backend projection.
   // selectedNode 根据当前后端投影解析持久化标识。
   const selectedNode = props.contextCompactionWindowNodes.find((node) => node.id === props.selectedNodeId) ?? null;
@@ -118,6 +155,13 @@ export function ContextUsageOrb(props: {
   // selectedNodeIsInvalid 在全局节点变化失效后仍保持可见，直到用户恢复默认。
   const selectedNodeIsInvalid = selectedNode != null
     && !availableNodes.some((node) => node.id === selectedNode.id);
+  // contextUsageAriaLabel exposes the same session-level summary through the capacity control.
+  // contextUsageAriaLabel 通过上下文容量控件公开同一份会话级统计摘要。
+  const contextUsageAriaLabel = [
+    title,
+    selectedNode ? formatContextWindowNodeTokens(selectedNode.tokens) : null,
+    providerUsageAriaLabel,
+  ].filter((value): value is string => Boolean(value)).join(" · ");
   const thresholdState = percent >= 100
     ? "full"
     : percent >= 95
@@ -134,9 +178,7 @@ export function ContextUsageOrb(props: {
     <Tooltip>
       <TooltipTrigger asChild>
         <button
-          aria-label={selectedNode
-            ? `${title} · ${formatContextWindowNodeTokens(selectedNode.tokens)}`
-            : title}
+          aria-label={contextUsageAriaLabel}
           className={cn("context-usage-control", selectedNode && "is-locked")}
           type="button"
         >
@@ -184,9 +226,23 @@ export function ContextUsageOrb(props: {
           <strong>
             {snapshot.cacheHitBasisPoints == null
               ? t("composer.contextUsage.noData")
-              : formatBasisPoints(snapshot.cacheHitBasisPoints)}
+            : formatBasisPoints(snapshot.cacheHitBasisPoints)}
           </strong>
         </div>
+        {providerUsage ? (
+          <div className="context-usage-provider-section" title={providerUsageTitle}>
+            <div className="context-usage-provider-row">
+              <div className="context-usage-provider-metric">
+                <span>{t("composer.contextUsage.totalRequests")}</span>
+                <strong>{formatCompactProviderCount(activeProviderUsage?.providerCallCount ?? 0, providerUsageUnknown)}</strong>
+              </div>
+              <div className="context-usage-provider-metric">
+                <span>{t("composer.contextUsage.totalTokens")}</span>
+                <strong>{formatCompactProviderCount(providerUsageTotal, providerUsageUnknown)}</strong>
+              </div>
+            </div>
+          </div>
+        ) : null}
         <div className="context-usage-window-section">
           <span className="context-usage-window-title">{t("composer.contextWindow.title")}</span>
           <SegmentedControl
@@ -223,6 +279,40 @@ export function ContextUsageOrb(props: {
       </TooltipContent>
     </Tooltip>
   );
+}
+
+// formatCompactProviderCount formats request and token counts with up to two decimals and K/M/B/T units.
+// formatCompactProviderCount 使用最多两位小数以及 K/M/B/T 单位格式化请求次数与 Token 数量。
+// Parameters: value is the non-negative count to format, and unknownLabel is shown when the count is unavailable.
+// 参数：value 是待格式化的非负数量，unknownLabel 是数量不可用时显示的文本。
+// Returns: a compact count string without a redundant trailing decimal zero.
+// 返回值：去除多余尾随零的小数紧凑数量文本。
+export function formatCompactProviderCount(value: number | null | undefined, unknownLabel: string): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return unknownLabel;
+  }
+  // normalizedValue prevents negative accounting values from leaking into the display.
+  // normalizedValue 防止负数统计值泄漏到界面展示中。
+  const normalizedValue = Math.max(0, value);
+  // unitIndex selects the largest supported compact unit without probing unknown formats.
+  // unitIndex 选择最大的已支持紧凑单位，不探测未知格式。
+  let unitIndex = 0;
+  // scaledValue is the count after applying the selected unit divisor.
+  // scaledValue 是应用所选单位除数后的数量。
+  let scaledValue = normalizedValue;
+  // units lists the only compact units accepted by the WebUI display contract.
+  // units 列出 WebUI 展示契约唯一接受的紧凑单位。
+  const units = ["", "K", "M", "B", "T"];
+  while (scaledValue >= 1_000 && unitIndex < units.length - 1) {
+    scaledValue /= 1_000;
+    unitIndex += 1;
+  }
+  // formattedValue keeps small values exact and larger values within two decimals.
+  // formattedValue 保持小数值精确，并将较大数值限制在两位小数内。
+  const formattedValue = unitIndex === 0
+    ? String(scaledValue)
+    : scaledValue.toFixed(2).replace(/\.?(0+)$/u, "");
+  return `${formattedValue}${units[unitIndex]}`;
 }
 
 // contextWindowNodeIdFromSwitchValue validates one switch value against the authoritative node list.

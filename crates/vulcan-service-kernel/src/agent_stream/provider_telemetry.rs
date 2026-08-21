@@ -76,6 +76,17 @@ impl ProviderTelemetryHookGuard {
         self.cancellation.take_cancelled_event()
     }
 
+    /// Records a replay-relevant semantic boundary observed by the owning service stream.
+    /// 记录所属服务流观测到的与重放相关的语义边界。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns no value after conservatively marking the sole active physical request.
+    /// 在保守标记唯一活动物理请求后不返回值。
+    pub(crate) fn observe_semantic_output(&mut self) {
+        self.cancellation.observe_semantic_output();
+    }
+
     /// Observes and forwards one exact ordered telemetry event.
     /// 观测并转发一条精确有序遥测事件。
     ///

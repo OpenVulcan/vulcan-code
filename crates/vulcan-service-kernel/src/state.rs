@@ -216,6 +216,9 @@ pub(crate) enum SessionTurnAdmissionReservationKind {
     /// The session Goal authority is being changed and stale dispatch must not register.
     /// 会话 Goal 权威正在变更，过期分发不得注册。
     GoalMutation,
+    /// The active conversation run is being stopped and no replacement turn may start yet.
+    /// 活动会话运行正在停止，替代回合尚不得启动。
+    RunStop,
 }
 
 impl SessionTurnAdmissionReservationKind {
@@ -226,6 +229,7 @@ impl SessionTurnAdmissionReservationKind {
             Self::PromptSubmission => "user prompt submission",
             Self::LifecycleTransition => "archive or removal lifecycle transition",
             Self::GoalMutation => "Goal authority mutation",
+            Self::RunStop => "conversation run stop",
         }
     }
 }
@@ -240,6 +244,24 @@ pub(crate) struct SessionTurnAdmissionReservation {
     /// Domain reason that owns the reservation.
     /// 持有此预留的领域原因。
     pub(crate) kind: SessionTurnAdmissionReservationKind,
+}
+
+/// Exact in-process owner that keeps one session closed while terminal state is being persisted.
+/// 在终态持久化期间保持单个会话关闭的精确进程内所有者。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SessionTerminalPersistenceOwner {
+    /// A registered stream task accepted or synthesized the terminal boundary.
+    /// 已注册流任务接纳或合成了终态边界。
+    StreamTask(Uuid),
+    /// A pre-registration failure terminalized the exact session-kernel generation.
+    /// 注册前失败终结了精确的会话内核代际。
+    KernelGeneration(u64),
+    /// A prompt-preparation cleanup owns one unique terminal settlement transaction.
+    /// 提示词准备清理持有一个唯一的终态结算事务。
+    PromptPreparation(Uuid),
+    /// A conversation Stop transaction owns teardown, retry refreeze, and durable stopped-state settlement.
+    /// 会话 Stop 事务持有拆除、重试重冻与可靠停止状态结算。
+    RunStop(Uuid),
 }
 
 /// Project-level scope serialized against lifecycle transitions and prompt submissions.
@@ -396,6 +418,10 @@ pub struct ServiceBridgeState {
     /// Active WebUI stream task handles keyed by session id.
     /// 按会话标识索引的 WebUI 活动流任务句柄。
     pub(crate) active_stream_tasks: BTreeMap<SessionId, ActiveStreamTask>,
+    /// Exact stream owners currently committing their accepted terminal state to durable storage.
+    /// 当前正在把已接纳终态提交到可靠存储的精确流所有者。
+    pub(crate) session_terminal_persistence_owners:
+        BTreeMap<SessionId, SessionTerminalPersistenceOwner>,
     /// Session runtime kernels keyed by root WebUI session id.
     /// 按 WebUI 根会话标识索引的会话运行时内核。
     pub(crate) session_runtime_kernels: BTreeMap<SessionId, SessionRuntimeKernel>,
@@ -421,6 +447,167 @@ pub struct ServiceBridgeState {
 /// Thread-safe service state handle.
 /// 线程安全的服务状态句柄。
 pub type SharedServiceBridgeState = Arc<Mutex<ServiceBridgeState>>;
+
+/// Owns one exact terminal-persistence marker until durable settlement finishes.
+/// 持有一个精确终态持久化标记，直至可靠结算完成。
+pub(crate) struct SessionTerminalPersistenceOwnerGuard {
+    /// Shared service state containing the exact owner marker.
+    /// 包含精确所有者标记的共享服务状态。
+    state: SharedServiceBridgeState,
+    /// Session whose replacement work must remain blocked.
+    /// 替代工作必须保持阻塞的会话。
+    session_id: SessionId,
+    /// Exact terminal boundary allowed to clear the marker.
+    /// 获准清除标记的精确终态边界。
+    owner: SessionTerminalPersistenceOwner,
+    /// Whether the exact marker was explicitly released after settlement.
+    /// 精确标记是否已在结算后显式释放。
+    released: bool,
+}
+
+impl SessionTerminalPersistenceOwnerGuard {
+    /// Adopts an owner marker already registered inside its terminal ownership transaction.
+    /// 接管已经在终态所有权事务内登记的所有者标记。
+    ///
+    /// # Parameters
+    /// # 参数
+    /// `state` contains the authoritative owner table, `session_id` selects the session, and `owner` must exactly match the registered boundary.
+    /// `state` 包含权威所有者表，`session_id` 选择会话，`owner` 必须精确匹配已登记边界。
+    ///
+    /// # Returns
+    /// # 返回值
+    /// A guard that clears only the same boundary, or an explicit ownership error.
+    /// 返回仅清除同一边界的守卫，或明确的所有权错误。
+    pub(crate) fn adopt_registered(
+        state: SharedServiceBridgeState,
+        session_id: SessionId,
+        owner: SessionTerminalPersistenceOwner,
+    ) -> Result<Self, String> {
+        // guard proves that this finalizer cannot adopt a missing or replacement marker.
+        // guard 证明当前终结器不会接管缺失标记或替代标记。
+        let guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        if guard.session_terminal_persistence_owners.get(&session_id) != Some(&owner) {
+            return Err(format!(
+                "Terminal persistence owner does not match: session={session_id} expected={owner:?} actual={:?}",
+                guard.session_terminal_persistence_owners.get(&session_id)
+            ));
+        }
+        drop(guard);
+        Ok(Self {
+            state,
+            session_id,
+            owner,
+            released: false,
+        })
+    }
+
+    /// Explicitly opens session admission after terminal settlement reaches a safe boundary.
+    /// 在终态结算达到安全边界后显式开放会话准入。
+    ///
+    /// # Parameters
+    /// # 参数
+    /// This method consumes the exact adopted guard and has no additional parameters.
+    /// 此方法消费已接管的精确守卫，不包含其他参数。
+    ///
+    /// # Returns
+    /// # 返回值
+    /// Success only when the same marker was removed; mismatches remain fail-closed.
+    /// 仅在同一标记被移除时返回成功；不匹配情况保持失败关闭。
+    pub(crate) fn release(mut self) -> Result<(), String> {
+        // guard recovers poisoned state only for exact owner-qualified admission cleanup.
+        // guard 仅为带精确所有者限定的准入清理恢复中毒状态。
+        let mut guard =
+            lock_service_state_for_admission_cleanup(&self.state, "terminal-persistence owner");
+        if guard
+            .session_terminal_persistence_owners
+            .get(&self.session_id)
+            != Some(&self.owner)
+        {
+            return Err(format!(
+                "Terminal persistence owner changed before release: session={} expected={:?} actual={:?}",
+                self.session_id,
+                self.owner,
+                guard
+                    .session_terminal_persistence_owners
+                    .get(&self.session_id)
+            ));
+        }
+        guard
+            .session_terminal_persistence_owners
+            .remove(&self.session_id);
+        self.released = true;
+        Ok(())
+    }
+}
+
+impl Drop for SessionTerminalPersistenceOwnerGuard {
+    /// Retains an unreleased marker so panic, cancellation, and early errors fail closed.
+    /// 保留未释放标记，使 panic、取消与提前错误保持失败关闭。
+    fn drop(&mut self) {
+        if !self.released {
+            eprintln!(
+                "[webui-service] retaining unreleased terminal-persistence owner: session={} owner={:?}",
+                self.session_id, self.owner
+            );
+        }
+    }
+}
+
+/// Registers one terminal-persistence owner without replacing an existing boundary.
+/// 登记一个终态持久化所有者，且不会替换现有边界。
+///
+/// # Parameters
+/// # 参数
+/// `state` is already locked by the terminal ownership transaction, `session_id` selects its session, and `owner` identifies the exact boundary.
+/// `state` 已由终态所有权事务锁定，`session_id` 选择其会话，`owner` 标识精确边界。
+///
+/// # Returns
+/// # 返回值
+/// `Ok(())` after vacant insertion, or an explicit conflict that leaves the existing owner unchanged.
+/// 空位插入后返回 `Ok(())`；发生冲突时返回明确错误且保留现有所有者不变。
+pub(crate) fn register_session_terminal_persistence_owner(
+    state: &mut ServiceBridgeState,
+    session_id: SessionId,
+    owner: SessionTerminalPersistenceOwner,
+) -> Result<(), String> {
+    if let Some(existing_owner) = state.session_terminal_persistence_owners.get(&session_id) {
+        return Err(format!(
+            "Terminal persistence already has an owner: session={session_id} existing={existing_owner:?} requested={owner:?}"
+        ));
+    }
+    state
+        .session_terminal_persistence_owners
+        .insert(session_id, owner);
+    Ok(())
+}
+
+/// Rolls back one exact owner registration before its RAII guard is adopted.
+/// 在 RAII 守卫接管之前回滚一个精确所有者登记。
+///
+/// # Parameters
+/// # 参数
+/// `state`, `session_id`, and `owner` identify the just-registered boundary inside the same lock transaction.
+/// `state`、`session_id` 与 `owner` 标识同一锁事务内刚登记的边界。
+///
+/// # Returns
+/// # 返回值
+/// `true` only when the exact owner was removed; replacement owners remain untouched.
+/// 仅在精确所有者被移除时返回 `true`；替代所有者保持不变。
+pub(crate) fn rollback_session_terminal_persistence_owner(
+    state: &mut ServiceBridgeState,
+    session_id: SessionId,
+    owner: SessionTerminalPersistenceOwner,
+) -> bool {
+    if state.session_terminal_persistence_owners.get(&session_id) != Some(&owner) {
+        return false;
+    }
+    state
+        .session_terminal_persistence_owners
+        .remove(&session_id);
+    true
+}
 
 /// Locks shared service state for exact admission-reservation cleanup, recovering poisoned ownership state when necessary.
 /// 为精确准入预留清理锁定共享服务状态，并在必要时恢复中毒的所有权状态。
@@ -480,6 +667,9 @@ pub(crate) struct ActiveStreamTask {
     /// Goal identifier currently bound to this provider execution.
     /// 当前绑定到该 Provider 执行的目标标识。
     session_goal_id: Option<String>,
+    /// Latest exact physical Provider call identity observed for this stream owner.
+    /// 为当前流所有者观测到的最近一个精确物理 Provider 调用身份。
+    provider_call_id: Option<String>,
 }
 
 impl ActiveStreamTask {
@@ -508,6 +698,7 @@ impl ActiveStreamTask {
             task_id,
             handle,
             session_goal_id,
+            provider_call_id: None,
         }
     }
 
@@ -528,6 +719,17 @@ impl ActiveStreamTask {
         self.task_id
     }
 
+    /// Returns the latest exact physical Provider call identity bound to this task.
+    /// 返回绑定到当前任务的最近一个精确物理 Provider 调用身份。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The borrowed physical call id, or `None` before the first Started boundary.
+    /// 返回借用的物理调用标识；首个 Started 边界前返回 `None`。
+    pub(crate) fn provider_call_id(&self) -> Option<&str> {
+        self.provider_call_id.as_deref()
+    }
+
     /// Rebinds this execution to the Goal that owns its next physical Provider request.
     /// 将当前执行重新绑定到拥有其下一次物理 Provider 请求的目标。
     ///
@@ -542,6 +744,22 @@ impl ActiveStreamTask {
     /// 替换执行绑定后此方法不返回值。
     fn bind_session_goal(&mut self, session_goal_id: String) {
         self.session_goal_id = Some(session_goal_id);
+    }
+
+    /// Binds the latest exact physical Provider call to this retained stream owner.
+    /// 将最近一个精确物理 Provider 调用绑定到当前保留流所有者。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `provider_call_id` is the non-empty host-generated identity from a Started event.
+    /// `provider_call_id` 是 Started 事件携带的非空宿主生成身份。
+    ///
+    /// # Returns
+    /// 返回值
+    /// This method returns no value after replacing the previous physical-attempt binding.
+    /// 替换前一个物理尝试绑定后不返回值。
+    fn bind_provider_call(&mut self, provider_call_id: String) {
+        self.provider_call_id = Some(provider_call_id);
     }
 
     /// Aborts the retained asynchronous task and waits until its owned guards are dropped.
@@ -634,6 +852,43 @@ pub(crate) fn bind_active_stream_task_goal_if_id(
     true
 }
 
+/// Binds one physical Provider call only when the caller still owns the retained stream task.
+/// 仅当调用方仍拥有保留流任务时绑定一个物理 Provider 调用。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the active stream task map.
+/// `state` 持有活动流任务映射。
+/// `session_id` identifies the session slot being updated.
+/// `session_id` 标识正在更新的会话槽位。
+/// `task_id` is the unique identity captured by the active task.
+/// `task_id` 是活动任务捕获的唯一身份。
+/// `provider_call_id` is the exact non-empty identity emitted by Provider telemetry.
+/// `provider_call_id` 是 Provider 遥测发出的精确非空身份。
+///
+/// # Returns
+/// 返回值
+/// `true` when the exact task was rebound, otherwise `false` without changing another owner.
+/// 精确任务完成重新绑定时返回 `true`，否则返回 `false` 且不修改其他所有者。
+pub(crate) fn bind_active_stream_task_provider_call_if_id(
+    state: &mut ServiceBridgeState,
+    session_id: SessionId,
+    task_id: Uuid,
+    provider_call_id: String,
+) -> bool {
+    if provider_call_id.trim().is_empty() {
+        return false;
+    }
+    let Some(entry) = state.active_stream_tasks.get_mut(&session_id) else {
+        return false;
+    };
+    if entry.task_id != task_id {
+        return false;
+    }
+    entry.bind_provider_call(provider_call_id);
+    true
+}
+
 /// Removes an active stream task only when the caller still owns the retained entry.
 /// 仅当调用方仍拥有保留条目时移除活动流任务。
 ///
@@ -687,6 +942,39 @@ pub(crate) enum ActiveStreamTaskRegistrationError {
         /// Exact owner identity retained by the session registry.
         /// 会话注册表保留的精确所有者身份。
         existing_task_id: Uuid,
+    },
+    /// A terminal boundary still owns durable settlement, so no replacement stream may register.
+    /// 终态边界仍拥有可靠结算，因此不得登记替代流。
+    TerminalPersistenceInFlight {
+        /// Exact terminal owner retained for diagnostics and stale-boundary analysis.
+        /// 为诊断与过期边界分析保留的精确终态所有者。
+        owner: SessionTerminalPersistenceOwner,
+    },
+    /// A conflicting admission transaction started before this kernel-bound stream could register.
+    /// 在当前 kernel 绑定流完成登记前，冲突的准入事务已经开始。
+    AdmissionInFlight {
+        /// Exact reservation kind that won the registration race.
+        /// 赢得登记竞态的精确预留类型。
+        kind: SessionTurnAdmissionReservationKind,
+    },
+    /// The immutable prompt-preparation kernel owner no longer matches live state.
+    /// 不可变提示词准备 kernel 所有者已不再匹配实时状态。
+    KernelOwnerStale {
+        /// Kernel generation captured before asynchronous preparation began.
+        /// 异步准备开始前捕获的 kernel 代际。
+        expected_generation: u64,
+        /// Current kernel generation, when the session still has a kernel.
+        /// 会话仍有 kernel 时的当前代际。
+        current_generation: Option<u64>,
+        /// Immutable logical turn identity expected by this stream.
+        /// 当前流预期的不可变逻辑回合身份。
+        expected_turn_id: String,
+        /// Current active logical turn identity, when one remains active.
+        /// 仍有活动回合时的当前逻辑回合身份。
+        current_turn_id: Option<String>,
+        /// Whether the current kernel generation has been explicitly stopped.
+        /// 当前 kernel 代际是否已被显式停止。
+        stopped: bool,
     },
 }
 
@@ -768,6 +1056,25 @@ impl std::fmt::Display for ActiveStreamTaskRegistrationError {
                 formatter,
                 "session already has an active stream owner {existing_task_id}"
             ),
+            Self::TerminalPersistenceInFlight { owner } => write!(
+                formatter,
+                "session terminal persistence is still in flight under owner {owner:?}"
+            ),
+            Self::AdmissionInFlight { kind } => write!(
+                formatter,
+                "session stream registration is blocked by {}",
+                kind.diagnostic_label()
+            ),
+            Self::KernelOwnerStale {
+                expected_generation,
+                current_generation,
+                expected_turn_id,
+                current_turn_id,
+                stopped,
+            } => write!(
+                formatter,
+                "prompt preparation kernel owner is stale: expected_generation={expected_generation} current_generation={current_generation:?} expected_turn_id={expected_turn_id} current_turn_id={current_turn_id:?} stopped={stopped}"
+            ),
         }
     }
 }
@@ -807,9 +1114,132 @@ pub(crate) fn spawn_registered_active_stream_task_with_mode<F>(
 where
     F: Future<Output = ()> + Send + 'static,
 {
+    spawn_registered_active_stream_task_with_optional_kernel_owner(
+        state,
+        session_id,
+        task_id,
+        session_goal_id,
+        mode,
+        None,
+        future,
+    )
+}
+
+/// Spawns one stream task only while an exact prompt-preparation kernel generation still owns admission.
+/// 仅当精确提示词准备 kernel 代际仍拥有准入权时才启动一个流任务。
+///
+/// # Parameters
+/// 参数
+/// The stream registration parameters retain the ordinary gated-registration contract.
+/// 流登记参数保留普通闸门登记契约。
+/// `expected_kernel_generation` and `expected_turn_id` bind registration to one immutable preparation owner.
+/// `expected_kernel_generation` 与 `expected_turn_id` 将登记绑定到单个不可变准备所有者。
+///
+/// # Returns
+/// 返回值
+/// Success after atomic owner validation and registration, or a concrete admission/owner error.
+/// 原子校验所有者并登记后返回成功，或返回具体准入/所有者错误。
+pub(crate) fn spawn_registered_kernel_stream_task_with_mode<F>(
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    task_id: Uuid,
+    session_goal_id: Option<String>,
+    mode: ActiveStreamTaskRegistrationMode,
+    expected_kernel_generation: u64,
+    expected_turn_id: &str,
+    future: F,
+) -> Result<(), ActiveStreamTaskRegistrationError>
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    spawn_registered_active_stream_task_with_optional_kernel_owner(
+        state,
+        session_id,
+        task_id,
+        session_goal_id,
+        mode,
+        Some((expected_kernel_generation, expected_turn_id)),
+        future,
+    )
+}
+
+/// Implements gated stream registration with an optional immutable kernel-owner fence.
+/// 使用可选的不可变 kernel 所有者栅栏实现闸门流登记。
+///
+/// # Parameters
+/// 参数
+/// The registration parameters match the public helpers; `expected_kernel_owner` optionally carries `(generation, turn id)`.
+/// 登记参数与公开辅助函数一致；`expected_kernel_owner` 可选携带“代际、回合标识”。
+///
+/// # Returns
+/// 返回值
+/// Success after the start gate opens, or an exact typed registration error.
+/// 启动闸门打开后返回成功，或返回精确的强类型登记错误。
+fn spawn_registered_active_stream_task_with_optional_kernel_owner<F>(
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    task_id: Uuid,
+    session_goal_id: Option<String>,
+    mode: ActiveStreamTaskRegistrationMode,
+    expected_kernel_owner: Option<(u64, &str)>,
+    future: F,
+) -> Result<(), ActiveStreamTaskRegistrationError>
+where
+    F: Future<Output = ()> + Send + 'static,
+{
     let (start_sender, start_receiver) = tokio::sync::oneshot::channel::<()>();
     let previous_task = match state.lock() {
         Ok(mut guard) => {
+            // owner is an exact terminal boundary that must settle before any replacement stream registration.
+            // owner 是在任何替代流登记前必须完成结算的精确终态边界。
+            if let Some(owner) = guard
+                .session_terminal_persistence_owners
+                .get(&session_id)
+                .copied()
+            {
+                return Err(
+                    ActiveStreamTaskRegistrationError::TerminalPersistenceInFlight { owner },
+                );
+            }
+            if let Some((expected_generation, expected_turn_id)) = expected_kernel_owner {
+                if let Some(reservation) = guard
+                    .session_turn_admission_reservations
+                    .get(&session_id)
+                    .copied()
+                    && reservation.kind != SessionTurnAdmissionReservationKind::PromptSubmission
+                {
+                    return Err(ActiveStreamTaskRegistrationError::AdmissionInFlight {
+                        kind: reservation.kind,
+                    });
+                }
+                if !webui_prompt_preparation_owner_is_current(
+                    &guard,
+                    session_id,
+                    expected_generation,
+                    expected_turn_id,
+                ) {
+                    // currentKernelFacts preserve exact mismatch evidence without guessing which concurrent owner won.
+                    // currentKernelFacts 保留精确不匹配证据，不猜测具体由哪个并发所有者胜出。
+                    let (current_generation, current_turn_id, stopped) = guard
+                        .session_runtime_kernels
+                        .get(&session_id)
+                        .map(|kernel| {
+                            (
+                                Some(kernel.generation()),
+                                kernel.active_turn().map(|turn| turn.turn_id.clone()),
+                                kernel.is_stopped(),
+                            )
+                        })
+                        .unwrap_or((None, None, false));
+                    return Err(ActiveStreamTaskRegistrationError::KernelOwnerStale {
+                        expected_generation,
+                        current_generation,
+                        expected_turn_id: expected_turn_id.to_string(),
+                        current_turn_id,
+                        stopped,
+                    });
+                }
+            }
             let previous_task_id = guard
                 .active_stream_tasks
                 .get(&session_id)

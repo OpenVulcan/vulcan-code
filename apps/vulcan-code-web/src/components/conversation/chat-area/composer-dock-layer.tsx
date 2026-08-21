@@ -67,6 +67,7 @@ export function ChatAreaComposerDockLayer(props: ChatAreaComposerDockLayerProps)
       conversationId={props.conversationId}
       slashCommands={workbench.composerSlashCommands ?? []}
       contextUsage={props.isEmptyConversation ? null : workbench.contextUsage ?? null}
+      sessionProviderUsage={props.isEmptyConversation ? null : workbench.sessionProviderUsage ?? null}
       contextCompactionWindowNodes={workbench.contextCompactionWindowNodes ?? []}
       sessionContextCompactionWindowNodeId={
         props.isEmptyConversation ? null : workbench.sessionContextCompactionWindowNodeId ?? null

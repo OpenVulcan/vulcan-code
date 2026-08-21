@@ -626,15 +626,27 @@ pub(crate) struct FullWorkbenchColdRefreshRequest<'a> {
     /// Provides the process-local public AI runtime and its live model catalogs.
     /// 提供进程内公共 AI 运行时及其实时模型目录。
     pub(crate) public_ai_runtime: Option<&'a vulcan_provider_adapters::PublicAiRuntime>,
-    /// Carries the canonical workspace state being committed.
-    /// 携带即将提交的规范工作区状态。
-    pub(crate) workspace_snapshot: WorkspaceSnapshot,
+    /// Selects whether this refresh commits a caller-owned candidate or the latest retained workspace.
+    /// 选择本次刷新提交调用方持有的候选工作区，还是锁内读取的最新保留工作区。
+    pub(crate) workspace_source: FullWorkbenchColdRefreshWorkspaceSource,
     /// Carries service logs to project into the rebuilt workbench.
     /// 携带需要投影到重建工作台中的服务日志。
     pub(crate) logs: &'a [String],
     /// Selects whether subagent navigation should be rebuilt from state or preserved from cache.
     /// 选择子代理导航应从状态重建还是从缓存保留。
     pub(crate) subagent_navigation_mode: SubagentNavigationRefreshMode,
+}
+
+/// Selects the authoritative workspace source for one cold workbench refresh.
+/// 为一次冷路径工作台刷新选择权威工作区来源。
+#[derive(Debug, Clone)]
+pub(crate) enum FullWorkbenchColdRefreshWorkspaceSource {
+    /// Commits an exact caller-owned mutation candidate.
+    /// 提交调用方持有的精确变更候选。
+    Candidate(WorkspaceSnapshot),
+    /// Captures the latest retained workspace after acquiring the shared state lock.
+    /// 获取共享状态锁后捕获最新保留工作区。
+    Retained,
 }
 
 /// Stores the canonical workspace snapshot without rebuilding or emitting a full workbench snapshot.
@@ -699,13 +711,41 @@ fn commit_cold_workbench_projection(
     workbench
 }
 
+/// Resolves the exact workspace used by one cold refresh while the caller holds the shared state lock.
+/// 在调用方持有共享状态锁时解析一次冷刷新的精确工作区。
+///
+/// # Parameters
+/// 参数
+/// `retained_workspace` is the latest shared workspace and `workspace_source` selects it or an exact mutation candidate.
+/// `retained_workspace` 是最新共享工作区，`workspace_source` 选择该工作区或一个精确变更候选。
+///
+/// # Returns
+/// 返回值
+/// The authoritative owned workspace, or an explicit not-ready error for a missing retained source.
+/// 返回拥有所有权的权威工作区；保留来源缺失时返回明确的未就绪错误。
+fn resolve_full_workbench_cold_refresh_workspace(
+    retained_workspace: Option<&WorkspaceSnapshot>,
+    workspace_source: FullWorkbenchColdRefreshWorkspaceSource,
+) -> Result<WorkspaceSnapshot, String> {
+    match workspace_source {
+        FullWorkbenchColdRefreshWorkspaceSource::Candidate(workspace_snapshot) => {
+            Ok(workspace_snapshot)
+        }
+        FullWorkbenchColdRefreshWorkspaceSource::Retained => {
+            retained_workspace.cloned().ok_or_else(|| {
+                String::from("service is still starting; workspace snapshot is not ready")
+            })
+        }
+    }
+}
+
 /// Stores and emits one rebuilt workbench snapshot after a cold-path workspace mutation.
 /// 在冷路径工作区变更后存储并发送一份重建后的工作台快照。
 ///
 /// # Parameters
 /// 参数
-/// `request` groups the runtime handles, workspace snapshot, logs, and subagent navigation mode for this refresh.
-/// `request` 聚合本次刷新需要的运行时句柄、工作区快照、日志与子代理导航模式。
+/// `request` groups the runtime handles, workspace source, logs, and subagent navigation mode for this refresh.
+/// `request` 聚合本次刷新需要的运行时句柄、工作区来源、日志与子代理导航模式。
 ///
 /// # Returns
 /// 返回值
@@ -722,7 +762,7 @@ pub(crate) fn store_and_emit_full_workbench_snapshot_for_cold_refresh(
         mcp_catalog,
         provider_configuration,
         public_ai_runtime,
-        workspace_snapshot,
+        workspace_source,
         logs,
         subagent_navigation_mode,
     } = request;
@@ -733,6 +773,12 @@ pub(crate) fn store_and_emit_full_workbench_snapshot_for_cold_refresh(
     let mut guard = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?;
+    // workspaceSnapshot is resolved only after the state lock is held, so a retained-source refresh cannot overwrite a newer concurrent mutation.
+    // workspaceSnapshot 仅在持有状态锁后解析，因此保留来源刷新不会覆盖更新的并发变更。
+    let workspace_snapshot = resolve_full_workbench_cold_refresh_workspace(
+        guard.workspace_snapshot.as_ref(),
+        workspace_source,
+    )?;
     let (
         live_context_budgets,
         surface_messages,
@@ -847,6 +893,11 @@ pub(crate) fn store_and_emit_full_workbench_snapshot_for_cold_refresh(
         hydrated_conversation_windows: &hydrated_window_summaries,
         native_tools,
     });
+    reconcile_workbench_conversation_lifecycle_projection(
+        &mut workbench,
+        &guard,
+        &workspace_snapshot,
+    )?;
     webui_trace(
         "store_workbench_built",
         format!(
@@ -1166,17 +1217,20 @@ mod tests {
         }
     }
 
-    /// Verifies cold projection commit advances the current generation and stores one matching pair.
-    /// 验证冷投影提交会推进当前代次并存储一组相互匹配的快照。
-    #[test]
-    fn cold_workbench_projection_commits_workspace_and_revision_together() {
-        // state owns the exact generation and retained snapshots under test.
-        // state 持有本测试的精确代次与保留快照。
-        let state =
-            create_service_bridge_state(std::sync::Arc::new(PersistenceVersionTestShellHost));
-        // workspace_snapshot is the authoritative cold-path mutation result.
-        // workspace_snapshot 是权威冷路径变更结果。
-        let workspace_snapshot = WorkspaceSnapshot {
+    /// Builds one empty workspace with a distinct selected-session identity for cold-refresh tests.
+    /// 为冷刷新测试构造一个带有不同选中会话身份的空工作区。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `selected_session` is the identity used to distinguish candidate and retained workspaces.
+    /// `selected_session` 是用于区分候选工作区与保留工作区的身份。
+    ///
+    /// # Returns
+    /// 返回值
+    /// An otherwise empty workspace snapshot carrying the requested identity.
+    /// 返回一个仅携带指定身份、其他内容为空的工作区快照。
+    fn cold_refresh_test_workspace(selected_session: SessionId) -> WorkspaceSnapshot {
+        WorkspaceSnapshot {
             task_projects: Vec::new(),
             archived_task_projects: Vec::new(),
             sessions: Vec::new(),
@@ -1189,9 +1243,53 @@ mod tests {
             archived_session_runtime_state: BTreeMap::new(),
             session_run_phases: BTreeMap::new(),
             expanded_task_projects: BTreeSet::new(),
-            selected_session: SessionId::nil(),
+            selected_session,
             hydrated_session_ids: BTreeSet::new(),
-        };
+        }
+    }
+
+    /// Verifies retained-source cold refreshes resolve the latest locked workspace instead of a detached candidate.
+    /// 验证保留来源冷刷新解析锁内最新工作区，而不是分离候选。
+    #[test]
+    fn cold_refresh_retained_source_uses_latest_locked_workspace() {
+        // candidate_session_id identifies the stale detached candidate used by mutation callers.
+        // candidate_session_id 标识变更调用方持有的过期分离候选。
+        let candidate_session_id = SessionId::from_u128(0x801);
+        // retained_session_id identifies the newer workspace visible under the shared lock.
+        // retained_session_id 标识共享锁内可见的更新工作区。
+        let retained_session_id = SessionId::from_u128(0x802);
+        // retained_workspace represents a concurrent update completed before final projection acquired the lock.
+        // retained_workspace 表示最终投影取得锁前已经完成的并发更新。
+        let retained_workspace = cold_refresh_test_workspace(retained_session_id);
+
+        let resolved_retained = resolve_full_workbench_cold_refresh_workspace(
+            Some(&retained_workspace),
+            FullWorkbenchColdRefreshWorkspaceSource::Retained,
+        )
+        .expect("retained cold refresh source should resolve");
+        let resolved_candidate = resolve_full_workbench_cold_refresh_workspace(
+            Some(&retained_workspace),
+            FullWorkbenchColdRefreshWorkspaceSource::Candidate(cold_refresh_test_workspace(
+                candidate_session_id,
+            )),
+        )
+        .expect("candidate cold refresh source should resolve");
+
+        assert_eq!(resolved_retained.selected_session, retained_session_id);
+        assert_eq!(resolved_candidate.selected_session, candidate_session_id);
+    }
+
+    /// Verifies cold projection commit advances the current generation and stores one matching pair.
+    /// 验证冷投影提交会推进当前代次并存储一组相互匹配的快照。
+    #[test]
+    fn cold_workbench_projection_commits_workspace_and_revision_together() {
+        // state owns the exact generation and retained snapshots under test.
+        // state 持有本测试的精确代次与保留快照。
+        let state =
+            create_service_bridge_state(std::sync::Arc::new(PersistenceVersionTestShellHost));
+        // workspace_snapshot is the authoritative cold-path mutation result.
+        // workspace_snapshot 是权威冷路径变更结果。
+        let workspace_snapshot = cold_refresh_test_workspace(SessionId::nil());
         // workbench starts without a revision because commit owns revision allocation.
         // workbench 初始没有修订号，因为修订号由提交阶段分配。
         let workbench = fallback_workbench_snapshot(&[]);

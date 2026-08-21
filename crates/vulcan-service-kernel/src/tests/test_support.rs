@@ -426,7 +426,7 @@ pub(super) fn test_service_shell_host() -> Arc<dyn ServiceShellHost> {
 
 /// Builds a minimal service state containing one regular parent session.
 /// 构建只包含一个常规父会话的最小服务状态。
-pub(super) fn test_service_state_with_parent_session(
+pub(crate) fn test_service_state_with_parent_session(
     parent_session_id: SessionId,
 ) -> ServiceBridgeState {
     ServiceBridgeState {
@@ -485,6 +485,7 @@ pub(super) fn test_service_state_with_parent_session(
         subagent_completion_gate_ignored_tasks: BTreeSet::new(),
         parent_sessions_waiting_for_subagents: BTreeSet::new(),
         active_stream_tasks: BTreeMap::new(),
+        session_terminal_persistence_owners: BTreeMap::new(),
         session_runtime_kernels: BTreeMap::new(),
         session_turn_admission_reservations: BTreeMap::new(),
         project_admission_reservations: BTreeMap::new(),

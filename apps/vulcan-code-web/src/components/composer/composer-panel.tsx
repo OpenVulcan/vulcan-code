@@ -36,6 +36,7 @@ import type {
   ComposerSlashCommandSummary,
   ContextCompactionWindowNodeId,
   ContextUsageSnapshot,
+  SessionProviderUsageSummary,
   PendingPromptSummary,
   ProviderSummary,
   PublicAiContextCompactionWindowNode,
@@ -82,6 +83,9 @@ export function ComposerPanel(props: {
   // Context usage snapshot shown by the composer orb.
   // 输入区圆盘展示的上下文占用快照。
   contextUsage: ContextUsageSnapshot | null;
+  // Session-level Provider accounting shown inside the context-usage card.
+  // 会话级 Provider 统计在上下文占用卡片内展示。
+  sessionProviderUsage?: SessionProviderUsageSummary | null;
   // Slash commands projected by the shared workbench service.
   // 共享工作台服务投影出的 slash 指令。
   slashCommands: ComposerSlashCommandSummary[];
@@ -694,6 +698,7 @@ export function ComposerPanel(props: {
           <ComposerPanelToolbarRight
             attachmentCount={attachments.length}
             contextUsage={props.contextUsage}
+            sessionProviderUsage={props.sessionProviderUsage}
             contextCompactionWindowNodes={props.contextCompactionWindowNodes}
             sessionContextCompactionWindowNodeId={props.sessionContextCompactionWindowNodeId}
             modelContextLimit={activeProviderModelSummary?.model.contextLimit ?? null}

@@ -232,6 +232,8 @@ pub(crate) fn empty_session_hydration_snapshot(session_id: SessionId) -> Session
 ///
 /// # Parameters
 /// 参数
+/// `state` owns process-local admission and execution registries used to distinguish live claims.
+/// `state` 持有用于区分实时领取的进程内准入与执行注册表。
 /// `controller_runtime` owns the workspace-store runtime bridge.
 /// `controller_runtime` 持有工作区存储运行时桥。
 /// `workspace_snapshot` is the retained WebUI workspace snapshot being submitted.
@@ -304,16 +306,19 @@ pub(crate) async fn hydrate_retained_submission_session_if_needed(
 /// `Ok(())` after runtime context exists or a concrete hydration error has been reported.
 /// 当运行态上下文已存在或已报告明确水合错误后返回 `Ok(())`。
 pub(crate) async fn hydrate_selected_session_runtime_if_needed(
+    state: &SharedServiceBridgeState,
     controller_runtime: ControllerRuntimeHandle,
     workspace_snapshot: &mut WorkspaceSnapshot,
     session_id: SessionId,
 ) -> Result<(), String> {
     if retained_submission_snapshot_has_session_context(workspace_snapshot, session_id) {
         return recover_interrupted_execution_retry_snapshot(
+            state,
             &controller_runtime,
             workspace_snapshot,
             session_id,
-        );
+        )
+        .await;
     }
     let hydration_result = if let Some((project_id, created_at)) =
         session_project_created_at_for_hydration(workspace_snapshot, session_id)
@@ -338,19 +343,245 @@ pub(crate) async fn hydrate_selected_session_runtime_if_needed(
     }
     ensure_hydrated_session_dialogue_context(workspace_snapshot, session_id)?;
     recover_interrupted_execution_retry_snapshot(
+        state,
         &controller_runtime,
         workspace_snapshot,
         session_id,
     )
+    .await
+}
+
+/// Invalidates one hydrated retry pointer without making the owning conversation unavailable.
+/// 在不使所属会话不可用的前提下失效一个已水合重试指针。
+///
+/// # Parameters
+/// 参数
+/// `workspace_snapshot` owns the detached hydrated runtime state being reconciled.
+/// `workspace_snapshot` 持有正在收敛的分离水合运行态。
+/// `session_id` selects the exact retry owner.
+/// `session_id` 选择精确的重试所有者。
+/// `blocked_reason` is the stable machine reason projected through WebUI i18n.
+/// `blocked_reason` 是通过 WebUI i18n 投影的稳定机器原因。
+/// `error_summary` is the controlled non-secret support diagnostic.
+/// `error_summary` 是受控的非敏感支持诊断。
+///
+/// # Returns
+/// 返回值
+/// Success after the reference and continuation eligibility cache are closed, or when no reference remains.
+/// 引用与 Continue 资格缓存关闭后返回成功；引用已经不存在时也返回成功。
+fn invalidate_hydrated_execution_retry_reference(
+    workspace_snapshot: &mut WorkspaceSnapshot,
+    session_id: SessionId,
+    blocked_reason: &str,
+    error_summary: &str,
+) -> Result<(), String> {
+    // updatedAt is shared by the lightweight pointer and its mirrored runtime entry.
+    // updatedAt 由轻量指针与其镜像运行态条目共同使用。
+    let updated_at = current_unix_millis_value().to_string();
+    // runtimeState is the unique detached owner selected by the authoritative session identity.
+    // runtimeState 是由权威会话身份选定的唯一分离所有者。
+    let runtime_state = workspace_snapshot
+        .session_runtime_state
+        .get_mut(&session_id)
+        .ok_or_else(|| String::from("Recovered retry runtime state disappeared."))?;
+    let Some(reference) = runtime_state.execution_retry_snapshot.as_mut() else {
+        return Ok(());
+    };
+    // resolvedBlockedReason preserves an earlier, more specific safety fact when one already exists.
+    // resolvedBlockedReason 在已有更具体安全事实时保留该事实。
+    let resolved_blocked_reason = reference
+        .blocked_reason
+        .as_deref()
+        .filter(|reason| !reason.trim().is_empty())
+        .unwrap_or(blocked_reason)
+        .to_string();
+    reference.invalidate_for_safety_reason(
+        resolved_blocked_reason,
+        error_summary.to_string(),
+        updated_at.clone(),
+    );
+    runtime_state.provider_call_ledger.continuation.eligible = false;
+    runtime_state.updated_at = updated_at;
+    Ok(())
+}
+
+/// Persists the exact hydrated runtime state after retry recovery changes its lightweight pointer.
+/// 在重试恢复修改轻量指针后持久化精确的已水合运行态。
+///
+/// # Parameters
+/// 参数
+/// `controller_runtime` owns the segmented-session persistence route.
+/// `controller_runtime` 持有分段会话持久化路由。
+/// `workspace_snapshot` owns the detached runtime state selected for publication.
+/// `workspace_snapshot` 持有准备发布的分离运行态。
+/// `session_id` identifies the exact persisted session owner.
+/// `session_id` 标识精确的持久化会话所有者。
+///
+/// # Returns
+/// 返回值
+/// Success only after the recovered runtime state is durable in the segmented session document.
+/// 仅当恢复后的运行态已可靠写入分段会话文档时返回成功。
+async fn persist_hydrated_execution_retry_runtime_state(
+    controller_runtime: &ControllerRuntimeHandle,
+    workspace_snapshot: &WorkspaceSnapshot,
+    session_id: SessionId,
+) -> Result<(), String> {
+    // runtimeState is cloned so no workspace borrow crosses the asynchronous persistence boundary.
+    // runtimeState 会被克隆，避免工作区借用跨越异步持久化边界。
+    let runtime_state = workspace_snapshot
+        .session_runtime_state
+        .get(&session_id)
+        .cloned()
+        .ok_or_else(|| String::from("Recovered retry runtime state disappeared."))?;
+    vulcan_workspace_store::workspace_store::persist_single_session_runtime_state_update(
+        controller_runtime.clone(),
+        session_id,
+        &runtime_state,
+    )
+    .await
+}
+
+/// Invalidates one hydrated retry pointer, then attempts to make that fail-closed state durable.
+/// 失效一个已水合重试指针，然后尝试可靠保存该失败关闭状态。
+///
+/// # Parameters
+/// 参数
+/// `controller_runtime` owns the segmented-session persistence route.
+/// `controller_runtime` 持有分段会话持久化路由。
+/// `workspace_snapshot` receives the user-visible blocked state even if storage is unavailable.
+/// `workspace_snapshot` 即使存储不可用也会接收用户可见的阻断状态。
+/// `session_id` identifies the exact retry owner.
+/// `session_id` 标识精确的重试所有者。
+/// `blocked_reason` and `error_summary` are controlled fail-closed diagnostics.
+/// `blocked_reason` 与 `error_summary` 是受控的失败关闭诊断。
+///
+/// # Returns
+/// 返回值
+/// Always preserves conversation availability after in-memory invalidation; persistence failure is logged for diagnosis.
+/// 内存失效后始终保持会话可用；持久化失败会记录日志供诊断。
+async fn invalidate_and_persist_hydrated_execution_retry_reference(
+    controller_runtime: &ControllerRuntimeHandle,
+    workspace_snapshot: &mut WorkspaceSnapshot,
+    session_id: SessionId,
+    blocked_reason: &str,
+    error_summary: &str,
+) -> Result<(), String> {
+    invalidate_hydrated_execution_retry_reference(
+        workspace_snapshot,
+        session_id,
+        blocked_reason,
+        error_summary,
+    )?;
+    if let Err(error) = persist_hydrated_execution_retry_runtime_state(
+        controller_runtime,
+        workspace_snapshot,
+        session_id,
+    )
+    .await
+    {
+        eprintln!(
+            "[webui-service] hydrated execution retry invalidation persistence failed for session {session_id}: {error}"
+        );
+    }
+    Ok(())
+}
+
+/// Returns whether the current process still owns admission or execution for one retry boundary.
+/// 返回当前进程是否仍持有一个重试边界的准入或执行所有权。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the process-local admission table, stream registry, and session kernels.
+/// `state` 持有进程内准入表、流注册表与会话内核。
+/// `session_id` identifies the exact retry-boundary owner.
+/// `session_id` 标识精确的重试边界所有者。
+///
+/// # Returns
+/// 返回值
+/// `true` when a live owner requires hydration to defer all recovery mutations.
+/// 当实时所有者要求 hydration 延后全部恢复性变更时返回 `true`。
+fn execution_retry_has_live_process_owner(
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+) -> Result<bool, String> {
+    // guard provides one lock-consistent ownership snapshot across every process-local registry.
+    // guard 为全部进程内注册表提供一个锁一致的所有权快照。
+    let guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    Ok(guard
+        .session_turn_admission_reservations
+        .contains_key(&session_id)
+        || guard
+            .session_terminal_persistence_owners
+            .contains_key(&session_id)
+        || guard.active_stream_tasks.contains_key(&session_id)
+        || webui_session_kernel_has_active_turn(&guard, session_id))
+}
+
+/// Returns whether a hydrated retry pointer may republish Continue eligibility after refreezing.
+/// 返回已水合重试指针在重冻后是否可以重新发布 Continue 资格。
+///
+/// # Parameters
+/// 参数
+/// `runtime_state` owns the canonical dialogue tail, terminal ledger, and open Provider calls.
+/// `runtime_state` 持有规范对话尾部、终态账本与未闭合 Provider 调用。
+/// `replay_safety_proven` reports the authoritative safety result of the newly persisted sidecar reference.
+/// `replay_safety_proven` 表示新持久化 sidecar 引用的权威安全判定。
+///
+/// # Returns
+/// 返回值
+/// `true` only when the body is replay-safe, the exact user/error tail matches the ledger, and no Provider call remains open.
+/// 仅当正文可安全重放、精确的用户或错误尾部与账本一致且不存在未闭合 Provider 调用时返回 `true`。
+fn hydrated_retry_continuation_is_eligible(
+    runtime_state: &SessionRuntimeStateEntry,
+    replay_safety_proven: bool,
+) -> bool {
+    // canonicalTailKind is derived from the authoritative record stream rather than the cached continuation label.
+    // canonicalTailKind 从权威记录流推导，而不是信任 Continue 缓存标签。
+    let canonical_tail_kind = crate::canonical_conversation_tail_kind(runtime_state);
+    // continuationTailMatches requires one exact prompt-free continuation tail and rejects assistant or missing tails.
+    // continuationTailMatches 要求精确的无提示词继续尾部，并拒绝助手或缺失尾部。
+    let continuation_tail_matches = canonical_tail_kind.is_some_and(|tail_kind| {
+        crate::is_prompt_free_continuation_tail_kind(tail_kind)
+            && runtime_state
+                .provider_call_ledger
+                .continuation
+                .canonical_tail_kind
+                .as_deref()
+                == Some(tail_kind)
+    });
+    replay_safety_proven
+        && continuation_tail_matches
+        && runtime_state.provider_call_ledger.in_flight_call_count() == 0
 }
 
 /// Recovers a crash-interrupted claimed retry as a frozen, explicitly retryable snapshot.
 /// 将因崩溃中断的已认领重试恢复为冻结且明确可重试的快照。
-fn recover_interrupted_execution_retry_snapshot(
+///
+/// # Parameters
+/// 参数
+/// `state` proves whether a claimed pointer still has a live owner in the current process.
+/// `state` 证明已领取指针在当前进程中是否仍有实时所有者。
+/// `controller_runtime` owns sidecar and segmented-session persistence.
+/// `controller_runtime` 持有 sidecar 与分段会话持久化能力。
+/// `workspace_snapshot` is the detached hydrated candidate being reconciled.
+/// `workspace_snapshot` 是正在协调的分离水合候选。
+/// `session_id` identifies the exact retry owner.
+/// `session_id` 标识精确的重试所有者。
+///
+/// # Returns
+/// 返回值
+/// Success after safe recovery, deliberate live-owner deferral, or fail-closed invalidation.
+/// 在安全恢复、因实时所有者而延迟或失败关闭失效后返回成功。
+async fn recover_interrupted_execution_retry_snapshot(
+    state: &SharedServiceBridgeState,
     controller_runtime: &ControllerRuntimeHandle,
     workspace_snapshot: &mut WorkspaceSnapshot,
     session_id: SessionId,
 ) -> Result<(), String> {
+    // reference is the exact lightweight pointer loaded from this session's durable runtime state.
+    // reference 是从当前会话可靠运行态加载的精确轻量指针。
     let reference = workspace_snapshot
         .session_runtime_state
         .get(&session_id)
@@ -358,58 +589,489 @@ fn recover_interrupted_execution_retry_snapshot(
     let Some(reference) = reference else {
         return Ok(());
     };
-    if reference.state != vulcan_workbench_model::ExecutionRetrySnapshotState::Claimed {
+    if !matches!(
+        reference.state,
+        vulcan_workbench_model::ExecutionRetrySnapshotState::Frozen
+            | vulcan_workbench_model::ExecutionRetrySnapshotState::Claimed
+    ) {
         return Ok(());
     }
-    let mut snapshot = vulcan_workspace_store::workspace_store::load_execution_retry_snapshot(
+    if execution_retry_has_live_process_owner(state, session_id)? {
+        // A live owner may still advance either a Frozen checkpoint or a Claimed retry; hydration must never publish a detached competing transition.
+        // 实时所有者仍可能推进 Frozen 检查点或 Claimed 重试；hydration 绝不能发布分离且相互竞争的状态迁移。
+        return Ok(());
+    }
+    if reference.schema_version != vulcan_workbench_model::EXECUTION_RETRY_SNAPSHOT_SCHEMA_VERSION {
+        return invalidate_and_persist_hydrated_execution_retry_reference(
+            controller_runtime,
+            workspace_snapshot,
+            session_id,
+            "ERR_CONVERSATION_CONTINUE_RETRY_SNAPSHOT_VERSION_UNSUPPORTED",
+            "The retained execution retry snapshot uses an unsupported strict schema version; automatic migration or fallback is disabled.",
+        )
+        .await;
+    }
+    // snapshot is validated for every executable Frozen or crash-orphaned Claimed pointer before UI projection.
+    // snapshot 会在投影到界面前校验每个可执行 Frozen 或崩溃遗留 Claimed 指针。
+    let mut snapshot = match vulcan_workspace_store::workspace_store::load_execution_retry_snapshot(
         &controller_runtime.data_root,
         session_id,
         &reference,
-    )?;
+    ) {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            eprintln!("[webui-service] hydrated execution retry body validation failed: {error}");
+            return invalidate_and_persist_hydrated_execution_retry_reference(
+                controller_runtime,
+                workspace_snapshot,
+                session_id,
+                crate::conversation_submission::EXECUTION_RETRY_SNAPSHOT_BODY_UNREADABLE_REASON,
+                crate::conversation_submission::EXECUTION_RETRY_SNAPSHOT_BODY_UNREADABLE_SUMMARY,
+            )
+            .await;
+        }
+    };
+    if reference.state == vulcan_workbench_model::ExecutionRetrySnapshotState::Frozen {
+        return Ok(());
+    }
+    // currentGeneration is the post-sanitize continuation generation that owns restart reconciliation.
+    // currentGeneration 是拥有重启收敛过程的净化后 Continue 代际。
+    let current_generation = workspace_snapshot
+        .session_runtime_state
+        .get(&session_id)
+        .map(|runtime_state| runtime_state.provider_call_ledger.continuation.generation)
+        .ok_or_else(|| String::from("Recovered retry runtime state disappeared."))?;
+    // Restart reconciliation binds the sidecar to the post-sanitize ledger generation.
+    // 重启收敛会把 sidecar 绑定到 sanitize 后的账本代际。
+    snapshot.generation = current_generation;
     snapshot.state = vulcan_workbench_model::ExecutionRetrySnapshotState::Frozen;
     snapshot.claimed_attempt_id = None;
     snapshot.updated_at = current_unix_millis_value().to_string();
-    snapshot.error = Some(vulcan_ai_contract::AiExecutionError {
-        category: vulcan_ai_contract::AiErrorCategory::Cancelled,
-        subcategory: Some(String::from("service_restart_interrupted")),
-        stage: String::from("startup_recovery"),
-        http_status: None,
-        transport: None,
-        websocket_close_code: None,
-        upstream_code: None,
-        upstream_type: None,
-        upstream_parameter: None,
-        upstream_message: None,
-        request_id: None,
-        provider_id: snapshot
-            .provider_route
-            .as_ref()
-            .map(|route| route.provider_id.clone()),
-        entry_id: None,
-        model_id: snapshot
-            .provider_route
-            .as_ref()
-            .map(|route| route.model_id.clone()),
-        message: String::from("The service restarted while the retry execution was claimed."),
-        dispatch_outcome: vulcan_ai_contract::DispatchOutcome::Unknown,
-        semantic_output_observed: false,
-        side_effect_observed: false,
-        terminal: true,
-        retryable: true,
-        retry_after: None,
-    });
+    // Preserve a previously proven non-retryable or side-effect-unknown error; restart is not proof of safety.
+    // 保留此前已证明不可重试或副作用未知的错误；重启本身不能证明安全。
+    if should_replace_restart_interruption_error(snapshot.error.as_ref(), &snapshot.pending_action)
+    {
+        // dispatchOutcome remains unknown for a Provider action and is proven not-dispatched only for local preparation actions.
+        // dispatchOutcome 对 Provider 动作保持未知，仅对本地准备动作证明为未分派。
+        let dispatch_outcome = match &snapshot.pending_action {
+            vulcan_workbench_model::ExecutionRetryPendingAction::ResumePreparation { .. }
+            | vulcan_workbench_model::ExecutionRetryPendingAction::PrepareNextProviderRequest => {
+                vulcan_ai_contract::DispatchOutcome::NotDispatched
+            }
+            _ => vulcan_ai_contract::DispatchOutcome::Unknown,
+        };
+        snapshot.error = Some(vulcan_ai_contract::AiExecutionError {
+            category: vulcan_ai_contract::AiErrorCategory::Cancelled,
+            subcategory: Some(String::from("service_restart_interrupted")),
+            stage: String::from("startup_recovery"),
+            http_status: None,
+            transport: None,
+            websocket_close_code: None,
+            upstream_code: None,
+            upstream_type: None,
+            upstream_parameter: None,
+            upstream_message: None,
+            request_id: None,
+            provider_id: snapshot
+                .provider_route
+                .as_ref()
+                .map(|route| route.provider_id.clone()),
+            entry_id: None,
+            model_id: snapshot
+                .provider_route
+                .as_ref()
+                .map(|route| route.model_id.clone()),
+            message: String::from("The service restarted while the retry execution was claimed."),
+            dispatch_outcome,
+            semantic_output_observed: false,
+            side_effect_observed: false,
+            terminal: true,
+            retryable: true,
+            retry_after: None,
+        });
+    }
+    // updatedReference is published only after the complete refrozen body is durable.
+    // updatedReference 仅在完整重冻正文可靠写入后发布。
     let updated_reference =
-        vulcan_workspace_store::workspace_store::persist_execution_retry_snapshot(
+        match vulcan_workspace_store::workspace_store::persist_execution_retry_snapshot(
             &controller_runtime.data_root,
             session_id,
             &snapshot,
-        )?;
+        ) {
+            Ok(updated_reference) => updated_reference,
+            Err(error) => {
+                eprintln!(
+                    "[webui-service] hydrated execution retry refreeze persistence failed: {error}"
+                );
+                return invalidate_and_persist_hydrated_execution_retry_reference(
+                    controller_runtime,
+                    workspace_snapshot,
+                    session_id,
+                    "retry_snapshot_transition_failed",
+                    "The crash-interrupted execution retry snapshot could not be safely refrozen.",
+                )
+                .await;
+            }
+        };
+    // replaySafetyProven determines the safety half of the mirrored ledger cache from the authoritative refreshed pointer.
+    // replaySafetyProven 根据权威刷新指针决定镜像账本缓存的安全性部分。
+    let replay_safety_proven = updated_reference.replay_safety_proven();
+    let updated_at = updated_reference.updated_at.clone();
     let runtime_state = workspace_snapshot
         .session_runtime_state
         .get_mut(&session_id)
         .ok_or_else(|| String::from("Recovered retry runtime state disappeared."))?;
     runtime_state.execution_retry_snapshot = Some(updated_reference);
+    // The mirrored cache is reopened only after the new body and every live ledger invariant agree.
+    // 只有新正文与全部实时账本不变量一致后，才重新开启镜像缓存。
+    runtime_state.provider_call_ledger.continuation.eligible =
+        hydrated_retry_continuation_is_eligible(runtime_state, replay_safety_proven);
+    runtime_state.updated_at = updated_at;
+    if let Err(error) = persist_hydrated_execution_retry_runtime_state(
+        controller_runtime,
+        workspace_snapshot,
+        session_id,
+    )
+    .await
+    {
+        eprintln!(
+            "[webui-service] hydrated execution retry refreeze reference persistence failed for session {session_id}: {error}"
+        );
+        return invalidate_and_persist_hydrated_execution_retry_reference(
+            controller_runtime,
+            workspace_snapshot,
+            session_id,
+            "retry_snapshot_transition_failed",
+            "The crash-interrupted execution retry reference could not be durably published.",
+        )
+        .await;
+    }
     Ok(())
+}
+
+/// Returns whether restart may replace the retained error with a retryable interruption marker.
+/// 判断重启是否可以用可重试的中断标记替换保留错误。
+fn should_replace_restart_interruption_error(
+    error: Option<&vulcan_ai_contract::AiExecutionError>,
+    pending_action: &vulcan_workbench_model::ExecutionRetryPendingAction,
+) -> bool {
+    let action_can_prove_no_dispatch = matches!(
+        pending_action,
+        vulcan_workbench_model::ExecutionRetryPendingAction::ResumePreparation { .. }
+            | vulcan_workbench_model::ExecutionRetryPendingAction::PrepareNextProviderRequest
+    );
+    error.is_none_or(|error| {
+        error.retryable
+            && !error.semantic_output_observed
+            && !error.side_effect_observed
+            && (error.dispatch_outcome != vulcan_ai_contract::DispatchOutcome::Unknown
+                || action_can_prove_no_dispatch)
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        execution_retry_has_live_process_owner, hydrated_retry_continuation_is_eligible,
+        invalidate_hydrated_execution_retry_reference, should_replace_restart_interruption_error,
+    };
+    use crate::{
+        SessionTerminalPersistenceOwner, SessionTurnAdmissionReservation,
+        SessionTurnAdmissionReservationKind,
+    };
+    use std::sync::{Arc, Mutex};
+    use uuid::Uuid;
+    use vulcan_ai_contract::{AiErrorCategory, AiExecutionError, DispatchOutcome};
+    use vulcan_context::SessionConversationRecord;
+    use vulcan_workbench_model::{
+        ExecutionRetryPendingAction, ExecutionRetrySnapshotRef, ExecutionRetrySnapshotState,
+        SessionId, SessionMessageKind, SessionMessageRecordKind, SessionRuntimeStateEntry,
+    };
+
+    /// Builds one initially executable lightweight retry pointer for hydration invalidation tests.
+    /// 为水合失效测试构建一个初始可执行的轻量重试指针。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A frozen v4 pointer whose mirrored safety summary initially permits replay.
+    /// 返回一个镜像安全摘要初始允许重放的冻结 v4 指针。
+    fn hydrated_safe_retry_reference() -> ExecutionRetrySnapshotRef {
+        ExecutionRetrySnapshotRef {
+            schema_version: vulcan_workbench_model::EXECUTION_RETRY_SNAPSHOT_SCHEMA_VERSION,
+            snapshot_id: String::from("00000000-0000-0000-0000-000000000001"),
+            generation: 1,
+            state: ExecutionRetrySnapshotState::Frozen,
+            content_sha256: String::from(
+                "0000000000000000000000000000000000000000000000000000000000000000",
+            ),
+            content_bytes: 1,
+            logical_execution_id: String::from("execution-1"),
+            pending_action_label: String::from("resume_preparation"),
+            provider_route: None,
+            preparation_route_selection: Some(
+                vulcan_workbench_model::ExecutionRetryPreparationRouteSelection {
+                    active_provider_id: None,
+                    active_connection_id: None,
+                    active_model_id: None,
+                },
+            ),
+            context_generation_id: None,
+            canonical_dispatch_sha256: "0".repeat(64),
+            retryable: true,
+            requires_manual_confirmation: false,
+            blocked_reason: None,
+            claimed_attempt_id: None,
+            error_summary: None,
+            updated_at: String::from("1"),
+        }
+    }
+
+    /// Verifies every process-local admission or terminal owner defers retry hydration recovery.
+    /// 验证每个进程内准入或终态所有者都会延后重试水合恢复。
+    #[test]
+    fn retry_boundary_with_live_process_owner_defers_hydration_recovery() {
+        // sessionId identifies the exact retry boundary whose process ownership is inspected.
+        // sessionId 标识需要检查进程所有权的精确重试边界。
+        let session_id = SessionId::new_v4();
+        // state starts without any process-local execution owner for the retained session.
+        // state 初始时不为保留会话持有任何进程内执行所有者。
+        let state = Arc::new(Mutex::new(
+            crate::tests::test_support::test_service_state_with_parent_session(session_id),
+        ));
+
+        assert!(
+            !execution_retry_has_live_process_owner(&state, session_id)
+                .expect("owner inspection should lock the test state")
+        );
+
+        // reservationId uniquely owns the admission interval before the live kernel is committed.
+        // reservationId 唯一持有实时内核提交之前的准入区间。
+        let reservation_id = Uuid::new_v4();
+        state
+            .lock()
+            .expect("test state should remain lockable")
+            .session_turn_admission_reservations
+            .insert(
+                session_id,
+                SessionTurnAdmissionReservation {
+                    reservation_id,
+                    kind: SessionTurnAdmissionReservationKind::PromptSubmission,
+                },
+            );
+
+        assert!(
+            execution_retry_has_live_process_owner(&state, session_id)
+                .expect("owner inspection should observe the admission reservation")
+        );
+
+        state
+            .lock()
+            .expect("test state should remain lockable")
+            .session_turn_admission_reservations
+            .remove(&session_id);
+        // terminalOwner covers the post-stream interval where no task or kernel remains but settlement is still authoritative.
+        // terminalOwner 覆盖流结束后已无任务或 kernel、但结算仍具权威性的区间。
+        let terminal_owner = SessionTerminalPersistenceOwner::RunStop(Uuid::new_v4());
+        state
+            .lock()
+            .expect("test state should remain lockable")
+            .session_terminal_persistence_owners
+            .insert(session_id, terminal_owner);
+
+        assert!(
+            execution_retry_has_live_process_owner(&state, session_id)
+                .expect("owner inspection should observe terminal persistence")
+        );
+    }
+
+    /// Verifies an unreadable hydrated body becomes a localized blocked token without removing the conversation.
+    /// 验证不可读取的水合正文会变成可本地化阻断令牌，同时不移除会话。
+    #[test]
+    fn hydrated_retry_invalidation_keeps_conversation_available() {
+        // sessionId identifies the exact retained conversation that must survive retry corruption.
+        // sessionId 标识即使重试数据损坏也必须保留的精确会话。
+        let session_id = SessionId::new_v4();
+        // serviceState supplies a production-shaped workspace shell containing the owning session.
+        // serviceState 提供包含所属会话的生产形态工作区外壳。
+        let mut service_state =
+            crate::tests::test_support::test_service_state_with_parent_session(session_id);
+        // workspaceSnapshot is the detached hydration candidate mutated by the recovery helper.
+        // workspaceSnapshot 是由恢复辅助函数变更的分离水合候选。
+        let mut workspace_snapshot = service_state
+            .workspace_snapshot
+            .take()
+            .expect("test workspace should exist");
+        workspace_snapshot.session_runtime_state.insert(
+            session_id,
+            SessionRuntimeStateEntry {
+                execution_retry_snapshot: Some(hydrated_safe_retry_reference()),
+                ..SessionRuntimeStateEntry::default()
+            },
+        );
+
+        invalidate_hydrated_execution_retry_reference(
+            &mut workspace_snapshot,
+            session_id,
+            "ERR_CONVERSATION_CONTINUE_RETRY_SNAPSHOT_BODY_UNREADABLE",
+            "The retained retry body failed validation.",
+        )
+        .expect("hydration invalidation should keep the session usable");
+
+        assert!(
+            workspace_snapshot
+                .sessions
+                .iter()
+                .any(|session| session.id == session_id)
+        );
+        let runtime_state = &workspace_snapshot.session_runtime_state[&session_id];
+        let reference = runtime_state
+            .execution_retry_snapshot
+            .as_ref()
+            .expect("invalidated diagnostic token should remain projected");
+        assert_eq!(reference.state, ExecutionRetrySnapshotState::Invalidated);
+        assert_eq!(
+            reference.blocked_reason.as_deref(),
+            Some("ERR_CONVERSATION_CONTINUE_RETRY_SNAPSHOT_BODY_UNREADABLE")
+        );
+        assert!(!runtime_state.provider_call_ledger.continuation.eligible);
+    }
+
+    /// Verifies hydration cannot reopen Continue from a stale cached tail label after the dialogue ends in assistant output or disappears.
+    /// 验证当对话以助手输出结尾或已经缺失时，hydration 不能依据过期缓存尾部标签重新开启 Continue。
+    #[test]
+    fn hydrated_retry_eligibility_requires_exact_retryable_canonical_tail() {
+        // runtimeState starts with one exact user tail and a matching terminal ledger cache.
+        // runtimeState 初始持有一个精确用户尾部以及匹配的终态账本缓存。
+        let mut runtime_state = SessionRuntimeStateEntry::default();
+        runtime_state
+            .conversation_state
+            .records
+            .push(SessionConversationRecord {
+                id: String::from("hydrated-user-tail"),
+                kind: SessionMessageKind::User,
+                record_kind: SessionMessageRecordKind::Transcript,
+                visible: true,
+                title: String::from("用户"),
+                body: String::from("继续执行"),
+                metadata: None,
+                created_at: String::from("100"),
+            });
+        assert!(
+            runtime_state
+                .provider_call_ledger
+                .mark_continuation_terminal(
+                    Some(String::from("hydrated-execution")),
+                    String::from("failed"),
+                    100,
+                    String::from("user"),
+                    false,
+                )
+        );
+        assert!(hydrated_retry_continuation_is_eligible(
+            &runtime_state,
+            true
+        ));
+
+        // assistantTail is a visible assistant-output record that supersedes the cached user tail.
+        // assistantTail 是覆盖缓存用户尾部的可见助手输出记录。
+        runtime_state
+            .conversation_state
+            .records
+            .push(SessionConversationRecord {
+                id: String::from("hydrated-assistant-tail"),
+                kind: SessionMessageKind::Assistant,
+                record_kind: SessionMessageRecordKind::AssistantOutput,
+                visible: true,
+                title: String::from("AI"),
+                body: String::from("已经完成"),
+                metadata: None,
+                created_at: String::from("101"),
+            });
+        assert!(!hydrated_retry_continuation_is_eligible(
+            &runtime_state,
+            true
+        ));
+
+        runtime_state.conversation_state.records.clear();
+        assert!(!hydrated_retry_continuation_is_eligible(
+            &runtime_state,
+            true
+        ));
+        assert!(!hydrated_retry_continuation_is_eligible(
+            &runtime_state,
+            false
+        ));
+    }
+
+    /// Builds a structured error for restart-safety helper tests.
+    /// 为重启安全辅助函数测试构建结构化错误。
+    fn test_error(
+        retryable: bool,
+        dispatch_outcome: DispatchOutcome,
+        semantic_output_observed: bool,
+        side_effect_observed: bool,
+    ) -> AiExecutionError {
+        AiExecutionError {
+            category: AiErrorCategory::ProviderUnavailable,
+            subcategory: None,
+            stage: String::from("provider_request"),
+            http_status: None,
+            transport: None,
+            websocket_close_code: None,
+            upstream_code: None,
+            upstream_type: None,
+            upstream_parameter: None,
+            upstream_message: None,
+            request_id: None,
+            provider_id: None,
+            entry_id: None,
+            model_id: None,
+            message: String::from("test"),
+            dispatch_outcome,
+            semantic_output_observed,
+            side_effect_observed,
+            terminal: true,
+            retryable,
+            retry_after: None,
+        }
+    }
+
+    /// Verifies restart replacement is allowed only when the retained error proves replay safety.
+    /// 验证仅在保留错误能够证明重放安全时才允许重启替换。
+    #[test]
+    fn restart_interruption_replacement_preserves_unsafe_errors() {
+        let next_provider_request = ExecutionRetryPendingAction::PrepareNextProviderRequest;
+        let unknown_dispatch_action = ExecutionRetryPendingAction::FinalizeAssistant;
+        assert!(should_replace_restart_interruption_error(
+            None,
+            &next_provider_request
+        ));
+        assert!(should_replace_restart_interruption_error(
+            Some(&test_error(true, DispatchOutcome::Dispatched, false, false)),
+            &next_provider_request
+        ));
+        assert!(!should_replace_restart_interruption_error(
+            Some(&test_error(
+                false,
+                DispatchOutcome::Dispatched,
+                false,
+                false
+            )),
+            &next_provider_request
+        ));
+        assert!(!should_replace_restart_interruption_error(
+            Some(&test_error(true, DispatchOutcome::Unknown, false, false)),
+            &unknown_dispatch_action
+        ));
+        assert!(!should_replace_restart_interruption_error(
+            Some(&test_error(true, DispatchOutcome::Dispatched, true, false)),
+            &next_provider_request
+        ));
+        assert!(!should_replace_restart_interruption_error(
+            Some(&test_error(true, DispatchOutcome::Dispatched, false, true)),
+            &next_provider_request
+        ));
+    }
 }
 
 /// Applies a selected-session hydration snapshot without replacing an existing display window.

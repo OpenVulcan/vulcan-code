@@ -378,32 +378,29 @@ export function ModelListSettingsArea() {
                           }}
                         />
                       </label>
-                      <label
-                        className="settings-model-switch-control"
-                        title={multimodalCandidateEligible
-                          ? undefined
-                          : t("settings.models.multimodalUnderstandingUnavailable")}
-                      >
-                        <span>{t("settings.models.multimodalUnderstandingCandidate")}</span>
-                        <Switch
-                          aria-label={`${t("settings.models.multimodalUnderstandingCandidate")} ${representative.model.display_name}`}
-                          checked={multimodalCandidateEnabled}
-                          disabled={multimodalCandidateToggleDisabled(
-                            pendingMutationKey !== null,
-                            multimodalCandidateEligible,
-                            multimodalCandidateEnabled,
-                          )}
-                          onCheckedChange={(checked) => {
-                            runSnapshotMutation(`multimodal-candidate/${modelKey}`, () => (
-                              savePublicAiMultimodalUnderstandingCandidate({
-                                providerId: selectedGroup.provider.id,
-                                modelId,
-                                enabled: checked,
-                              })
-                            ))
-                          }}
-                        />
-                      </label>
+                      {multimodalCandidateEligible ? (
+                        <label className="settings-model-switch-control">
+                          <span>{t("settings.models.multimodalUnderstandingCandidate")}</span>
+                          <Switch
+                            aria-label={`${t("settings.models.multimodalUnderstandingCandidate")} ${representative.model.display_name}`}
+                            checked={multimodalCandidateEnabled}
+                            disabled={multimodalCandidateToggleDisabled(
+                              pendingMutationKey !== null,
+                              multimodalCandidateEligible,
+                              multimodalCandidateEnabled,
+                            )}
+                            onCheckedChange={(checked) => {
+                              runSnapshotMutation(`multimodal-candidate/${modelKey}`, () => (
+                                savePublicAiMultimodalUnderstandingCandidate({
+                                  providerId: selectedGroup.provider.id,
+                                  modelId,
+                                  enabled: checked,
+                                })
+                              ))
+                            }}
+                          />
+                        </label>
+                      ) : null}
                       {internalState ? (
                         <label
                           className="settings-model-switch-control"

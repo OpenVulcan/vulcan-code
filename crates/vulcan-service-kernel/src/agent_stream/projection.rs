@@ -901,8 +901,67 @@ pub(crate) fn emit_materialized_session_message_delta(
     message: &SessionMessageEntry,
     run_phase: SessionRunPhase,
 ) -> Result<(), String> {
+    emit_materialized_session_message_delta_internal(
+        app, state, session_id, message, run_phase, None,
+    )
+    .map(|_| ())
+}
+
+/// Emits one prepared message projection only while its exact kernel generation still owns the turn.
+/// 仅当精确 kernel 代际仍拥有当前回合时才发送一条准备后的消息投影。
+///
+/// # Parameters
+/// 参数
+/// `app`, `state`, `session_id`, `message`, and `run_phase` retain the ordinary message projection contract.
+/// `app`、`state`、`session_id`、`message` 与 `run_phase` 保留普通消息投影契约。
+/// `expected_generation` and `turn_id` bind the projection to one immutable preparation owner.
+/// `expected_generation` 与 `turn_id` 将投影绑定到单个不可变准备所有者。
+///
+/// # Returns
+/// 返回值
+/// `true` when a visible projection committed, `false` after Stop/replacement or for a hidden surface, or a state error.
+/// 可见投影提交时返回 `true`；Stop/替代后或界面隐藏时返回 `false`；状态异常时返回错误。
+pub(crate) fn emit_materialized_session_message_delta_if_prompt_owner_current(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    message: &SessionMessageEntry,
+    run_phase: SessionRunPhase,
+    expected_generation: u64,
+    turn_id: &str,
+) -> Result<bool, String> {
+    emit_materialized_session_message_delta_internal(
+        app,
+        state,
+        session_id,
+        message,
+        run_phase,
+        Some((expected_generation, turn_id)),
+    )
+}
+
+/// Commits one message delta with an optional exact prompt-preparation owner fence.
+/// 使用可选的精确提示词准备所有者栅栏提交一条消息增量。
+///
+/// # Parameters
+/// 参数
+/// The projection parameters match the public helpers; `expected_owner` optionally carries `(kernel generation, turn id)`.
+/// 投影参数与公开辅助函数一致；`expected_owner` 可选携带“kernel 代际、回合标识”。
+///
+/// # Returns
+/// 返回值
+/// Whether a visible message projection committed, or an explicit state error.
+/// 返回可见消息投影是否已提交，或显式状态错误。
+fn emit_materialized_session_message_delta_internal(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    message: &SessionMessageEntry,
+    run_phase: SessionRunPhase,
+    expected_owner: Option<(u64, &str)>,
+) -> Result<bool, String> {
     if !message.is_visible_to_user() {
-        return Ok(());
+        return Ok(false);
     }
     let conversation_id = session_id.to_string();
     let projected_message = conversation_message_from_session_entry(&conversation_id, message);
@@ -910,8 +969,18 @@ pub(crate) fn emit_materialized_session_message_delta(
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
+        if let Some((expected_generation, turn_id)) = expected_owner
+            && !webui_prompt_preparation_owner_is_current(
+                &guard,
+                session_id,
+                expected_generation,
+                turn_id,
+            )
+        {
+            return Ok(false);
+        }
         if !workbench_surface_matches_conversation(&guard.workbench, &conversation_id) {
-            return Ok(());
+            return Ok(false);
         }
         guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
         let generation = guard.workbench_generation;
@@ -957,7 +1026,7 @@ pub(crate) fn emit_materialized_session_message_delta(
         "workbench_user_message_delta_emit",
         ServiceEvent::WorkbenchDelta(Box::new(event)),
     );
-    Ok(())
+    Ok(true)
 }
 
 /// Commits one workspace snapshot and emits a phase-only conversation delta.
@@ -987,12 +1056,175 @@ pub(crate) fn commit_workspace_snapshot_and_emit_session_phase_delta(
     session_id: SessionId,
     run_phase: SessionRunPhase,
 ) -> Result<(), String> {
+    commit_workspace_snapshot_and_emit_session_phase_delta_internal(
+        app,
+        state,
+        workspace_snapshot,
+        session_id,
+        run_phase,
+        None,
+    )
+    .map(|_| ())
+}
+
+/// Mutates the latest retained workspace and commits its session phase in one shared-state transaction.
+/// 在同一个共享状态事务中修改最新保留工作区并提交其会话阶段。
+///
+/// # Parameters
+/// 参数
+/// `app` emits the committed delta and `state` owns the retained workspace and workbench.
+/// `app` 发送已提交增量，`state` 持有保留工作区与工作台。
+/// `session_id` selects the conversation, `run_phase` fixes its phase, and `mutation` applies the exact in-lock state change.
+/// `session_id` 选择会话，`run_phase` 固定其阶段，`mutation` 应用精确的锁内状态变更。
+///
+/// # Returns
+/// 返回值
+/// Success after the mutation, workspace phase, workbench revision, and delta are committed, or an explicit mutation/state error.
+/// 在变更、工作区阶段、工作台修订与增量提交后返回成功，否则返回明确的变更或状态错误。
+pub(crate) fn commit_retained_workspace_session_phase_mutation_and_emit_delta<Mutation>(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    run_phase: SessionRunPhase,
+    mutation: Mutation,
+) -> Result<(), String>
+where
+    Mutation: FnOnce(&mut WorkspaceSnapshot) -> Result<(), String>,
+{
     let conversation_id = session_id.to_string();
     let session_state = session_state_for_run_phase(run_phase);
     let event = {
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let workspace_snapshot = guard.workspace_snapshot.as_mut().ok_or_else(|| {
+            String::from("service is still starting; workspace snapshot is not ready")
+        })?;
+        mutation(workspace_snapshot)?;
+        workspace_snapshot
+            .session_run_phases
+            .insert(session_id, run_phase);
+        guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+        let generation = guard.workbench_generation;
+        guard.workbench.revision = generation;
+        for conversation in &mut guard.workbench.conversations {
+            if conversation.id == conversation_id {
+                conversation.run_phase = run_phase.to_string();
+                conversation.status = session_state.label().to_string();
+                conversation.last_updated_label = String::from("刚刚");
+                conversation.last_updated_at = current_unix_millis_text();
+                break;
+            }
+        }
+        WorkbenchDeltaEnvelope {
+            generation,
+            delta: WorkbenchDelta::UpdateConversationRunPhase(UpdateConversationRunPhaseDelta {
+                conversation_id,
+                run_phase: run_phase.to_string(),
+                status: Some(session_state.label().to_string()),
+                last_updated_label: Some(String::from("now")),
+            }),
+        }
+    };
+    emit_service_event_with_trace(
+        app,
+        "workbench_retained_phase_delta_emit",
+        ServiceEvent::WorkbenchDelta(Box::new(event)),
+    );
+    Ok(())
+}
+
+/// Commits a prepared workspace phase only while its exact kernel generation still owns the turn.
+/// 仅当精确 kernel 代际仍拥有当前回合时才提交准备工作区阶段。
+///
+/// # Parameters
+/// 参数
+/// The workspace projection parameters retain the ordinary phase-commit contract.
+/// 工作区投影参数保留普通阶段提交契约。
+/// `expected_generation` and `turn_id` bind the detached candidate to its immutable preparation owner.
+/// `expected_generation` 与 `turn_id` 将分离候选绑定到其不可变准备所有者。
+///
+/// # Returns
+/// 返回值
+/// `true` after commit, `false` when Stop/replacement won, or an explicit state error.
+/// 提交后返回 `true`；Stop/替代已胜出时返回 `false`；状态异常时返回显式错误。
+pub(crate) fn commit_workspace_snapshot_and_emit_session_phase_delta_if_prompt_owner_current(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    workspace_snapshot: WorkspaceSnapshot,
+    session_id: SessionId,
+    run_phase: SessionRunPhase,
+    expected_generation: u64,
+    turn_id: &str,
+) -> Result<bool, String> {
+    commit_workspace_snapshot_and_emit_session_phase_delta_internal(
+        app,
+        state,
+        workspace_snapshot,
+        session_id,
+        run_phase,
+        Some((expected_generation, turn_id)),
+    )
+}
+
+/// Commits and emits one phase delta with an optional exact prompt-preparation owner fence.
+/// 使用可选的精确提示词准备所有者栅栏提交并发送一条阶段增量。
+///
+/// # Parameters
+/// 参数
+/// The phase parameters match the public helpers; `expected_owner` optionally carries `(kernel generation, turn id)`.
+/// 阶段参数与公开辅助函数一致；`expected_owner` 可选携带“kernel 代际、回合标识”。
+///
+/// # Returns
+/// 返回值
+/// Whether the workspace and phase committed, or an explicit state error.
+/// 返回工作区与阶段是否已提交，或显式状态错误。
+fn commit_workspace_snapshot_and_emit_session_phase_delta_internal(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    mut workspace_snapshot: WorkspaceSnapshot,
+    session_id: SessionId,
+    run_phase: SessionRunPhase,
+    expected_owner: Option<(u64, &str)>,
+) -> Result<bool, String> {
+    let conversation_id = session_id.to_string();
+    let session_state = session_state_for_run_phase(run_phase);
+    let event = {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        if let Some((expected_generation, turn_id)) = expected_owner
+            && !webui_prompt_preparation_owner_is_current(
+                &guard,
+                session_id,
+                expected_generation,
+                turn_id,
+            )
+        {
+            return Ok(false);
+        }
+        if expected_owner.is_some() {
+            // latestUiState belongs to concurrent queue, composer, read, and collapse interactions rather than detached prompt preparation.
+            // latestUiState 归并发队列、输入框、已读与折叠交互所有，而不归分离提示词准备所有。
+            let latest_ui_state = guard
+                .workspace_snapshot
+                .as_ref()
+                .and_then(|workspace| workspace.session_runtime_state.get(&session_id))
+                .map(|runtime_state| runtime_state.ui_state.clone());
+            if let Some(latest_ui_state) = latest_ui_state {
+                // candidateRuntimeState must exist because an owner-checked preparation commit cannot synthesize a partial session.
+                // candidateRuntimeState 必须存在，因为经过所有者校验的准备提交不得合成不完整会话。
+                let candidate_runtime_state = workspace_snapshot
+                    .session_runtime_state
+                    .get_mut(&session_id)
+                    .ok_or_else(|| {
+                        format!(
+                            "prompt preparation candidate is missing runtime state for session `{session_id}`"
+                        )
+                    })?;
+                candidate_runtime_state.ui_state = latest_ui_state;
+            }
+        }
         guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
         let generation = guard.workbench_generation;
         guard.workbench.revision = generation;
@@ -1021,7 +1253,7 @@ pub(crate) fn commit_workspace_snapshot_and_emit_session_phase_delta(
         "workbench_phase_delta_emit",
         ServiceEvent::WorkbenchDelta(Box::new(event)),
     );
-    Ok(())
+    Ok(true)
 }
 
 /// Emits the selected-session context injection side-panel projection as its own delta.

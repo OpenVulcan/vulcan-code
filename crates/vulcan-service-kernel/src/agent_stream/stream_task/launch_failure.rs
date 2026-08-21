@@ -109,6 +109,36 @@ pub(crate) fn handle_stream_task_registration_failure(
         task_state,
         session_id,
         expected_kernel_generation,
+        true,
+    )
+}
+
+/// Terminalizes an execution stream that failed before active-task registration and closes its continuation ledger.
+/// 终结在活动任务注册前失败的执行流，并闭合其 Continue 账本。
+///
+/// # Parameters
+/// 参数
+/// `app` emits the Failed phase delta and `task_state` owns the exact launch-time state.
+/// `app` 发送 Failed 阶段增量，`task_state` 持有精确启动期状态。
+/// `session_id` identifies the failed execution and `expected_kernel_generation` proves its kernel ownership.
+/// `session_id` 标识失败执行，`expected_kernel_generation` 证明其内核所有权。
+///
+/// # Returns
+/// 返回值
+/// The strong ownership outcome after phase, kernel, and continuation terminalization, or an explicit state error.
+/// 返回阶段、内核与 Continue 终结后的强所有权结果，或明确的状态错误。
+pub(crate) fn handle_pre_registration_execution_stream_task_launch_failure(
+    app: &ServiceEventEmitter,
+    task_state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    expected_kernel_generation: Option<u64>,
+) -> Result<StreamTaskLaunchFailureOutcome, String> {
+    finalize_owned_stream_task_launch_failure(
+        app,
+        task_state,
+        session_id,
+        expected_kernel_generation,
+        true,
     )
 }
 
@@ -137,6 +167,7 @@ pub(crate) fn handle_pre_registration_stream_task_launch_failure(
         task_state,
         session_id,
         expected_kernel_generation,
+        false,
     )
 }
 
@@ -149,6 +180,8 @@ pub(crate) fn handle_pre_registration_stream_task_launch_failure(
 /// `app` 发送对齐的阶段增量，`task_state` 持有启动状态，`session_id` 选择会话。
 /// `expected_kernel_generation` proves ownership of the exact launch-time kernel turn.
 /// `expected_kernel_generation` 证明对精确启动期内核回合的所有权。
+/// `terminalize_continuation` selects whether this failure belongs to a resumable execution stream.
+/// `terminalize_continuation` 选择当前失败是否属于可恢复的执行流。
 ///
 /// # Returns
 /// 返回值
@@ -159,14 +192,122 @@ fn finalize_owned_stream_task_launch_failure(
     task_state: &SharedServiceBridgeState,
     session_id: SessionId,
     expected_kernel_generation: Option<u64>,
+    terminalize_continuation: bool,
 ) -> Result<StreamTaskLaunchFailureOutcome, String> {
+    if terminalize_continuation {
+        // expected_kernel_generation uniquely owns both the failed kernel turn and its terminal-persistence marker.
+        // expected_kernel_generation 唯一拥有失败 kernel 回合及其终态持久化标记。
+        let Some(expected_kernel_generation) = expected_kernel_generation else {
+            return Ok(StreamTaskLaunchFailureOutcome::OwnershipUnverified);
+        };
+        // terminal_persistence_owner remains stable while the asynchronous retry finalizer is queued.
+        // terminal_persistence_owner 在异步重试终结器排队期间保持稳定。
+        let terminal_persistence_owner =
+            SessionTerminalPersistenceOwner::KernelGeneration(expected_kernel_generation);
+        // terminal_phase_event is optional because a proven owner must still close its kernel and retry token when phase projection fails.
+        // terminal_phase_event 为可选值，因为阶段投影失败时，已证明所有者仍必须闭合 kernel 与重试令牌。
+        let terminal_phase_event = {
+            // guard protects ownership validation, marker registration, terminal projection, and kernel closure as one transaction.
+            // guard 将所有权验证、标记登记、终态投影与 kernel 闭合作为一个事务保护。
+            let mut guard = task_state
+                .lock()
+                .map_err(|error| format!("failed to lock service state: {error}"))?;
+            // still_owns_failed_turn excludes replacement tasks, generations, stopped kernels, and another terminal settlement.
+            // still_owns_failed_turn 排除替代任务、替代代际、已停止 kernel 与其他终态结算。
+            let still_owns_failed_turn = !guard.active_stream_tasks.contains_key(&session_id)
+                && !guard
+                    .session_terminal_persistence_owners
+                    .contains_key(&session_id)
+                && guard
+                    .session_runtime_kernels
+                    .get(&session_id)
+                    .is_some_and(|kernel| {
+                        kernel.generation() == expected_kernel_generation
+                            && kernel.has_active_turn()
+                            && !kernel.is_stopped()
+                    });
+            if !still_owns_failed_turn {
+                return Ok(StreamTaskLaunchFailureOutcome::StaleOwner);
+            }
+            register_session_terminal_persistence_owner(
+                &mut guard,
+                session_id,
+                terminal_persistence_owner,
+            )?;
+            // phase_event may fail when retained projection state is unavailable; retry invalidation below remains mandatory.
+            // phase_event 可能因保留投影状态不可用而失败；下方重试失效仍为强制步骤。
+            let phase_event = match apply_session_phase_to_state(
+                &mut guard,
+                session_id,
+                SessionRunPhase::Failed,
+            ) {
+                Ok(event) => Some(event),
+                Err(error) => {
+                    eprintln!(
+                        "[webui-service] execution stream launch failure phase projection failed: session={session_id} generation={expected_kernel_generation} error={error}"
+                    );
+                    None
+                }
+            };
+            // terminal_at closes the continuation ledger before the exact kernel generation is released.
+            // terminal_at 在释放精确 kernel 代际前闭合 Continue 账本。
+            let terminal_at = current_unix_millis_text();
+            let continuation_result = guard
+                .workspace_snapshot
+                .as_mut()
+                .and_then(|workspace| workspace.session_runtime_state.get_mut(&session_id))
+                .ok_or_else(|| {
+                    String::from("Execution stream launch failure runtime state is unavailable.")
+                })
+                .and_then(|runtime_state| {
+                    refresh_terminal_continuation_state(runtime_state, false, &terminal_at)?;
+                    runtime_state.updated_at = terminal_at;
+                    Ok(())
+                });
+            if let Err(error) = continuation_result {
+                // retry_invalidated prevents a broken ledger revision from leaving the claimed token apparently resumable.
+                // retry_invalidated 防止损坏的账本修订让已领取令牌看似仍可恢复。
+                let retry_invalidated = guard
+                    .workspace_snapshot
+                    .as_mut()
+                    .and_then(|workspace| workspace.session_runtime_state.get_mut(&session_id))
+                    .is_some_and(|runtime_state| {
+                        super::conversation_checkpoint::invalidate_execution_retry_runtime_state(
+                            runtime_state,
+                            "retry_snapshot_transition_failed",
+                            "The failed stream launch continuation could not advance and was invalidated.",
+                            current_unix_millis_text(),
+                        )
+                    });
+                eprintln!(
+                    "[webui-service] execution stream launch failure continuation terminalization failed: session={session_id} generation={expected_kernel_generation} retry_invalidated={retry_invalidated} error={error}"
+                );
+            }
+            finish_webui_session_kernel_turn(&mut guard, session_id, TurnTerminalStatus::Failed);
+            phase_event
+        };
+        if let Some(terminal_phase_event) = terminal_phase_event {
+            emit_service_event_with_trace(
+                app,
+                "workbench_phase_delta_emit",
+                ServiceEvent::WorkbenchDelta(Box::new(terminal_phase_event)),
+            );
+        }
+        return Ok(StreamTaskLaunchFailureOutcome::FailedOwnerFinalized);
+    }
     // commit_result carries either the aligned Failed delta or the exact ownership rejection.
     // commit_result 携带对齐的 Failed 增量或精确所有权拒绝。
     let commit_result = commit_owned_stream_task_launch_failure(
         task_state,
         session_id,
         expected_kernel_generation,
-        |state| apply_session_phase_to_state(state, session_id, SessionRunPhase::Failed),
+        |state| {
+            // phaseEvent and the terminal continuation generation commit under the same exact-owner lock.
+            // phaseEvent 与终态 Continue 代际在同一个精确所有者锁内提交。
+            let phase_event =
+                apply_session_phase_to_state(state, session_id, SessionRunPhase::Failed)?;
+            Ok(phase_event)
+        },
         |_, event| Ok(event),
     )?;
     // event exists only when the failed owner committed phase and kernel state atomically.

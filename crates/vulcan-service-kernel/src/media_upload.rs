@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::conversation_submission::SubmissionModelSelection;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use vulcan_core::types::{ConversationAttachment, ConversationAttachmentKind};
 use vulcan_provider_adapters::{
@@ -15,6 +15,7 @@ use vulcan_service_api::{
     MediaUploadPhase, MediaUploadProgressChangedDelta, ServiceEvent, WorkbenchDelta,
     WorkbenchDeltaEnvelope,
 };
+use vulcan_workbench_model::{SessionMediaReferenceEntry, SessionMediaReferenceScope};
 
 /// Process-local pending media submissions keyed by the client submission id.
 /// 按客户端提交标识索引的进程内待处理媒体提交。
@@ -58,6 +59,118 @@ struct MediaUploadTelemetryIdentity {
     /// Frozen response projection profile identities.
     /// 冻结响应投影 Profile 身份。
     response_profiles: Vec<ProviderOperationalProfileRevision>,
+}
+
+/// Carries provider-native video references prepared for one accepted prompt.
+/// 携带一条已接纳提示词所准备的供应商原生视频引用。
+#[derive(Debug, Clone, Default)]
+pub(crate) struct PreparedSubmissionMedia {
+    /// Provider-native references that must be attached to the canonical user-message owner.
+    /// 必须附加到规范用户消息所有者上的供应商原生引用。
+    pub(crate) references: Vec<PreparedSubmissionMediaReference>,
+}
+
+/// Carries one durable media-ledger candidate without exposing provider secrets.
+/// 携带一个不暴露供应商秘密的可持久化媒体账本候选项。
+#[derive(Debug, Clone)]
+pub(crate) struct PreparedSubmissionMediaReference {
+    /// SHA-256 digest of the exact source bytes.
+    /// 精确源字节的 SHA-256 摘要。
+    pub(crate) source_sha256: String,
+    /// Byte length covered by the source digest.
+    /// 源摘要覆盖的字节长度。
+    pub(crate) source_byte_len: u64,
+    /// Provider identity owning the uploaded object.
+    /// 拥有已上传对象的供应商标识。
+    pub(crate) provider_id: String,
+    /// Service/API entry owning the upload channel.
+    /// 拥有上传通道的服务/API 入口。
+    pub(crate) service_entry_id: String,
+    /// Manifest upload channel that created the object.
+    /// 创建该对象的 Manifest 上传通道。
+    pub(crate) upload_channel_id: String,
+    /// Content fingerprint of the upload contract semantics.
+    /// 上传契约语义的内容指纹。
+    pub(crate) upload_contract_fingerprint: String,
+    /// Explicit reuse boundary declared by the upload channel.
+    /// 上传通道声明的显式复用边界。
+    pub(crate) reference_scope: SessionMediaReferenceScope,
+    /// Credential identity required only by credential-scoped references.
+    /// 仅凭据作用域引用需要的凭据身份。
+    pub(crate) connection_id: Option<String>,
+    /// Session identity required only by session-scoped references.
+    /// 仅会话作用域引用需要的会话身份。
+    pub(crate) session_id: Option<String>,
+    /// Canonical resource kind retained by the ledger.
+    /// 账本保留的规范资源类型。
+    pub(crate) resource_kind: String,
+    /// Exact normalized source MIME type.
+    /// 精确归一化源 MIME 类型。
+    pub(crate) mime_type: String,
+    /// Provider-native URI or URL used by request projection.
+    /// 请求投影使用的供应商原生 URI 或 URL。
+    pub(crate) provider_reference: String,
+    /// Provider reference creation time in Unix milliseconds.
+    /// 供应商引用创建时间的 Unix 毫秒值。
+    pub(crate) created_at_unix_millis: u64,
+    /// Provider reference expiry time in Unix milliseconds.
+    /// 供应商引用过期时间的 Unix 毫秒值。
+    pub(crate) expires_at_unix_millis: u64,
+    /// Historical canonical user-message owners that still retain this source.
+    /// 仍保留该源文件的历史规范用户消息所有者。
+    pub(crate) owner_message_ids: BTreeSet<String>,
+    /// Whether the current submission owner should be attached after turn admission.
+    /// 是否应在本轮回合准入后附加当前提交所有者。
+    pub(crate) attach_current_owner: bool,
+}
+
+impl PreparedSubmissionMediaReference {
+    /// Converts the preparation result into a durable session-ledger entry.
+    /// 将准备结果转换为可持久化的会话账本条目。
+    pub(crate) fn into_ledger_entry(
+        self,
+        owner_message_id: Option<&str>,
+    ) -> SessionMediaReferenceEntry {
+        let owner_message_ids = self.owner_message_ids;
+        let attach_current_owner = self.attach_current_owner;
+        let mut entry = SessionMediaReferenceEntry {
+            source_sha256: self.source_sha256,
+            source_byte_len: self.source_byte_len,
+            provider_id: self.provider_id,
+            service_entry_id: self.service_entry_id,
+            upload_channel_id: self.upload_channel_id,
+            upload_contract_fingerprint: self.upload_contract_fingerprint,
+            reference_scope: self.reference_scope,
+            connection_id: self.connection_id,
+            session_id: self.session_id,
+            resource_kind: self.resource_kind,
+            mime_type: self.mime_type,
+            provider_reference: self.provider_reference,
+            created_at_unix_millis: self.created_at_unix_millis,
+            expires_at_unix_millis: self.expires_at_unix_millis,
+            owner_message_ids,
+        };
+        if attach_current_owner {
+            if let Some(owner_message_id) = owner_message_id {
+                entry.owner_message_ids.insert(owner_message_id.to_string());
+            }
+        }
+        entry
+    }
+}
+
+impl PreparedSubmissionMedia {
+    /// Retains a durable reference only for video, whose provider-native upload must survive model switches.
+    /// 仅为视频保留可持久化引用，因为视频供应商原生上传必须跨模型切换存活。
+    fn push_video_reference(
+        &mut self,
+        resource_kind: vulcan_ai_contract::ResourceKind,
+        reference: PreparedSubmissionMediaReference,
+    ) {
+        if resource_kind == vulcan_ai_contract::ResourceKind::Video {
+            self.references.push(reference);
+        }
+    }
 }
 
 /// Returns the process-local pending media cancellation registry.
@@ -293,9 +406,11 @@ pub(crate) async fn prepare_submission_media(
     session_runtime_state: Option<&vulcan_workbench_model::SessionRuntimeStateEntry>,
     model_selection: Option<&SubmissionModelSelection>,
     attachments: &[ConversationAttachment],
-) -> Result<(), String> {
-    if attachments.is_empty() {
-        return Ok(());
+) -> Result<PreparedSubmissionMedia, String> {
+    if attachments.is_empty()
+        && !session_runtime_state.is_some_and(session_runtime_state_has_video_attachment)
+    {
+        return Ok(PreparedSubmissionMedia::default());
     }
     let cancellation = register_media_upload(client_submission_id)?;
     let result = prepare_submission_media_inner(
@@ -312,6 +427,38 @@ pub(crate) async fn prepare_submission_media(
     .await;
     remove_media_upload(client_submission_id);
     result
+}
+
+/// Commits prepared video references together with their canonical user-message owner.
+/// 将已准备视频引用与其规范用户消息所有者一并提交。
+pub(crate) fn commit_prepared_submission_media_ledger(
+    workspace_snapshot: &mut WorkspaceSnapshot,
+    session_id: SessionId,
+    owner_message_id: Option<&str>,
+    prepared: PreparedSubmissionMedia,
+) -> Result<(), String> {
+    if prepared.references.is_empty() {
+        return Ok(());
+    }
+    let runtime_state = workspace_snapshot
+        .session_runtime_state
+        .get_mut(&session_id)
+        .ok_or_else(|| String::from("Media reference ledger session runtime state is missing."))?;
+    for reference in prepared.references {
+        // A reference without a historical owner and without a newly admitted canonical owner
+        // is request-scoped only and must not become an orphaned durable ledger entry.
+        // 没有历史所有者且没有新准入规范所有者的引用仅属于请求作用域，不得成为孤立持久账本条目。
+        if reference.owner_message_ids.is_empty()
+            && (!reference.attach_current_owner || owner_message_id.is_none())
+        {
+            continue;
+        }
+        runtime_state
+            .media_reference_ledger
+            .upsert(reference.into_ledger_entry(owner_message_id));
+    }
+    runtime_state.updated_at = current_unix_millis_text();
+    Ok(())
 }
 
 /// Resolves media preparation through the same immutable session route as provider dispatch.
@@ -440,7 +587,7 @@ async fn prepare_submission_media_inner(
     model_selection: Option<&SubmissionModelSelection>,
     attachments: &[ConversationAttachment],
     cancellation: &MediaUploadCancellation,
-) -> Result<(), String> {
+) -> Result<PreparedSubmissionMedia, String> {
     let execution = resolve_submission_media_execution(
         agent_runtime,
         session_id,
@@ -469,8 +616,12 @@ async fn prepare_submission_media_inner(
         &bridged_media_kinds,
         attachments,
     )?;
-    let file_count = attachments.len();
-    for (file_index, attachment) in attachments.iter().enumerate() {
+    let preparation_attachments =
+        collect_media_preparation_attachments(session_runtime_state, attachments);
+    let file_count = preparation_attachments.len();
+    let mut prepared_submission_media = PreparedSubmissionMedia::default();
+    for (file_index, preparation_attachment) in preparation_attachments.iter().enumerate() {
+        let attachment = &preparation_attachment.attachment;
         let media_kind = attachment_kind_text(attachment.kind.clone());
         let total_bytes = attachment.byte_len;
         let resource_kind = attachment_kind(attachment.kind.clone());
@@ -485,14 +636,139 @@ async fn prepare_submission_media_inner(
         if !native_media {
             continue;
         }
-        let upload_channel_id = execution
+        // Images and audio are intentionally request-scoped Base64 projections; only videos
+        // create provider-owned references that must survive a model or provider switch.
+        // 图片与音频有意保持请求作用域 Base64 投影；只有视频创建必须跨模型或供应商切换存活的
+        // 供应商引用。
+        if resource_kind != vulcan_ai_contract::ResourceKind::Video {
+            continue;
+        }
+        let upload_contract = execution.client.conversation_media_upload_contract(
+            &execution.route,
+            resource_kind,
+            attachment.mime_type.as_str(),
+        )?;
+        let Some(upload_contract) = upload_contract else {
+            return Err(format!(
+                "Video attachment `{}` has no declared provider upload channel; refusing Base64 fallback.",
+                attachment.file_name
+            ));
+        };
+        let session_scope_id = session_id.map(|session_id| session_id.to_string());
+        if resource_kind == vulcan_ai_contract::ResourceKind::Video
+            && upload_contract.reference_scope
+                == vulcan_provider_adapters::UploadReferenceScope::Session
+            && session_scope_id.is_none()
+        {
+            return Err(format!(
+                "Upload channel `{}` requires a session identity before media preparation.",
+                upload_contract.upload_channel_id
+            ));
+        }
+        let source_identity = execution
             .client
-            .conversation_media_upload_channel_id(
+            .read_media_source_identity(
+                std::path::Path::new(attachment.local_path.as_str()),
+                Some(cancellation),
+            )
+            .await?;
+        let now_unix_millis = current_unix_millis_u64();
+        let source_ledger_reference = (resource_kind == vulcan_ai_contract::ResourceKind::Video)
+            .then(|| session_runtime_state)
+            .flatten()
+            .and_then(|runtime_state| {
+                runtime_state.media_reference_ledger.find_usable(
+                    source_identity.content_sha256.as_str(),
+                    source_identity.byte_len,
+                    provider_id.as_str(),
+                    execution.route.entry.id.as_str(),
+                    upload_contract.upload_channel_id.as_str(),
+                    upload_contract.contract_fingerprint.as_str(),
+                    session_media_reference_scope(upload_contract.reference_scope),
+                    execution.route.connection.id.as_str(),
+                    session_scope_id.as_deref(),
+                    resource_kind_text(resource_kind),
+                    attachment.mime_type.as_str(),
+                    current_unix_millis_u64(),
+                )
+            })
+            .filter(|reference| {
+                // Historical attachments keep their original provider reference even after provider TTL metadata expires.
+                // 历史附件即使供应商 TTL 元数据已过期，也继续保留并使用原供应商引用。
+                submission_media_reference_is_usable_for_current_attachment(
+                    preparation_attachment.attach_current_owner,
+                    reference.created_at_unix_millis,
+                    reference.expires_at_unix_millis,
+                    now_unix_millis,
+                )
+            })
+            .cloned();
+        if let Some(source_ledger_reference) = source_ledger_reference {
+            execution
+                .client
+                .remember_persisted_media_reference(
+                    &execution.route,
+                    std::path::Path::new(attachment.local_path.as_str()),
+                    resource_kind,
+                    attachment.mime_type.as_str(),
+                    source_ledger_reference.provider_reference.clone(),
+                    source_ledger_reference.source_sha256.as_str(),
+                    source_ledger_reference.source_byte_len,
+                    session_scope_id.as_deref(),
+                    source_ledger_reference.created_at_unix_millis,
+                    source_ledger_reference.expires_at_unix_millis,
+                )
+                .await?;
+            prepared_submission_media.push_video_reference(
+                resource_kind,
+                prepared_media_reference_from_ledger(
+                    &source_ledger_reference,
+                    preparation_attachment.attach_current_owner,
+                ),
+            );
+            continue;
+        }
+        if let Some(prepared_reference) = execution
+            .client
+            .prepared_media_reference(
                 &execution.route,
+                std::path::Path::new(attachment.local_path.as_str()),
                 resource_kind,
                 attachment.mime_type.as_str(),
-            )?
-            .unwrap_or_else(|| String::from("host.inline_payload"));
+                session_scope_id.as_deref(),
+                Some(cancellation),
+            )
+            .await
+            .filter(|reference| {
+                // Re-attaching an expired local video is a new upload intent; an old history replay is not.
+                // 重新附加已过期本地视频代表新的上传意图；历史回放不代表新的上传意图。
+                submission_media_reference_is_usable_for_current_attachment(
+                    preparation_attachment.attach_current_owner,
+                    reference.created_at_unix_millis,
+                    reference.expires_at_unix_millis,
+                    now_unix_millis,
+                )
+            })
+        {
+            prepared_submission_media.push_video_reference(
+                resource_kind,
+                prepared_media_reference_from_source(
+                    &execution,
+                    &upload_contract,
+                    &source_identity,
+                    resource_kind,
+                    attachment.mime_type.as_str(),
+                    prepared_reference.provider_reference,
+                    prepared_reference.created_at_unix_millis,
+                    prepared_reference.expires_at_unix_millis,
+                    session_scope_id.as_deref(),
+                    preparation_attachment.owner_message_ids.clone(),
+                    preparation_attachment.attach_current_owner,
+                ),
+            );
+            continue;
+        }
+        let upload_channel_id = upload_contract.upload_channel_id.clone();
         // identity is captured once before any source read so progress, telemetry, cache, and
         // dispatch cannot disagree after a manifest hot replacement.
         // identity 在任何源读取前只捕获一次，确保 Manifest 热替换后进度、遥测、缓存与分派
@@ -574,6 +850,9 @@ async fn prepare_submission_media_inner(
                 ),
             );
         });
+        // firstUsedAt anchors both the process cache and durable ledger to the beginning of this upload attempt.
+        // firstUsedAt 将进程缓存与持久账本同时锚定到本次上传尝试开始时。
+        let first_used_at_unix_millis = current_unix_millis_u64();
         // Physical media upload reads the same latest credential revision as conversation requests.
         // 媒体物理上传与会话请求一样读取同一份最新凭据修订版。
         let prepared = async {
@@ -588,6 +867,7 @@ async fn prepare_submission_media_inner(
                     resource_kind,
                     attachment.mime_type.as_str(),
                     false,
+                    true,
                     Some(progress),
                     cancellation,
                 )
@@ -672,13 +952,45 @@ async fn prepare_submission_media_inner(
             );
             return Err(String::from("submission_cancelled: media upload cancelled"));
         }
-        execution.client.remember_prepared_media(
+        let prepared_reference = prepared
+            .prepared_reference()
+            .ok_or_else(|| String::from("Provider media upload did not return a reference."))?
+            .to_string();
+        let prepared_source_identity = prepared.source_identity();
+        let prepared_created_at_unix_millis = first_used_at_unix_millis;
+        let prepared_expires_at_unix_millis = upload_contract
+            .cache_duration_ms
+            .map(|cache_duration_ms| {
+                prepared_created_at_unix_millis.saturating_add(cache_duration_ms)
+            })
+            .unwrap_or(u64::MAX);
+        execution.client.remember_conversation_prepared_media(
             &execution.route,
-            model_id.as_str(),
             std::path::Path::new(attachment.local_path.as_str()),
             attachment_kind(attachment.kind.clone()),
             attachment.mime_type.as_str(),
             prepared,
+            session_scope_id.as_deref(),
+            Some((
+                prepared_created_at_unix_millis,
+                prepared_expires_at_unix_millis,
+            )),
+        );
+        prepared_submission_media.push_video_reference(
+            resource_kind,
+            prepared_media_reference_from_source(
+                &execution,
+                &upload_contract,
+                &prepared_source_identity,
+                resource_kind,
+                attachment.mime_type.as_str(),
+                prepared_reference,
+                prepared_created_at_unix_millis,
+                prepared_expires_at_unix_millis,
+                session_scope_id.as_deref(),
+                preparation_attachment.owner_message_ids.clone(),
+                preparation_attachment.attach_current_owner,
+            ),
         );
         emit_media_operational_telemetry(
             &identity,
@@ -703,7 +1015,226 @@ async fn prepare_submission_media_inner(
             ),
         );
     }
-    Ok(())
+    Ok(prepared_submission_media)
+}
+
+/// Reports whether the active canonical conversation still contains a video attachment.
+/// 判断活动规范会话中是否仍包含视频附件。
+fn session_runtime_state_has_video_attachment(
+    runtime_state: &vulcan_workbench_model::SessionRuntimeStateEntry,
+) -> bool {
+    runtime_state
+        .conversation_state
+        .messages
+        .iter()
+        .any(|message| {
+            let vulcan_context::SessionConversationPayload::UserText { attachments, .. } =
+                &message.payload
+            else {
+                return false;
+            };
+            attachments
+                .iter()
+                .any(|attachment| attachment.kind == ConversationAttachmentKind::Video)
+        })
+}
+
+/// Decides whether one prepared reference may satisfy the current attachment intent.
+/// 判断一条已准备引用是否可以满足当前附件意图。
+///
+/// Historical replay deliberately ignores provider TTL metadata; an explicit current attachment
+/// reuses only a reference whose known lifetime is still valid, while `u64::MAX` means unknown.
+/// 历史回放有意忽略供应商 TTL 元数据；本轮明确附件仅复用已知生命周期仍有效的引用，
+/// `u64::MAX` 表示没有已知的过期时间。
+fn submission_media_reference_is_usable_for_current_attachment(
+    attach_current_owner: bool,
+    created_at_unix_millis: u64,
+    expires_at_unix_millis: u64,
+    now_unix_millis: u64,
+) -> bool {
+    !attach_current_owner
+        || expires_at_unix_millis == u64::MAX
+        || (created_at_unix_millis <= now_unix_millis && expires_at_unix_millis > now_unix_millis)
+}
+
+/// Describes one deduplicated media source and its canonical message ownership.
+/// 描述一个去重后的媒体源及其规范消息所有权。
+#[derive(Debug, Clone)]
+struct MediaPreparationAttachment {
+    /// Exact attachment source selected for provider preparation.
+    /// 用于供应商准备的精确附件源。
+    attachment: ConversationAttachment,
+    /// Historical canonical user-message owners of this source.
+    /// 该源文件对应的历史规范用户消息所有者。
+    owner_message_ids: BTreeSet<String>,
+    /// Whether this source is also attached to the current submission.
+    /// 该源文件是否同时属于当前提交。
+    attach_current_owner: bool,
+}
+
+/// Returns whether two attachment sources identify the same local media input.
+/// 判断两个附件源是否标识同一个本地媒体输入。
+fn same_media_preparation_attachment(
+    left: &ConversationAttachment,
+    right: &ConversationAttachment,
+) -> bool {
+    left.kind == right.kind
+        && left.local_path == right.local_path
+        && left.mime_type == right.mime_type
+}
+
+/// Collects current attachments plus every historical video that must be projected for a new route.
+/// 收集当前附件以及新路由必须投影的全部历史视频。
+fn collect_media_preparation_attachments(
+    session_runtime_state: Option<&vulcan_workbench_model::SessionRuntimeStateEntry>,
+    attachments: &[ConversationAttachment],
+) -> Vec<MediaPreparationAttachment> {
+    let mut collected: Vec<MediaPreparationAttachment> = Vec::new();
+    for attachment in session_runtime_state
+        .into_iter()
+        .flat_map(|runtime_state| runtime_state.conversation_state.messages.iter())
+        .flat_map(|message| {
+            let vulcan_context::SessionConversationPayload::UserText { attachments, .. } =
+                &message.payload
+            else {
+                return Vec::new();
+            };
+            attachments
+                .iter()
+                .filter(|attachment| attachment.kind == ConversationAttachmentKind::Video)
+                .map(|attachment| (message.id.as_str(), attachment))
+                .collect::<Vec<_>>()
+        })
+    {
+        if let Some(existing) = collected
+            .iter_mut()
+            .find(|existing| same_media_preparation_attachment(&existing.attachment, attachment.1))
+        {
+            existing.owner_message_ids.insert(attachment.0.to_string());
+        } else {
+            let mut owner_message_ids = BTreeSet::new();
+            owner_message_ids.insert(attachment.0.to_string());
+            collected.push(MediaPreparationAttachment {
+                attachment: attachment.1.clone(),
+                owner_message_ids,
+                attach_current_owner: false,
+            });
+        }
+    }
+    for attachment in attachments {
+        if let Some(existing) = collected
+            .iter_mut()
+            .find(|existing| same_media_preparation_attachment(&existing.attachment, attachment))
+        {
+            existing.attach_current_owner = true;
+        } else {
+            collected.push(MediaPreparationAttachment {
+                attachment: attachment.clone(),
+                owner_message_ids: BTreeSet::new(),
+                attach_current_owner: true,
+            });
+        }
+    }
+    collected
+}
+
+/// Converts a persisted ledger entry into the current submission result shape.
+/// 将已持久化账本条目转换为当前提交结果形状。
+fn prepared_media_reference_from_ledger(
+    entry: &SessionMediaReferenceEntry,
+    attach_current_owner: bool,
+) -> PreparedSubmissionMediaReference {
+    PreparedSubmissionMediaReference {
+        source_sha256: entry.source_sha256.clone(),
+        source_byte_len: entry.source_byte_len,
+        provider_id: entry.provider_id.clone(),
+        service_entry_id: entry.service_entry_id.clone(),
+        upload_channel_id: entry.upload_channel_id.clone(),
+        upload_contract_fingerprint: entry.upload_contract_fingerprint.clone(),
+        reference_scope: entry.reference_scope,
+        connection_id: entry.connection_id.clone(),
+        session_id: entry.session_id.clone(),
+        resource_kind: entry.resource_kind.clone(),
+        mime_type: entry.mime_type.clone(),
+        provider_reference: entry.provider_reference.clone(),
+        created_at_unix_millis: entry.created_at_unix_millis,
+        expires_at_unix_millis: entry.expires_at_unix_millis,
+        owner_message_ids: entry.owner_message_ids.clone(),
+        attach_current_owner,
+    }
+}
+
+/// Converts one freshly verified source and upload contract into a ledger candidate.
+/// 将一个刚验证的源与上传契约转换为账本候选项。
+fn prepared_media_reference_from_source(
+    execution: &vulcan_provider_adapters::ResolvedPublicAiExecution,
+    upload_contract: &vulcan_provider_adapters::ConversationMediaUploadContract,
+    source_identity: &vulcan_provider_adapters::PreparedMediaSourceIdentity,
+    resource_kind: vulcan_ai_contract::ResourceKind,
+    mime_type: &str,
+    provider_reference: String,
+    created_at_unix_millis: u64,
+    expires_at_unix_millis: u64,
+    session_scope_id: Option<&str>,
+    owner_message_ids: BTreeSet<String>,
+    attach_current_owner: bool,
+) -> PreparedSubmissionMediaReference {
+    let reference_scope = match upload_contract.reference_scope {
+        vulcan_provider_adapters::UploadReferenceScope::ProviderProtocol => {
+            SessionMediaReferenceScope::ProviderProtocol
+        }
+        vulcan_provider_adapters::UploadReferenceScope::Credential => {
+            SessionMediaReferenceScope::Credential
+        }
+        vulcan_provider_adapters::UploadReferenceScope::Session => {
+            SessionMediaReferenceScope::Session
+        }
+    };
+    PreparedSubmissionMediaReference {
+        source_sha256: source_identity.content_sha256.clone(),
+        source_byte_len: source_identity.byte_len,
+        provider_id: execution.route.provider.id.clone(),
+        service_entry_id: execution.route.entry.id.clone(),
+        upload_channel_id: upload_contract.upload_channel_id.clone(),
+        upload_contract_fingerprint: upload_contract.contract_fingerprint.clone(),
+        reference_scope,
+        connection_id: matches!(reference_scope, SessionMediaReferenceScope::Credential)
+            .then(|| execution.route.connection.id.clone()),
+        session_id: matches!(reference_scope, SessionMediaReferenceScope::Session)
+            .then(|| session_scope_id.map(str::to_owned))
+            .flatten(),
+        resource_kind: resource_kind_text(resource_kind).to_string(),
+        mime_type: mime_type.to_string(),
+        provider_reference,
+        created_at_unix_millis,
+        expires_at_unix_millis,
+        owner_message_ids,
+        attach_current_owner,
+    }
+}
+
+/// Converts the shared signed millisecond clock into the non-negative ledger time domain.
+/// 将共享的有符号毫秒时钟转换为非负账本时间域。
+fn current_unix_millis_u64() -> u64 {
+    u64::try_from(current_unix_millis_value()).unwrap_or(u64::MAX)
+}
+
+/// Converts the Manifest scope enum into the durable workbench scope enum.
+/// 将 Manifest 作用域枚举转换为可持久化工作台作用域枚举。
+fn session_media_reference_scope(
+    scope: vulcan_provider_adapters::UploadReferenceScope,
+) -> SessionMediaReferenceScope {
+    match scope {
+        vulcan_provider_adapters::UploadReferenceScope::ProviderProtocol => {
+            SessionMediaReferenceScope::ProviderProtocol
+        }
+        vulcan_provider_adapters::UploadReferenceScope::Credential => {
+            SessionMediaReferenceScope::Credential
+        }
+        vulcan_provider_adapters::UploadReferenceScope::Session => {
+            SessionMediaReferenceScope::Session
+        }
+    }
 }
 
 /// Rejects unsupported media before any provider upload or inline pre-read starts.
@@ -833,15 +1364,30 @@ fn attachment_kind_text(kind: ConversationAttachmentKind) -> &'static str {
     }
 }
 
+/// Converts a provider-neutral resource kind into its stable ledger label.
+/// 将供应商无关资源类型转换为稳定的账本标签。
+fn resource_kind_text(kind: vulcan_ai_contract::ResourceKind) -> &'static str {
+    match kind {
+        vulcan_ai_contract::ResourceKind::Image => "image",
+        vulcan_ai_contract::ResourceKind::Video => "video",
+        vulcan_ai_contract::ResourceKind::Audio => "audio",
+        vulcan_ai_contract::ResourceKind::File => "file",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        register_media_upload, remove_media_upload, submission_attachment_is_native,
+        collect_media_preparation_attachments, register_media_upload, remove_media_upload,
+        submission_attachment_is_native,
+        submission_media_reference_is_usable_for_current_attachment,
         validate_submission_media_support,
     };
     use std::collections::BTreeSet;
     use vulcan_ai_contract::{ModelCapabilities, ResourceKind};
+    use vulcan_context::{SessionConversationMessage, SessionConversationPayload};
     use vulcan_core::types::{ConversationAttachment, ConversationAttachmentKind};
+    use vulcan_workbench_model::SessionRuntimeStateEntry;
 
     /// Builds one attachment fixture for pre-upload capability validation.
     /// 构建一个用于上传前能力校验的附件夹具。
@@ -878,6 +1424,57 @@ mod tests {
             Ok(_) => panic!("duplicate registration must be rejected"),
         }
         remove_media_upload(client_submission_id);
+    }
+
+    /// Verifies every historical video keeps its real owners while current reuse adds only the new owner.
+    /// 验证每个历史视频保留真实所有者，而当前复用只追加新的所有者。
+    #[test]
+    fn historical_video_owners_are_merged_without_rebinding_history() {
+        let mut first_video = attachment(ConversationAttachmentKind::Video);
+        first_video.local_path = String::from("first.mp4");
+        let mut second_video = attachment(ConversationAttachmentKind::Video);
+        second_video.local_path = String::from("second.mp4");
+        let mut runtime_state = SessionRuntimeStateEntry::default();
+        runtime_state.conversation_state.messages = vec![
+            SessionConversationMessage {
+                id: String::from("old-a"),
+                payload: SessionConversationPayload::UserText {
+                    text: String::from("old a"),
+                    attachments: vec![first_video.clone(), second_video],
+                },
+            },
+            SessionConversationMessage {
+                id: String::from("old-b"),
+                payload: SessionConversationPayload::UserText {
+                    text: String::from("old b"),
+                    attachments: vec![first_video.clone()],
+                },
+            },
+        ];
+
+        let collected = collect_media_preparation_attachments(
+            Some(&runtime_state),
+            std::slice::from_ref(&first_video),
+        );
+        assert_eq!(collected.len(), 2);
+        let first = collected
+            .iter()
+            .find(|candidate| candidate.attachment.local_path == "first.mp4")
+            .expect("first historical video should be collected");
+        assert_eq!(
+            first.owner_message_ids,
+            BTreeSet::from([String::from("old-a"), String::from("old-b")])
+        );
+        assert!(first.attach_current_owner);
+        let second = collected
+            .iter()
+            .find(|candidate| candidate.attachment.local_path == "second.mp4")
+            .expect("second historical video should be collected");
+        assert_eq!(
+            second.owner_message_ids,
+            BTreeSet::from([String::from("old-a")])
+        );
+        assert!(!second.attach_current_owner);
     }
 
     /// Verifies a model-declared media restriction rejects before upload preparation.
@@ -1023,6 +1620,25 @@ mod tests {
             vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID,
             &capabilities,
             &opus_attachment,
+        ));
+    }
+
+    /// Verifies expired history is replayed while an explicit re-attachment requests a new upload.
+    /// 验证过期历史会继续回放，而明确重新附加会触发新的上传请求。
+    #[test]
+    fn media_reference_expiry_only_affects_current_attachment_intent() {
+        assert!(submission_media_reference_is_usable_for_current_attachment(
+            false, 1, 2, 3
+        ));
+        assert!(!submission_media_reference_is_usable_for_current_attachment(true, 1, 2, 3));
+        assert!(submission_media_reference_is_usable_for_current_attachment(
+            true, 1, 10, 3
+        ));
+        assert!(submission_media_reference_is_usable_for_current_attachment(
+            true,
+            1,
+            u64::MAX,
+            u64::MAX,
         ));
     }
 }

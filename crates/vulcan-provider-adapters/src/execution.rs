@@ -89,6 +89,9 @@ const RESPONSES_WEBSOCKET_PREVIOUS_RESPONSE_NOT_FOUND_CODE: &str = "previous_res
 /// Maximum process-local prepared media references retained across all providers and accounts.
 /// 全部供应商与账号合计允许保留的最大进程内媒体准备引用数。
 const PREPARED_MEDIA_CACHE_MAX_ENTRIES: usize = 256;
+/// Maximum process-local reuse lifetime for one context-free model-extension video upload; durable conversations do not use this limit.
+/// 无上下文模型扩展视频上传的进程级最大复用生命周期；持久普通会话不使用此限制。
+pub(crate) const PROVIDER_TOOL_MEDIA_CACHE_DURATION_MS: u64 = 86_400_000;
 /// Maximum process-local Responses WebSocket sessions retained across all roots.
 /// 全部根会话合计允许保留的最大进程内 Responses WebSocket 会话数。
 const RESPONSES_WEBSOCKET_SESSION_MAX_ENTRIES: usize = 256;
@@ -844,12 +847,18 @@ struct PreparedMediaCacheEntry {
     /// Provider-native URL or URI used by the exact request projector.
     /// 精确请求投影器使用的供应商原生 URL 或 URI。
     url: String,
-    /// Expiry prevents an abandoned submission from retaining a reference forever.
-    /// 过期时间防止放弃的提交永久保留远端引用。
-    expires_at: Instant,
+    /// Optional monotonic expiry; durable conversation references intentionally have no process expiry.
+    /// 可选的单调时钟过期点；持久会话引用有意不设置进程过期时间。
+    expires_at: Option<Instant>,
     /// Creation time provides deterministic oldest-first capacity eviction.
     /// 创建时间用于确定性的最旧优先容量淘汰。
     created_at: Instant,
+    /// Wall-clock creation time is persisted when a cache hit becomes a durable ledger entry.
+    /// 当缓存命中转为持久账本条目时，使用墙钟创建时间保持真实供应商 TTL。
+    created_at_unix_millis: u64,
+    /// Wall-clock expiry time prevents a replay from extending the provider-issued lifetime.
+    /// 墙钟过期时间防止重放延长供应商签发引用的有效期。
+    expires_at_unix_millis: u64,
     /// Source metadata prevents a rewritten file from reusing an older provider reference.
     /// 源文件元数据防止被改写的文件复用旧供应商引用。
     source_fingerprint: PreparedMediaSourceFingerprint,
@@ -879,6 +888,60 @@ impl PreparedConversationMedia {
     pub fn prepared_reference(&self) -> Option<&str> {
         self.prepared_reference.as_deref()
     }
+
+    /// Returns the public content identity of the verified source bytes.
+    /// 返回已验证源字节的公开内容身份。
+    pub fn source_identity(&self) -> PreparedMediaSourceIdentity {
+        PreparedMediaSourceIdentity {
+            byte_len: self.source_fingerprint.byte_len,
+            content_sha256: hex::encode(self.source_fingerprint.content_sha256),
+        }
+    }
+}
+
+/// Carries the provider-neutral source identity needed by the durable media ledger.
+/// 携带可持久化媒体账本所需的供应商无关源身份。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreparedMediaSourceIdentity {
+    /// Exact source byte length covered by the digest.
+    /// 摘要覆盖的精确源字节长度。
+    pub byte_len: u64,
+    /// Lowercase hexadecimal SHA-256 digest of the exact source bytes.
+    /// 精确源字节的小写十六进制 SHA-256 摘要。
+    pub content_sha256: String,
+}
+
+/// Describes one cached provider reference together with its original wall-clock lifetime.
+/// 描述一条缓存供应商引用及其原始墙钟生命周期。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreparedMediaReferenceSnapshot {
+    /// Provider-native URI or URL used by the request projector.
+    /// 请求投影器使用的供应商原生 URI 或 URL。
+    pub provider_reference: String,
+    /// Wall-clock time when the provider reference was cached after upload.
+    /// 供应商引用上传后进入缓存的墙钟时间。
+    pub created_at_unix_millis: u64,
+    /// Wall-clock time after which the provider reference must not be reused.
+    /// 供应商引用不得继续复用的墙钟过期时间。
+    pub expires_at_unix_millis: u64,
+}
+
+/// Carries the immutable upload-contract identity required for reference reuse.
+/// 携带引用复用所需的不可变上传契约身份。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConversationMediaUploadContract {
+    /// Stable Manifest upload-channel identifier.
+    /// 稳定的 Manifest 上传通道标识。
+    pub upload_channel_id: String,
+    /// Content fingerprint of the request-relevant upload semantics.
+    /// 与请求相关的上传语义内容指纹。
+    pub contract_fingerprint: String,
+    /// Explicit reference reuse boundary declared by the channel.
+    /// 通道声明的显式引用复用边界。
+    pub reference_scope: crate::UploadReferenceScope,
+    /// Provider-declared lifetime for the returned reference.
+    /// 供应商声明的返回引用生命周期。
+    pub cache_duration_ms: Option<u64>,
 }
 
 /// Identifies the source-file revision used to create one prepared media reference.
@@ -1082,12 +1145,41 @@ fn resolve_conversation_media_upload_channel<'a>(
 
 /// Builds the process-local cache key for one exact provider media projection.
 /// 构建一个精确供应商媒体投影的进程内缓存键。
+/// Builds the content fingerprint of the request-relevant upload semantics.
+/// 构造与请求相关的上传语义内容指纹。
+fn upload_channel_contract_fingerprint(
+    channel: &crate::UploadChannelDeclaration,
+) -> Option<String> {
+    // contractMaterial excludes descriptive text, progress affordances, and cache lifetime.
+    // contractMaterial 排除描述文本、进度能力与缓存生命周期。
+    let contract_material = (
+        channel.primitive,
+        channel.signing_primitive,
+        channel.endpoint_host.as_deref(),
+        channel.endpoint_path.as_deref(),
+        channel.response_host_suffixes.as_slice(),
+        channel.remote_url_host_suffixes.as_slice(),
+        channel.method.as_deref(),
+        channel.credential_role.as_deref(),
+        channel.file_field.as_deref(),
+        channel.accepted_mime_types.as_slice(),
+        channel.response_id_pointer.as_deref(),
+        channel.response_url_pointer.as_deref(),
+        channel.reference_template.as_deref(),
+        &channel.fixed_fields,
+        channel.reference_encoding,
+        channel.reference_scope,
+    );
+    let bytes = serde_json::to_vec(&contract_material).ok()?;
+    Some(format!("sha256:{}", hex::encode(Sha256::digest(bytes))))
+}
+
 fn prepared_media_key(
     route: &ProviderExecutionRoute,
-    model_id: &str,
-    local_path: &Path,
+    source_fingerprint: &PreparedMediaSourceFingerprint,
     kind: ResourceKind,
     mime_type: &str,
+    session_scope_id: Option<&str>,
 ) -> Option<String> {
     let credential_profile = route
         .entry
@@ -1095,10 +1187,10 @@ fn prepared_media_key(
         .iter()
         .find(|profile| profile.id == route.connection.credential_profile_id)?;
     let source = crate::upload_engine::UploadResource {
-        local_path: Some(local_path.to_path_buf()),
+        local_path: None,
         inline_bytes: None,
         mime_type: mime_type.to_string(),
-        byte_len: 1,
+        byte_len: source_fingerprint.byte_len,
         remote_url: None,
         item_count: 1,
     };
@@ -1116,25 +1208,58 @@ fn prepared_media_key(
         credential_profile.credential_role.as_deref(),
     )
     .ok()?;
-    channel.cache_duration_ms?;
-    // material includes account, protocol, manifest generation, complete route revision, and
-    // the resolved upload declaration so no hot update can reuse a stale provider reference.
-    // material 同时包含账号、协议、Manifest 代际、完整路由修订与解析后的上传声明，确保
-    // 热更新绝不会复用过期的供应商引用。
-    let material = serde_json::to_vec(&(
+    prepared_media_cache_key(
         route.provider.id.as_str(),
+        route.entry.id.as_str(),
         route.connection.id.as_str(),
-        model_id,
-        route.protocol_route.protocol_profile_id.as_str(),
-        route.manifest_revision,
-        route.manifest_generation,
-        route.route_revision.as_str(),
-        CONVERSATION_MEDIA_INPUT_OPERATION_ID,
-        constraint,
         channel,
+        source_fingerprint,
         kind,
         mime_type,
-        local_path.to_string_lossy(),
+        session_scope_id,
+    )
+}
+
+/// Builds the shared cache key used by native conversation and provider-tool video uploads.
+/// 构建原生会话与供应商工具视频上传共同使用的缓存键。
+///
+/// The key deliberately omits model, chat protocol, operation, manifest generation, and concrete
+/// account unless the upload channel explicitly narrows its reuse scope. This is the user-defined
+/// boundary: provider plus service/API entry plus upload-contract semantics.
+/// 该键按设计省略模型、聊天协议、操作、Manifest 代际及具体账号，除非上传通道显式收窄复用
+/// 作用域。这正是用户定义的边界：供应商、服务/API 入口与上传契约语义。
+fn prepared_media_cache_key(
+    provider_id: &str,
+    service_entry_id: &str,
+    connection_id: &str,
+    channel: &crate::UploadChannelDeclaration,
+    source_fingerprint: &PreparedMediaSourceFingerprint,
+    kind: ResourceKind,
+    mime_type: &str,
+    session_scope_id: Option<&str>,
+) -> Option<String> {
+    let contract_fingerprint = upload_channel_contract_fingerprint(channel)?;
+    let scope_identity = match channel.reference_scope {
+        crate::UploadReferenceScope::ProviderProtocol => None,
+        crate::UploadReferenceScope::Credential => Some(connection_id),
+        crate::UploadReferenceScope::Session => {
+            if session_scope_id.is_none() {
+                return None;
+            }
+            session_scope_id
+        }
+    };
+    let material = serde_json::to_vec(&(
+        provider_id,
+        service_entry_id,
+        channel.upload_channel_id.as_str(),
+        contract_fingerprint,
+        channel.reference_scope,
+        scope_identity,
+        kind,
+        mime_type,
+        source_fingerprint.byte_len,
+        source_fingerprint.content_sha256,
     ))
     .ok()?;
     Some(format!("sha256:{}", hex::encode(Sha256::digest(material))))
@@ -1143,7 +1268,7 @@ fn prepared_media_key(
 /// Removes expired prepared media references and enforces the global process-local capacity.
 /// 移除已过期媒体准备引用并强制执行进程内全局容量上限。
 fn prune_prepared_media_cache(cache: &mut BTreeMap<String, PreparedMediaCacheEntry>, now: Instant) {
-    cache.retain(|_, entry| entry.expires_at > now);
+    cache.retain(|_, entry| entry.expires_at.is_none_or(|expires_at| expires_at > now));
     while cache.len() > PREPARED_MEDIA_CACHE_MAX_ENTRIES {
         let Some(oldest_key) = cache
             .iter()
@@ -1158,6 +1283,27 @@ fn prune_prepared_media_cache(cache: &mut BTreeMap<String, PreparedMediaCacheEnt
         };
         cache.remove(&oldest_key);
     }
+}
+
+/// Returns the current Unix time used to preserve provider reference lifetimes.
+/// 返回用于保持供应商引用生命周期的当前 Unix 时间。
+fn current_prepared_media_unix_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
+        .unwrap_or_default()
+}
+
+/// Checks whether a provider-tool cache entry is still inside both lifetime boundaries.
+/// 检查供应商工具缓存条目是否同时处于两个生命周期边界内。
+fn provider_tool_reference_is_reusable(
+    reference: &PreparedMediaReferenceSnapshot,
+    now_unix_millis: u64,
+    max_age_ms: u64,
+) -> bool {
+    reference.created_at_unix_millis <= now_unix_millis
+        && reference.expires_at_unix_millis > now_unix_millis
+        && now_unix_millis.saturating_sub(reference.created_at_unix_millis) < max_age_ms
 }
 
 impl ProviderExecutionClient {
@@ -1195,10 +1341,14 @@ impl ProviderExecutionClient {
     /// `route`、`model_id` 与 `secret` 固定精确的供应商账号及模型契约。
     /// `local_path` and `mime_type` identify the validated host attachment.
     /// `local_path` 与 `mime_type` 标识已校验的宿主附件。
-    /// `retain_inline_reference` requests an owned Data URL when no upload channel exists;
-    /// `progress` receives source-byte progress and `cancellation` owns the submit cancel path.
-    /// `retain_inline_reference` 在不存在上传通道时请求自有 Data URL；`progress` 接收源字节进度，
+    /// `retain_inline_reference` requests an owned Data URL for request-scoped media;
+    /// `progress` receives video upload bytes and `cancellation` owns the submit cancel path.
+    /// `retain_inline_reference` 为请求作用域媒体请求自有 Data URL；`progress` 接收视频上传字节，
     /// `cancellation` 持有提交取消路径。
+    /// `allow_provider_upload` is true only for media kinds whose protocol contract owns a
+    /// reusable provider reference, currently video; images and audio remain request-scoped.
+    /// `allow_provider_upload` 仅对协议契约要求可复用供应商引用的媒体类型开启，目前为视频；
+    /// 图片与音频始终保持请求作用域。
     ///
     /// # Returns
     /// 返回值
@@ -1217,6 +1367,7 @@ impl ProviderExecutionClient {
         kind: ResourceKind,
         mime_type: &str,
         retain_inline_reference: bool,
+        allow_provider_upload: bool,
         progress: Option<MediaUploadProgressCallback>,
         cancellation: &MediaUploadCancellation,
     ) -> Result<PreparedConversationMedia, String> {
@@ -1242,8 +1393,18 @@ impl ProviderExecutionClient {
                 source_fingerprint.byte_len
             ));
         }
-        let (prepared_reference, current_source_fingerprint) = if let Some(channel) =
+        let upload_channel = if allow_provider_upload {
             resolve_conversation_media_upload_channel(route, kind, mime_type)?
+        } else {
+            None
+        };
+        if kind == ResourceKind::Video && upload_channel.is_none() {
+            return Err(format!(
+                "Video resource `{}` has no declared provider upload channel; refusing Base64 fallback.",
+                local_path.display()
+            ));
+        }
+        let (prepared_reference, current_source_fingerprint) = if let Some(channel) = upload_channel
         {
             // The frozen route selects a bounded upload channel by resource kind and ordered
             // channel references; provider identity never participates in dispatch.
@@ -1346,16 +1507,346 @@ impl ProviderExecutionClient {
             .map(|channel| channel.map(|channel| channel.upload_channel_id.clone()))
     }
 
+    /// Resolves the immutable contract identity used to cache one provider media reference.
+    /// 解析缓存供应商媒体引用时使用的不可变契约身份。
+    pub fn conversation_media_upload_contract(
+        &self,
+        route: &ProviderExecutionRoute,
+        kind: ResourceKind,
+        mime_type: &str,
+    ) -> Result<Option<ConversationMediaUploadContract>, String> {
+        let Some(channel) = resolve_conversation_media_upload_channel(route, kind, mime_type)?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(ConversationMediaUploadContract {
+            upload_channel_id: channel.upload_channel_id.clone(),
+            contract_fingerprint: upload_channel_contract_fingerprint(channel)
+                .ok_or_else(|| String::from("Media upload contract could not be fingerprinted."))?,
+            reference_scope: channel.reference_scope,
+            cache_duration_ms: channel.cache_duration_ms,
+        }))
+    }
+
+    /// Reads one exact source identity without retaining the source bytes in memory.
+    /// 读取一个精确源身份，但不在内存中保留源字节。
+    pub async fn read_media_source_identity(
+        &self,
+        local_path: &Path,
+        cancellation: Option<&MediaUploadCancellation>,
+    ) -> Result<PreparedMediaSourceIdentity, String> {
+        prepared_media_source_fingerprint(local_path, None, cancellation)
+            .await
+            .map(|fingerprint| PreparedMediaSourceIdentity {
+                byte_len: fingerprint.byte_len,
+                content_sha256: hex::encode(fingerprint.content_sha256),
+            })
+    }
+
+    /// Looks up a reusable provider-tool media reference under the shared upload-contract boundary.
+    /// 按共享上传契约边界查找一条可复用的供应商工具媒体引用。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `provider_id`, `service_entry_id`, `connection_id`, and `channel` identify the exact
+    /// provider upload contract; `local_path`, `kind`, and `mime_type` identify the source;
+    /// session-scoped channels are intentionally non-reusable because this API has no session ledger.
+    /// `provider_id`、`service_entry_id`、`connection_id` 与 `channel` 标识精确供应商上传契约；
+    /// `local_path`、`kind` 与 `mime_type` 标识源文件；由于该 API 没有会话账本，显式会话作用域通道
+    /// 有意不参与复用。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A still-valid reference snapshot, `None` when the channel is intentionally non-cacheable or
+    /// no matching source reference exists, or an explicit scope/source validation error.
+    /// 仍然有效的引用快照；通道明确不可缓存或没有匹配源引用时返回 `None`；作用域/源校验
+    /// 失败返回明确错误。
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn prepared_provider_tool_media_reference(
+        &self,
+        provider_id: &str,
+        service_entry_id: &str,
+        connection_id: &str,
+        channel: &crate::UploadChannelDeclaration,
+        local_path: &Path,
+        kind: ResourceKind,
+        mime_type: &str,
+        cancellation: Option<&MediaUploadCancellation>,
+    ) -> Result<Option<PreparedMediaReferenceSnapshot>, String> {
+        let Some(cache_duration_ms) = channel
+            .cache_duration_ms
+            .filter(|duration| *duration > 0)
+            .map(|duration| duration.min(PROVIDER_TOOL_MEDIA_CACHE_DURATION_MS))
+        else {
+            return Ok(None);
+        };
+        if channel.reference_scope == crate::UploadReferenceScope::Session {
+            return Ok(None);
+        }
+        let source_fingerprint =
+            prepared_media_source_fingerprint(local_path, None, cancellation).await?;
+        let key = prepared_media_cache_key(
+            provider_id,
+            service_entry_id,
+            connection_id,
+            channel,
+            &source_fingerprint,
+            kind,
+            mime_type,
+            None,
+        )
+        .ok_or_else(|| String::from("Provider-tool media cache key could not be constructed."))?;
+        let Some(reference) =
+            self.cached_prepared_media_reference(key.as_str(), &source_fingerprint)
+        else {
+            return Ok(None);
+        };
+        if !provider_tool_reference_is_reusable(
+            &reference,
+            current_prepared_media_unix_millis(),
+            cache_duration_ms,
+        ) {
+            return Ok(None);
+        }
+        Ok(Some(reference))
+    }
+
+    /// Validates and remembers one provider-tool media reference with its original lifetime.
+    /// 校验并按原始生命周期记住一条供应商工具媒体引用。
+    ///
+    /// # Parameters
+    /// 参数
+    /// The route identity and channel define the reusable contract; `expected_source_identity`
+    /// must be the bytes fingerprint captured before the upload; `provider_reference` is the
+    /// reference emitted by the upload engine after the network transfer.
+    /// 路由身份与通道定义可复用契约；`expected_source_identity` 必须是上传前捕获的字节指纹；
+    /// `provider_reference` 是网络传输完成后上传引擎生成的引用。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success after the post-upload source recheck and cache insertion, or a controlled mismatch,
+    /// scope, reference, or lifetime failure.
+    /// 上传后源文件复检与缓存插入完成后返回成功；否则返回受控的源不一致、作用域、引用或
+    /// 生命周期错误。
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn remember_provider_tool_media_reference(
+        &self,
+        provider_id: &str,
+        service_entry_id: &str,
+        connection_id: &str,
+        channel: &crate::UploadChannelDeclaration,
+        local_path: &Path,
+        kind: ResourceKind,
+        mime_type: &str,
+        expected_source_identity: &PreparedMediaSourceIdentity,
+        provider_reference: String,
+        first_used_at_unix_millis: u64,
+    ) -> Result<(), String> {
+        let Some(cache_duration_ms) = channel
+            .cache_duration_ms
+            .filter(|duration| *duration > 0)
+            .map(|duration| duration.min(PROVIDER_TOOL_MEDIA_CACHE_DURATION_MS))
+        else {
+            return Ok(());
+        };
+        if channel.reference_scope == crate::UploadReferenceScope::Session {
+            return Ok(());
+        }
+        crate::upload_engine::validate_prepared_reference(channel, provider_reference.as_str())?;
+        let source_fingerprint = prepared_media_source_fingerprint(local_path, None, None).await?;
+        let actual_source_identity = PreparedMediaSourceIdentity {
+            byte_len: source_fingerprint.byte_len,
+            content_sha256: hex::encode(source_fingerprint.content_sha256),
+        };
+        if &actual_source_identity != expected_source_identity {
+            return Err(String::from(
+                "Provider-tool media source changed during upload; refusing to cache the provider reference.",
+            ));
+        }
+        let key = prepared_media_cache_key(
+            provider_id,
+            service_entry_id,
+            connection_id,
+            channel,
+            &source_fingerprint,
+            kind,
+            mime_type,
+            None,
+        )
+        .ok_or_else(|| String::from("Provider-tool media cache key could not be constructed."))?;
+        let now_unix_millis = current_prepared_media_unix_millis();
+        if first_used_at_unix_millis > now_unix_millis {
+            return Err(String::from(
+                "Provider-tool media cache first-use time is in the future; refusing to cache the reference.",
+            ));
+        }
+        let expires_at_unix_millis = first_used_at_unix_millis.saturating_add(cache_duration_ms);
+        self.remember_prepared_media_cache_entry(
+            key,
+            provider_reference,
+            source_fingerprint,
+            cache_duration_ms,
+            Some((first_used_at_unix_millis, expires_at_unix_millis)),
+            false,
+        );
+        Ok(())
+    }
+
+    /// Returns one cache entry after pruning and source-fingerprint validation.
+    /// 裁剪缓存并校验源文件指纹后返回一条缓存项。
+    fn cached_prepared_media_reference(
+        &self,
+        key: &str,
+        source_fingerprint: &PreparedMediaSourceFingerprint,
+    ) -> Option<PreparedMediaReferenceSnapshot> {
+        let mut cache = self.prepared_media.lock().ok()?;
+        prune_prepared_media_cache(&mut cache, Instant::now());
+        let entry = cache.get(key)?.clone();
+        if entry.source_fingerprint != *source_fingerprint {
+            cache.remove(key);
+            return None;
+        }
+        Some(PreparedMediaReferenceSnapshot {
+            provider_reference: entry.url,
+            created_at_unix_millis: entry.created_at_unix_millis,
+            expires_at_unix_millis: entry.expires_at_unix_millis,
+        })
+    }
+
+    /// Seeds the process cache from a persisted reference after revalidating the local source.
+    /// 在重新验证本地源后，用持久化引用预热进程缓存。
+    #[allow(clippy::too_many_arguments)]
+    pub async fn remember_persisted_media_reference(
+        &self,
+        route: &ProviderExecutionRoute,
+        local_path: &Path,
+        kind: ResourceKind,
+        mime_type: &str,
+        provider_reference: String,
+        source_sha256: &str,
+        source_byte_len: u64,
+        session_scope_id: Option<&str>,
+        created_at_unix_millis: u64,
+        expires_at_unix_millis: u64,
+    ) -> Result<(), String> {
+        let channel = resolve_conversation_media_upload_channel(route, kind, mime_type)?
+            .ok_or_else(|| String::from("Persisted media reference requires an upload channel."))?;
+        if channel.reference_scope == crate::UploadReferenceScope::Session
+            && session_scope_id.is_none()
+        {
+            return Err(format!(
+                "Upload channel `{}` requires a session identity before a persisted media reference can be reused.",
+                channel.upload_channel_id
+            ));
+        }
+        crate::upload_engine::validate_prepared_reference(channel, provider_reference.as_str())?;
+        let source_fingerprint = prepared_media_source_fingerprint(local_path, None, None).await?;
+        let actual_source_sha256 = hex::encode(source_fingerprint.content_sha256);
+        if actual_source_sha256 != source_sha256 || source_fingerprint.byte_len != source_byte_len {
+            return Err(String::from(
+                "Persisted media reference does not match the current source bytes.",
+            ));
+        }
+        self.remember_prepared_media_with_wall_clock_and_retention(
+            route,
+            local_path,
+            kind,
+            mime_type,
+            PreparedConversationMedia {
+                prepared_reference: Some(provider_reference),
+                source_fingerprint,
+            },
+            session_scope_id,
+            Some((created_at_unix_millis, expires_at_unix_millis)),
+            true,
+        );
+        Ok(())
+    }
+
     /// Remembers one provider-native reference for the exact route and local source.
     /// 为精确路由与本地源记住一个供应商原生引用。
     pub fn remember_prepared_media(
         &self,
         route: &ProviderExecutionRoute,
-        model_id: &str,
         local_path: &Path,
         kind: ResourceKind,
         mime_type: &str,
         prepared: PreparedConversationMedia,
+        session_scope_id: Option<&str>,
+    ) {
+        self.remember_prepared_media_with_wall_clock(
+            route,
+            local_path,
+            kind,
+            mime_type,
+            prepared,
+            session_scope_id,
+            None,
+        );
+    }
+
+    /// Remembers one reference while preserving an existing provider wall-clock lifetime when supplied.
+    /// 在提供既有供应商墙钟生命周期时，按原有效期记住一条引用。
+    #[allow(clippy::too_many_arguments)]
+    pub fn remember_prepared_media_with_wall_clock(
+        &self,
+        route: &ProviderExecutionRoute,
+        local_path: &Path,
+        kind: ResourceKind,
+        mime_type: &str,
+        prepared: PreparedConversationMedia,
+        session_scope_id: Option<&str>,
+        wall_clock_lifetime: Option<(u64, u64)>,
+    ) {
+        self.remember_prepared_media_with_wall_clock_and_retention(
+            route,
+            local_path,
+            kind,
+            mime_type,
+            prepared,
+            session_scope_id,
+            wall_clock_lifetime,
+            false,
+        );
+    }
+
+    /// Remembers a newly uploaded conversation reference until the process exits.
+    /// 将新上传的会话引用保留到进程退出，以便普通会话永不因宿主 TTL 重新上传。
+    pub fn remember_conversation_prepared_media(
+        &self,
+        route: &ProviderExecutionRoute,
+        local_path: &Path,
+        kind: ResourceKind,
+        mime_type: &str,
+        prepared: PreparedConversationMedia,
+        session_scope_id: Option<&str>,
+        wall_clock_lifetime: Option<(u64, u64)>,
+    ) {
+        self.remember_prepared_media_with_wall_clock_and_retention(
+            route,
+            local_path,
+            kind,
+            mime_type,
+            prepared,
+            session_scope_id,
+            wall_clock_lifetime,
+            true,
+        );
+    }
+
+    /// Remembers one reference with an explicit process-retention policy.
+    /// 按显式进程保留策略记住一条引用。
+    #[allow(clippy::too_many_arguments)]
+    fn remember_prepared_media_with_wall_clock_and_retention(
+        &self,
+        route: &ProviderExecutionRoute,
+        local_path: &Path,
+        kind: ResourceKind,
+        mime_type: &str,
+        prepared: PreparedConversationMedia,
+        session_scope_id: Option<&str>,
+        wall_clock_lifetime: Option<(u64, u64)>,
+        keep_until_process_exit: bool,
     ) {
         let PreparedConversationMedia {
             prepared_reference: Some(url),
@@ -1398,19 +1889,93 @@ impl ProviderExecutionClient {
                 .ok()
             })
             .and_then(|channel| channel.cache_duration_ms);
-        // An absent cache declaration intentionally disables reuse; the host must not invent
-        // a lifetime that can outlive the provider-issued reference.
-        // 缺少缓存声明时应有意禁用复用；宿主不得虚构可能超过供应商引用有效期的生命周期。
-        let Some(cache_duration_ms) = cache_duration_ms else {
+        // Timed process caches require a declared provider lifetime; durable conversation entries may retain a reference without one.
+        // 有时效的进程缓存必须声明供应商生命周期；持久会话条目可以在未声明生命周期时继续保留引用。
+        let cache_duration_ms = cache_duration_ms.unwrap_or_default();
+        if !keep_until_process_exit && cache_duration_ms == 0 {
+            return;
+        }
+        let Some(key) = prepared_media_key(
+            route,
+            &source_fingerprint,
+            kind,
+            mime_type,
+            session_scope_id,
+        ) else {
             return;
         };
-        let Some(key) = prepared_media_key(route, model_id, local_path, kind, mime_type) else {
-            return;
-        };
+        self.remember_prepared_media_cache_entry(
+            key,
+            url,
+            source_fingerprint,
+            cache_duration_ms,
+            wall_clock_lifetime,
+            keep_until_process_exit,
+        );
+    }
+
+    /// Inserts one provider reference while preserving the provider-issued wall-clock lifetime.
+    /// 保留供应商签发的墙钟生命周期并插入一条供应商引用。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `key`, `url`, and `source_fingerprint` identify the exact cached source; `cache_duration_ms`
+    /// supplies the declared lifetime for a fresh upload; `wall_clock_lifetime` preserves an
+    /// existing persisted or provider-tool lifetime when available; `keep_until_process_exit`
+    /// disables monotonic expiry for a durable conversation reference.
+    /// `key`、`url` 与 `source_fingerprint` 标识精确缓存源；`cache_duration_ms` 为新上传提供
+    /// 声明生命周期；`wall_clock_lifetime` 在可用时保留已有持久或供应商工具生命周期；
+    /// `keep_until_process_exit` 为持久会话引用关闭单调时钟过期。
+    fn remember_prepared_media_cache_entry(
+        &self,
+        key: String,
+        url: String,
+        source_fingerprint: PreparedMediaSourceFingerprint,
+        cache_duration_ms: u64,
+        wall_clock_lifetime: Option<(u64, u64)>,
+        keep_until_process_exit: bool,
+    ) {
         let now = Instant::now();
-        let Some(expires_at) = now.checked_add(Duration::from_millis(cache_duration_ms)) else {
-            return;
-        };
+        let now_unix_millis = current_prepared_media_unix_millis();
+        let (created_at_unix_millis, expires_at_unix_millis, expires_at) =
+            if let Some((created_at_unix_millis, expires_at_unix_millis)) = wall_clock_lifetime {
+                if created_at_unix_millis > expires_at_unix_millis {
+                    return;
+                }
+                if keep_until_process_exit {
+                    (created_at_unix_millis, expires_at_unix_millis, None)
+                } else {
+                    if expires_at_unix_millis <= now_unix_millis {
+                        return;
+                    }
+                    let remaining_ms = expires_at_unix_millis.saturating_sub(now_unix_millis);
+                    let Some(expires_at) = now.checked_add(Duration::from_millis(remaining_ms))
+                    else {
+                        return;
+                    };
+                    (
+                        created_at_unix_millis,
+                        expires_at_unix_millis,
+                        Some(expires_at),
+                    )
+                }
+            } else {
+                let expires_at_unix_millis = if cache_duration_ms == 0 {
+                    u64::MAX
+                } else {
+                    now_unix_millis.saturating_add(cache_duration_ms)
+                };
+                if keep_until_process_exit {
+                    (now_unix_millis, expires_at_unix_millis, None)
+                } else {
+                    let Some(expires_at) =
+                        now.checked_add(Duration::from_millis(cache_duration_ms))
+                    else {
+                        return;
+                    };
+                    (now_unix_millis, expires_at_unix_millis, Some(expires_at))
+                }
+            };
         if let Ok(mut cache) = self.prepared_media.lock() {
             cache.insert(
                 key,
@@ -1418,6 +1983,8 @@ impl ProviderExecutionClient {
                     url,
                     expires_at,
                     created_at: now,
+                    created_at_unix_millis,
+                    expires_at_unix_millis,
                     source_fingerprint,
                 },
             );
@@ -1425,28 +1992,51 @@ impl ProviderExecutionClient {
         }
     }
 
+    /// Returns a still-valid provider reference and its original wall-clock lifetime.
+    /// 返回仍然有效的供应商引用及其原始墙钟生命周期。
+    pub async fn prepared_media_reference(
+        &self,
+        route: &ProviderExecutionRoute,
+        local_path: &Path,
+        kind: ResourceKind,
+        mime_type: &str,
+        session_scope_id: Option<&str>,
+        cancellation: Option<&MediaUploadCancellation>,
+    ) -> Option<PreparedMediaReferenceSnapshot> {
+        let source_fingerprint = prepared_media_source_fingerprint(local_path, None, cancellation)
+            .await
+            .ok()?;
+        let key = prepared_media_key(
+            route,
+            &source_fingerprint,
+            kind,
+            mime_type,
+            session_scope_id,
+        )?;
+        self.cached_prepared_media_reference(key.as_str(), &source_fingerprint)
+    }
+
     /// Returns a still-valid provider-native reference for the exact local source.
     /// 返回精确本地源仍然有效的供应商原生引用。
     pub async fn prepared_media_url(
         &self,
         route: &ProviderExecutionRoute,
-        model_id: &str,
         local_path: &Path,
         kind: ResourceKind,
         mime_type: &str,
+        session_scope_id: Option<&str>,
+        cancellation: Option<&MediaUploadCancellation>,
     ) -> Option<String> {
-        let source_fingerprint = prepared_media_source_fingerprint(local_path, None, None)
-            .await
-            .ok()?;
-        let key = prepared_media_key(route, model_id, local_path, kind, mime_type)?;
-        let mut cache = self.prepared_media.lock().ok()?;
-        prune_prepared_media_cache(&mut cache, Instant::now());
-        let entry = cache.get(&key)?.clone();
-        if entry.source_fingerprint != source_fingerprint {
-            cache.remove(&key);
-            return None;
-        }
-        Some(entry.url)
+        self.prepared_media_reference(
+            route,
+            local_path,
+            kind,
+            mime_type,
+            session_scope_id,
+            cancellation,
+        )
+        .await
+        .map(|snapshot| snapshot.provider_reference)
     }
 
     /// Executes one frozen provider-native tool target and normalizes its output.
@@ -8198,8 +8788,8 @@ mod tests {
         }));
     }
 
-    /// Verifies prepared media keys isolate account, protocol, and manifest route generations.
-    /// 验证媒体准备缓存键会隔离账号、协议与 Manifest 路由代际。
+    /// Verifies prepared media keys follow provider, service, and upload-contract boundaries.
+    /// 验证媒体准备缓存键遵循供应商、服务与上传契约边界。
     #[test]
     fn prepared_media_key_isolates_frozen_route_identity() {
         // route is a cacheable Kimi video route with an explicit frozen generation identity.
@@ -8209,48 +8799,129 @@ mod tests {
         route.manifest_revision = 10;
         route.manifest_generation = 20;
         route.route_revision = String::from("sha256:route-a");
-        // first is the baseline key for one exact account and route generation.
-        // first 是一个精确账号与路由代际的基准缓存键。
+        let source_fingerprint = PreparedMediaSourceFingerprint {
+            byte_len: 42,
+            modified_at: None,
+            content_sha256: [7; 32],
+        };
+        // first is the baseline key for one provider-service-contract and source identity.
+        // first 是一个供应商-服务-契约与源身份组合的基准缓存键。
         let first = prepared_media_key(
             &route,
-            "kimi-for-coding",
-            Path::new("C:/media/video.mp4"),
+            &source_fingerprint,
             ResourceKind::Video,
             "video/mp4",
+            None,
         )
         .expect("cacheable upload route should produce a key");
-        // replaced_manifest models a hot replacement that keeps provider, account, and model stable.
-        // replaced_manifest 模拟保持供应商、账号与模型不变的热替换。
+        // replaced_manifest keeps the provider upload contract stable despite chat-route metadata changes.
+        // replaced_manifest 在聊天路由元数据变化时保持供应商上传契约稳定。
         let mut replaced_manifest = route.clone();
         replaced_manifest.manifest_revision = 11;
         replaced_manifest.manifest_generation = 21;
         replaced_manifest.route_revision = String::from("sha256:route-b");
-        // replacement_key must not reuse a reference produced by the previous manifest route.
-        // replacement_key 不得复用上一 Manifest 路由生成的引用。
+        // replacement_key reuses the prior reference only because the provider-service upload contract is unchanged.
+        // replacement_key 仅在供应商服务上传契约未变化时复用原引用。
         let replacement_key = prepared_media_key(
             &replaced_manifest,
-            "kimi-for-coding",
-            Path::new("C:/media/video.mp4"),
+            &source_fingerprint,
             ResourceKind::Video,
             "video/mp4",
+            None,
         )
         .expect("replacement route should produce a key");
-        assert_ne!(first, replacement_key);
-        // other_account proves credential connections never share provider-native references.
-        // other_account 证明不同凭据连接绝不会共享供应商原生引用。
+        assert_eq!(first, replacement_key);
+        // other_account proves the default provider-protocol scope ignores concrete accounts.
+        // other_account 证明默认供应商协议作用域忽略具体账号。
         let mut other_account = route.clone();
         other_account.connection.id = String::from("secondary-account");
-        // account_key is scoped to the second exact credential connection.
-        // account_key 限定到第二条精确凭据连接。
         let account_key = prepared_media_key(
             &other_account,
-            "kimi-for-coding",
-            Path::new("C:/media/video.mp4"),
+            &source_fingerprint,
             ResourceKind::Video,
             "video/mp4",
+            None,
         )
         .expect("second account route should produce a key");
-        assert_ne!(first, account_key);
+        assert_eq!(first, account_key);
+    }
+
+    /// Verifies explicit credential and session upload scopes narrow reference reuse.
+    /// 验证显式凭据与会话上传作用域会收窄引用复用边界。
+    #[test]
+    fn prepared_media_key_honors_explicit_upload_reference_scopes() {
+        // route is the exact Kimi video route whose channel can be narrowed for this test.
+        // route 是当前测试可收窄上传通道作用域的精确 Kimi 视频路由。
+        let mut route =
+            bundled_manifest_route("kimi", "coding-plan", ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID);
+        let source_fingerprint = PreparedMediaSourceFingerprint {
+            byte_len: 42,
+            modified_at: None,
+            content_sha256: [8; 32],
+        };
+        // credential_scope isolates otherwise identical media references by exact connection.
+        // credential_scope 按精确连接隔离其他条件完全相同的媒体引用。
+        let upload_channel = route
+            .upload_channels
+            .iter_mut()
+            .find(|channel| channel.upload_channel_id == "coding-plan.video-file")
+            .expect("Kimi coding-plan video upload channel must exist");
+        upload_channel.reference_scope = crate::UploadReferenceScope::Credential;
+        let credential_key = prepared_media_key(
+            &route,
+            &source_fingerprint,
+            ResourceKind::Video,
+            "video/mp4",
+            None,
+        )
+        .expect("credential-scoped upload should produce a key");
+        let mut other_connection = route.clone();
+        other_connection.connection.id = String::from("secondary-account");
+        let other_credential_key = prepared_media_key(
+            &other_connection,
+            &source_fingerprint,
+            ResourceKind::Video,
+            "video/mp4",
+            None,
+        )
+        .expect("second credential-scoped route should produce a key");
+        assert_ne!(credential_key, other_credential_key);
+
+        // session_scope requires an exact session identity and never falls back to a global key.
+        // session_scope 要求精确会话身份，绝不回退到全局键。
+        let upload_channel = route
+            .upload_channels
+            .iter_mut()
+            .find(|channel| channel.upload_channel_id == "coding-plan.video-file")
+            .expect("Kimi coding-plan video upload channel must still exist");
+        upload_channel.reference_scope = crate::UploadReferenceScope::Session;
+        assert!(
+            prepared_media_key(
+                &route,
+                &source_fingerprint,
+                ResourceKind::Video,
+                "video/mp4",
+                None,
+            )
+            .is_none()
+        );
+        let session_a = prepared_media_key(
+            &route,
+            &source_fingerprint,
+            ResourceKind::Video,
+            "video/mp4",
+            Some("session-a"),
+        )
+        .expect("session-scoped upload should produce a key");
+        let session_b = prepared_media_key(
+            &route,
+            &source_fingerprint,
+            ResourceKind::Video,
+            "video/mp4",
+            Some("session-b"),
+        )
+        .expect("second session-scoped upload should produce a key");
+        assert_ne!(session_a, session_b);
     }
 
     /// Verifies prepared media cache pruning expires entries and enforces global capacity.
@@ -8271,8 +8942,10 @@ mod tests {
                 format!("key-{index:04}"),
                 PreparedMediaCacheEntry {
                     url: format!("https://example.invalid/{index}"),
-                    expires_at: now + Duration::from_secs(60),
+                    expires_at: Some(now + Duration::from_secs(60)),
                     created_at,
+                    created_at_unix_millis: 1,
+                    expires_at_unix_millis: 60_001,
                     source_fingerprint: PreparedMediaSourceFingerprint {
                         byte_len: 1,
                         modified_at: None,
@@ -8285,8 +8958,10 @@ mod tests {
             String::from("expired"),
             PreparedMediaCacheEntry {
                 url: String::from("https://example.invalid/expired"),
-                expires_at: now,
+                expires_at: Some(now),
                 created_at: now,
+                created_at_unix_millis: 1,
+                expires_at_unix_millis: 1,
                 source_fingerprint: PreparedMediaSourceFingerprint {
                     byte_len: 1,
                     modified_at: None,
@@ -8299,6 +8974,62 @@ mod tests {
         assert!(!cache.contains_key("expired"));
         assert!(!cache.contains_key("key-0000"));
         assert!(cache.contains_key(&format!("key-{:04}", PREPARED_MEDIA_CACHE_MAX_ENTRIES + 7)));
+    }
+
+    /// Verifies a durable conversation reference survives monotonic cache expiry checks.
+    /// 验证持久会话引用可以穿过单调时钟缓存过期检查继续保留。
+    #[test]
+    fn prepared_media_cache_keeps_durable_conversation_reference() {
+        let now = Instant::now();
+        let mut cache = BTreeMap::new();
+        cache.insert(
+            String::from("durable"),
+            PreparedMediaCacheEntry {
+                url: String::from("mm_file://durable"),
+                expires_at: None,
+                created_at: now,
+                created_at_unix_millis: 1,
+                expires_at_unix_millis: 2,
+                source_fingerprint: PreparedMediaSourceFingerprint {
+                    byte_len: 1,
+                    modified_at: None,
+                    content_sha256: [0; 32],
+                },
+            },
+        );
+        prune_prepared_media_cache(&mut cache, now + Duration::from_secs(86_400));
+        assert!(cache.contains_key("durable"));
+    }
+
+    /// Verifies model-extension references expire from the first use after one day or provider TTL.
+    /// 验证模型扩展引用从首次使用起一天后或供应商 TTL 到期后失效。
+    #[test]
+    fn provider_tool_reference_reuse_uses_first_use_and_provider_expiry() {
+        let reference = PreparedMediaReferenceSnapshot {
+            provider_reference: String::from("mm_file://video-1"),
+            created_at_unix_millis: 1_000,
+            expires_at_unix_millis: 1_000 + 10 * PROVIDER_TOOL_MEDIA_CACHE_DURATION_MS,
+        };
+        assert!(provider_tool_reference_is_reusable(
+            &reference,
+            1_000 + PROVIDER_TOOL_MEDIA_CACHE_DURATION_MS - 1,
+            PROVIDER_TOOL_MEDIA_CACHE_DURATION_MS,
+        ));
+        assert!(!provider_tool_reference_is_reusable(
+            &reference,
+            1_000 + PROVIDER_TOOL_MEDIA_CACHE_DURATION_MS,
+            PROVIDER_TOOL_MEDIA_CACHE_DURATION_MS,
+        ));
+
+        let provider_expired = PreparedMediaReferenceSnapshot {
+            expires_at_unix_millis: 1_000 + 500,
+            ..reference
+        };
+        assert!(!provider_tool_reference_is_reusable(
+            &provider_expired,
+            1_500,
+            PROVIDER_TOOL_MEDIA_CACHE_DURATION_MS,
+        ));
     }
 
     /// Verifies equal-length media replacements receive distinct content-addressed fingerprints.
@@ -8787,7 +9518,10 @@ mod tests {
 
         // connect_error is produced before an HTTP connection can be established.
         // connect_error 产生于 HTTP 连接建立之前。
-        let connect_error = reqwest::Client::new()
+        let connect_error = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("loopback test client should build")
             .post(format!("http://127.0.0.1:{port}/responses"))
             .send()
             .await

@@ -399,6 +399,41 @@
   font-size: 11px;
 }
 
+.context-usage-provider-section {
+  border-top: 1px solid rgb(255 255 255 / 8%);
+  padding-top: 10px;
+}
+
+.context-usage-provider-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: center;
+  gap: 16px;
+}
+
+.context-usage-provider-metric {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: rgb(244 244 244 / 52%);
+  font-size: 11px;
+  line-height: 1.25;
+}
+
+.context-usage-provider-metric span,
+.context-usage-provider-metric strong {
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.context-usage-provider-metric strong {
+  color: rgb(244 244 244 / 88%);
+  font-variant-numeric: tabular-nums;
+  font-weight: 560;
+}
+
 .composer-control-tooltip {
   display: grid;
   align-items: start;

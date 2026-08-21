@@ -366,7 +366,9 @@ fn webui_stop_session_work_appends_stopped_turn_projection_once() {
         .expect("stopped runtime state should exist")
         .provider_call_ledger
         .continuation;
-    assert!(continuation.eligible);
+    // A stop without a replay-safe retry sidecar must not publish a claimable Continue ledger.
+    // 没有可安全重放重试 sidecar 的停止不能发布可领取的 Continue 账本。
+    assert!(!continuation.eligible);
     assert_eq!(continuation.terminal_reason.as_deref(), Some("stopped"));
     assert_eq!(continuation.canonical_tail_kind.as_deref(), Some("error"));
     let stopped_message_count = messages.len();

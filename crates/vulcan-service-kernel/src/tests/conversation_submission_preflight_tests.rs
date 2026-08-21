@@ -1,7 +1,8 @@
 use super::*;
 use crate::conversation_submission::{
     attach_client_submission_id_to_visible_user_record, commit_created_submission_workspace_slice,
-    prepare_materialized_submission_session, prepare_retained_submission_preflight,
+    continuation_submission_runtime_blockers, prepare_materialized_submission_session,
+    prepare_retained_submission_preflight,
 };
 
 /// Builds an initialized retained workspace that owns `project-a` for new-session admission tests.
@@ -212,6 +213,28 @@ fn existing_submission_admission_blocks_competitor_and_authorizes_owner() {
         None,
     )
     .expect("first existing submission should reserve admission");
+    {
+        // guard proves the owner can distinguish its own exact row from an external admission blocker.
+        // guard 证明所有者能够把自身精确行与外部准入阻断区分开来。
+        let guard = state.lock().expect("service state lock");
+        assert!(
+            preflight
+                .turn_admission
+                .owns_current_prompt_submission_reservation(&guard, session_id)
+        );
+        let retained_workspace = guard
+            .workspace_snapshot
+            .as_ref()
+            .expect("test workspace should remain available");
+        let blockers = continuation_submission_runtime_blockers(
+            &guard,
+            retained_workspace,
+            session_id,
+            &preflight.turn_admission,
+        )
+        .expect("Continue should exclude only its exact admission reservation");
+        assert!(!blockers.has_turn_admission_reservation);
+    }
 
     // competitor_error proves the reservation closes the second-submit race.
     // competitor_error 证明该预留关闭第二次提交竞态。
@@ -240,6 +263,46 @@ fn existing_submission_admission_blocks_competitor_and_authorizes_owner() {
         .kernel_reservation_id(&materialized_session)
         .expect("materialized session should match admission")
         .expect("existing session should have a reservation");
+    {
+        // guard simulates a replacement row and proves stale ownership never receives the exemption.
+        // guard 模拟替代预留行，并证明陈旧所有权绝不会获得排除资格。
+        let mut guard = state.lock().expect("service state lock");
+        let original_reservation = guard
+            .session_turn_admission_reservations
+            .get(&session_id)
+            .expect("owner reservation should exist")
+            .clone();
+        guard.session_turn_admission_reservations.insert(
+            session_id,
+            SessionTurnAdmissionReservation {
+                reservation_id: Uuid::new_v4(),
+                kind: SessionTurnAdmissionReservationKind::PromptSubmission,
+            },
+        );
+        assert!(
+            !preflight
+                .turn_admission
+                .owns_current_prompt_submission_reservation(&guard, session_id)
+        );
+        let retained_workspace = guard
+            .workspace_snapshot
+            .as_ref()
+            .expect("test workspace should remain available");
+        let replacement_error = continuation_submission_runtime_blockers(
+            &guard,
+            retained_workspace,
+            session_id,
+            &preflight.turn_admission,
+        )
+        .expect_err("a replacement reservation must remain an external blocker");
+        assert_eq!(
+            replacement_error,
+            "ERR_CONVERSATION_CONTINUE_ADMISSION_IN_FLIGHT"
+        );
+        guard
+            .session_turn_admission_reservations
+            .insert(session_id, original_reservation);
+    }
     {
         // guard commits the kernel turn while the exact reservation remains current.
         // guard 在精确预留仍为当前所有者时提交 kernel 回合。

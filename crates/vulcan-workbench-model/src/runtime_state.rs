@@ -65,6 +65,7 @@ fn is_zero_usize(value: &usize) -> bool {
 
 mod execution_retry;
 mod internal_queue;
+mod media_references;
 mod panel_queue;
 mod planning;
 mod prompt_models;
@@ -75,6 +76,7 @@ mod vmm_state;
 
 pub use execution_retry::*;
 pub use internal_queue::*;
+pub use media_references::*;
 pub use panel_queue::*;
 pub use planning::*;
 pub use prompt_models::*;

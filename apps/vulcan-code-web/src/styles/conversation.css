@@ -84,6 +84,29 @@
   pointer-events: auto;
 }
 
+.conversation-continue-footer {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(100%, 720px);
+  pointer-events: auto;
+}
+
+.conversation-continue-status {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.conversation-continue-status-blocked {
+  color: var(--muted-foreground);
+}
+
+.conversation-continue-status-failed {
+  color: var(--destructive);
+}
+
 .conversation-continue-button:hover:not(:disabled) {
   border-color: var(--accent-primary);
   color: var(--accent-primary);

@@ -713,10 +713,12 @@ async fn try_remote_responses_compaction(
     );
     // messages use the ordinary route-aware bridge so prior checkpoints, tools, and images survive recompaction.
     // messages 使用普通路由感知桥接，使既有检查点、工具与图片在再次压缩时得以保留。
+    let compaction_session_scope_id = session_id.to_string();
     let mut messages = build_responses_compaction_messages(
         full_context_state,
         &plan.source_messages,
         &prepared_execution,
+        Some(compaction_session_scope_id.as_str()),
     )
     .await
     .map_err(|error| format!("Remote Responses compaction input projection failed: {error}"))?;
@@ -1123,6 +1125,10 @@ pub fn stream_prompt_compaction_job(
                             }
                         }
                     }
+                    ExecutionStreamEvent::ContextCompactionRequired { reason, .. } => {
+                        terminal_error = Some(prompt_compaction_request_budget_error(&reason));
+                        break;
+                    }
                     event => {
                         if let Some(progress) = prompt_compaction_progress_for_runtime_event(&event)
                         {
@@ -1347,6 +1353,10 @@ pub fn stream_prompt_compaction_foundation_job(
                             }
                         }
                     }
+                    ExecutionStreamEvent::ContextCompactionRequired { reason, .. } => {
+                        terminal_error = Some(prompt_compaction_request_budget_error(&reason));
+                        break;
+                    }
                     event => {
                         if let Some(progress) = prompt_compaction_progress_for_runtime_event(&event)
                         {
@@ -1441,7 +1451,12 @@ fn build_prompt_compaction_launch_request(
         provider_visible_agent_messages: Vec::new(),
         turn_start_mode: None,
         conversation_state,
-        context_compaction_policy: model_target.map(|target| target.context_compaction_policy),
+        // The isolated summary request must retain the hard model window but cannot recursively trigger automatic compaction.
+        // 隔离摘要请求必须保留模型硬窗口，但不能递归触发自动压缩。
+        context_compaction_policy: model_target.map(|target| ContextCompactionPolicy {
+            auto: false,
+            ..target.context_compaction_policy
+        }),
         context_compaction_window_node_id: model_target
             .and_then(|target| target.context_compaction_policy.compression_window_node_id),
         context_budget_override: None,
@@ -1471,6 +1486,22 @@ fn build_prompt_compaction_launch_request(
         session_plan_context: launch_context.session_plan_context.clone(),
         embedded_turn_usage_segments: Vec::new(),
     }
+}
+
+/// Converts an isolated summary-request budget boundary into an explicit context-window failure.
+/// 将隔离摘要请求的预算边界转换为明确的上下文窗口失败。
+///
+/// # Parameters
+/// 参数
+/// `reason` is the exact request-budget diagnostic emitted before Provider dispatch.
+/// `reason` 是 Provider 分派前发出的精确请求预算诊断。
+///
+/// # Returns
+/// 返回值
+/// An error that preserves the diagnostic and activates the existing pruned-input retry path.
+/// 返回保留诊断并激活现有输入剪枝重试路径的错误。
+fn prompt_compaction_request_budget_error(reason: &str) -> String {
+    format!("Prompt compaction request exceeded its context window: {reason}")
 }
 
 /// Finalizes one terminal execution report returned by the internal summary run into the prompt-based compaction result.

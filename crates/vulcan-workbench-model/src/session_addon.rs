@@ -856,6 +856,10 @@ pub struct SessionRuntimeControls {
     /// 最近一次被该会话使用的激活模型标识。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_model_id: Option<String>,
+    /// Exact model selection waiting for the next user-submission boundary.
+    /// 等待下一次用户提交边界生效的精确模型选择。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_model_selection: Option<crate::SessionPendingModelSelection>,
     /// Persisted non-secret identity of the session's frozen provider route.
     /// 当前会话冻结供应商路由的持久化非秘密身份。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -918,6 +922,7 @@ impl SessionRuntimeControls {
             active_provider_id: runtime_state.active_provider_id.clone(),
             active_connection_id: runtime_state.active_connection_id.clone(),
             active_model_id: runtime_state.active_model_id.clone(),
+            pending_model_selection: runtime_state.pending_model_selection.clone(),
             provider_route_lease: runtime_state.provider_route_lease.clone(),
             context_compaction_window_node_id: runtime_state.context_compaction_window_node_id,
             active_reasoning_effort: runtime_state.active_reasoning_effort,
@@ -946,6 +951,7 @@ impl SessionRuntimeControls {
         runtime_state.active_provider_id = self.active_provider_id.clone();
         runtime_state.active_connection_id = self.active_connection_id.clone();
         runtime_state.active_model_id = self.active_model_id.clone();
+        runtime_state.pending_model_selection = self.pending_model_selection.clone();
         runtime_state.provider_route_lease = self.provider_route_lease.clone();
         runtime_state.context_compaction_window_node_id = self.context_compaction_window_node_id;
         runtime_state.active_reasoning_effort = self.active_reasoning_effort;
@@ -972,6 +978,7 @@ impl SessionRuntimeControls {
             || self.active_provider_id.is_some()
             || self.active_connection_id.is_some()
             || self.active_model_id.is_some()
+            || self.pending_model_selection.is_some()
             || self.provider_route_lease.is_some()
             || self.context_compaction_window_node_id.is_some()
             || self.active_reasoning_effort.is_some()

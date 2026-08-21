@@ -550,6 +550,12 @@ pub(crate) fn refreshed_execution_request_after_context_compaction(
         .ok_or_else(|| String::from("自动上下文压缩完成后未找到会话运行时状态。"))?;
     let mut refreshed = request.clone();
     refreshed.conversation_state = runtime_state.conversation_state.clone();
+    // The compacted state already contains the internal continuation seed, so replaying it as a
+    // new UserPrompt would append the original prompt to the visible transcript a second time.
+    // 压缩后的状态已经包含内部续接种子，因此若再按新 UserPrompt 重放，就会把原始提示词第二次追加到可见转录。
+    refreshed.turn_start_mode = Some(
+        vulcan_agent_runtime::agent_runtime::execution_models::ExecutionTurnStartMode::RestoredCheckpoint,
+    );
     refreshed.output_style_snapshot = applied_output_style_snapshot(runtime_state);
     let turn_marker = refreshed
         .boundary_events

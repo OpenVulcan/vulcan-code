@@ -129,6 +129,7 @@ export interface ChatAreaProps {
     conversationId: string,
     expectedGeneration: number,
     expectedLedgerRevision: number,
+    clientContinuationId: string,
   ) => Promise<boolean>;
   // Opens a subagent transcript in the right context panel.
   // 在右侧上下文面板中打开子代理转录。

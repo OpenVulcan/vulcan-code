@@ -669,15 +669,12 @@ pub(crate) fn process_provider_stream_delta(
                 state.last_successful_provider_usage = Some(usage.clone());
                 state.record_successful_provider_usage_checkpoint(&conversation_state, usage);
             }
-            // events closes the active physical request before publishing its replayable checkpoint.
-            // events 在发布可回放检查点前关闭活动真实请求。
-            let mut events = state
-                .provider_request_telemetry
-                .complete_success(last_successful_provider_usage.as_ref())
-                .map(ExecutionStreamEvent::ProviderRequestTelemetry)
-                .into_iter()
-                .collect::<Vec<_>>();
             state.active_provider_usage = None;
+            // The adapter-owned RequestSucceeded delta is the sole successful durability boundary;
+            // a replayable conversation checkpoint may arrive first and must not consume its terminal telemetry.
+            // 适配器持有的 RequestSucceeded 增量是唯一成功持久化边界；
+            // 可回放会话检查点可能先到达，绝不能提前消费其终态遥测。
+            let mut events = Vec::new();
             events.push(ExecutionStreamEvent::ConversationCheckpoint {
                 session_id,
                 conversation_state,
@@ -963,6 +960,50 @@ mod tests {
             completed_usage.and_then(|usage| usage.total_tokens),
             Some(25)
         );
+    }
+
+    /// Keeps successful terminal telemetry available when a replayable checkpoint arrives before the durable success delta.
+    /// 当可回放检查点先于持久成功增量到达时，保留成功终态遥测供持久化边界使用。
+    #[test]
+    fn final_state_before_request_succeeded_preserves_terminal_durability_event() {
+        let session_id = Uuid::nil();
+        let mut state = build_delta_state_with_telemetry();
+        let _ = process_provider_stream_delta(
+            session_id,
+            &mut state,
+            Ok(ProviderStreamDelta::RequestSnapshot(
+                build_request_snapshot(),
+            )),
+        );
+
+        let checkpoint_events = process_provider_stream_delta(
+            session_id,
+            &mut state,
+            Ok(ProviderStreamDelta::FinalConversationState(
+                build_successful_conversation_state(&["压缩摘要"]),
+                Some(build_usage_snapshot(200, 20, 5, 225, 100)),
+            )),
+        );
+        assert!(matches!(
+            checkpoint_events.as_slice(),
+            [ExecutionStreamEvent::ConversationCheckpoint { .. }]
+        ));
+
+        let (completion, _receiver) =
+            crate::agent_runtime::events::provider_request_durability_barrier();
+        let terminal_events = process_provider_stream_delta(
+            session_id,
+            &mut state,
+            Ok(ProviderStreamDelta::RequestSucceeded {
+                usage: Some(build_usage_snapshot(200, 20, 5, 225, 100)),
+                completion,
+            }),
+        );
+        assert!(matches!(
+            terminal_events.as_slice(),
+            [ExecutionStreamEvent::ProviderRequestDurabilityBoundary { event, .. }]
+                if event.kind == ProviderRequestTelemetryEventKind::Completed
+        ));
     }
 
     /// Builds one minimal request snapshot so provider-request counting uses the real event shape.

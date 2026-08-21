@@ -51,6 +51,8 @@ fn preserve_live_model_selection_for_prompt_replay(
     replay_runtime_state.active_provider_id = live_runtime_state.active_provider_id.clone();
     replay_runtime_state.active_connection_id = live_runtime_state.active_connection_id.clone();
     replay_runtime_state.active_model_id = live_runtime_state.active_model_id.clone();
+    replay_runtime_state.pending_model_selection =
+        live_runtime_state.pending_model_selection.clone();
     replay_runtime_state.provider_route_lease = live_runtime_state.provider_route_lease.clone();
 }
 
@@ -69,6 +71,15 @@ fn preserve_live_model_selection_for_prompt_replay(
 fn prompt_replay_model_selection(
     live_runtime_state: &SessionRuntimeStateEntry,
 ) -> Result<Option<SubmissionModelSelection>, String> {
+    if let Some(pending_selection) = live_runtime_state.pending_model_selection.as_ref() {
+        // An edited prompt is a real user submission, so it must promote the exact pending picker choice.
+        // 编辑后的提示词属于真实用户提交，因此必须提升精确的待生效选择器选择。
+        return Ok(Some(SubmissionModelSelection {
+            provider_id: pending_selection.provider_id.clone(),
+            connection_id: pending_selection.connection_id.clone(),
+            model_id: pending_selection.model_id.clone(),
+        }));
+    }
     match (
         live_runtime_state.active_provider_id.as_ref(),
         live_runtime_state.active_connection_id.as_ref(),
@@ -545,6 +556,11 @@ mod tests {
             active_provider_id: Some(String::from("custom:new-provider")),
             active_connection_id: Some(String::from("connection-new")),
             active_model_id: Some(String::from("model-new")),
+            pending_model_selection: Some(vulcan_workbench_model::SessionPendingModelSelection {
+                provider_id: String::from("command-code"),
+                connection_id: String::from("command-code-account"),
+                model_id: String::from("deepseek"),
+            }),
             provider_route_lease: Some(SessionProviderRouteLeaseIdentity {
                 schema_version: 1,
                 provider_id: String::from("custom:new-provider"),
@@ -600,12 +616,16 @@ mod tests {
             live_runtime_state.provider_route_lease
         );
         assert_eq!(
+            replay_runtime_state.pending_model_selection,
+            live_runtime_state.pending_model_selection
+        );
+        assert_eq!(
             prompt_replay_model_selection(&live_runtime_state)
                 .expect("complete live selection should project"),
             Some(SubmissionModelSelection {
-                provider_id: String::from("custom:new-provider"),
-                connection_id: String::from("connection-new"),
-                model_id: String::from("model-new"),
+                provider_id: String::from("command-code"),
+                connection_id: String::from("command-code-account"),
+                model_id: String::from("deepseek"),
             })
         );
     }

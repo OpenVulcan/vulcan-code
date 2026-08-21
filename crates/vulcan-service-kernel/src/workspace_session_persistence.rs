@@ -6,6 +6,22 @@ use std::future::Future;
 
 /// Persists only the changed session after a WebUI runtime mutation.
 /// 在 WebUI 运行时变更后仅持久化被修改的单个会话。
+///
+/// # Parameters
+/// 参数
+/// `state` optionally supplies the authoritative retained workspace and invalidates older background writers.
+/// `state` 可选提供权威保留工作区，并使更早的后台写入者失效。
+/// `controller_runtime` owns the workspace-store persistence route.
+/// `controller_runtime` 持有工作区存储持久化路由。
+/// `workspace_snapshot` is the caller-owned fallback used only when no retained service state exists.
+/// `workspace_snapshot` 是仅在不存在保留服务状态时使用的调用方候选回退。
+/// `session_id` selects the exact regular session to persist.
+/// `session_id` 选择需要持久化的精确普通会话。
+///
+/// # Returns
+/// 返回值
+/// Success after the newest authoritative session revision has crossed the shared write gate.
+/// 最新权威会话修订通过共享写入闸门后返回成功。
 pub(crate) async fn persist_workspace_session_update(
     state: Option<&SharedServiceBridgeState>,
     controller_runtime: ControllerRuntimeHandle,
@@ -13,12 +29,50 @@ pub(crate) async fn persist_workspace_session_update(
     session_id: SessionId,
 ) -> Result<(), String> {
     if let Some(state) = state {
-        invalidate_webui_session_persist_version(state, session_id)?;
+        let (_persist_guard, authoritative_snapshot) =
+            lock_latest_retained_workspace_session_persistence_snapshot(state, session_id).await?;
+        return persist_workspace_session_update_unlocked(
+            controller_runtime,
+            &authoritative_snapshot,
+            session_id,
+        )
+        .await;
     }
     let persist_lock = webui_workspace_persist_lock();
     let _persist_guard = persist_lock.lock().await;
     persist_workspace_session_update_unlocked(controller_runtime, workspace_snapshot, session_id)
         .await
+}
+
+/// Acquires the shared write gate and then clones the newest retained workspace revision.
+/// 取得共享写入闸门后再克隆最新保留工作区修订。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the authoritative retained workspace and background persistence versions.
+/// `state` 持有权威保留工作区与后台持久化版本。
+/// `session_id` selects the session whose older queued writers must be invalidated.
+/// `session_id` 选择必须使旧排队写入者失效的会话。
+///
+/// # Returns
+/// 返回值
+/// The owned write guard and a snapshot read after that guard was acquired.
+/// 返回有所有权的写入守卫，以及取得该守卫后读取的快照。
+pub(crate) async fn lock_latest_retained_workspace_session_persistence_snapshot(
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+) -> Result<(tokio::sync::OwnedMutexGuard<()>, WorkspaceSnapshot), String> {
+    invalidate_webui_session_persist_version(state, session_id)?;
+    let persist_guard = webui_workspace_persist_lock().lock_owned().await;
+    // authoritativeSnapshot is read only after acquiring the write gate, so a newer retained mutation that queued first can never be overwritten by an older detached caller snapshot.
+    // authoritativeSnapshot 仅在取得写入闸门后读取，使先排队的较新保留态变更绝不会被更旧的调用方分离快照反向覆盖。
+    let authoritative_snapshot =
+        current_workspace_snapshot_from_shared_state(state)?.ok_or_else(|| {
+            String::from(
+                "cannot persist a retained session without an authoritative workspace snapshot",
+            )
+        })?;
+    Ok((persist_guard, authoritative_snapshot))
 }
 
 /// Persists one session snapshot after the caller has acquired the shared WebUI write gate.
@@ -632,6 +686,90 @@ mod tests {
                 String::from("active-project"),
                 String::from("archived-project")
             ]
+        );
+    }
+
+    /// Verifies a synchronous terminal writer reloads retained state after waiting for the shared persistence gate.
+    /// 验证同步终态写入者在等待共享持久化闸门后会重新读取保留状态。
+    #[tokio::test]
+    async fn retained_session_persistence_source_is_loaded_after_write_gate() {
+        // sessionId identifies the exact regular session whose retained revision changes while persistence waits.
+        // sessionId 标识持久化等待期间保留修订发生变化的精确普通会话。
+        let session_id = SessionId::new_v4();
+        // serviceState starts with the standard retained parent-session shell.
+        // serviceState 从标准保留父会话外壳开始。
+        let mut service_state =
+            crate::tests::test_support::test_service_state_with_parent_session(session_id);
+        {
+            // workspace owns the initial stale marker captured before the write gate is released.
+            // workspace 持有写入闸门释放前捕获的初始旧标记。
+            let workspace = service_state
+                .workspace_snapshot
+                .as_mut()
+                .expect("test workspace should exist");
+            workspace.session_runtime_state.insert(
+                session_id,
+                SessionRuntimeStateEntry {
+                    updated_at: String::from("stale-before-write-gate"),
+                    ..SessionRuntimeStateEntry::default()
+                },
+            );
+        }
+        // state is the shared authoritative owner read again by the synchronous persistence path.
+        // state 是同步持久化路径会重新读取的共享权威所有者。
+        let state = Arc::new(std::sync::Mutex::new(service_state));
+        // writeGate blocks the tested persistence call after it invalidates older background versions.
+        // writeGate 在被测持久化调用使旧后台版本失效后阻塞该调用。
+        let persist_lock = webui_workspace_persist_lock();
+        let write_gate = persist_lock.lock().await;
+        // persistenceTask enters the exact production source-selection helper and waits behind writeGate.
+        // persistenceTask 进入精确的生产源选择辅助函数，并在 writeGate 后等待。
+        let persistence_state = state.clone();
+        let persistence_task = tokio::spawn(async move {
+            lock_latest_retained_workspace_session_persistence_snapshot(
+                &persistence_state,
+                session_id,
+            )
+            .await
+        });
+        // versionObserved proves the spawned call reached its invalidation boundary before retained state changes.
+        // versionObserved 证明已启动调用在保留态变化前到达版本失效边界。
+        loop {
+            let version_observed = state
+                .lock()
+                .expect("test state should remain lockable")
+                .session_persist_versions
+                .contains_key(&session_id);
+            if version_observed {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        {
+            // runtimeState is the later authoritative mutation that must survive the delayed terminal write.
+            // runtimeState 是必须在延迟终态写入后保留的较新权威变更。
+            let mut guard = state.lock().expect("test state should remain lockable");
+            let runtime_state = guard
+                .workspace_snapshot
+                .as_mut()
+                .and_then(|workspace| workspace.session_runtime_state.get_mut(&session_id))
+                .expect("test runtime state should exist");
+            runtime_state.updated_at = String::from("latest-after-write-gate");
+        }
+        drop(write_gate);
+        let (_persistence_guard, authoritative_snapshot) = persistence_task
+            .await
+            .expect("persistence task should join")
+            .expect("authoritative source selection should succeed");
+        // persistedRuntimeState is the exact source production persistence receives while its guard remains held.
+        // persistedRuntimeState 是生产持久化在守卫仍被持有时接收的精确来源。
+        let persisted_runtime_state = authoritative_snapshot
+            .session_runtime_state
+            .get(&session_id)
+            .expect("authoritative runtime state should exist");
+        assert_eq!(
+            persisted_runtime_state.updated_at,
+            "latest-after-write-gate"
         );
     }
 }

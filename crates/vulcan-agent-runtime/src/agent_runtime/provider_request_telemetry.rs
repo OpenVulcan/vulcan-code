@@ -376,6 +376,21 @@ impl ProviderRequestTelemetryEvent {
         }
     }
 
+    /// Returns the exact host-generated physical Provider call identity carried by this event.
+    /// 返回当前事件携带的精确宿主生成物理 Provider 调用身份。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The non-empty `request_id`, or a controlled contract error for a malformed internal event.
+    /// 返回非空 `request_id`；内部事件契约损坏时返回受控错误。
+    pub fn provider_call_id(&self) -> Result<&str, String> {
+        self.payload
+            .get("request_id")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| String::from("Provider telemetry event is missing request_id."))
+    }
+
     /// Replaces the next-request baseline after the owning ledger boundary is durable.
     /// 在所属账本边界持久化后替换下一请求基线。
     pub fn replace_durable_budget_baseline(
@@ -496,6 +511,12 @@ impl ProviderRequestTelemetryCancellationTracker {
                             event_object.get(field).cloned().unwrap_or(Value::Null),
                         );
                     }
+                    // dispatchOutcome is monotonic evidence carried by the typed Dispatched event itself.
+                    // dispatchOutcome 是由强类型 Dispatched 事件本身携带的单调事实证据。
+                    active_object.insert(
+                        String::from("dispatch_outcome"),
+                        Value::String(String::from("dispatched")),
+                    );
                 }
             }
             ProviderRequestTelemetryEventKind::FirstToken => {
@@ -524,6 +545,10 @@ impl ProviderRequestTelemetryCancellationTracker {
                             .cloned()
                             .unwrap_or(Value::Null),
                     );
+                    // semanticOutputObserved records that replay-visible output crossed the service boundary.
+                    // semanticOutputObserved 记录可影响重放的输出已经越过服务边界。
+                    active_object
+                        .insert(String::from("semantic_output_observed"), Value::Bool(true));
                 }
             }
             ProviderRequestTelemetryEventKind::Completed => {
@@ -540,6 +565,27 @@ impl ProviderRequestTelemetryCancellationTracker {
             }
             ProviderRequestTelemetryEventKind::Retrying => {}
         }
+    }
+
+    /// Records that replay-relevant semantic output crossed the owning service stream boundary.
+    /// 记录与重放相关的语义输出已经越过所属服务流边界。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns no value; without an active request the observation is conservatively ignored.
+    /// 不返回值；没有活动请求时保守地忽略该观测。
+    pub fn observe_semantic_output(&mut self) {
+        // activePayload is the sole stream-local physical request established by ordered Started telemetry.
+        // activePayload 是由有序 Started 遥测建立的唯一流局部物理请求。
+        let Some(active_payload) = self.active_started_payload.as_mut() else {
+            return;
+        };
+        // activeObject is guaranteed by the internal telemetry serializer; malformed payloads remain unsafe because cancellation synthesis then fails closed.
+        // activeObject 由内部遥测序列化器保证；载荷损坏时取消合成会失败关闭，因此仍保持不安全。
+        let Some(active_object) = active_payload.as_object_mut() else {
+            return;
+        };
+        active_object.insert(String::from("semantic_output_observed"), Value::Bool(true));
     }
 
     /// Converts the sole active request into one redacted cancelled terminal event.
@@ -580,10 +626,34 @@ impl ProviderRequestTelemetryCancellationTracker {
         // payloadObject is guaranteed by the internal telemetry serializer.
         // payloadObject 由内部遥测序列化器保证为对象。
         let payload_object = payload.as_object_mut()?;
+        // dispatchOutcome preserves a proven dispatched boundary; absence remains unknown rather than guessed not-dispatched.
+        // dispatchOutcome 保留已证明的分派边界；缺失时保持未知，而不是猜测为未分派。
+        let dispatch_outcome = payload_object
+            .get("dispatch_outcome")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        // semanticOutputObserved is false only when no ordered semantic event reached this service tracker.
+        // semanticOutputObserved 仅在没有有序语义事件到达当前服务跟踪器时为 false。
+        let semantic_output_observed = payload_object
+            .get("semantic_output_observed")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        // replaySafe requires both a proven dispatch outcome and absence of observed semantic output.
+        // replaySafe 同时要求分派结果已获证明且没有观测到语义输出。
+        let replay_safe = dispatch_outcome.is_some() && !semantic_output_observed;
         payload_object.insert(
             String::from("status"),
             Value::String(String::from("cancelled")),
         );
+        payload_object.insert(
+            String::from("dispatch_outcome"),
+            dispatch_outcome.map(Value::String).unwrap_or(Value::Null),
+        );
+        payload_object.insert(
+            String::from("semantic_output_observed"),
+            Value::Bool(semantic_output_observed),
+        );
+        payload_object.insert(String::from("replay_safe"), Value::Bool(replay_safe));
         payload_object.insert(String::from("first_event_at_ms"), first_token_at_ms);
         payload_object
             .entry(String::from("first_token_at_ms"))
@@ -2268,6 +2338,19 @@ mod tests {
             .expect("request evidence should build")
             .remove(0);
         cancellation.observe(&started);
+        // dispatched proves the request crossed the network dispatch boundary before cancellation.
+        // dispatched 证明请求在取消前已经越过网络分派边界。
+        let dispatched = tracker
+            .observe_transport(
+                AiTransportKind::Http,
+                100,
+                None,
+                None,
+                None,
+                std::collections::BTreeMap::new(),
+            )
+            .expect("emit dispatched telemetry");
+        cancellation.observe(&dispatched);
         // firstToken preserves exact first-token timing when cancellation happens later.
         // firstToken 在随后发生取消时保留精确首 Token 时间。
         let first_token = tracker
@@ -2281,9 +2364,125 @@ mod tests {
             .expect("emit cancelled terminal event");
         assert_eq!(cancelled.kind, ProviderRequestTelemetryEventKind::Completed);
         assert_eq!(cancelled.payload["status"], "cancelled");
+        assert_eq!(cancelled.payload["dispatch_outcome"], "dispatched");
+        assert_eq!(cancelled.payload["semantic_output_observed"], true);
+        assert_eq!(cancelled.payload["replay_safe"], false);
         assert!(cancelled.payload["total_tokens"].is_null());
         assert!(cancelled.payload["first_token_at_ms"].is_number());
         assert_eq!(cancelled.payload.get("prompt"), None);
         assert!(cancellation.take_cancelled_event().is_none());
+    }
+
+    /// Verifies cancellation preserves a proven dispatch without inventing semantic output.
+    /// 验证取消会保留已证明的分派事实，且不会虚构语义输出。
+    #[test]
+    fn cancellation_tracker_preserves_safe_dispatched_boundary() {
+        // tracker emits one normal physical request lifecycle under test.
+        // tracker 发出一条被测的正常物理请求生命周期。
+        let mut tracker = test_tracker();
+        // cancellation retains only ordered service-edge facts for the active request.
+        // cancellation 仅为当前活动请求保留有序服务边界事实。
+        let mut cancellation = ProviderRequestTelemetryCancellationTracker::default();
+        // started establishes the unique physical Provider call identity.
+        // started 建立唯一物理 Provider 调用身份。
+        let started = tracker
+            .start_request(&test_request_snapshot(), None)
+            .expect("request evidence should build")
+            .remove(0);
+        cancellation.observe(&started);
+        // dispatched proves transport dispatch while no visible output has crossed the boundary.
+        // dispatched 证明传输已经分派，同时尚无可见输出越过边界。
+        let dispatched = tracker
+            .observe_transport(
+                AiTransportKind::Http,
+                100,
+                None,
+                None,
+                None,
+                std::collections::BTreeMap::new(),
+            )
+            .expect("emit dispatched telemetry");
+        cancellation.observe(&dispatched);
+
+        // cancelled must retain the known dispatch and the exact absence of observed output.
+        // cancelled 必须保留已知分派与未观测输出的精确事实。
+        let cancelled = cancellation
+            .take_cancelled_event()
+            .expect("emit cancelled terminal event");
+        assert_eq!(cancelled.payload["dispatch_outcome"], "dispatched");
+        assert_eq!(cancelled.payload["semantic_output_observed"], false);
+        assert_eq!(cancelled.payload["replay_safe"], true);
+    }
+
+    /// Verifies a tool-only semantic boundary blocks replay even without a visible first token.
+    /// 验证纯工具语义边界即使没有可见首 Token 也会阻止重放。
+    #[test]
+    fn cancellation_tracker_preserves_tool_only_semantic_output() {
+        // tracker emits one normal physical request lifecycle under test.
+        // tracker 发出一条被测的正常物理请求生命周期。
+        let mut tracker = test_tracker();
+        // cancellation retains only ordered service-boundary facts for the active request.
+        // cancellation 仅为活动请求保留有序服务边界事实。
+        let mut cancellation = ProviderRequestTelemetryCancellationTracker::default();
+        // started establishes the sole active physical Provider call.
+        // started 建立唯一活动物理 Provider 调用。
+        let started = tracker
+            .start_request(&test_request_snapshot(), None)
+            .expect("request evidence should build")
+            .remove(0);
+        cancellation.observe(&started);
+        // dispatched proves the transport boundary before tool-only semantic output appears.
+        // dispatched 证明纯工具语义输出出现前已经越过传输边界。
+        let dispatched = tracker
+            .observe_transport(
+                AiTransportKind::Http,
+                100,
+                None,
+                None,
+                None,
+                std::collections::BTreeMap::new(),
+            )
+            .expect("emit dispatched telemetry");
+        cancellation.observe(&dispatched);
+        // semanticOutput represents a tool request that crossed the service stream without visible text.
+        // semanticOutput 表示没有可见文本但已经越过服务流的工具请求。
+        cancellation.observe_semantic_output();
+
+        // cancelled must block replay because semantic output was already observed.
+        // cancelled 必须因已观测到语义输出而阻止重放。
+        let cancelled = cancellation
+            .take_cancelled_event()
+            .expect("emit cancelled terminal event");
+        assert!(cancelled.payload["first_token_at_ms"].is_null());
+        assert_eq!(cancelled.payload["semantic_output_observed"], true);
+        assert_eq!(cancelled.payload["replay_safe"], false);
+    }
+
+    /// Verifies cancellation before a dispatched event remains explicitly unknown and unsafe.
+    /// 验证在 Dispatched 事件前取消会保持明确未知且不可安全重放。
+    #[test]
+    fn cancellation_tracker_does_not_guess_not_dispatched() {
+        // tracker emits one pre-dispatch Started boundary.
+        // tracker 发出一条分派前 Started 边界。
+        let mut tracker = test_tracker();
+        // cancellation observes the same service-edge event sequence as production.
+        // cancellation 观测与生产路径相同的服务边界事件序列。
+        let mut cancellation = ProviderRequestTelemetryCancellationTracker::default();
+        // started alone cannot prove whether transport dispatch raced task cancellation.
+        // 仅有 started 无法证明传输分派是否与任务取消发生竞争。
+        let started = tracker
+            .start_request(&test_request_snapshot(), None)
+            .expect("request evidence should build")
+            .remove(0);
+        cancellation.observe(&started);
+
+        // cancelled keeps dispatch unknown instead of guessing not-dispatched.
+        // cancelled 保持分派未知，而不是猜测为未分派。
+        let cancelled = cancellation
+            .take_cancelled_event()
+            .expect("emit cancelled terminal event");
+        assert!(cancelled.payload["dispatch_outcome"].is_null());
+        assert_eq!(cancelled.payload["semantic_output_observed"], false);
+        assert_eq!(cancelled.payload["replay_safe"], false);
     }
 }

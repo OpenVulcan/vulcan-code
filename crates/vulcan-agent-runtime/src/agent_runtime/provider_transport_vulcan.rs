@@ -14,6 +14,7 @@ use crate::agent_runtime::provider_transport_entry_inputs::{
 };
 use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
 use crate::agent_runtime::provider_transport_request::ProviderTransportExecutionRequest;
+use crate::agent_runtime::provider_transport_retry::REPLAYABLE_TOOL_CALL_STREAM_FAILURE_SUBCATEGORY;
 use crate::agent_runtime::provider_transport_stream_runtime::execute_host_controlled_stream_with_prepared_inputs;
 use crate::agent_runtime::tool_request_stream::ToolRequestFragment;
 use crate::attachment_assets::{AttachmentDescriptor, stage_attachment_bytes};
@@ -27,12 +28,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use vulcan_ai_contract::{
-    AiContinuation, AiExecutionError, AiExecutionRequest, AiMessage, AiOperation, AiStreamEvent,
-    ContentItem, MessageRole, ModelParameterValue, NativeToolKind, ParallelToolCallPolicy,
-    PromptCachePolicy, ProviderReplayEnvelope, ReasoningEffort, ReasoningOutputPolicy,
-    RequestUsage, ResourceKind, ResourceReference, ResourceSourceKind, StructuredOutputPolicy,
-    ToolCall as PublicToolCall, ToolChoicePolicy, ToolDefinition, ToolResult, UsageValue,
-    canonicalize_codex_responses_replay_items, is_replayable_codex_responses_item,
+    AiContinuation, AiErrorCategory, AiExecutionError, AiExecutionRequest, AiMessage, AiOperation,
+    AiStreamEvent, ContentItem, DispatchOutcome, MessageRole, ModelParameterValue, NativeToolKind,
+    ParallelToolCallPolicy, PromptCachePolicy, ProviderReplayEnvelope, ReasoningEffort,
+    ReasoningOutputPolicy, RequestUsage, ResourceKind, ResourceReference, ResourceSourceKind,
+    StructuredOutputPolicy, ToolCall as PublicToolCall, ToolChoicePolicy, ToolDefinition,
+    ToolResult, UsageValue, canonicalize_codex_responses_replay_items,
+    is_replayable_codex_responses_item,
 };
 use vulcan_context::{SessionConversationState, SessionMessageEntry};
 use vulcan_core::provider::{
@@ -778,6 +780,7 @@ impl VulcanProviderAdapter for VulcanPublicContractAdapter {
                 self.model_id.as_str(),
                 self.input_resources.as_slice(),
                 &self.client,
+                Some(self.cache_scope_id.as_str()),
             )
             .await?;
             messages.push(public_message);
@@ -1939,7 +1942,10 @@ impl PublicTurnAccumulator {
                         reason: message.clone(),
                     },
                 )));
-                return Err(provider_failure(provider_id, message.as_str()));
+                return Err(replayable_tool_call_stream_failure(
+                    provider_id,
+                    message.as_str(),
+                ));
             }
             AiStreamEvent::UsageUpdated { usage } => {
                 if let Some(current) = self.usage.as_mut() {
@@ -2287,6 +2293,7 @@ async fn resolve_public_message_resources(
     model_id: &str,
     model_resource_kinds: &[ResourceKind],
     client: &ProviderExecutionClient,
+    session_scope_id: Option<&str>,
 ) -> Result<(), VulcanCoreError> {
     for constraint in &route.protocol_route.input_resource_constraints {
         let resource_count = message
@@ -2361,18 +2368,33 @@ async fn resolve_public_message_resources(
                 ));
             }
         }
-        if let Some(prepared_url) = client
-            .prepared_media_url(
-                route,
-                model_id,
-                std::path::Path::new(local_path),
-                resource.kind,
-                media_type,
-            )
-            .await
-        {
-            resource.url = Some(prepared_url);
-            continue;
+        if resource.kind == ResourceKind::Video {
+            if let Some(prepared_url) = client
+                .prepared_media_url(
+                    route,
+                    std::path::Path::new(local_path),
+                    resource.kind,
+                    media_type,
+                    session_scope_id,
+                    None,
+                )
+                .await
+            {
+                resource.url = Some(prepared_url);
+                continue;
+            }
+        }
+        // Native video must have a provider upload reference before protocol projection.
+        // 原生视频在协议投影前必须已经拥有供应商上传引用。
+        if resource.kind == ResourceKind::Video {
+            return Err(provider_failure(
+                route.provider.id.as_str(),
+                format!(
+                    "Video resource `{}` has no prepared provider reference; refusing Base64 fallback.",
+                    resource.id
+                )
+                .as_str(),
+            ));
         }
         let bytes = tokio::fs::read(local_path).await.map_err(|error| {
             provider_failure(
@@ -2587,6 +2609,7 @@ pub(crate) async fn build_responses_compaction_messages(
     conversation_state: &SessionConversationState,
     source: &[SessionMessageEntry],
     resolved: &ResolvedPublicAiExecution,
+    session_scope_id: Option<&str>,
 ) -> Result<Vec<AiMessage>, String> {
     // sourceIds is the exact planner-selected canonical window and rejects ambiguous duplicates.
     // sourceIds 是规划器精确选中的规范窗口，并拒绝有歧义的重复标识。
@@ -2633,6 +2656,7 @@ pub(crate) async fn build_responses_compaction_messages(
             resolved.model.id.as_str(),
             resolved.model.capabilities.input_resources.as_slice(),
             &resolved.client,
+            session_scope_id,
         )
         .await
         .map_err(|error| error.to_string())?;
@@ -3068,6 +3092,48 @@ fn provider_failure(provider_id: &str, message: &str) -> VulcanCoreError {
         provider_id: provider_id.to_string(),
         message: message.to_string(),
         details: None,
+    }
+}
+
+/// Creates a typed retryable failure for streamed tool arguments that never became executable JSON.
+/// 为始终未形成可执行 JSON 的流式工具参数创建强类型可重试失败。
+///
+/// # Parameters
+/// 参数
+/// `provider_id` identifies the frozen route and `message` retains the controlled decoder diagnostic.
+/// `provider_id` 标识冻结路由，`message` 保留受控解码诊断。
+///
+/// # Returns
+/// 返回值
+/// A dispatched response-stream failure whose partial semantic output may be replaced because no tool ran.
+/// 返回一项已分派的响应流失败；由于工具尚未运行，其局部语义输出可以被替换。
+fn replayable_tool_call_stream_failure(provider_id: &str, message: &str) -> VulcanCoreError {
+    VulcanCoreError::ProviderFailure {
+        provider_id: provider_id.to_string(),
+        message: message.to_string(),
+        details: Some(Box::new(AiExecutionError {
+            category: AiErrorCategory::Unclassified,
+            subcategory: Some(REPLAYABLE_TOOL_CALL_STREAM_FAILURE_SUBCATEGORY.to_string()),
+            stage: String::from("response_stream"),
+            http_status: None,
+            transport: None,
+            websocket_close_code: None,
+            upstream_code: None,
+            upstream_type: None,
+            upstream_parameter: None,
+            upstream_message: None,
+            request_id: None,
+            provider_id: Some(provider_id.to_string()),
+            entry_id: None,
+            model_id: None,
+            message: message.to_string(),
+            dispatch_outcome: DispatchOutcome::Dispatched,
+            semantic_output_observed: true,
+            side_effect_observed: false,
+            terminal: true,
+            retryable: true,
+            retry_after: None,
+        })),
     }
 }
 
@@ -3556,6 +3622,101 @@ mod tests {
             }]
         );
         assert_eq!(replay.provider_context_items, vec![provider_item]);
+    }
+
+    /// Verifies malformed streamed tool arguments remain typed as retryable before any tool execution.
+    /// 验证格式错误的流式工具参数在任何工具执行前保持为强类型可重试失败。
+    #[test]
+    fn public_tool_abort_preserves_replayable_unexecuted_failure() {
+        // liveChannel and sink capture both the visible tool draft and its abort boundary.
+        // liveChannel 与 sink 同时捕获可见工具草稿及其中止边界。
+        let (live_sender, mut live_receiver) = tokio::sync::mpsc::unbounded_channel();
+        let mut sink = RecordingProviderDeltaSink::default();
+        // accumulator represents one physical Provider request after the latest controller checkpoint.
+        // accumulator 表示最近控制器检查点之后的一次真实 Provider 请求。
+        let mut accumulator = PublicTurnAccumulator::new(
+            "opencode-go",
+            "connection-opencode-go",
+            "https://opencode.example/v1/responses",
+            "openai-responses.v1",
+            "deepseek-v4-flash",
+            None,
+        );
+
+        accumulator
+            .apply_event(
+                "opencode-go",
+                &live_sender,
+                &mut sink,
+                AiStreamEvent::ToolCallStarted {
+                    item_id: String::from("tool-item"),
+                    call_id: String::from("call-1"),
+                    tool_name: String::from("vulcan_file_edit"),
+                    index: 0,
+                },
+            )
+            .expect("tool draft should start");
+        // decoderMessage mirrors the controlled error emitted by OpenAI Responses argument parsing.
+        // decoderMessage 镜像 OpenAI Responses 参数解析发出的受控错误。
+        let decoder_message = "OpenAI Responses tool input ended before valid JSON was complete";
+        // failure must carry typed replay facts instead of becoming a legacy terminal Provider failure.
+        // failure 必须携带强类型重放事实，而不能退化为旧式终态 Provider 失败。
+        let failure = accumulator
+            .apply_event(
+                "opencode-go",
+                &live_sender,
+                &mut sink,
+                AiStreamEvent::ToolCallAborted {
+                    item_id: String::from("tool-item"),
+                    message: decoder_message.to_string(),
+                },
+            )
+            .expect_err("aborted tool draft should fail the physical response");
+
+        // retryDecision proves the actual adapter error crosses the generic same-route retry boundary.
+        // retryDecision 证明实际适配器错误能够通过通用同路由重试边界。
+        let retry_decision =
+            crate::agent_runtime::provider_transport_retry::ProviderRetryPolicy::from_config(
+                &crate::provider_config::PersistedProviderRetryConfiguration::default(),
+            )
+            .next_retry(&failure, 0, true)
+            .expect("typed aborted tool draft should enter automatic retry");
+        assert_eq!(retry_decision.reason, "Provider tool call stream failure");
+
+        let VulcanCoreError::ProviderFailure {
+            message,
+            details: Some(details),
+            ..
+        } = failure
+        else {
+            panic!("typed Provider failure expected");
+        };
+        assert_eq!(message, decoder_message);
+        assert_eq!(details.category, AiErrorCategory::Unclassified);
+        assert_eq!(
+            details.subcategory.as_deref(),
+            Some(REPLAYABLE_TOOL_CALL_STREAM_FAILURE_SUBCATEGORY)
+        );
+        assert_eq!(details.stage, "response_stream");
+        assert_eq!(details.dispatch_outcome, DispatchOutcome::Dispatched);
+        assert!(details.semantic_output_observed);
+        assert!(!details.side_effect_observed);
+        assert!(details.terminal);
+        assert!(details.retryable);
+        assert!(accumulator.tool_calls.is_empty());
+
+        assert!(matches!(
+            live_receiver.try_recv(),
+            Ok(Ok(ProviderStreamDelta::ToolRequestFragment(
+                ToolRequestFragment::Detected { .. }
+            )))
+        ));
+        assert!(matches!(
+            live_receiver.try_recv(),
+            Ok(Ok(ProviderStreamDelta::ToolRequestFragment(
+                ToolRequestFragment::Aborted { .. }
+            )))
+        ));
     }
 
     /// Verifies partial provider captures cannot replace complete normalized assistant history.

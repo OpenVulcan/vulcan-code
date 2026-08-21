@@ -970,6 +970,7 @@ mod tests {
             subagent_completion_gate_ignored_tasks: BTreeSet::new(),
             parent_sessions_waiting_for_subagents: BTreeSet::new(),
             active_stream_tasks: BTreeMap::new(),
+            session_terminal_persistence_owners: BTreeMap::new(),
             session_runtime_kernels: BTreeMap::new(),
             session_turn_admission_reservations: BTreeMap::new(),
             project_admission_reservations: BTreeMap::new(),

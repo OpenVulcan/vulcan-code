@@ -460,6 +460,14 @@ fn start_webui_session_kernel_turn_with_admission(
     kind: ActiveTurnKind,
     allowed_reservation_id: Option<Uuid>,
 ) -> Result<(), String> {
+    if state
+        .session_terminal_persistence_owners
+        .contains_key(&session_id)
+    {
+        return Err(format!(
+            "Session `{session_id}` is committing its terminal state; a new runtime kernel turn cannot start"
+        ));
+    }
     match (
         state.session_turn_admission_reservations.get(&session_id),
         allowed_reservation_id,
@@ -743,8 +751,8 @@ pub(crate) fn webui_session_kernel_has_active_turn(
 ///
 /// # Returns
 /// 返回值
-/// `true` when the kernel has an active turn.
-/// 当内核存在活动回合时返回 `true`。
+/// `true` when the kernel has an active turn or an accepted terminal report is still being persisted.
+/// 当 kernel 存在活动回合，或已接纳终态报告仍在持久化时返回 `true`。
 pub(crate) fn webui_session_has_active_run(
     state: &ServiceBridgeState,
     session_id: SessionId,
@@ -753,6 +761,9 @@ pub(crate) fn webui_session_has_active_run(
         .session_runtime_kernels
         .get(&session_id)
         .is_some_and(SessionRuntimeKernel::has_active_turn)
+        || state
+            .session_terminal_persistence_owners
+            .contains_key(&session_id)
 }
 
 /// Reads the current kernel generation for one WebUI session.
@@ -777,6 +788,114 @@ pub(crate) fn webui_session_kernel_generation(
         .session_runtime_kernels
         .get(&session_id)
         .map(SessionRuntimeKernel::generation)
+}
+
+/// Returns the exact active kernel generation owned by one prompt-preparation turn.
+/// 返回单个提示词准备回合精确拥有的活动 kernel 代际。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the kernel, terminal-persistence owners, and admission reservations.
+/// `state` 持有 kernel、终态持久化所有者与准入预留。
+/// `session_id` identifies the session being prepared.
+/// `session_id` 标识正在准备的会话。
+/// `turn_id` is the immutable logical turn identity captured when the kernel started.
+/// `turn_id` 是 kernel 启动时捕获的不可变逻辑回合身份。
+///
+/// # Returns
+/// 返回值
+/// The current generation only while the same active turn still owns preparation; otherwise `None`.
+/// 仅当同一活动回合仍拥有准备流程时返回当前代际；否则返回 `None`。
+pub(crate) fn current_webui_prompt_preparation_generation(
+    state: &ServiceBridgeState,
+    session_id: SessionId,
+    turn_id: &str,
+) -> Option<u64> {
+    if state
+        .session_terminal_persistence_owners
+        .contains_key(&session_id)
+    {
+        return None;
+    }
+    if state
+        .session_turn_admission_reservations
+        .get(&session_id)
+        .is_some_and(|reservation| {
+            reservation.kind != SessionTurnAdmissionReservationKind::PromptSubmission
+        })
+    {
+        return None;
+    }
+    // kernel is the sole generation owner; matching only the logical id would permit an ABA restart of the same Continue turn.
+    // kernel 是唯一代际所有者；仅匹配逻辑标识会错误放行同一 Continue 回合的 ABA 重启。
+    let kernel = state.session_runtime_kernels.get(&session_id)?;
+    if kernel.is_stopped()
+        || !kernel
+            .active_turn()
+            .is_some_and(|active_turn| active_turn.turn_id == turn_id)
+    {
+        return None;
+    }
+    Some(kernel.generation())
+}
+
+/// Returns whether one immutable prompt-preparation owner still matches live service state.
+/// 返回单个不可变提示词准备所有者是否仍与实时服务状态匹配。
+///
+/// # Parameters
+/// 参数
+/// `state`, `session_id`, and `turn_id` select the live prompt-preparation owner.
+/// `state`、`session_id` 与 `turn_id` 选择实时提示词准备所有者。
+/// `expected_generation` is the kernel generation captured before asynchronous preparation began.
+/// `expected_generation` 是异步准备开始前捕获的 kernel 代际。
+///
+/// # Returns
+/// 返回值
+/// `true` only while terminal settlement, Stop, lifecycle mutation, and replacement generations have not taken ownership.
+/// 仅当终态结算、Stop、生命周期变更及替代代际均未取得所有权时返回 `true`。
+pub(crate) fn webui_prompt_preparation_owner_is_current(
+    state: &ServiceBridgeState,
+    session_id: SessionId,
+    expected_generation: u64,
+    turn_id: &str,
+) -> bool {
+    current_webui_prompt_preparation_generation(state, session_id, turn_id)
+        == Some(expected_generation)
+}
+
+/// Captures one authoritative workspace snapshot together with its exact prompt-preparation generation.
+/// 捕获一份权威工作区快照及其精确提示词准备代际。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the live kernel and retained workspace.
+/// `state` 持有实时 kernel 与保留工作区。
+/// `session_id` and `turn_id` identify the accepted preparation turn.
+/// `session_id` 与 `turn_id` 标识已接纳的准备回合。
+///
+/// # Returns
+/// 返回值
+/// `Some((workspace, generation))` for the current owner, `None` after Stop/replacement, or a lock/state error.
+/// 当前所有者返回 `Some((workspace, generation))`；Stop/替代后返回 `None`；加锁或状态异常时返回错误。
+pub(crate) fn capture_webui_prompt_preparation_workspace(
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    turn_id: &str,
+) -> Result<Option<(WorkspaceSnapshot, u64)>, String> {
+    // guard makes owner validation and workspace cloning one indivisible read boundary.
+    // guard 让所有者校验与工作区克隆成为不可分割的读取边界。
+    let guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    let Some(generation) = current_webui_prompt_preparation_generation(&guard, session_id, turn_id)
+    else {
+        return Ok(None);
+    };
+    let workspace_snapshot = guard
+        .workspace_snapshot
+        .clone()
+        .ok_or_else(|| String::from("workspace snapshot is not ready"))?;
+    Ok(Some((workspace_snapshot, generation)))
 }
 
 /// Returns the session ids whose runtime kernels currently own active turns.

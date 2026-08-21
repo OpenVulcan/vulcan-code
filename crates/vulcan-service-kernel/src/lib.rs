@@ -315,7 +315,8 @@ use execution_report_memory::apply_task_session_execution_report_to_memory;
 use execution_report_memory::{
     apply_conversation_checkpoint, apply_execution_report_to_memory,
     apply_task_session_execution_report_to_memory_in_place,
-    emit_conversation_continuation_summary_changed, spawn_conversation_completion_hook_task,
+    emit_conversation_continuation_summary_changed, refresh_terminal_continuation_state,
+    spawn_conversation_completion_hook_task,
 };
 use fallback_workbench_projection::*;
 use git::{
@@ -507,6 +508,7 @@ pub fn create_service_bridge_state(
         subagent_completion_gate_ignored_tasks: BTreeSet::new(),
         parent_sessions_waiting_for_subagents: BTreeSet::new(),
         active_stream_tasks: BTreeMap::new(),
+        session_terminal_persistence_owners: BTreeMap::new(),
         session_runtime_kernels: BTreeMap::new(),
         session_turn_admission_reservations: BTreeMap::new(),
         project_admission_reservations: BTreeMap::new(),

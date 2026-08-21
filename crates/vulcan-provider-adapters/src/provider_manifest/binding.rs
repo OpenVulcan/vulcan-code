@@ -389,6 +389,27 @@ mod tests {
         assert_eq!(binding.protocol_profile_id, flash.protocol_profile_id);
     }
 
+    /// Verifies MiniMax M3 uses its explicitly selected video-capable chat protocol.
+    /// 验证 MiniMax M3 使用显式选择的支持视频对话协议。
+    #[test]
+    fn minimax_m3_binding_is_fixed_to_video_capable_chat_profile() {
+        // manifest is the production MiniMax routing authority for the exact coding-plan entry.
+        // manifest 是精确 coding-plan 入口的生产 MiniMax 路由权威。
+        let manifest = compile_manifest_text(&bundled_text("minimax"), ManifestOwnership::System)
+            .expect("MiniMax manifest must compile");
+        let binding = resolve_system_model_protocol_binding(
+            &manifest,
+            "cn",
+            Some("token-plan-key"),
+            "MiniMax-M3",
+        )
+        .expect("MiniMax M3 must have a frozen protocol binding");
+        assert_eq!(binding.protocol_profile_id, OPENAI_CHAT_PROFILE_ID);
+        assert_eq!(binding.source, ModelProtocolBindingSource::SystemManifest);
+        assert_eq!(binding.rule_id, "reasoning-minimax-m3");
+        assert_eq!(binding.manifest_revision, manifest.revision);
+    }
+
     /// Verifies a credential-scoped rule outranks a global rule with the same matcher.
     /// 验证相同匹配器下凭据作用域规则优先于全局规则。
     #[test]

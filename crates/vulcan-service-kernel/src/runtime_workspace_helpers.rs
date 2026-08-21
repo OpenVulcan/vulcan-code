@@ -866,6 +866,12 @@ pub(crate) fn stop_webui_session_work(
             "ERR_CONVERSATION_CONTINUE_PROVIDER_CALL_STILL_ACTIVE",
         ));
     }
+    // replaySafety is evaluated before the stop ledger is published because refreeze may happen after this detached projection.
+    // replaySafety 在停止账本发布前评估，因为重冻可能在这份分离投影之后发生。
+    let replay_safety_proven = runtime_state
+        .execution_retry_snapshot
+        .as_ref()
+        .is_some_and(|reference| reference.replay_safety_proven());
     if !runtime_state
         .provider_call_ledger
         .mark_continuation_terminal(
@@ -873,7 +879,7 @@ pub(crate) fn stop_webui_session_work(
             String::from("stopped"),
             terminal_at_ms,
             String::from("error"),
-            true,
+            replay_safety_proven,
         )
     {
         return Err(String::from(

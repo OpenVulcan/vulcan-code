@@ -3500,7 +3500,12 @@ mod tests {
         );
         let m3 = &catalog.models[0].capabilities;
         assert_eq!(m3.context_limit, Some(1_000_000));
-        assert!(m3.input_resources.is_empty());
+        // MiniMax M3 is the manifest-declared multimodal model for image and video input.
+        // MiniMax M3 是 Manifest 明确声明支持图片与视频输入的多模态模型。
+        assert_eq!(
+            m3.input_resources,
+            vec![ResourceKind::Image, ResourceKind::Video]
+        );
         assert!(!m3.prompt_cache.supports_managed_explicit);
         assert_eq!(m3.model_parameters[0].id, SAMPLING_TEMPERATURE_PARAMETER_ID);
 

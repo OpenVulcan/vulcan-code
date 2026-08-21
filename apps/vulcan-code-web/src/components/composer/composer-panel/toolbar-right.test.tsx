@@ -1,8 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
+import { formatCompactProviderCount } from "@/components/composer/composer-capability-controls";
 import { ComposerPanelToolbarRight } from "@/components/composer/composer-panel/toolbar-right";
 import { I18nProvider } from "@/i18n";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import type { ContextUsageSnapshot, SessionProviderUsageSummary } from "@/types";
 
 // renderToolbar renders the exact composer action surface for one draft and run state.
 // renderToolbar 为一个草稿与运行状态渲染精确的输入区操作面。
@@ -16,30 +19,39 @@ function renderToolbar(options: {
   // Whether the conversation is running.
   // 会话是否正在运行。
   isConversationRunning: boolean;
+  // Context usage snapshot shown by the context-capacity card.
+  // 上下文容量卡片展示的上下文占用快照。
+  contextUsage?: ContextUsageSnapshot | null;
+  // Session-level Provider accounting shown by the context-capacity card.
+  // 上下文容量卡片展示的会话级 Provider 统计。
+  sessionProviderUsage?: SessionProviderUsageSummary | null;
 }): string {
   return renderToStaticMarkup(
-    <I18nProvider initialLocale="en-US">
-      <ComposerPanelToolbarRight
-        attachmentCount={options.attachmentCount}
-        contextCompactionWindowNodes={[]}
-        contextUsage={null}
-        draftInput={options.draftInput}
-        isConversationRunning={options.isConversationRunning}
-        modelContextLimit={null}
-        onReasoningEffortChange={vi.fn()}
-        onSetSessionContextCompactionWindow={vi.fn()}
-        onSend={vi.fn()}
-        reasoningAriaLabel="Reasoning"
-        reasoningEffort=""
-        reasoningEffortOptions={[]}
-        reasoningPickerOpenSignal={0}
-        selectFallbackLabel="Select"
-        sendAriaLabel="Send"
-        sendBlocked={false}
-        sessionContextCompactionWindowNodeId={null}
-        stopAriaLabel="Stop"
-      />
-    </I18nProvider>,
+    <TooltipProvider>
+      <I18nProvider initialLocale="en-US">
+        <ComposerPanelToolbarRight
+          attachmentCount={options.attachmentCount}
+          contextCompactionWindowNodes={[]}
+          contextUsage={options.contextUsage ?? null}
+          draftInput={options.draftInput}
+          isConversationRunning={options.isConversationRunning}
+          modelContextLimit={null}
+          onReasoningEffortChange={vi.fn()}
+          onSetSessionContextCompactionWindow={vi.fn()}
+          onSend={vi.fn()}
+          reasoningAriaLabel="Reasoning"
+          reasoningEffort=""
+          reasoningEffortOptions={[]}
+          reasoningPickerOpenSignal={0}
+          selectFallbackLabel="Select"
+          sendAriaLabel="Send"
+          sendBlocked={false}
+          sessionProviderUsage={options.sessionProviderUsage ?? null}
+          sessionContextCompactionWindowNodeId={null}
+          stopAriaLabel="Stop"
+        />
+      </I18nProvider>
+    </TooltipProvider>,
   );
 }
 
@@ -65,5 +77,66 @@ describe("composer toolbar primary action", () => {
 
     expect(markup).toContain('aria-label="Send"');
     expect(markup).not.toContain('aria-label="Stop"');
+  });
+
+  it("renders session Provider usage inside the context-capacity tooltip", () => {
+    // contextUsage is the minimal active snapshot required to mount the capacity tooltip.
+    // contextUsage 是挂载上下文容量浮层所需的最小活动快照。
+    const contextUsage: ContextUsageSnapshot = {
+      baselineMatchesActiveRuntime: true,
+      breakdown: [],
+      cacheHitBasisPoints: 9_820,
+      maxTokens: 950_000,
+      percent: 8,
+      severity: "normal",
+      tooltipRows: [],
+      tooltipTitle: "Context capacity",
+      usageBasisPoints: 810,
+      usedTokens: 77_000,
+    };
+    // sessionProviderUsage mirrors one selected-session accounting projection.
+    // sessionProviderUsage 模拟当前选中会话的一份统计投影。
+    const sessionProviderUsage: SessionProviderUsageSummary = {
+      activeBranch: {
+        providerCallCount: 2,
+        unknownUsageCallCount: 0,
+        usage: { totalTokens: 35_037_962 },
+      },
+      cumulativeUsage: { totalTokens: 35_037_962 },
+      inFlightCallCount: 0,
+      inherited: {
+        providerCallCount: 0,
+        unknownUsageCallCount: 0,
+        usage: null,
+      },
+      lastUsage: { totalTokens: 35_037_962 },
+      latestCall: null,
+      lifetime: {
+        providerCallCount: 2,
+        unknownUsageCallCount: 0,
+        usage: { totalTokens: 35_037_962 },
+      },
+      providerCallCount: 2,
+      unknownUsageCallCount: 0,
+      usageRevision: 1,
+    };
+    const markup = renderToolbar({
+      attachmentCount: 0,
+      contextUsage,
+      draftInput: "",
+      isConversationRunning: false,
+      sessionProviderUsage,
+    });
+
+    expect(markup).toContain("Total requests: 2");
+    expect(markup).toContain("Total tokens: 35.04M");
+  });
+
+  it("formats Provider request and token counts with compact units", () => {
+    expect(formatCompactProviderCount(1_234, "unknown")).toBe("1.23K");
+    expect(formatCompactProviderCount(1_234_567, "unknown")).toBe("1.23M");
+    expect(formatCompactProviderCount(1_234_567_890, "unknown")).toBe("1.23B");
+    expect(formatCompactProviderCount(1_234_567_890_123, "unknown")).toBe("1.23T");
+    expect(formatCompactProviderCount(272, "unknown")).toBe("272");
   });
 });

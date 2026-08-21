@@ -476,6 +476,13 @@ pub(crate) fn build_webui_context_compaction_draft(
         &execution.compaction_result,
     )
     .map_err(|error| format!("Invalid frozen context-compaction rewrite: {error}"))?;
+    // Media references are pruned against the final retained canonical window, so discarded
+    // compressed history cannot keep provider uploads alive or affect later model switches.
+    // 媒体引用依据最终保留的规范窗口裁剪，因此已丢弃的压缩历史不会继续保活上传资源，
+    // 也不会影响后续模型切换。
+    draft_runtime_state
+        .media_reference_ledger
+        .retain_for_conversation(&draft_runtime_state.conversation_state);
     append_remote_responses_compaction_context(
         &mut draft_runtime_state.conversation_state,
         &summary_message_id,

@@ -133,16 +133,29 @@ pub(crate) fn session_process_public_ai_selection(
 ///
 /// # Returns
 /// 返回值
-/// The immutable session lease first, then the current exact session target. A global active
-/// selection is used only when the session has no persisted model identity.
-/// 优先返回不可变会话租约，其次返回当前精确会话目标。仅当会话没有持久化模型身份时，
-/// 才使用全局激活选择。
+/// A pending next-turn target first, then the immutable current-turn lease, then the current exact
+/// session target. A global active selection is used only when the session has no persisted model
+/// identity.
+/// 优先返回等待下一轮生效的目标，其次返回当前回合的不可变租约，再返回当前精确会话目标。
+/// 仅当会话没有持久化模型身份时，才使用全局激活选择。
 pub(crate) fn public_ai_workbench_selection(
     configuration: &vulcan_provider_adapters::PersistedAiConfiguration,
     runtime: &vulcan_provider_adapters::PublicAiRuntime,
     session_id: Option<crate::SessionId>,
     runtime_state: Option<&vulcan_workbench_model::SessionRuntimeStateEntry>,
 ) -> Result<Option<vulcan_provider_adapters::ResolvedPublicAiSelection>, String> {
+    if runtime_state.is_some_and(|runtime_state| runtime_state.pending_model_selection.is_some()) {
+        // A persisted pending target is the user's latest exact choice. If it is no longer
+        // executable the picker must become empty and require reselection instead of showing the
+        // old in-flight route or a global fallback.
+        // 持久化待生效目标是用户最近一次精确选择。若它已不可执行，选择器必须变为空并要求重新选择，
+        // 不能继续显示旧的执行中路由或全局回退项。
+        return public_ai_workbench_selection_from_runtime_state(
+            configuration,
+            runtime,
+            runtime_state,
+        );
+    }
     if let Some(session_id) = session_id
         && let Some(selection) =
             session_process_public_ai_selection(runtime, session_id, runtime_state)?
@@ -187,15 +200,26 @@ pub(crate) fn public_ai_workbench_selection_after_route_revocation(
 ///
 /// # Returns
 /// 返回值
-/// The exact persisted selection for an established session. The configured global selection is
-/// considered only for a blank session without any persisted model identity.
-/// 对已有会话返回精确持久化选择。仅对没有任何持久化模型身份的空白会话考虑已配置全局选择。
+/// The exact pending or active persisted selection for an established session. The configured
+/// global selection is considered only for a blank session without any persisted model identity.
+/// 对已有会话返回精确的待生效或活动持久化选择。仅对没有任何持久化模型身份的空白会话考虑
+/// 已配置全局选择。
 fn public_ai_workbench_selection_from_runtime_state(
     configuration: &vulcan_provider_adapters::PersistedAiConfiguration,
     runtime: &vulcan_provider_adapters::PublicAiRuntime,
     runtime_state: Option<&vulcan_workbench_model::SessionRuntimeStateEntry>,
 ) -> Result<Option<vulcan_provider_adapters::ResolvedPublicAiSelection>, String> {
     if let Some(runtime_state) = runtime_state {
+        if let Some(pending_selection) = runtime_state.pending_model_selection.as_ref() {
+            return Ok(runtime
+                .resolve_connection_model_selection(
+                    configuration,
+                    pending_selection.connection_id.as_str(),
+                    pending_selection.provider_id.as_str(),
+                    pending_selection.model_id.as_str(),
+                )
+                .ok());
+        }
         // hasPersistedIdentity distinguishes an established session from a blank session. A
         // transient catalog miss must never replace an established session with the global model.
         // hasPersistedIdentity 区分已有会话与空白会话。瞬时目录缺失绝不能用全局模型替换已有会话。
@@ -606,6 +630,39 @@ mod tests {
             selection.is_none(),
             "an established session must retain no selection until its exact catalog returns"
         );
+    }
+
+    /// Verifies a pending exact tuple outranks the still-valid active route in picker projection.
+    /// 验证待生效精确三元组在选择器投影中优先于仍有效的活动路由。
+    #[test]
+    fn unavailable_pending_session_selection_does_not_fall_back_to_active_route() {
+        // configuration and runtime expose the valid active global route.
+        // configuration 与 runtime 公开有效的活动全局路由。
+        let (configuration, runtime) = runtime_with_global_selection();
+        // runtimeState keeps the valid active tuple while an unavailable exact choice is pending.
+        // runtimeState 保留有效活动三元组，同时持有一个不可用的精确待生效选择。
+        let runtime_state = vulcan_workbench_model::SessionRuntimeStateEntry {
+            active_provider_id: Some(String::from("openrouter")),
+            active_connection_id: Some(String::from("global-account")),
+            active_model_id: Some(String::from("openai/gpt-5.6-terra")),
+            pending_model_selection: Some(vulcan_workbench_model::SessionPendingModelSelection {
+                provider_id: String::from("commandcode"),
+                connection_id: String::from("commandcode-account"),
+                model_id: String::from("deepseek/deepseek-v4-flash"),
+            }),
+            ..Default::default()
+        };
+
+        // selection must stay empty until the exact pending tuple becomes available or is reselected.
+        // selection 必须保持为空，直至精确待生效三元组恢复可用或被重新选择。
+        let selection = public_ai_workbench_selection_from_runtime_state(
+            &configuration,
+            &runtime,
+            Some(&runtime_state),
+        )
+        .expect("pending selection projection should remain readable");
+
+        assert!(selection.is_none());
     }
 
     /// Verifies only a blank session inherits the configured global model.

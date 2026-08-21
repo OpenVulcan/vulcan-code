@@ -121,7 +121,10 @@ function structuredMessageBlockKind(message: ConversationMessage): ConversationB
     return "tool-result";
   }
   if (message.recordKind === "display-note") {
-    if (metadataString(message.metadata, ["notice_kind"]) === "provider_retry") return "notice";
+    // noticeKind identifies backend-owned display notes that use the generic notice surface.
+    // noticeKind 标识使用通用提示界面的后端自有显示备注。
+    const noticeKind = metadataString(message.metadata, ["notice_kind"]);
+    if (noticeKind === "provider_retry" || noticeKind === "model_switch") return "notice";
     if (isSubagentFeedbackMetadata(message.metadata)) return "tool-result";
   }
   if (message.recordKind === "thinking-output") return "thinking";
@@ -199,6 +202,9 @@ function structuredMessageAttributes(
       "preview",
       "summary",
     ]) ?? turnStatsSummary(message.metadata, t);
+  // modelSwitchAttributes localizes the durable backend audit record without persisting UI language.
+  // modelSwitchAttributes 在不持久化界面语言的前提下本地化后端可靠审计记录。
+  const modelSwitchAttributes = localizedModelSwitchAttributes(message, t);
   if (message.title) attributes.title = message.title;
   if (message.recordKind) attributes.record_kind = message.recordKind;
   if (toolName) attributes.tool_name = toolName;
@@ -208,7 +214,61 @@ function structuredMessageAttributes(
   if (subagentName) attributes.subagent_name = subagentName;
   if (status) attributes.status = status;
   if (summary) attributes.summary = summary;
+  if (modelSwitchAttributes) {
+    attributes.title = modelSwitchAttributes.title;
+    attributes.summary = modelSwitchAttributes.summary;
+  }
   return attributes;
+}
+
+// localizedModelSwitchAttributes renders one backend-owned model-switch audit record in the active locale.
+// localizedModelSwitchAttributes 使用当前语言渲染一条后端自有模型切换审计记录。
+function localizedModelSwitchAttributes(
+  // Source transcript message.
+  // 源转录消息。
+  message: ConversationMessage,
+  // Optional translator supplied by the active conversation surface.
+  // 当前会话界面提供的可选翻译函数。
+  t?: (key: TranslationKey) => string,
+): { title: string; summary: string } | null {
+  if (message.recordKind !== "display-note"
+    || metadataString(message.metadata, ["notice_kind"]) !== "model_switch") {
+    return null;
+  }
+  // providerName prefers the frozen display label and falls back only to its exact persisted id.
+  // providerName 优先使用冻结的显示标签，仅在缺失时退回精确持久化标识。
+  const providerName = metadataString(message.metadata, ["provider_name", "provider_id"]) ?? "";
+  // connectionName prefers the frozen account label and falls back only to its exact persisted id.
+  // connectionName 优先使用冻结的账号标签，仅在缺失时退回精确持久化标识。
+  const connectionName = metadataString(message.metadata, ["connection_name", "connection_id"]) ?? "";
+  // modelName prefers the frozen model label and falls back only to its exact persisted id.
+  // modelName 优先使用冻结的模型标签，仅在缺失时退回精确持久化标识。
+  const modelName = metadataString(message.metadata, ["model_name", "model_id"]) ?? "";
+  // activation selects the lifecycle-specific localized explanation.
+  // activation 选择与生命周期语义对应的本地化说明。
+  const activation = metadataString(message.metadata, ["activation"]);
+  // summaryKey remains extensible for already-persisted immediate records while new session
+  // selections use the strict next-submission boundary.
+  // summaryKey 为已持久化的即时记录保留扩展性，而新的会话选择使用严格的下次提交边界。
+  const summaryKey: TranslationKey = activation === "immediate"
+    ? "conversation.modelSwitch.immediate"
+    : "conversation.modelSwitch.nextSubmission";
+  // title is localized at render time so changing the UI locale updates historical records too.
+  // title 在渲染时本地化，因此切换界面语言也会更新历史记录。
+  const title = t?.("conversation.modelSwitch.title") ?? "Model selection";
+  // template is the active-language sentence before exact label interpolation.
+  // template 是插入精确标签前的当前语言句子。
+  const template = t?.(summaryKey)
+    ?? (activation === "immediate"
+      ? "Selected {provider} / {account} / {model}."
+      : "Selected {provider} / {account} / {model}; any current execution keeps its frozen model, and this selection applies on the next user submission.");
+  // summary replaces only the three contract-declared placeholders.
+  // summary 仅替换契约声明的三个占位符。
+  const summary = template
+    .replaceAll("{provider}", providerName)
+    .replaceAll("{account}", connectionName)
+    .replaceAll("{model}", modelName);
+  return { title, summary };
 }
 
 // parseDirectiveConversationBlocks parses Vulcan triple-colon transcript directives.

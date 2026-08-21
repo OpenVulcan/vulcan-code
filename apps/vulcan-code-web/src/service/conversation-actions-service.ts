@@ -57,15 +57,22 @@ export async function continueConversation(
   conversationId: string,
   expectedGeneration: number,
   expectedLedgerRevision: number,
+  clientContinuationId: string,
+  signal?: AbortSignal,
 ): Promise<SubmitConversationPromptAck | null> {
   if (!hasServiceRuntime()) {
     return null;
   }
-  return serviceClient.request<SubmitConversationPromptAck>("service_continue_conversation", {
-    conversationId,
-    expectedGeneration,
-    expectedLedgerRevision,
-  });
+  return serviceClient.request<SubmitConversationPromptAck>(
+    "service_continue_conversation",
+    {
+      conversationId,
+      expectedGeneration,
+      expectedLedgerRevision,
+      clientContinuationId,
+    },
+    { signal },
+  );
 }
 
 // cancelConversationSubmission cancels pre-dispatch media preparation by client submission id.

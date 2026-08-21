@@ -955,6 +955,25 @@ pub(super) async fn load_hydrated_session_workbench(
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
+        // final_active_kernel_sessions closes the hydration projection race before committing the rebuilt workbench.
+        // final_active_kernel_sessions 在提交重建工作台前关闭水合投影竞态窗口。
+        let final_active_kernel_sessions = active_kernel_session_ids(&guard);
+        // final_preserved_run_state carries every live session fact that changed while VMM snapshots were read.
+        // final_preserved_run_state 携带读取 VMM 快照期间发生变化的全部实时会话事实。
+        let final_preserved_run_state = capture_preserved_workspace_run_state_for_session_hydration(
+            guard.workspace_snapshot.as_ref(),
+            &final_active_kernel_sessions,
+            parsed_session_id,
+        );
+        preserve_active_session_run_state(
+            final_preserved_run_state.as_ref(),
+            &mut refreshed_snapshot,
+        );
+        crate::reconcile_workbench_conversation_lifecycle_projection(
+            &mut workbench,
+            &guard,
+            &refreshed_snapshot,
+        )?;
         crate::preserve_project_settings_revisions(&mut workbench, &guard.workbench);
         guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
         workbench.revision = guard.workbench_generation;

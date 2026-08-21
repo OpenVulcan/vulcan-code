@@ -875,5 +875,11 @@ export function providerToolModelKey(target: PublicAiProviderToolTargetSnapshot)
 // errorMessage converts a rejected value into a visible diagnostic.
 // errorMessage 将被拒绝的值转换为可见诊断。
 function errorMessage(reason: unknown): string {
-  return reason instanceof Error ? reason.message : String(reason);
+  // message preserves an actionable explanation when the desktop halves are from different builds.
+  // message 在桌面前后端来自不同构建时保留可执行的说明。
+  const message = reason instanceof Error ? reason.message : String(reason);
+  if (message.includes("unknown service RPC method")) {
+    return "当前前端与桌面后端版本不一致，请彻底退出应用后重新编译并启动。";
+  }
+  return message;
 }

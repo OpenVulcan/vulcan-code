@@ -1383,6 +1383,29 @@ pub enum UploadSigningPrimitiveKind {
     TemporaryOssPolicy,
 }
 
+/// Defines the smallest non-secret identity boundary for reusing one uploaded provider object.
+/// 定义复用一个已上传供应商对象的最小非秘密身份边界。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UploadReferenceScope {
+    /// Reuse across models and credential connections of the same provider service and contract.
+    /// 在同一供应商服务与上传契约内跨模型、跨凭据连接复用。
+    #[default]
+    ProviderProtocol,
+    /// Reuse only for the exact credential connection.
+    /// 仅对精确凭据连接复用。
+    Credential,
+    /// Reuse only for the exact owning session.
+    /// 仅对精确所属会话复用。
+    Session,
+}
+
+/// Keeps the default provider-protocol scope absent from legacy serialized manifests.
+/// 让默认供应商协议作用域在旧版序列化 Manifest 中保持省略。
+fn is_provider_protocol_scope(scope: &UploadReferenceScope) -> bool {
+    *scope == UploadReferenceScope::ProviderProtocol
+}
+
 /// One named upload channel declaration with its full bounded payload (plan §16.3).
 /// 单条具名上传通道声明及其完整有界载荷（方案 §16.3）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1479,6 +1502,10 @@ pub struct UploadChannelDeclaration {
     /// 操作请求消费的可选引用编码。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reference_encoding: Option<UploadReferenceEncoding>,
+    /// Explicit reuse boundary for references returned by this upload channel.
+    /// 该上传通道返回引用的显式复用边界。
+    #[serde(default, skip_serializing_if = "is_provider_protocol_scope")]
+    pub reference_scope: UploadReferenceScope,
 }
 
 /// One bounded reference encoding for an uploaded object (plan §R9.3).

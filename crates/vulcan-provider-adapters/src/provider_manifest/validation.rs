@@ -8975,6 +8975,7 @@ mod tests {
                 fixed_fields: Default::default(),
                 cache_duration_ms: None,
                 reference_encoding: None,
+                reference_scope: Default::default(),
             }];
         manifest.tool_targets = vec![tool_target_declaration(
             "public-api",

@@ -128,8 +128,8 @@ fn compaction_launch_request_excludes_dynamic_vmm_injection() {
     assert_eq!(request.session_vmm, Default::default());
 }
 
-/// Verifies local prompt compaction preserves the exact session agent, provider, connection, and model.
-/// 验证本地提示词压缩保留精确会话代理、供应商、连接与模型。
+/// Verifies local prompt compaction preserves the exact route while disabling recursive automatic compaction.
+/// 验证本地提示词压缩保留精确路由，同时禁用递归自动压缩。
 #[test]
 fn compaction_launch_request_preserves_session_model_target() {
     // conversationState supplies one canonical source message for request construction.
@@ -183,9 +183,15 @@ fn compaction_launch_request_preserves_session_model_target() {
     );
 
     assert_eq!(request.provider_id_override.as_deref(), Some("custom:test"));
+    // expectedCompactionPolicy keeps every hard-window and retained-tail field while disabling only recursive auto-triggering.
+    // expectedCompactionPolicy 保留全部硬窗口与尾部保留字段，仅禁用递归自动触发。
+    let expected_compaction_policy = vulcan_context::ContextCompactionPolicy {
+        auto: false,
+        ..model_target.context_compaction_policy
+    };
     assert_eq!(
         request.context_compaction_policy,
-        Some(model_target.context_compaction_policy)
+        Some(expected_compaction_policy)
     );
     assert_eq!(
         request.connection_id_override.as_deref(),
@@ -536,6 +542,30 @@ fn context_overflow_error_immediately_downgrades() {
     assert_eq!(
         next_compaction_retry_mode(
             "maximum context length exceeded",
+            CompactionInputPruneMode::None,
+            1,
+            0,
+            Some(test_budget()),
+        ),
+        Some(CompactionInputPruneMode::RetryAfterFailure)
+    );
+}
+
+/// Verifies an internal request-budget boundary retains its cause and immediately selects pruned retry.
+/// 验证内部请求预算边界会保留原因并立即选择剪枝重试。
+#[test]
+fn internal_compaction_budget_boundary_immediately_downgrades() {
+    // error retains the exact budget guard reason while registering the context-window boundary for retry selection.
+    // error 保留精确预算门原因，同时为重试选择登记上下文窗口边界。
+    let error = prompt_compaction_request_budget_error(
+        "请求预算门阻止发送：自动压缩线已达到。请先执行上下文压缩后重新组装请求。",
+    );
+
+    assert!(error.contains("请求预算门阻止发送"));
+    assert!(prompt_compaction_error_is_context_overflow(&error));
+    assert_eq!(
+        next_compaction_retry_mode(
+            &error,
             CompactionInputPruneMode::None,
             1,
             0,

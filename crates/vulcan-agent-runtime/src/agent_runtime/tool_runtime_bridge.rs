@@ -1,7 +1,7 @@
 //! Shared host-managed tool runtime bridge for the host executor and `vulcan-core` controller.
 //! 供宿主执行器与 `vulcan-core` 控制器共享的宿主管理工具运行时桥接层。
 
-use crate::agent_runtime::events::RuntimeEvent;
+use crate::agent_runtime::events::{RuntimeEvent, RuntimeEventKind};
 use crate::model::SessionId;
 use serde_json::{Map, Value, json};
 #[cfg(test)]
@@ -75,6 +75,9 @@ pub(crate) struct RuntimeEventProjectionBarrier {
     /// Stable barrier id copied into runtime-event metadata.
     /// 复制到运行时事件元数据中的稳定屏障标识。
     id: String,
+    /// Whether acknowledgement is a mandatory safety gate before external execution may begin.
+    /// 确认是否属于外部执行开始前必须通过的安全门禁。
+    required_for_execution: bool,
     /// Receiver resolved by the host bridge after it emits the projected workbench snapshot.
     /// 宿主桥接层完成投影快照发送后解析的接收端。
     receiver: oneshot::Receiver<()>,
@@ -282,6 +285,9 @@ pub(crate) fn attach_runtime_event_projection_barrier(
         return Ok((event, None));
     }
 
+    // requiredForExecution distinguishes the tool-side-effect safety gate from display-only ordering barriers.
+    // requiredForExecution 将工具副作用安全门禁与仅用于显示排序的屏障区分开来。
+    let required_for_execution = event.kind == RuntimeEventKind::ToolStarted;
     let barrier_id = Uuid::new_v4().to_string();
     let (sender, receiver) = oneshot::channel();
     let registry = RUNTIME_EVENT_PROJECTION_BARRIERS.get_or_init(|| Mutex::new(HashMap::new()));
@@ -311,6 +317,7 @@ pub(crate) fn attach_runtime_event_projection_barrier(
         event,
         Some(RuntimeEventProjectionBarrier {
             id: barrier_id,
+            required_for_execution,
             receiver,
         }),
     ))
@@ -326,8 +333,8 @@ pub(crate) fn attach_runtime_event_projection_barrier(
 ///
 /// # Returns
 /// 返回值
-/// Success after acknowledgement, legitimate timeout, or no barrier; timeout cleanup lock failure is returned explicitly.
-/// 收到确认、合法超时或没有屏障时返回成功；超时清理锁失败会被明确返回。
+/// Success after acknowledgement or no barrier. Display-only barriers tolerate cancellation and timeout, while a required execution barrier fails closed.
+/// 收到确认或没有屏障时返回成功。仅显示屏障容忍取消和超时，执行必需屏障则失败关闭。
 pub(crate) async fn wait_runtime_event_projection_barrier(
     barrier: Option<RuntimeEventProjectionBarrier>,
 ) -> Result<(), String> {
@@ -335,18 +342,29 @@ pub(crate) async fn wait_runtime_event_projection_barrier(
         return Ok(());
     };
     let barrier_id = barrier.id.clone();
-    if tokio::time::timeout(RUNTIME_EVENT_PROJECTION_BARRIER_TIMEOUT, barrier.receiver)
-        .await
-        .is_err()
-        && let Some(registry) = RUNTIME_EVENT_PROJECTION_BARRIERS.get()
-    {
-        remove_runtime_event_projection_barrier(
-            registry,
-            &barrier_id,
-            "remove a timed-out barrier",
-        )?;
+    let required_for_execution = barrier.required_for_execution;
+    match tokio::time::timeout(RUNTIME_EVENT_PROJECTION_BARRIER_TIMEOUT, barrier.receiver).await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(_)) if required_for_execution => Err(String::from(
+            "Tool execution safety barrier was rejected before the tool body started.",
+        )),
+        Ok(Err(_)) => Ok(()),
+        Err(_) => {
+            if let Some(registry) = RUNTIME_EVENT_PROJECTION_BARRIERS.get() {
+                remove_runtime_event_projection_barrier(
+                    registry,
+                    &barrier_id,
+                    "remove a timed-out barrier",
+                )?;
+            }
+            if required_for_execution {
+                return Err(String::from(
+                    "Tool execution safety barrier timed out before the tool body started.",
+                ));
+            }
+            Ok(())
+        }
     }
-    Ok(())
 }
 
 /// Removes a projection barrier for a runtime event that will never reach the host bridge.
@@ -389,12 +407,7 @@ pub(crate) fn cancel_runtime_event_projection_barrier(
 pub fn acknowledge_runtime_event_projection_barrier_from_event(
     event: &RuntimeEvent,
 ) -> Result<bool, String> {
-    let Some(barrier_id) = event
-        .metadata
-        .as_ref()
-        .and_then(|metadata| metadata.get(RUNTIME_EVENT_PROJECTION_BARRIER_ID))
-        .and_then(Value::as_str)
-    else {
+    let Some(barrier_id) = runtime_event_projection_barrier_id(event) else {
         return Ok(false);
     };
     let Some(registry) = RUNTIME_EVENT_PROJECTION_BARRIERS.get() else {
@@ -410,6 +423,71 @@ pub fn acknowledge_runtime_event_projection_barrier_from_event(
     } else {
         Ok(false)
     }
+}
+
+/// Rejects one projection barrier from runtime-event metadata without acknowledging execution safety.
+/// 根据运行时事件元数据拒绝一条投影屏障，且不确认执行安全性。
+///
+/// # Parameters
+/// 参数
+/// `event` carries the authoritative optional barrier identity attached by the Agent runtime.
+/// `event` 携带 Agent 运行时附加的权威可选屏障标识。
+///
+/// # Returns
+/// 返回值
+/// `Ok(true)` when one pending waiter was rejected, `Ok(false)` for legitimate absence, or a registry-lock error.
+/// 拒绝了一条待处理等待时返回 `Ok(true)`，合法缺席时返回 `Ok(false)`，注册表锁失败时返回错误。
+pub fn reject_runtime_event_projection_barrier_from_event(
+    event: &RuntimeEvent,
+) -> Result<bool, String> {
+    let Some(barrier_id) = runtime_event_projection_barrier_id(event) else {
+        return Ok(false);
+    };
+    let Some(registry) = RUNTIME_EVENT_PROJECTION_BARRIERS.get() else {
+        return Ok(false);
+    };
+    Ok(
+        remove_runtime_event_projection_barrier(registry, barrier_id, "reject a projected event")?
+            .is_some(),
+    )
+}
+
+/// Returns whether one runtime event is the exact mandatory gate before a real tool body may start.
+/// 返回单条运行时事件是否是真实工具主体开始前的精确强制门禁。
+///
+/// # Parameters
+/// 参数
+/// `event` is the runtime event whose kind and runtime-owned barrier identity must both match.
+/// `event` 是其类型与运行时持有的屏障身份都必须匹配的运行时事件。
+///
+/// # Returns
+/// 返回值
+/// `true` only for an actual tool-start event emitted by the streaming tool executor with a projection barrier.
+/// 仅对流式工具执行器发出且携带投影屏障的真实工具开始事件返回 `true`。
+pub fn runtime_event_requires_tool_execution_safety_barrier(event: &RuntimeEvent) -> bool {
+    event.kind == RuntimeEventKind::ToolStarted
+        && runtime_event_projection_barrier_id(event).is_some()
+}
+
+/// Reads the exact optional projection-barrier identity carried by one runtime event.
+/// 读取单条运行时事件携带的精确可选投影屏障身份。
+///
+/// # Parameters
+/// 参数
+/// `event` is the authoritative metadata owner.
+/// `event` 是权威元数据持有者。
+///
+/// # Returns
+/// 返回值
+/// The borrowed non-empty barrier id when present, otherwise `None`.
+/// 存在时返回借用的非空屏障标识，否则返回 `None`。
+fn runtime_event_projection_barrier_id(event: &RuntimeEvent) -> Option<&str> {
+    event
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get(RUNTIME_EVENT_PROJECTION_BARRIER_ID))
+        .and_then(Value::as_str)
+        .filter(|barrier_id| !barrier_id.is_empty())
 }
 
 /// Builds the canonical controller-visible tool-error host result with trusted invocation identity.

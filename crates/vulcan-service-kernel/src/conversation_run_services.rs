@@ -56,6 +56,79 @@ pub(crate) struct StopConversationRunSubagentSummary {
     pub(crate) label: String,
 }
 
+/// Emits the authoritative Continue summary when a service-owned Stop settlement exits with an error.
+/// 当服务持有的 Stop 结算因错误退出时发送权威 Continue 摘要。
+struct ConversationStopFailureFeedbackGuard {
+    /// Event emitter used to publish the final blocker summary.
+    /// 用于发布最终阻断摘要的事件发送器。
+    app: ServiceEventEmitter,
+    /// Shared state containing the stopped phase, retry reference, and live terminal owner.
+    /// 包含停止阶段、重试引用与实时终态所有者的共享状态。
+    state: SharedServiceBridgeState,
+    /// Exact session whose continuation projection must be refreshed.
+    /// 必须刷新 Continue 投影的精确会话。
+    session_id: SessionId,
+    /// Whether an error exit still requires fail-closed feedback.
+    /// 错误退出是否仍需要失败关闭反馈。
+    armed: bool,
+}
+
+impl ConversationStopFailureFeedbackGuard {
+    /// Creates one armed Stop failure feedback guard.
+    /// 创建一个已启用的 Stop 失败反馈守卫。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `app` emits feedback, `state` owns authoritative blockers, and `session_id` fixes the target.
+    /// `app` 发送反馈，`state` 持有权威阻断条件，`session_id` 固定目标。
+    ///
+    /// # Returns
+    /// 返回值
+    /// An armed guard that emits on every early return or panic.
+    /// 返回一个会在任何提前返回或 panic 时发送反馈的已启用守卫。
+    fn new(
+        app: ServiceEventEmitter,
+        state: SharedServiceBridgeState,
+        session_id: SessionId,
+    ) -> Self {
+        Self {
+            app,
+            state,
+            session_id,
+            armed: true,
+        }
+    }
+
+    /// Disarms failure feedback after the final unblocked workbench projection succeeds.
+    /// 在最终无阻断工作台投影成功后停用失败反馈。
+    ///
+    /// # Returns
+    /// 返回值
+    /// This method returns no value and only changes the local guard state.
+    /// 此方法不返回值，仅变更本地守卫状态。
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for ConversationStopFailureFeedbackGuard {
+    /// Publishes one best-effort authoritative blocker summary on an incomplete Stop settlement.
+    /// 在 Stop 结算未完成时尽力发布一次权威阻断摘要。
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        if let Err(error) =
+            emit_conversation_continuation_summary_changed(&self.app, &self.state, self.session_id)
+        {
+            eprintln!(
+                "[webui-service] Stop failure continuation feedback failed for session {}: {error}",
+                self.session_id
+            );
+        }
+    }
+}
+
 /// Terminates the exact active conversation Hook turn retained by a stopped execution.
 /// 终止已停止执行所保留的精确活动会话 Hook 回合。
 ///
@@ -132,6 +205,7 @@ pub(crate) async fn service_compact_selected_conversation_context(
             String::from("service is still starting; workspace snapshot is not ready")
         })?;
     hydrate_selected_session_runtime_if_needed(
+        &state,
         controller_runtime.clone(),
         &mut workspace_snapshot,
         selected_session_id,
@@ -209,7 +283,9 @@ pub(crate) async fn service_compact_selected_conversation_context(
             mcp_catalog: &mcp_catalog,
             provider_configuration: &agent_runtime.provider_configuration,
             public_ai_runtime: Some(agent_runtime.public_ai_runtime.as_ref()),
-            workspace_snapshot,
+            workspace_source: FullWorkbenchColdRefreshWorkspaceSource::Candidate(
+                workspace_snapshot,
+            ),
             logs: &logs,
             subagent_navigation_mode: SubagentNavigationRefreshMode::Rebuild,
         },
@@ -264,6 +340,34 @@ pub(crate) async fn service_stop_conversation_run(
     conversation_id: String,
     mode: Option<StopConversationRunMode>,
 ) -> Result<StopConversationRunResponse, String> {
+    // stopTask transfers the complete Stop transaction to service ownership before its RPC can be cancelled.
+    // stopTask 在 RPC 可能被取消前，把完整 Stop 事务转移给服务所有权。
+    let stop_task = spawn_service_task(async move {
+        service_stop_conversation_run_owned(app, state, conversation_id, mode).await
+    });
+    stop_task
+        .await
+        .map_err(|join_error| format!("ERR_CONVERSATION_STOP_TASK_FAILED: {join_error}"))?
+}
+
+/// Executes one service-owned conversation Stop transaction through durable terminal settlement.
+/// 执行一个由服务持有的会话 Stop 事务，直至可靠终态结算完成。
+///
+/// # Parameters
+/// 参数
+/// `app` emits the committed workbench, `state` owns live runtime facts, `conversation_id` fixes the target, and `mode` selects child-agent handling.
+/// `app` 发送已提交工作台，`state` 持有实时运行事实，`conversation_id` 固定目标，`mode` 选择子代理处理方式。
+///
+/// # Returns
+/// 返回值
+/// The confirmation payload or stopped workbench snapshot, or an explicit validation/runtime error.
+/// 返回确认载荷或已停止工作台快照，或显式验证/运行错误。
+async fn service_stop_conversation_run_owned(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    conversation_id: String,
+    mode: Option<StopConversationRunMode>,
+) -> Result<StopConversationRunResponse, String> {
     // target_session_id is the validated immutable target shared by preflight and final mutation.
     // target_session_id 是预检与最终变更共享的已验证不可变目标。
     let target_session_id = parse_session_id(conversation_id.trim())
@@ -291,6 +395,9 @@ pub(crate) async fn service_stop_conversation_run(
             ),
         });
     }
+    // stopAdmissionGuard closes replacement-turn admission before the active stream registry is dismantled.
+    // stopAdmissionGuard 在拆除活动流注册表前关闭替代回合准入。
+    let stop_admission_guard = begin_session_run_stop_exclusion(&state, target_session_id)?;
     // stoppedHookTurnId freezes the exact logical Hook owner before any stop teardown can race a replacement turn.
     // stoppedHookTurnId 在停止清理可能与替代回合竞争前冻结精确逻辑 Hook 所有者。
     let stopped_hook_turn_id = agent_runtime
@@ -300,40 +407,80 @@ pub(crate) async fn service_stop_conversation_run(
         .active_turn_id(target_session_id)
         .map(str::to_string);
     let stop_running_subagents = mode == StopConversationRunMode::MainAndSubagents;
-    let active_task = {
+    // terminalPersistenceOwner is installed in the same transaction that dismantles live execution ownership.
+    // terminalPersistenceOwner 与实时执行所有权拆除在同一个事务中安装。
+    let terminal_persistence_owner = SessionTerminalPersistenceOwner::RunStop(Uuid::new_v4());
+    // stopOwnershipTransition closes the former stream and kernel generation without an unowned terminal gap.
+    // stopOwnershipTransition 关闭旧流与 kernel 代际，且不会留下无所有者终态空窗。
+    let (active_task, had_active_kernel_turn) = {
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
-        guard.active_stream_tasks.remove(&target_session_id)
+        // activeTask is detached before the kernel stops, while the same state lock excludes replacement registration.
+        // activeTask 在 kernel 停止前分离，同一状态锁同时排除替代登记。
+        let active_task = guard.active_stream_tasks.remove(&target_session_id);
+        // hadActiveKernelTurn records the exact in-lock generation transition for Stop diagnostics.
+        // hadActiveKernelTurn 记录 Stop 诊断所需的精确锁内代际转换。
+        let had_active_kernel_turn =
+            stop_webui_session_kernel_generation(&mut guard, target_session_id);
+        register_session_terminal_persistence_owner(
+            &mut guard,
+            target_session_id,
+            terminal_persistence_owner,
+        )?;
+        (active_task, had_active_kernel_turn)
     };
+    // failureFeedbackGuard is armed before any wait or secondary teardown can fail.
+    // failureFeedbackGuard 在任何等待或后续拆除可能失败前启用。
+    let mut failure_feedback_guard =
+        ConversationStopFailureFeedbackGuard::new(app.clone(), state.clone(), target_session_id);
+    // terminalPersistenceGuard deliberately retains an unreleased marker on every early error or panic.
+    // terminalPersistenceGuard 会在任何提前错误或 panic 时有意保留未释放标记。
+    let terminal_persistence_guard = SessionTerminalPersistenceOwnerGuard::adopt_registered(
+        state.clone(),
+        target_session_id,
+        terminal_persistence_owner,
+    )?;
     let goal_before_stop = active_task
         .as_ref()
         .and_then(ActiveStreamTask::session_goal_id)
         .map(str::to_string);
-    let had_active_kernel_turn = {
-        let mut guard = state
-            .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?;
-        stop_webui_session_kernel_generation(&mut guard, target_session_id)
-    };
+    // providerCallBinding freezes the exact stream-to-call relation before task cancellation drops telemetry guards.
+    // providerCallBinding 在任务取消析构遥测守卫前冻结精确的流到调用关系。
+    let provider_call_binding = active_task.as_ref().and_then(|active_task| {
+        active_task
+            .provider_call_id()
+            .map(|provider_call_id| (active_task.task_id(), provider_call_id.to_string()))
+    });
     let had_active_stream_task = active_task.is_some();
     let active_task_join_error = if let Some(active_task) = active_task {
         active_task.abort_and_wait().await.err()
     } else {
         None
     };
-    // workspaceSnapshot is cloned only after task teardown so the cancellation guard's terminal ledger fact is included.
-    // workspaceSnapshot 仅在任务清理后克隆，确保包含取消守卫写入的终态账本事实。
-    let mut workspace_snapshot = current_workspace_snapshot_from_shared_state(&state)?
+    // The immediate stopped phase removes the stale running affordance before slower settlement can fail.
+    // 即时停止阶段会在较慢结算可能失败前移除过期的运行中操作入口。
+    commit_retained_workspace_session_phase_mutation_and_emit_delta(
+        &app,
+        &state,
+        target_session_id,
+        SessionRunPhase::Stopped,
+        |workspace_snapshot| {
+            let now = current_unix_millis_text();
+            if let Some(runtime_state) = workspace_snapshot
+                .session_runtime_state
+                .get_mut(&target_session_id)
+            {
+                seal_active_streaming_records_in_state(runtime_state, &now);
+            }
+            mark_webui_session_stop_requested_in_workspace(workspace_snapshot, target_session_id);
+            Ok(())
+        },
+    )?;
+    // workspaceSnapshot is captured after the atomic phase commit for exact child-task discovery.
+    // workspaceSnapshot 在原子阶段提交后捕获，用于精确发现子任务。
+    let workspace_snapshot = current_workspace_snapshot_from_shared_state(&state)?
         .ok_or_else(|| String::from("停止运行时工作区尚未就绪。"))?;
-    let now = current_unix_millis_text();
-    if let Some(runtime_state) = workspace_snapshot
-        .session_runtime_state
-        .get_mut(&target_session_id)
-    {
-        seal_active_streaming_records_in_state(runtime_state, &now);
-    }
-    mark_webui_session_stop_requested_in_workspace(&mut workspace_snapshot, target_session_id);
     let running_subagent_task_states = if stop_running_subagents {
         let mut guard = state
             .lock()
@@ -353,16 +500,10 @@ pub(crate) async fn service_stop_conversation_run(
             running_subagent_task_states.len()
         ),
     );
-    for (direct_parent_session_id, task_state) in &running_subagent_task_states {
+    for (_, task_state) in &running_subagent_task_states {
         let _ = agent_runtime
             .task_runtime
             .stop_task_tree(task_state.task_id);
-        mark_webui_subagent_task_stopped_in_workspace(
-            &mut workspace_snapshot,
-            *direct_parent_session_id,
-            task_state.task_id,
-            Some(task_state),
-        );
     }
     if !running_subagent_task_states.is_empty() {
         let running_subagent_task_ids = running_subagent_task_states
@@ -374,66 +515,7 @@ pub(crate) async fn service_stop_conversation_run(
             .map_err(|error| format!("failed to lock service state: {error}"))?;
         mark_webui_subagent_tasks_stopped_in_state(&mut guard, &running_subagent_task_ids);
     }
-    let did_stop_work = stop_webui_session_work(
-        &mut workspace_snapshot,
-        target_session_id,
-        had_active_kernel_turn,
-        had_active_stream_task,
-        !running_subagent_task_states.is_empty(),
-    )?;
-    if did_stop_work {
-        // owningProjectId is resolved from the stopped workspace rather than inferred from a path.
-        // owningProjectId 从已停止工作区解析，而不是从路径推断。
-        let owning_project_id =
-            owning_project_id_for_session(&workspace_snapshot, target_session_id);
-        // A stop closes the retained Hook turn before a later Continue restores the same logical input.
-        // 停止操作会在后续 Continue 恢复同一逻辑输入前关闭保留的 Hook 回合。
-        terminate_active_conversation_hook_turn_after_stop(
-            &agent_runtime,
-            target_session_id,
-            owning_project_id,
-            stopped_hook_turn_id.as_deref(),
-            "The user stopped the active conversation execution.",
-        )?;
-        // stoppedConversationState is the post-stop canonical state that the retry digest must bind.
-        // stoppedConversationState 是重试摘要必须绑定的停止后规范状态。
-        let stopped_conversation_state = workspace_snapshot
-            .session_runtime_state
-            .get(&target_session_id)
-            .ok_or_else(|| String::from("停止后未找到会话运行时状态。"))?
-            .conversation_state
-            .clone();
-        refreeze_claimed_execution_retry_snapshot_with_canonical_state(
-            &state,
-            &controller_runtime,
-            target_session_id,
-            &stopped_conversation_state,
-            "The user stopped the claimed retry execution.",
-        )?;
-        let refreshed_retry_reference = state
-            .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?
-            .workspace_snapshot
-            .as_ref()
-            .and_then(|workspace| workspace.session_runtime_state.get(&target_session_id))
-            .and_then(|runtime_state| runtime_state.execution_retry_snapshot.clone());
-        if let Some(runtime_state) = workspace_snapshot
-            .session_runtime_state
-            .get_mut(&target_session_id)
-        {
-            runtime_state.execution_retry_snapshot = refreshed_retry_reference;
-        }
-    }
-    if did_stop_work
-        && !workspace_snapshot
-            .session_runtime_state
-            .contains_key(&target_session_id)
-    {
-        return Err(String::from("停止后未找到会话运行时状态。"));
-    }
-    if did_stop_work && let Some(expected_goal_id) = goal_before_stop {
-        let goal_transition_guard =
-            begin_session_turn_start_exclusion(&state, [target_session_id], "暂停目标")?;
+    if let Some(expected_goal_id) = goal_before_stop {
         match VulcanGoalStore::new(controller_runtime.clone())
             .pause_thread_goal(target_session_id, &expected_goal_id)
             .await?
@@ -462,8 +544,80 @@ pub(crate) async fn service_stop_conversation_run(
                 );
             }
         }
-        drop(goal_transition_guard);
     }
+    // stopSettlement mutates the latest retained workspace only after every awaited pre-settlement step has finished.
+    // stopSettlement 仅在所有结算前异步步骤结束后修改最新保留工作区。
+    let stop_settlement = {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let retained_workspace = guard.workspace_snapshot.as_mut().ok_or_else(|| {
+            String::from("service is still starting; workspace snapshot is not ready")
+        })?;
+        for (direct_parent_session_id, task_state) in &running_subagent_task_states {
+            mark_webui_subagent_task_stopped_in_workspace(
+                retained_workspace,
+                *direct_parent_session_id,
+                task_state.task_id,
+                Some(task_state),
+            );
+        }
+        let did_stop_work = stop_webui_session_work(
+            retained_workspace,
+            target_session_id,
+            had_active_kernel_turn,
+            had_active_stream_task,
+            !running_subagent_task_states.is_empty(),
+        )?;
+        if did_stop_work {
+            let owning_project_id =
+                owning_project_id_for_session(retained_workspace, target_session_id);
+            let stopped_conversation_state = retained_workspace
+                .session_runtime_state
+                .get(&target_session_id)
+                .ok_or_else(|| String::from("停止后未找到会话运行时状态。"))?
+                .conversation_state
+                .clone();
+            Some((owning_project_id, stopped_conversation_state))
+        } else {
+            None
+        }
+    };
+    if let Some((owning_project_id, stopped_conversation_state)) = stop_settlement {
+        // A stop closes the retained Hook turn before a later Continue restores the same logical input.
+        // 停止操作会在后续 Continue 恢复同一逻辑输入前关闭保留的 Hook 回合。
+        terminate_active_conversation_hook_turn_after_stop(
+            &agent_runtime,
+            target_session_id,
+            owning_project_id,
+            stopped_hook_turn_id.as_deref(),
+            "The user stopped the active conversation execution.",
+        )?;
+        if let Err(error) = refreeze_claimed_execution_retry_snapshot_with_canonical_state(
+            &state,
+            &controller_runtime,
+            target_session_id,
+            &stopped_conversation_state,
+            provider_call_binding,
+            "The user stopped the claimed retry execution.",
+        ) {
+            // A damaged sidecar must not roll back an already-completed Stop teardown or leave a silently executable token.
+            // 损坏的 sidecar 不得回滚已经完成的 Stop 拆除，也不得留下可被静默执行的令牌。
+            eprintln!(
+                "[webui-service] refreeze stopped execution retry failed; invalidating token: {error}"
+            );
+            invalidate_execution_retry_reference(
+                &state,
+                target_session_id,
+                error.blocked_reason(),
+                error.error_summary(),
+            )?;
+        }
+    }
+    // workspaceSnapshot captures the exact retained settlement, including the refrozen reference published above.
+    // workspaceSnapshot 捕获精确保留结算状态，并包含上方发布的重冻引用。
+    let workspace_snapshot = current_workspace_snapshot_from_shared_state(&state)?
+        .ok_or_else(|| String::from("停止持久化时工作区尚未就绪。"))?;
     persist_workspace_session_update(
         Some(&state),
         controller_runtime.clone(),
@@ -471,6 +625,12 @@ pub(crate) async fn service_stop_conversation_run(
         target_session_id,
     )
     .await?;
+    // Release precedes final projection so the successful response is built from an unblocked live-owner revision.
+    // 释放必须先于最终投影，使成功响应基于已解除阻断的实时所有者修订构建。
+    terminal_persistence_guard.release()?;
+    // The Stop admission reservation is equally live state and must not contaminate the successful Continue summary.
+    // Stop 准入预留同样属于实时状态，不得污染成功响应中的 Continue 摘要。
+    drop(stop_admission_guard);
     let workbench =
         store_and_emit_full_workbench_snapshot_for_cold_refresh(FullWorkbenchColdRefreshRequest {
             app: &app,
@@ -480,10 +640,11 @@ pub(crate) async fn service_stop_conversation_run(
             mcp_catalog: &mcp_catalog,
             provider_configuration: &agent_runtime.provider_configuration,
             public_ai_runtime: Some(agent_runtime.public_ai_runtime.as_ref()),
-            workspace_snapshot,
+            workspace_source: FullWorkbenchColdRefreshWorkspaceSource::Retained,
             logs: &logs,
             subagent_navigation_mode: SubagentNavigationRefreshMode::Rebuild,
         })?;
+    failure_feedback_guard.disarm();
     if let Some(error) = active_task_join_error {
         eprintln!("[webui-service] stopped conversation task teardown warning: {error}");
     }

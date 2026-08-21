@@ -33,6 +33,21 @@ pub struct SessionProviderRouteLeaseIdentity {
     pub route_revision: String,
 }
 
+/// Exact session model choice accepted while the current turn keeps its frozen route.
+/// 当前回合保持冻结路由时接受的精确会话模型选择。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionPendingModelSelection {
+    /// Exact provider identifier selected for the next user submission.
+    /// 为下一次用户提交选择的精确供应商标识。
+    pub provider_id: String,
+    /// Exact credential connection identifier selected for the next user submission.
+    /// 为下一次用户提交选择的精确凭据连接标识。
+    pub connection_id: String,
+    /// Exact model identifier selected for the next user submission.
+    /// 为下一次用户提交选择的精确模型标识。
+    pub model_id: String,
+}
+
 /// Session-scoped runtime state required for context reconstruction and agent tracing.
 /// 上下文重建与代理追踪所需的按会话归属运行时状态。
 /// Session-scoped output-style selection and the last safely applied prompt snapshot.
@@ -151,6 +166,10 @@ pub struct SessionRuntimeStateEntry {
     /// Last active model identifier used by the session.
     /// 最近一次被该会话使用的激活模型标识。
     pub active_model_id: Option<String>,
+    /// Exact model selection waiting for the next user-submission boundary.
+    /// 等待下一次用户提交边界生效的精确模型选择。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_model_selection: Option<SessionPendingModelSelection>,
     /// Persisted non-secret identity of the session's frozen provider route.
     /// 当前会话冻结供应商路由的持久化非秘密身份。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -183,6 +202,10 @@ pub struct SessionRuntimeStateEntry {
     /// 仅为当前会话启用的供应商工具能力。
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub provider_tool_enabled_capabilities: BTreeSet<String>,
+    /// Durable provider media references retained only for the active uncompressed conversation window.
+    /// 仅为活动未压缩会话窗口保留的可持久化供应商媒体引用。
+    #[serde(default, skip_serializing_if = "SessionMediaReferenceLedger::is_empty")]
+    pub media_reference_ledger: SessionMediaReferenceLedger,
     /// Session-selected native model-extension target sets keyed by extension capability.
     /// 按扩展能力索引的会话级原生模型扩展目标集合。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]

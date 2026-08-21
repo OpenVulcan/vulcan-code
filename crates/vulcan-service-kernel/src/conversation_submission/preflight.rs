@@ -6,10 +6,10 @@ use vulcan_workspace_store::workspace_store::WorkspaceSnapshot;
 use super::*;
 use crate::{
     MaterializedPromptSession, ProjectAdmissionReservation, ProjectAdmissionReservationKind,
-    ProjectAdmissionScope, PromptSessionMaterializationKind, PromptSessionTarget, SessionId,
-    SessionTurnAdmissionReservation, SessionTurnAdmissionReservationKind,
-    lock_service_state_for_admission_cleanup, session_hydration::PreservedWorkspaceRunState,
-    workspace_session_summary_for_session,
+    ProjectAdmissionScope, PromptSessionMaterializationKind, PromptSessionTarget,
+    ServiceBridgeState, SessionId, SessionTurnAdmissionReservation,
+    SessionTurnAdmissionReservationKind, lock_service_state_for_admission_cleanup,
+    session_hydration::PreservedWorkspaceRunState, workspace_session_summary_for_session,
 };
 
 /// Submission-scoped admission ownership retained until one materialized kernel turn starts.
@@ -41,6 +41,43 @@ pub(crate) struct ExistingSubmissionTurnAdmission {
 }
 
 impl SubmissionTurnAdmission {
+    /// Returns whether this submission still owns the exact current prompt-admission row.
+    /// 返回本次提交是否仍拥有精确的当前提示词准入行。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `state` is the already locked authoritative service state and `session_id` is the existing Continue target.
+    /// `state` 是已经锁定的权威服务状态，`session_id` 是已有 Continue 目标。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` only when the current row has the same session, reservation id, and prompt-submission kind.
+    /// 仅当当前行具有相同会话、预留标识及提示词提交类型时返回 `true`。
+    pub(crate) fn owns_current_prompt_submission_reservation(
+        &self,
+        state: &ServiceBridgeState,
+        session_id: SessionId,
+    ) -> bool {
+        // expectedReservationId is available only for an existing-session owner targeting this exact session.
+        // expectedReservationId 仅在已有会话所有者指向该精确会话时存在。
+        let expected_reservation_id = match self {
+            Self::Existing(admission) if admission.session_id == session_id => {
+                admission.reservation_id
+            }
+            Self::Preauthorized(authorization) if authorization.session_id == session_id => {
+                authorization.reservation_id
+            }
+            _ => return false,
+        };
+        state
+            .session_turn_admission_reservations
+            .get(&session_id)
+            .is_some_and(|reservation| {
+                reservation.reservation_id == expected_reservation_id
+                    && reservation.kind == SessionTurnAdmissionReservationKind::PromptSubmission
+            })
+    }
+
     /// Resolves the reservation id that may authorize the materialized session's kernel start.
     /// 解析可授权已物化会话启动 kernel 的预留标识。
     ///
@@ -296,6 +333,15 @@ pub(crate) fn prepare_retained_submission_preflight(
     let mut guard = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?;
+    if let Some(session_id) = submission_session_id
+        && guard
+            .session_terminal_persistence_owners
+            .contains_key(&session_id)
+    {
+        return Err(format!(
+            "会话 `{session_id}` 正在可靠提交终态，暂时不能启动新的提示词。"
+        ));
+    }
     if let Some(session_id) = submission_session_id
         && let Some(reservation) = guard.session_turn_admission_reservations.get(&session_id)
     {

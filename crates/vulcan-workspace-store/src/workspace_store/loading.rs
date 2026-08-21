@@ -896,6 +896,23 @@ pub(super) fn sanitize_loaded_runtime_state_for_fresh_process(
         .provider_call_ledger
         .close_open_calls_as_interrupted(completed_at_ms);
     changed |= interrupted_call_count > 0;
+    if interrupted_call_count > 0
+        && let Some(reference) = runtime_state.execution_retry_snapshot.as_mut()
+        && reference
+            .blocked_reason
+            .as_deref()
+            .is_none_or(|reason| reason.trim().is_empty())
+    {
+        // A persisted pre-dispatch checkpoint only proves that transport was allowed to start; after a process loss, it cannot prove that the upstream never accepted the request.
+        // 已持久化的分派前 checkpoint 只能证明传输获准启动；进程丢失后无法证明上游从未接收该请求。
+        reference.invalidate_for_safety_reason(
+            String::from("provider_dispatch_outcome_unknown"),
+            String::from(
+                "The previous process ended while a Provider request could already have been accepted; verify the upstream outcome before continuing.",
+            ),
+            completed_at_ms.to_string(),
+        );
+    }
     if interrupted_call_count > 0 || orphaned_continuation_claim {
         let tail_kind = runtime_state
             .conversation_state
@@ -904,8 +921,11 @@ pub(super) fn sanitize_loaded_runtime_state_for_fresh_process(
             .rev()
             .find(|record| {
                 record.visible
-                    && record.record_kind
-                        == vulcan_workbench_model::SessionMessageRecordKind::Transcript
+                    && matches!(
+                        record.record_kind,
+                        vulcan_workbench_model::SessionMessageRecordKind::Transcript
+                            | vulcan_workbench_model::SessionMessageRecordKind::AssistantOutput
+                    )
             })
             .map(|record| match record.kind {
                 vulcan_workbench_model::SessionMessageKind::Assistant => "assistant",
@@ -914,8 +934,22 @@ pub(super) fn sanitize_loaded_runtime_state_for_fresh_process(
             })
             .unwrap_or("empty")
             .to_string();
-        let eligible = tail_kind != "assistant"
-            && runtime_state.provider_call_ledger.in_flight_call_count() == 0;
+        // replaySafety is required before restart reconciliation can expose a Continue boundary.
+        // replaySafety 是重启收敛重新暴露 Continue 边界前的必要条件。
+        let replay_safety_proven =
+            runtime_state
+                .execution_retry_snapshot
+                .as_ref()
+                .is_some_and(|reference| {
+                    reference.state == vulcan_workbench_model::ExecutionRetrySnapshotState::Frozen
+                        && reference.claimed_attempt_id.is_none()
+                        && reference.replay_safety_proven()
+                });
+        // Only an exact user or error tail can seed recovery; empty or synthetic labels are diagnostics, not replay proof.
+        // 只有精确的用户或错误尾部可以建立恢复资格；空或合成标签只是诊断，不是重放证明。
+        let eligible = matches!(tail_kind.as_str(), "user" | "error")
+            && runtime_state.provider_call_ledger.in_flight_call_count() == 0
+            && replay_safety_proven;
         let continuation_changed = runtime_state
             .provider_call_ledger
             .mark_continuation_terminal(

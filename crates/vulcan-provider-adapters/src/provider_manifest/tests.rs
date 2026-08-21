@@ -118,6 +118,86 @@ fn bundled_video_understanding_targets_compile_with_exact_upload_references() {
     }
 }
 
+/// Verifies MiniMax M3 binds to the video-capable OpenAI route and owns both regional upload channels.
+/// 验证 MiniMax M3 固定绑定支持视频的 OpenAI 路由，并拥有两个区域上传通道。
+#[test]
+fn bundled_minimax_m3_declares_image_video_and_provider_upload_contract() {
+    // manifestPath is the authoritative MiniMax source asset used by production compilation.
+    // manifestPath 是生产编译使用的权威 MiniMax 源资源。
+    let manifest_path =
+        vulcan_runtime_assets::source_bundled_provider_manifests_directory().join("minimax.json");
+    let manifest_text = std::fs::read_to_string(&manifest_path)
+        .unwrap_or_else(|_| panic!("missing MiniMax manifest at {}", manifest_path.display()));
+    // compiled is the same validated manifest representation consumed by route resolution.
+    // compiled 是路由解析实际消费的同一份已校验 Manifest 表示。
+    let compiled = super::compiler::compile_manifest_text(
+        manifest_text.as_str(),
+        super::ManifestOwnership::System,
+    )
+    .expect("MiniMax manifest must compile");
+    // m3 freezes the model-level multimodal declaration and the protocol used by normal chat.
+    // m3 冻结模型级多模态声明以及普通对话使用的协议。
+    let m3 = compiled
+        .rule_for_model("cn", Some("token-plan-key"), "MiniMax-M3")
+        .expect("MiniMax M3 must have a CN rule instance");
+    assert_eq!(
+        m3.selected_protocol.as_deref(),
+        Some("openai-chat-completions.v1")
+    );
+    assert!(
+        m3.supported_protocols
+            .iter()
+            .any(|protocol| protocol == "anthropic-messages-video.v1")
+    );
+    let capabilities = m3
+        .capabilities
+        .as_ref()
+        .expect("MiniMax M3 must declare capabilities");
+    assert_eq!(
+        capabilities.input_resources,
+        vec![
+            vulcan_ai_contract::ResourceKind::Image,
+            vulcan_ai_contract::ResourceKind::Video
+        ]
+    );
+    assert_ne!(
+        capabilities.structured_output,
+        vulcan_ai_contract::StructuredOutputCapability::Unsupported
+    );
+
+    // Each regional upload channel must preserve the verified MiniMax file API semantics.
+    // 每个区域上传通道都必须保留已验证的 MiniMax 文件 API 语义。
+    for (channel_id, host) in [
+        ("global.video-file", "api.minimax.io"),
+        ("cn.video-file", "api.minimaxi.com"),
+    ] {
+        let channel = compiled
+            .upload_channels
+            .iter()
+            .find(|channel| channel.upload_channel_id == channel_id)
+            .unwrap_or_else(|| panic!("missing MiniMax upload channel `{channel_id}`"));
+        assert_eq!(channel.endpoint_host.as_deref(), Some(host));
+        assert_eq!(channel.endpoint_path.as_deref(), Some("/v1/files/upload"));
+        assert_eq!(channel.file_field.as_deref(), Some("file"));
+        assert_eq!(channel.max_bytes, Some(50_000_000));
+        assert_eq!(
+            channel.response_id_pointer.as_deref(),
+            Some("/file/file_id")
+        );
+        assert_eq!(
+            channel.reference_template.as_deref(),
+            Some("mm_file://{id}")
+        );
+        assert_eq!(
+            channel.fixed_fields.get("purpose").map(String::as_str),
+            Some("video_understanding")
+        );
+        assert!(channel.progress_supported);
+        assert!(channel.cancellation_supported);
+        assert_eq!(channel.cache_duration_ms, Some(86_400_000));
+    }
+}
+
 /// Verifies every bundled Kimi video route preserves the complete format set accepted by kimi-cli.
 /// 验证每条内置 Kimi 视频路由均保留 kimi-cli 接受的完整格式集合。
 #[test]

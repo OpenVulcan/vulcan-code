@@ -581,6 +581,11 @@ pub fn compact_conversation_records_after_summary_with_retained_ids(
     let mut matched_local_tool_ids = std::collections::BTreeSet::new();
     let mut matched_tool_call_ids = std::collections::BTreeSet::new();
     for record in &state.records {
+        if model_switch_display_record_should_survive_compaction(record) {
+            // Model-switch audit records remain complete so the renderer can localize their frozen labels after compaction.
+            // 模型切换审计记录保持完整，使渲染器在压缩后仍能本地化其冻结标签。
+            full_record_ids.insert(record.id.clone());
+        }
         if retained_local_tool_ids.contains(&record.id) {
             full_record_ids.insert(record.id.clone());
             matched_local_tool_ids.insert(record.id.clone());
@@ -746,6 +751,30 @@ fn historical_record_survives_compaction(record: &SessionConversationRecord) -> 
         )
         || generated_attachment_tool_result_should_survive_compaction(record)
         || change_set_tool_result_should_survive_compaction(record)
+}
+
+/// Returns whether one display-only model-switch audit record must remain complete after compaction.
+/// 返回一条仅展示的模型切换审计记录是否必须在压缩后保持完整。
+///
+/// # Parameters
+/// 参数
+/// `record` is the canonical transcript record being evaluated for record-level compaction.
+/// `record` 是正在接受记录级压缩判定的规范转录记录。
+///
+/// # Returns
+/// 返回值
+/// Returns true only for the explicit `model_switch` display-note contract.
+/// 仅对显式的 `model_switch` 展示说明契约返回 true。
+fn model_switch_display_record_should_survive_compaction(
+    record: &SessionConversationRecord,
+) -> bool {
+    matches!(record.record_kind, SessionMessageRecordKind::DisplayNote)
+        && record
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("notice_kind"))
+            .and_then(Value::as_str)
+            == Some("model_switch")
 }
 
 /// Reduces an old surviving dialogue record to compact text and minimal metadata.
@@ -1772,6 +1801,96 @@ mod tests {
                 .find(|record| record.id == "detail-retained")
                 .map(|record| record.body.as_str()),
             Some(original_detail_body.as_str())
+        );
+    }
+
+    /// Verifies record compaction preserves the complete i18n metadata of model-switch audit notes.
+    /// 验证记录压缩会完整保留模型切换审计说明的 i18n 元数据。
+    #[test]
+    fn record_compaction_preserves_model_switch_display_audit_metadata() {
+        // modelSwitchMetadata freezes exact route labels for locale-specific rendering after reload or compaction.
+        // modelSwitchMetadata 冻结精确路由标签，供重载或压缩后的本地化渲染使用。
+        let model_switch_metadata = json!({
+            "notice_kind": "model_switch",
+            "activation": "next_submission",
+            "provider_id": "command-code",
+            "provider_name": "Command Code",
+            "connection_id": "command-code-account",
+            "connection_name": "Command Code Account",
+            "model_id": "deepseek",
+            "model_name": "DeepSeek",
+        });
+        // state includes one durable model-switch note and one unrelated display note eligible for deletion.
+        // state 包含一条可靠模型切换说明，以及一条允许删除的无关展示说明。
+        let mut state = SessionConversationState {
+            messages: vec![summary_conversation_message(
+                String::from("summary-exact"),
+                SessionMessageKind::Assistant,
+                String::from("summary"),
+            )],
+            records: vec![
+                SessionConversationRecord {
+                    id: String::from("summary-exact"),
+                    kind: SessionMessageKind::Assistant,
+                    record_kind: SessionMessageRecordKind::CompactionSummary,
+                    visible: false,
+                    title: String::from("summary"),
+                    body: String::from("summary"),
+                    metadata: None,
+                    created_at: String::from("1"),
+                },
+                SessionConversationRecord {
+                    id: String::from("model-switch-audit"),
+                    kind: SessionMessageKind::Assistant,
+                    record_kind: SessionMessageRecordKind::DisplayNote,
+                    visible: true,
+                    title: String::new(),
+                    body: String::from(
+                        "provider_id=command-code\nconnection_id=command-code-account\nmodel_id=deepseek",
+                    ),
+                    metadata: Some(model_switch_metadata.clone()),
+                    created_at: String::from("2"),
+                },
+                SessionConversationRecord {
+                    id: String::from("discarded-display-note"),
+                    kind: SessionMessageKind::Assistant,
+                    record_kind: SessionMessageRecordKind::DisplayNote,
+                    visible: true,
+                    title: String::from("temporary"),
+                    body: String::from("temporary"),
+                    metadata: Some(json!({"notice_kind": "temporary"})),
+                    created_at: String::from("3"),
+                },
+            ],
+            continuation: Default::default(),
+        };
+
+        // report captures the exact identity-based retention outcome.
+        // report 捕获基于身份的精确保留结果。
+        let report = compact_conversation_records_after_summary_with_retained_ids(
+            &mut state,
+            "summary-exact",
+            &[],
+            ContextCompactionPolicy::default(),
+            test_compact_change_set_host_result,
+        );
+        // retainedModelSwitch is the complete durable audit row after compaction.
+        // retainedModelSwitch 是压缩后的完整可靠审计行。
+        let retained_model_switch = state
+            .records
+            .iter()
+            .find(|record| record.id == "model-switch-audit")
+            .expect("model-switch audit record must survive compaction");
+
+        assert_eq!(retained_model_switch.metadata, Some(model_switch_metadata));
+        assert_eq!(report.original_record_count, 3);
+        assert_eq!(report.full_record_count, 2);
+        assert_eq!(report.deleted_record_count, 1);
+        assert!(
+            state
+                .records
+                .iter()
+                .all(|record| record.id != "discarded-display-note")
         );
     }
 

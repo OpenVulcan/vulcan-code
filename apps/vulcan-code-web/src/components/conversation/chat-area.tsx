@@ -53,6 +53,7 @@ import {
 import { useConversationSurfaceLayoutMemory } from "@/components/conversation/chat-area/surface-layout-memory";
 import { useConversationScrollController } from "@/components/conversation/chat-area/conversation-scroll-controller";
 import { hasAuthoritativeSubmissionCorrelation } from "@/components/workspace/draft-submission-state";
+import { conversationContinuationBlockedReasonText } from "@/components/conversation/continuation-blocked-reason";
 
 // ChatArea renders the conversation workspace and composer.
 // ChatArea 渲染会话工作区与输入区域。
@@ -86,6 +87,15 @@ export function ChatArea(props: ChatAreaProps) {
   // continuationClaimKey suppresses duplicate claims until the authoritative workbench revision changes.
   // continuationClaimKey 在权威工作台修订变化前阻止重复领取 Continue。
   const [continuationClaimKey, setContinuationClaimKey] = React.useState<string | null>(null);
+  // continuationFeedback keeps claim progress and failures visible after transient toasts disappear.
+  // continuationFeedback 在瞬时 toast 消失后继续保留领取进度与失败反馈。
+  const [continuationFeedback, setContinuationFeedback] = React.useState<{
+    key: string;
+    kind: "claiming" | "failed" | "accepted";
+  } | null>(null);
+  // continuationClientIdsRef preserves one retry id across timeout/retry clicks for the same snapshot.
+  // continuationClientIdsRef 为同一快照跨超时/重试点击保留一个继续请求标识。
+  const continuationClientIdsRef = React.useRef<Map<string, string>>(new Map());
   const continuation = selectedConversation?.continuation;
   const activeContinuationKey = selectedConversation && continuation
     ? `${selectedConversation.id}:${continuation.generation}:${continuation.expectedLedgerRevision}`
@@ -94,7 +104,10 @@ export function ChatArea(props: ChatAreaProps) {
     if (!continuation?.eligible || continuationClaimKey !== activeContinuationKey) {
       setContinuationClaimKey(null);
     }
-  }, [activeContinuationKey, continuation?.eligible, continuationClaimKey]);
+    if (continuationFeedback && continuationFeedback.key !== activeContinuationKey) {
+      setContinuationFeedback(null);
+    }
+  }, [activeContinuationKey, continuation?.eligible, continuationClaimKey, continuationFeedback]);
   // handleContinueConversation claims one exact terminal generation without synthesizing user input.
   // handleContinueConversation 在不伪造用户输入的情况下领取一个精确终止代际。
   const handleContinueConversation = React.useCallback(async () => {
@@ -108,13 +121,38 @@ export function ChatArea(props: ChatAreaProps) {
       return;
     }
     setContinuationClaimKey(activeContinuationKey);
-    const accepted = await props.onContinueConversation(
-      selectedConversation.id,
-      continuation.generation,
-      continuation.expectedLedgerRevision,
-    );
+    setContinuationFeedback({ key: activeContinuationKey, kind: "claiming" });
+    // accepted remains false for every rejected callback so an unexpected Promise rejection cannot leave the button locked.
+    // accepted 对所有被拒绝的回调保持 false，避免意外的 Promise 拒绝让按钮永久锁定。
+    let accepted = false;
+    try {
+      // clientContinuationId reuses one stable idempotency identity for the exact visible continuation token.
+      // clientContinuationId 为精确可见的继续令牌复用同一个稳定幂等身份。
+      const clientContinuationId = continuationClientIdsRef.current.get(activeContinuationKey)
+        ?? globalThis.crypto.randomUUID();
+      continuationClientIdsRef.current.set(activeContinuationKey, clientContinuationId);
+      if (continuationClientIdsRef.current.size > 128) {
+        // oldestKey bounds retained idempotency identities without removing the active token.
+        // oldestKey 限制保留的幂等身份数量，同时不会移除当前活动令牌。
+        const oldestKey = continuationClientIdsRef.current.keys().next().value;
+        if (oldestKey) {
+          continuationClientIdsRef.current.delete(oldestKey);
+        }
+      }
+      accepted = await props.onContinueConversation(
+        selectedConversation.id,
+        continuation.generation,
+        continuation.expectedLedgerRevision,
+        clientContinuationId,
+      );
+    } catch {
+      toast.error(t("conversation.continuation.claimFailed"));
+    }
     if (!accepted) {
       setContinuationClaimKey(null);
+      setContinuationFeedback({ key: activeContinuationKey, kind: "failed" });
+    } else {
+      setContinuationFeedback({ key: activeContinuationKey, kind: "accepted" });
     }
   }, [
     activeContinuationKey,
@@ -122,6 +160,7 @@ export function ChatArea(props: ChatAreaProps) {
     continuationClaimKey,
     props.onContinueConversation,
     selectedConversation,
+    t,
   ]);
   const subagentNavigation = props.workbench.subagentNavigation?.parentConversationId === props.selectedConversationId
     ? props.workbench.subagentNavigation
@@ -470,7 +509,6 @@ export function ChatArea(props: ChatAreaProps) {
         autoExpandStreamingThinking={thinkingDisplayMode !== "first_inline_with_popup"}
         conversation={surfaceConversation}
         sessionRunning={conversationIsRunning(surfaceConversation)}
-        sessionProviderUsage={props.workbench.sessionProviderUsage ?? null}
         hiddenThinkingBlockIds={hiddenThinkingBlockIds}
         messages={messages}
         renderItems={renderItems}
@@ -494,22 +532,42 @@ export function ChatArea(props: ChatAreaProps) {
         transientReasoningStatus={transientReasoningStatus ? (
           <TransientReasoningStatusLine status={transientReasoningStatus} />
         ) : null}
-        footer={selectedConversation
-          && continuation?.eligible
-          && !conversationIsRunning(selectedConversation)
-          && props.onContinueConversation ? (
-            <button
-              className="conversation-continue-button"
-              disabled={continuationClaimKey === activeContinuationKey}
-              onClick={() => void handleContinueConversation()}
-              type="button"
-            >
-              <Play aria-hidden="true" size={15} />
-              {continuationClaimKey === activeContinuationKey
-                ? t("conversation.continuing")
-                : t("conversation.continue")}
-            </button>
-          ) : null}
+         footer={selectedConversation
+           && continuation
+           && !conversationIsRunning(selectedConversation)
+           && props.onContinueConversation ? (
+             <div className="conversation-continue-footer" role="status" aria-live="polite">
+               {continuation.eligible ? (
+                 <button
+                   className="conversation-continue-button"
+                   disabled={continuationClaimKey === activeContinuationKey}
+                   onClick={() => void handleContinueConversation()}
+                   type="button"
+                 >
+                   <Play aria-hidden="true" size={15} />
+                   {continuationClaimKey === activeContinuationKey
+                     ? t("conversation.continuing")
+                     : t("conversation.continue")}
+                 </button>
+               ) : (
+                 <span className="conversation-continue-status conversation-continue-status-blocked">
+                   {t("conversation.continuation.blocked")}
+                   {t("global.labelSeparator")}
+                   {conversationContinuationBlockedReasonText(continuation.blockedReason, t)}
+                 </span>
+               )}
+               {continuationFeedback?.key === activeContinuationKey && continuationFeedback.kind === "failed" ? (
+                 <span className="conversation-continue-status conversation-continue-status-failed">
+                   {t("conversation.continuation.claimFailed")}
+                 </span>
+               ) : null}
+               {continuationFeedback?.key === activeContinuationKey && continuationFeedback.kind === "accepted" ? (
+                 <span className="conversation-continue-status">
+                   {t("conversation.continuing")}
+                 </span>
+               ) : null}
+             </div>
+           ) : null}
         suppressEmptyPlaceholder={isEmptyConversation || isMaterializingConversationSurface}
         onCopyText={props.onCopyText}
         onEditUserPrompt={userPromptEdit.open}

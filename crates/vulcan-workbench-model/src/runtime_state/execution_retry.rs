@@ -7,7 +7,7 @@ use vulcan_core::types::{ControllerConfig, ConversationSnapshot};
 
 /// Strict schema version accepted for execution-retry snapshots.
 /// 执行重试快照接受的严格 Schema 版本。
-pub const EXECUTION_RETRY_SNAPSHOT_SCHEMA_VERSION: u32 = 1;
+pub const EXECUTION_RETRY_SNAPSHOT_SCHEMA_VERSION: u32 = 4;
 
 /// Lifecycle state of one persisted execution-retry snapshot.
 /// 单个持久化执行重试快照的生命周期状态。
@@ -126,6 +126,24 @@ pub struct ExecutionRetryPreparationInput {
     /// Exact profile Hook payload prepared by the original logical turn.
     /// 原始逻辑回合准备的精确画像 Hook 载荷。
     pub profile_payload: serde_json::Value,
+}
+
+/// Lightweight route selection frozen for a retry that resumes pre-provider preparation.
+/// 为恢复 Provider 调用前准备的重试冻结的轻量路由选择。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExecutionRetryPreparationRouteSelection {
+    /// Session-selected provider identity frozen before route resolution.
+    /// 在路由解析前冻结的会话级 Provider 选择身份。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_provider_id: Option<String>,
+    /// Session-selected connection identity frozen before route resolution.
+    /// 在路由解析前冻结的会话级连接选择身份。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_connection_id: Option<String>,
+    /// Session-selected model identity frozen before route resolution.
+    /// 在路由解析前冻结的会话级模型选择身份。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_model_id: Option<String>,
 }
 
 /// Replay-safety state of one tool call retained in a retry snapshot.
@@ -264,6 +282,34 @@ pub struct ExecutionRetrySnapshotRef {
     /// Stable pending-action label mirrored without the large payload.
     /// 在不携带大载荷的情况下镜像的稳定待执行动作标签。
     pub pending_action_label: String,
+    /// Frozen provider route identity used to reject route drift before claim.
+    /// 用于在领取前拒绝路由漂移的冻结供应商路由身份。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_route: Option<SessionProviderRouteLeaseIdentity>,
+    /// Frozen pre-resolution selection when the pending action resumes preparation.
+    /// 待执行动作为恢复准备时冻结的解析前选择。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preparation_route_selection: Option<ExecutionRetryPreparationRouteSelection>,
+    /// Context-generation identity mirrored for display-time drift rejection.
+    /// 为展示阶段拒绝代际漂移而镜像的上下文代际身份。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_generation_id: Option<String>,
+    /// SHA-256 digest of provider-visible messages and continuation cursor.
+    /// Provider 可见消息与 continuation 游标的 SHA-256 摘要。
+    #[serde(default)]
+    pub canonical_dispatch_sha256: String,
+    /// Whether the complete sidecar proves that automatic replay is safe.
+    /// 完整 sidecar 是否证明可以安全自动重放。
+    #[serde(default)]
+    pub retryable: bool,
+    /// Whether an operator must verify an external outcome before continuing.
+    /// 继续前是否必须由人工确认外部结果。
+    #[serde(default)]
+    pub requires_manual_confirmation: bool,
+    /// Stable machine-readable reason when replay is blocked.
+    /// 阻止重放时的稳定机器可读原因。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocked_reason: Option<String>,
     /// Physical attempt that currently claims the snapshot.
     /// 当前领取快照的物理尝试身份。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -275,4 +321,178 @@ pub struct ExecutionRetrySnapshotRef {
     /// Last reference mutation timestamp as Unix-millis text.
     /// Unix 毫秒文本形式的最近引用修改时间。
     pub updated_at: String,
+}
+
+impl ExecutionRetrySnapshotRef {
+    /// Returns whether this pending action has an executor registered by the current runtime.
+    /// 返回当前运行时是否为该待执行动作注册了 Continue 执行器。
+    pub fn pending_action_executor_supported(&self) -> bool {
+        matches!(
+            self.pending_action_label.as_str(),
+            "resume_preparation" | "dispatch_provider_request" | "prepare_next_provider_request"
+        )
+    }
+
+    /// Returns whether the reference proves replay safety independent of lifecycle ownership.
+    /// 返回引用是否证明重放安全；该判断不包含生命周期所有权。
+    pub fn replay_safety_proven(&self) -> bool {
+        // Content identity must be structurally readable before the UI may advertise an executable body.
+        // 在 UI 宣称正文可执行前，内容身份必须在结构上可读取。
+        let content_identity_valid = uuid::Uuid::parse_str(self.snapshot_id.as_str()).is_ok()
+            && self.content_bytes > 0
+            && self.content_sha256.len() == 64
+            && self
+                .content_sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
+        let action_boundary_complete = match self.pending_action_label.as_str() {
+            "resume_preparation" => self.preparation_route_selection.is_some(),
+            "dispatch_provider_request" | "prepare_next_provider_request" => {
+                self.preparation_route_selection.is_none() && self.provider_route.is_some()
+            }
+            _ => false,
+        };
+        self.schema_version == EXECUTION_RETRY_SNAPSHOT_SCHEMA_VERSION
+            && content_identity_valid
+            && self.retryable
+            && !self.requires_manual_confirmation
+            && self.blocked_reason.is_none()
+            && self.pending_action_executor_supported()
+            && action_boundary_complete
+            && self.canonical_dispatch_sha256.len() == 64
+            && self
+                .canonical_dispatch_sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    }
+
+    /// Permanently invalidates this lightweight reference after its replay-safety proof is lost.
+    /// 在重放安全证明丢失后永久失效当前轻量引用。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `blocked_reason` is the stable machine-readable reason projected through WebUI i18n.
+    /// `blocked_reason` 是通过 WebUI i18n 投影的稳定机器可读原因。
+    /// `error_summary` is the controlled non-secret diagnostic retained for support inspection.
+    /// `error_summary` 是为支持排查保留的受控非敏感诊断。
+    /// `updated_at` is the authoritative Unix-millisecond timestamp text for this transition.
+    /// `updated_at` 是当前状态迁移使用的权威 Unix 毫秒时间戳文本。
+    pub fn invalidate_for_safety_reason(
+        &mut self,
+        blocked_reason: String,
+        error_summary: String,
+        updated_at: String,
+    ) {
+        self.state = ExecutionRetrySnapshotState::Invalidated;
+        self.retryable = false;
+        self.requires_manual_confirmation = true;
+        self.blocked_reason = Some(blocked_reason);
+        self.claimed_attempt_id = None;
+        self.error_summary = Some(error_summary);
+        self.updated_at = updated_at;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Tests for the explicit replay-safety proof carried by the lightweight reference.
+    //! 轻量引用携带的显式重放安全证明测试。
+
+    use super::*;
+
+    /// Builds a minimal frozen reference for replay-safety assertions.
+    /// 构建用于重放安全断言的最小冻结引用。
+    fn safe_reference() -> ExecutionRetrySnapshotRef {
+        ExecutionRetrySnapshotRef {
+            schema_version: EXECUTION_RETRY_SNAPSHOT_SCHEMA_VERSION,
+            snapshot_id: String::from("00000000-0000-0000-0000-000000000001"),
+            generation: 1,
+            state: ExecutionRetrySnapshotState::Frozen,
+            content_sha256: "1".repeat(64),
+            content_bytes: 1,
+            logical_execution_id: String::from("logical-execution"),
+            pending_action_label: String::from("resume_preparation"),
+            provider_route: None,
+            preparation_route_selection: Some(ExecutionRetryPreparationRouteSelection {
+                active_provider_id: None,
+                active_connection_id: None,
+                active_model_id: None,
+            }),
+            context_generation_id: None,
+            canonical_dispatch_sha256: "0".repeat(64),
+            retryable: true,
+            requires_manual_confirmation: false,
+            blocked_reason: None,
+            claimed_attempt_id: None,
+            error_summary: None,
+            updated_at: String::from("1"),
+        }
+    }
+
+    /// Verifies that an explicit blocked reason invalidates an otherwise safe reference.
+    /// 验证显式阻塞原因会使原本安全的引用失效。
+    #[test]
+    fn blocked_reason_invalidates_replay_safety_proof() {
+        let safe = safe_reference();
+        assert!(safe.replay_safety_proven());
+
+        let mut blocked = safe;
+        blocked.blocked_reason = Some(String::from("provider_dispatch_outcome_unknown"));
+        assert!(!blocked.replay_safety_proven());
+    }
+
+    /// Verifies malformed or empty sidecar identities never produce a clickable replay proof.
+    /// 验证格式错误或空的 sidecar 身份绝不会产生可点击的重放证明。
+    #[test]
+    fn malformed_sidecar_identity_invalidates_replay_safety_proof() {
+        // malformedSnapshotId proves the reference must name an exact UUID-owned body.
+        // malformedSnapshotId 证明引用必须指向由精确 UUID 拥有的正文。
+        let mut malformed_snapshot_id = safe_reference();
+        malformed_snapshot_id.snapshot_id = String::from("not-a-uuid");
+        assert!(!malformed_snapshot_id.replay_safety_proven());
+
+        // malformedDigest proves a syntactically invalid content address cannot reach the button.
+        // malformedDigest 证明语法无效的内容地址不能到达按钮。
+        let mut malformed_digest = safe_reference();
+        malformed_digest.content_sha256 = String::from("digest");
+        assert!(!malformed_digest.replay_safety_proven());
+
+        // emptyBody proves a zero-byte sidecar cannot be advertised as executable.
+        // emptyBody 证明零字节 sidecar 不能被宣称为可执行。
+        let mut empty_body = safe_reference();
+        empty_body.content_bytes = 0;
+        assert!(!empty_body.replay_safety_proven());
+    }
+
+    /// Verifies safety invalidation closes lifecycle ownership and retains a concrete diagnostic.
+    /// 验证安全失效会关闭生命周期所有权并保留具体诊断。
+    #[test]
+    fn safety_invalidation_closes_replay_reference() {
+        // reference starts as a claimable snapshot owned by one interrupted physical attempt.
+        // reference 初始为由一个已中断物理尝试领取的可重放快照。
+        let mut reference = safe_reference();
+        reference.state = ExecutionRetrySnapshotState::Claimed;
+        reference.claimed_attempt_id = Some(String::from("attempt-1"));
+
+        reference.invalidate_for_safety_reason(
+            String::from("provider_dispatch_outcome_unknown"),
+            String::from("Provider dispatch outcome requires manual verification."),
+            String::from("2"),
+        );
+
+        assert_eq!(reference.state, ExecutionRetrySnapshotState::Invalidated);
+        assert!(!reference.retryable);
+        assert!(reference.requires_manual_confirmation);
+        assert_eq!(
+            reference.blocked_reason.as_deref(),
+            Some("provider_dispatch_outcome_unknown")
+        );
+        assert!(reference.claimed_attempt_id.is_none());
+        assert_eq!(
+            reference.error_summary.as_deref(),
+            Some("Provider dispatch outcome requires manual verification.")
+        );
+        assert_eq!(reference.updated_at, "2");
+        assert!(!reference.replay_safety_proven());
+    }
 }
