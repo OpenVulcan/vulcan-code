@@ -75,6 +75,7 @@ impl Serialize for SegmentedRuntimeStateMetadata<'_> {
             provider_call_ledger,
             execution_retry_snapshot,
             transient_execution_retry_snapshot: _,
+            observed_first_semantic_submission_id: _,
             auto_compact_prefill_input_tokens,
             active_precheck_turn_id,
             session_runtime_kernel,
@@ -192,7 +193,10 @@ pub(in crate::workspace_store) fn write_state(
     session_dir: &Path,
     state: &SegmentedSessionStateDocument,
 ) -> Result<(), String> {
-    let _guard = segmented_state_file_io_lock()
+    // state_lock isolates this exact session-like state document from every other session.
+    // state_lock 将当前精确会话类状态文档与其他所有会话隔离。
+    let state_lock = segmented_state_file_io_lock(session_dir);
+    let _guard = state_lock
         .lock()
         .map_err(|error| format!("锁定分段 state.json 失败：{error}"))?;
     let mut next_state = state.clone();
@@ -210,7 +214,10 @@ pub(in crate::workspace_store) fn write_state(
 pub(in crate::workspace_store) fn read_state(
     session_dir: &Path,
 ) -> Result<Option<SegmentedSessionStateDocument>, String> {
-    let _guard = segmented_state_file_io_lock()
+    // state_lock isolates this exact session-like state document from every other session.
+    // state_lock 将当前精确会话类状态文档与其他所有会话隔离。
+    let state_lock = segmented_state_file_io_lock(session_dir);
+    let _guard = state_lock
         .lock()
         .map_err(|error| format!("锁定分段 state.json 失败：{error}"))?;
     read_state_unlocked(session_dir)
@@ -243,7 +250,10 @@ pub(in crate::workspace_store) fn replace_session_boundary_state(
     session_dir: &Path,
     state: Value,
 ) -> Result<(), String> {
-    let _guard = segmented_state_file_io_lock()
+    // state_lock isolates this exact session-like state document from every other session.
+    // state_lock 将当前精确会话类状态文档与其他所有会话隔离。
+    let state_lock = segmented_state_file_io_lock(session_dir);
+    let _guard = state_lock
         .lock()
         .map_err(|error| format!("锁定分段 state.json 失败：{error}"))?;
     let mut state_document =
@@ -334,9 +344,10 @@ pub(in crate::workspace_store) fn write_segmented_session_fork_source(
     session_dir: &Path,
     fork_source: SegmentedSessionForkSource,
 ) -> Result<(), String> {
-    let _guard = segmented_state_file_io_lock()
-        .lock()
-        .map_err(to_store_error)?;
+    // session_storage_lock shares the same exact-session metadata boundary as transcript append.
+    // session_storage_lock 与转录追加共享同一个精确会话元数据边界。
+    let session_storage_lock = segmented_append_file_io_lock(session_dir);
+    let _guard = session_storage_lock.write().map_err(to_store_error)?;
     let mut metadata = read_session_metadata(session_dir)?;
     metadata.fork_source = Some(fork_source);
     write_metadata(session_dir, &metadata)

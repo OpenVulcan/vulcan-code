@@ -226,8 +226,34 @@ pub(super) async fn handle_runtime_stream_event(
         eprintln!("[webui-service] append runtime event failed: {error}");
     }
 
-    // Barrier acknowledgement is unconditional after the projection attempt so provider execution cannot deadlock on display errors.
-    // 投影尝试后的屏障确认必须无条件执行，避免 Provider 执行因显示错误而死锁。
+    if !subagent_event_consumed && runtime_event_forms_durable_transcript_boundary(&event) {
+        // durable_started_at measures the exact canonical append barrier before Core may advance.
+        // durable_started_at 测量 Core 可继续推进前的精确规范追加屏障。
+        let durable_started_at = std::time::Instant::now();
+        if let Err(error) = await_session_transcript_writer_durable(session_id).await {
+            eprintln!(
+                "[webui-service] runtime transcript durability boundary failed: session={session_id} kind={:?} error={error}",
+                event.kind
+            );
+            if let Err(rejection_error) = vulcan_agent_runtime::agent_runtime::tool_runtime_bridge::reject_runtime_event_projection_barrier_from_event(&event) {
+                eprintln!(
+                    "[webui-service] reject failed transcript durability barrier failed: {rejection_error}"
+                );
+            }
+            return;
+        }
+        webui_trace(
+            "runtime_transcript_durable_ack",
+            format!(
+                "session={session_id} kind={:?} durable_ack_ms={}",
+                event.kind,
+                durable_started_at.elapsed().as_millis()
+            ),
+        );
+    }
+
+    // Barrier acknowledgement follows canonical durability for stable tool boundaries.
+    // 稳定工具边界的屏障确认发生在规范持久化可靠之后。
     if let Err(error) = release_runtime_event_projection_barrier_after_attempt(&event) {
         eprintln!("[webui-service] release runtime event projection barrier failed: {error}");
     }

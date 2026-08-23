@@ -5,6 +5,46 @@ use super::*;
 use crate::vmm::hydrate_vmm_default_identity;
 use vulcan_service_api::PendingPromptsChangedDelta;
 
+/// Minimum elapsed time that makes one workbench-refresh stage worth reporting.
+/// 工作台刷新阶段需要输出诊断日志的最小耗时。
+const WORKBENCH_REFRESH_SLOW_TRACE_THRESHOLD_MS: u128 = 20;
+
+/// Emits one unconditional slow-stage diagnostic for workbench refreshes.
+/// 为工作台刷新输出一条不依赖环境开关的慢阶段诊断日志。
+///
+/// # Parameters
+/// 参数
+/// `stage` identifies the exact refresh node being measured.
+/// `stage` 标识正在测量的精确刷新节点。
+/// `session_id` identifies the selected session, or the nil id before selection resolves.
+/// `session_id` 标识选中会话；选择尚未解析时使用空标识。
+/// `started_at` is the monotonic start time of the measured node.
+/// `started_at` 是被测节点的单调起始时间。
+/// `detail` carries compact result metadata for diagnosis.
+/// `detail` 携带用于诊断的紧凑结果元数据。
+///
+/// # Returns
+/// 返回值
+/// This function returns nothing and writes only stages exceeding the diagnostic threshold.
+/// 此函数不返回数据，仅输出超过诊断阈值的阶段。
+fn trace_workbench_refresh_if_slow(
+    stage: &str,
+    session_id: SessionId,
+    started_at: std::time::Instant,
+    detail: impl AsRef<str>,
+) {
+    // elapsed_ms is monotonic so clock adjustments cannot corrupt the measurement.
+    // elapsed_ms 使用单调时钟，系统时钟调整不会破坏测量结果。
+    let elapsed_ms = started_at.elapsed().as_millis();
+    if elapsed_ms <= WORKBENCH_REFRESH_SLOW_TRACE_THRESHOLD_MS {
+        return;
+    }
+    eprintln!(
+        "[webui-service][workbench-refresh-timing] session={session_id} stage={stage} elapsed_ms={elapsed_ms} {}",
+        detail.as_ref()
+    );
+}
+
 /// Input bundle for projecting runtime and workspace state into one WebUI workbench snapshot.
 /// 将运行时与工作区状态投影为 WebUI 工作台快照的输入包。
 pub(crate) struct WorkbenchRuntimeProjection<'a> {
@@ -95,6 +135,12 @@ async fn refresh_workbench_snapshot_with_selected_session(
     state: SharedServiceBridgeState,
     target_session_id: Option<SessionId>,
 ) -> Result<WorkbenchSnapshot, String> {
+    // refresh_started_at measures the complete canonical workbench refresh.
+    // refresh_started_at 测量完整的规范工作台刷新过程。
+    let refresh_started_at = std::time::Instant::now();
+    // state_capture_started_at isolates the initial shared-state lock and snapshot clones.
+    // state_capture_started_at 将初始共享状态锁及快照克隆单独测量。
+    let state_capture_started_at = std::time::Instant::now();
     let (
         controller_runtime,
         luaskills_catalog,
@@ -104,7 +150,6 @@ async fn refresh_workbench_snapshot_with_selected_session(
         provider_configuration,
         live_context_budgets,
         agent_runtime_for_status,
-        live_listener_task_ids,
         captured_workbench_generation,
     ) = {
         let guard = state
@@ -140,20 +185,34 @@ async fn refresh_workbench_snapshot_with_selected_session(
             provider_configuration,
             live_context_budgets,
             guard.agent_runtime.clone(),
-            guard
-                .detached_subagent_task_listeners
-                .keys()
-                .copied()
-                .collect::<BTreeSet<_>>(),
             captured_workbench_generation,
         )
     };
+    trace_workbench_refresh_if_slow(
+        "initial_state_capture",
+        target_session_id.unwrap_or_else(SessionId::nil),
+        state_capture_started_at,
+        "result=completed",
+    );
 
+    // workspace_index_started_at isolates the Controller workspace-index load.
+    // workspace_index_started_at 将 Controller 工作区索引加载单独测量。
+    let workspace_index_started_at = std::time::Instant::now();
     let mut refreshed_snapshot =
         vulcan_workspace_store::workspace_store::load_workspace_index_snapshot(
             controller_runtime.clone(),
         )
         .await?;
+    trace_workbench_refresh_if_slow(
+        "workspace_index",
+        target_session_id.unwrap_or_else(SessionId::nil),
+        workspace_index_started_at,
+        format!(
+            "projects={} sessions={}",
+            refreshed_snapshot.task_projects.len(),
+            refreshed_snapshot.sessions.len()
+        ),
+    );
     preserve_active_session_run_state(
         preserved_workspace_run_state.as_ref(),
         &mut refreshed_snapshot,
@@ -161,37 +220,15 @@ async fn refresh_workbench_snapshot_with_selected_session(
     let selected_session_id =
         selected_session_id_after_refresh(&refreshed_snapshot, target_session_id);
     refreshed_snapshot.selected_session = selected_session_id;
-    if selected_session_id != SessionId::nil() {
-        hydrate_selected_session_runtime_if_needed(
-            &state,
-            controller_runtime.clone(),
-            &mut refreshed_snapshot,
-            selected_session_id,
-        )
-        .await?;
-        let refreshed_session_run_phases = refreshed_snapshot.session_run_phases.clone();
-        apply_persisted_task_mirror_statuses_to_workspace(
-            &controller_runtime,
-            &mut refreshed_snapshot,
-            selected_session_id,
-            |task_id| {
-                webui_subagent_task_has_live_run_for_phase(
-                    refreshed_session_run_phases.get(&task_id).copied(),
-                    agent_runtime_for_status
-                        .as_ref()
-                        .map(|runtime| &runtime.task_runtime),
-                    live_listener_task_ids.contains(&task_id),
-                    task_id,
-                )
-            },
-        )?;
-    }
-    sync_selected_session_goal_summary_from_store(
-        &state,
-        controller_runtime.clone(),
-        selected_session_id,
-    )
-    .await?;
+    // A workbench refresh owns only indexes and already-retained active state.
+    // 工作台刷新仅负责索引与已经保留的活动状态。
+    // Display hydration, task-mirror loading, goal loading, and VMM opening require explicit
+    // session access or execution ownership and must never be inferred from selection.
+    // 展示水合、任务镜像加载、目标加载与 VMM 打开必须由显式会话访问或执行所有权触发，
+    // 不能根据选中状态隐式执行。
+    // projection_inputs_started_at isolates state-derived WebUI projection input assembly.
+    // projection_inputs_started_at 将从状态派生 WebUI 投影输入的组装过程单独测量。
+    let projection_inputs_started_at = std::time::Instant::now();
     let (surface_messages, subagent_navigation, session_goal_summaries, hydrated_window_summaries) = {
         let mut guard = state
             .lock()
@@ -223,6 +260,12 @@ async fn refresh_workbench_snapshot_with_selected_session(
             ),
         )
     };
+    trace_workbench_refresh_if_slow(
+        "projection_inputs",
+        selected_session_id,
+        projection_inputs_started_at,
+        format!("surface_messages={}", surface_messages.len()),
+    );
     let vulcan_plugin_catalog = agent_runtime_for_status
         .as_ref()
         .and_then(|agent_runtime| agent_runtime.extension_generation.plugin_catalog());
@@ -248,27 +291,22 @@ async fn refresh_workbench_snapshot_with_selected_session(
         .map_err(|error| format!("failed to lock service state: {error}"))?
         .vmm_controller_registry
         .clone();
-    if selected_session_id != SessionId::nil() {
-        let session_directory = segmented_session_directory_for_workspace_session(
-            &controller_runtime.data_root,
-            &refreshed_snapshot,
-            selected_session_id,
-        )
-        .ok_or_else(|| {
-            format!(
-                "Selected session `{selected_session_id}` has no exact storage locator; workbench refresh directory scanning is disabled."
-            )
-        })?;
-        let _ = vmm_controller_registry.get_or_open(
-            &session_directory,
-            selected_session_id,
-            &current_unix_millis_text(),
-        )?;
-    }
+    // vmm_snapshot_started_at isolates snapshots of controllers already owned by active work.
+    // vmm_snapshot_started_at 将活动工作已经持有的控制器快照单独测量。
+    let vmm_snapshot_started_at = std::time::Instant::now();
     // vmm_session_states are read-only snapshots used only for WebUI projection.
     // vmm_session_states 是仅用于 WebUI 投影的只读快照。
     let vmm_session_states = vmm_controller_registry.snapshots()?;
+    trace_workbench_refresh_if_slow(
+        "vmm_snapshots",
+        selected_session_id,
+        vmm_snapshot_started_at,
+        format!("sessions={}", vmm_session_states.len()),
+    );
     let managed_vmm_runtime = crate::managed_memory_mesh_runtime::snapshot_from_state(&state);
+    // workbench_projection_started_at isolates pure model projection from storage I/O.
+    // workbench_projection_started_at 将纯模型投影与存储 I/O 分开测量。
+    let workbench_projection_started_at = std::time::Instant::now();
     let mut workbench = workbench_from_runtime(WorkbenchRuntimeProjection {
         controller: &controller_runtime,
         command_session_runtime: agent_runtime_for_status
@@ -297,6 +335,15 @@ async fn refresh_workbench_snapshot_with_selected_session(
         hydrated_conversation_windows: &hydrated_window_summaries,
         native_tools: native_tool_summaries_from_agent_runtime(agent_runtime_for_status.as_ref()),
     });
+    trace_workbench_refresh_if_slow(
+        "workbench_projection",
+        selected_session_id,
+        workbench_projection_started_at,
+        "result=completed",
+    );
+    // final_commit_started_at isolates the final shared-state reconciliation and replacement.
+    // final_commit_started_at 将最终共享状态协调与替换单独测量。
+    let final_commit_started_at = std::time::Instant::now();
     {
         let mut guard = state
             .lock()
@@ -329,6 +376,25 @@ async fn refresh_workbench_snapshot_with_selected_session(
         guard.workbench = workbench.clone();
         guard.workspace_snapshot = Some(refreshed_snapshot);
     }
+    trace_workbench_refresh_if_slow(
+        "final_state_commit",
+        selected_session_id,
+        final_commit_started_at,
+        "result=completed",
+    );
+    trace_workbench_refresh_if_slow(
+        "refresh_total",
+        selected_session_id,
+        refresh_started_at,
+        format!(
+            "result=completed requested_selection={}",
+            if target_session_id.is_some() {
+                "explicit"
+            } else {
+                "retained"
+            }
+        ),
+    );
     Ok(workbench)
 }
 

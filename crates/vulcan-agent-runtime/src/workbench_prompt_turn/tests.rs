@@ -120,6 +120,26 @@ fn visible_user_prompt_reuses_authoritative_canonical_message_id() {
         SessionConversationPayload::UserText { .. }
     ));
     assert_eq!(runtime_state.conversation_state.records.len(), 1);
+    // visibleRecordId is the distinct transcript-row identity required by segmented JSONL persistence.
+    // visibleRecordId 是分段 JSONL 持久化所需的独立转录行身份。
+    let visible_record_id = start
+        .visible_user_prompt_record_id
+        .as_deref()
+        .expect("visible user prompt must expose its transcript record identity");
+    assert_ne!(visible_record_id, canonical_user_message_id);
+    // projectedTranscript proves shell persistence can resolve the returned record id exactly.
+    // projectedTranscript 证明外壳持久化能够精确解析返回的记录标识。
+    let projected_transcript = merge_session_messages_with_conversation_state_records(
+        &[],
+        &runtime_state.conversation_state,
+    );
+    assert_eq!(
+        projected_transcript
+            .iter()
+            .filter(|message| message.id == visible_record_id)
+            .count(),
+        1
+    );
 }
 
 /// Verifies pre-provider retry restoration reuses the original turn and prompt without appending a user message.

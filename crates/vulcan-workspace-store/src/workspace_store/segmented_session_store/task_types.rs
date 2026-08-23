@@ -161,6 +161,14 @@ pub(in crate::workspace_store) struct SegmentedSessionMetadata {
     /// Next global sequence number for the main session.
     /// 主会话下一条全局事件序号。
     pub next_global_seq: u64,
+    /// Monotonic storage generation derived from the durable global sequence frontier.
+    /// 从可靠全局序号前沿派生的单调存储代次。
+    #[serde(default)]
+    pub storage_generation: u64,
+    /// Version of the metadata integrity contract maintained by current writers.
+    /// 当前写入器维护的元数据完整性契约版本。
+    #[serde(default)]
+    pub integrity_version: u32,
     /// Number of canonical transcript messages already appended after the latest rollback boundary.
     /// 最新回滚边界之后已经追加的规范转录消息数量。
     #[serde(default)]

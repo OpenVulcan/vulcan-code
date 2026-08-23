@@ -19,7 +19,7 @@ use super::{
     ControllerRuntimeHandle, SessionId, SharedServiceBridgeState, WorkspaceSnapshot,
     composer_attachment_draft_scope, current_unix_millis_text, emit_pending_prompts_changed_delta,
     parse_session_id, runtime_parts_from_state, selected_session_id_from_state,
-    spawn_workspace_session_persist_task, webui_trace, workspace_path_for_session,
+    spawn_workspace_session_runtime_state_persist_task, webui_trace, workspace_path_for_session,
 };
 
 /// Describes one attachment-owner transition committed with a pending-queue snapshot mutation.
@@ -243,7 +243,9 @@ fn spawn_pending_prompt_queue_persist_task(
     if !workspace_is_ready {
         return Err(workspace_snapshot_not_ready_error());
     }
-    spawn_workspace_session_persist_task(
+    // Queue edits own runtime metadata only and must not publish the retained transcript prefix.
+    // 队列编辑只拥有运行态元数据，不得发布保留转录前缀。
+    spawn_workspace_session_runtime_state_persist_task(
         state.clone(),
         controller_runtime.clone(),
         session_id,

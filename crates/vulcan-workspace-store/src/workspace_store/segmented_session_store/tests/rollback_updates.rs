@@ -1,9 +1,92 @@
 use super::*;
 
-/// Verifies an inserted transcript row triggers a physical rewrite instead of an unchecked suffix append.
-/// 验证插入转录行会触发物理重写，而不是未经校验的尾部追加。
+/// Verifies a compacted runtime window cannot overwrite the complete persisted display history.
+/// 验证压缩后的运行时窗口不能覆盖完整的持久化展示历史。
 #[test]
-fn append_message_update_physically_rewrites_inserted_history() {
+fn compacted_runtime_window_cannot_rewrite_display_history() {
+    // root isolates the destructive-compaction regression fixture.
+    // root 隔离破坏性压缩回归夹具。
+    let root = test_root("compacted_runtime_window_cannot_rewrite_display_history");
+    // session_dir owns the exact segmented display history under test.
+    // session_dir 持有本测试使用的精确分段展示历史。
+    let session_dir = create_segmented_session_in_location(
+        &root,
+        false,
+        test_session_request(SegmentPolicy::default()),
+    )
+    .expect("create session");
+    // complete_history models the display rows that must survive context-anchor compaction.
+    // complete_history 模拟上下文锚点压缩后仍必须保留的展示记录。
+    let complete_history = vec![
+        test_message(
+            "m-user-old",
+            SessionMessageKind::User,
+            SessionMessageRecordKind::Transcript,
+            "older prompt",
+        ),
+        test_message(
+            "m-thinking-old",
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::ThinkingOutput,
+            "older reasoning",
+        ),
+        test_message(
+            "m-tool-old",
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::ToolCallOutput,
+            "older tool",
+        ),
+        test_message(
+            "m-assistant-old",
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::AssistantOutput,
+            "older answer",
+        ),
+    ];
+    append_segmented_session_message_update(&session_dir, &complete_history)
+        .expect("append complete display history");
+    // compacted_window models the much shorter provider-facing record set after compaction.
+    // compacted_window 模拟压缩后大幅缩短的 Provider 可见记录集合。
+    let compacted_window = vec![
+        test_message(
+            "m-compaction-status",
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::CompactionStatus,
+            "上下文已压缩",
+        ),
+        test_message(
+            "m-user-current",
+            SessionMessageKind::User,
+            SessionMessageRecordKind::Transcript,
+            "continue",
+        ),
+    ];
+
+    // error proves ordinary persistence stopped before any destructive rewrite.
+    // error 证明普通持久化在任何破坏性重写前已经停止。
+    let error = append_segmented_session_message_update(&session_dir, &compacted_window)
+        .expect_err("reject compacted runtime window as display replacement");
+
+    assert!(error.contains("Ordinary persistence cannot rewrite or shorten display history"));
+    // replay reloads the canonical display rows after the rejected mutation.
+    // replay 在变更被拒绝后重新加载规范展示记录。
+    let replay = replay_segmented_session_context(&session_dir)
+        .expect("replay retained display history")
+        .expect("retained display replay result");
+    // replay_messages is the exact retained row sequence visible after reload.
+    // replay_messages 是重载后可见的精确保留记录序列。
+    let replay_messages = conversation_state_to_session_messages(&replay.conversation_state);
+    assert_eq!(replay_messages, complete_history);
+    // metadata proves the durable message boundary did not shrink from four to two.
+    // metadata 证明可靠消息边界没有从四条缩短为两条。
+    let metadata = read_session_metadata(&session_dir).expect("read retained metadata");
+    assert_eq!(metadata.message_count, 4);
+}
+
+/// Verifies explicit maintenance can insert a transcript row through a physical rewrite.
+/// 验证显式维护可通过物理重写插入转录行。
+#[test]
+fn explicit_repair_physically_rewrites_inserted_history() {
     let root = test_root("append_message_update_physically_rewrites_inserted_history");
     let session_dir = create_segmented_session_in_location(
         &root,
@@ -38,8 +121,9 @@ fn append_message_update_physically_rewrites_inserted_history() {
         ),
         first_messages[1].clone(),
     ];
-    let changed_lines = append_segmented_session_message_update(&session_dir, &changed_messages)
-        .expect("rewrite inserted transcript row");
+    let changed_lines =
+        replace_segmented_session_message_records_for_repair(&session_dir, &changed_messages)
+            .expect("rewrite inserted transcript row");
 
     let metadata: SegmentedSessionMetadata =
         read_required_json(&session_dir.join(SEGMENTED_METADATA_FILE))
@@ -54,10 +138,10 @@ fn append_message_update_physically_rewrites_inserted_history() {
     assert_eq!(replay_messages, changed_messages);
 }
 
-/// Verifies an incomplete persisted tail checkpoint forces a physical rewrite and checkpoint repair.
-/// 验证不完整的持久化尾部检查点会强制执行物理重写并修复检查点。
+/// Verifies explicit maintenance repairs an incomplete persisted tail checkpoint.
+/// 验证显式维护会修复不完整的持久化尾部检查点。
 #[test]
-fn append_message_update_rewrites_incomplete_tail_checkpoint() {
+fn explicit_repair_rewrites_incomplete_tail_checkpoint() {
     let root = test_root("append_message_update_rewrites_incomplete_tail_checkpoint");
     let session_dir = create_segmented_session_in_location(
         &root,
@@ -98,8 +182,9 @@ fn append_message_update_rewrites_incomplete_tail_checkpoint() {
             "corrected answer",
         ),
     ];
-    let changed_lines = append_segmented_session_message_update(&session_dir, &changed_messages)
-        .expect("rewrite incomplete checkpoint transcript");
+    let changed_lines =
+        replace_segmented_session_message_records_for_repair(&session_dir, &changed_messages)
+            .expect("rewrite incomplete checkpoint transcript");
 
     let repaired_metadata: SegmentedSessionMetadata =
         read_required_json(&session_dir.join(SEGMENTED_METADATA_FILE))
@@ -115,10 +200,10 @@ fn append_message_update_rewrites_incomplete_tail_checkpoint() {
     assert_eq!(replay_messages, changed_messages);
 }
 
-/// Verifies shortened transcript updates physically rewrite message rows without rollback bloat.
-/// 验证缩短的转录更新会物理重写消息行且不产生回滚膨胀。
+/// Verifies explicit maintenance can shorten message rows without rollback bloat.
+/// 验证显式维护可缩短消息行且不产生回滚膨胀。
 #[test]
-fn append_message_update_physically_rewrites_shortened_history() {
+fn explicit_repair_physically_rewrites_shortened_history() {
     let root = test_root("append_message_update_physically_rewrites_shortened_history");
     let session_dir = create_segmented_session_in_location(
         &root,
@@ -150,7 +235,7 @@ fn append_message_update_physically_rewrites_shortened_history() {
     )];
 
     let replacement_lines =
-        append_segmented_session_message_update(&session_dir, &replacement_messages)
+        replace_segmented_session_message_records_for_repair(&session_dir, &replacement_messages)
             .expect("rewrite shortened transcript");
 
     let replacement_metadata: SegmentedSessionMetadata =
@@ -248,7 +333,7 @@ fn replay_uses_physically_rewritten_events_as_baseline() {
             "stream prefix and completed body",
         ),
     ];
-    append_segmented_session_message_update(&session_dir, &replacement_messages)
+    replace_segmented_session_message_records_for_repair(&session_dir, &replacement_messages)
         .expect("append replacement");
     let metadata = read_session_metadata(&session_dir).expect("read metadata");
     let scan = find_latest_compaction_anchor(&session_dir, &metadata.segments)
@@ -589,7 +674,7 @@ fn append_after_physical_rewrite_reintroduces_removed_message_id() {
         .expect("append original messages");
     let replacement_messages = vec![original_messages[0].clone(), original_messages[1].clone()];
     let replacement_lines =
-        append_segmented_session_message_update(&session_dir, &replacement_messages)
+        replace_segmented_session_message_records_for_repair(&session_dir, &replacement_messages)
             .expect("rewrite without removed message");
     assert!(
         replacement_lines
@@ -623,10 +708,10 @@ fn append_after_physical_rewrite_reintroduces_removed_message_id() {
     );
 }
 
-/// Verifies repeated message updates rewrite in place instead of creating display maintenance work.
-/// 验证重复消息更新会就地重写，而不是制造显示层维护任务。
+/// Verifies ordinary persistence rejects an in-place display rewrite without mutating history.
+/// 验证普通持久化会拒绝就地展示重写，且不会修改历史。
 #[test]
-fn repeated_message_updates_do_not_create_rollback_maintenance_work() {
+fn ordinary_message_update_rejects_in_place_display_rewrite() {
     let root = test_root("repeated_message_updates_do_not_create_rollback_maintenance_work");
     let policy = SegmentPolicy {
         max_bytes: 700,
@@ -651,13 +736,12 @@ fn repeated_message_updates_do_not_create_rollback_maintenance_work() {
     ];
     append_segmented_session_message_update(&session_dir, &messages)
         .expect("append initial messages");
-    for index in 0..4 {
-        messages[1].body.push_str(&format!(
-            " completed chunk {index} with enough text to force rollover"
-        ));
-        append_segmented_session_message_update(&session_dir, &messages)
-            .expect("append replacement update");
-    }
+    messages[1]
+        .body
+        .push_str(" completed body that must not replace the persisted display row");
+    let rewrite_error = append_segmented_session_message_update(&session_dir, &messages)
+        .expect_err("ordinary update must reject rewritten display rows");
+    assert!(rewrite_error.contains("non-append display mutation"));
     let metadata = read_session_metadata(&session_dir).expect("read metadata");
     assert_eq!(metadata.latest_rollback_seq, None);
     let retained_lines = metadata
@@ -681,7 +765,7 @@ fn repeated_message_updates_do_not_create_rollback_maintenance_work() {
     let replay_messages =
         conversation_state_to_session_messages(&replay.expect("replay result").conversation_state);
     assert_eq!(replay_messages.len(), 2);
-    assert_eq!(replay_messages[1].body, messages[1].body);
+    assert_eq!(replay_messages[1].body, "stream prefix");
 }
 
 /// Verifies physical message rewrites keep the next sequence after retained non-message rows.
@@ -728,7 +812,7 @@ fn append_message_update_keeps_next_sequence_after_retained_event_gap() {
         SessionMessageRecordKind::Transcript,
         "edited prompt",
     )];
-    append_segmented_session_message_update(&session_dir, &replacement_messages)
+    replace_segmented_session_message_records_for_repair(&session_dir, &replacement_messages)
         .expect("rewrite shortened transcript");
     let metadata_after_rewrite: SegmentedSessionMetadata =
         read_required_json(&session_dir.join(SEGMENTED_METADATA_FILE))

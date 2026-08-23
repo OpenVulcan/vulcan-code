@@ -1,6 +1,10 @@
 import React from "react";
-import type { WorkbenchSnapshot } from "@/types";
-import type { WorkbenchMergeOptions } from "@/state/workbench-state";
+import { useI18n } from "@/i18n";
+import type { ConversationHistoryPageResponse, WorkbenchSnapshot } from "@/types";
+import type {
+  ConversationHistoryPageMergeResult,
+  WorkbenchMergeOptions,
+} from "@/state/workbench-state";
 import {
   loadConversationHistoryPage,
   loadConversationMessages,
@@ -14,6 +18,13 @@ type WorkbenchStateMerger = (
   incoming: WorkbenchSnapshot,
   options?: WorkbenchMergeOptions,
 ) => WorkbenchSnapshot;
+
+// ConversationHistoryPageMerger applies one exact older-history page to the latest UI snapshot.
+// ConversationHistoryPageMerger 将一个精确的更早历史分页应用到最新界面快照。
+type ConversationHistoryPageMerger = (
+  current: WorkbenchSnapshot,
+  response: ConversationHistoryPageResponse,
+) => ConversationHistoryPageMergeResult;
 
 // ConversationHydrationOptions carries the selected conversation and snapshot merge dependencies.
 // ConversationHydrationOptions 携带当前选中会话与快照合并依赖。
@@ -33,6 +44,12 @@ interface ConversationHydrationOptions {
   // mergeConversationHydrationWithLocalCaches preserves local caches while applying focused conversation hydration.
   // mergeConversationHydrationWithLocalCaches 在应用聚焦会话水合时保留本地缓存。
   mergeConversationHydrationWithLocalCaches: WorkbenchStateMerger;
+  // mergeConversationHistoryPageWithLocalCaches applies one history page without replacing unrelated live state.
+  // mergeConversationHistoryPageWithLocalCaches 应用单页历史且不替换无关实时状态。
+  mergeConversationHistoryPageWithLocalCaches: ConversationHistoryPageMerger;
+  // readLatestWorkbenchState returns the latest committed snapshot for exact added-row preflight checks.
+  // readLatestWorkbenchState 返回最新已提交快照，用于精确预检新增行数。
+  readLatestWorkbenchState: () => WorkbenchSnapshot;
   // setWorkbenchState updates the owning WorkbenchLayout snapshot state.
   // setWorkbenchState 更新所属 WorkbenchLayout 的快照状态。
   setWorkbenchState: React.Dispatch<React.SetStateAction<WorkbenchSnapshot>>;
@@ -65,9 +82,14 @@ export function useConversationHydration({
   draftConversationId,
   selectedConversationHydrated,
   hydratedConversationWindowById,
+  mergeConversationHistoryPageWithLocalCaches,
   mergeConversationHydrationWithLocalCaches,
+  readLatestWorkbenchState,
   setWorkbenchState,
 }: ConversationHydrationOptions): ConversationHydrationState {
+  // t resolves user-facing pagination failures through the active locale.
+  // t 通过当前语言解析面向用户的分页失败文案。
+  const { t } = useI18n();
   // loadingConversationId stores the conversation currently loading from the service.
   // loadingConversationId 保存当前正在从服务加载正文的会话标识。
   const [loadingConversationId, setLoadingConversationId] = React.useState<string | null>(null);
@@ -77,6 +99,7 @@ export function useConversationHydration({
   // selectedConversationIdRef stores the latest selected conversation for async completion gates.
   // selectedConversationIdRef 保存最新选中会话，用于异步完成后的状态门控。
   const selectedConversationIdRef = React.useRef<string | null>(selectedConversationId);
+  selectedConversationIdRef.current = selectedConversationId;
   // hydratingConversationIdsRef stores conversation ids with an active service hydration request.
   // hydratingConversationIdsRef 保存当前已有服务端正文水合请求在途的会话标识。
   const hydratingConversationIdsRef = React.useRef<Set<string>>(new Set());
@@ -93,9 +116,25 @@ export function useConversationHydration({
   // conversationHistoryLoadingIdsRef 是更早历史请求的同步门禁。
   const conversationHistoryLoadingIdsRef = React.useRef<Set<string>>(new Set());
 
-  React.useEffect(() => {
-    selectedConversationIdRef.current = selectedConversationId;
-  }, [selectedConversationId]);
+  // reportConversationLoadError publishes an asynchronous failure only while its exact conversation remains selected.
+  // reportConversationLoadError 仅在异步失败所属的精确会话仍被选中时发布该失败。
+  //
+  // Parameters:
+  // 参数：
+  // conversationId identifies the request that produced the failure.
+  // conversationId 标识产生失败的请求。
+  // message is the already localized or backend-provided failure detail.
+  // message 是已经本地化或由后端提供的失败详情。
+  //
+  // Returns:
+  // 返回值：
+  // No value; stale or unmounted failures are ignored.
+  // 无返回值；过期或组件已卸载的失败会被忽略。
+  const reportConversationLoadError = React.useCallback((conversationId: string, message: string): void => {
+    if (mountedRef.current && selectedConversationIdRef.current === conversationId) {
+      setConversationLoadError(message);
+    }
+  }, []);
 
   React.useEffect(() => {
     mountedRef.current = true;
@@ -143,6 +182,7 @@ export function useConversationHydration({
     const requestGeneration = conversationHydrationGenerationByIdRef.current.get(conversationId) ?? 0;
     if (selectedConversationHydrated) {
       setLoadingConversationId(null);
+      setConversationLoadError(null);
       return;
     }
     if (hydratingConversationIdsRef.current.has(conversationId)) {
@@ -176,9 +216,10 @@ export function useConversationHydration({
           { focusedConversationId: conversationId },
         ));
       } catch (nextError) {
-        if (mountedRef.current && selectedConversationIdRef.current === conversationId) {
-          setConversationLoadError(nextError instanceof Error ? nextError.message : String(nextError));
-        }
+        reportConversationLoadError(
+          conversationId,
+          nextError instanceof Error ? nextError.message : String(nextError),
+        );
       } finally {
         hydratingConversationIdsRef.current.delete(conversationId);
         if (mountedRef.current) {
@@ -191,6 +232,7 @@ export function useConversationHydration({
   }, [
     draftConversationId,
     mergeConversationHydrationWithLocalCaches,
+    reportConversationLoadError,
     selectedConversationHydrated,
     selectedConversationId,
     setWorkbenchState,
@@ -209,6 +251,7 @@ export function useConversationHydration({
     // requestGeneration 防止更早历史分页响应跨越破坏性编辑边界。
     const requestGeneration = conversationHydrationGenerationByIdRef.current.get(conversationId) ?? 0;
     setConversationHistoryRequestLoading(conversationId, true);
+    setConversationLoadError(null);
     try {
       const response = await loadConversationHistoryPage(conversationId, cursor.earliestOrdinal);
       if (
@@ -217,19 +260,73 @@ export function useConversationHydration({
       ) {
         return false;
       }
-      setWorkbenchState((current) => mergeConversationHydrationWithLocalCaches(
+      if (
+        response.sessionId !== conversationId
+        || response.messages.some((message) => message.conversationId !== conversationId)
+      ) {
+        reportConversationLoadError(conversationId, t("conversation.history.invalidResponse"));
+        return false;
+      }
+      if (
+        response.hasMoreHistory
+        && (response.earliestOrdinal == null || response.earliestOrdinal >= cursor.earliestOrdinal)
+      ) {
+        reportConversationLoadError(conversationId, t("conversation.history.invalidCursor"));
+        return false;
+      }
+      // knownMessageIds is the exact current stable-row set used for the success decision.
+      // knownMessageIds 是用于决定本次是否成功的精确当前稳定行集合。
+      const knownMessageIds = new Set<string>();
+      for (const message of readLatestWorkbenchState().messages) {
+        if (message.conversationId === conversationId) {
+          knownMessageIds.add(message.id);
+        }
+      }
+      // addedMessageCount counts only response rows absent from the latest committed snapshot.
+      // addedMessageCount 只统计最新已提交快照中不存在的响应行。
+      let addedMessageCount = 0;
+      for (const message of response.messages) {
+        if (knownMessageIds.has(message.id)) {
+          continue;
+        }
+        knownMessageIds.add(message.id);
+        addedMessageCount += 1;
+      }
+      if (addedMessageCount === 0) {
+        if (response.hasMoreHistory) {
+          reportConversationLoadError(conversationId, t("conversation.history.emptyPageWithMore"));
+          return false;
+        }
+        setWorkbenchState((current) => mergeConversationHistoryPageWithLocalCaches(
+          current,
+          response,
+        ).workbench);
+        return false;
+      }
+      setWorkbenchState((current) => mergeConversationHistoryPageWithLocalCaches(
         current,
-        response.workbench,
-        { focusedConversationId: response.sessionId },
-      ));
+        response,
+      ).workbench);
       return true;
     } catch (error) {
       console.error("Failed to load older conversation history", error);
+      // detail preserves the exact backend failure after an internationalized user-facing prefix.
+      // detail 在已国际化的用户提示前缀后保留精确后端失败原因。
+      const detail = error instanceof Error ? error.message : String(error);
+      reportConversationLoadError(conversationId, `${t("conversation.history.loadFailed")}: ${detail}`);
       return false;
     } finally {
       setConversationHistoryRequestLoading(conversationId, false);
     }
-  }, [hydratedConversationWindowById, mergeConversationHydrationWithLocalCaches, setConversationHistoryRequestLoading, setWorkbenchState]);
+  }, [
+    hydratedConversationWindowById,
+    mergeConversationHistoryPageWithLocalCaches,
+    readLatestWorkbenchState,
+    reportConversationLoadError,
+    setConversationHistoryRequestLoading,
+    setWorkbenchState,
+    t,
+  ]);
 
   return {
     loadingConversationId,

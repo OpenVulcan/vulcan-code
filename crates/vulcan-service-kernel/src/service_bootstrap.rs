@@ -39,7 +39,6 @@ use super::{
     mark_webui_service_discovery_failed, mark_webui_service_discovery_ready,
     mark_webui_service_discovery_starting, native_tool_summaries_from_agent_runtime,
     normalized_workspace_path_text_from_path, pending_question_snapshots_from_agent_runtime,
-    segmented_session_directory_for_workspace_session,
     subagent_navigation_snapshot_from_cached_state, workbench_from_runtime, workspace_root,
 };
 
@@ -1146,47 +1145,10 @@ fn run_service_bootstrap(
             .extension_generation
             .mcp_runtime()
             .server_states();
-        if selected_session_id != uuid::Uuid::nil() {
-            let selected_session_directory = segmented_session_directory_for_workspace_session(
-                &controller_runtime.data_root,
-                &workspace_snapshot,
-                selected_session_id,
-            )
-            .ok_or_else(|| {
-                ServiceBootstrapError::new(
-                    "workspace",
-                    "Workspace",
-                    format!(
-                        "Selected session `{selected_session_id}` has no exact storage locator; startup directory scanning is disabled."
-                    ),
-                )
-            })?;
-            // selected_vmm_controller eagerly validates and opens the selected session before its first UI projection.
-            // selected_vmm_controller 在首次 UI 投影前主动校验并打开选中会话。
-            let selected_vmm_controller = guard.vmm_controller_registry.get_or_open(
-                &selected_session_directory,
-                selected_session_id,
-                &current_unix_millis_text(),
-            );
-            if let Err(error) = selected_vmm_controller {
-                // bootstrap_error preserves the strict diagnostic and adds recovery only for a storage-classified historical or damaged VMM attachment.
-                // bootstrap_error 保留严格诊断，并且仅对存储层已分类的历史或损坏 VMM 附件附加恢复操作。
-                let mut bootstrap_error =
-                    ServiceBootstrapError::new("workspace", "Workspace", error.to_string());
-                if error.requires_rebuild() {
-                    // controller_runtime is retained only for the exact recovery action exposed by this failure.
-                    // controller_runtime 仅为该失败暴露的精确恢复操作保留。
-                    guard.controller_runtime = Some(controller_runtime.clone());
-                    bootstrap_error = bootstrap_error.with_recovery(StartupRecoverySnapshot {
-                        kind: StartupRecoveryKind::RebuildSessionVmm,
-                        session_id: selected_session_id.to_string(),
-                    });
-                }
-                return Err(bootstrap_error);
-            }
-        }
-        // vmm_session_states are immutable projections from the controllers opened during bootstrap.
-        // vmm_session_states 是引导期间已打开控制器产生的不可变投影。
+        // vmm_session_states contains only controllers already owned by active in-memory work.
+        // vmm_session_states 仅包含活动内存工作已经持有的控制器。
+        // Startup never opens the selected session merely because its index row is selected.
+        // 启动不会仅因某个会话索引被选中而打开该会话。
         let vmm_session_states = guard
             .vmm_controller_registry
             .snapshots()
@@ -1269,32 +1231,6 @@ fn run_service_bootstrap(
             "[webui-service] managed VMM projection degraded: {error}"
         )),
     }
-    // Reproject the canonical workbench after managed VMM reconciliation so the first emitted
-    // snapshot cannot retain the pre-launch external-runtime placeholder.
-    // 托管 VMM 协调完成后重新投影规范工作台，避免首次发布的快照保留启动前的外部运行时占位状态。
-    // post_managed_refresh_started_at measures the first retained workbench refresh.
-    // post_managed_refresh_started_at 测量首次保留工作台刷新。
-    let post_managed_refresh_started_at = start_bootstrap_stage("post_managed_workbench_refresh");
-    // post_managed_refresh_result reports the actual fallible projection outcome.
-    // post_managed_refresh_result 报告可失败投影的真实结果。
-    let post_managed_refresh_result =
-        match runtime.block_on(crate::refresh_workbench_snapshot(state.clone())) {
-            Ok(workbench) => {
-                emitted_workbench = workbench;
-                "ready"
-            }
-            Err(error) => {
-                logs.push(format!(
-                    "[webui-service] post-managed workspace refresh degraded: {error}"
-                ));
-                "degraded"
-            }
-        };
-    trace_bootstrap_stage(
-        "post_managed_workbench_refresh",
-        post_managed_refresh_started_at,
-        format!("result={post_managed_refresh_result}"),
-    );
     // Managed Codebase Memory enablement survives restart; unavailable packaged assets degrade only that integration.
     // 托管 Codebase Memory 启用意图会跨重启保留；打包资产不可用时仅降级该集成。
     // codebase_memory_started_at measures managed Codebase Memory reconciliation independently.

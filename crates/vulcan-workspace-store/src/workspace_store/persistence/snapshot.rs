@@ -1,4 +1,7 @@
 use super::*;
+use crate::workspace_store::segmented_session_store::{
+    segmented_message_fingerprint, stable_segmented_message_id,
+};
 
 /// Persists one session and its runtime artifacts without rewriting unrelated workspace sessions.
 /// 仅持久化单个会话及其运行时工件，不重写无关工作区会话。
@@ -270,6 +273,34 @@ pub fn load_single_session_transcript_checkpoint_in_directory(
     })
 }
 
+/// Opens one resident transcript append cursor for an exact existing session directory.
+/// 为一个精确的既有会话目录打开常驻转录追加游标。
+///
+/// # Parameters
+/// 参数
+/// `session_directory` is the exact deterministic main-session directory.
+/// `session_directory` 是精确的确定性主会话目录。
+/// `session_id` is the expected stable owner.
+/// `session_id` 是预期的稳定所有者。
+///
+/// # Returns
+/// 返回值
+/// The opaque cursor and its initial durable checkpoint after one metadata read.
+/// 在单次读取元数据后返回不透明游标及其初始可靠检查点。
+pub fn open_single_session_transcript_append_cursor_in_directory(
+    session_directory: &Path,
+    session_id: SessionId,
+) -> Result<
+    (
+        SessionTranscriptAppendCursor,
+        PersistedSessionTranscriptCheckpoint,
+    ),
+    String,
+> {
+    validate_exact_segmented_session_directory_owner(session_directory, session_id)?;
+    open_segmented_session_transcript_append_cursor(session_directory, session_id)
+}
+
 /// Appends one exact immutable transcript suffix without cloning or scanning the historical prefix.
 /// 在不克隆或扫描历史前缀的情况下追加一个精确的不可变转录后缀。
 ///
@@ -340,6 +371,92 @@ pub fn persist_single_session_transcript_tail_from_checkpoint_in_directory(
         tail_messages,
     )?;
     Ok(())
+}
+
+/// Persists one immutable suffix through a resident cursor without rereading metadata.
+/// 通过常驻游标持久化一个不可变后缀且不重新读取元数据。
+///
+/// # Parameters
+/// 参数
+/// `cursor` owns the exact in-memory metadata frontier.
+/// `cursor` 持有精确的内存元数据前沿。
+/// `checkpoint` is the immediate durable predecessor.
+/// `checkpoint` 是直接可靠前驱。
+/// `tail_messages` is the immutable canonical suffix.
+/// `tail_messages` 是不可变规范后缀。
+///
+/// # Returns
+/// 返回值
+/// The advanced durable checkpoint after the append and metadata publication complete.
+/// 在追加和元数据发布完成后返回推进后的可靠检查点。
+pub fn persist_single_session_transcript_tail_with_cursor(
+    cursor: &mut SessionTranscriptAppendCursor,
+    checkpoint: &PersistedSessionTranscriptCheckpoint,
+    tail_messages: &[SessionMessageEntry],
+) -> Result<PersistedSessionTranscriptCheckpoint, String> {
+    append_segmented_session_message_tail_with_cursor(cursor, checkpoint, tail_messages)
+}
+
+/// Retries one retained immutable suffix after bounded reconciliation of the exact active file tail.
+/// 在有界协调精确活动文件尾部后重试一个保留的不可变后缀。
+///
+/// # Parameters
+/// 参数
+/// `cursor` is the same resident writer cursor used by the failed first attempt.
+/// `cursor` 是失败的首次尝试使用的同一个常驻写入器游标。
+/// `checkpoint` and `tail_messages` are the original immutable command boundary and row.
+/// `checkpoint` 与 `tail_messages` 是最初的不可变命令边界与记录。
+///
+/// # Returns
+/// 返回值
+/// The exact durable checkpoint after recovering only a complete active tail or truncating one partial row.
+/// 在仅恢复完整活动尾部或截断一条不完整记录后返回精确可靠检查点。
+pub fn retry_single_session_transcript_tail_with_cursor(
+    cursor: &mut SessionTranscriptAppendCursor,
+    checkpoint: &PersistedSessionTranscriptCheckpoint,
+    tail_messages: &[SessionMessageEntry],
+) -> Result<PersistedSessionTranscriptCheckpoint, String> {
+    retry_segmented_session_message_tail_with_cursor(cursor, checkpoint, tail_messages)
+}
+
+/// Advances one transcript checkpoint from an immutable suffix without reading storage.
+/// 在不读取存储的情况下，根据不可变后缀推进转录检查点。
+///
+/// # Parameters
+/// 参数
+/// `checkpoint` is the exact durable or committed prefix before the suffix.
+/// `checkpoint` 是后缀之前的精确可靠或已提交前缀。
+/// `tail_messages` contains the ordered immutable suffix accepted by the writer.
+/// `tail_messages` 包含写入器接纳的有序不可变后缀。
+///
+/// # Returns
+/// 返回值
+/// The deterministic checkpoint after the suffix, or an overflow or fingerprint error.
+/// 返回后缀之后的确定性检查点，或溢出、指纹错误。
+pub fn advance_single_session_transcript_checkpoint(
+    checkpoint: &PersistedSessionTranscriptCheckpoint,
+    tail_messages: &[SessionMessageEntry],
+) -> Result<PersistedSessionTranscriptCheckpoint, String> {
+    if tail_messages.is_empty() {
+        return Ok(checkpoint.clone());
+    }
+    // message_count is the exact absolute coordinate after this immutable suffix.
+    // message_count 是该不可变后缀之后的精确绝对坐标。
+    let message_count = checkpoint
+        .message_count
+        .checked_add(tail_messages.len())
+        .ok_or_else(|| String::from("Segmented transcript message count overflowed."))?;
+    // final_message owns both deterministic last-row identity fields.
+    // final_message 持有两个确定性的末行身份字段。
+    let final_message = tail_messages
+        .last()
+        .expect("non-empty transcript tail guarantees a final message");
+    let final_index = message_count - 1;
+    Ok(PersistedSessionTranscriptCheckpoint {
+        message_count,
+        last_message_id: Some(stable_segmented_message_id(final_index, final_message)),
+        last_message_fingerprint: Some(segmented_message_fingerprint(final_message)?),
+    })
 }
 
 /// Builds the visible transcript slice persisted together with runtime checkpoints.

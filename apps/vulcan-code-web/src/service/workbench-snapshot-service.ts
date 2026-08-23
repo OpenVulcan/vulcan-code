@@ -34,6 +34,10 @@ import {
   serviceClient,
 } from "@/service/webui-service-runtime";
 
+// conversationMessagesRequestBySession shares only active exact-session body loads across component lifetimes.
+// conversationMessagesRequestBySession 仅在组件生命周期之间共享仍在途的精确会话正文加载。
+const conversationMessagesRequestBySession = new Map<string, Promise<ConversationMessagesLoadResponse>>();
+
 // WorkspaceDiffFileDetailLoadOptions controls one lazy file detail request.
 // WorkspaceDiffFileDetailLoadOptions 控制单次懒加载文件详情请求。
 export interface WorkspaceDiffFileDetailLoadOptions {
@@ -270,7 +274,23 @@ export async function loadConversationMessages(sessionId: string): Promise<Conve
       progress,
     };
   }
-  return serviceClient.request<ConversationMessagesLoadResponse>("service_session_messages", { sessionId });
+  // retainedRequest prevents a real component remount from issuing a second physical access while the first is unresolved.
+  // retainedRequest 防止组件真实重挂载时在首个请求未完成前再次发出物理访问。
+  const retainedRequest = conversationMessagesRequestBySession.get(sessionId);
+  if (retainedRequest) {
+    return retainedRequest;
+  }
+  // request is retained only until settlement, so later explicit access still reaches the service normally.
+  // request 仅保留到完成或失败，之后的显式访问仍会正常到达服务端。
+  const request = serviceClient
+    .request<ConversationMessagesLoadResponse>("service_session_messages", { sessionId })
+    .finally(() => {
+      if (conversationMessagesRequestBySession.get(sessionId) === request) {
+        conversationMessagesRequestBySession.delete(sessionId);
+      }
+    });
+  conversationMessagesRequestBySession.set(sessionId, request);
+  return request;
 }
 
 // loadConversationHistoryPage loads older turns before the current conversation window.

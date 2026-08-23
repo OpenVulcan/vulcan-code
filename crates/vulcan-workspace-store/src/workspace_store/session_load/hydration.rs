@@ -10,6 +10,119 @@ use vulcan_workbench_model::{
     SessionTurnUsageSegment, SessionTurnUsageSegmentKind,
 };
 
+/// Maximum number of CPU-heavy session hydration jobs allowed to run concurrently.
+/// 允许同时运行的 CPU 密集型会话水合任务上限。
+const SESSION_HYDRATION_BLOCKING_CONCURRENCY: usize = 2;
+
+/// Process-local admission gate for blocking session hydration work.
+/// 进程内阻塞式会话水合工作的准入闸门。
+static SESSION_HYDRATION_BLOCKING_GATE: std::sync::LazyLock<
+    std::sync::Arc<tokio::sync::Semaphore>,
+> = std::sync::LazyLock::new(|| {
+    std::sync::Arc::new(tokio::sync::Semaphore::new(
+        SESSION_HYDRATION_BLOCKING_CONCURRENCY,
+    ))
+});
+
+/// Runs one session hydration job on the blocking pool after bounded admission.
+/// 在有界准入后通过阻塞执行池运行一个会话水合任务。
+///
+/// # Parameters
+/// 参数
+/// `operation` is the stable English operation label included in admission and join failures.
+/// `operation` 是准入或任务连接失败时使用的稳定英文操作标签。
+/// `work` owns the synchronous exact-file read, decode, and projection work.
+/// `work` 持有同步精确文件读取、解码与投影工作。
+///
+/// # Returns
+/// 返回值
+/// The job result after the blocking task releases its owned permit, or a precise failure.
+/// 返回阻塞任务释放其自有许可后的任务结果，或精确失败信息。
+async fn run_bounded_session_hydration<T, F>(operation: &'static str, work: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+{
+    // permit is moved into the blocking task so caller cancellation cannot over-admit CPU work.
+    // permit 被移动进阻塞任务，使调用方取消时不会超额放行 CPU 工作。
+    let permit = SESSION_HYDRATION_BLOCKING_GATE
+        .clone()
+        .acquire_owned()
+        .await
+        .map_err(|error| format!("{operation} hydration admission failed: {error}"))?;
+    tokio::task::spawn_blocking(move || {
+        // permit_guard keeps the capacity slot until all synchronous work has actually stopped.
+        // permit_guard 保持容量槽位，直到全部同步工作真实停止。
+        let _permit_guard = permit;
+        work()
+    })
+    .await
+    .map_err(|error| format!("{operation} hydration blocking task failed: {error}"))?
+}
+
+/// Loads only the execution context required by a new Provider request.
+/// 仅加载新 Provider 请求所需的执行上下文。
+///
+/// # Parameters
+/// 参数
+/// `controller` owns the workspace-store runtime bridge.
+/// `controller` 持有工作区存储运行时桥。
+/// `project_id` is the known owning project identifier used as the segmented project tag.
+/// `project_id` 是已知的所属项目标识，用作分段项目标签。
+/// `created_at` is the raw Unix-milliseconds creation timestamp from the session summary.
+/// `created_at` 是会话摘要中的原始 Unix 毫秒创建时间戳。
+/// `session_id` selects the exact session whose canonical runtime state should be loaded.
+/// `session_id` 选择需要加载规范运行态的精确会话。
+///
+/// # Returns
+/// 返回值
+/// An execution snapshot assembled exclusively from exact runtime storage.
+/// 返回仅从精确运行态存储组装出的执行快照。
+pub async fn load_session_execution_hydration_snapshot_for_project_created_at(
+    controller: ControllerRuntimeHandle,
+    project_id: &str,
+    created_at: &str,
+    session_id: SessionId,
+) -> Result<SessionExecutionHydrationSnapshot, String> {
+    // locator_started_at isolates the deterministic Controller locator query.
+    // locator_started_at 单独测量确定性的 Controller 定位查询。
+    let locator_started_at = std::time::Instant::now();
+    // locator is resolved from the exact project, creation timestamp, and session identity.
+    // locator 通过精确的项目、创建时间戳与会话身份解析。
+    let locator = query_session_locator_for_project_created_at(
+        &controller,
+        project_id,
+        created_at,
+        session_id,
+    )
+    .await?;
+    trace_session_load_if_slow(
+        "execution_locator_query",
+        session_id,
+        locator_started_at,
+        format!("found={}", locator.is_some()),
+    );
+    // runtime_state_started_at measures only runtime JSONL and metadata hydration.
+    // runtime_state_started_at 仅测量运行时 JSONL 与元数据水合。
+    let runtime_state_started_at = std::time::Instant::now();
+    // runtime_state never depends on presentation windows or display-segment parsing.
+    // runtime_state 永不依赖展示窗口或显示分段解析。
+    let runtime_state = run_bounded_session_hydration("Execution", move || {
+        load_segmented_runtime_state(&controller, locator.as_ref(), session_id)
+    })
+    .await?;
+    trace_session_load_if_slow(
+        "execution_runtime_state",
+        session_id,
+        runtime_state_started_at,
+        format!("found={}", runtime_state.is_some()),
+    );
+    Ok(SessionExecutionHydrationSnapshot {
+        session_id,
+        runtime_state,
+    })
+}
+
 /// Lazily loads one session by its deterministic project, created-at, and session id.
 /// 按确定性的项目、创建时间与会话标识懒加载单个会话。
 ///
@@ -37,6 +150,9 @@ pub async fn load_session_hydration_snapshot_for_project_created_at(
     session_id: SessionId,
     requested_limit: usize,
 ) -> Result<SessionHydrationSnapshot, String> {
+    // locator_started_at measures only the deterministic Controller locator query.
+    // locator_started_at 仅测量确定性的 Controller 定位查询。
+    let locator_started_at = std::time::Instant::now();
     let locator = query_session_locator_for_project_created_at(
         &controller,
         project_id,
@@ -44,6 +160,12 @@ pub async fn load_session_hydration_snapshot_for_project_created_at(
         session_id,
     )
     .await?;
+    trace_session_load_if_slow(
+        "locator_query",
+        session_id,
+        locator_started_at,
+        format!("found={}", locator.is_some()),
+    );
     load_session_hydration_snapshot_from_locator(controller, session_id, requested_limit, locator)
         .await
 }
@@ -110,10 +232,47 @@ async fn load_session_hydration_snapshot_from_locator(
     requested_limit: usize,
     locator: Option<StoredSessionLocatorRow>,
 ) -> Result<SessionHydrationSnapshot, String> {
+    run_bounded_session_hydration("Display", move || {
+        build_session_hydration_snapshot_from_locator(
+            controller,
+            session_id,
+            requested_limit,
+            locator,
+        )
+    })
+    .await
+}
+
+/// Builds one display hydration snapshot on the bounded blocking execution pool.
+/// 在有界阻塞执行池上构建一个展示水合快照。
+///
+/// # Parameters
+/// 参数
+/// `controller` owns exact storage access, `session_id` selects the owner, `requested_limit`
+/// bounds recent turns, and `locator` identifies the exact segmented directory when present.
+/// `controller` 持有精确存储访问，`session_id` 选择所属者，`requested_limit` 限制最近轮次，
+/// `locator` 在存在时标识精确分段目录。
+///
+/// # Returns
+/// 返回值
+/// A fully assembled display snapshot or a strict storage/projection failure.
+/// 返回完整组装的展示快照，或严格的存储/投影失败。
+fn build_session_hydration_snapshot_from_locator(
+    controller: ControllerRuntimeHandle,
+    session_id: SessionId,
+    requested_limit: usize,
+    locator: Option<StoredSessionLocatorRow>,
+) -> Result<SessionHydrationSnapshot, String> {
+    // hydration_started_at measures the complete snapshot assembly below the locator query.
+    // hydration_started_at 测量定位查询之后的完整快照组装过程。
+    let hydration_started_at = std::time::Instant::now();
     let requested_limit = requested_limit.clamp(1, SESSION_TRANSCRIPT_WINDOW_MAX_TURN_LIMIT);
     let compactions = Vec::new();
     let target_turn_count =
         resolve_initial_hydration_turn_count(requested_limit, &compactions, locator.as_ref());
+    // window_started_at isolates transcript-window loading from runtime-state hydration.
+    // window_started_at 将转录窗口加载与运行态水合分开测量。
+    let window_started_at = std::time::Instant::now();
     let segmented_window = load_segmented_window_messages(
         &controller,
         locator.as_ref(),
@@ -121,13 +280,21 @@ async fn load_session_hydration_snapshot_from_locator(
         None,
         target_turn_count,
     )?;
+    trace_session_load_if_slow(
+        "segmented_window",
+        session_id,
+        window_started_at,
+        format!(
+            "target_turns={target_turn_count} found={}",
+            segmented_window.is_some()
+        ),
+    );
     let (
         has_more_history,
         mut messages,
         mut tool_detail_messages,
         message_start_index,
         earliest_ordinal,
-        full_messages,
         _boundary_conversation_state,
     ) = segmented_window
         .map(|window| {
@@ -137,16 +304,14 @@ async fn load_session_hydration_snapshot_from_locator(
                 window.tool_detail_messages,
                 window.message_start_index,
                 window.earliest_ordinal,
-                window.full_messages,
                 window.boundary_conversation_state,
             )
         })
-        .unwrap_or_else(|| (false, Vec::new(), Vec::new(), None, None, Vec::new(), None));
-    let runtime_state =
-        match load_segmented_runtime_state(&controller, locator.as_ref(), session_id)? {
-            Some(runtime_state) => Some(runtime_state),
-            None => hydrate_session_runtime_state(session_id, &full_messages).await?,
-        }
+        .unwrap_or_else(|| (false, Vec::new(), Vec::new(), None, None, None));
+    // runtime_state_started_at isolates the exact persisted runtime-state read.
+    // runtime_state_started_at 将精确的持久化运行态读取单独测量。
+    let runtime_state_started_at = std::time::Instant::now();
+    let runtime_state = load_segmented_runtime_state(&controller, locator.as_ref(), session_id)?
         .inspect(|runtime_state| {
             let provider_conversation_state = runtime_state.conversation_state.clone();
             repair_hydration_turn_stats_from_runtime_usage(
@@ -154,10 +319,31 @@ async fn load_session_hydration_snapshot_from_locator(
                 &provider_conversation_state,
             );
         });
+    trace_session_load_if_slow(
+        "runtime_state",
+        session_id,
+        runtime_state_started_at,
+        format!(
+            "found={} display_messages={}",
+            runtime_state.is_some(),
+            messages.len()
+        ),
+    );
     restore_hydration_window_from_runtime_state_if_empty(
         &mut messages,
         &mut tool_detail_messages,
         runtime_state.as_ref(),
+    );
+
+    trace_session_load_if_slow(
+        "hydration_total",
+        session_id,
+        hydration_started_at,
+        format!(
+            "target_turns={target_turn_count} display_messages={} tool_details={}",
+            messages.len(),
+            tool_detail_messages.len()
+        ),
     );
 
     Ok(SessionHydrationSnapshot {
@@ -541,6 +727,48 @@ mod tests {
     use super::*;
     use serde_json::json;
     use vulcan_workbench_model::SessionTurnStatsStatus;
+
+    /// Verifies bounded hydration admission never runs more CPU jobs than the declared limit.
+    /// 验证有界水合准入不会运行超过声明上限的 CPU 任务。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn bounded_session_hydration_limits_concurrent_cpu_work() {
+        // active counts hydration closures currently executing on blocking threads.
+        // active 统计当前正在阻塞线程中执行的水合闭包数量。
+        let active = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        // observed_max records the highest simultaneous closure count.
+        // observed_max 记录观察到的最高同时执行闭包数。
+        let observed_max = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        // job builds one representative bounded blocking task.
+        // job 构建一个具有代表性的有界阻塞任务。
+        let job = || {
+            // active belongs to this closure so all concurrent jobs share one counter.
+            // active 属于当前闭包，使全部并发任务共享同一个计数器。
+            let active = active.clone();
+            // observed_max belongs to this closure so all jobs publish to one maximum.
+            // observed_max 属于当前闭包，使全部任务发布到同一个最大值。
+            let observed_max = observed_max.clone();
+            run_bounded_session_hydration("Test", move || {
+                // now is the number of jobs executing after this job enters.
+                // now 是当前任务进入后正在执行的任务数量。
+                let now = active.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                observed_max.fetch_max(now, std::sync::atomic::Ordering::SeqCst);
+                std::thread::sleep(std::time::Duration::from_millis(30));
+                active.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            })
+        };
+
+        // results execute three jobs together against a two-permit gate.
+        // results 针对两个许可的闸门同时执行三个任务。
+        let results = tokio::join!(job(), job(), job());
+        results.0.expect("first bounded hydration");
+        results.1.expect("second bounded hydration");
+        results.2.expect("third bounded hydration");
+        assert_eq!(
+            observed_max.load(std::sync::atomic::Ordering::SeqCst),
+            SESSION_HYDRATION_BLOCKING_CONCURRENCY
+        );
+    }
 
     /// Verifies hydration repairs legacy stats rows that kept only the last provider usage.
     /// 验证水合会修复仅保留最后一次 Provider 用量的历史统计行。

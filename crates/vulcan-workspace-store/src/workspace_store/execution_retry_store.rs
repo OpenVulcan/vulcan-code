@@ -327,8 +327,8 @@ impl ExecutionRetrySnapshotStore {
     ///
     /// # Returns
     /// 返回值
-    /// Success when the exact `retry.json` file is absent or removed.
-    /// 精确的 `retry.json` 文件不存在或已删除时返回成功。
+    /// Success when the referenced body is absent, removed, or already replaced by another valid snapshot.
+    /// 引用正文不存在、已删除或已被另一份有效快照替换时返回成功。
     pub fn delete(&self, reference: &ExecutionRetrySnapshotRef) -> Result<(), String> {
         validate_snapshot_id(reference.snapshot_id.as_str())?;
         validate_sha256_hex(reference.content_sha256.as_str())?;
@@ -352,9 +352,22 @@ impl ExecutionRetrySnapshotStore {
         if actual_bytes != reference.content_bytes
             || sha256_hex(&encoded) != reference.content_sha256
         {
-            return Err(String::from(
-                "Execution retry snapshot changed before deletion; the newer exact file was preserved.",
-            ));
+            // current_snapshot distinguishes a valid superseding owner from corrupted bytes. A stale
+            // exact-reference delete is already satisfied when another valid owner occupies retry.json.
+            // current_snapshot 区分有效替代所有者与损坏字节；当另一有效所有者占用 retry.json 时，
+            // 过期精确引用的删除意图已经满足。
+            let current_snapshot = serde_json::from_slice::<ExecutionRetrySnapshot>(&encoded)
+                .map_err(|error| {
+                    format!(
+                        "Execution retry snapshot changed before deletion and the current exact file is invalid: {error}"
+                    )
+                })?;
+            validate_snapshot_identity(&current_snapshot).map_err(|error| {
+                format!(
+                    "Execution retry snapshot changed before deletion and the current exact file has invalid identity: {error}"
+                )
+            })?;
+            return Ok(());
         }
         fs::remove_file(&retry_path).map_err(|error| {
             format!(
@@ -1397,11 +1410,10 @@ mod tests {
             .write_interrupted(&newer_snapshot)
             .expect("newer interruption should replace the fixed file");
 
-        let stale_delete_error = store
+        store
             .delete(&stale_reference)
-            .expect_err("stale cleanup must fail without removing a newer body");
+            .expect("stale cleanup should be an idempotent no-op for a newer valid body");
 
-        assert!(stale_delete_error.contains("changed before deletion"));
         assert_eq!(
             store
                 .read(&newer_reference)
@@ -1409,6 +1421,29 @@ mod tests {
                 .snapshot_id,
             newer_snapshot.snapshot_id
         );
+    }
+
+    /// Verifies stale cleanup still reports corruption when the replacement file is not a valid snapshot.
+    /// 验证替代文件不是有效快照时，过期清理仍会报告损坏。
+    #[test]
+    fn stale_retry_snapshot_deletion_rejects_corrupted_replacement_body() {
+        // tempRoot owns the exact fixed retry path used by the corruption fixture.
+        // tempRoot 持有损坏夹具使用的精确固定重试路径。
+        let temp_root = tempfile::tempdir().expect("temporary session directory should exist");
+        let store = ExecutionRetrySnapshotStore::new(temp_root.path());
+        let snapshot = test_snapshot(uuid::Uuid::new_v4().to_string());
+        let reference = store
+            .write_interrupted(&snapshot)
+            .expect("initial interruption should persist");
+        fs::write(store.retry_path(), b"{invalid-json")
+            .expect("test should replace the exact retry file with corrupted bytes");
+
+        let error = store
+            .delete(&reference)
+            .expect_err("corrupted replacement must remain an explicit cleanup error");
+
+        assert!(error.contains("current exact file is invalid"));
+        assert!(store.retry_path().is_file());
     }
 
     /// Verifies a lightweight reference cannot remain readable after its exact sidecar disappears.

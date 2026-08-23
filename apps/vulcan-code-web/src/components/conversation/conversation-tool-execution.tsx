@@ -29,6 +29,7 @@ import {
   toolExecutionMediaAttachments,
   toolExecutionName,
   toolRequestProgress,
+  toolRequestProgressForDisplay,
   toolRequestProgressStateLabel,
   toolRequestStreamMetricsLabel,
   toolExecutionSubagentLabel,
@@ -103,10 +104,10 @@ export function ToolExecutionBlock(props: {
     return null;
   }
 
+  const displayState = toolExecutionDisplayState(props.blocks, props.sessionRunning);
   const summary = toolExecutionSummary(props.blocks, props.sessionRunning, t);
   const toolName = toolExecutionName(props.blocks);
   const subagentLabel = toolExecutionSubagentLabel(props.blocks, t);
-  const displayState = toolExecutionDisplayState(props.blocks, props.sessionRunning);
   const mediaAttachments = toolExecutionMediaAttachments(props.blocks);
   const subagentTaskId = props.blocks.find((block) => block.subagentTaskId)?.subagentTaskId ?? null;
   const identifier = toolExecutionIdentifier(props.blocks);
@@ -120,11 +121,14 @@ export function ToolExecutionBlock(props: {
     props.conversationId,
     retainedRequestProgress?.requestStreamId ?? null,
   );
-  // requestProgress prefers the newer external snapshot while retaining durable lifecycle boundaries.
-  // requestProgress 优先使用较新的外部快照，同时保留持久生命周期边界。
-  const requestProgress = liveRequestProgress
+  // resolvedRequestProgress prefers the newer external snapshot while retaining durable lifecycle boundaries.
+  // resolvedRequestProgress 优先使用较新的外部快照，同时保留持久生命周期边界。
+  const resolvedRequestProgress = liveRequestProgress
     ? liveToolRequestProgress(liveRequestProgress)
     : retainedRequestProgress;
+  // requestProgressForDisplay stops the durable ready marker from overriding the actual tool execution state.
+  // requestProgressForDisplay 阻止持久化的 ready 标记覆盖真实工具执行状态。
+  const requestProgress = toolRequestProgressForDisplay(resolvedRequestProgress, displayState);
   // requestCardProgress keeps request formation distinct from actual tool execution while reusing the resolved card.
   // requestCardProgress 在复用既有卡片的同时，保持请求构造与真实工具执行语义分离。
   const requestCardProgress = requestProgress ? {
@@ -160,7 +164,7 @@ export function ToolExecutionBlock(props: {
     () => resolveToolPresentation(props.blocks, displayState, detailRef, {
       commandSessionById,
       commandSessions: props.commandSessions,
-      requestPreview: requestProgress?.preview ?? null,
+      requestPreview: resolvedRequestProgress?.preview ?? null,
       workspacePath: props.workspacePath,
     }),
     [
@@ -173,7 +177,7 @@ export function ToolExecutionBlock(props: {
       commandSessionById,
       props.blocks,
       props.commandSessions,
-      requestProgress?.preview,
+      resolvedRequestProgress?.preview,
       props.workspacePath,
     ],
   );

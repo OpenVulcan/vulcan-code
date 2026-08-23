@@ -237,6 +237,7 @@ pub(crate) fn invalidate_webui_session_lifecycle_persist_versions(
 /// # 返回值
 /// The version assigned to the new live transcript persistence task.
 /// 返回分配给新运行中转录持久化任务的版本。
+#[cfg(test)]
 pub(crate) fn next_webui_session_transcript_persist_version(
     state: &SharedServiceBridgeState,
     session_id: SessionId,
@@ -263,6 +264,7 @@ pub(crate) fn next_webui_session_transcript_persist_version(
 /// # 返回值
 /// `true` when the transcript task may write to disk.
 /// 当该转录任务可以写入磁盘时返回 `true`。
+#[cfg(test)]
 pub(crate) fn webui_session_transcript_persist_version_is_current(
     state: &SharedServiceBridgeState,
     session_id: SessionId,

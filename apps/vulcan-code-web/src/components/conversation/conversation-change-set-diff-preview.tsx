@@ -9,7 +9,7 @@ import {
   useHighlightedDiffFileHtml,
   usePlainDiffFileHtml,
 } from "@/diff/diff-render-worker-client";
-import type { DiffFile } from "@/diff/types";
+import type { DiffFile, DiffHunkSeparatorStyle } from "@/diff/types";
 import "@/diff/diffReview.css";
 
 // ChangeSetDiffPreview renders one change-set file through the shared review diff renderer.
@@ -18,6 +18,12 @@ export function ChangeSetDiffPreview(props: {
   // Parsed diff file adapted from a change-set payload.
   // 从 change-set 载荷适配出的已解析 diff 文件。
   file: DiffFile;
+  // Separator style used between rendered hunks.
+  // 渲染 hunk 之间使用的分隔样式。
+  hunkSeparatorStyle?: DiffHunkSeparatorStyle;
+  // Whether inline change emphasis should be enabled.
+  // 是否启用行内变更强调。
+  inlineDiff?: boolean;
 }) {
   const language = React.useMemo(() => diffLanguageForFile(props.file), [props.file]);
   const highlightSupported = useHighlightLanguage(language);
@@ -27,9 +33,9 @@ export function ChangeSetDiffPreview(props: {
     activeSearchLineKey: null,
     contextControls: false,
     file: props.file,
-    hunkSeparatorStyle: "line-info",
+    hunkSeparatorStyle: props.hunkSeparatorStyle ?? "line-info",
     indicatorStyle: "bars",
-    inlineDiff: true,
+    inlineDiff: props.inlineDiff ?? true,
     overflowMode: "scroll",
     viewMode: "unified",
   }, !useHighlightedRenderer);
@@ -38,9 +44,9 @@ export function ChangeSetDiffPreview(props: {
     contextControls: false,
     file: props.file,
     highlightRevision,
-    hunkSeparatorStyle: "line-info",
+    hunkSeparatorStyle: props.hunkSeparatorStyle ?? "line-info",
     indicatorStyle: "bars",
-    inlineDiff: true,
+    inlineDiff: props.inlineDiff ?? true,
     language: language ?? "text",
     overflowMode: "scroll",
     viewMode: "unified",

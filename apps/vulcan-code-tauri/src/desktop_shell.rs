@@ -1,7 +1,14 @@
 //! Tauri desktop shell for the Vulcan Code service kernel.
 //! Vulcan Code 服务内核的 Tauri 桌面壳。
 
-use std::{path::Path, process::Command, sync::Arc};
+use std::{
+    path::Path,
+    process::Command,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use tauri::Emitter;
 use tokio::sync::broadcast;
@@ -11,7 +18,8 @@ use vulcan_service_host::webui_service_event_bus_sink;
 
 use vulcan_service_kernel::{
     ServiceShellHost, create_service_bridge_state, emit_initial_service_events,
-    service_prepare_for_app_shutdown, spawn_service_bootstrap, spawn_webui_service_http_bridge,
+    service_prepare_for_app_shutdown, service_resume_after_failed_app_shutdown,
+    spawn_service_bootstrap, spawn_webui_service_http_bridge,
 };
 
 /// Tauri desktop event sink used only by the desktop shell.
@@ -88,15 +96,69 @@ pub fn run() {
     let state = create_service_bridge_state(Arc::new(DesktopServiceShellHost));
     let managed_state = Arc::clone(&state);
     let shutdown_state = Arc::clone(&state);
+    // shutdown_in_progress closes the repeat-click window while durable writers are draining.
+    // shutdown_in_progress 在耐久写入器排空期间关闭重复点击窗口。
+    let shutdown_in_progress = Arc::new(AtomicBool::new(false));
+    // shutdown_close_allowed lets only a successfully drained recursive close event proceed.
+    // shutdown_close_allowed 仅允许已经成功排空后的递归关闭事件继续。
+    let shutdown_close_allowed = Arc::new(AtomicBool::new(false));
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .manage(state)
-        .on_window_event(move |_window, event| {
-            if matches!(event, tauri::WindowEvent::CloseRequested { .. })
-                && let Err(error) = service_prepare_for_app_shutdown(&shutdown_state)
-            {
-                eprintln!("[vulcan-code-tauri] app shutdown preparation failed: {error}");
+        .on_window_event(move |window, event| {
+            let tauri::WindowEvent::CloseRequested { api, .. } = event else {
+                return;
+            };
+            if shutdown_close_allowed.load(Ordering::Acquire) {
+                return;
             }
+            api.prevent_close();
+            if shutdown_in_progress.swap(true, Ordering::AcqRel) {
+                return;
+            }
+            // The start event makes the bounded durable drain visible before blocking work begins.
+            // 开始事件在阻塞排空工作启动前，让有界耐久保存过程对用户可见。
+            if let Err(error) = window.emit("vulcan://shutdown-persist-started", ()) {
+                eprintln!(
+                    "[vulcan-code-tauri] emitting shutdown persistence start failed: {error}"
+                );
+            }
+            // shutdown_worker_state owns the service handles needed by the blocking drain coordinator.
+            // shutdown_worker_state 持有阻塞排空协调器所需的服务句柄。
+            let shutdown_worker_state = Arc::clone(&shutdown_state);
+            // shutdown_worker_in_progress publishes retry eligibility after a failed drain.
+            // shutdown_worker_in_progress 在排空失败后发布可重试资格。
+            let shutdown_worker_in_progress = Arc::clone(&shutdown_in_progress);
+            // shutdown_worker_close_allowed publishes the only normally closable state.
+            // shutdown_worker_close_allowed 发布唯一允许正常关闭的状态。
+            let shutdown_worker_close_allowed = Arc::clone(&shutdown_close_allowed);
+            // shutdown_window is the exact window that originated this close request.
+            // shutdown_window 是发起当前关闭请求的精确窗口。
+            let shutdown_window = window.clone();
+            std::thread::spawn(move || {
+                match service_prepare_for_app_shutdown(&shutdown_worker_state) {
+                    Ok(_) => {
+                        shutdown_worker_close_allowed.store(true, Ordering::Release);
+                        if let Err(error) = shutdown_window.close() {
+                            shutdown_worker_close_allowed.store(false, Ordering::Release);
+                            shutdown_worker_in_progress.store(false, Ordering::Release);
+                            eprintln!(
+                                "[vulcan-code-tauri] closing drained app window failed: {error}"
+                            );
+                            let _ = shutdown_window
+                                .emit("vulcan://shutdown-persist-failed", error.to_string());
+                        }
+                    }
+                    Err(error) => {
+                        // Reopen admission before the UI lets the user keep working or retry close.
+                        // 在界面允许用户继续工作或重试关闭之前重新开放准入。
+                        service_resume_after_failed_app_shutdown();
+                        shutdown_worker_in_progress.store(false, Ordering::Release);
+                        eprintln!("[vulcan-code-tauri] app shutdown preparation failed: {error}");
+                        let _ = shutdown_window.emit("vulcan://shutdown-persist-failed", error);
+                    }
+                }
+            });
         })
         .setup(move |app| {
             let event_emitter = service_event_emitter_from_tauri_app(

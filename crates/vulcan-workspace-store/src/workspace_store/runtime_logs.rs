@@ -1,6 +1,9 @@
 use super::segmented_session_store::{
-    append_segmented_session_message_update, read_runtime_conversation_state,
-    replay_segmented_session_context, sync_runtime_log_from_conversation_state,
+    append_segmented_session_message_update, cached_runtime_system_updates,
+    invalidate_runtime_system_update_cache, read_runtime_conversation_state,
+    repair_runtime_log_lines, repair_segmented_session_display_if_needed,
+    replace_segmented_session_message_records_for_repair, replay_segmented_session_context,
+    sync_runtime_log_from_conversation_state,
 };
 use super::*;
 use crate::conversation_protocol::conversation_state_to_session_messages;
@@ -46,6 +49,83 @@ pub fn read_segmented_session_runtime_conversation_state(
     session_dir: &std::path::Path,
 ) -> Result<Option<SessionConversationState>, String> {
     read_runtime_conversation_state(session_dir)
+}
+
+/// Explicitly repairs runtime-log storage for one already resolved segmented session.
+/// 显式修复一个已经解析的分段会话运行时日志存储。
+///
+/// # Parameters
+/// 参数
+/// `session_dir` is the exact session directory selected by a maintenance command.
+/// `session_dir` 是由维护命令选择的精确会话目录。
+///
+/// # Returns
+/// 返回值
+/// The repaired runtime-line count, zero for consistent absence, or a strict repair failure.
+/// 返回修复后的运行时日志行数；一致缺失时返回零，否则返回严格修复失败。
+pub fn repair_segmented_session_runtime_storage(
+    session_dir: &std::path::Path,
+) -> Result<usize, String> {
+    Ok(repair_runtime_log_lines(session_dir)?
+        .map(|lines| lines.len())
+        .unwrap_or(0))
+}
+
+/// Releases the process-local runtime SystemUpdate projection for one exact inactive session.
+/// 释放一个精确非活动会话的进程内运行时 SystemUpdate 投影。
+///
+/// # Parameters
+/// 参数
+/// `session_dir` is the deterministic directory of the execution generation that just ended.
+/// `session_dir` 是刚刚结束的执行代次对应的确定性目录。
+///
+/// # Returns
+/// 返回值
+/// Success after exact-key removal; no filesystem path is opened or enumerated.
+/// 精确键移除后返回成功；不会打开或枚举任何文件系统路径。
+pub fn release_session_runtime_system_update_cache(
+    session_dir: &std::path::Path,
+) -> Result<(), String> {
+    invalidate_runtime_system_update_cache(session_dir)
+}
+
+/// Explicitly repairs display transcript storage for one already resolved segmented session.
+/// 显式修复一个已经解析的分段会话展示转录存储。
+///
+/// # Parameters
+/// 参数
+/// `session_dir` is the exact session directory selected by a maintenance command.
+/// `session_dir` 是由维护命令选择的精确会话目录。
+///
+/// # Returns
+/// 返回值
+/// `true` when a display rebuild was published, `false` when only validation or narrow tail repair was needed.
+/// 发布展示重建时返回 `true`；仅需验证或定向尾修复时返回 `false`。
+pub fn repair_segmented_session_display_storage(
+    session_dir: &std::path::Path,
+) -> Result<bool, String> {
+    Ok(repair_segmented_session_display_if_needed(session_dir)?.is_some())
+}
+
+/// Replaces damaged display rows with one complete history during explicit maintenance.
+/// 在显式维护期间使用一份完整历史替换受损展示记录。
+///
+/// # Parameters
+/// 参数
+/// `session_dir` is the exact session directory selected by the maintenance caller.
+/// `session_dir` 是维护调用方选定的精确会话目录。
+/// `messages` is the complete verified display history, including every retained process row.
+/// `messages` 是经过完整校验的展示历史，包括所有需要保留的过程行。
+///
+/// # Returns
+/// 返回值
+/// Returns the number of rewritten display-event lines after the exclusive repair succeeds.
+/// 在独占修复成功后返回重写的展示事件行数量。
+pub fn replace_segmented_session_display_storage_for_repair(
+    session_dir: &std::path::Path,
+    messages: &[SessionMessageEntry],
+) -> Result<usize, String> {
+    Ok(replace_segmented_session_message_records_for_repair(session_dir, messages)?.len())
 }
 
 /// Reads display transcript state from an already resolved segmented session directory.
@@ -447,6 +527,13 @@ pub fn load_session_runtime_system_updates(
     session_id: SessionId,
 ) -> Result<Vec<vulcan_context::RuntimeSystemUpdateEvent>, String> {
     validate_exact_segmented_session_directory_owner(session_directory, session_id)?;
+    // cached_updates keeps retained execution turns on the zero-runtime-log-read path.
+    // cached_updates 使保留执行上下文的回合保持运行时日志零读取路径。
+    if let Some(cached_updates) = cached_runtime_system_updates(session_directory)? {
+        return Ok(cached_updates);
+    }
+    // lines performs one strict cold recovery only before a resident projection exists.
+    // lines 仅在常驻投影尚不存在时执行一次严格冷恢复。
     let Some(lines) = read_runtime_log_lines(session_directory)? else {
         return Ok(Vec::new());
     };

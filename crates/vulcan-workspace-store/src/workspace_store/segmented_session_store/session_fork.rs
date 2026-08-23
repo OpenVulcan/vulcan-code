@@ -26,9 +26,8 @@ pub(in crate::workspace_store) fn fork_segmented_session_directory_from_source(
     let fork_result = (|| {
         // source_append_guard prevents runtime and display artifacts from crossing source versions.
         // source_append_guard 防止运行时与展示产物跨越不同源版本。
-        let source_append_guard = segmented_append_file_io_lock()
-            .lock()
-            .map_err(to_store_error)?;
+        let source_storage_lock = segmented_append_file_io_lock(source_dir);
+        let source_append_guard = source_storage_lock.lock().map_err(to_store_error)?;
         // source_metadata and every copied runtime artifact are captured under one append lock.
         // source_metadata 与每个已复制运行时产物都在同一个追加锁下捕获。
         let source_metadata = copy_segmented_session_tree_without_tasks(source_dir, &target_dir)?;
@@ -243,9 +242,8 @@ fn rewrite_forked_runtime_identity_artifacts(
 ) -> Result<(), String> {
     // append_guard keeps validation, identity rewrite, metadata refresh, and index rebuild atomic.
     // append_guard 使验证、身份改写、元数据刷新与索引重建保持原子化。
-    let append_guard = segmented_append_file_io_lock()
-        .lock()
-        .map_err(to_store_error)?;
+    let session_storage_lock = segmented_append_file_io_lock(session_dir);
+    let append_guard = session_storage_lock.lock().map_err(to_store_error)?;
     // snapshot is absent only when metadata, index, and runtime directory are all absent.
     // snapshot 仅在元数据、索引与运行时目录全部缺失时为空。
     let Some(snapshot) = read_runtime_log_snapshot_with_owned_lock(session_dir, &append_guard)?

@@ -396,8 +396,7 @@ pub async fn fork_persisted_session(
         project_id,
         "ERR_SESSION_FORK_SOURCE_NOT_FOUND",
     )?;
-    let _ = repair_segmented_session_display_if_needed(&source_dir)?;
-    let source_replay = replay_segmented_session_context_without_repair(&source_dir)?;
+    let source_replay = replay_segmented_session_context(&source_dir)?;
     let source_provider_call_ledger = provider_call_ledger_from_state_document(&source_dir)?;
     let source_anchor_index = anchor_message_id
         .map(|message_id| {

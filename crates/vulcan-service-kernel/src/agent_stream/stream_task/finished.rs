@@ -355,6 +355,13 @@ pub(super) async fn handle_finished_stream_event(
         // finalPersistStartedAt measures both the primary write and any fail-closed replacement write.
         // finalPersistStartedAt 衡量主写入以及可能发生的失败关闭替代写入。
         let final_persist_started_at = current_unix_millis_value();
+        // Drain accepted immutable suffixes before the terminal snapshot can advance the same disk checkpoint.
+        // 在终态快照推进同一磁盘检查点之前，先排空已经接纳的不可变后缀。
+        if let Err(error) = await_session_transcript_writer_durable(finished_session_id).await {
+            eprintln!(
+                "[webui-service] live transcript writer drain before terminal persistence failed: session={finished_session_id} error={error}"
+            );
+        }
         // primaryPersistenceResult captures only the exact retained session after write admission.
         // primaryPersistenceResult 在取得写入许可后只捕获精确保留会话。
         let primary_persistence_result = persist_latest_retained_workspace_session_update(
@@ -435,6 +442,23 @@ pub(super) async fn handle_finished_stream_event(
     } else {
         None
     };
+    if terminal_state_persisted {
+        // Writer ownership and runtime-cache ownership are independent: a text-only turn may
+        // populate RuntimeSystemUpdate cache without ever creating a transcript writer.
+        // 写入器所有权与运行时缓存所有权彼此独立：纯文本回合可能建立 RuntimeSystemUpdate
+        // 缓存，却从未创建转录写入器。
+        let _ = release_session_transcript_writer_after_terminal_persist(finished_session_id);
+        if let Some(session_directory) = terminal_session_directory.as_ref()
+            && let Err(error) =
+                vulcan_workspace_store::workspace_store::release_session_runtime_system_update_cache(
+                    session_directory,
+                )
+        {
+            eprintln!(
+                "[webui-service] release terminal runtime SystemUpdate cache failed: session={finished_session_id} error={error}"
+            );
+        }
+    }
     if terminal_state_persisted {
         // Physical cleanup occurs only after the durable main document no longer references this immutable body.
         // 只有在可靠主文档不再引用该不可变正文后，才执行物理清理。

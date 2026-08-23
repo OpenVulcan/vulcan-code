@@ -557,8 +557,83 @@ fn request_time_vmm_refresh_never_rebuilds_the_global_snapshot() {
     );
 }
 
-/// Verifies context compaction persistence transfers owned state without complete snapshot clones.
-/// 验证上下文压缩持久化通过所有权转移推进且不会复制完整快照。
+/// Verifies startup and index refreshes never infer body work from the selected session id.
+/// 验证启动与索引刷新绝不会根据选中会话标识推断正文工作。
+#[test]
+fn startup_and_index_refresh_never_hydrate_selected_session() {
+    // bootstrapSource owns startup projection while refreshSource owns later index refreshes.
+    // bootstrapSource 负责启动投影，refreshSource 负责后续索引刷新。
+    let bootstrap_source = include_str!("../service_bootstrap.rs");
+    let refresh_source = include_str!("../workbench_refresh.rs");
+    let forbidden_bootstrap = [
+        "runtime.block_on(crate::refresh_workbench_snapshot",
+        "vmm_controller_registry.get_or_open",
+    ];
+    let forbidden_refresh = [
+        "hydrate_selected_session_runtime_if_needed(",
+        "apply_persisted_task_mirror_statuses_to_workspace(",
+        "sync_selected_session_goal_summary_from_store(",
+        "vmm_controller_registry.get_or_open(",
+    ];
+    let bootstrap_violations = forbidden_bootstrap
+        .iter()
+        .filter(|needle| bootstrap_source.contains(**needle))
+        .copied()
+        .collect::<Vec<_>>();
+    let refresh_violations = forbidden_refresh
+        .iter()
+        .filter(|needle| refresh_source.contains(**needle))
+        .copied()
+        .collect::<Vec<_>>();
+    assert!(
+        bootstrap_violations.is_empty(),
+        "startup reintroduced selected-session body work: {bootstrap_violations:?}"
+    );
+    assert!(
+        refresh_violations.is_empty(),
+        "index refresh reintroduced selected-session body work: {refresh_violations:?}"
+    );
+}
+
+/// Verifies execution hydration never opens presentation transcript windows.
+/// 验证执行态水合永不打开展示转录窗口。
+#[test]
+fn execution_hydration_reads_only_exact_runtime_state() {
+    // storeSource owns the storage-side execution and display hydration entry points.
+    // storeSource 持有存储侧执行态与显示态水合入口。
+    let store_source = include_str!(
+        "../../../vulcan-workspace-store/src/workspace_store/session_load/hydration.rs"
+    );
+    // executionStart identifies the execution-only loader boundary.
+    // executionStart 标识纯执行加载器边界。
+    let execution_start = store_source
+        .find("pub async fn load_session_execution_hydration_snapshot_for_project_created_at(")
+        .expect("execution hydration loader");
+    // executionEnd excludes the later display hydration implementation from this assertion.
+    // executionEnd 从本次断言中排除后续显示态水合实现。
+    let execution_end = store_source[execution_start..]
+        .find("/// Lazily loads one session by its deterministic project")
+        .map(|offset| execution_start + offset)
+        .expect("display hydration loader");
+    // executionSource contains only the execution loader implementation and documentation.
+    // executionSource 仅包含执行加载器实现与文档。
+    let execution_source = &store_source[execution_start..execution_end];
+    assert!(execution_source.contains("load_segmented_runtime_state("));
+    assert!(!execution_source.contains("load_segmented_window_messages("));
+    assert!(!execution_source.contains("requested_limit"));
+
+    // serviceSource owns the three request-time runtime hydration entry points.
+    // serviceSource 持有三个请求时运行态水合入口。
+    let service_source = include_str!("../session_hydration/loading.rs");
+    assert!(
+        service_source
+            .contains("load_session_execution_hydration_snapshot_for_project_created_at(")
+    );
+    assert!(!service_source.contains("load_session_hydration_snapshot_for_project_created_at("));
+}
+
+/// Verifies context compaction persistence transfers owned state and preserves lazy transcript authority.
+/// 验证上下文压缩持久化通过所有权转移推进并保留懒加载转录权威边界。
 #[test]
 fn context_compaction_persistence_does_not_clone_complete_snapshots() {
     // source owns display-message persistence and runtime-state publication after compaction.
@@ -567,6 +642,8 @@ fn context_compaction_persistence_does_not_clone_complete_snapshots() {
     assert!(!source.contains("workspace_snapshot.clone()"));
     assert!(!source.contains("runtime_state.clone()"));
     assert!(source.contains("let mut persistence_snapshot = workspace_snapshot;"));
+    assert!(source.contains("persist_latest_retained_workspace_session_update_unlocked("));
+    assert!(!source.contains("persist_workspace_session_update_unlocked("));
 }
 
 /// Verifies session addon controls resolve one retained directory and avoid full workspace ownership copies.

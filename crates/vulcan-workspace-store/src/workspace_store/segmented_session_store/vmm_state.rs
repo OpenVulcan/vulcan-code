@@ -87,11 +87,10 @@ pub(in crate::workspace_store) fn core_vmm_rebuild_reason(
     // path is the sole current VMM document location inspected for the removed flat schema.
     // path 是用于检查已移除扁平结构的唯一当前 VMM 文档位置。
     let path = vmm_state_path(session_dir);
-    // guard serializes classification with atomic document publication.
-    // guard 将分类过程与文档原子发布串行化。
-    let _guard = segmented_state_file_io_lock()
-        .lock()
-        .map_err(to_store_error)?;
+    // state_lock isolates classification and atomic publication to this exact session.
+    // state_lock 将分类与原子发布隔离到当前精确会话。
+    let state_lock = segmented_state_file_io_lock(session_dir);
+    let _guard = state_lock.lock().map_err(to_store_error)?;
     match fs::metadata(&path) {
         Ok(metadata) if metadata.len() > VMM_SESSION_MEMORY_MAX_BYTES as u64 => {
             return Ok(Some(damaged_vmm_rebuild_reason(
@@ -163,11 +162,10 @@ pub(in crate::workspace_store) fn load_core_vmm_controller_state(
     // path is the only durable document location owned by the session controller.
     // path 是会话控制器拥有的唯一持久化文档位置。
     let path = vmm_state_path(session_dir);
-    // guard serializes the physical read with atomic state-file publication.
-    // guard 将物理读取与原子状态文件发布串行化。
-    let _guard = segmented_state_file_io_lock()
-        .lock()
-        .map_err(to_store_error)?;
+    // state_lock serializes the physical read only with this session's atomic publication.
+    // state_lock 仅将物理读取与当前会话的原子发布串行化。
+    let state_lock = segmented_state_file_io_lock(session_dir);
+    let _guard = state_lock.lock().map_err(to_store_error)?;
     // metadata rejects oversized historical or corrupt content before JSON allocation.
     // metadata 在 JSON 分配前拒绝超限的历史或损坏内容。
     match fs::metadata(&path) {
@@ -253,11 +251,10 @@ pub(in crate::workspace_store) fn write_core_vmm_controller_state(
     // path is resolved once before entering the single physical file critical section.
     // path 在进入唯一物理文件临界区前只解析一次。
     let path = vmm_state_path(session_dir);
-    // guard prevents interleaved reads and atomic replacements inside the storage adapter.
-    // guard 防止存储适配器内的读取与原子替换交错。
-    let _guard = segmented_state_file_io_lock()
-        .lock()
-        .map_err(to_store_error)?;
+    // state_lock prevents interleaved reads and replacements only for this exact session.
+    // state_lock 仅防止当前精确会话的读取与替换交错。
+    let state_lock = segmented_state_file_io_lock(session_dir);
+    let _guard = state_lock.lock().map_err(to_store_error)?;
     if path.try_exists().map_err(to_store_error)? {
         // raw_value is inspected before decode to reject the old flat document without fallback.
         // raw_value 在解码前检查，以便无回退地拒绝旧扁平文档。

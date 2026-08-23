@@ -154,6 +154,7 @@ pub(crate) fn commit_created_submission_workspace_slice(
     hydrated_conversation_windows.insert(
         session_id,
         crate::HydratedConversationWindowState {
+            transcript_window_loaded: true,
             message_start_index: Some(0),
             earliest_ordinal: None,
             has_more_history: false,

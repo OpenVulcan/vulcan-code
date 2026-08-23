@@ -1,4 +1,5 @@
 import { resolveFileTypeIcon } from "@/components/conversation/conversation-file-type-icon";
+import type { ConversationDetailRef, ToolDetailPayload } from "@/components/conversation/conversation-detail";
 import type { ToolExecutionConversationBlock } from "@/components/conversation/conversation-tool-execution-types";
 import type { FileAccessAction, FileChangeDiffRow, FileChangeFilePresentation, FileChangeOperation, FileChangePresentation, ToolPresentationDisplayState, ToolPresentationResolveOptions } from "./types";
 import { argumentsFromMetadata, arrayValue, compactHash, fixedToolName, metadataString, metadataValue, normalizeToolName, numberValue, objectValue, stringValue, textValue } from "./presentation-value-readers";
@@ -25,12 +26,13 @@ export function resolveFileChangePresentation(
   blocks: ToolExecutionConversationBlock[],
   displayState: ToolPresentationDisplayState,
   options: ToolPresentationResolveOptions,
+  detailRef?: ConversationDetailRef,
 ): FileChangePresentation | null {
   const nativeToolId = exactNativeToolId(blocks);
   if (nativeToolId === "file") {
     const accessAction = nativeFileAccessAction(blocks);
     return accessAction
-      ? buildNativeFileAccessPresentation(blocks, displayState, accessAction, options)
+      ? buildNativeFileAccessPresentation(blocks, displayState, accessAction, options, detailRef)
       : null;
   }
   if (nativeToolId === "file_edit") {
@@ -220,12 +222,13 @@ function buildNativeFileAccessPresentation(
   displayState: ToolPresentationDisplayState,
   accessAction: FileAccessAction,
   options: ToolPresentationResolveOptions,
+  detailRef?: ConversationDetailRef,
 ): FileChangePresentation | null {
-  const paths = nativeFileAccessPaths(blocks);
-  if (!paths.length) {
+  const targets = nativeFileAccessTargets(blocks, accessAction);
+  if (!targets.length) {
     return null;
   }
-  const files = paths.map((path, index) => {
+  const files = targets.map((target, index) => {
     const rows = displayState === "failed"
       ? errorRowsFromBlocks(blocks)
       : nativeFileResultRows(blocks, index, accessAction);
@@ -235,7 +238,8 @@ function buildNativeFileAccessPresentation(
       expandable: rows.length > 0,
       index,
       operation: "mixed",
-      path,
+      path: target.path,
+      readRange: target.readRange,
       removed: null,
       rows,
       resourceId: null,
@@ -248,9 +252,10 @@ function buildNativeFileAccessPresentation(
   return {
     accessAction,
     errorDetail: displayState === "failed" ? errorDetailFromBlocks(blocks) : null,
+    detailRef,
     files,
     id: fileChangePresentationId(blocks, files, `native-file-${accessAction}`),
-    interactive: displayState !== "running" && files.some((file) => file.expandable),
+    interactive: displayState !== "running" && (Boolean(detailRef) || files.some((file) => file.expandable)),
     kind: "file_change",
     mode: "unknown",
     operation: "mixed",
@@ -397,6 +402,9 @@ function buildFilePresentation(args: {
   // Original path.
   // 原始路径。
   path: string;
+  // Requested read range shown beside native read paths.
+  // 原生读取路径旁显示的请求行号范围。
+  readRange?: string | null;
   // Removed line count for this file.
   // 当前文件的删除行数。
   removed: number | null;
@@ -429,16 +437,14 @@ function buildFilePresentation(args: {
   idOperation?: string | null;
 }): FileChangeFilePresentation {
   const displayPath = displayPathForFile(args.path, args.options.workspacePath);
-  const diffFile = args.readOnly
-    ? null
-    : fileChangeDiffFile({
-        added: args.added,
-        index: args.index,
-        operation: args.operation,
-        path: displayPath.path,
-        removed: args.removed,
-        rows: args.rows,
-      });
+  const diffFile = fileChangeDiffFile({
+    added: args.readOnly ? 0 : args.added,
+    index: args.index,
+    operation: args.operation,
+    path: displayPath.path,
+    removed: args.readOnly ? 0 : args.removed,
+    rows: args.rows,
+  });
   const identity = args.blocks
     .map((block) => block.toolCallId ?? block.id)
     .find(Boolean) ?? "file";
@@ -457,6 +463,7 @@ function buildFilePresentation(args: {
     operation: args.operation,
     path: args.path,
     pathKind: displayPath.kind,
+    readRange: args.readRange ?? null,
     previousPath: args.previousPath,
     readOnly: args.readOnly,
     resourceId: args.resourceId,
@@ -538,17 +545,69 @@ function nativeRequestPathForHostPath(
   return longestMatches.length === 1 ? longestMatches[0] : null;
 }
 
-// nativeFileAccessPaths preserves the exact target order used by the native file result array.
-// nativeFileAccessPaths 保留原生 file 结果数组所使用的精确目标顺序。
-function nativeFileAccessPaths(blocks: ToolExecutionConversationBlock[]): string[] {
+// NativeFileAccessTarget keeps one request target aligned with one result index.
+// NativeFileAccessTarget 让单个请求目标与单个结果索引保持对齐。
+interface NativeFileAccessTarget {
+  // Original path supplied by the model.
+  // 模型提供的原始路径。
+  path: string;
+  // Requested one-based line range, or null when no bounded range was provided.
+  // 请求的一基准行号范围；未提供有界范围时为 null。
+  readRange: string | null;
+}
+
+// nativeFileAccessTargets preserves target order and exposes read ranges in the summary.
+// nativeFileAccessTargets 保留目标顺序，并把读取范围暴露给摘要行。
+function nativeFileAccessTargets(
+  blocks: ToolExecutionConversationBlock[],
+  action: FileAccessAction,
+): NativeFileAccessTarget[] {
   for (let index = blocks.length - 1; index >= 0; index -= 1) {
+    const args = objectValue(argumentsFromMetadata(blocks[index]?.rawMetadata));
+    if (!args) {
+      continue;
+    }
+    const targets = arrayValue(args.targets)
+      .map((value) => objectValue(value))
+      .map((target) => {
+        const path = stringValue(target?.path);
+        if (!path) {
+          return null;
+        }
+        return {
+          path,
+          readRange: action === "read" && target ? readRangeLabel(target) : null,
+        };
+      })
+      .filter((target): target is NativeFileAccessTarget => Boolean(target));
+    if (targets.length) {
+      return targets;
+    }
     const paths: string[] = [];
-    collectArgumentPaths(argumentsFromMetadata(blocks[index]?.rawMetadata), paths);
+    collectArgumentPaths(args, paths);
     if (paths.length) {
-      return paths;
+      return paths.map((path) => ({ path, readRange: null }));
     }
   }
   return [];
+}
+
+// readRangeLabel formats the native file tool's one-based bounded segments.
+// readRangeLabel 格式化原生 file 工具的一基准有界行分段。
+function readRangeLabel(target: Record<string, unknown>): string {
+  const segments = arrayValue(target.segments)
+    .map((value) => objectValue(value))
+    .map((segment) => {
+      const start = numberValue(segment?.start_line);
+      const count = numberValue(segment?.line_count);
+      if (start === null || count === null || start < 1 || count < 1) {
+        return null;
+      }
+      const end = start + count - 1;
+      return start === end ? `L${start}` : `L${start}-L${end}`;
+    })
+    .filter((range): range is string => Boolean(range));
+  return segments.length ? segments.join(", ") : "L1-…";
 }
 
 // collectArgumentPaths appends file paths from single-file and batch argument shapes.
@@ -693,7 +752,16 @@ function nativeFileResultRows(
   targetIndex: number,
   action: FileAccessAction,
 ): FileChangeDiffRow[] {
-  const output = visibleJsonOutput(blocks);
+  return nativeFileResultRowsFromOutput(visibleJsonOutput(blocks), targetIndex, action);
+}
+
+// nativeFileResultRowsFromOutput maps one structured native result to bounded display rows.
+// nativeFileResultRowsFromOutput 将一个结构化原生结果映射为有界展示行。
+function nativeFileResultRowsFromOutput(
+  output: Record<string, unknown> | null,
+  targetIndex: number,
+  action: FileAccessAction,
+): FileChangeDiffRow[] {
   const result = objectValue(arrayValue(output?.results)[targetIndex]);
   if (!result) {
     return [];
@@ -753,23 +821,69 @@ function nativeFileResultRows(
 
 // visibleJsonOutput finds the bounded native file result body without parsing arbitrary prose.
 // visibleJsonOutput 仅解析有界的原生 file 结果正文，不尝试解析任意自然语言。
+// hydrateFileAccessPresentation fills native file rows from the authoritative hidden result body.
+// hydrateFileAccessPresentation 使用权威隐藏结果正文补全原生 file 展示行。
+export function hydrateFileAccessPresentation(
+  presentation: FileChangePresentation,
+  payload: ToolDetailPayload | null,
+): FileChangePresentation {
+  if (presentation.source !== "native_file" || !presentation.accessAction || !payload) {
+    return presentation;
+  }
+  const output = parseFileToolOutput(payload.body);
+  if (!output) {
+    return presentation;
+  }
+  const files = presentation.files.map((file, index) => {
+    const rows = nativeFileResultRowsFromOutput(output, index, presentation.accessAction!);
+    if (!rows.length) {
+      return file;
+    }
+    const diffFile = fileChangeDiffFile({
+      added: 0,
+      index,
+      operation: file.operation,
+      path: file.displayPath,
+      removed: 0,
+      rows,
+    });
+    return {
+      ...file,
+      diffFile,
+      expandable: true,
+      rows,
+    };
+  });
+  return {
+    ...presentation,
+    files,
+    interactive: presentation.state !== "running" && files.some((file) => file.expandable),
+  };
+}
+
 function visibleJsonOutput(blocks: ToolExecutionConversationBlock[]): Record<string, unknown> | null {
   for (let index = blocks.length - 1; index >= 0; index -= 1) {
-    const body = blocks[index]?.body.trim();
-    if (!body) {
-      continue;
-    }
-    try {
-      const parsed = JSON.parse(body) as unknown;
-      const object = objectValue(parsed);
-      if (object && Array.isArray(object.results)) {
-        return object;
-      }
-    } catch {
-      continue;
+    const output = parseFileToolOutput(blocks[index]?.body);
+    if (output) {
+      return output;
     }
   }
   return null;
+}
+
+// parseFileToolOutput accepts only the structured result envelope of the native file tool.
+// parseFileToolOutput 仅接受原生 file 工具的结构化结果封装。
+function parseFileToolOutput(body: string | null | undefined): Record<string, unknown> | null {
+  const trimmed = body?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  try {
+    const object = objectValue(JSON.parse(trimmed) as unknown);
+    return object && Array.isArray(object.results) ? object : null;
+  } catch {
+    return null;
+  }
 }
 
 // operationIdsForResource maps native extension operation ids to canonical resources.

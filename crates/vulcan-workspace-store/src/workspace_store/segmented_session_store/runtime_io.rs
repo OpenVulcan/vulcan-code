@@ -3,6 +3,56 @@
 
 use super::*;
 
+/// Decodes one immutable runtime JSONL byte snapshot without repairing or rewriting storage.
+/// 在不修复或重写存储的情况下解码一个不可变运行时 JSONL 字节快照。
+///
+/// # Parameters
+/// 参数
+/// `path` identifies the exact source segment for diagnostics and `bytes` is its captured content.
+/// `path` 标识用于诊断的精确源分段，`bytes` 是已经捕获的文件内容。
+///
+/// # Returns
+/// 返回值
+/// Strictly decoded runtime lines, or the first path-and-line-aware decoding failure.
+/// 返回严格解码后的运行时日志行，或首个包含路径与行号的解码失败。
+pub(in crate::workspace_store) fn decode_runtime_segment_lines_strict(
+    path: &Path,
+    bytes: &[u8],
+) -> Result<Vec<RuntimeLogEventLine>, String> {
+    // lines receives each complete non-empty physical JSONL row exactly once.
+    // lines 仅接收每个完整且非空的物理 JSONL 行一次。
+    let mut lines = Vec::new();
+    for (line_index, raw_line) in bytes.split(|byte| *byte == b'\n').enumerate() {
+        // line_number keeps diagnostics aligned with one-based editor and log positions.
+        // line_number 使诊断与从一开始计数的编辑器和日志位置保持一致。
+        let line_number = line_index.saturating_add(1);
+        // normalized_line removes only the optional CR from a CRLF record boundary.
+        // normalized_line 仅移除 CRLF 记录边界中可选的回车字符。
+        let normalized_line = raw_line.strip_suffix(b"\r").unwrap_or(raw_line);
+        if normalized_line.iter().all(u8::is_ascii_whitespace) {
+            continue;
+        }
+        // line_text validates UTF-8 before protocol decoding so byte damage remains explicit.
+        // line_text 在协议解码前验证 UTF-8，使字节损坏保持显式可见。
+        let line_text = std::str::from_utf8(normalized_line).map_err(|error| {
+            format!(
+                "Runtime JSONL segment `{}` line {line_number} is not valid UTF-8: {error}",
+                path.display()
+            )
+        })?;
+        // decoded_line performs one direct strongly typed protocol decode for this row.
+        // decoded_line 对当前行执行一次直接的强类型协议解码。
+        let decoded_line = decode_runtime_log_event_line_json(line_text).map_err(|error| {
+            format!(
+                "Failed to decode runtime JSONL segment `{}` line {line_number}: {error}",
+                path.display()
+            )
+        })?;
+        lines.push(decoded_line);
+    }
+    Ok(lines)
+}
+
 /// Reads one required runtime segment while tolerating only a corrupt JSONL suffix.
 /// 读取一个必需运行时分段，同时仅容忍损坏的 JSONL 后缀。
 ///
@@ -150,7 +200,7 @@ pub(in crate::workspace_store) fn refresh_runtime_metadata_from_lines_with_owned
     session_dir: &Path,
     metadata: &RuntimeLogMetadata,
     lines: &[RuntimeLogEventLine],
-    _append_guard: &std::sync::MutexGuard<'_, ()>,
+    _append_guard: &std::sync::RwLockWriteGuard<'_, ()>,
 ) -> Result<RuntimeLogMetadata, String> {
     // next_metadata is derived from the already validated single-segment snapshot.
     // next_metadata 从已经验证的单分段快照推导。
@@ -207,13 +257,16 @@ pub(in crate::workspace_store) fn append_runtime_log_tail_with_owned_lock<'guard
     session_dir: &Path,
     mut snapshot: RuntimeLogSnapshot<'guard>,
     tail: &[RuntimeLogEventLine],
-    _append_guard: &'guard std::sync::MutexGuard<'_, ()>,
+    _append_guard: &'guard std::sync::RwLockWriteGuard<'_, ()>,
 ) -> Result<RuntimeLogMetadata, String> {
     // last_tail_line makes an empty append an explicit no-op with no metadata timestamp churn.
     // last_tail_line 使空追加成为显式空操作，不造成元数据时间戳变化。
     let Some(last_tail_line) = tail.last() else {
         return Ok(snapshot.metadata);
     };
+    // previous_next_seq identifies the exact resident-cache frontier before this append.
+    // previous_next_seq 标识当前追加前的精确常驻缓存前沿。
+    let previous_next_seq = snapshot.metadata.next_seq;
     // next_seq validates every tail row before the first append byte is written.
     // next_seq 在写入首个追加字节前验证每一条尾部记录。
     let next_seq = validate_runtime_log_tail(&snapshot.metadata, tail)?;
@@ -245,6 +298,7 @@ pub(in crate::workspace_store) fn append_runtime_log_tail_with_owned_lock<'guard
     segment.updated_at = Some(last_tail_line.created_at.clone());
     write_runtime_metadata(session_dir, &snapshot.metadata)?;
     write_runtime_index(session_dir, &rebuild_runtime_log_index(&snapshot.lines))?;
+    advance_runtime_system_update_cache(session_dir, previous_next_seq, next_seq, tail)?;
     Ok(snapshot.metadata)
 }
 
@@ -313,20 +367,23 @@ pub(in crate::workspace_store) fn append_runtime_log_tail_from_metadata_with_own
     session_dir: &Path,
     mut metadata: RuntimeLogMetadata,
     tail: &[RuntimeLogEventLine],
-    _append_guard: &std::sync::MutexGuard<'_, ()>,
+    _append_guard: &std::sync::RwLockWriteGuard<'_, ()>,
 ) -> Result<RuntimeLogMetadata, String> {
     let active_segment_path = validate_runtime_segment_append_boundary(session_dir, &metadata)?;
     let Some(last_tail_line) = tail.last() else {
         return Ok(metadata);
     };
+    // previous_next_seq identifies the exact resident-cache frontier before this append.
+    // previous_next_seq 标识当前追加前的精确常驻缓存前沿。
+    let previous_next_seq = metadata.next_seq;
     // next_seq validates every candidate before the first append byte is written.
     // next_seq 在写入首个追加字节前验证每个候选事件。
     let next_seq = validate_runtime_log_tail(&metadata, tail)?;
     // encoded_tail preflights all serialization while metadata still references the old boundary.
     // encoded_tail 在元数据仍指向旧边界时预检全部序列化。
-    let _encoded_tail = encode_json_lines(tail)?;
+    let encoded_tail = encode_json_lines(tail)?;
     invalidate_runtime_index_cache(session_dir)?;
-    append_json_lines_file(&active_segment_path, tail)?;
+    append_encoded_json_lines_file(&active_segment_path, &encoded_tail)?;
     let persisted_byte_len = fs::symlink_metadata(&active_segment_path)
         .map_err(|error| {
             format!(
@@ -353,6 +410,7 @@ pub(in crate::workspace_store) fn append_runtime_log_tail_from_metadata_with_own
     segment.end_seq = Some(last_tail_line.seq);
     segment.updated_at = Some(last_tail_line.created_at.clone());
     write_runtime_metadata(session_dir, &metadata)?;
+    advance_runtime_system_update_cache(session_dir, previous_next_seq, next_seq, tail)?;
     Ok(metadata)
 }
 

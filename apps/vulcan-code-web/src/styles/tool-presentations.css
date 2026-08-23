@@ -609,9 +609,17 @@
 
 .file-change-path-text {
   min-width: 0;
+  flex: 0 1 auto;
   max-width: min(52vw, 560px);
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.file-change-path-range {
+  flex: 0 0 auto;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
 }
 
 .tool-request-inline-progress {
@@ -707,25 +715,6 @@
   padding: 12px 14px;
   color: var(--muted-foreground);
   font-size: 13px;
-}
-
-.file-change-read-row {
-  display: grid;
-  grid-template-columns: 4em minmax(0, 1fr);
-  gap: 10px;
-  padding: 2px 14px;
-  white-space: pre;
-}
-
-.file-change-read-line-number {
-  color: var(--muted-foreground);
-  text-align: right;
-  user-select: none;
-}
-
-.file-change-read-content {
-  min-width: 0;
-  overflow-wrap: anywhere;
 }
 
 @media (prefers-reduced-motion: reduce) {

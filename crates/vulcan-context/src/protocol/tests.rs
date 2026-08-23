@@ -240,6 +240,55 @@ fn merge_session_messages_with_conversation_state_records_preserves_loaded_histo
     assert_eq!(merged_messages[2].body, "继续提问");
 }
 
+/// Verifies legacy first-semantic telemetry cannot alter projected transcript identity.
+/// 验证旧版首语义遥测不能改变投影后的转录身份。
+#[test]
+fn conversation_projection_strips_legacy_first_semantic_marker() {
+    // state simulates a runtime document written before first-semantic telemetry became transient.
+    // state 模拟首语义遥测改为瞬态之前写入的运行时文档。
+    let state = conversation_state_from_session_messages(&[transcript_entry(
+        "user-legacy-diagnostic",
+        SessionMessageKind::User,
+        SessionMessageRecordKind::Transcript,
+        "继续",
+        Some(json!({
+            "client_submission_id": "submission-legacy",
+            "client_submission_first_semantic_observed": true,
+        })),
+    )])
+    .expect("legacy diagnostic fixture should replay");
+    let projected = conversation_state_to_session_messages(&state);
+
+    assert_eq!(projected.len(), 1);
+    assert_eq!(
+        projected[0]
+            .metadata
+            .as_ref()
+            .and_then(Value::as_object)
+            .and_then(|metadata| metadata.get("client_submission_id"))
+            .and_then(Value::as_str),
+        Some("submission-legacy")
+    );
+    assert!(
+        projected[0]
+            .metadata
+            .as_ref()
+            .and_then(Value::as_object)
+            .is_some_and(|metadata| {
+                !metadata.contains_key("client_submission_first_semantic_observed")
+            })
+    );
+    assert!(
+        state.records[0]
+            .metadata
+            .as_ref()
+            .and_then(Value::as_object)
+            .is_some_and(|metadata| {
+                metadata.contains_key("client_submission_first_semantic_observed")
+            })
+    );
+}
+
 /// Verifies a canonical interrupt record replaces its already visible admission row by stable identity.
 /// 验证规范插队记录会按稳定身份替换已经可见的接纳阶段行。
 #[test]

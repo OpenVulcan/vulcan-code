@@ -7,6 +7,7 @@ import {
 } from "@/state/workbench-message-merge";
 import type {
   ConversationHydrationProgress,
+  ConversationHistoryPageResponse,
   ConversationArchivedDelta,
   ContextInjectionChangedDelta,
   ConversationMessage,
@@ -874,6 +875,108 @@ function applyWorkbenchDeltaPayloadWithSubagentSurfaceMessageCache(
   }
 }
 
+// ConversationHistoryPageMergeResult reports the exact state and number of rows added by one history page.
+// ConversationHistoryPageMergeResult 报告单次历史分页得到的精确状态与新增行数。
+export interface ConversationHistoryPageMergeResult {
+  // workbench is the current snapshot with only the requested conversation page applied.
+  // workbench 是仅应用目标会话分页后的当前快照。
+  workbench: WorkbenchSnapshot;
+  // addedMessageCount is the number of previously unseen stable message ids prepended to the target conversation.
+  // addedMessageCount 是前置到目标会话且此前未出现过的稳定消息标识数量。
+  addedMessageCount: number;
+}
+
+// mergeConversationHistoryPageResponse applies one older page without accepting an unrelated full-snapshot replacement.
+// mergeConversationHistoryPageResponse 应用一页更早历史，且不接受无关的完整快照替换。
+//
+// Parameters:
+// 参数：
+// current is the latest UI-owned workbench state.
+// current 是界面当前持有的最新工作台状态。
+// response is the exact conversation-scoped history page returned by the service.
+// response 是服务返回的精确会话范围历史分页。
+//
+// Returns:
+// 返回值：
+// The minimally changed workbench and the number of newly prepended messages.
+// 返回最小化变更后的工作台以及实际前置的新消息数量。
+export function mergeConversationHistoryPageResponse(
+  current: WorkbenchSnapshot,
+  response: ConversationHistoryPageResponse,
+): ConversationHistoryPageMergeResult {
+  // conversationId is the only business surface this page may mutate.
+  // conversationId 是该分页唯一允许修改的业务界面。
+  const conversationId = response.sessionId;
+  // seenMessageIds protects target rows and duplicate rows inside the incoming page.
+  // seenMessageIds 保护目标行以及传入分页内部的重复行。
+  const seenMessageIds = new Set<string>();
+  // currentConversationMessages preserves all newer and concurrent rows already owned by the target surface.
+  // currentConversationMessages 保留目标界面已经持有的全部较新及并发行。
+  const currentConversationMessages: ConversationMessage[] = [];
+  // unrelatedMessages preserves every other conversation without consulting the response snapshot.
+  // unrelatedMessages 不读取响应快照并保留所有其他会话。
+  const unrelatedMessages: ConversationMessage[] = [];
+  for (const message of current.messages) {
+    if (message.conversationId === conversationId) {
+      currentConversationMessages.push(message);
+      seenMessageIds.add(message.id);
+    } else {
+      unrelatedMessages.push(message);
+    }
+  }
+  // addedMessages retains exact response order for rows absent from the current state.
+  // addedMessages 为当前状态中不存在的行保留精确响应顺序。
+  const addedMessages: ConversationMessage[] = [];
+  for (const message of response.messages) {
+    if (message.conversationId !== conversationId || seenMessageIds.has(message.id)) {
+      continue;
+    }
+    seenMessageIds.add(message.id);
+    addedMessages.push(message);
+  }
+
+  // currentWindow is the UI-owned cursor summary before this page.
+  // currentWindow 是应用该分页前由界面持有的游标摘要。
+  const currentWindow = (current.hydratedConversationWindows ?? []).find(
+    (window) => window.sessionId === conversationId,
+  );
+  // responseWindow contributes only exact session metadata omitted from the page-local cursor fields.
+  // responseWindow 仅提供分页本地游标字段未携带的精确会话元数据。
+  const responseWindow = (response.workbench.hydratedConversationWindows ?? []).find(
+    (window) => window.sessionId === conversationId,
+  );
+  // The summary field is optional by protocol, so page-local cursor facts stay authoritative while exact metadata is preserved when present.
+  // 该摘要字段按协议可选，因此分页本地游标事实保持权威，同时在存在时保留精确元数据。
+  const nextWindow = {
+    sessionId: conversationId,
+    subagentMetadataLoaded: responseWindow?.subagentMetadataLoaded
+      ?? currentWindow?.subagentMetadataLoaded
+      ?? false,
+    earliestOrdinal: response.earliestOrdinal ?? null,
+    hasMoreHistory: response.hasMoreHistory,
+  };
+  // hydratedConversationWindows replaces only the target cursor summary.
+  // hydratedConversationWindows 只替换目标会话的游标摘要。
+  const hydratedConversationWindows = [
+    ...(current.hydratedConversationWindows ?? []).filter(
+      (window) => window.sessionId !== conversationId,
+    ),
+    nextWindow,
+  ];
+  // nextWorkbench keeps current global state and advances only monotonic revision, target messages, and target cursor.
+  // nextWorkbench 保留当前全局状态，只推进单调版本、目标消息与目标游标。
+  const nextWorkbench = deriveSelectedConversationFields({
+    ...current,
+    revision: Math.max(current.revision ?? 0, response.workbench.revision ?? 0),
+    messages: [...unrelatedMessages, ...addedMessages, ...currentConversationMessages],
+    hydratedConversationWindows,
+  });
+  return {
+    workbench: nextWorkbench,
+    addedMessageCount: addedMessages.length,
+  };
+}
+
 // applyConversationArchivedDelta commits the archive-owned lifecycle domain without replacing unrelated newer state.
 // applyConversationArchivedDelta 提交归档拥有的生命周期领域，且不替换无关的较新状态。
 //
@@ -1121,6 +1224,44 @@ export function mergeConversationHydrationSnapshotWithSubagentSurfaceMessageCach
   }
   rememberSubagentSurfaceMessages(cache, mergedWorkbench);
   return injectCachedSubagentSurfaceMessages(mergedWorkbench, cache);
+}
+
+// mergeConversationHistoryPageResponseWithSubagentSurfaceMessageCache applies one exact page and updates only its child cache key when needed.
+// mergeConversationHistoryPageResponseWithSubagentSurfaceMessageCache 应用一个精确分页，并仅在需要时更新其子代理缓存键。
+//
+// Parameters:
+// 参数：
+// current is the latest UI-owned workbench snapshot.
+// current 是界面当前持有的最新工作台快照。
+// response is the exact history page response to merge.
+// response 是待合并的精确历史分页响应。
+// cache stores already loaded child transcript windows.
+// cache 保存已经载入的子代理转录窗口。
+//
+// Returns:
+// 返回值：
+// The page merge result after an optional exact child-cache update.
+// 返回可选精确子代理缓存更新后的分页合并结果。
+export function mergeConversationHistoryPageResponseWithSubagentSurfaceMessageCache(
+  current: WorkbenchSnapshot,
+  response: ConversationHistoryPageResponse,
+  cache: SubagentSurfaceMessageCache,
+): ConversationHistoryPageMergeResult {
+  // result is the exact conversation-scoped page merge before the optional child-cache update.
+  // result 是更新精确子代理缓存键前的会话范围分页合并结果。
+  const result = mergeConversationHistoryPageResponse(current, response);
+  // targetHasCachedSurface uses one exact map lookup and never enumerates unrelated conversations or child tasks.
+  // targetHasCachedSurface 使用一次精确映射查询，绝不枚举无关会话或子任务。
+  const targetHasCachedSurface = cache.has(response.sessionId);
+  if (targetHasCachedSurface) {
+    // targetMessages is the complete merged child window stored under its exact cache key.
+    // targetMessages 是保存到精确缓存键下的完整已合并子代理窗口。
+    const targetMessages = result.workbench.messages.filter(
+      (message) => message.conversationId === response.sessionId,
+    );
+    cache.set(response.sessionId, targetMessages);
+  }
+  return result;
 }
 
 // mergeConversationMessagesWithSubagentSurfaceMessageCache replaces one message window and updates child-surface cache when applicable.

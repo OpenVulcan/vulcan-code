@@ -3,6 +3,195 @@
 
 use super::*;
 
+/// Minimum total decode time that makes one JSONL file read worth reporting.
+/// 单个 JSONL 文件读取需要输出诊断日志的最小总解码耗时。
+pub(in crate::workspace_store) const JSONL_READ_DIAGNOSTIC_THRESHOLD_MS: u128 = 20;
+
+/// One immutable full-file byte snapshot captured by a single exact-path read.
+/// 通过一次精确路径读取捕获的不可变完整文件字节快照。
+struct JsonlFileReadSnapshot {
+    /// Complete file bytes retained for zero-copy line slicing during parsing.
+    /// 为解析期间零复制行切片保留的完整文件字节。
+    bytes: Vec<u8>,
+    /// Elapsed time spent inside the one filesystem read operation.
+    /// 单次文件系统读取操作消耗的时间。
+    read_elapsed: std::time::Duration,
+}
+
+/// Reads one exact JSONL file completely before any in-memory parsing begins.
+/// 在任何内存解析开始前完整读取一个精确 JSONL 文件。
+///
+/// # Parameters
+/// 参数
+/// `path` is the exact metadata-selected JSONL path.
+/// `path` 是元数据选择出的精确 JSONL 路径。
+///
+/// # Returns
+/// 返回值
+/// A full immutable byte snapshot, clean absence for `NotFound`, or an explicit read failure.
+/// 返回完整不可变字节快照；`NotFound` 时返回干净缺失，其他情况返回明确读取错误。
+fn read_jsonl_file_snapshot(path: &Path) -> Result<Option<JsonlFileReadSnapshot>, String> {
+    // read_started_at measures the single operating-system-backed whole-file read.
+    // read_started_at 测量唯一一次由操作系统支持的完整文件读取。
+    let read_started_at = std::time::Instant::now();
+    // bytes are loaded in one operation so parsing never interleaves tiny buffered reads.
+    // bytes 通过一次操作载入，使解析过程不再交错执行细碎缓冲读取。
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(format!(
+                "读取 JSONL 文件 `{}` 失败：{error}",
+                path.display()
+            ));
+        }
+    };
+    Ok(Some(JsonlFileReadSnapshot {
+        bytes,
+        read_elapsed: read_started_at.elapsed(),
+    }))
+}
+
+/// Returns whether one byte-sliced JSONL row contains only ASCII whitespace.
+/// 返回一个字节切片 JSONL 行是否仅包含 ASCII 空白字符。
+///
+/// # Parameters
+/// 参数
+/// `line` is one newline-delimited byte slice from a full-file snapshot.
+/// `line` 是完整文件快照中的单个换行分隔字节切片。
+///
+/// # Returns
+/// 返回值
+/// `true` only when no non-whitespace byte exists.
+/// 仅在不存在非空白字节时返回 `true`。
+pub(in crate::workspace_store) fn jsonl_line_is_blank(line: &[u8]) -> bool {
+    line.iter().all(u8::is_ascii_whitespace)
+}
+
+/// Decodes one complete JSONL row while isolating unknown historical event kinds.
+/// 解码一条完整 JSONL 行，同时隔离未知历史事件类型。
+///
+/// # Parameters
+/// 参数
+/// `line` is one complete non-blank JSON byte slice.
+/// `line` 是一条完整且非空白的 JSON 字节切片。
+/// `segment_path` identifies the exact source file for diagnostics.
+/// `segment_path` 标识诊断所需的精确来源文件。
+/// `line_number` is the one-based physical row number.
+/// `line_number` 是从一开始的物理行号。
+///
+/// # Returns
+/// 返回值
+/// A known typed event, `None` for one unknown historical kind, or an explicit malformed-row error.
+/// 返回已知强类型事件；未知历史类型返回 `None`；格式损坏时返回明确错误。
+pub(in crate::workspace_store) fn decode_segment_event_line_tolerant(
+    line: &[u8],
+    segment_path: &Path,
+    line_number: usize,
+) -> Result<Option<SegmentedSessionEventLine>, String> {
+    // event_result is the single healthy-path JSON deserialization.
+    // event_result 是健康路径中的唯一一次 JSON 反序列化。
+    let event_result = serde_json::from_slice::<SegmentedSessionEventLine>(line);
+    match event_result {
+        Ok(event_line) => Ok(Some(event_line)),
+        Err(typed_error) => {
+            // value is constructed only to classify an already-failed typed row.
+            // value 仅用于分类已经强类型解码失败的行。
+            let value = serde_json::from_slice::<Value>(line).map_err(|_| {
+                format!(
+                    "解析 JSONL 文件 `{}` 第 {line_number} 行失败：{typed_error}",
+                    segment_path.display()
+                )
+            })?;
+            if segmented_event_value_has_known_kind(&value) {
+                return Err(format!(
+                    "解析 JSONL 文件 `{}` 第 {line_number} 行失败：{typed_error}",
+                    segment_path.display()
+                ));
+            }
+            // event_type is used only by the stable internal unknown-kind diagnostic.
+            // event_type 仅用于稳定的内部未知类型诊断。
+            let event_type = value
+                .get("type")
+                .and_then(Value::as_str)
+                .unwrap_or("<missing>");
+            eprintln!(
+                "[workspace-store] skipped unknown segmented session event type `{event_type}` at {}:{line_number}",
+                segment_path.display()
+            );
+            Ok(None)
+        }
+    }
+}
+
+/// One complete separated timing observation for an exact JSONL segment read.
+/// 一次精确 JSONL 分段读取的完整分项耗时观测。
+struct JsonlReadTiming<'path> {
+    /// Read mode distinguishing normal window reads from repair validation.
+    /// 区分普通窗口读取与修复校验的读取模式。
+    mode: &'static str,
+    /// Exact metadata-selected JSONL file.
+    /// 元数据选中的精确 JSONL 文件。
+    segment_path: &'path Path,
+    /// Complete full-file snapshot length.
+    /// 完整文件快照长度。
+    bytes_read: usize,
+    /// Duration of the one full-file read.
+    /// 唯一一次完整文件读取的耗时。
+    read_elapsed: std::time::Duration,
+    /// Number of retained typed event rows.
+    /// 保留的强类型事件行数。
+    line_count: usize,
+    /// Byte-slice line scanning duration outside JSON decoding.
+    /// JSON 解码以外的字节切片行扫描耗时。
+    line_scan_elapsed: std::time::Duration,
+    /// Direct byte-to-event decoding duration.
+    /// 从字节直接解码为事件的耗时。
+    typed_decode_elapsed: std::time::Duration,
+    /// Error-only unknown-kind inspection duration.
+    /// 仅在错误路径执行的未知类型检查耗时。
+    fallback_decode_elapsed: std::time::Duration,
+    /// Complete file decode duration.
+    /// 完整文件解码操作耗时。
+    total_elapsed: std::time::Duration,
+}
+
+/// Emits separated file-read and in-memory JSONL decode timings for one segment.
+/// 为单个分段输出拆分后的文件读取与内存 JSONL 解码耗时。
+///
+/// # Parameters
+/// 参数
+/// `timing` carries one coherent observation so fields cannot be reordered at call sites.
+/// `timing` 携带一次完整观测，避免调用点错排各耗时字段。
+///
+/// # Returns
+/// 返回值
+/// This function returns nothing and writes only slow file-decode diagnostics.
+/// 此函数不返回数据，仅输出慢文件解码诊断。
+fn trace_jsonl_read_timing(timing: JsonlReadTiming<'_>) {
+    if timing.total_elapsed.as_millis() <= JSONL_READ_DIAGNOSTIC_THRESHOLD_MS {
+        return;
+    }
+    // file_name keeps diagnostics compact while the session id remains available in parent logs.
+    // file_name 保持诊断紧凑，所属会话标识由上层日志提供。
+    let file_name = timing
+        .segment_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("<unknown>");
+    eprintln!(
+        "[workspace-store][jsonl-read-timing] mode={} file={file_name} bytes={} read_calls=1 io_read_us={} line_scan_us={} typed_decode_us={} fallback_decode_us={} total_us={} lines={}",
+        timing.mode,
+        timing.bytes_read,
+        timing.read_elapsed.as_micros(),
+        timing.line_scan_elapsed.as_micros(),
+        timing.typed_decode_elapsed.as_micros(),
+        timing.fallback_decode_elapsed.as_micros(),
+        timing.total_elapsed.as_micros(),
+        timing.line_count,
+    );
+}
+
 /// Reads one segment event file without mutating on-disk data.
 /// 读取单个分段事件文件，且不改动磁盘数据。
 pub(in crate::workspace_store) fn read_segment_event_lines(
@@ -16,49 +205,80 @@ pub(in crate::workspace_store) fn read_segment_event_lines(
 pub(in crate::workspace_store) fn read_segment_event_lines_tolerant(
     segment_path: &Path,
 ) -> Result<Vec<SegmentedSessionEventLine>, String> {
-    if !segment_path.exists() {
+    // total_started_at measures the one full-file read and all in-memory decoding.
+    // total_started_at 测量唯一一次完整文件读取以及全部内存解码。
+    let total_started_at = std::time::Instant::now();
+    let Some(snapshot) = read_jsonl_file_snapshot(segment_path)? else {
         return Ok(Vec::new());
-    }
-    let file = File::open(segment_path).map_err(to_store_error)?;
-    let reader = BufReader::new(file);
+    };
     let mut lines = Vec::new();
-    for (line_index, line) in reader.lines().enumerate() {
+    // typed_decode_elapsed measures the healthy direct byte-to-event path.
+    // typed_decode_elapsed 测量健康路径中从字节直接解码为事件的耗时。
+    let mut typed_decode_elapsed = std::time::Duration::ZERO;
+    // fallback_decode_elapsed measures the error-only schema-kind inspection.
+    // fallback_decode_elapsed 测量仅在错误路径执行的 schema 类型检查耗时。
+    let mut fallback_decode_elapsed = std::time::Duration::ZERO;
+    // line_iteration_started_at includes byte-slice scanning plus measured decode phases.
+    // line_iteration_started_at 包含字节切片扫描以及已单独测量的解码阶段。
+    let line_iteration_started_at = std::time::Instant::now();
+    for (line_index, line) in snapshot.bytes.split(|byte| *byte == b'\n').enumerate() {
+        if jsonl_line_is_blank(line) {
+            continue;
+        }
         let line_number = line_index.saturating_add(1);
-        let line = line.map_err(|error| {
-            format!(
-                "读取 JSONL 文件 `{}` 第 {line_number} 行失败：{error}",
-                segment_path.display()
-            )
-        })?;
-        if line.trim().is_empty() {
-            continue;
-        }
-        let value = serde_json::from_str::<Value>(&line).map_err(|error| {
-            format!(
-                "解析 JSONL 文件 `{}` 第 {line_number} 行失败：{error}",
-                segment_path.display()
-            )
-        })?;
-        if !segmented_event_value_has_known_kind(&value) {
-            let event_type = value
-                .get("type")
-                .and_then(Value::as_str)
-                .unwrap_or("<missing>");
-            eprintln!(
-                "[workspace-store] skipped unknown segmented session event type `{event_type}` at {}:{line_number}",
-                segment_path.display()
-            );
-            continue;
-        }
-        lines.push(
-            serde_json::from_value::<SegmentedSessionEventLine>(value).map_err(|error| {
-                format!(
-                    "解析 JSONL 文件 `{}` 第 {line_number} 行失败：{error}",
+        // typed_decode_started_at isolates the single healthy-path deserialization.
+        // typed_decode_started_at 将健康路径中的唯一一次反序列化单独测量。
+        let typed_decode_started_at = std::time::Instant::now();
+        let event_result = serde_json::from_slice::<SegmentedSessionEventLine>(line);
+        typed_decode_elapsed += typed_decode_started_at.elapsed();
+        match event_result {
+            Ok(event_line) => lines.push(event_line),
+            Err(typed_error) => {
+                // fallback_decode_started_at is reached only when direct typed decoding failed.
+                // fallback_decode_started_at 仅在直接强类型解码失败时执行。
+                let fallback_decode_started_at = std::time::Instant::now();
+                let value_result = serde_json::from_slice::<Value>(line);
+                fallback_decode_elapsed += fallback_decode_started_at.elapsed();
+                let value = value_result.map_err(|_| {
+                    format!(
+                        "解析 JSONL 文件 `{}` 第 {line_number} 行失败：{typed_error}",
+                        segment_path.display()
+                    )
+                })?;
+                if segmented_event_value_has_known_kind(&value) {
+                    return Err(format!(
+                        "解析 JSONL 文件 `{}` 第 {line_number} 行失败：{typed_error}",
+                        segment_path.display()
+                    ));
+                }
+                let event_type = value
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .unwrap_or("<missing>");
+                eprintln!(
+                    "[workspace-store] skipped unknown segmented session event type `{event_type}` at {}:{line_number}",
                     segment_path.display()
-                )
-            })?,
-        );
+                );
+            }
+        }
     }
+    let line_iteration_elapsed = line_iteration_started_at.elapsed();
+    // line_scan_elapsed excludes both JSON decode phases without risking negative duration.
+    // line_scan_elapsed 排除两个 JSON 解码阶段，并避免出现负时长。
+    let line_scan_elapsed = line_iteration_elapsed
+        .saturating_sub(typed_decode_elapsed)
+        .saturating_sub(fallback_decode_elapsed);
+    trace_jsonl_read_timing(JsonlReadTiming {
+        mode: "window",
+        segment_path,
+        bytes_read: snapshot.bytes.len(),
+        read_elapsed: snapshot.read_elapsed,
+        line_count: lines.len(),
+        line_scan_elapsed,
+        typed_decode_elapsed,
+        fallback_decode_elapsed,
+        total_elapsed: total_started_at.elapsed(),
+    });
     Ok(lines)
 }
 
@@ -83,20 +303,7 @@ pub(in crate::workspace_store) fn repair_segmented_session_jsonl_files_if_needed
             continue;
         }
 
-        let mut repair_read = read_segment_event_lines_for_repair(&segment_path)?;
-        // exactSerializedLength detects a missing final newline even though BufRead::lines accepts the final unterminated row.
-        // exactSerializedLength 用于检测缺失的末尾换行，即使 BufRead::lines 会接受未终止的最后一行。
-        let exact_serialized_length = repair_read.lines.iter().try_fold(0_u64, |total, line| {
-            let line_length = serde_json::to_string(line).map_err(to_store_error)?.len() as u64 + 1;
-            total.checked_add(line_length).ok_or_else(|| {
-                format!(
-                    "Segment repair byte length overflowed for `{}`.",
-                    segment_path.display()
-                )
-            })
-        })?;
-        repair_read.changed |=
-            fs::metadata(&segment_path).map_err(to_store_error)?.len() != exact_serialized_length;
+        let repair_read = read_segment_event_lines_for_repair(&segment_path)?;
         changed |= repair_read.changed;
         if repair_read.truncated_at_corrupt_line {
             discard_remaining_segments = true;
@@ -217,12 +424,12 @@ pub(in crate::workspace_store) fn validate_segmented_session_append_boundary_loc
 ) -> Result<(), String> {
     let active_segment = metadata.segments.last().ok_or_else(|| {
         String::from(
-            "Segmented session append metadata has no active segment; load-time repair is required.",
+            "Segmented session append metadata has no active segment; explicit maintenance repair is required.",
         )
     })?;
     if metadata.active_segment != active_segment.file {
         return Err(format!(
-            "Segmented session append metadata points to `{}` but the exact final segment is `{}`; load-time repair is required.",
+            "Segmented session append metadata points to `{}` but the exact final segment is `{}`; explicit maintenance repair is required.",
             metadata.active_segment, active_segment.file
         ));
     }
@@ -237,7 +444,7 @@ pub(in crate::workspace_store) fn validate_segmented_session_append_boundary_loc
         .len();
     if actual_byte_len != active_segment.byte_len {
         return Err(format!(
-            "Exact active segment `{}` has byte length {actual_byte_len}, expected {}; load-time repair is required.",
+            "Exact active segment `{}` has byte length {actual_byte_len}, expected {}; explicit maintenance repair is required.",
             active_path.display(),
             active_segment.byte_len
         ));
@@ -245,7 +452,7 @@ pub(in crate::workspace_store) fn validate_segmented_session_append_boundary_loc
     if actual_byte_len == 0 {
         if active_segment.line_count != 0 {
             return Err(format!(
-                "Exact active segment `{}` is empty but metadata retains {} lines; load-time repair is required.",
+                "Exact active segment `{}` is empty but metadata retains {} lines; explicit maintenance repair is required.",
                 active_path.display(),
                 active_segment.line_count
             ));
@@ -262,7 +469,7 @@ pub(in crate::workspace_store) fn validate_segmented_session_append_boundary_loc
         .map_err(to_store_error)?;
     if final_byte[0] != b'\n' {
         return Err(format!(
-            "Exact active segment `{}` has an incomplete JSONL tail; load-time repair is required.",
+            "Exact active segment `{}` has an incomplete JSONL tail; explicit maintenance repair is required.",
             active_path.display()
         ));
     }
@@ -364,42 +571,88 @@ struct SegmentJsonlRepairRead {
 fn read_segment_event_lines_for_repair(
     segment_path: &Path,
 ) -> Result<SegmentJsonlRepairRead, String> {
-    if !segment_path.exists() {
+    // total_started_at measures the one full-file read and repair classification.
+    // total_started_at 测量唯一一次完整文件读取以及修复分类。
+    let total_started_at = std::time::Instant::now();
+    let Some(snapshot) = read_jsonl_file_snapshot(segment_path)? else {
         return Ok(SegmentJsonlRepairRead {
             lines: Vec::new(),
             changed: true,
             truncated_at_corrupt_line: true,
         });
-    }
-    let file = File::open(segment_path).map_err(to_store_error)?;
-    let reader = BufReader::new(file);
+    };
     let mut lines = Vec::new();
-    let mut changed = false;
+    // changed also captures a non-empty final row without the required newline terminator.
+    // changed 同时捕获非空最后一行缺少必要换行终止符的情况。
+    let mut changed = !snapshot.bytes.is_empty() && !snapshot.bytes.ends_with(b"\n");
     let mut truncated_at_corrupt_line = false;
-    for line in reader.lines() {
-        let line = line.map_err(to_store_error)?;
-        if line.trim().is_empty() {
-            changed = true;
+    // typed_decode_elapsed measures direct repair-path byte-to-event decoding.
+    // typed_decode_elapsed 测量修复路径从字节直接解码为事件的耗时。
+    let mut typed_decode_elapsed = std::time::Duration::ZERO;
+    // fallback_decode_elapsed measures error-only unknown-kind classification.
+    // fallback_decode_elapsed 测量仅在错误路径执行的未知类型分类耗时。
+    let mut fallback_decode_elapsed = std::time::Duration::ZERO;
+    // line_iteration_started_at includes byte slicing and the measured decode phases.
+    // line_iteration_started_at 包含字节切片以及已单独测量的解码阶段。
+    let line_iteration_started_at = std::time::Instant::now();
+    // terminal_slice_index identifies only the synthetic empty slice created by a final newline.
+    // terminal_slice_index 仅标识末尾换行产生的合成空切片。
+    let terminal_slice_index = snapshot.bytes.iter().filter(|byte| **byte == b'\n').count();
+    for (line_index, line) in snapshot.bytes.split(|byte| *byte == b'\n').enumerate() {
+        if jsonl_line_is_blank(line) {
+            // Only the synthetic empty slice after a valid final newline is not an on-disk blank row.
+            // 只有有效末尾换行产生的合成空切片不是磁盘上的空白行。
+            let is_synthetic_terminal_slice = line.is_empty()
+                && line_index == terminal_slice_index
+                && snapshot.bytes.ends_with(b"\n");
+            if !is_synthetic_terminal_slice {
+                changed = true;
+            }
             continue;
         }
-        let Ok(value) = serde_json::from_str::<Value>(&line) else {
-            changed = true;
-            truncated_at_corrupt_line = true;
-            break;
-        };
-        if !segmented_event_value_has_known_kind(&value) {
-            changed = true;
-            continue;
-        }
-        match serde_json::from_value::<SegmentedSessionEventLine>(value) {
+        // typed_decode_started_at isolates the healthy repair-path deserialization.
+        // typed_decode_started_at 将修复健康路径的反序列化单独测量。
+        let typed_decode_started_at = std::time::Instant::now();
+        let event_result = serde_json::from_slice::<SegmentedSessionEventLine>(line);
+        typed_decode_elapsed += typed_decode_started_at.elapsed();
+        match event_result {
             Ok(event_line) => lines.push(event_line),
             Err(_) => {
-                changed = true;
-                truncated_at_corrupt_line = true;
-                break;
+                // fallback_decode_started_at classifies unknown historical types without a second parse on healthy rows.
+                // fallback_decode_started_at 对未知历史类型分类，健康行不会发生第二次解析。
+                let fallback_decode_started_at = std::time::Instant::now();
+                let value_result = serde_json::from_slice::<Value>(line);
+                fallback_decode_elapsed += fallback_decode_started_at.elapsed();
+                match value_result {
+                    Ok(value) if !segmented_event_value_has_known_kind(&value) => {
+                        changed = true;
+                    }
+                    _ => {
+                        changed = true;
+                        truncated_at_corrupt_line = true;
+                        break;
+                    }
+                }
             }
         }
     }
+    let line_iteration_elapsed = line_iteration_started_at.elapsed();
+    // line_scan_elapsed excludes both JSON decode phases without risking negative duration.
+    // line_scan_elapsed 排除两个 JSON 解码阶段，并避免出现负时长。
+    let line_scan_elapsed = line_iteration_elapsed
+        .saturating_sub(typed_decode_elapsed)
+        .saturating_sub(fallback_decode_elapsed);
+    trace_jsonl_read_timing(JsonlReadTiming {
+        mode: "repair",
+        segment_path,
+        bytes_read: snapshot.bytes.len(),
+        read_elapsed: snapshot.read_elapsed,
+        line_count: lines.len(),
+        line_scan_elapsed,
+        typed_decode_elapsed,
+        fallback_decode_elapsed,
+        total_elapsed: total_started_at.elapsed(),
+    });
     Ok(SegmentJsonlRepairRead {
         lines,
         changed,
@@ -550,6 +803,165 @@ pub(in crate::workspace_store) fn append_events_with_metadata(
     Ok(appended_lines)
 }
 
+/// Appends one event through a reusable active-segment file handle while preserving per-event durability.
+/// 通过一个可复用的活动分段文件句柄追加一个事件，同时保持逐事件耐久语义。
+///
+/// # Parameters
+/// 参数
+/// `session_dir` and `metadata` identify the exact locked session frontier.
+/// `session_dir` 与 `metadata` 标识精确且已经加锁的会话前沿。
+/// `event` is the next stable semantic event.
+/// `event` 是下一个稳定语义事件。
+/// `append_file` retains the current active file handle across writer commands.
+/// `append_file` 在写入器命令之间保留当前活动文件句柄。
+///
+/// # Returns
+/// 返回值
+/// The store-assigned event line after its bytes have received a durable flush.
+/// 在事件字节完成可靠刷新后返回由存储层分配序号的事件行。
+pub(in crate::workspace_store) fn append_event_with_metadata_cursor(
+    session_dir: &Path,
+    metadata: &mut SegmentedSessionMetadata,
+    event: &SegmentedSessionEventInput,
+    append_file: &mut Option<(PathBuf, File)>,
+) -> Result<SegmentedSessionEventLine, String> {
+    let line = SegmentedSessionEventLine {
+        seq: metadata.next_global_seq,
+        timestamp: event.timestamp.clone(),
+        kind: event.kind,
+        payload: event.payload.clone(),
+    };
+    append_line_to_active_segment_with_cursor(
+        session_dir,
+        metadata,
+        &line,
+        event.turn_index,
+        append_file,
+    )?;
+    metadata.next_global_seq = metadata
+        .next_global_seq
+        .checked_add(1)
+        .ok_or_else(|| String::from("Segmented session global sequence overflowed."))?;
+    metadata.updated_at = event.timestamp.clone();
+    if event.kind == SegmentedSessionEventKind::ThreadRolledBack {
+        metadata.latest_rollback_seq = Some(line.seq);
+    }
+    Ok(line)
+}
+
+/// Appends one line through a reusable handle and publishes a deterministic rollover locator before writing.
+/// 通过可复用句柄追加一行，并在写入前发布确定性的滚段定位信息。
+///
+/// # Parameters
+/// 参数
+/// `metadata` is the resident authoritative frontier and `append_file` retains its exact active handle.
+/// `metadata` 是常驻权威前沿，`append_file` 保留其精确的活动句柄。
+///
+/// # Returns
+/// 返回值
+/// Success only after `write_all` and `sync_data` complete for this exact line.
+/// 仅在当前精确行完成 `write_all` 与 `sync_data` 后返回成功。
+fn append_line_to_active_segment_with_cursor(
+    session_dir: &Path,
+    metadata: &mut SegmentedSessionMetadata,
+    line: &SegmentedSessionEventLine,
+    turn_index: Option<i64>,
+    append_file: &mut Option<(PathBuf, File)>,
+) -> Result<(), String> {
+    let line_text = serde_json::to_string(line).map_err(to_store_error)?;
+    let line_byte_len = u64::try_from(line_text.len())
+        .map_err(to_store_error)?
+        .checked_add(1)
+        .ok_or_else(|| String::from("Segmented event line byte length overflowed."))?;
+    if active_segment_needs_rollover(&metadata.segments, &metadata.segment_policy, line_byte_len) {
+        let next_file = segment_file_name(metadata.segments.len() + 1);
+        // next_segment_path is deterministic and never discovered through directory enumeration.
+        // next_segment_path 是确定性路径，绝不通过目录枚举发现。
+        let next_segment_path = session_dir.join(&next_file);
+        // next_segment_file is created empty before metadata publication so a crash cannot leave
+        // metadata pointing at a missing active file. A previous zero-byte orphan is safe to reuse.
+        // next_segment_file 在元数据发布前以空文件创建，避免崩溃后元数据指向缺失的活动文件；
+        // 先前遗留的零字节孤立文件可以安全复用。
+        let next_segment_file = open_exact_empty_rollover_segment(&next_segment_path)?;
+        metadata
+            .segments
+            .push(SegmentMetadata::empty(next_file.clone(), line.seq));
+        metadata.active_segment = next_file;
+        // Publish the exact locator before the first byte enters the new segment. The metadata
+        // already contains every preceding message checkpoint advanced by the caller.
+        // 在首字节进入新分段前发布精确定位；元数据已包含调用方推进的全部前序消息检查点。
+        write_metadata(session_dir, metadata)?;
+        *append_file = Some((next_segment_path, next_segment_file));
+    }
+    let Some(segment) = metadata.segments.last_mut() else {
+        return Err(String::from("Segment metadata is empty."));
+    };
+    let segment_path = session_dir.join(&segment.file);
+    let handle_matches = append_file
+        .as_ref()
+        .is_some_and(|(path, _)| path == &segment_path);
+    if !handle_matches {
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&segment_path)
+            .map_err(to_store_error)?;
+        *append_file = Some((segment_path.clone(), file));
+    }
+    let file = append_file
+        .as_mut()
+        .map(|(_, file)| file)
+        .expect("active append handle is initialized before write");
+    file.write_all(line_text.as_bytes())
+        .map_err(to_store_error)?;
+    file.write_all(b"\n").map_err(to_store_error)?;
+    file.sync_data().map_err(to_store_error)?;
+    update_segment_metadata(segment, line, line_byte_len, turn_index);
+    Ok(())
+}
+
+/// Opens the exact deterministic rollover file only when it is new or a verified empty orphan.
+/// 仅在确定性滚段文件为新文件或已验证的空孤立文件时打开它。
+///
+/// # Parameters
+/// 参数
+/// `segment_path` is the exact path derived from authoritative metadata cardinality.
+/// `segment_path` 是从权威元数据分段数量推导出的精确路径。
+///
+/// # Returns
+/// 返回值
+/// An append handle whose empty file entry has been durably synchronized, or a strict conflict error.
+/// 返回已可靠同步空文件项的追加句柄，或严格的冲突错误。
+fn open_exact_empty_rollover_segment(segment_path: &Path) -> Result<File, String> {
+    let create_result = OpenOptions::new()
+        .read(true)
+        .append(true)
+        .create_new(true)
+        .open(segment_path);
+    let file = match create_result {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            // physical_metadata rejects links and non-files without probing neighboring paths.
+            // physical_metadata 在不探测相邻路径的情况下拒绝链接与非文件目标。
+            let physical_metadata = fs::symlink_metadata(segment_path).map_err(to_store_error)?;
+            if !physical_metadata.file_type().is_file() || physical_metadata.len() != 0 {
+                return Err(format!(
+                    "Deterministic rollover target `{}` already exists and is not an empty regular file.",
+                    segment_path.display()
+                ));
+            }
+            OpenOptions::new()
+                .read(true)
+                .append(true)
+                .open(segment_path)
+                .map_err(to_store_error)?
+        }
+        Err(error) => return Err(to_store_error(error)),
+    };
+    file.sync_data().map_err(to_store_error)?;
+    Ok(file)
+}
+
 /// Builds the durable payload for one session boundary event with store-assigned sequence.
 /// 使用存储层分配的序号构建单个 会话边界事件的持久化 payload。
 pub(in crate::workspace_store) fn session_boundary_payload(
@@ -632,7 +1044,9 @@ pub(in crate::workspace_store) fn update_segment_metadata(
 ) {
     if segment.line_count == 0 {
         segment.first_timestamp = Some(line.timestamp.clone());
-        segment.first_turn_index = turn_index;
+    }
+    if let Some(turn_index) = turn_index {
+        segment.first_turn_index.get_or_insert(turn_index);
     }
     segment.line_count += 1;
     segment.byte_len += line_byte_len;
@@ -648,6 +1062,28 @@ pub(in crate::workspace_store) fn update_segment_metadata(
     if line.kind == SegmentedSessionEventKind::Compacted {
         segment.last_compaction_seq = Some(line.seq);
     }
+    if line.kind == SegmentedSessionEventKind::SessionBoundary {
+        segment.session_boundary_line_count = segment.session_boundary_line_count.saturating_add(1);
+        segment.first_session_boundary_seq.get_or_insert(line.seq);
+        segment.last_session_boundary_seq = Some(line.seq);
+        if let Some(turn_id) = line
+            .payload
+            .get("turn_id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|turn_id| !turn_id.is_empty())
+        {
+            segment
+                .first_session_boundary_turn_id
+                .get_or_insert_with(|| turn_id.to_string());
+            if segment.last_session_boundary_turn_id.as_deref() != Some(turn_id) {
+                segment.session_boundary_turn_count =
+                    segment.session_boundary_turn_count.saturating_add(1);
+                segment.last_session_boundary_turn_id = Some(turn_id.to_string());
+            }
+        }
+    }
+    segment.projection_index_version = 1;
 }
 
 /// Rebuilds one segment metadata record from the retained physical event lines.
@@ -716,13 +1152,90 @@ pub(in crate::workspace_store) fn read_session_metadata(
     read_required_json::<SegmentedSessionMetadata>(&metadata_path(session_dir))
 }
 
+/// Acquires the shared resident metadata cursor for one exact session while its root write lock is held.
+/// 在持有根会话写锁时获取一个精确会话的共享常驻元数据游标。
+///
+/// # Parameters
+/// 参数
+/// `session_dir` is the exact deterministic session directory.
+/// `session_dir` 是精确的确定性会话目录。
+///
+/// # Returns
+/// 返回值
+/// The existing live cursor or a newly initialized cursor after one metadata file read.
+/// 返回既有活动游标，或在单次读取元数据文件后新建的游标。
+pub(in crate::workspace_store) fn acquire_session_metadata_cursor_with_owned_lock(
+    session_dir: &Path,
+) -> Result<Arc<Mutex<SegmentedSessionMetadata>>, String> {
+    let registry = SESSION_METADATA_CURSORS.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let mut registry_guard = registry.lock().map_err(to_store_error)?;
+    if let Some(cursor) = registry_guard.get(session_dir).and_then(Weak::upgrade) {
+        return Ok(cursor);
+    }
+    let metadata = read_session_metadata(session_dir)?;
+    let cursor = Arc::new(Mutex::new(metadata));
+    registry_guard.insert(session_dir.to_path_buf(), Arc::downgrade(&cursor));
+    Ok(cursor)
+}
+
+/// Releases one exact weak metadata cursor entry after its final strong owner disappears.
+/// 在最后一个强所有者消失后释放一条精确的弱元数据游标记录。
+///
+/// # Parameters
+/// 参数
+/// `session_dir` is the exact registry key and `cursor` is the final strong candidate.
+/// `session_dir` 是精确注册表键，`cursor` 是最后一个强引用候选。
+pub(in crate::workspace_store) fn release_session_metadata_cursor(
+    session_dir: &Path,
+    cursor: &Arc<Mutex<SegmentedSessionMetadata>>,
+) {
+    let Some(registry) = SESSION_METADATA_CURSORS.get() else {
+        return;
+    };
+    let Ok(mut registry_guard) = registry.lock() else {
+        return;
+    };
+    let removable = registry_guard
+        .get(session_dir)
+        .and_then(Weak::upgrade)
+        .is_some_and(|registered| {
+            Arc::ptr_eq(&registered, cursor) && Arc::strong_count(cursor) == 2
+        });
+    if removable {
+        registry_guard.remove(session_dir);
+    }
+}
+
 /// Writes a main session metadata document atomically.
 /// 原子写入主会话元数据文档。
 pub(in crate::workspace_store) fn write_metadata(
     session_dir: &Path,
     metadata: &SegmentedSessionMetadata,
 ) -> Result<(), String> {
-    write_json_file_atomic(&metadata_path(session_dir), metadata)
+    // persisted_metadata derives both generation fields from the same authoritative sequence frontier.
+    // persisted_metadata 从同一个权威序号前沿派生两个代次字段。
+    let mut persisted_metadata = metadata.clone();
+    persisted_metadata.storage_generation = persisted_metadata.next_global_seq;
+    persisted_metadata.integrity_version = 1;
+    write_json_file_atomic(&metadata_path(session_dir), &persisted_metadata)?;
+    if let Some(registry) = SESSION_METADATA_CURSORS.get()
+        && let Ok(registry_guard) = registry.lock()
+        && let Some(cursor) = registry_guard.get(session_dir).and_then(Weak::upgrade)
+    {
+        match cursor.try_lock() {
+            Ok(mut cursor_guard) => *cursor_guard = persisted_metadata,
+            Err(std::sync::TryLockError::WouldBlock) => {
+                // The cursor owner already mutated the same metadata object under the root write lock.
+                // 游标所有者已经在根会话写锁内修改了同一个元数据对象。
+            }
+            Err(std::sync::TryLockError::Poisoned(error)) => {
+                return Err(format!(
+                    "Session metadata cursor lock was poisoned: {error}"
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Writes a task session metadata document atomically.
@@ -747,16 +1260,53 @@ pub(in crate::workspace_store) fn state_path(session_dir: &Path) -> PathBuf {
     session_dir.join(SEGMENTED_STATE_FILE)
 }
 
-/// Returns the shared process-local mutex used for state document read/modify/write operations.
-/// 返回状态文档读改写操作共用的进程内互斥锁。
-pub(in crate::workspace_store) fn segmented_state_file_io_lock() -> &'static Mutex<()> {
-    SEGMENTED_STATE_FILE_IO_LOCK.get_or_init(|| Mutex::new(()))
+/// Returns the process-local state-document lock sharded by exact session-like directory.
+/// 返回按精确会话类目录分片的进程内状态文档锁。
+///
+/// # Parameters
+/// 参数
+/// `session_dir` is the deterministic directory that owns the overwrite-only state document.
+/// `session_dir` 是持有覆盖式状态文档的确定性目录。
+///
+/// # Returns
+/// 返回值
+/// A retained lock handle shared only by callers targeting the same exact directory.
+/// 返回仅由指向同一精确目录的调用方共享的保留锁句柄。
+pub(in crate::workspace_store) fn segmented_state_file_io_lock(
+    session_dir: &Path,
+) -> Arc<Mutex<()>> {
+    // registry_guard protects only one exact lookup or replacement; physical IO never holds it.
+    // registry_guard 仅保护一次精确查询或替换；物理 IO 从不持有该锁。
+    let mut registry_guard = SEGMENTED_STATE_FILE_IO_LOCKS
+        .get_or_init(|| Mutex::new(BTreeMap::new()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(lock) = registry_guard.get(session_dir).and_then(Weak::upgrade) {
+        return lock;
+    }
+    // lock is published under the exact path spelling supplied by the authoritative locator.
+    // lock 使用权威定位信息提供的精确路径拼写进行发布。
+    let lock = Arc::new(Mutex::new(()));
+    registry_guard.insert(session_dir.to_path_buf(), Arc::downgrade(&lock));
+    lock
 }
 
-/// Returns the shared process-local mutex used for segmented JSONL append operations.
-/// 返回分段 JSONL 追加操作共用的进程内互斥锁。
-pub(in crate::workspace_store) fn segmented_append_file_io_lock() -> &'static Mutex<()> {
-    vulcan_session_core::segmented_file_io::segmented_append_file_io_lock()
+/// Returns the process-local lock sharded by the exact root-session directory.
+/// 返回按精确根会话目录分片的进程内锁。
+///
+/// # Parameters
+/// 参数
+/// `session_dir` is the deterministic root-session storage directory.
+/// `session_dir` 是确定性的根会话存储目录。
+///
+/// # Returns
+/// 返回值
+/// A retained lock handle that coordinates only this root session and its TaskSessions.
+/// 返回仅协调当前根会话及其 TaskSession 的保留锁句柄。
+pub(in crate::workspace_store) fn segmented_append_file_io_lock(
+    session_dir: &Path,
+) -> vulcan_session_core::segmented_file_io::SegmentedSessionFileIoLock {
+    vulcan_session_core::segmented_file_io::segmented_append_file_io_lock(session_dir)
 }
 
 /// Builds a stable segment file name from its one-based index.
@@ -1087,15 +1637,32 @@ pub(in crate::workspace_store) fn append_json_lines_file<T>(
 where
     T: Serialize,
 {
-    if values.is_empty() {
+    // Serialize once before opening the file so a serialization failure cannot partially append.
+    // 在打开文件前仅序列化一次，确保序列化失败不会造成部分追加。
+    let encoded_batch = encode_json_lines(values)?;
+    append_encoded_json_lines_file(path, &encoded_batch)
+}
+
+/// Appends an already encoded JSONL batch to an existing file without re-serialization.
+/// 将已编码的 JSONL 批次追加到已有文件，且不再重复序列化。
+///
+/// # Parameters
+/// 参数
+/// `path` is the exact existing JSONL file that receives the encoded batch.
+/// `path` 是接收编码批次的精确已有 JSONL 文件。
+/// `encoded_batch` is one complete ordered JSONL suffix whose records already end with newlines.
+/// `encoded_batch` 是一段完整有序的 JSONL 后缀，其中每条记录已经以换行结束。
+///
+/// # Returns
+/// 返回值
+/// Success after all bytes are flushed and synchronized, or a path-aware persistence error.
+/// 全部字节刷新并同步后返回成功，否则返回包含路径的持久化错误。
+pub(in crate::workspace_store) fn append_encoded_json_lines_file(
+    path: &Path,
+    encoded_batch: &[u8],
+) -> Result<(), String> {
+    if encoded_batch.is_empty() {
         return Ok(());
-    }
-    // Build the full batch first so each append call emits one contiguous byte buffer.
-    // 先构建完整批次，使每次追加调用输出一个连续字节缓冲。
-    let mut encoded_batch = String::new();
-    for value in values {
-        encoded_batch.push_str(&serde_json::to_string(value).map_err(to_store_error)?);
-        encoded_batch.push('\n');
     }
     let mut file = OpenOptions::new()
         .append(true)
@@ -1108,8 +1675,7 @@ where
             )
         })?;
     ensure_jsonl_append_boundary(&mut file)?;
-    file.write_all(encoded_batch.as_bytes())
-        .map_err(to_store_error)?;
+    file.write_all(encoded_batch).map_err(to_store_error)?;
     // Synchronize the whole batch before runtime metadata/index files can reference it.
     // 在运行时元数据与索引文件引用该批次前同步完整批次。
     file.sync_data().map_err(to_store_error)

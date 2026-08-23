@@ -41,7 +41,8 @@ pub(in crate::workspace_store) fn backup_runtime_log_before_compaction(
 ) -> Result<Vec<String>, String> {
     // append_guard keeps validation, copying, and the audit append on one immutable source state.
     // append_guard 让验证、复制与审计追加共享同一个不可变源状态。
-    let append_guard = segmented_append_file_io_lock()
+    let session_storage_lock = segmented_append_file_io_lock(session_dir);
+    let append_guard = session_storage_lock
         .lock()
         .map_err(|error| format!("Failed to lock runtime log for compaction backup: {error}"))?;
     // snapshot is the only authoritative source for backup naming and audit sequencing.

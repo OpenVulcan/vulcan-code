@@ -266,9 +266,8 @@ pub(in crate::workspace_store) fn rebuild_runtime_log_from_conversation_state(
         .map_err(|error| format!("Invalid canonical conversation record identity: {error}"))?;
     // append_guard keeps destructive rebuild publication serialized with every runtime append.
     // append_guard 使破坏性重建发布与每次运行时追加保持串行。
-    let append_guard = segmented_append_file_io_lock()
-        .lock()
-        .map_err(to_store_error)?;
+    let session_storage_lock = segmented_append_file_io_lock(session_dir);
+    let append_guard = session_storage_lock.lock().map_err(to_store_error)?;
     rebuild_runtime_log_with_owned_lock(
         session_dir,
         conversation_state,
@@ -303,7 +302,7 @@ fn rebuild_runtime_log_with_owned_lock(
     conversation_state: &SessionConversationState,
     updated_at: &str,
     extra_events: Vec<RuntimeLogEventLine>,
-    _append_guard: &std::sync::MutexGuard<'_, ()>,
+    _append_guard: &std::sync::RwLockWriteGuard<'_, ()>,
 ) -> Result<RuntimeLogMetadata, String> {
     // active_segment is the sole implemented segment selected before destructive work begins.
     // active_segment 是在破坏性操作开始前选定的唯一已实现分段。
@@ -338,6 +337,7 @@ fn rebuild_runtime_log_with_owned_lock(
     // runtime_dir 会被保留，使固定分段能够原子替换且不会出现缺失窗口。
     let runtime_dir = runtime_dir_path(session_dir);
     create_dir_all(&runtime_dir)?;
+    invalidate_runtime_system_update_cache(session_dir)?;
     // active_segment_path receives the already encoded complete candidate.
     // active_segment_path 接收已经编码完成的完整候选内容。
     let active_segment_path = session_dir.join(&active_segment);
@@ -370,6 +370,7 @@ fn rebuild_runtime_log_with_owned_lock(
     };
     write_runtime_metadata(session_dir, &metadata)?;
     write_runtime_index(session_dir, &rebuild_runtime_log_index(&lines))?;
+    publish_runtime_system_update_cache(session_dir, metadata.next_seq, &lines)?;
     Ok(metadata)
 }
 
@@ -440,9 +441,8 @@ pub(in crate::workspace_store) fn sync_runtime_log_from_conversation_state(
         .map_err(|error| format!("Invalid canonical conversation record identity: {error}"))?;
     // append_guard keeps read, decision, append, and rebuild inside one runtime transaction.
     // append_guard 将读取、决策、追加与重建保持在同一个运行时事务内。
-    let append_guard = segmented_append_file_io_lock()
-        .lock()
-        .map_err(to_store_error)?;
+    let session_storage_lock = segmented_append_file_io_lock(session_dir);
+    let append_guard = session_storage_lock.lock().map_err(to_store_error)?;
     sync_runtime_log_from_conversation_state_with_owned_lock(
         session_dir,
         conversation_state,
@@ -473,7 +473,7 @@ fn sync_runtime_log_from_conversation_state_with_owned_lock(
     session_dir: &Path,
     conversation_state: &SessionConversationState,
     updated_at: &str,
-    append_guard: &std::sync::MutexGuard<'_, ()>,
+    append_guard: &std::sync::RwLockWriteGuard<'_, ()>,
 ) -> Result<RuntimeLogMetadata, String> {
     // metadata is the constant-size hot-path checkpoint; runtime JSONL is not opened here.
     // metadata 是常量大小的热路径检查点；此处不会打开运行时 JSONL。
@@ -641,7 +641,7 @@ fn rebuild_runtime_log_preserving_existing_audit_with_owned_lock(
     session_dir: &Path,
     conversation_state: &SessionConversationState,
     updated_at: &str,
-    append_guard: &std::sync::MutexGuard<'_, ()>,
+    append_guard: &std::sync::RwLockWriteGuard<'_, ()>,
 ) -> Result<RuntimeLogMetadata, String> {
     let Some(snapshot) = read_runtime_log_snapshot_with_owned_lock(session_dir, append_guard)?
     else {
@@ -691,9 +691,8 @@ pub(in crate::workspace_store) fn sync_runtime_log_from_compacted_conversation_s
         .map_err(|error| format!("Invalid canonical conversation record identity: {error}"))?;
     // append_guard serializes compaction synchronization with runtime audit appends and rebuilds.
     // append_guard 将压缩同步与运行时审计追加及重建串行化。
-    let append_guard = segmented_append_file_io_lock()
-        .lock()
-        .map_err(to_store_error)?;
+    let session_storage_lock = segmented_append_file_io_lock(session_dir);
+    let append_guard = session_storage_lock.lock().map_err(to_store_error)?;
     sync_runtime_log_from_compacted_conversation_state_with_owned_lock(
         session_dir,
         conversation_state,
@@ -728,7 +727,7 @@ fn sync_runtime_log_from_compacted_conversation_state_with_owned_lock(
     conversation_state: &SessionConversationState,
     updated_at: &str,
     compaction_id: &str,
-    append_guard: &std::sync::MutexGuard<'_, ()>,
+    append_guard: &std::sync::RwLockWriteGuard<'_, ()>,
 ) -> Result<RuntimeLogMetadata, String> {
     if compaction_id.trim().is_empty() {
         return Err(String::from(
@@ -781,7 +780,7 @@ fn sync_runtime_log_from_compacted_conversation_state_cold_with_owned_lock(
     conversation_state: &SessionConversationState,
     updated_at: &str,
     compaction_id: &str,
-    append_guard: &std::sync::MutexGuard<'_, ()>,
+    append_guard: &std::sync::RwLockWriteGuard<'_, ()>,
 ) -> Result<RuntimeLogMetadata, String> {
     let desired_lines =
         runtime_log_lines_from_conversation_state(conversation_state, updated_at, 1)
@@ -927,6 +926,132 @@ pub(in crate::workspace_store) fn ensure_runtime_metadata_absence_is_consistent(
     ))
 }
 
+/// Returns the process-local cache registry for exact-session runtime system updates.
+/// 返回按精确会话保存运行时系统更新的进程内缓存注册表。
+fn runtime_system_update_cache() -> &'static Mutex<BTreeMap<PathBuf, RuntimeSystemUpdateCacheEntry>>
+{
+    RUNTIME_SYSTEM_UPDATE_CACHE.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
+
+/// Invalidates one exact resident system-update projection before destructive runtime replacement.
+/// 在破坏性替换运行时存储前使一个精确常驻系统更新投影失效。
+///
+/// # Parameters
+/// 参数
+/// `session_dir` is the exact deterministic cache key to remove.
+/// `session_dir` 是要移除的精确定性缓存键。
+pub(in crate::workspace_store) fn invalidate_runtime_system_update_cache(
+    session_dir: &Path,
+) -> Result<(), String> {
+    // cache_guard protects only removal of the one exact cache entry.
+    // cache_guard 仅保护单个精确缓存条目的移除。
+    let mut cache_guard = runtime_system_update_cache()
+        .lock()
+        .map_err(to_store_error)?;
+    cache_guard.remove(session_dir);
+    Ok(())
+}
+
+/// Publishes a complete system-update projection for one validated runtime snapshot.
+/// 为一个已验证运行时快照发布完整系统更新投影。
+///
+/// # Parameters
+/// 参数
+/// `session_dir` is the exact owner directory, `next_seq` is the represented durable frontier,
+/// and `lines` is the immutable runtime snapshot used to derive updates.
+/// `session_dir` 是精确所属目录，`next_seq` 是所表示的耐久前沿，`lines` 是用于推导更新的不可变运行时快照。
+fn publish_runtime_system_update_cache(
+    session_dir: &Path,
+    next_seq: u64,
+    lines: &[RuntimeLogEventLine],
+) -> Result<(), String> {
+    // updates retain only the small provider-visible audit projection required by later turns.
+    // updates 仅保留后续回合需要的小型 Provider 可见审计投影。
+    let updates = lines
+        .iter()
+        .filter_map(|line| match &line.event {
+            RuntimeLogEvent::SystemUpdate(event) => Some(event.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    // cache_guard serializes exact-key publication without touching any filesystem path.
+    // cache_guard 在不接触任何文件系统路径的情况下串行化精确键发布。
+    let mut cache_guard = runtime_system_update_cache()
+        .lock()
+        .map_err(to_store_error)?;
+    if cache_guard
+        .get(session_dir)
+        .is_some_and(|current| current.next_seq > next_seq)
+    {
+        return Ok(());
+    }
+    cache_guard.insert(
+        session_dir.to_path_buf(),
+        RuntimeSystemUpdateCacheEntry { next_seq, updates },
+    );
+    Ok(())
+}
+
+/// Returns the retained system-update projection without opening runtime storage.
+/// 在不打开运行时存储的情况下返回常驻系统更新投影。
+///
+/// # Parameters
+/// 参数
+/// `session_dir` is the exact deterministic session directory cache key.
+/// `session_dir` 是用作缓存键的精确定性会话目录。
+///
+/// # Returns
+/// 返回值
+/// A cloned chronological projection on a cache hit, or `None` before cold recovery.
+/// 缓存命中时返回克隆后的按时间顺序投影，冷恢复前返回 `None`。
+pub(in crate::workspace_store) fn cached_runtime_system_updates(
+    session_dir: &Path,
+) -> Result<Option<Vec<RuntimeSystemUpdateEvent>>, String> {
+    // cache_guard protects only one small in-memory lookup and clone.
+    // cache_guard 仅保护一次小型内存查询与克隆。
+    let cache_guard = runtime_system_update_cache()
+        .lock()
+        .map_err(to_store_error)?;
+    Ok(cache_guard
+        .get(session_dir)
+        .map(|entry| entry.updates.clone()))
+}
+
+/// Advances a resident system-update cache after one durable contiguous runtime append.
+/// 在一次耐久连续运行时追加后推进常驻系统更新缓存。
+///
+/// # Parameters
+/// 参数
+/// `session_dir` identifies the cache owner, `previous_next_seq` is the append precondition,
+/// `next_seq` is the durable result, and `tail` contains the newly committed rows.
+/// `session_dir` 标识缓存所属者，`previous_next_seq` 是追加前置条件，`next_seq` 是耐久结果，`tail` 包含新提交行。
+pub(in crate::workspace_store) fn advance_runtime_system_update_cache(
+    session_dir: &Path,
+    previous_next_seq: u64,
+    next_seq: u64,
+    tail: &[RuntimeLogEventLine],
+) -> Result<(), String> {
+    // cache_guard synchronizes the exact resident projection with its durable sequence frontier.
+    // cache_guard 将精确常驻投影与其耐久序号前沿同步。
+    let mut cache_guard = runtime_system_update_cache()
+        .lock()
+        .map_err(to_store_error)?;
+    let Some(entry) = cache_guard.get_mut(session_dir) else {
+        return Ok(());
+    };
+    if entry.next_seq != previous_next_seq {
+        cache_guard.remove(session_dir);
+        return Ok(());
+    }
+    for line in tail {
+        if let RuntimeLogEvent::SystemUpdate(event) = &line.event {
+            entry.updates.push(event.clone());
+        }
+    }
+    entry.next_seq = next_seq;
+    Ok(())
+}
+
 /// Reads provider-facing runtime log lines in metadata segment order.
 /// 按元数据分段顺序读取 Provider 可见运行时日志行。
 ///
@@ -942,20 +1067,138 @@ pub(in crate::workspace_store) fn ensure_runtime_metadata_absence_is_consistent(
 pub(in crate::workspace_store) fn read_runtime_log_lines(
     session_dir: &Path,
 ) -> Result<Option<Vec<RuntimeLogEventLine>>, String> {
-    // append_guard serializes validation, repair publication, metadata refresh, and appends.
-    // append_guard 将验证、修复发布、元数据刷新与追加串行化。
-    let append_guard = segmented_append_file_io_lock()
-        .lock()
-        .map_err(to_store_error)?;
-    // snapshot performs the intentional cold full-history validation required by runtime hydration.
-    // snapshot 执行运行时加载所需的有意冷路径全历史校验。
+    // read_started_at measures the complete strict cold-read path.
+    // read_started_at 测量完整的严格冷读路径。
+    let read_started_at = std::time::Instant::now();
+    // captured_snapshot owns immutable bytes copied while the exact session read lock is held.
+    // captured_snapshot 持有在精确会话读锁期间复制的不可变字节。
+    let captured_snapshot = {
+        // session_storage_lock coordinates only this root session during byte capture.
+        // session_storage_lock 仅在捕获字节期间协调当前根会话。
+        let session_storage_lock = segmented_append_file_io_lock(session_dir);
+        // lock_wait_started_at measures contention only for this exact session.
+        // lock_wait_started_at 仅测量当前精确会话的锁竞争。
+        let lock_wait_started_at = std::time::Instant::now();
+        // read_guard prevents a concurrent append from changing metadata or bytes mid-capture.
+        // read_guard 防止并发追加在捕获过程中改变元数据或字节。
+        let _read_guard = session_storage_lock.read().map_err(to_store_error)?;
+        // lock_wait_ms excludes all file metadata and byte reads.
+        // lock_wait_ms 不包含任何文件元数据或字节读取。
+        let lock_wait_ms = lock_wait_started_at.elapsed().as_millis();
+        // lock_hold_started_at measures only the immutable byte-capture transaction.
+        // lock_hold_started_at 仅测量不可变字节捕获事务。
+        let lock_hold_started_at = std::time::Instant::now();
+        // metadata is optional only when every runtime artifact is consistently absent.
+        // metadata 仅在所有运行时产物一致缺失时可选。
+        let Some(metadata) = read_optional_runtime_metadata(session_dir)? else {
+            ensure_runtime_metadata_absence_is_consistent(session_dir)?;
+            return Ok(None);
+        };
+        // segment is unique because runtime metadata validation enforces one fixed segment.
+        // segment 具有唯一性，因为运行时元数据校验强制使用一个固定分段。
+        let segment = &metadata.segments[0];
+        // segment_path is resolved directly from authoritative metadata without enumeration.
+        // segment_path 直接从权威元数据解析，不进行枚举。
+        let segment_path = session_dir.join(&segment.file);
+        // segment_file_metadata rejects links and validates the exact immutable byte boundary.
+        // segment_file_metadata 拒绝链接并验证精确不可变字节边界。
+        let segment_file_metadata = fs::symlink_metadata(&segment_path).map_err(|error| {
+            format!(
+                "Failed to inspect required runtime JSONL segment `{}`: {error}",
+                segment_path.display()
+            )
+        })?;
+        if segment_file_metadata.file_type().is_symlink() || !segment_file_metadata.is_file() {
+            return Err(format!(
+                "Required runtime JSONL segment is not a regular file: {}",
+                segment_path.display()
+            ));
+        }
+        if segment_file_metadata.len() != segment.byte_len {
+            return Err(format!(
+                "Runtime segment byte length mismatch: metadata {}, file {}.",
+                segment.byte_len,
+                segment_file_metadata.len()
+            ));
+        }
+        // bytes performs one whole-file read while the stable metadata boundary is protected.
+        // bytes 在稳定元数据边界受保护期间执行一次整文件读取。
+        let bytes = fs::read(&segment_path).map_err(|error| {
+            format!(
+                "Failed to read required runtime JSONL segment `{}`: {error}",
+                segment_path.display()
+            )
+        })?;
+        // lock_hold_ms ends before the read guard leaves this capture scope.
+        // lock_hold_ms 在读锁离开当前捕获作用域前结束。
+        let lock_hold_ms = lock_hold_started_at.elapsed().as_millis();
+        (metadata, segment_path, bytes, lock_wait_ms, lock_hold_ms)
+    };
+    // metadata, segment_path, and bytes are parsed only after the session lock is released.
+    // metadata、segment_path 与 bytes 仅在会话锁释放后解析。
+    let (metadata, segment_path, bytes, lock_wait_ms, lock_hold_ms) = captured_snapshot;
+    // parse_started_at isolates typed JSONL decoding and sequence validation.
+    // parse_started_at 单独测量强类型 JSONL 解码与序号校验。
+    let parse_started_at = std::time::Instant::now();
+    // lines directly decode the immutable bytes without tolerant repair or storage mutation.
+    // lines 直接解码不可变字节，不执行容错修复或存储修改。
+    let lines = decode_runtime_segment_lines_strict(&segment_path, &bytes)?;
+    // strict_read reuses the authoritative sequence validator with an explicitly clean suffix state.
+    // strict_read 使用显式无损坏后缀状态复用权威序号校验器。
+    let strict_read = RuntimeLogRepairRead {
+        lines,
+        corrupt_line_numbers: Vec::new(),
+    };
+    validate_runtime_segment_snapshot(
+        &metadata,
+        &strict_read,
+        u64::try_from(bytes.len())
+            .map_err(|_| String::from("Runtime JSONL byte length exceeds u64 capacity."))?,
+    )?;
+    // parse_ms excludes the session lock and physical file read.
+    // parse_ms 不包含会话锁与物理文件读取。
+    let parse_ms = parse_started_at.elapsed().as_millis();
+    // total_ms provides the exact end-to-end cold-read latency.
+    // total_ms 提供精确的冷读端到端延迟。
+    let total_ms = read_started_at.elapsed().as_millis();
+    if total_ms > 20 {
+        eprintln!(
+            "[workspace-store][runtime-system-updates] source=cold_disk bytes_read={} lines_parsed={} lock_wait_ms={lock_wait_ms} lock_hold_ms={lock_hold_ms} parse_ms={parse_ms} elapsed_ms={total_ms}",
+            bytes.len(),
+            strict_read.lines.len()
+        );
+    }
+    publish_runtime_system_update_cache(session_dir, metadata.next_seq, &strict_read.lines)?;
+    Ok(Some(strict_read.lines))
+}
+
+/// Explicitly repairs a corrupt runtime JSONL suffix and rebuilds its derived index.
+/// 显式修复损坏的运行时 JSONL 后缀并重建其派生索引。
+///
+/// # Parameters
+/// 参数
+/// `session_dir` is the exact session directory selected by an explicit maintenance action.
+/// `session_dir` 是由显式维护操作选择的精确会话目录。
+///
+/// # Returns
+/// 返回值
+/// Repaired validated lines, `None` for consistent absence, or a strict maintenance failure.
+/// 返回修复并验证后的日志行；一致缺失时返回 `None`，否则返回严格维护失败。
+pub(in crate::workspace_store) fn repair_runtime_log_lines(
+    session_dir: &Path,
+) -> Result<Option<Vec<RuntimeLogEventLine>>, String> {
+    // session_storage_lock grants exclusive ownership only for this explicit repair transaction.
+    // session_storage_lock 仅为当前显式修复事务授予独占所有权。
+    let session_storage_lock = segmented_append_file_io_lock(session_dir);
+    // append_guard covers validation, optional repair publication, and derived-index publication.
+    // append_guard 覆盖验证、可选修复发布与派生索引发布。
+    let append_guard = session_storage_lock.lock().map_err(to_store_error)?;
     let Some(snapshot) = read_runtime_log_snapshot_with_owned_lock(session_dir, &append_guard)?
     else {
         return Ok(None);
     };
-    // index is rebuilt only after an explicit cold runtime read; hot audit appends invalidate this cache.
-    // index 仅在显式冷路径运行时读取后重建；热路径审计追加会使该缓存失效。
     write_runtime_index(session_dir, &rebuild_runtime_log_index(&snapshot.lines))?;
+    publish_runtime_system_update_cache(session_dir, snapshot.metadata.next_seq, &snapshot.lines)?;
     Ok(Some(snapshot.lines))
 }
 
@@ -975,7 +1218,7 @@ pub(in crate::workspace_store) fn read_runtime_log_lines(
 /// 返回已验证的元数据与日志行快照；一致缺失时返回 `None`，否则返回严格错误。
 pub(in crate::workspace_store) fn read_runtime_log_snapshot_with_owned_lock<'guard>(
     session_dir: &Path,
-    append_guard: &'guard std::sync::MutexGuard<'_, ()>,
+    append_guard: &'guard std::sync::RwLockWriteGuard<'_, ()>,
 ) -> Result<Option<RuntimeLogSnapshot<'guard>>, String> {
     // metadata is optional, while parse and open failures remain observable.
     // metadata 是可选文档，而解析与打开失败保持可观察。
@@ -1047,6 +1290,7 @@ pub(in crate::workspace_store) fn read_runtime_log_snapshot_with_owned_lock<'gua
             }),
         );
         lines.push(repair_line);
+        invalidate_runtime_system_update_cache(session_dir)?;
         backup_corrupt_runtime_segment(&segment_path)?;
         // lines is encoded completely before one atomic replacement publishes prefix plus repair event.
         // lines 会在一次原子替换发布前缀与修复事件前完成完整编码。
@@ -1059,6 +1303,7 @@ pub(in crate::workspace_store) fn read_runtime_log_snapshot_with_owned_lock<'gua
         )?;
         write_runtime_index(session_dir, &rebuild_runtime_log_index(&lines))?;
     }
+    publish_runtime_system_update_cache(session_dir, snapshot_metadata.next_seq, &lines)?;
     Ok(Some(RuntimeLogSnapshot {
         metadata: snapshot_metadata,
         lines,
@@ -1237,9 +1482,8 @@ pub(in crate::workspace_store) fn append_runtime_log_event_if_present(
 ) -> Result<bool, String> {
     // _append_guard serializes the exact metadata check and append without hydrating runtime history.
     // _append_guard 在不加载运行时历史的情况下串行化精确元数据检查与追加。
-    let _append_guard = segmented_append_file_io_lock()
-        .lock()
-        .map_err(to_store_error)?;
+    let session_storage_lock = segmented_append_file_io_lock(session_dir);
+    let _append_guard = session_storage_lock.lock().map_err(to_store_error)?;
     // metadata is the constant-size authoritative append checkpoint for the fixed runtime segment.
     // metadata 是固定运行时分段使用的常量大小权威追加检查点。
     let Some(metadata) = read_optional_runtime_metadata(session_dir)? else {
@@ -1286,7 +1530,7 @@ pub(in crate::workspace_store) fn append_runtime_log_event_to_snapshot_with_owne
     snapshot: RuntimeLogSnapshot<'guard>,
     timestamp: &str,
     event: RuntimeLogEvent,
-    append_guard: &'guard std::sync::MutexGuard<'_, ()>,
+    append_guard: &'guard std::sync::RwLockWriteGuard<'_, ()>,
 ) -> Result<bool, String> {
     if snapshot.lines.is_empty() {
         return Ok(false);

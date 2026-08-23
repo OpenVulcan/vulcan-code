@@ -76,7 +76,7 @@ export function toolExecutionSummary(blocks: ToolExecutionConversationBlock[], s
   const statusLabel = toolDisplayStateLabel(displayState, t);
   const identifier = toolExecutionIdentifier(blocks);
   const errorPreview = displayState === "failed" ? toolExecutionErrorPreview(blocks) : null;
-  const requestProgress = toolRequestProgress(blocks);
+  const requestProgress = toolRequestProgressForDisplay(toolRequestProgress(blocks), displayState);
   if (commandBlock && !toolName) {
     return commandBlock.summary.toLowerCase().includes("command")
       ? commandBlock.summary
@@ -128,6 +128,18 @@ export function toolRequestProgress(blocks: ToolExecutionConversationBlock[]): T
     }
   }
   return latest;
+}
+
+// toolRequestProgressForDisplay keeps request formation visible only while it owns the tool card status.
+// toolRequestProgressForDisplay 仅在请求构造仍拥有工具卡状态时显示请求进度。
+export function toolRequestProgressForDisplay(
+  progress: ToolRequestProgress | null,
+  displayState: "failed" | "completed" | "running" | "stopped",
+): ToolRequestProgress | null {
+  if (displayState !== "running" || progress?.state === "ready") {
+    return null;
+  }
+  return progress;
 }
 
 // liveToolRequestProgress projects one external Store snapshot into the existing card model.

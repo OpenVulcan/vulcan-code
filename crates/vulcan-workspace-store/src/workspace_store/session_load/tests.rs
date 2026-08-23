@@ -144,6 +144,23 @@ fn boundary_window_keeps_raw_timeline_process_rows() {
         "tool_call_id": "call-1",
         "tool_name": "shell_command",
     }));
+    // raw_thinking models visible reasoning that Boundary does not project as a turn anchor.
+    // raw_thinking 模拟 Boundary 不会投影为轮次锚点的可见思考记录。
+    let raw_thinking = test_message(
+        "raw-thinking",
+        SessionMessageKind::Assistant,
+        SessionMessageRecordKind::ThinkingOutput,
+        "checking files",
+    );
+    // raw_tool_detail models a hidden expansion payload that must not participate in window identity.
+    // raw_tool_detail 模拟不得参与窗口身份判断的隐藏展开载荷。
+    let mut raw_tool_detail = test_message(
+        "raw-tool-detail",
+        SessionMessageKind::Assistant,
+        SessionMessageRecordKind::ToolDetailOutput,
+        "full tool payload",
+    );
+    raw_tool_detail.visible = false;
     let raw_messages = vec![
         test_message(
             "raw-user",
@@ -151,7 +168,9 @@ fn boundary_window_keeps_raw_timeline_process_rows() {
             SessionMessageRecordKind::Transcript,
             "run command",
         ),
+        raw_thinking,
         raw_tool_call.clone(),
+        raw_tool_detail.clone(),
         test_message(
             "raw-assistant",
             SessionMessageKind::Assistant,
@@ -160,33 +179,41 @@ fn boundary_window_keeps_raw_timeline_process_rows() {
         ),
     ];
     let raw_window = SegmentedWindowMessages {
-        messages: raw_messages.clone(),
-        tool_detail_messages: vec![raw_tool_call],
+        messages: raw_messages,
+        tool_detail_messages: vec![raw_tool_detail],
         message_start_index: Some(0),
         earliest_ordinal: Some(10),
         has_more_history: true,
-        full_messages: raw_messages,
         boundary_conversation_state: None,
     };
 
     merge_raw_timeline_window_into_boundary_window(&mut boundary_window, raw_window);
 
-    assert_eq!(boundary_window.messages.len(), 3);
+    assert_eq!(boundary_window.messages.len(), 5);
     assert!(matches!(
         boundary_window.messages[0].record_kind,
         SessionMessageRecordKind::Transcript
     ));
     assert!(matches!(
         boundary_window.messages[1].record_kind,
-        SessionMessageRecordKind::ToolCallOutput
+        SessionMessageRecordKind::ThinkingOutput
     ));
     assert!(matches!(
         boundary_window.messages[2].record_kind,
+        SessionMessageRecordKind::ToolCallOutput
+    ));
+    assert!(matches!(
+        boundary_window.messages[3].record_kind,
+        SessionMessageRecordKind::ToolDetailOutput
+    ));
+    assert!(!boundary_window.messages[3].visible);
+    assert!(matches!(
+        boundary_window.messages[4].record_kind,
         SessionMessageRecordKind::AssistantOutput
     ));
     assert_eq!(boundary_window.tool_detail_messages.len(), 1);
-    assert_eq!(boundary_window.earliest_ordinal, Some(10));
-    assert!(boundary_window.has_more_history);
+    assert_eq!(boundary_window.earliest_ordinal, Some(1));
+    assert!(!boundary_window.has_more_history);
     assert!(boundary_window.boundary_conversation_state.is_some());
 }
 
@@ -254,12 +281,11 @@ fn boundary_process_order_wins_over_stale_raw_window() {
         stale_raw_tool.clone(),
     ];
     let stale_raw_window = SegmentedWindowMessages {
-        messages: stale_raw_messages.clone(),
+        messages: stale_raw_messages,
         tool_detail_messages: vec![stale_raw_tool],
         message_start_index: Some(40),
         earliest_ordinal: Some(100),
         has_more_history: true,
-        full_messages: stale_raw_messages,
         boundary_conversation_state: None,
     };
 
@@ -279,7 +305,7 @@ fn boundary_process_order_wins_over_stale_raw_window() {
     ));
     assert_eq!(boundary_window.message_start_index, Some(40));
     assert_eq!(boundary_window.earliest_ordinal, Some(1));
-    assert!(boundary_window.has_more_history);
+    assert!(!boundary_window.has_more_history);
 }
 
 /// Verifies a simple canonical window inherits only the matching raw absolute coordinate.
@@ -323,12 +349,11 @@ fn simple_boundary_window_inherits_matching_raw_message_coordinate() {
         ),
     ];
     let raw_window = SegmentedWindowMessages {
-        messages: raw_messages.clone(),
+        messages: raw_messages,
         tool_detail_messages: Vec::new(),
         message_start_index: Some(20),
         earliest_ordinal: Some(100),
         has_more_history: true,
-        full_messages: raw_messages,
         boundary_conversation_state: None,
     };
 
@@ -338,6 +363,117 @@ fn simple_boundary_window_inherits_matching_raw_message_coordinate() {
     assert_eq!(boundary_window.messages[1].body, "answer");
     assert_eq!(boundary_window.message_start_index, Some(20));
     assert_eq!(boundary_window.earliest_ordinal, Some(1));
+}
+
+/// Verifies a compacted Raw active tail cannot replace or repaginate a larger Boundary history window.
+/// 验证压缩后的 Raw 活动尾部不能替换更大的 Boundary 历史窗口，也不能改写其分页坐标。
+#[test]
+fn compacted_raw_tail_cannot_replace_boundary_history_window() {
+    // thread_id owns both canonical turns in the synthetic Boundary history window.
+    // thread_id 持有合成 Boundary 历史窗口中的两个规范轮次。
+    let thread_id = SessionNodeId::new_v4();
+    // boundary_window models the canonical multi-turn history that must remain visible after compaction.
+    // boundary_window 模拟上下文压缩后仍必须可见的规范多轮历史。
+    let mut boundary_window = session_boundary_lines_to_window_messages(
+        &[
+            session_boundary_line(
+                100,
+                thread_id,
+                SessionBoundaryEventKind::UserInput,
+                SessionEventVisibility::Visible,
+                "older question",
+            ),
+            session_boundary_line(
+                101,
+                thread_id,
+                SessionBoundaryEventKind::AgentMessage,
+                SessionEventVisibility::Visible,
+                "older answer",
+            ),
+            session_boundary_line(
+                102,
+                thread_id,
+                SessionBoundaryEventKind::UserInput,
+                SessionEventVisibility::Visible,
+                "current question",
+            ),
+            session_boundary_line(
+                103,
+                thread_id,
+                SessionBoundaryEventKind::AgentMessage,
+                SessionEventVisibility::Visible,
+                "current answer",
+            ),
+        ],
+        true,
+    )
+    .expect("project canonical compacted history")
+    .expect("visible canonical compacted history");
+    // raw_tool_call is process-only data retained beside the compacted current transcript tail.
+    // raw_tool_call 是保留在压缩后当前转录尾部旁的仅过程数据。
+    let mut raw_tool_call = test_message(
+        "raw-current-tool",
+        SessionMessageKind::Assistant,
+        SessionMessageRecordKind::ToolCallOutput,
+        "",
+    );
+    raw_tool_call.metadata = Some(json!({
+        "tool_call_id": "call-current",
+        "tool_name": "shell_command",
+    }));
+    raw_tool_call.created_at = String::from("1102");
+    // raw_compaction_status models the visible compression marker retained only by Raw display rows.
+    // raw_compaction_status 模拟仅由 Raw 展示记录保留的可见压缩标记。
+    let mut raw_compaction_status = test_message(
+        "raw-compaction-status",
+        SessionMessageKind::Assistant,
+        SessionMessageRecordKind::CompactionStatus,
+        "上下文已压缩",
+    );
+    raw_compaction_status.created_at = String::from("1101");
+    // raw_window deliberately starts at ordinal one and contains only the current compacted tail.
+    // raw_window 故意从序号一开始，且只包含当前压缩尾部。
+    let raw_window = SegmentedWindowMessages {
+        messages: vec![
+            test_message(
+                "raw-current-user",
+                SessionMessageKind::User,
+                SessionMessageRecordKind::Transcript,
+                "current question",
+            ),
+            raw_compaction_status,
+            raw_tool_call.clone(),
+            test_message(
+                "raw-current-assistant",
+                SessionMessageKind::Assistant,
+                SessionMessageRecordKind::AssistantOutput,
+                "current answer",
+            ),
+        ],
+        tool_detail_messages: vec![raw_tool_call],
+        message_start_index: Some(0),
+        earliest_ordinal: Some(1),
+        has_more_history: false,
+        boundary_conversation_state: None,
+    };
+
+    merge_raw_timeline_window_into_boundary_window(&mut boundary_window, raw_window);
+
+    assert_eq!(boundary_window.messages.len(), 6);
+    assert_eq!(boundary_window.messages[0].body, "older question");
+    assert_eq!(
+        boundary_window.messages[2].record_kind,
+        SessionMessageRecordKind::CompactionStatus
+    );
+    assert_eq!(
+        boundary_window.messages[4].record_kind,
+        SessionMessageRecordKind::ToolCallOutput
+    );
+    assert_eq!(boundary_window.messages[5].body, "current answer");
+    assert_eq!(boundary_window.tool_detail_messages.len(), 1);
+    assert_eq!(boundary_window.message_start_index, None);
+    assert_eq!(boundary_window.earliest_ordinal, Some(100));
+    assert!(boundary_window.has_more_history);
 }
 
 /// Verifies boundary-turn reads skip over large non-boundary tails without losing the latest turn.
@@ -551,48 +687,6 @@ fn session_boundary_archive_restore_keeps_display_projection() {
     assert_eq!(restored_window.messages[1].body, "助手归档后输出");
 
     let _ = std::fs::remove_dir_all(root);
-}
-
-/// Verifies hydration leaves runtime state absent when only display transcript rows exist.
-/// 验证只有展示转录行时，水合会保持运行态为空。
-#[test]
-fn hydrate_session_runtime_state_does_not_rebuild_from_segmented_window() {
-    let session_id = SessionId::from_u128(99);
-    let transcript_messages = vec![test_message(
-        "user-1",
-        SessionMessageKind::User,
-        SessionMessageRecordKind::Transcript,
-        "仅转录消息",
-    )];
-
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("build current-thread tokio runtime");
-    let hydrated = runtime
-        .block_on(hydrate_session_runtime_state(
-            session_id,
-            &transcript_messages,
-        ))
-        .expect("hydrate runtime state");
-
-    assert!(hydrated.is_none());
-}
-
-/// Verifies hydration no longer falls back to legacy context snapshots when segmented state is absent.
-/// 验证分段状态缺失时水合不再回退旧上下文快照。
-#[test]
-fn hydrate_session_runtime_state_without_segmented_inputs_returns_empty() {
-    let session_id = SessionId::from_u128(119);
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("build current-thread tokio runtime");
-    let hydrated = runtime
-        .block_on(hydrate_session_runtime_state(session_id, &[]))
-        .expect("hydrate empty runtime state");
-
-    assert!(hydrated.is_none());
 }
 
 /// Verifies startup hydration rebuilds the visible transcript from runtime context when turn-window rows are temporarily absent.

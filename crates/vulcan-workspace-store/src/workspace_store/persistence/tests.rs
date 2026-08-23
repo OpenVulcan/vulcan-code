@@ -129,3 +129,44 @@ fn effective_session_messages_for_persistence_preserves_display_history() {
             .any(|message| message.body.contains("已总结旧过程"))
     );
 }
+
+/// Verifies legacy first-semantic telemetry cannot change a durable user-row fingerprint.
+/// 验证旧版首语义遥测不能改变已落盘用户记录的指纹。
+#[test]
+fn effective_session_messages_ignore_legacy_first_semantic_marker() {
+    // durable_user is the immutable row already acknowledged by segmented transcript metadata.
+    // durable_user 是已经由分段转录元数据确认的不可变记录。
+    let mut durable_user = SessionMessageEntry::new(SessionMessageKind::User, "用户指令", "继续");
+    durable_user.id = String::from("user-with-submission-diagnostic");
+    durable_user.created_at = String::from("1000");
+    durable_user.metadata = Some(serde_json::json!({
+        "client_submission_id": "submission-1",
+        "client_submission_target": "existing",
+        "client_submission_accepted_at_ms": "1001",
+    }));
+    // runtime_state simulates the legacy mutation that used to occur after the first semantic delta.
+    // runtime_state 模拟旧版在首个语义增量后发生的变更。
+    let mut runtime_state = SessionRuntimeStateEntry {
+        conversation_state: conversation_state_from_session_messages(std::slice::from_ref(
+            &durable_user,
+        ))
+        .expect("durable user fixture should replay"),
+        ..Default::default()
+    };
+    runtime_state.conversation_state.records[0]
+        .metadata
+        .as_mut()
+        .and_then(serde_json::Value::as_object_mut)
+        .expect("runtime user metadata should be an object")
+        .insert(
+            String::from("client_submission_first_semantic_observed"),
+            serde_json::Value::Bool(true),
+        );
+
+    let messages = effective_session_messages_for_persistence(
+        std::slice::from_ref(&durable_user),
+        &runtime_state,
+    );
+
+    assert_eq!(messages, vec![durable_user]);
+}

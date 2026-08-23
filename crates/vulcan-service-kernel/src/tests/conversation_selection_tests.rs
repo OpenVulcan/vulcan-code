@@ -582,6 +582,15 @@ async fn retained_conversation_messages_response_is_focused_on_requested_session
             .as_ref()
             .expect("workspace snapshot"),
     );
+    // The requested fixture owns a complete loaded transcript, not only a hydration summary marker.
+    // 被请求的测试夹具持有完整已加载转录，而不只是水合摘要标记。
+    crate::conversation_history::remember_hydrated_conversation_window(
+        &mut service_state.hydrated_conversation_windows,
+        first_session_id,
+        Some(0),
+        None,
+        false,
+    );
     service_state
         .webui_preloaded_unclosed_subagent_roots
         .insert(first_session_id);

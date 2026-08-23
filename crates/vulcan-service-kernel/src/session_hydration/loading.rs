@@ -34,25 +34,19 @@ pub(crate) async fn load_workspace_for_submission(
         let hydration = if let Some((project_id, created_at)) =
             session_project_created_at_for_hydration(&workspace_snapshot, session_id)
         {
-            vulcan_workspace_store::workspace_store::load_session_hydration_snapshot_for_project_created_at(
+            vulcan_workspace_store::workspace_store::load_session_execution_hydration_snapshot_for_project_created_at(
                     controller_runtime.clone(),
                     &project_id,
                     &created_at,
                     session_id,
-                    SELECTED_SESSION_TURN_LOAD_LIMIT,
                 )
                 .await
         } else {
-            Ok(empty_session_hydration_snapshot(session_id))
+            Ok(empty_session_execution_hydration_snapshot(session_id))
         };
         match hydration {
             Ok(hydration) => {
-                apply_submission_session_hydration(
-                    &controller_runtime,
-                    &mut workspace_snapshot,
-                    session_id,
-                    hydration,
-                )?;
+                apply_session_execution_hydration(&mut workspace_snapshot, session_id, hydration)?;
             }
             Err(error) if is_missing_segmented_session_file_error(&error) => {}
             Err(error) => return Err(error),
@@ -229,6 +223,27 @@ pub(crate) fn empty_session_hydration_snapshot(session_id: SessionId) -> Session
     }
 }
 
+/// Builds an empty execution hydration payload for a missing segmented session file.
+/// 为缺失的分段会话文件构建空执行水合载荷。
+///
+/// # Parameters
+/// 参数
+/// `session_id` identifies the exact missing session.
+/// `session_id` 标识精确的缺失会话。
+///
+/// # Returns
+/// 返回值
+/// An execution snapshot with no runtime state.
+/// 返回不含运行态的执行快照。
+pub(crate) fn empty_session_execution_hydration_snapshot(
+    session_id: SessionId,
+) -> SessionExecutionHydrationSnapshot {
+    SessionExecutionHydrationSnapshot {
+        session_id,
+        runtime_state: None,
+    }
+}
+
 /// Hydrates the submitted retained session only when the retained snapshot lacks concrete context.
 /// 仅在保留快照缺少具体上下文时水合本次提交的目标会话。
 ///
@@ -259,25 +274,19 @@ pub(crate) async fn hydrate_retained_submission_session_if_needed(
     let hydration_result = if let Some((project_id, created_at)) =
         session_project_created_at_for_hydration(workspace_snapshot, session_id)
     {
-        vulcan_workspace_store::workspace_store::load_session_hydration_snapshot_for_project_created_at(
+        vulcan_workspace_store::workspace_store::load_session_execution_hydration_snapshot_for_project_created_at(
                 controller_runtime.clone(),
                 &project_id,
                 &created_at,
                 session_id,
-                SELECTED_SESSION_TURN_LOAD_LIMIT,
             )
             .await
     } else {
-        Ok(empty_session_hydration_snapshot(session_id))
+        Ok(empty_session_execution_hydration_snapshot(session_id))
     };
     match hydration_result {
         Ok(hydration) => {
-            apply_submission_session_hydration(
-                &controller_runtime,
-                workspace_snapshot,
-                session_id,
-                hydration,
-            )?;
+            apply_session_execution_hydration(workspace_snapshot, session_id, hydration)?;
         }
         Err(error) if is_missing_segmented_session_file_error(&error) => {}
         Err(error) => return Err(error),
@@ -325,20 +334,19 @@ pub(crate) async fn hydrate_selected_session_runtime_if_needed(
     let hydration_result = if let Some((project_id, created_at)) =
         session_project_created_at_for_hydration(workspace_snapshot, session_id)
     {
-        vulcan_workspace_store::workspace_store::load_session_hydration_snapshot_for_project_created_at(
+        vulcan_workspace_store::workspace_store::load_session_execution_hydration_snapshot_for_project_created_at(
                 controller_runtime.clone(),
                 &project_id,
                 &created_at,
                 session_id,
-                SELECTED_SESSION_TURN_LOAD_LIMIT,
             )
             .await
     } else {
-        Ok(empty_session_hydration_snapshot(session_id))
+        Ok(empty_session_execution_hydration_snapshot(session_id))
     };
     match hydration_result {
         Ok(hydration) => {
-            apply_selected_session_runtime_hydration(workspace_snapshot, session_id, hydration)?;
+            apply_session_execution_hydration(workspace_snapshot, session_id, hydration)?;
         }
         Err(error) if is_missing_segmented_session_file_error(&error) => {}
         Err(error) => return Err(error),
@@ -906,6 +914,10 @@ fn should_replace_restart_interruption_error(
 }
 
 #[cfg(test)]
+// Retry recovery tests remain adjacent to the private safety predicates they exercise; later
+// production helpers belong to the independent execution/display hydration projection section.
+// 重试恢复测试保留在其验证的私有安全谓词旁；后续生产辅助函数属于独立的执行/显示水合投影章节。
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::{
         execution_retry_has_live_process_owner, hydrated_retry_continuation_is_eligible,
@@ -1251,8 +1263,8 @@ mod tests {
     }
 }
 
-/// Applies a selected-session hydration snapshot without replacing an existing display window.
-/// 应用选中会话水合快照，同时不替换已有显示窗口。
+/// Applies execution hydration without replacing an existing presentation window.
+/// 应用执行态水合，同时不替换已有展示窗口。
 ///
 /// # Parameters
 /// 参数
@@ -1260,23 +1272,22 @@ mod tests {
 /// `workspace_snapshot` 接收水合后的运行态上下文。
 /// `session_id` selects the hydrated session.
 /// `session_id` 选择被水合的会话。
-/// `hydration` contains runtime JSONL and optional display-window data.
-/// `hydration` 包含运行时 JSONL 与可选显示窗口数据。
+/// `hydration` contains only runtime JSONL and execution metadata.
+/// `hydration` 仅包含运行时 JSONL 与执行元数据。
 ///
 /// # Returns
 /// 返回值
 /// Applies the validated runtime context and hydration marker, or returns the exact replay identity failure.
 /// 应用经过校验的运行态上下文与水合标记，或返回准确的重放身份失败。
-pub(crate) fn apply_selected_session_runtime_hydration(
+pub(crate) fn apply_session_execution_hydration(
     workspace_snapshot: &mut WorkspaceSnapshot,
     session_id: SessionId,
-    hydration: SessionHydrationSnapshot,
+    hydration: SessionExecutionHydrationSnapshot,
 ) -> Result<(), String> {
-    let SessionHydrationSnapshot {
-        mut messages,
-        mut tool_detail_messages,
-        mut runtime_state,
-        ..
+    // runtime_state is the only payload required to construct the next Provider request.
+    // runtime_state 是构造下一次 Provider 请求唯一需要的水合载荷。
+    let SessionExecutionHydrationSnapshot {
+        mut runtime_state, ..
     } = hydration;
     if let Some(runtime_state) = runtime_state.as_mut() {
         // Runtime-only hydration is performed before a new live owner is installed for this session.
@@ -1284,17 +1295,8 @@ pub(crate) fn apply_selected_session_runtime_hydration(
         let now = current_unix_millis_value().to_string();
         normalize_orphaned_tool_request_records(runtime_state, &now);
     }
-    normalize_orphaned_tool_request_messages(&mut messages);
-    normalize_orphaned_tool_request_messages(&mut tool_detail_messages);
-    match workspace_snapshot.session_messages.entry(session_id) {
-        std::collections::btree_map::Entry::Vacant(entry) => {
-            let messages = hydration_messages_with_tool_details(messages, tool_detail_messages);
-            entry.insert(filter_legacy_goal_internal_user_messages(messages));
-        }
-        std::collections::btree_map::Entry::Occupied(mut entry) => {
-            normalize_orphaned_tool_request_messages(entry.get_mut());
-            append_unique_session_messages(entry.get_mut(), tool_detail_messages);
-        }
+    if let Some(messages) = workspace_snapshot.session_messages.get_mut(&session_id) {
+        normalize_orphaned_tool_request_messages(messages);
     }
     if let Some(runtime_state) = runtime_state {
         workspace_snapshot
@@ -1303,61 +1305,6 @@ pub(crate) fn apply_selected_session_runtime_hydration(
     }
     sync_hydrated_session_dialogue_ready_marker(workspace_snapshot, session_id);
     Ok(())
-}
-
-/// Applies one session hydration snapshot to the submit workspace snapshot.
-/// 将单个会话水合快照应用到提交工作区快照。
-///
-/// # Parameters
-/// 参数
-/// `controller_runtime` owns the workspace-store runtime bridge.
-/// `controller_runtime` 持有工作区存储运行时桥。
-/// `workspace_snapshot` receives the hydrated messages and runtime state.
-/// `workspace_snapshot` 接收已水合的消息与运行态。
-/// `session_id` selects the hydrated session.
-/// `session_id` 选择被水合的会话。
-/// `hydration` contains the lazy-loaded session data.
-/// `hydration` 包含懒加载出的会话数据。
-///
-/// # Returns
-/// 返回值
-/// `Ok(())` after hydration data and task mirror statuses have been applied.
-/// 应用水合数据与任务镜像状态后返回 `Ok(())`。
-pub(crate) fn apply_submission_session_hydration(
-    controller_runtime: &ControllerRuntimeHandle,
-    workspace_snapshot: &mut WorkspaceSnapshot,
-    session_id: SessionId,
-    hydration: SessionHydrationSnapshot,
-) -> Result<(), String> {
-    let SessionHydrationSnapshot {
-        messages,
-        tool_detail_messages,
-        runtime_state,
-        ..
-    } = hydration;
-    let messages = hydration_messages_with_tool_details(messages, tool_detail_messages);
-    let mut messages = filter_legacy_goal_internal_user_messages(messages);
-    normalize_orphaned_tool_request_messages(&mut messages);
-    workspace_snapshot
-        .session_messages
-        .insert(session_id, messages);
-    if let Some(mut runtime_state) = runtime_state {
-        // Disk hydration is reached only when no retained live dialogue context owns this session.
-        // 仅当没有保留的实时对话上下文拥有该会话时才会进入磁盘水合。
-        let now = current_unix_millis_value().to_string();
-        normalize_orphaned_tool_request_records(&mut runtime_state, &now);
-        workspace_snapshot
-            .session_runtime_state
-            .insert(session_id, runtime_state);
-    }
-    ensure_hydrated_session_dialogue_context(workspace_snapshot, session_id)?;
-    sync_hydrated_session_dialogue_ready_marker(workspace_snapshot, session_id);
-    apply_persisted_task_mirror_statuses_to_workspace(
-        controller_runtime,
-        workspace_snapshot,
-        session_id,
-        |_| false,
-    )
 }
 
 /// Combines a loaded display window with hidden tool-detail rows from the same load.

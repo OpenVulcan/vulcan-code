@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ToolExecutionConversationBlock } from "@/components/conversation/conversation-tool-execution-types";
-import { resolveFileChangePresentation } from "./file-change-presentation";
+import { hydrateFileAccessPresentation, resolveFileChangePresentation } from "./file-change-presentation";
 
 /// Builds one compact tool block fixture with the exact public tool identity and metadata bridge.
 /// 构建带有精确公开工具标识与 metadata 桥接数据的紧凑工具块 fixture。
@@ -22,6 +22,104 @@ function toolBlock(
 }
 
 describe("native file presentation mapping", () => {
+  it("labels an implicit bounded read from the first line", () => {
+    const presentation = resolveFileChangePresentation(
+      toolBlock("file", "", {
+        arguments: {
+          action: "read",
+          targets: [{ path: "src/a.ts" }],
+        },
+      }),
+      "completed",
+      {},
+      { sessionId: "session-1", recordId: "detail-implicit" },
+    );
+
+    expect(presentation?.files[0]?.readRange).toBe("L1-…");
+  });
+
+  it("shows requested ranges and hydrates multi-file read results on expansion", () => {
+    const presentation = resolveFileChangePresentation(
+      toolBlock("file", "", {
+        arguments: {
+          action: "read",
+          targets: [{
+            path: "src/a.ts",
+            segments: [
+              { start_line: 10, line_count: 3 },
+              { start_line: 30, line_count: 1 },
+            ],
+          }, {
+            path: "src/b.ts",
+            segments: [{ start_line: 40, line_count: 2 }],
+          }],
+        },
+      }),
+      "completed",
+      { workspacePath: "D:/repo" },
+      { sessionId: "session-1", recordId: "detail-1" },
+    );
+
+    expect(presentation).toMatchObject({
+      detailRef: { sessionId: "session-1", recordId: "detail-1" },
+      interactive: true,
+      files: [
+        { path: "src/a.ts", readRange: "L10-L12, L30", rows: [] },
+        { path: "src/b.ts", readRange: "L40-L41", rows: [] },
+      ],
+    });
+
+    const hydrated = hydrateFileAccessPresentation(presentation!, {
+      body: JSON.stringify({
+        action: "read",
+        results: [{
+          ok: true,
+          lines: [
+            { line: 10, content: "alpha" },
+            { line: 11, content: "beta" },
+            { line: 30, content: "omega" },
+          ],
+        }, {
+          ok: true,
+          lines: [
+            { line: 40, content: "delta" },
+            { line: 41, content: "epsilon" },
+          ],
+        }],
+      }),
+    });
+
+    expect(hydrated).toMatchObject({
+      interactive: true,
+      files: [
+        {
+          diffFile: {
+            hunks: [{
+              lines: [
+                { content: "alpha", kind: "context", oldLine: 10, newLine: 10 },
+                { content: "beta", kind: "context", oldLine: 11, newLine: 11 },
+                { content: "omega", kind: "context", oldLine: 30, newLine: 30 },
+              ],
+            }],
+          },
+          expandable: true,
+          rows: [
+            { lineNumber: 10, content: "alpha" },
+            { lineNumber: 11, content: "beta" },
+            { lineNumber: 30, content: "omega" },
+          ],
+        },
+        {
+          expandable: true,
+          rows: [
+            { lineNumber: 40, content: "delta" },
+            { lineNumber: 41, content: "epsilon" },
+          ],
+        },
+      ],
+    });
+  });
+
   it("maps read results to the shared multi-file card shell", () => {
     const presentation = resolveFileChangePresentation(
       toolBlock(
@@ -53,6 +151,10 @@ describe("native file presentation mapping", () => {
         { path: "src/b.ts", readOnly: true, rows: [{ lineNumber: 9, content: "beta" }] },
       ],
     });
+    expect(presentation?.files.map((file) => file.diffFile?.hunks[0]?.lines)).toEqual([
+      [{ content: "alpha", kind: "context", oldLine: 4, newLine: 4 }],
+      [{ content: "beta", kind: "context", oldLine: 9, newLine: 9 }],
+    ]);
   });
 
   it("preserves duplicate read targets so result indexes stay aligned", () => {

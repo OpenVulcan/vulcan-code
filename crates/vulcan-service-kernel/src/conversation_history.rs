@@ -1,7 +1,10 @@
 //! Conversation history loading and lazy hydration routes.
 //! 会话历史加载与懒水合路由。
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet, HashSet},
+    sync::{Arc, Mutex, OnceLock, Weak},
+};
 
 use super::session_hydration::{
     PreservedWorkspaceRunState, capture_preserved_workspace_run_state_for_session_hydration,
@@ -39,6 +42,97 @@ use super::{
 mod tool_detail;
 
 pub(super) use tool_detail::*;
+
+/// Process-local exact-key registry for in-progress display hydration locks.
+/// 用于显示态水合在途锁的进程内精确键注册表。
+static CONVERSATION_HYDRATION_SINGLEFLIGHT_LOCKS: OnceLock<
+    Mutex<BTreeMap<SessionId, Weak<tokio::sync::Mutex<()>>>>,
+> = OnceLock::new();
+
+/// Owns one acquired display-hydration singleflight lock and performs exact-key cleanup on drop.
+/// 持有一个已经取得的显示态水合 singleflight 锁，并在释放时执行精确键清理。
+struct ConversationHydrationSingleflightGuard {
+    /// Exact session identity owning this singleflight lock.
+    /// 持有当前 singleflight 锁的精确会话身份。
+    session_id: SessionId,
+    /// Shared lock identity retained for pointer-safe registry cleanup.
+    /// 为指针安全的注册表清理保留的共享锁身份。
+    lock: Arc<tokio::sync::Mutex<()>>,
+    /// Owned asynchronous guard released before the exact registry entry is inspected.
+    /// 在检查精确注册表项之前释放的异步自有守卫。
+    guard: Option<tokio::sync::OwnedMutexGuard<()>>,
+}
+
+impl ConversationHydrationSingleflightGuard {
+    /// Acquires the exact per-session hydration lock without enumerating other sessions.
+    /// 在不枚举其他会话的前提下取得精确的会话水合锁。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `session_id` identifies the one display hydration request group to serialize.
+    /// `session_id` 标识需要串行化的唯一显示态水合请求组。
+    ///
+    /// # Returns
+    /// 返回值
+    /// An owned guard shared by all concurrent requests for the same session.
+    /// 返回由同一会话全部并发请求共享的自有守卫。
+    async fn acquire(session_id: SessionId) -> Result<Self, String> {
+        // registry is queried by the exact session key; no cleanup scan is permitted here.
+        // registry 仅按精确会话键查询；此处不允许清理扫描。
+        let registry =
+            CONVERSATION_HYDRATION_SINGLEFLIGHT_LOCKS.get_or_init(|| Mutex::new(BTreeMap::new()));
+        // lock is reused when the exact entry still has an active owner or waiter.
+        // lock 在精确表项仍有活动所有者或等待者时复用。
+        let lock = {
+            let mut entries = registry
+                .lock()
+                .map_err(|error| format!("conversation hydration lock registry failed: {error}"))?;
+            match entries.get(&session_id).and_then(Weak::upgrade) {
+                Some(lock) => lock,
+                None => {
+                    // new_lock replaces only the requested stale or missing entry.
+                    // new_lock 仅替换当前请求对应的过期或缺失表项。
+                    let new_lock = Arc::new(tokio::sync::Mutex::new(()));
+                    entries.insert(session_id, Arc::downgrade(&new_lock));
+                    new_lock
+                }
+            }
+        };
+        // guard serializes the actual cold display load for this exact session.
+        // guard 串行化当前精确会话的真实冷显示加载。
+        let guard = lock.clone().lock_owned().await;
+        Ok(Self {
+            session_id,
+            lock,
+            guard: Some(guard),
+        })
+    }
+}
+
+impl Drop for ConversationHydrationSingleflightGuard {
+    /// Releases the owned lock and removes only an unused matching weak entry.
+    /// 释放自有锁，并且只移除未被使用且身份匹配的弱引用表项。
+    fn drop(&mut self) {
+        // guard must be released before strong-count inspection so queued owners remain visible.
+        // 必须先释放 guard 再检查强引用计数，使排队所有者保持可见。
+        self.guard.take();
+        let Some(registry) = CONVERSATION_HYDRATION_SINGLEFLIGHT_LOCKS.get() else {
+            return;
+        };
+        let Ok(mut entries) = registry.lock() else {
+            return;
+        };
+        // removable requires this wrapper to be the sole remaining strong owner of the exact lock.
+        // removable 要求当前包装器是该精确锁唯一剩余的强所有者。
+        let removable = Arc::strong_count(&self.lock) == 1
+            && entries
+                .get(&self.session_id)
+                .is_some_and(|entry| Weak::ptr_eq(entry, &Arc::downgrade(&self.lock)));
+        if removable {
+            entries.remove(&self.session_id);
+        }
+    }
+}
 
 /// Lightweight storage context captured before one display hydration pass.
 /// 单次显示水合前捕获的轻量存储上下文。
@@ -95,6 +189,9 @@ pub(super) struct HydratedSessionWorkbench {
 /// 单个已水合 WebUI 会话的保留分页状态。
 #[derive(Debug, Clone, Copy)]
 pub(super) struct HydratedConversationWindowState {
+    /// Whether the exact transcript window and pagination facts were loaded from storage.
+    /// 是否已经从存储加载精确转录窗口与分页事实。
+    pub(super) transcript_window_loaded: bool,
     /// Absolute persisted message index owned by the first raw row in the retained window.
     /// 保留窗口首条原始行对应的绝对持久化消息下标。
     pub(super) message_start_index: Option<usize>,
@@ -134,6 +231,7 @@ pub(super) fn retain_hydrated_conversation_windows_for_workspace(
         windows
             .entry(*session_id)
             .or_insert(HydratedConversationWindowState {
+                transcript_window_loaded: false,
                 message_start_index: None,
                 earliest_ordinal: None,
                 has_more_history: false,
@@ -153,6 +251,7 @@ pub(super) fn remember_hydrated_conversation_window(
     windows.insert(
         session_id,
         HydratedConversationWindowState {
+            transcript_window_loaded: true,
             message_start_index,
             earliest_ordinal,
             has_more_history,
@@ -170,6 +269,15 @@ pub(super) async fn service_session_messages(
     let parsed_session_id = session_id
         .parse::<SessionId>()
         .map_err(|error| format!("invalid session id '{session_id}': {error}"))?;
+    if let Some(response) =
+        retained_hydrated_session_messages_response(&app, &state, parsed_session_id, &session_id)?
+    {
+        return Ok(response);
+    }
+    // hydration_guard merges concurrent cold loads for only this exact session.
+    // hydration_guard 仅合并当前精确会话的并发冷加载。
+    let _hydration_guard =
+        ConversationHydrationSingleflightGuard::acquire(parsed_session_id).await?;
     if let Some(response) =
         retained_hydrated_session_messages_response(&app, &state, parsed_session_id, &session_id)?
     {
@@ -271,15 +379,14 @@ fn retained_hydrated_session_messages_response(
             parsed_session_id,
             None,
         );
-        let retained_window = guard
+        let Some(retained_window) = guard
             .hydrated_conversation_windows
             .get(&parsed_session_id)
             .copied()
-            .unwrap_or(HydratedConversationWindowState {
-                message_start_index: None,
-                earliest_ordinal: None,
-                has_more_history: false,
-            });
+            .filter(|window| window.transcript_window_loaded)
+        else {
+            return Ok(None);
+        };
         (session_messages, allow_user_prompt_editing, retained_window)
     };
     let mut guard = state
@@ -336,15 +443,38 @@ fn retained_hydrated_session_messages_response(
 
 /// Loads one older transcript page and merges it into the retained conversation window.
 /// 加载一页更早转录历史，并将其合并进保留的会话窗口。
+///
+/// # Parameters
+/// 参数
+/// `app` emits the resulting workbench event after the page is retained.
+/// `app` 在分页进入保留窗口后发出工作台事件。
+/// `state` owns the controller runtime, workspace index, and retained message windows.
+/// `state` 持有控制器运行时、工作区索引与保留消息窗口。
+/// `session_id` identifies the exact conversation to page.
+/// `session_id` 标识需要分页的精确会话。
+/// `before_ordinal` is the exclusive transcript boundary for the older page.
+/// `before_ordinal` 是更早分页使用的排他转录边界。
+///
+/// # Returns
+/// 返回值
+/// The conversation-scoped page response, or an explicit location/read failure.
+/// 返回会话范围分页响应，或明确的定位与读取失败。
 pub(super) async fn service_session_history_page(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     session_id: String,
     before_ordinal: i64,
 ) -> Result<ConversationHistoryPageResponse, String> {
+    // started_at measures the complete page request without logging transcript content.
+    // started_at 在不记录转录正文的前提下测量完整分页请求。
+    let started_at = std::time::Instant::now();
+    // parsed_session_id is the validated storage identity used by every downstream lookup.
+    // parsed_session_id 是所有后续查询使用的已验证存储标识。
     let parsed_session_id = session_id
         .parse::<SessionId>()
         .map_err(|error| format!("invalid session id '{session_id}': {error}"))?;
+    // controller_runtime and session_location are captured together from one retained workspace boundary.
+    // controller_runtime 与 session_location 从同一个保留工作区边界一起捕获。
     let (controller_runtime, session_location) = {
         let guard = state
             .lock()
@@ -362,7 +492,22 @@ pub(super) async fn service_session_history_page(
             .map(|(project_id, created_at)| (project_id.to_string(), created_at.to_string()));
         (controller_runtime, session_location)
     };
-    let page = if let Some((project_id, created_at)) = session_location {
+    // project_id and created_at form the deterministic session directory locator without any scan fallback.
+    // project_id 与 created_at 组成不含任何扫描回退的确定性会话目录定位器。
+    let (project_id, created_at) = session_location.ok_or_else(|| {
+        eprintln!(
+            "[webui-service][conversation-history-page] status=location_failed session={} before_ordinal={} elapsed_ms={}",
+            session_id,
+            before_ordinal,
+            started_at.elapsed().as_millis(),
+        );
+        format!(
+            "conversation history page cannot locate session `{session_id}` from the retained workspace index"
+        )
+    })?;
+    // page is the exact older segmented-transcript window returned by storage.
+    // page 是存储返回的精确更早分段转录窗口。
+    let page =
         vulcan_workspace_store::workspace_store::load_session_history_page_for_project_created_at(
             controller_runtime,
             &project_id,
@@ -371,18 +516,33 @@ pub(super) async fn service_session_history_page(
             before_ordinal,
             SELECTED_SESSION_TURN_LOAD_LIMIT,
         )
-        .await?
-    } else {
-        empty_session_history_page(parsed_session_id)
-    };
-    let (workbench, response_workbench, page_messages) = {
+        .await
+        .map_err(|error| {
+            eprintln!(
+                "[webui-service][conversation-history-page] status=read_failed session={} before_ordinal={} elapsed_ms={} error={}",
+                session_id,
+                before_ordinal,
+                started_at.elapsed().as_millis(),
+                error,
+            );
+            error
+        })?;
+    // page_entry_count records visible/storage boundary entries before projection.
+    // page_entry_count 记录投影前的可见及存储边界条目数量。
+    let page_entry_count = page.messages.len();
+    // page_tool_detail_count records detached tool-detail entries retained with this page.
+    // page_tool_detail_count 记录随该分页保留的独立工具详情条目数量。
+    let page_tool_detail_count = page.tool_detail_messages.len();
+    // The merged tuple preserves exact counts across the short service-state lock boundary.
+    // 合并元组跨越短服务状态锁边界保留精确计数。
+    let (workbench, response_workbench, page_messages, retained_before, retained_after, added) = {
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
         let Some(workspace_snapshot) = guard.workspace_snapshot.as_mut() else {
             return Err(String::from("service workspace snapshot is not ready"));
         };
-        let (response_messages, page_messages) = {
+        let (response_messages, page_messages, retained_before, retained_after, added) = {
             let allow_user_prompt_editing = workspace_surface_allows_user_prompt_editing(
                 workspace_snapshot,
                 parsed_session_id,
@@ -392,7 +552,15 @@ pub(super) async fn service_session_history_page(
                 .session_messages
                 .entry(parsed_session_id)
                 .or_default();
-            prepend_unique_older_session_history_page(retained_messages, &page);
+            // retained_before is the in-memory entry count before this page.
+            // retained_before 是应用本分页前的内存条目数量。
+            let retained_before = retained_messages.len();
+            // added is the exact number of stable entries newly prepended.
+            // added 是实际新前置的稳定条目数量。
+            let added = prepend_unique_older_session_history_page(retained_messages, &page);
+            // retained_after is the in-memory entry count after deterministic deduplication.
+            // retained_after 是确定性去重后的内存条目数量。
+            let retained_after = retained_messages.len();
             (
                 conversation_messages_from_session(
                     &session_id,
@@ -400,6 +568,9 @@ pub(super) async fn service_session_history_page(
                     allow_user_prompt_editing,
                 ),
                 conversation_messages_from_session(&session_id, &page.messages, false),
+                retained_before,
+                retained_after,
+                added,
             )
         };
         remember_hydrated_conversation_window(
@@ -421,9 +592,30 @@ pub(super) async fn service_session_history_page(
         let workbench = guard.workbench.clone();
         let response_workbench =
             focused_history_page_response_workbench(&workbench, response_messages);
-        (workbench, response_workbench, page_messages)
+        (
+            workbench,
+            response_workbench,
+            page_messages,
+            retained_before,
+            retained_after,
+            added,
+        )
     };
     emit_workbench_event(&app, &workbench);
+    eprintln!(
+        "[webui-service][conversation-history-page] status=completed session={} before_ordinal={} page_entries={} page_tool_details={} projected_page_messages={} retained_before={} retained_after={} added={} earliest_ordinal={:?} has_more_history={} elapsed_ms={}",
+        session_id,
+        before_ordinal,
+        page_entry_count,
+        page_tool_detail_count,
+        page_messages.len(),
+        retained_before,
+        retained_after,
+        added,
+        page.earliest_ordinal,
+        page.has_more_history,
+        started_at.elapsed().as_millis(),
+    );
     Ok(ConversationHistoryPageResponse {
         session_id,
         workbench: Box::new(response_workbench),
@@ -433,41 +625,37 @@ pub(super) async fn service_session_history_page(
     })
 }
 
-/// Builds an empty history page when a session cannot be deterministically located.
-/// 当会话无法被确定性定位时构建空历史页。
-///
-/// # Parameters
-/// 参数
-/// `session_id` identifies the requested session.
-/// `session_id` 标识请求的会话。
-///
-/// # Returns
-/// 返回值
-/// An empty page that does not trigger any directory scan fallback.
-/// 返回不会触发目录扫描回退的空分页结果。
-fn empty_session_history_page(session_id: SessionId) -> SessionHistoryPage {
-    SessionHistoryPage {
-        session_id,
-        messages: Vec::new(),
-        tool_detail_messages: Vec::new(),
-        message_start_index: None,
-        earliest_ordinal: None,
-        has_more_history: false,
-    }
-}
-
 /// Prepends an older history page into the retained session message window without duplicating rows.
 /// 将更早历史页前置合并到保留的会话消息窗口中，并避免重复行。
 /// Prepends older page messages into the retained hydrated window without duplicating stable rows.
 /// 将较早分页消息前置合并进已保留的水合窗口，并避免重复稳定行。
+///
+/// # Parameters
+/// 参数
+/// `retained_messages` is the current in-memory conversation window.
+/// `retained_messages` 是当前内存会话窗口。
+/// `page` contains the exact older visible and tool-detail entries.
+/// `page` 包含精确的更早可见条目与工具详情条目。
+///
+/// # Returns
+/// 返回值
+/// The number of previously unseen stable entries prepended by this call.
+/// 返回本次调用前置的此前未出现稳定条目数量。
 fn prepend_unique_older_session_history_page(
     retained_messages: &mut Vec<SessionMessageEntry>,
     page: &SessionHistoryPage,
-) {
+) -> usize {
+    // retained_before is the baseline used to report exact additions.
+    // retained_before 是用于报告精确新增数的基线。
+    let retained_before = retained_messages.len();
+    // seen_keys gives retained rows precedence over duplicate rows in older storage pages.
+    // seen_keys 使保留行优先于更早存储分页中的重复行。
     let mut seen_keys = retained_messages
         .iter()
         .map(SessionMessageEntry::stable_merge_key)
-        .collect::<BTreeSet<_>>();
+        .collect::<HashSet<_>>();
+    // merged retains the page order for unseen entries before appending the current window.
+    // merged 为未见条目保留分页顺序，然后追加当前窗口。
     let mut merged = page
         .messages
         .iter()
@@ -477,6 +665,7 @@ fn prepend_unique_older_session_history_page(
         .collect::<Vec<_>>();
     merged.append(retained_messages);
     *retained_messages = merged;
+    retained_messages.len().saturating_sub(retained_before)
 }
 
 /// Captures storage inputs needed before reading one selected-session transcript window.
@@ -1151,6 +1340,51 @@ fn emit_conversation_hydration_progress(
 mod tests {
     use super::*;
 
+    /// Verifies concurrent cold loads share one exact session lock and release its registry entry.
+    /// 验证并发冷加载共享同一个精确会话锁，并在结束后释放其注册表项。
+    #[tokio::test]
+    async fn conversation_hydration_singleflight_serializes_exact_session() {
+        // session_id isolates this test from every other hydration owner.
+        // session_id 将本测试与其他水合所有者隔离。
+        let session_id = SessionId::new_v4();
+        // first_guard owns the exact lock while the second request is queued.
+        // first_guard 在第二个请求排队期间持有精确锁。
+        let first_guard = ConversationHydrationSingleflightGuard::acquire(session_id)
+            .await
+            .expect("first hydration guard");
+        // waiter represents a concurrent duplicate service request for the same session.
+        // waiter 表示同一会话的并发重复服务请求。
+        let mut waiter = tokio::spawn(async move {
+            ConversationHydrationSingleflightGuard::acquire(session_id).await
+        });
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), &mut waiter)
+                .await
+                .is_err(),
+            "the duplicate cold load must wait for the exact session owner"
+        );
+        drop(first_guard);
+        // second_guard proves the queued request acquired the same serialized boundary.
+        // second_guard 证明排队请求取得了同一个串行化边界。
+        let second_guard = tokio::time::timeout(std::time::Duration::from_secs(1), waiter)
+            .await
+            .expect("queued hydration should resume")
+            .expect("queued hydration task")
+            .expect("second hydration guard");
+        drop(second_guard);
+        // registry must release exactly this entry without scanning unrelated sessions.
+        // registry 必须精确释放当前表项，且不扫描无关会话。
+        let registry = CONVERSATION_HYDRATION_SINGLEFLIGHT_LOCKS
+            .get()
+            .expect("singleflight registry");
+        assert!(
+            !registry
+                .lock()
+                .expect("registry lock")
+                .contains_key(&session_id)
+        );
+    }
+
     /// Builds one visible history message with stable runtime metadata.
     /// 构建一条带稳定运行时元数据的可见历史消息。
     fn history_test_message(id: &str, body: &str, created_at: &str) -> SessionMessageEntry {
@@ -1184,8 +1418,11 @@ mod tests {
         };
         let mut retained_messages = vec![retained_duplicate.clone(), retained_newer.clone()];
 
-        prepend_unique_older_session_history_page(&mut retained_messages, &page);
+        // added captures the exact unique visible and hidden entries introduced by the first page.
+        // added 捕获首次分页引入的精确唯一可见及隐藏条目数量。
+        let added = prepend_unique_older_session_history_page(&mut retained_messages, &page);
 
+        assert_eq!(added, 2);
         assert_eq!(
             retained_messages,
             vec![
@@ -1195,5 +1432,62 @@ mod tests {
                 retained_newer
             ]
         );
+
+        // duplicate_added proves replaying the exact same page is a zero-addition operation.
+        // duplicate_added 证明重放完全相同分页是零新增操作。
+        let duplicate_added =
+            prepend_unique_older_session_history_page(&mut retained_messages, &page);
+
+        assert_eq!(duplicate_added, 0);
+        assert_eq!(retained_messages.len(), 4);
+    }
+
+    /// Verifies workspace refresh distinguishes loaded pagination facts from marker-only sessions.
+    /// 验证工作区刷新会区分已加载分页事实与仅有标记的会话。
+    #[test]
+    fn hydrated_window_retention_marks_missing_pagination_facts_unloaded() {
+        let retained_session_id = SessionId::new_v4();
+        let marker_only_session_id = SessionId::new_v4();
+        let mut workspace = WorkspaceSnapshot {
+            task_projects: Vec::new(),
+            archived_task_projects: Vec::new(),
+            sessions: Vec::new(),
+            archived_sessions: Vec::new(),
+            session_messages: BTreeMap::new(),
+            archived_session_messages: BTreeMap::new(),
+            session_compactions: BTreeMap::new(),
+            archived_session_compactions: BTreeMap::new(),
+            session_runtime_state: BTreeMap::new(),
+            archived_session_runtime_state: BTreeMap::new(),
+            session_run_phases: BTreeMap::new(),
+            expanded_task_projects: BTreeSet::new(),
+            selected_session: retained_session_id,
+            hydrated_session_ids: BTreeSet::new(),
+        };
+        workspace
+            .hydrated_session_ids
+            .extend([retained_session_id, marker_only_session_id]);
+        let retained_window = HydratedConversationWindowState {
+            transcript_window_loaded: true,
+            message_start_index: None,
+            earliest_ordinal: Some(354),
+            has_more_history: true,
+        };
+        let mut windows = BTreeMap::from([(retained_session_id, retained_window)]);
+
+        retain_hydrated_conversation_windows_for_workspace(&mut windows, &workspace);
+
+        let restored_window = windows
+            .get(&retained_session_id)
+            .expect("retained pagination facts must survive refresh");
+        assert_eq!(restored_window.message_start_index, None);
+        assert_eq!(restored_window.earliest_ordinal, Some(354));
+        assert!(restored_window.has_more_history);
+        let marker_only_window = windows
+            .get(&marker_only_session_id)
+            .expect("marker-only session must remain visible to summary projection");
+        assert!(!marker_only_window.transcript_window_loaded);
+        assert_eq!(marker_only_window.earliest_ordinal, None);
+        assert!(!marker_only_window.has_more_history);
     }
 }

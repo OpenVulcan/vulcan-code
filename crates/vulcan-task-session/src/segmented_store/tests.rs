@@ -671,7 +671,9 @@ fn save_task_session_waits_for_segment_transaction_lock() {
 
     // transaction_guard deliberately owns the append transaction before the worker starts saving.
     // transaction_guard 在工作线程开始保存前刻意持有追加事务。
-    let transaction_guard = vulcan_session_core::segmented_file_io::segmented_append_file_io_lock()
+    let session_storage_lock =
+        vulcan_session_core::segmented_file_io::segmented_append_file_io_lock(&root);
+    let transaction_guard = session_storage_lock
         .lock()
         .expect("lock segmented append transaction");
     // ready_channel proves the worker reached the call boundary before the blocking assertion.
@@ -1510,10 +1512,11 @@ fn parent_task_link_rejects_missing_child_metadata() {
 
     // transaction_guard satisfies the owned-lock contract exercised by the root helper.
     // transaction_guard 满足根 helper 所要求的已持锁契约。
-    let _transaction_guard =
-        vulcan_session_core::segmented_file_io::segmented_append_file_io_lock()
-            .lock()
-            .expect("lock root append transaction");
+    let session_storage_lock =
+        vulcan_session_core::segmented_file_io::segmented_append_file_io_lock(&root);
+    let _transaction_guard = session_storage_lock
+        .lock()
+        .expect("lock root append transaction");
     let result = append_main_session_task_link_event_with_owned_append_lock(
         &root,
         &TaskInvocationEvent {
@@ -1644,7 +1647,7 @@ fn task_segment_load_repairs_stale_metadata_before_bounded_append() {
     assert!(stale_error.message.contains("load-time repair is required"));
     // repairedLines are loaded only because this test explicitly requests full task history.
     // repairedLines 仅因本测试显式请求完整子任务历史而加载。
-    let (_, repaired_lines) = read_repaired_task_segment_lines(&task_dir)
+    let (_, repaired_lines) = read_repaired_task_segment_lines(&root, &task_dir)
         .expect("explicit task-history load should repair metadata");
     assert_eq!(
         repaired_lines.last().expect("retained high sequence").seq,
@@ -1746,7 +1749,7 @@ fn task_segment_load_repairs_truncated_tail_before_bounded_append() {
     );
     // repairedLines come from the explicit history-read repair boundary.
     // repairedLines 来自显式历史读取修复边界。
-    let (_, repaired_lines) = read_repaired_task_segment_lines(&task_dir)
+    let (_, repaired_lines) = read_repaired_task_segment_lines(&root, &task_dir)
         .expect("explicit task-history load should repair truncated tail");
     assert_eq!(repaired_lines.last().expect("last retained line").seq, 1);
     store

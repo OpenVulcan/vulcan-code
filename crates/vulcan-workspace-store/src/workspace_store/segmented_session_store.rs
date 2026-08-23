@@ -18,11 +18,11 @@ use std::fs::{self, File, OpenOptions};
 use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use uuid::Uuid;
 use vulcan_context::{
     RUNTIME_LOG_SCHEMA_VERSION, RuntimeContextCompactionAppliedEvent, RuntimeInjectionAppliedEvent,
-    RuntimeLogEvent, RuntimeLogEventLine, RuntimeRepairEvent,
+    RuntimeLogEvent, RuntimeLogEventLine, RuntimeRepairEvent, RuntimeSystemUpdateEvent,
     conversation_state_from_runtime_log_lines, decode_runtime_log_event_line_json,
     runtime_log_lines_from_conversation_state,
 };
@@ -31,7 +31,7 @@ use vulcan_context::{
     RuntimeInjectionCancelledEvent, RuntimeInjectionMergedEvent,
     RuntimeProviderLoweringRepairEvent, RuntimeProviderNativeStateEnvelope,
     RuntimeProviderRequestCheckpointEvent, RuntimeProviderResponseCheckpointEvent,
-    RuntimeSystemUpdateEvent, RuntimeSystemUpdateLoweringHint, RuntimeSystemUpdateTrust,
+    RuntimeSystemUpdateLoweringHint, RuntimeSystemUpdateTrust,
 };
 use vulcan_session_boundary::SessionBoundaryEvent;
 
@@ -80,9 +80,28 @@ const RUNTIME_COMPACTION_BACKUP_LIMIT: usize = 5;
 /// Version of the bounded conversation-projection checkpoint stored in runtime metadata.
 /// 保存在运行时元数据中的有界会话投影检查点版本。
 const SEGMENTED_RUNTIME_PROJECTION_CHECKPOINT_VERSION: u32 = 1;
-/// Process-local mutex protecting overwrite-only state read/modify/write operations.
-/// 保护覆盖式状态读改写操作的进程内互斥锁。
-static SEGMENTED_STATE_FILE_IO_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+/// Process-local weak lock registry sharded by exact session-like state directory.
+/// 按精确会话类状态目录分片的进程内弱锁注册表。
+static SEGMENTED_STATE_FILE_IO_LOCKS: OnceLock<Mutex<BTreeMap<PathBuf, Weak<Mutex<()>>>>> =
+    OnceLock::new();
+
+/// Process-local authoritative cache of runtime system updates for exact session directories.
+/// 按精确会话目录保存运行时系统更新的进程内权威缓存。
+static RUNTIME_SYSTEM_UPDATE_CACHE: OnceLock<
+    Mutex<BTreeMap<PathBuf, RuntimeSystemUpdateCacheEntry>>,
+> = OnceLock::new();
+
+/// Cached runtime-system-update projection tied to one exact durable sequence frontier.
+/// 绑定到单个精确耐久序号前沿的运行时系统更新缓存投影。
+#[derive(Debug, Clone)]
+struct RuntimeSystemUpdateCacheEntry {
+    /// Next durable runtime sequence represented by this cache entry.
+    /// 当前缓存条目所表示的下一个耐久运行时序号。
+    next_seq: u64,
+    /// Chronological system updates retained independently from the full runtime log.
+    /// 独立于完整运行时日志保留的按时间顺序系统更新。
+    updates: Vec<RuntimeSystemUpdateEvent>,
+}
 
 mod message_events;
 mod message_mapping;
@@ -113,6 +132,37 @@ pub(super) use session_reading::*;
 pub(super) use state_documents::*;
 pub(super) use task_types::*;
 pub(super) use vmm_state::*;
+
+/// Process-local weak registry of active exact-session metadata cursors.
+/// 活动精确会话元数据游标的进程内弱引用注册表。
+static SESSION_METADATA_CURSORS: OnceLock<
+    Mutex<BTreeMap<PathBuf, Weak<Mutex<SegmentedSessionMetadata>>>>,
+> = OnceLock::new();
+
+/// Opaque append cursor that keeps one exact session metadata frontier resident in memory.
+/// 将一个精确会话元数据前沿常驻内存的不透明追加游标。
+pub struct SessionTranscriptAppendCursor {
+    /// Exact deterministic session directory owned by this cursor.
+    /// 当前游标拥有的精确确定性会话目录。
+    session_directory: PathBuf,
+    /// Stable owner identity validated when the cursor is opened.
+    /// 打开游标时已经验证的稳定所属身份。
+    session_id: Uuid,
+    /// Shared metadata frontier updated by every in-process main-session metadata publication.
+    /// 由每次进程内主会话元数据发布共同更新的元数据前沿。
+    metadata: Arc<Mutex<SegmentedSessionMetadata>>,
+    /// Reusable append handle for the current active display segment.
+    /// 当前活动展示分段可复用的追加句柄。
+    active_file: Option<(PathBuf, File)>,
+}
+
+impl Drop for SessionTranscriptAppendCursor {
+    /// Removes only this exact weak registry entry when the final strong cursor is dropped.
+    /// 在最后一个强游标释放时仅移除当前精确弱引用注册表条目。
+    fn drop(&mut self) {
+        release_session_metadata_cursor(&self.session_directory, &self.metadata);
+    }
+}
 
 /// Builds an active or archived session directory path.
 /// 构建活动或归档会话目录路径。
@@ -185,6 +235,8 @@ pub(super) fn create_segmented_session_in_location(
         active_segment: first_segment.file.clone(),
         task_dir: SEGMENTED_TASK_DIR.to_string(),
         next_global_seq: 0,
+        storage_generation: 0,
+        integrity_version: 1,
         message_count: 0,
         last_message_id: None,
         last_message_fingerprint: None,

@@ -287,6 +287,7 @@ pub(in crate::workspace_store) struct SegmentedSessionReplayResult {
 /// Transcript turn window read from segmented JSONL files.
 /// 从分段 JSONL 文件读取出的转录轮次窗口。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg(test)]
 pub(in crate::workspace_store) struct SegmentedSessionTurnWindow {
     /// Event lines in forward display order.
     /// 按正向展示顺序排列的事件行。

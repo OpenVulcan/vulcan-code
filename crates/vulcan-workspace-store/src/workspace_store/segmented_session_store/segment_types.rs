@@ -132,6 +132,34 @@ pub(in crate::workspace_store) struct SegmentMetadata {
     /// Last compaction sequence observed in this segment when known.
     /// 已知时当前分段内最后一次压缩事件序号。
     pub last_compaction_seq: Option<u64>,
+    /// Version of the projection indexes maintained by the append path.
+    /// 由追加路径维护的投影索引版本。
+    #[serde(default)]
+    pub projection_index_version: u32,
+    /// Number of session-boundary rows physically stored in this segment.
+    /// 当前分段物理存储的会话边界行数量。
+    #[serde(default)]
+    pub session_boundary_line_count: u64,
+    /// Number of distinct adjacent boundary turns represented by this segment.
+    /// 当前分段表示的相邻去重边界轮次数量。
+    #[serde(default)]
+    pub session_boundary_turn_count: u64,
+    /// First session-boundary sequence physically stored in this segment.
+    /// 当前分段物理存储的首个会话边界序号。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_session_boundary_seq: Option<u64>,
+    /// Last session-boundary sequence physically stored in this segment.
+    /// 当前分段物理存储的最后一个会话边界序号。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_session_boundary_seq: Option<u64>,
+    /// First non-empty boundary turn identifier represented by this segment.
+    /// 当前分段表示的首个非空边界轮次标识。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_session_boundary_turn_id: Option<String>,
+    /// Last non-empty boundary turn identifier represented by this segment.
+    /// 当前分段表示的最后一个非空边界轮次标识。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_session_boundary_turn_id: Option<String>,
 }
 
 impl SegmentMetadata {
@@ -151,6 +179,13 @@ impl SegmentMetadata {
             first_message_index: None,
             last_message_index: None,
             last_compaction_seq: None,
+            projection_index_version: 1,
+            session_boundary_line_count: 0,
+            session_boundary_turn_count: 0,
+            first_session_boundary_seq: None,
+            last_session_boundary_seq: None,
+            first_session_boundary_turn_id: None,
+            last_session_boundary_turn_id: None,
         }
     }
 }

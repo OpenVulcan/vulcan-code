@@ -585,9 +585,6 @@ pub(crate) fn seal_stream_content_kind(
 /// Correlates the first provider semantic delta with one accepted browser submission.
 /// 将首个 Provider 语义增量与一次已接纳浏览器提交关联。
 struct FirstSemanticSubmissionDiagnostic {
-    /// Stable canonical user-record identifier mirrored into visible transcript metadata.
-    /// 镜像到可见转录元数据的稳定规范用户记录标识。
-    user_record_id: String,
     /// Stable browser-generated submission identifier.
     /// 浏览器生成的稳定提交标识。
     client_submission_id: String,
@@ -614,80 +611,45 @@ struct FirstSemanticSubmissionDiagnostic {
 fn mark_first_semantic_submission_observed(
     runtime_state: &mut SessionRuntimeStateEntry,
 ) -> Option<FirstSemanticSubmissionDiagnostic> {
-    let latest_user_record = runtime_state
-        .conversation_state
-        .records
-        .iter_mut()
-        .rev()
-        .find(|record| record.kind == SessionMessageKind::User)?;
-    let metadata = latest_user_record.metadata.as_mut()?.as_object_mut()?;
-    if metadata
-        .get("client_submission_first_semantic_observed")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false)
+    // correlation is copied out before the transient observation marker mutates runtime state.
+    // correlation 会在瞬态观察标记修改运行态之前完成复制。
+    let (client_submission_id, target, accepted_at_ms) = {
+        let latest_user_record = runtime_state
+            .conversation_state
+            .records
+            .iter()
+            .rev()
+            .find(|record| record.kind == SessionMessageKind::User)?;
+        let metadata = latest_user_record.metadata.as_ref()?.as_object()?;
+        (
+            metadata.get("client_submission_id")?.as_str()?.to_string(),
+            metadata
+                .get("client_submission_target")?
+                .as_str()?
+                .to_string(),
+            metadata
+                .get("client_submission_accepted_at_ms")?
+                .as_str()?
+                .parse::<i128>()
+                .ok()?,
+        )
+    };
+    if runtime_state
+        .observed_first_semantic_submission_id
+        .as_deref()
+        == Some(client_submission_id.as_str())
     {
         return None;
     }
-    let client_submission_id = metadata.get("client_submission_id")?.as_str()?.to_string();
-    let target = metadata
-        .get("client_submission_target")?
-        .as_str()?
-        .to_string();
-    let accepted_at_ms = metadata
-        .get("client_submission_accepted_at_ms")?
-        .as_str()?
-        .parse::<i128>()
-        .ok()?;
-    let user_record_id = latest_user_record.id.clone();
-    metadata.insert(
-        String::from("client_submission_first_semantic_observed"),
-        serde_json::Value::Bool(true),
-    );
+    // The observation marker is bounded process-local telemetry. Canonical conversation records
+    // are immutable transcript inputs and must never carry mutable diagnostic acknowledgements.
+    // 观察标记是有界的进程内遥测；规范会话记录属于不可变转录输入，绝不能携带可变诊断确认。
+    runtime_state.observed_first_semantic_submission_id = Some(client_submission_id.clone());
     Some(FirstSemanticSubmissionDiagnostic {
-        user_record_id,
         client_submission_id,
         target,
         elapsed_ms: current_unix_millis_value().saturating_sub(accepted_at_ms),
     })
-}
-
-/// Mirrors one canonical first-semantic marker into its visible transcript record.
-/// 将一条规范首语义标记镜像到对应的可见转录记录。
-///
-/// # Parameters
-/// 参数
-/// `workspace` owns the visible user-record projection.
-/// `workspace` 持有可见用户记录投影。
-/// `session_id` identifies the exact conversation.
-/// `session_id` 标识精确会话。
-/// `diagnostic` carries the stable canonical user-record identity already marked once.
-/// `diagnostic` 携带已经标记一次的稳定规范用户记录身份。
-///
-/// # Returns
-/// 返回值
-/// This function returns no value after best-effort metadata mirroring.
-/// 此函数尽力完成元数据镜像后不返回值。
-fn mirror_first_semantic_submission_observed(
-    workspace: &mut WorkspaceSnapshot,
-    session_id: SessionId,
-    diagnostic: &FirstSemanticSubmissionDiagnostic,
-) {
-    if let Some(visible_metadata) = workspace
-        .session_messages
-        .get_mut(&session_id)
-        .and_then(|messages| {
-            messages
-                .iter_mut()
-                .find(|message| message.id == diagnostic.user_record_id)
-        })
-        .and_then(|message| message.metadata.as_mut())
-        .and_then(serde_json::Value::as_object_mut)
-    {
-        visible_metadata.insert(
-            String::from("client_submission_first_semantic_observed"),
-            serde_json::Value::Bool(true),
-        );
-    }
 }
 
 /// Appends or extends one streaming transcript record.
@@ -771,9 +733,6 @@ fn append_stream_delta_record(
             *record_id_slot = record_id_draft;
             (projected_entry, is_new_message, first_semantic_diagnostic)
         };
-        if let Some(diagnostic) = first_semantic_diagnostic.as_ref() {
-            mirror_first_semantic_submission_observed(workspace, session_id, diagnostic);
-        }
         workspace.session_run_phases.insert(session_id, run_phase);
         sync_hydrated_session_dialogue_ready_marker(workspace, session_id);
         let Some(projected_entry) = projected_entry else {
@@ -2547,8 +2506,7 @@ fn append_runtime_event_projection_with_authority(
     let (
         changed_todolist,
         changed_plan_mode,
-        transcript_changed,
-        transcript_ready_for_persistence,
+        transcript_entries_for_persistence,
         child_transcript_for_persistence,
         message_window_deltas,
     ) = commit_runtime_event_projection_state(state, session_id, authority, |guard| {
@@ -2590,10 +2548,14 @@ fn append_runtime_event_projection_with_authority(
         if changed_todolist.is_some() || changed_plan_mode.is_some() {
             changed_addon_session_id = Some(session_id);
         }
-        // transcriptReadyForPersistence keeps mutable request cards memory-only until the complete parallel batch closes.
-        // transcriptReadyForPersistence 在完整并行批次关闭前仅在内存中保留可变请求卡片。
-        let transcript_ready_for_persistence = transcript_changed
-            && runtime_event_closes_durable_transcript_batch(event, &workspace_draft.runtime_state);
+        // transcriptEntriesForPersistence captures only this event's stable rows before the draft moves into UI state.
+        // transcriptEntriesForPersistence 仅在草稿移入界面状态前捕获当前事件的稳定记录。
+        let transcript_entries_for_persistence =
+            if transcript_changed && runtime_event_forms_durable_transcript_boundary(event) {
+                workspace_draft.parent_message_entries.clone()
+            } else {
+                Vec::new()
+            };
         let child_message_projection = workspace_draft.child_projection.as_ref().map(|child| {
             (
                 child.task_id,
@@ -2606,7 +2568,7 @@ fn append_runtime_event_projection_with_authority(
         let child_transcript_for_persistence = workspace_draft
             .child_projection
             .as_ref()
-            .map(|child| child.task_id);
+            .map(|child| (child.task_id, child.message.clone()));
         // No fallible operation may follow this commit boundary while the service lock is held.
         // 持有服务锁时，该提交边界之后不允许再出现可失败操作。
         workspace_draft.commit(workspace, session_id);
@@ -2723,8 +2685,7 @@ fn append_runtime_event_projection_with_authority(
         Ok((
             changed_todolist,
             changed_plan_mode,
-            transcript_changed,
-            transcript_ready_for_persistence,
+            transcript_entries_for_persistence,
             child_transcript_for_persistence,
             message_window_deltas,
         ))
@@ -2764,21 +2725,23 @@ fn append_runtime_event_projection_with_authority(
     {
         eprintln!("[webui-service] runtime event addon delta emit failed after commit: {error}");
     }
-    if transcript_changed && transcript_ready_for_persistence {
-        spawn_session_transcript_messages_persist_task(
+    if !transcript_entries_for_persistence.is_empty() {
+        spawn_exact_session_transcript_entries_persist_task(
             state.clone(),
             controller_runtime.clone(),
             session_id,
+            transcript_entries_for_persistence,
             Some(String::from("runtime_event_projection")),
-        );
+        )?;
     }
-    if let Some(child_task_id) = child_transcript_for_persistence {
-        spawn_session_transcript_messages_persist_task(
+    if let Some((child_task_id, child_message)) = child_transcript_for_persistence {
+        spawn_exact_session_transcript_entries_persist_task(
             state.clone(),
             controller_runtime.clone(),
             child_task_id,
+            vec![child_message],
             Some(String::from("subagent_send_message_projection")),
-        );
+        )?;
     }
     // addonSessionDirectory is resolved once by exact retained locator only when a tool changed addon state.
     // addonSessionDirectory 仅在工具改变附属状态时通过精确保留定位信息解析一次。
@@ -2874,33 +2837,28 @@ fn runtime_event_projects_conversation_transcript(event_kind: RuntimeEventKind) 
     )
 }
 
-/// Reports whether one runtime event closes every mutable tool card in the current parallel batch.
-/// 判断一条运行事件是否关闭当前并行批次中的全部可变工具卡片。
+/// Reports whether one runtime event forms an independently durable transcript boundary.
+/// 判断一条运行事件是否形成可独立耐久化的转录边界。
 ///
 /// # Parameters
 /// 参数
 /// `event` is the exact runtime lifecycle boundary being projected.
 /// `event` 是正在投影的精确运行时生命周期边界。
-/// `runtime_state` is the post-event session state that owns open request and call correlations.
-/// `runtime_state` 是事件应用后持有开放请求与调用关联的会话状态。
-///
 /// # Returns
 /// 返回值
-/// `true` only for terminal request/tool/retry boundaries after every open correlation is closed.
-/// 仅当请求、工具或重试终态边界已经关闭全部开放关联时返回 `true`。
-fn runtime_event_closes_durable_transcript_batch(
-    event: &RuntimeEvent,
-    runtime_state: &SessionRuntimeStateEntry,
-) -> bool {
+/// `true` for one complete request, start, result, or retry record without consulting sibling correlations.
+/// 对一条完整请求、开始、结果或重试记录返回 `true`，且不查询同批关联。
+pub(crate) fn runtime_event_forms_durable_transcript_boundary(event: &RuntimeEvent) -> bool {
     matches!(
         event.kind,
-        RuntimeEventKind::ToolRequestInvalid
+        RuntimeEventKind::ToolRequestReady
+            | RuntimeEventKind::ToolRequestInvalid
             | RuntimeEventKind::ToolRequestAborted
+            | RuntimeEventKind::ToolStarted
             | RuntimeEventKind::ToolFinished
             | RuntimeEventKind::Retrying
             | RuntimeEventKind::ProviderRetryStatusChanged
-    ) && runtime_state.tool_request_record_ids.is_empty()
-        && runtime_state.tool_call_record_ids.is_empty()
+    )
 }
 
 /// Reports whether one runtime event completed a tool that owns command-session lifecycle state.
@@ -3255,8 +3213,8 @@ mod tests {
         }
     }
 
-    /// Verifies first-semantic correlation is emitted once and mirrored to the visible user record.
-    /// 验证首个语义输出关联只产生一次，并镜像到可见用户记录。
+    /// Verifies first-semantic correlation is emitted once without mutating transcript metadata.
+    /// 验证首个语义输出关联只产生一次，且不会修改转录元数据。
     #[test]
     fn first_semantic_submission_correlation_is_consumed_once() {
         // session_id and user_record_id identify the exact canonical-visible record pair.
@@ -3273,7 +3231,7 @@ mod tests {
             SessionMessageEntry::new(SessionMessageKind::User, "", "hello")
                 .with_runtime_metadata(user_record_id, accepted_at_ms.to_string());
         visible_user_record.metadata = Some(metadata.clone());
-        let mut workspace = WorkspaceSnapshot {
+        let workspace = WorkspaceSnapshot {
             task_projects: Vec::new(),
             archived_task_projects: Vec::new(),
             sessions: Vec::new(),
@@ -3304,15 +3262,26 @@ mod tests {
                 created_at: accepted_at_ms.to_string(),
             });
 
-        // diagnostic carries the canonical marker identity into the separate visible projection step.
-        // diagnostic 把规范标记身份传递到独立的可见投影步骤。
+        // original_runtime_metadata proves telemetry observation leaves the canonical row immutable.
+        // original_runtime_metadata 证明遥测观察保持规范记录不可变。
+        let original_runtime_metadata =
+            runtime_state.conversation_state.records[0].metadata.clone();
         let diagnostic = mark_first_semantic_submission_observed(&mut runtime_state)
             .expect("first semantic observation should expose timing correlation");
-        mirror_first_semantic_submission_observed(&mut workspace, session_id, &diagnostic);
         assert_eq!(diagnostic.client_submission_id, "submission-1");
         assert_eq!(diagnostic.target, "new");
         assert!(diagnostic.elapsed_ms >= 250);
         assert!(mark_first_semantic_submission_observed(&mut runtime_state).is_none());
+        assert_eq!(
+            runtime_state
+                .observed_first_semantic_submission_id
+                .as_deref(),
+            Some("submission-1")
+        );
+        assert_eq!(
+            runtime_state.conversation_state.records[0].metadata,
+            original_runtime_metadata
+        );
         assert_eq!(
             workspace.session_messages[&session_id][0]
                 .metadata
@@ -3320,7 +3289,7 @@ mod tests {
                 .and_then(serde_json::Value::as_object)
                 .and_then(|value| value.get("client_submission_first_semantic_observed"))
                 .and_then(serde_json::Value::as_bool),
-            Some(true)
+            None
         );
     }
 
@@ -3703,6 +3672,37 @@ mod tests {
         ));
         assert!(!runtime_event_projects_conversation_transcript(
             RuntimeEventKind::ToolRequestPreviewUpdated
+        ));
+    }
+
+    /// Verifies each complete tool lifecycle event forms its own persistence boundary.
+    /// 验证每条完整工具生命周期事件都会形成自己的持久化边界。
+    #[test]
+    fn durable_tool_boundaries_do_not_wait_for_parallel_siblings() {
+        // durable_boundaries represent independently stable records in one parallel batch.
+        // durable_boundaries 表示同一并行批次中可独立稳定的记录。
+        let durable_boundaries = [
+            RuntimeEventKind::ToolRequestReady,
+            RuntimeEventKind::ToolRequestInvalid,
+            RuntimeEventKind::ToolRequestAborted,
+            RuntimeEventKind::ToolStarted,
+            RuntimeEventKind::ToolFinished,
+            RuntimeEventKind::Retrying,
+            RuntimeEventKind::ProviderRetryStatusChanged,
+        ];
+        for event_kind in durable_boundaries {
+            // event is complete by kind and therefore needs no sibling correlation state.
+            // event 按类型已经完整，因此不需要同批关联状态。
+            let event = RuntimeEvent::new(event_kind, "durable boundary", String::new());
+            assert!(runtime_event_forms_durable_transcript_boundary(&event));
+        }
+        let mutable_request = RuntimeEvent::new(
+            RuntimeEventKind::ToolRequestStarted,
+            "mutable request",
+            String::new(),
+        );
+        assert!(!runtime_event_forms_durable_transcript_boundary(
+            &mutable_request
         ));
     }
 

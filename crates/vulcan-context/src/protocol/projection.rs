@@ -987,6 +987,13 @@ pub fn conversation_state_to_context_records(
 fn conversation_record_to_session_message(
     record: SessionConversationRecord,
 ) -> SessionMessageEntry {
+    // metadata excludes the legacy mutable first-semantic diagnostic marker. That marker was
+    // never part of transcript identity and would otherwise change an already durable fingerprint.
+    // metadata 排除旧版可变首语义诊断标记；该标记从不属于转录身份，否则会改变已经落盘的指纹。
+    let mut metadata = record.metadata;
+    if let Some(metadata_object) = metadata.as_mut().and_then(serde_json::Value::as_object_mut) {
+        metadata_object.remove("client_submission_first_semantic_observed");
+    }
     SessionMessageEntry {
         id: record.id,
         kind: record.kind,
@@ -994,7 +1001,7 @@ fn conversation_record_to_session_message(
         visible: record.visible,
         title: record.title,
         body: record.body,
-        metadata: record.metadata,
+        metadata,
         created_at: record.created_at,
     }
 }

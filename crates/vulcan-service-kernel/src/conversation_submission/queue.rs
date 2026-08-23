@@ -453,9 +453,9 @@ pub(crate) fn queue_existing_submission(
     // revision is the final ordered workbench revision returned to the submit caller.
     // revision 是返回提交调用方的最终有序工作台版本。
     let (revision, run_phase) = emit_queued_prompt_run_phase_delta(app, state, session_id)?;
-    // Persistence captures the latest exact session after both queue deltas without cloning the workspace here.
-    // 持久化会在两个队列增量之后捕获最新精确会话，此处不克隆工作区。
-    spawn_workspace_session_persist_task(
+    // Queue admission changes runtime metadata only; a full transcript persist could overtake the active ordered writer.
+    // 队列接纳只修改运行态元数据；完整转录持久化可能抢先越过活动的顺序写入器。
+    spawn_workspace_session_runtime_state_persist_task(
         state.clone(),
         controller_runtime.clone(),
         session_id,

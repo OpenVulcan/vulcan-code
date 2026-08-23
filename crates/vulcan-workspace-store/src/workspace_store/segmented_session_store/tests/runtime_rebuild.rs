@@ -781,7 +781,7 @@ fn runtime_log_tolerates_and_repairs_corrupt_jsonl_tail() {
         writeln!(file, "{{ broken").expect("append corrupt line");
     }
 
-    let lines = read_runtime_log_lines(&session_dir)
+    let lines = repair_runtime_log_lines(&session_dir)
         .expect("read repaired runtime lines")
         .expect("runtime lines exist");
     let cleaned = read_json_lines::<RuntimeLogEventLine>(&runtime_segment_path)
@@ -858,10 +858,17 @@ fn runtime_log_rejects_internal_corruption_without_rewriting_source() {
     // damaged_segment inserts an invalid middle row without changing either valid row.
     // damaged_segment 插入一条无效中间行，同时不改变两条有效记录。
     let damaged_segment = format!("{}\n{{ broken\n{}\n", valid_rows[0], valid_rows[1]);
+    // decode_error proves the immutable byte decoder stops at the exact corrupt physical row.
+    // decode_error 证明不可变字节解码器会在精确的损坏物理行处停止。
+    let decode_error =
+        decode_runtime_segment_lines_strict(&segment_path, damaged_segment.as_bytes())
+            .expect_err("strict decoder must reject the corrupt middle row");
+    assert!(decode_error.contains("line 2"));
+    assert!(decode_error.contains("Failed to decode runtime JSONL segment"));
     fs::write(&segment_path, &damaged_segment).expect("write internally corrupt segment");
 
-    // error proves the reader rejects valid data after the first corrupt row.
-    // error 证明读取器会拒绝首条损坏记录之后的有效数据。
+    // error proves the ordinary reader rejects a changed durable byte boundary before hydration.
+    // error 证明普通读取器会在水合前拒绝发生变化的耐久字节边界。
     let error = read_runtime_log_lines(&session_dir)
         .expect_err("internal runtime corruption must fail without repair");
     // persisted_segment proves no prefix rewrite occurred.
@@ -875,7 +882,7 @@ fn runtime_log_rejects_internal_corruption_without_rewriting_source() {
         .filter(|entry| entry.file_name().to_string_lossy().contains(".corrupt-"))
         .count();
 
-    assert!(error.contains("valid line 3 after corrupt line 2"));
+    assert!(error.contains("Runtime segment byte length mismatch"));
     assert_eq!(persisted_segment, damaged_segment);
     assert_eq!(corrupt_backups, 0);
 }
@@ -917,8 +924,8 @@ fn runtime_log_full_corruption_does_not_fall_back_to_segmented_replay() {
     fs::write(session_dir.join("runtime").join("r001.jsonl"), "{ broken\n")
         .expect("damage runtime segment");
 
-    // first_error captures the first strict full-damage diagnosis.
-    // first_error 捕获第一次严格的全损坏诊断。
+    // first_error captures the first strict durable-boundary diagnosis.
+    // first_error 捕获第一次严格的耐久边界诊断。
     let first_error = ensure_runtime_log_from_segmented_context(&session_dir)
         .expect_err("fully damaged runtime log must remain observable");
     // second_error proves the original corruption remains observable on repeated reads.
@@ -930,7 +937,7 @@ fn runtime_log_full_corruption_does_not_fall_back_to_segmented_replay() {
     let persisted_segment = fs::read_to_string(session_dir.join("runtime").join("r001.jsonl"))
         .expect("read damaged runtime segment");
 
-    assert!(first_error.contains("Runtime log is fully damaged"));
-    assert!(second_error.contains("Runtime log is fully damaged"));
+    assert!(first_error.contains("Runtime segment byte length mismatch"));
+    assert_eq!(second_error, first_error);
     assert_eq!(persisted_segment, "{ broken\n");
 }

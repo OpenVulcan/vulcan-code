@@ -217,6 +217,10 @@ export type TranslationKey =
   | "appChrome.window.restore"
   | "appChrome.window.maximize"
   | "appChrome.window.close"
+  | "app.shutdown.persisting"
+  | "app.shutdown.persistFailed.title"
+  | "app.shutdown.persistFailed.description"
+  | "app.shutdown.persistFailed.forceConfirm"
   | "appChrome.githubOpenFailed"
   | "appChrome.githubAria"
   | "sidebar.user.local"
@@ -333,6 +337,10 @@ export type TranslationKey =
   | "conversation.unlinkedProject"
   | "conversation.history.loadMore"
   | "conversation.history.loading"
+  | "conversation.history.invalidResponse"
+  | "conversation.history.invalidCursor"
+  | "conversation.history.emptyPageWithMore"
+  | "conversation.history.loadFailed"
   | "conversation.action.copyFinal"
   | "conversation.action.copiedFinal"
   | "conversation.action.fork"
@@ -3074,6 +3082,10 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "appChrome.window.restore": "还原窗口",
     "appChrome.window.maximize": "最大化窗口",
     "appChrome.window.close": "关闭窗口",
+    "app.shutdown.persisting": "正在保存会话记录并安全关闭…",
+    "app.shutdown.persistFailed.title": "关闭前保存未完成",
+    "app.shutdown.persistFailed.description": "无法确认最后一批会话记录已经耐久保存。取消后可保持窗口打开，再次关闭即可重试。",
+    "app.shutdown.persistFailed.forceConfirm": "强制退出可能丢失最后一部分会话记录。是否仍要强制退出？",
     "appChrome.githubOpenFailed": "打开 GitHub 失败：",
     "appChrome.githubAria": "打开 OpenVulcan/vulcan-code GitHub 仓库",
     "sidebar.user.local": "本地用户",
@@ -3189,6 +3201,10 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.unlinkedProject": "未关联项目",
     "conversation.history.loadMore": "加载更多历史",
     "conversation.history.loading": "正在加载历史",
+    "conversation.history.invalidResponse": "历史分页响应不属于当前会话，已拒绝合并。",
+    "conversation.history.invalidCursor": "历史分页没有推进到更早位置，已停止合并以避免重复加载。请重试并查看会话历史分页诊断日志。",
+    "conversation.history.emptyPageWithMore": "本次没有加载到任何历史，但服务端仍声明存在更早记录。请重试并查看会话历史分页诊断日志。",
+    "conversation.history.loadFailed": "加载更早历史失败",
     "conversation.action.copyFinal": "复制最终输出原文",
     "conversation.action.copiedFinal": "已复制最终输出原文",
     "conversation.action.fork": "分叉会话",
@@ -5928,6 +5944,10 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "appChrome.window.restore": "Restore window",
     "appChrome.window.maximize": "Maximize window",
     "appChrome.window.close": "Close window",
+    "app.shutdown.persisting": "Saving conversation records and closing safely…",
+    "app.shutdown.persistFailed.title": "Shutdown save did not finish",
+    "app.shutdown.persistFailed.description": "The final conversation records could not be confirmed as durably saved. Cancel to keep the window open, then close it again to retry.",
+    "app.shutdown.persistFailed.forceConfirm": "Forcing exit may lose the final conversation records. Force exit anyway?",
     "appChrome.githubOpenFailed": "Failed to open GitHub: ",
     "appChrome.githubAria": "Open the OpenVulcan/vulcan-code GitHub repository",
     "sidebar.user.local": "Local user",
@@ -6043,6 +6063,10 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.unlinkedProject": "Unlinked project",
     "conversation.history.loadMore": "Load more history",
     "conversation.history.loading": "Loading history",
+    "conversation.history.invalidResponse": "The history page belongs to a different conversation and was rejected.",
+    "conversation.history.invalidCursor": "The history page did not advance to an older position and was rejected to prevent repeated loading. Retry and inspect the conversation history page diagnostics.",
+    "conversation.history.emptyPageWithMore": "No history was loaded, but the service still reports older records. Retry and inspect the conversation history page diagnostics.",
+    "conversation.history.loadFailed": "Failed to load older history",
     "conversation.action.copyFinal": "Copy final output source",
     "conversation.action.copiedFinal": "Copied final output source",
     "conversation.action.fork": "Fork conversation",

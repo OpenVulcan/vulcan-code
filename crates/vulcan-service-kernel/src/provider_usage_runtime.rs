@@ -956,7 +956,9 @@ fn provider_owner_is_regular_session(
     event: &ProviderRequestTelemetryEvent,
 ) -> Result<bool, String> {
     match telemetry_string(event, "owner_kind")?.as_str() {
-        "main_agent" => Ok(true),
+        // Conversation service workloads persist their physical calls in the owning regular-session ledger.
+        // 会话服务工作负载会把实际调用持久化到所属的常规会话账本中。
+        "main_agent" | "context_compaction" | "git_commit_summary" => Ok(true),
         "subagent" => Ok(false),
         owner_kind => Err(format!(
             "Provider telemetry has unsupported owner_kind `{owner_kind}`."
@@ -1585,6 +1587,57 @@ mod tests {
         assert!(snapshot.regular_session);
         assert!(snapshot.runtime_state_projection.is_some());
         assert!(snapshot.provider_call_ledger.calls.contains_key("call-1"));
+    }
+
+    /// Verifies conversation service workloads retain their Provider start boundary in the regular-session ledger.
+    /// 验证会话服务工作负载会把 Provider 开始边界保留在常规会话账本中。
+    #[test]
+    fn conversation_service_provider_boundaries_use_the_regular_session_ledger() {
+        for owner_kind in ["context_compaction", "git_commit_summary"] {
+            // Each service workload receives an isolated session so the fixed test call id cannot collide.
+            // 每个服务工作负载使用隔离会话，避免固定测试调用 ID 发生冲突。
+            let session_id = SessionId::new_v4();
+            let state = provider_usage_test_state(session_id);
+            let mut started = provider_usage_test_event(
+                ProviderRequestTelemetryEventKind::Started,
+                session_id,
+                None,
+            );
+            started.payload["owner_kind"] = Value::String(owner_kind.to_string());
+            started.payload["owner_id"] = Value::String(session_id.to_string());
+            started.payload["owner_name"] = Value::String(owner_kind.to_string());
+
+            let snapshot = apply_provider_request_usage_telemetry(&state, &started)
+                .unwrap_or_else(|error| panic!("{owner_kind} start boundary failed: {error}"))
+                .expect("service workload start boundary should change the ledger");
+
+            assert!(snapshot.regular_session, "owner_kind={owner_kind}");
+            assert!(snapshot.runtime_state_projection.is_some());
+            let record = snapshot
+                .provider_call_ledger
+                .calls
+                .get("call-1")
+                .expect("service workload start boundary should be retained");
+            assert_eq!(record.identity.owner_kind, owner_kind);
+        }
+    }
+
+    /// Verifies unrecognized Provider owners still fail closed instead of entering an arbitrary ledger.
+    /// 验证未知 Provider 所有者仍会封闭失败，而不会进入任意账本。
+    #[test]
+    fn unsupported_provider_owner_kind_remains_rejected() {
+        let session_id = SessionId::new_v4();
+        let mut started =
+            provider_usage_test_event(ProviderRequestTelemetryEventKind::Started, session_id, None);
+        started.payload["owner_kind"] = Value::String(String::from("unknown_workload"));
+
+        let error = provider_owner_is_regular_session(&started)
+            .expect_err("unknown Provider owner kind must fail closed");
+
+        assert_eq!(
+            error,
+            "Provider telemetry has unsupported owner_kind `unknown_workload`."
+        );
     }
 
     /// Verifies rollback removes a runtime entry created only for the failed boundary.

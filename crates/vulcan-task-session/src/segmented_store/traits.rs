@@ -1,6 +1,27 @@
 use super::*;
 
 impl SegmentedTaskSessionStore {
+    /// Explicitly repairs one indexed task-session JSONL stream and synchronizes its metadata.
+    /// 显式修复一个已索引子任务会话的 JSONL 流并同步其元数据。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `node_id` selects the exact indexed task-session directory.
+    /// `node_id` 选择精确索引的子任务会话目录。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success after explicit maintenance completes, or an exact lookup/repair error.
+    /// 显式维护完成后返回成功，否则返回精确查找/修复错误。
+    pub fn repair_task_session_storage(
+        &self,
+        node_id: SessionNodeId,
+    ) -> Result<(), SessionStoreError> {
+        let task_dir = self.indexed_task_dir(node_id)?;
+        let _ = read_repaired_task_segment_lines(&self.root_session_dir, &task_dir)?;
+        Ok(())
+    }
+
     /// Publishes one context document under the shared state-file transaction and optional exact precondition.
     /// 在共享状态文件事务与可选精确前置条件下发布一份上下文文档。
     ///
@@ -71,7 +92,7 @@ impl SessionNodeStore for SegmentedTaskSessionStore {
         node_id: SessionNodeId,
     ) -> Result<Vec<SessionEventRecord>, SessionStoreError> {
         let task_dir = self.indexed_task_dir(node_id)?;
-        let (_, lines) = read_repaired_task_segment_lines(&task_dir)?;
+        let (_, lines) = read_task_segment_lines(&self.root_session_dir, &task_dir)?;
         let mut records = Vec::new();
         for line in lines {
             if let Some(value) = line.payload.get("session_event").cloned() {
@@ -163,10 +184,11 @@ impl TaskSessionStore for SegmentedTaskSessionStore {
     fn create_task_session(&self, metadata: TaskSessionMetadata) -> Result<(), SessionStoreError> {
         // transaction_guard serializes existence checks, publication, and parent-link append.
         // transaction_guard 将存在性检查、发布与父级关联追加串行化。
-        let _transaction_guard =
-            vulcan_session_core::segmented_file_io::segmented_append_file_io_lock()
-                .lock()
-                .map_err(to_store_error)?;
+        let session_storage_lock =
+            vulcan_session_core::segmented_file_io::segmented_append_file_io_lock(
+                &self.root_session_dir,
+            );
+        let _transaction_guard = session_storage_lock.lock().map_err(to_store_error)?;
         create_dir_all(&self.task_root_dir())?;
         // task_dir is the single authoritative directory for this stable task-session id.
         // task_dir 是该稳定子任务会话标识对应的唯一权威目录。
@@ -291,10 +313,11 @@ impl TaskSessionStore for SegmentedTaskSessionStore {
     fn save_task_session(&self, metadata: TaskSessionMetadata) -> Result<(), SessionStoreError> {
         // The append lock protects the complete read-modify-write set shared with event appends.
         // 追加锁保护与事件追加共享的完整读改写集合。
-        let _transaction_guard =
-            vulcan_session_core::segmented_file_io::segmented_append_file_io_lock()
-                .lock()
-                .map_err(to_store_error)?;
+        let session_storage_lock =
+            vulcan_session_core::segmented_file_io::segmented_append_file_io_lock(
+                &self.root_session_dir,
+            );
+        let _transaction_guard = session_storage_lock.lock().map_err(to_store_error)?;
         let task_dir = self.indexed_task_dir(metadata.task_session_id)?;
         let metadata_path = task_metadata_path(&task_dir);
         let mut document = read_required_task_metadata_document(&metadata_path)?;
@@ -434,7 +457,7 @@ impl TaskSessionStore for SegmentedTaskSessionStore {
         task_session_id: TaskSessionId,
     ) -> Result<Vec<SessionCompactionCheckpoint>, SessionStoreError> {
         let task_dir = self.indexed_task_dir(task_session_id)?;
-        let (_, lines) = read_repaired_task_segment_lines(&task_dir)?;
+        let (_, lines) = read_task_segment_lines(&self.root_session_dir, &task_dir)?;
         let mut checkpoints = Vec::new();
         for line in lines {
             if let Some(value) = line.payload.get("compaction_checkpoint").cloned() {

@@ -106,7 +106,9 @@ pub(crate) async fn service_insert_pending_prompt(
             format!("session={selected_session_id} error={error}"),
         );
     }
-    spawn_workspace_session_persist_task(
+    // The immediate admission row is a process-scoped UI projection; only its queue state is durable here.
+    // 立即接纳行属于进程级界面投影；此处仅持久化其队列状态。
+    spawn_workspace_session_runtime_state_persist_task(
         state.clone(),
         controller_runtime.clone(),
         selected_session_id,

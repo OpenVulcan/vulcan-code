@@ -3,8 +3,9 @@
 
 use super::*;
 use crate::{
-    next_webui_session_addon_persist_version, persist_workspace_session_addon_state_update,
-    persist_workspace_session_update_unlocked, webui_session_addon_persist_versions_are_current,
+    next_webui_session_addon_persist_version,
+    persist_latest_retained_workspace_session_update_unlocked,
+    persist_workspace_session_addon_state_update, webui_session_addon_persist_versions_are_current,
     workspace_session_with_archive_status,
 };
 use vulcan_workbench_model::{SessionAddonNamespace, SessionAddonState};
@@ -50,7 +51,7 @@ pub(crate) async fn persist_context_compaction_snapshot(
     controller_runtime: ControllerRuntimeHandle,
     workspace_snapshot: WorkspaceSnapshot,
     session_id: SessionId,
-    section_id: String,
+    _section_id: String,
     reason: Option<String>,
 ) -> Result<(), String> {
     if !workspace_snapshot_contains_regular_session(&workspace_snapshot, session_id) {
@@ -103,8 +104,6 @@ pub(crate) async fn persist_context_compaction_snapshot(
             "context-compaction persistence was superseded before write: session={session_id}"
         ));
     }
-    let display_messages =
-        context_compaction_complete_display_messages(&workspace_snapshot, session_id, &section_id);
     // persistenceSnapshot is already owned by this task, so its exact session row can move without
     // cloning the workspace or canonical conversation history a second time.
     // persistenceSnapshot 已由当前任务独占，因此其精确会话行可以直接移动，无需再次复制工作区
@@ -166,29 +165,12 @@ pub(crate) async fn persist_context_compaction_snapshot(
         }
         Some(addon_state)
     };
-    // Compose the exact transcript and moved runtime state into one session snapshot before persistence.
-    // 在持久化前将精确转录与移动后的运行态组合成同一份会话快照。
-    if archived {
-        persistence_snapshot
-            .archived_session_messages
-            .insert(session_id, display_messages);
-        persistence_snapshot
-            .archived_session_runtime_state
-            .insert(session_id, runtime_state);
-    } else {
-        persistence_snapshot
-            .session_messages
-            .insert(session_id, display_messages);
-        persistence_snapshot
-            .session_runtime_state
-            .insert(session_id, runtime_state);
-    }
-    // The workspace-store single-session API writes segmented transcript, runtime state, and its
-    // locator in one ordered operation, so a rebuilt turn cannot observe a half-written boundary.
-    // workspace-store 单会话 API 按顺序一次写入转录、运行态和定位行，重建回合不会读到半写边界。
-    persist_workspace_session_update_unlocked(
+    // The retained-session path classifies lazy display windows before writing, so compaction can
+    // never promote a bounded in-memory window into complete-transcript overwrite authority.
+    // 保留会话路径会在写入前分类懒加载展示窗口，因此压缩绝不会把有界内存窗口提升为完整转录覆盖权威。
+    persist_latest_retained_workspace_session_update_unlocked(
+        &state,
         controller_runtime.clone(),
-        &persistence_snapshot,
         session_id,
     )
     .await
@@ -253,9 +235,9 @@ pub(crate) fn spawn_context_compaction_persist_task(
         }
     });
 }
-
-/// Returns the complete visible display window that must survive runtime compaction.
-/// 返回必须在运行态压缩后仍可保留的完整可见显示窗口。
+/// Returns the complete visible display window used by context-compaction projection tests.
+/// 返回上下文压缩投影测试使用的完整可见展示窗口。
+#[cfg(test)]
 pub(crate) fn context_compaction_complete_display_messages(
     workspace_snapshot: &WorkspaceSnapshot,
     session_id: SessionId,
@@ -276,9 +258,10 @@ pub(crate) fn context_compaction_complete_display_messages(
         })
 }
 
-/// Returns the visible display rows that belong to one context-compaction section.
-/// 返回归属于单个上下文压缩分段的可见显示行。
-pub(crate) fn context_compaction_section_display_messages(
+/// Returns the visible display rows that belong to one context-compaction section in tests.
+/// 在测试中返回归属于单个上下文压缩分段的可见显示行。
+#[cfg(test)]
+fn context_compaction_section_display_messages(
     workspace_snapshot: &WorkspaceSnapshot,
     session_id: SessionId,
     section_id: &str,
@@ -293,9 +276,10 @@ pub(crate) fn context_compaction_section_display_messages(
         .collect()
 }
 
-/// Returns whether one display row belongs to the requested context-compaction section.
-/// 返回单条显示行是否归属于请求的上下文压缩分段。
-pub(crate) fn context_compaction_message_belongs_to_section(
+/// Returns whether one display row belongs to the requested context-compaction section in tests.
+/// 在测试中返回单条显示行是否归属于请求的上下文压缩分段。
+#[cfg(test)]
+fn context_compaction_message_belongs_to_section(
     message: &SessionMessageEntry,
     section_id: &str,
 ) -> bool {

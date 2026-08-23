@@ -36,13 +36,8 @@ fn selected_session_runtime_hydration_preserves_existing_display_window() {
         "tool_display_state": "receiving",
         "request_revision": 1,
     }));
-    // hydrated_display_entry represents the lazy hydration window that must not overwrite display_entry.
-    // hydrated_display_entry 表示不应覆盖 display_entry 的懒加载显示窗口。
-    let hydrated_display_entry =
-        SessionMessageEntry::new(SessionMessageKind::Assistant, "助手", "水合显示正文")
-            .with_runtime_metadata("hydrated-display-entry", "1001");
-    // hidden_tool_detail_entry is loaded with the same visible window but must not be displayed directly.
-    // hidden_tool_detail_entry 随同一可见窗口加载，但不能直接显示。
+    // hidden_tool_detail_entry is already retained with the presentation window and must remain untouched.
+    // hidden_tool_detail_entry 已随展示窗口保留，执行水合不得改写它。
     let mut hidden_tool_detail_entry =
         SessionMessageEntry::new(SessionMessageKind::Assistant, "工具详情", "隐藏详情正文")
             .with_runtime_metadata("tool-detail-entry", "1002");
@@ -87,15 +82,9 @@ fn selected_session_runtime_hydration_preserves_existing_display_window() {
         String::from("orphaned-call"),
         String::from("orphaned-request-card"),
     );
-    let hydration = SessionHydrationSnapshot {
+    let hydration = SessionExecutionHydrationSnapshot {
         session_id,
-        messages: vec![hydrated_display_entry],
-        tool_detail_messages: vec![hidden_tool_detail_entry.clone()],
-        compactions: Vec::new(),
         runtime_state: Some(runtime_state),
-        message_start_index: Some(0),
-        earliest_ordinal: None,
-        has_more_history: false,
     };
     // workspace_snapshot already has the display layer but lacks runtime context.
     // workspace_snapshot 已有显示层但缺少运行态上下文。
@@ -106,7 +95,11 @@ fn selected_session_runtime_hydration_preserves_existing_display_window() {
         archived_sessions: Vec::new(),
         session_messages: BTreeMap::from([(
             session_id,
-            vec![display_entry, orphaned_display_entry],
+            vec![
+                display_entry,
+                orphaned_display_entry,
+                hidden_tool_detail_entry.clone(),
+            ],
         )]),
         archived_session_messages: BTreeMap::new(),
         session_compactions: BTreeMap::new(),
@@ -119,7 +112,7 @@ fn selected_session_runtime_hydration_preserves_existing_display_window() {
         hydrated_session_ids: BTreeSet::new(),
     };
 
-    apply_selected_session_runtime_hydration(&mut workspace_snapshot, session_id, hydration)
+    apply_session_execution_hydration(&mut workspace_snapshot, session_id, hydration)
         .expect("valid selected-session hydration identities");
 
     assert_eq!(

@@ -7,6 +7,7 @@ import {
 } from "./tool-presentations/ask-question-presentation";
 import {
   fileChangeStatusLabel,
+  hydrateFileAccessPresentation,
   resolveFileChangePresentation,
 } from "./tool-presentations/file-change-presentation";
 import {
@@ -67,6 +68,7 @@ export {
   askQuestionStatusLabel,
   commandPresentationStatusLabel,
   fileChangeStatusLabel,
+  hydrateFileAccessPresentation,
   hydrateMarkdownToolPresentation,
   hydrateLuaExecutionPresentation,
   hydrateSubagentOrchestrationPresentation,
@@ -88,7 +90,7 @@ export function resolveToolPresentation(
     ?? resolveProviderToolExtractPresentation(blocks, displayState)
     ?? resolveProviderToolSearchPresentation(blocks, displayState)
     ?? resolveAskQuestionPresentation(blocks, displayState, detailRef)
-    ?? resolveFileChangePresentation(blocks, displayState, options)
+    ?? resolveFileChangePresentation(blocks, displayState, options, detailRef)
     ?? resolveLuaExecutionPresentation(blocks, displayState, detailRef)
     ?? resolveMarkdownToolPresentation(blocks, displayState, detailRef)
     ?? resolveCommandExecutionPresentation(blocks, displayState, detailRef, options);

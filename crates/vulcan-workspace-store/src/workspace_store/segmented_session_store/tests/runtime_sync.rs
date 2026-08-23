@@ -44,6 +44,118 @@ fn read_test_runtime_index(session_dir: &Path) -> RuntimeLogIndex {
         .expect("read runtime index")
 }
 
+/// Verifies an ordinary cold runtime read never republishes the rebuildable runtime index.
+/// 验证普通运行时冷读取绝不会重新发布可重建运行时索引。
+#[test]
+fn ordinary_runtime_read_does_not_rewrite_runtime_index() {
+    // root isolates the exact runtime-read fixture.
+    // root 隔离精确运行时读取夹具。
+    let root = test_root("ordinary_runtime_read_does_not_rewrite_runtime_index");
+    // session_dir owns one valid runtime projection whose derived index can be removed safely.
+    // session_dir 持有一个有效运行时投影，其派生索引可被安全移除。
+    let session_dir = create_segmented_session_in_location(
+        &root,
+        false,
+        test_session_request(SegmentPolicy::default()),
+    )
+    .expect("create session");
+    // conversation_state provides one deterministic cold-read row.
+    // conversation_state 提供一条确定性的冷读取记录。
+    let conversation_state = conversation_state_from_session_messages(&[test_message(
+        "ordinary-read-user",
+        SessionMessageKind::User,
+        SessionMessageRecordKind::Transcript,
+        "ordinary read",
+    )])
+    .expect("build conversation state");
+    rebuild_runtime_log_from_conversation_state(&session_dir, &conversation_state, "t1")
+        .expect("build runtime log");
+    // index_path is removed to detect any hidden publication by the ordinary reader.
+    // index_path 被移除，用于检测普通读取器是否存在隐藏发布。
+    let index_path = runtime_index_path(&session_dir);
+    fs::remove_file(&index_path).expect("remove derived runtime index");
+
+    // lines proves strict cold recovery still succeeds without the derived index.
+    // lines 证明严格冷恢复在缺少派生索引时仍然成功。
+    let lines = read_runtime_log_lines(&session_dir)
+        .expect("read runtime log")
+        .expect("runtime log exists");
+
+    assert_eq!(lines.len(), 1);
+    assert!(!index_path.exists());
+}
+
+/// Verifies durable runtime appends advance the resident system-update projection without rereading JSONL.
+/// 验证耐久运行时追加会推进常驻系统更新投影，而无需重新读取 JSONL。
+#[test]
+fn resident_runtime_system_updates_advance_with_durable_appends() {
+    // root isolates the resident runtime-update fixture.
+    // root 隔离常驻运行时更新夹具。
+    let root = test_root("resident_runtime_system_updates_advance_with_durable_appends");
+    // session_dir owns the runtime log and its exact in-memory cache key.
+    // session_dir 持有运行时日志及其精确内存缓存键。
+    let session_dir = create_segmented_session_in_location(
+        &root,
+        false,
+        test_session_request(SegmentPolicy::default()),
+    )
+    .expect("create session");
+    // conversation_state initializes the durable runtime log and resident empty projection.
+    // conversation_state 初始化耐久运行时日志与常驻空投影。
+    let conversation_state = conversation_state_from_session_messages(&[test_message(
+        "resident-update-user",
+        SessionMessageKind::User,
+        SessionMessageRecordKind::Transcript,
+        "resident updates",
+    )])
+    .expect("build conversation state");
+    rebuild_runtime_log_from_conversation_state(&session_dir, &conversation_state, "t1")
+        .expect("build runtime log");
+
+    assert!(
+        record_runtime_audit_event(
+            &session_dir,
+            "t2",
+            test_runtime_system_update_event("update-one", "first update"),
+        )
+        .expect("append first system update")
+    );
+    assert!(
+        record_runtime_audit_event(
+            &session_dir,
+            "t3",
+            test_runtime_system_update_event("update-two", "second update"),
+        )
+        .expect("append second system update")
+    );
+    // segment_path is damaged only after durable appends to prove the following lookup is memory-only.
+    // segment_path 仅在耐久追加后被损坏，用于证明后续查询完全来自内存。
+    let segment_path = session_dir.join(runtime_segment_file_name());
+    fs::write(&segment_path, b"not valid runtime jsonl\n").expect("damage runtime segment");
+
+    // cached_updates must remain available even though opening and parsing the segment would now fail.
+    // cached_updates 即使打开并解析分段会失败，也必须保持可用。
+    let cached_updates = cached_runtime_system_updates(&session_dir)
+        .expect("read resident updates")
+        .expect("resident updates exist");
+    // update_ids preserve chronological append order in the retained projection.
+    // update_ids 在常驻投影中保留按时间顺序的追加次序。
+    let update_ids = cached_updates
+        .iter()
+        .map(|update| update.update_id.as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(update_ids, vec!["update-one", "update-two"]);
+    // Exact terminal release must remove only this session's resident projection.
+    // 精确终态释放必须只移除当前会话的常驻投影。
+    invalidate_runtime_system_update_cache(&session_dir).expect("release resident updates");
+    assert!(
+        cached_runtime_system_updates(&session_dir)
+            .expect("read released cache state")
+            .is_none()
+    );
+}
+
 /// Verifies compaction runtime backups copy active files and keep only the newest five backups.
 /// 验证压缩运行时备份会复制活动文件，并且仅保留最新五份备份。
 #[test]
@@ -794,9 +906,9 @@ fn concurrent_runtime_audit_appends_commit_without_event_loss() {
     // sequences exposes exact persisted ordering for the contiguity assertion.
     // sequences 暴露精确持久化顺序，用于连续性断言。
     let sequences = lines.iter().map(|line| line.seq).collect::<Vec<_>>();
-    // index captures the rebuildable sidecar after both serialized append transactions.
-    // index 捕获两个串行追加事务后的可重建附属索引。
-    let index = read_test_runtime_index(&session_dir);
+    // index_path proves hot appends invalidate rather than rebuild the derived sidecar.
+    // index_path 证明热追加会使派生附属索引失效，而不是重建它。
+    let index_path = runtime_index_path(&session_dir);
     // update_ids collects both unique audit identifiers independent of lock acquisition order.
     // update_ids 收集两个唯一审计标识，且不依赖锁获取顺序。
     let mut update_ids = lines
@@ -810,8 +922,7 @@ fn concurrent_runtime_audit_appends_commit_without_event_loss() {
 
     assert_eq!(append_results, vec![true, true]);
     assert_eq!(sequences, vec![1, 2, 3]);
-    assert_eq!(index.last_seq, Some(3));
-    assert_eq!(index.line_count, 3);
+    assert!(!index_path.exists());
     assert_eq!(
         update_ids,
         vec![
@@ -819,20 +930,6 @@ fn concurrent_runtime_audit_appends_commit_without_event_loss() {
             String::from("concurrent-audit-1")
         ]
     );
-    for update_id in &update_ids {
-        // event_seq is the authoritative JSONL sequence mirrored by the index entry.
-        // event_seq 是索引条目所镜像的权威 JSONL 序号。
-        let event_seq = lines
-            .iter()
-            .find_map(|line| match &line.event {
-                RuntimeLogEvent::SystemUpdate(event) if &event.update_id == update_id => {
-                    Some(line.seq)
-                }
-                _ => None,
-            })
-            .expect("find persisted concurrent audit event");
-        assert_eq!(index.system_update_offsets.get(update_id), Some(&event_seq));
-    }
 }
 
 /// Verifies a rebuilding sync and audit append preserve the audit event in either lock order.
@@ -1269,7 +1366,8 @@ fn runtime_tail_append_rejects_internal_sequence_gap_before_write() {
     let original_index = fs::read(runtime_index_path(&session_dir)).expect("read runtime index");
     // append_guard keeps snapshot validation and the rejected append in one lock lifetime.
     // append_guard 使快照验证与被拒绝追加保持在同一个锁生命周期内。
-    let append_guard = segmented_append_file_io_lock()
+    let session_storage_lock = segmented_append_file_io_lock(&session_dir);
+    let append_guard = session_storage_lock
         .lock()
         .expect("lock runtime append transaction");
     // snapshot is the validated state consumed by the append helper.
@@ -1403,8 +1501,8 @@ fn runtime_audit_append_reports_fully_damaged_runtime_log() {
     fs::write(session_dir.join("runtime").join("r001.jsonl"), "{ broken\n")
         .expect("damage runtime segment");
 
-    // append_error captures the first strict full-damage diagnosis.
-    // append_error 捕获第一次严格的全损坏诊断。
+    // append_error captures the first strict durable-boundary diagnosis.
+    // append_error 捕获第一次严格的耐久边界诊断。
     let append_error = record_runtime_audit_event(
         &session_dir,
         "t2",
@@ -1430,7 +1528,7 @@ fn runtime_audit_append_reports_fully_damaged_runtime_log() {
         .expect("read damaged runtime segment");
 
     assert!(append_error.contains("Runtime segment byte length mismatch before bounded append"));
-    assert!(read_error.contains("Runtime log is fully damaged"));
+    assert!(read_error.contains("Runtime segment byte length mismatch"));
     assert_eq!(persisted_segment, "{ broken\n");
 }
 

@@ -5,7 +5,9 @@ use super::*;
 use crate::{
     commit_prepared_submission_media_ledger,
     conversation_submission::{
-        effective_pending_prompt_reasoning_effort, promote_submission_attachment_draft_scope,
+        deferred_consumed_execution_retry_cleanup, effective_pending_prompt_reasoning_effort,
+        promote_submission_attachment_draft_scope, retain_accepted_preparation_retry_checkpoint,
+        spawn_accepted_retry_runtime_state_persist_task,
     },
     ensure_webui_goal_session_kernel_turn_start_allowed,
     pending_prompts::pending_prompt_attachment_staging_scope,
@@ -256,7 +258,9 @@ pub(crate) async fn maybe_prepare_next_webui_pending_prompt(
             restore_webui_pending_prompt(&mut workspace_snapshot, session_id, entry)?;
             store_workspace_snapshot_without_workbench_rebuild(state, workspace_snapshot)?;
             emit_pending_prompts_changed_delta(app, state, session_id)?;
-            spawn_workspace_session_persist_task(
+            // Restoring an unsent queue entry changes runtime metadata only; transcript ownership stays with the ordered writer.
+            // 恢复尚未发送的队列项只修改运行态元数据；转录所有权仍属于顺序写入器。
+            spawn_workspace_session_runtime_state_persist_task(
                 state.clone(),
                 controller_runtime.clone(),
                 session_id,
@@ -320,6 +324,21 @@ pub(crate) async fn maybe_prepare_next_webui_pending_prompt(
         execution_mode: String::from("build"),
         reasoning_effort,
     };
+    // A new user-authored queued turn supersedes any frozen retry identity owned by the completed run.
+    // 新的用户排队回合会替代已完成运行所拥有的冻结重试身份。
+    let mut deferred_consumed_retry_cleanup = None;
+    if entry.source.persists_canonical_user_message() {
+        match deferred_consumed_execution_retry_cleanup(
+            controller_runtime,
+            &workspace_snapshot,
+            session_id,
+        ) {
+            Ok(cleanup) => deferred_consumed_retry_cleanup = cleanup,
+            Err(error) => eprintln!(
+                "[webui-service] queued prompt consumed execution retry cleanup could not be scheduled: {error}"
+            ),
+        }
+    }
     let precheck_start = if let Some(expected_goal_dispatch_version) = goal_dispatch_version {
         // Service state always precedes the shared Hook runtime in the cross-runtime lock order.
         // 跨运行时锁顺序中，服务状态始终先于共享 Hook 运行时。
@@ -380,6 +399,31 @@ pub(crate) async fn maybe_prepare_next_webui_pending_prompt(
         }
         precheck_start
     };
+    if entry.source.persists_canonical_user_message()
+        && let Err(error) = retain_accepted_preparation_retry_checkpoint(
+            &mut workspace_snapshot,
+            session_id,
+            entry.id.as_str(),
+            &precheck_start,
+            deferred_consumed_retry_cleanup
+                .as_ref()
+                .map(|cleanup| cleanup.generation()),
+        )
+    {
+        // Retry retention is auxiliary; the accepted user prompt remains authoritative even if this projection fails.
+        // 重试保留属于辅助能力；即使投影失败，已接纳的用户提示词仍保持权威。
+        eprintln!(
+            "[webui-service] queued prompt accepted preparation retry checkpoint skipped: {error}"
+        );
+        if let Some(runtime_state) = workspace_snapshot
+            .session_runtime_state
+            .get_mut(&session_id)
+        {
+            let _ = runtime_state.execution_retry_snapshot.take();
+            runtime_state.transient_execution_retry_snapshot = None;
+            runtime_state.updated_at = current_unix_millis_text();
+        }
+    }
     commit_prepared_submission_media_ledger(
         &mut workspace_snapshot,
         session_id,
@@ -418,6 +462,37 @@ pub(crate) async fn maybe_prepare_next_webui_pending_prompt(
             panel_entry_id,
         );
     }
+    // Only the canonical user row crosses the durable transcript boundary; the earlier admission row is UI-only.
+    // 只有规范用户记录跨越可靠转录边界；此前的接纳行仅用于界面投影。
+    let visible_user_prompt_record_for_persistence = if entry
+        .source
+        .persists_canonical_user_message()
+    {
+        let visible_user_prompt_record_id = precheck_start
+            .visible_user_prompt_record_id
+            .as_deref()
+            .ok_or_else(|| {
+                String::from("Queued user prompt started without a visible transcript record id.")
+            })?;
+        Some(
+            workspace_snapshot
+                .session_messages
+                .get(&session_id)
+                .and_then(|messages| {
+                    messages
+                        .iter()
+                        .find(|message| message.id == visible_user_prompt_record_id)
+                })
+                .cloned()
+                .ok_or_else(|| {
+                    format!(
+                        "Queued user prompt visible record `{visible_user_prompt_record_id}` is missing from the retained transcript."
+                    )
+                })?,
+        )
+    } else {
+        None
+    };
     commit_workspace_snapshot_and_emit_session_phase_delta(
         app,
         state,
@@ -448,7 +523,57 @@ pub(crate) async fn maybe_prepare_next_webui_pending_prompt(
     if panel_entry_id.is_some() {
         emit_pending_prompts_changed_delta(app, state, session_id)?;
     }
-    if entry.source.runs_user_prompt_precheck() {
+    if let Some(visible_user_prompt_record) = visible_user_prompt_record_for_persistence {
+        // Admission is synchronous inside the writer helper, so later runtime events cannot reserve this row's position first.
+        // 写入器辅助函数会同步完成准入，因此后续运行时事件不能抢先预留该记录的位置。
+        // transcriptAdmissionResult preserves synchronous locator/cursor failure before any durability wait begins.
+        // transcriptAdmissionResult 在开始可靠性等待前保留同步定位器或游标失败。
+        let transcript_admission_result = spawn_exact_session_transcript_entries_persist_task(
+            state.clone(),
+            controller_runtime.clone(),
+            session_id,
+            vec![visible_user_prompt_record],
+            Some(String::from("queued_canonical_user_message")),
+        );
+        // The queued Provider turn cannot start until its canonical user boundary is physically durable.
+        // 排队 Provider 回合只能在其规范用户边界完成物理持久化后启动。
+        // transcriptDurabilityResult unifies synchronous admission and asynchronous physical-write failure.
+        // transcriptDurabilityResult 统一同步准入失败与异步物理写入失败。
+        let transcript_durability_result = match transcript_admission_result {
+            Ok(()) => await_session_transcript_writer_durable(session_id).await,
+            Err(error) => Err(error),
+        };
+        if let Err(error) = transcript_durability_result {
+            let cleanup_error = mark_webui_prompt_preparation_failed(
+                app,
+                state,
+                controller_runtime,
+                &entry_agent_runtime,
+                session_id,
+                &precheck_start.preparation_turn_id,
+                &error,
+            )
+            .await
+            .err();
+            return Err(cleanup_error.map_or_else(
+                || format!("Queued user prompt transcript durability failed: {error}"),
+                |cleanup_error| {
+                    format!(
+                        "Queued user prompt transcript durability failed: {error}; cleanup also failed: {cleanup_error}"
+                    )
+                },
+            ));
+        }
+    }
+    if entry.source.persists_canonical_user_message() {
+        spawn_accepted_retry_runtime_state_persist_task(
+            state.clone(),
+            controller_runtime.clone(),
+            session_id,
+            deferred_consumed_retry_cleanup,
+            "queued_begin",
+        );
+    } else if entry.source.runs_user_prompt_precheck() {
         spawn_workspace_session_runtime_state_persist_task(
             state.clone(),
             controller_runtime.clone(),

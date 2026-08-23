@@ -34,9 +34,6 @@ pub(super) struct SegmentedWindowMessages {
     /// Whether older segmented events exist before this window.
     /// 当前窗口之前是否还存在更早的分段事件。
     pub(super) has_more_history: bool,
-    /// Full projected message window used by runtime-state hydration.
-    /// 供运行态水合使用的完整投影消息窗口。
-    pub(super) full_messages: Vec<SessionMessageEntry>,
     /// Canonical session-boundary-derived conversation state when the window came from session boundary events.
     /// 当窗口来自 会话边界事件时对应的规范 会话边界投影会话状态。
     pub(super) boundary_conversation_state: Option<SessionConversationState>,

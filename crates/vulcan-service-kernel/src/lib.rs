@@ -570,8 +570,17 @@ pub fn service_prepare_for_app_shutdown(
         .and_then(|_| project_terminal_runtime().request_all_terminal_stops_for_shutdown());
     let runtime_shutdown = ordered_runtime_shutdown(
         || match task_runtime.as_ref() {
-            Some(task_runtime) => task_runtime.stop_active_tasks_for_app_shutdown(),
-            None => Ok(Vec::new()),
+            Some(task_runtime) => {
+                // stopped_task_ids are captured before canonical writer drain prevents new runtime events.
+                // stopped_task_ids 在规范写入器排空阻止新运行事件之前捕获。
+                let stopped_task_ids = task_runtime.stop_active_tasks_for_app_shutdown()?;
+                drain_all_session_transcript_writers_for_shutdown()?;
+                Ok(stopped_task_ids)
+            }
+            None => {
+                drain_all_session_transcript_writers_for_shutdown()?;
+                Ok(Vec::new())
+            }
         },
         || {
             if let Some(managed_memory_mesh_runtime) = managed_memory_mesh_runtime {
@@ -600,6 +609,17 @@ pub fn service_prepare_for_app_shutdown(
             "{runtime_error} Project terminal shutdown also failed: {terminal_error}"
         )),
     }
+}
+
+/// Reopens transcript writer admission after the host keeps the window open following a failed shutdown.
+/// 在关闭失败后宿主保持窗口打开时重新开放转录写入器准入。
+///
+/// # Returns
+/// 返回值
+/// This operation only resets the process-local shutdown admission seal and cannot fail.
+/// 此操作仅重置进程内关闭准入封印，不会失败。
+pub fn service_resume_after_failed_app_shutdown() {
+    resume_session_transcript_writer_admission_after_failed_shutdown();
 }
 
 /// Runs the strict task, managed-memory, and MCP shutdown sequence.

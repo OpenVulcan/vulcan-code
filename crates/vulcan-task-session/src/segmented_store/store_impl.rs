@@ -208,10 +208,11 @@ impl SegmentedTaskSessionStore {
     ) -> Result<SegmentedEventLine, SessionStoreError> {
         // transaction_guard protects JSONL append and both child metadata projections.
         // transaction_guard 保护 JSONL 追加与两份子任务元数据投影。
-        let _transaction_guard =
-            vulcan_session_core::segmented_file_io::segmented_append_file_io_lock()
-                .lock()
-                .map_err(to_store_error)?;
+        let session_storage_lock =
+            vulcan_session_core::segmented_file_io::segmented_append_file_io_lock(
+                &self.root_session_dir,
+            );
+        let _transaction_guard = session_storage_lock.lock().map_err(to_store_error)?;
         self.append_task_segment_event_with_owned_append_lock(
             task_session_id,
             kind,
@@ -304,10 +305,11 @@ impl SegmentedTaskSessionStore {
     ) -> Result<(), SessionStoreError> {
         // transaction_guard prevents interleaving between the direct parent and root projections.
         // transaction_guard 防止直接父级投影与根投影之间发生交错。
-        let _transaction_guard =
-            vulcan_session_core::segmented_file_io::segmented_append_file_io_lock()
-                .lock()
-                .map_err(to_store_error)?;
+        let session_storage_lock =
+            vulcan_session_core::segmented_file_io::segmented_append_file_io_lock(
+                &self.root_session_dir,
+            );
+        let _transaction_guard = session_storage_lock.lock().map_err(to_store_error)?;
         self.append_parent_invocation_event_with_owned_append_lock(parent, event)
     }
 
@@ -376,7 +378,7 @@ impl SegmentedTaskSessionStore {
                 ..
             } => {
                 let task_dir = self.indexed_task_dir(*parent_task_session_id)?;
-                read_task_invocations_from_task_segments(&task_dir, parent)
+                read_task_invocations_from_task_segments(&self.root_session_dir, &task_dir, parent)
             }
         }
     }

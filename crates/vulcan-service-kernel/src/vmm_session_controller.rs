@@ -47,6 +47,7 @@ impl SessionVmmControllerOpenError {
     /// 返回值
     /// `true` only for a storage-classified historical or damaged VMM attachment.
     /// 仅对存储层已分类的历史或损坏 VMM 附件返回 `true`。
+    #[cfg(test)]
     pub(crate) fn requires_rebuild(&self) -> bool {
         matches!(self, Self::RebuildRequired(_))
     }

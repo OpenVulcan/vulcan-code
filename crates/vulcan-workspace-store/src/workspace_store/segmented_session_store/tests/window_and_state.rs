@@ -160,11 +160,11 @@ fn read_turn_window_preserves_complete_display_turns() {
     assert!(!previous_window.has_more_history);
 }
 
-/// Verifies display window loading repairs a malformed JSONL tail before strict projection.
-/// 验证展示窗口加载会在严格投影前修复格式损坏的 JSONL 尾行。
+/// Verifies display window loading ignores bytes beyond the durable boundary without mutating storage.
+/// 验证展示窗口加载会忽略可靠边界之后的字节，且不修改存储。
 #[test]
-fn read_turn_window_repairs_corrupt_jsonl_tail_before_loading() {
-    let root = test_root("read_turn_window_repairs_corrupt_jsonl_tail_before_loading");
+fn read_turn_window_ignores_uncommitted_corrupt_tail_without_repair() {
+    let root = test_root("read_turn_window_ignores_uncommitted_corrupt_tail_without_repair");
     let session_dir = create_segmented_session_in_location(
         &root,
         false,
@@ -192,9 +192,17 @@ fn read_turn_window_repairs_corrupt_jsonl_tail_before_loading() {
         .open(&segment_path)
         .expect("open segment for corruption");
     write!(file, "{{\"seq\":999,\"timestamp\":\"broken\"").expect("append corrupt json tail");
+    drop(file);
+    // corrupted_segment_bytes capture the exact malformed file before the ordinary read.
+    // corrupted_segment_bytes 捕获普通读取前格式损坏文件的精确字节。
+    let corrupted_segment_bytes = fs::read(&segment_path).expect("read corrupted segment");
+    // metadata_bytes capture the exact metadata before the ordinary read.
+    // metadata_bytes 捕获普通读取前的精确元数据。
+    let metadata_path = session_dir.join(SEGMENTED_METADATA_FILE);
+    let metadata_bytes = fs::read(&metadata_path).expect("read metadata before ordinary read");
 
-    let window =
-        read_segmented_session_turn_window(&session_dir, None, 1).expect("read repaired window");
+    let window = read_segmented_session_turn_window(&session_dir, None, 1)
+        .expect("ordinary read uses the durable metadata boundary");
 
     assert_eq!(
         window
@@ -204,17 +212,14 @@ fn read_turn_window_repairs_corrupt_jsonl_tail_before_loading() {
             .collect::<Vec<_>>(),
         vec!["m-user-1", "m-assistant-1"]
     );
-    assert!(!window.has_more_history);
-    let text = fs::read_to_string(&segment_path).expect("read repaired segment");
-    assert!(
-        text.lines()
-            .all(|line| serde_json::from_str::<Value>(line).is_ok())
+    assert_eq!(
+        fs::read(&segment_path).expect("read unchanged corrupted segment"),
+        corrupted_segment_bytes
     );
-    let metadata: SegmentedSessionMetadata =
-        read_required_json(&session_dir.join(SEGMENTED_METADATA_FILE))
-            .expect("read repaired metadata");
-    assert_eq!(metadata.next_global_seq, 3);
-    assert_eq!(metadata.segments[0].line_count, 3);
+    assert_eq!(
+        fs::read(&metadata_path).expect("read unchanged metadata"),
+        metadata_bytes
+    );
 }
 
 /// Verifies state documents are overwritten independently from JSONL event lines.
@@ -324,4 +329,35 @@ fn runtime_state_entry_maps_to_segmented_state_document() {
     assert!(state.runtime_state.get("ai_tool_configuration").is_none());
     assert!(state.runtime_state.get("conversation_state").is_none());
     assert!(state.current_context.get("conversation_state").is_none());
+}
+
+/// Verifies overwrite-only state IO locks share by exact directory without blocking another session.
+/// 验证覆盖式状态 IO 锁仅按精确目录共享，且不会阻塞另一个会话。
+#[test]
+fn state_document_locks_are_sharded_by_exact_session_directory() {
+    // root owns deterministic synthetic session directories for this lock-identity test.
+    // root 为本锁身份测试持有确定性的合成会话目录。
+    let root = test_root("state_document_locks_are_sharded_by_exact_session_directory");
+    // first_session identifies the state document whose lock identity must remain stable.
+    // first_session 标识锁身份必须保持稳定的状态文档。
+    let first_session = root.join("session-a");
+    // second_session identifies an independent state document that must receive another lock.
+    // second_session 标识必须获得另一把锁的独立状态文档。
+    let second_session = root.join("session-b");
+    // first_lock is the retained lock handle for the first exact directory.
+    // first_lock 是第一个精确目录的保留锁句柄。
+    let first_lock = segmented_state_file_io_lock(&first_session);
+    // repeated_first_lock proves exact lookups reuse the same live lock.
+    // repeated_first_lock 证明精确查询会复用同一把存活锁。
+    let repeated_first_lock = segmented_state_file_io_lock(&first_session);
+    // second_lock is independently acquirable while the first session is locked.
+    // second_lock 在第一个会话锁定期间仍可独立获取。
+    let second_lock = segmented_state_file_io_lock(&second_session);
+
+    assert!(Arc::ptr_eq(&first_lock, &repeated_first_lock));
+    assert!(!Arc::ptr_eq(&first_lock, &second_lock));
+    // first_guard holds only the first session lock while the second is probed.
+    // first_guard 仅持有第一个会话锁，同时探测第二把锁。
+    let _first_guard = first_lock.lock().expect("lock first session state");
+    assert!(second_lock.try_lock().is_ok());
 }

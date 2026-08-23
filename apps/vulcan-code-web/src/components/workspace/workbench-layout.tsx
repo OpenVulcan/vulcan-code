@@ -88,6 +88,7 @@ import type {
   AgentSkillsCatalogUpdate,
   ComposerSlashCommandSummary,
   ConversationArchivedDelta,
+  ConversationHistoryPageResponse,
   ConversationMessage,
   ConversationSummary,
   FeatureAreaSummary,
@@ -176,6 +177,7 @@ import {
   applyWorkbenchDeltaWithSubagentSurfaceMessageCache,
   coalesceWorkbenchDeltaEnvelopes,
   markConversationLocallyRead,
+  mergeConversationHistoryPageResponseWithSubagentSurfaceMessageCache,
   mergeConversationHydrationSnapshotWithSubagentSurfaceMessageCache,
   mergeWorkbenchSnapshotWithSubagentSurfaceMessageCache,
   shouldAcceptWorkbenchRevision,
@@ -601,6 +603,28 @@ export function WorkbenchLayout(props: {
       return merged;
     })()
   ), []);
+  // mergeConversationHistoryPageWithLocalCaches applies one page without replacing unrelated live workbench state.
+  // mergeConversationHistoryPageWithLocalCaches 应用单页历史，且不替换无关的实时工作台状态。
+  const mergeConversationHistoryPageWithLocalCaches = React.useCallback((
+    current: WorkbenchSnapshot,
+    response: ConversationHistoryPageResponse,
+  ) => {
+    // result is the deterministic page merge after reconciling retained child surfaces.
+    // result 是对账已保留子界面后的确定性分页合并结果。
+    const result = mergeConversationHistoryPageResponseWithSubagentSurfaceMessageCache(
+      current,
+      response,
+      subagentSurfaceMessageCacheRef.current,
+    );
+    acceptedWorkbenchRevisionRef.current = Math.max(
+      acceptedWorkbenchRevisionRef.current,
+      result.workbench.revision ?? 0,
+    );
+    return result;
+  }, []);
+  // readLatestWorkbenchState returns the latest committed UI snapshot for pagination preflight checks.
+  // readLatestWorkbenchState 返回用于分页预检的最新已提交界面快照。
+  const readLatestWorkbenchState = React.useCallback((): WorkbenchSnapshot => workbenchStateRef.current, []);
   // resetAcceptedWorkbenchOrderingForServiceInstance clears ordering owned by a replaced service.
   // resetAcceptedWorkbenchOrderingForServiceInstance 清理由已替换服务持有的版本排序。
   const resetAcceptedWorkbenchOrderingForServiceInstance = React.useCallback((
@@ -1054,7 +1078,9 @@ export function WorkbenchLayout(props: {
     draftConversationId: draftConversation?.id ?? null,
     selectedConversationHydrated,
     hydratedConversationWindowById,
+    mergeConversationHistoryPageWithLocalCaches,
     mergeConversationHydrationWithLocalCaches,
+    readLatestWorkbenchState,
     setWorkbenchState,
   });
   // selectedDraftConversation stores the draft used by the console header and empty state.

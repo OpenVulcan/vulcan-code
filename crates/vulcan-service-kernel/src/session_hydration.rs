@@ -13,19 +13,20 @@ use vulcan_workbench_model::{
 };
 use vulcan_workspace_store::{
     data_plane::ControllerRuntimeHandle,
-    workspace_store::{SessionHydrationSnapshot, WorkspaceSnapshot},
+    workspace_store::{
+        SessionExecutionHydrationSnapshot, SessionHydrationSnapshot, WorkspaceSnapshot,
+    },
 };
 
 use super::{
     SELECTED_SESSION_TURN_LOAD_LIMIT, SharedServiceBridgeState,
     apply_persisted_task_mirror_statuses_to_workspace, current_unix_millis_value,
-    filter_legacy_goal_internal_user_messages, is_active_session_run_phase,
-    runtime_state_has_queued_pending_prompt_work, selected_workspace_session_id,
-    session_summary_project_and_created_at, session_summary_project_id,
-    webui_session_kernel_has_active_turn, webui_subagent_task_has_live_run_for_phase,
-    webui_trace_if_slow, workspace_session_summary_for_session,
-    workspace_snapshot_contains_active_project, workspace_task_project_for_project_id,
-    workspace_task_project_for_project_id_mut,
+    is_active_session_run_phase, runtime_state_has_queued_pending_prompt_work,
+    selected_workspace_session_id, session_summary_project_and_created_at,
+    session_summary_project_id, webui_session_kernel_has_active_turn,
+    webui_subagent_task_has_live_run_for_phase, webui_trace_if_slow,
+    workspace_session_summary_for_session, workspace_snapshot_contains_active_project,
+    workspace_task_project_for_project_id, workspace_task_project_for_project_id_mut,
 };
 
 mod context_marker;

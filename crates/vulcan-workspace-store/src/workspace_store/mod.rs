@@ -39,7 +39,6 @@ mod session_load;
 use self::runtime_state_codec::{
     deserialize_session_runtime_state_entry, serialize_session_runtime_state_entry,
 };
-pub use self::segmented_session_store::find_segmented_session_directory_for_task_store_created_at;
 use self::segmented_session_store::{
     SegmentedSessionEventInput, SegmentedSessionEventKind, SegmentedSessionStateDocument,
     append_segmented_boundary_events, append_segmented_session_events,
@@ -50,6 +49,9 @@ use self::segmented_session_store::{
     reset_vmm_state_for_history_rewrite, segmented_session_directory,
     segmented_session_directory_exists, state_document_from_runtime_state,
     write_core_vmm_controller_state, write_file_bytes_atomic, write_state,
+};
+pub use self::segmented_session_store::{
+    SessionTranscriptAppendCursor, find_segmented_session_directory_for_task_store_created_at,
 };
 use self::session_addon_store::read_session_addon_state;
 pub use ai_credentials::{
@@ -67,10 +69,12 @@ pub use goal_store::{
     validate_thread_goal_token_budget,
 };
 pub use persistence::{
-    PersistedSessionForkResult, PersistedUserPromptRollbackResult, archive_project_sessions,
-    archive_single_session, cleanup_missing_session_index, delete_archived_session,
-    fork_persisted_session, load_single_session_transcript_checkpoint_in_directory,
-    persist_collapsed_task_project_ids, persist_existing_session_index_update, persist_new_project,
+    PersistedSessionForkResult, PersistedUserPromptRollbackResult,
+    advance_single_session_transcript_checkpoint, archive_project_sessions, archive_single_session,
+    cleanup_missing_session_index, delete_archived_session, fork_persisted_session,
+    load_single_session_transcript_checkpoint_in_directory,
+    open_single_session_transcript_append_cursor_in_directory, persist_collapsed_task_project_ids,
+    persist_existing_session_index_update, persist_new_project,
     persist_project_codebase_memory_enabled, persist_project_icon_update,
     persist_project_order_update, persist_project_pinned_and_order_update,
     persist_single_session_addon_state_update,
@@ -78,9 +82,11 @@ pub use persistence::{
     persist_single_session_runtime_state_update,
     persist_single_session_transcript_messages_in_directory,
     persist_single_session_transcript_tail_from_checkpoint_in_directory,
-    persist_single_session_transcript_tail_in_directory, persist_single_session_update,
+    persist_single_session_transcript_tail_in_directory,
+    persist_single_session_transcript_tail_with_cursor, persist_single_session_update,
     remove_project_after_archiving_sessions, rename_project, rename_single_session,
-    restore_archived_session, restore_project, rollback_persisted_session_before_user_prompt,
+    restore_archived_session, restore_project, retry_single_session_transcript_tail_with_cursor,
+    rollback_persisted_session_before_user_prompt,
 };
 
 /// Lightweight pre-serialized metadata for one exact `state.json` update.
@@ -116,6 +122,7 @@ pub use provider_usage::{
 };
 pub use session_load::{
     load_session_display_hydration_snapshot_for_project_created_at,
+    load_session_execution_hydration_snapshot_for_project_created_at,
     load_session_history_page_for_project_created_at,
     load_session_hydration_snapshot_for_project_created_at,
     load_session_transcript_window_for_project_created_at,
@@ -127,12 +134,6 @@ pub const SESSION_TRANSCRIPT_WINDOW_MAX_TURN_LIMIT: usize = 50;
 /// Number of complete turns kept visible before the latest compaction boundary when the startup transcript page would otherwise stop too late.
 /// 当启动转录分页本应停得过晚时，在最近压缩边界之前仍需额外保留的完整轮次数量。
 pub const SESSION_TRANSCRIPT_COMPACTION_OVERLAP_TURN_COUNT: usize = 5;
-/// Maximum message rows fetched for each requested turn before an inner-turn page becomes necessary.
-/// 在需要轮内分页前，每个请求轮次允许拉取的最大消息行数。
-const SESSION_TRANSCRIPT_ROWS_PER_TURN_LIMIT: usize = 32;
-/// Minimum message-row floor used when one segmented turn window contains dense rows.
-/// 当单个分段轮次窗口包含密集行时使用的最小消息行下限。
-const SESSION_TRANSCRIPT_MIN_ROW_LIMIT: usize = 100;
 /// App metadata key used to persist collapsed task-project identifiers.
 /// 用于持久化已折叠任务项目标识的应用元数据键。
 const COLLAPSED_TASK_PROJECTS_METADATA_KEY: &str = "workspace.collapsed_task_projects";

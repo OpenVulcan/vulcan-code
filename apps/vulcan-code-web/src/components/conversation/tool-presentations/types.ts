@@ -129,6 +129,9 @@ export interface FileChangePresentation {
   // Read-only action selected by the native file tool, when this is not a mutation card.
   // 原生 file 工具选择的只读动作；非只读卡片时为空。
   accessAction?: FileAccessAction | null;
+  // Hidden detail reference used to hydrate native file results lazily after completion.
+  // 用于工具完成后按需加载原生 file 返回内容的隐藏详情引用。
+  detailRef?: ConversationDetailRef;
   // Files shown by this presentation.
   // 当前展示包含的文件列表。
   files: FileChangeFilePresentation[];
@@ -178,6 +181,9 @@ export interface FileChangeFilePresentation {
   // Display path after workspace-relative normalization.
   // 工作区相对归一后的展示路径。
   displayPath: string;
+  // Requested one-based line range for a native read target, when provided.
+  // 原生读取目标提供范围时显示的一基准行号范围。
+  readRange?: string | null;
   // Whether the display path is project-local or external.
   // 展示路径属于项目内还是项目外。
   pathKind: "project" | "external" | "unknown";

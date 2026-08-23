@@ -14,23 +14,24 @@ mod tests;
 
 use super::segmented_session_store::{
     SegmentPolicy, SegmentedSessionCreateRequest, SegmentedSessionForkRequest,
-    SegmentedSessionForkSource, SegmentedSessionReplayResult,
+    SegmentedSessionForkSource, SegmentedSessionReplayResult, SessionTranscriptAppendCursor,
     append_segmented_session_message_tail_from_checkpoint,
-    append_segmented_session_message_tail_update, append_segmented_session_message_update,
+    append_segmented_session_message_tail_update,
+    append_segmented_session_message_tail_with_cursor, append_segmented_session_message_update,
     archive_segmented_session_by_created_date, create_segmented_session_in_location,
     finalize_staged_archived_session_deletion,
     find_segmented_session_directory_for_task_store_created_at,
     fork_segmented_session_directory_from_source, history_rewrite_mutable_relative_paths,
-    read_session_metadata, rebuild_runtime_log_from_conversation_state,
-    rename_segmented_session_by_created_date, repair_segmented_session_display_if_needed,
-    replay_segmented_session_context_without_repair, restore_segmented_session_by_created_date,
-    rewrite_json_value_identity_tokens, rewrite_string_identity_tokens,
-    rollback_staged_archived_session_deletion, segmented_session_directory,
-    segmented_session_directory_exists, stage_archived_segmented_session_deletion,
-    state_document_from_runtime_state, sync_runtime_log_from_compacted_conversation_state,
-    sync_runtime_log_from_conversation_state, to_store_error,
-    truncate_segmented_session_before_message, update_segmented_message_checkpoint, write_metadata,
-    write_segmented_session_fork_source, write_state,
+    open_segmented_session_transcript_append_cursor, read_session_metadata,
+    rebuild_runtime_log_from_conversation_state, rename_segmented_session_by_created_date,
+    replay_segmented_session_context, restore_segmented_session_by_created_date,
+    retry_segmented_session_message_tail_with_cursor, rewrite_json_value_identity_tokens,
+    rewrite_string_identity_tokens, rollback_staged_archived_session_deletion,
+    segmented_session_directory, segmented_session_directory_exists,
+    stage_archived_segmented_session_deletion, state_document_from_runtime_state,
+    sync_runtime_log_from_compacted_conversation_state, sync_runtime_log_from_conversation_state,
+    to_store_error, truncate_segmented_session_before_message, update_segmented_message_checkpoint,
+    write_metadata, write_segmented_session_fork_source, write_state,
 };
 use super::session_addon_store::{read_session_addon_state, write_session_addon_state};
 use super::*;
@@ -62,9 +63,13 @@ pub use session_lifecycle::{
     restore_project,
 };
 pub use snapshot::{
-    load_single_session_transcript_checkpoint_in_directory, persist_existing_session_index_update,
-    persist_single_session_runtime_state_update,
+    advance_single_session_transcript_checkpoint,
+    load_single_session_transcript_checkpoint_in_directory,
+    open_single_session_transcript_append_cursor_in_directory,
+    persist_existing_session_index_update, persist_single_session_runtime_state_update,
     persist_single_session_transcript_messages_in_directory,
     persist_single_session_transcript_tail_from_checkpoint_in_directory,
-    persist_single_session_transcript_tail_in_directory, persist_single_session_update,
+    persist_single_session_transcript_tail_in_directory,
+    persist_single_session_transcript_tail_with_cursor, persist_single_session_update,
+    retry_single_session_transcript_tail_with_cursor,
 };

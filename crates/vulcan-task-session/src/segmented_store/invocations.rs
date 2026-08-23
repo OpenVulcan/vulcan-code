@@ -27,10 +27,11 @@ pub(super) fn read_task_invocations_from_main_segments(
 /// Reads task invocations from a task segmented stream.
 /// 从子任务分段流读取子任务调用事件。
 pub(super) fn read_task_invocations_from_task_segments(
+    root_session_dir: &Path,
     task_dir: &Path,
     parent: &ParentSessionRef,
 ) -> Result<Vec<TaskInvocationEvent>, SessionStoreError> {
-    let (_, lines) = read_repaired_task_segment_lines(task_dir)?;
+    let (_, lines) = read_task_segment_lines(root_session_dir, task_dir)?;
     read_task_invocations_from_lines(lines, parent)
 }
 
@@ -62,15 +63,28 @@ pub(super) fn read_segment_lines(
     dir: &Path,
     segments: &[SegmentMetadata],
 ) -> Result<Vec<SegmentedEventLine>, SessionStoreError> {
-    let _guard = vulcan_session_core::segmented_file_io::segmented_append_file_io_lock()
-        .lock()
-        .map_err(to_store_error)?;
+    let session_storage_lock =
+        vulcan_session_core::segmented_file_io::segmented_append_file_io_lock(dir);
+    let _guard = session_storage_lock.read().map_err(to_store_error)?;
     read_segment_lines_with_owned_append_lock(dir, segments)
 }
 
-/// Reads task-session segment lines after repairing damaged JSONL and synchronizing metadata.
-/// 修复损坏 JSONL 并同步元数据后读取子任务会话分段行。
-pub(super) fn read_repaired_task_segment_lines(
+/// Reads one task-session stream from its exact metadata snapshot without repairing or writing files.
+/// 从精确元数据快照读取一个子任务会话流，且不修复或写入文件。
+///
+/// # Parameters
+/// 参数
+/// `root_session_dir` selects the parent-root storage lock.
+/// `root_session_dir` 选择父根会话存储锁。
+/// `task_dir` is the exact indexed task-session directory.
+/// `task_dir` 是精确索引的子任务会话目录。
+///
+/// # Returns
+/// 返回值
+/// The immutable metadata snapshot and decoded lines, or an explicit read/validation error.
+/// 返回不可变元数据快照与已解码行，或明确的读取/校验错误。
+pub(super) fn read_task_segment_lines(
+    root_session_dir: &Path,
     task_dir: &Path,
 ) -> Result<
     (
@@ -79,9 +93,30 @@ pub(super) fn read_repaired_task_segment_lines(
     ),
     SessionStoreError,
 > {
-    let _guard = vulcan_session_core::segmented_file_io::segmented_append_file_io_lock()
-        .lock()
-        .map_err(to_store_error)?;
+    let session_storage_lock =
+        vulcan_session_core::segmented_file_io::segmented_append_file_io_lock(root_session_dir);
+    let _guard = session_storage_lock.read().map_err(to_store_error)?;
+    let main_metadata =
+        read_required_task_main_metadata_document(&task_main_metadata_path(task_dir))?;
+    let lines = read_segment_lines_with_owned_append_lock(task_dir, &main_metadata.segments)?;
+    Ok((main_metadata, lines))
+}
+
+/// Reads task-session segment lines after repairing damaged JSONL and synchronizing metadata.
+/// 修复损坏 JSONL 并同步元数据后读取子任务会话分段行。
+pub(super) fn read_repaired_task_segment_lines(
+    root_session_dir: &Path,
+    task_dir: &Path,
+) -> Result<
+    (
+        SegmentedTaskSessionMainMetadataDocument,
+        Vec<SegmentedEventLine>,
+    ),
+    SessionStoreError,
+> {
+    let session_storage_lock =
+        vulcan_session_core::segmented_file_io::segmented_append_file_io_lock(root_session_dir);
+    let _guard = session_storage_lock.lock().map_err(to_store_error)?;
     let main_metadata_path = task_main_metadata_path(task_dir);
     let mut main_metadata = read_required_task_main_metadata_document(&main_metadata_path)?;
     let repaired = repair_task_segment_jsonl_files_if_needed_locked(task_dir, &mut main_metadata)?;

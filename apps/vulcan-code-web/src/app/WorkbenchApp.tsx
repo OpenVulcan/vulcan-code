@@ -51,6 +51,10 @@ const STREAMING_DELTA_FLUSH_MS = 80;
 // WORKBENCH_DELTA_GAP_RECOVERY_MS 在增量乱序缺口处短暂等待，超时后回退到完整快照。
 const WORKBENCH_DELTA_GAP_RECOVERY_MS = 400;
 
+// SHUTDOWN_PERSIST_TOAST_ID identifies the single replaceable durable-close progress notice.
+// SHUTDOWN_PERSIST_TOAST_ID 标识唯一且可替换的耐久关闭进度提示。
+const SHUTDOWN_PERSIST_TOAST_ID = "shutdown-persist-progress";
+
 // WorkbenchApp owns the real workbench snapshots, event subscriptions, and reconnect notifications.
 // WorkbenchApp 持有真实工作台快照、事件订阅与重连通知。
 export function WorkbenchApp(props: {
@@ -116,6 +120,92 @@ export function WorkbenchApp(props: {
   React.useEffect(() => {
     appLocaleRef.current = webuiAppLocale(workbench?.uiLocale ?? startup.uiLocale);
   }, [startup.uiLocale, workbench?.uiLocale]);
+
+  React.useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) {
+      return;
+    }
+    // disposed prevents a late native subscription from surviving component unmount.
+    // disposed 防止迟到的原生订阅在组件卸载后继续存活。
+    let disposed = false;
+    // unlistenStarted releases the native durable-close start subscription.
+    // unlistenStarted 释放原生耐久关闭开始订阅。
+    let unlistenStarted: (() => void) | null = null;
+    // unlistenFailed releases the native durable-close failure subscription.
+    // unlistenFailed 释放原生耐久关闭失败订阅。
+    let unlistenFailed: (() => void) | null = null;
+
+    // subscribeShutdownFailure installs the user decision boundary for a failed durable writer drain.
+    // subscribeShutdownFailure 为耐久写入器排空失败安装用户决策边界。
+    async function subscribeShutdownFailure() {
+      // eventApi provides the native event subscription and windowApi provides force-destroy only after confirmation.
+      // eventApi 提供原生事件订阅，windowApi 仅在用户确认后提供强制销毁能力。
+      const [eventApi, windowApi] = await Promise.all([
+        import("@tauri-apps/api/event"),
+        import("@tauri-apps/api/window"),
+      ]);
+      // nextUnlistenStarted publishes one localized progress notice for the bounded drain.
+      // nextUnlistenStarted 为有界排空过程发布一条本地化进度提示。
+      const nextUnlistenStarted = await eventApi.listen<void>("vulcan://shutdown-persist-started", () => {
+        // locale captures the latest service-selected UI language when shutdown starts.
+        // locale 在关闭开始时捕获服务最近选择的界面语言。
+        const locale = appLocaleRef.current;
+        toast.loading(webuiAppTranslation(locale, "app.shutdown.persisting"), {
+          id: SHUTDOWN_PERSIST_TOAST_ID,
+          duration: Infinity,
+        });
+      });
+      if (disposed) {
+        nextUnlistenStarted();
+        return;
+      }
+      unlistenStarted = nextUnlistenStarted;
+      // nextUnlistenFailed is retained only while this WorkbenchApp instance remains mounted.
+      // nextUnlistenFailed 仅在当前 WorkbenchApp 实例保持挂载时保留。
+      const nextUnlistenFailed = await eventApi.listen<string>("vulcan://shutdown-persist-failed", (event) => {
+        toast.dismiss(SHUTDOWN_PERSIST_TOAST_ID);
+        // locale captures the latest service-selected UI language at the decision boundary.
+        // locale 在决策边界捕获服务最近选择的界面语言。
+        const locale = appLocaleRef.current;
+        // prompt combines localized risk guidance with the exact technical failure for diagnosis.
+        // prompt 将本地化风险说明与用于诊断的精确技术失败组合起来。
+        const prompt = [
+          webuiAppTranslation(locale, "app.shutdown.persistFailed.title"),
+          webuiAppTranslation(locale, "app.shutdown.persistFailed.description"),
+          event.payload,
+          webuiAppTranslation(locale, "app.shutdown.persistFailed.forceConfirm"),
+        ].join("\n\n");
+        if (!window.confirm(prompt)) {
+          return;
+        }
+        // nativeWindow is destroyed only after the user explicitly accepts possible tail loss.
+        // nativeWindow 仅在用户明确接受可能的尾部丢失后被销毁。
+        const nativeWindow = windowApi.getCurrentWindow();
+        void nativeWindow.destroy().catch((destroyError) => {
+          console.error("Force-closing the desktop window failed.", destroyError);
+        });
+      });
+      if (disposed) {
+        nextUnlistenFailed();
+        return;
+      }
+      unlistenFailed = nextUnlistenFailed;
+    }
+
+    void subscribeShutdownFailure().catch((subscribeError) => {
+      unlistenStarted?.();
+      unlistenStarted = null;
+      unlistenFailed?.();
+      unlistenFailed = null;
+      console.error("Desktop shutdown failure subscription failed.", subscribeError);
+    });
+    return () => {
+      disposed = true;
+      toast.dismiss(SHUTDOWN_PERSIST_TOAST_ID);
+      unlistenStarted?.();
+      unlistenFailed?.();
+    };
+  }, []);
 
   React.useEffect(() => {
     workbenchRef.current = workbench;

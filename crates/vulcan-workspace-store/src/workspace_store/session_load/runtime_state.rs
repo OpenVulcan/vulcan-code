@@ -230,15 +230,6 @@ fn segmented_json_string(value: &serde_json::Value) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-/// Leaves runtime state absent when no provider-facing runtime source exists.
-/// 当不存在 Provider 可见运行时来源时，保持运行态为空。
-pub(super) async fn hydrate_session_runtime_state(
-    _session_id: SessionId,
-    _full_messages: &[SessionMessageEntry],
-) -> Result<Option<SessionRuntimeStateEntry>, String> {
-    Ok(None)
-}
-
 /// Restores missing hydration rows from runtime state while keeping loaded tool details available.
 /// 从运行时状态恢复缺失的水合行，并保持已载入工具详情可用。
 pub(super) fn restore_hydration_window_from_runtime_state_if_empty(

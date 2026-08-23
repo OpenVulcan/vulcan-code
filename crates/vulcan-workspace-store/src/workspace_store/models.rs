@@ -141,6 +141,18 @@ pub struct SessionHistoryPage {
     pub has_more_history: bool,
 }
 
+/// Execution-only runtime payload loaded without reading presentation transcript segments.
+/// 在不读取展示转录分段的前提下加载出的纯执行运行态载荷。
+#[derive(Debug, Clone)]
+pub struct SessionExecutionHydrationSnapshot {
+    /// Session identifier owning the loaded execution context.
+    /// 拥有本次已加载执行上下文的会话标识。
+    pub session_id: SessionId,
+    /// Provider-visible canonical dialogue and execution metadata restored from runtime storage.
+    /// 从运行态存储恢复出的 Provider 可见规范对话与执行元数据。
+    pub runtime_state: Option<SessionRuntimeStateEntry>,
+}
+
 /// Exact metadata-only checkpoint used to append one immutable transcript suffix.
 /// 用于追加一段不可变转录后缀的精确纯元数据检查点。
 #[derive(Debug, Clone, Eq, PartialEq)]

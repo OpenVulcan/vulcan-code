@@ -270,12 +270,17 @@ pub(crate) async fn handle_webui_detached_subagent_task_event(
                 ),
             );
             if !consumed {
-                append_runtime_event_projection_and_release_barrier(
-                    app,
-                    state,
-                    parent_session_id,
-                    &event,
-                )?;
+                append_runtime_event_projection(app, state, parent_session_id, &event)?;
+                if runtime_event_forms_durable_transcript_boundary(&event)
+                    && let Err(error) =
+                        await_session_transcript_writer_durable(parent_session_id).await
+                {
+                    let _ = vulcan_agent_runtime::agent_runtime::tool_runtime_bridge::reject_runtime_event_projection_barrier_from_event(&event);
+                    return Err(format!(
+                        "Detached runtime transcript durability boundary failed for session `{parent_session_id}`: {error}"
+                    ));
+                }
+                release_runtime_event_projection_barrier_after_attempt(&event)?;
             } else {
                 release_runtime_event_projection_barrier_after_attempt(&event)?;
             }

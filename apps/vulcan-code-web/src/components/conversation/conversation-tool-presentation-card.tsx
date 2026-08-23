@@ -31,6 +31,7 @@ import {
 import {
   hydrateAskQuestionPresentation,
   hydrateCommandExecutionPresentation,
+  hydrateFileAccessPresentation,
   hydrateLuaExecutionPresentation,
   hydrateMarkdownToolPresentation,
   hydrateSubagentOrchestrationPresentation,
@@ -123,6 +124,7 @@ export function ToolPresentationCard(props: {
         presentation={props.presentation}
         requestProgress={props.requestProgress}
         onExpandedChange={props.onExpandedChange}
+        onLoadToolDetail={props.detailLoadEnabled ? props.onLoadToolDetail : undefined}
       />
     );
   }
@@ -558,6 +560,10 @@ const markdownToolPresentationDetailCache = new Map<string, MarkdownToolPresenta
 // luaExecutionPresentationDetailCache avoids refetching full RunLua results after ordinary remounts.
 // luaExecutionPresentationDetailCache 避免普通重新挂载后重复请求完整 RunLua 结果。
 const luaExecutionPresentationDetailCache = new Map<string, LuaExecutionPresentation>();
+
+// fileChangePresentationDetailCache avoids refetching native file result rows after remounts.
+// fileChangePresentationDetailCache 避免原生 file 结果行在重新挂载后重复请求。
+const fileChangePresentationDetailCache = new Map<string, FileChangePresentation>();
 
 // subagentOrchestrationPresentationDetailCache avoids refetching hidden subagent status details.
 // subagentOrchestrationPresentationDetailCache 避免重复请求隐藏子代理状态详情。
@@ -1152,6 +1158,21 @@ function markdownToolStatusLabel(
 // markdownToolPresentationDetailCacheKey returns a cache key for one Markdown-output detail reference.
 // markdownToolPresentationDetailCacheKey 返回单条 Markdown 输出详情引用的缓存键。
 function markdownToolPresentationDetailCacheKey(presentation: MarkdownToolPresentation): string | null {
+  if (!presentation.detailRef) {
+    return null;
+  }
+  return [
+    presentation.detailRef.sessionId,
+    presentation.detailRef.recordId ?? "",
+    presentation.detailRef.toolCallId ?? "",
+    presentation.detailRef.seq ?? "",
+    presentation.detailRef.messageIndex ?? "",
+  ].join(":");
+}
+
+// fileChangePresentationDetailCacheKey returns a cache key for one native file detail reference.
+// fileChangePresentationDetailCacheKey 返回单条原生 file 详情引用的缓存键。
+function fileChangePresentationDetailCacheKey(presentation: FileChangePresentation): string | null {
   if (!presentation.detailRef) {
     return null;
   }
@@ -2203,6 +2224,9 @@ function FileChangePresentationCard(props: {
   // Updates the surface-level expansion state.
   // 更新界面级展开状态。
   onExpandedChange: (presentationId: string, expanded: boolean) => void;
+  // Loads one hidden native file result detail after the card is expanded.
+  // 卡片展开后加载一次隐藏的原生文件结果详情。
+  onLoadToolDetail?: ToolDetailLoader;
 }) {
   // t resolves stable WebUI copy keys for the active language.
   // t 根据当前语言解析稳定的 WebUI 文案键。
@@ -2210,15 +2234,55 @@ function FileChangePresentationCard(props: {
   const {
     expanded,
     expandedToolPresentationIds,
+    onLoadToolDetail,
     onExpandedChange,
     presentation,
   } = props;
+  const detailCacheKey = fileChangePresentationDetailCacheKey(presentation);
+  const [hydratedPresentation, setHydratedPresentation] = React.useState<FileChangePresentation>(
+    () => detailCacheKey ? fileChangePresentationDetailCache.get(detailCacheKey) ?? presentation : presentation,
+  );
+  const [loadingDetail, setLoadingDetail] = React.useState(false);
+  React.useEffect(() => {
+    const cached = detailCacheKey ? fileChangePresentationDetailCache.get(detailCacheKey) : undefined;
+    setHydratedPresentation(cached ?? presentation);
+  }, [detailCacheKey, presentation]);
+  React.useEffect(() => {
+    if (!expanded || !onLoadToolDetail || !presentation.detailRef || !detailCacheKey || fileChangePresentationDetailCache.has(detailCacheKey)) {
+      return;
+    }
+    let cancelled = false;
+    setLoadingDetail(true);
+    void onLoadToolDetail(presentation.detailRef)
+      .then((payload) => {
+        if (cancelled) {
+          return;
+        }
+        const nextPresentation = hydrateFileAccessPresentation(presentation, payload);
+        fileChangePresentationDetailCache.set(detailCacheKey, nextPresentation);
+        setHydratedPresentation(nextPresentation);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setHydratedPresentation(presentation);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoadingDetail(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [detailCacheKey, expanded, onLoadToolDetail, presentation]);
+  const displayPresentation = hydratedPresentation;
   const [errorExpanded, setErrorExpanded] = React.useState(() => presentation.state === "failed" && Boolean(presentation.errorDetail));
   React.useEffect(() => {
     setErrorExpanded(presentation.state === "failed" && Boolean(presentation.errorDetail));
   }, [presentation.errorDetail, presentation.id, presentation.state]);
-  const effectiveExpanded = presentation.state === "failed" && presentation.errorDetail ? errorExpanded : expanded;
-  const singleFile = presentation.files.length === 1 ? presentation.files[0] : null;
+  const effectiveExpanded = displayPresentation.state === "failed" && displayPresentation.errorDetail ? errorExpanded : expanded;
+  const singleFile = displayPresentation.files.length === 1 ? displayPresentation.files[0] : null;
   const handleTopToggle = React.useCallback(() => {
     if (!presentation.interactive) {
       return;
@@ -2233,20 +2297,21 @@ function FileChangePresentationCard(props: {
 
   if (singleFile) {
     return (
-      <div className={cn("tool-presentation-card file-change", effectiveExpanded && "expanded", !presentation.interactive && "disabled")}>
+      <div className={cn("tool-presentation-card file-change", effectiveExpanded && "expanded", !displayPresentation.interactive && "disabled")}>
         <FileChangeSummaryButton
           expanded={effectiveExpanded}
           file={singleFile}
-          interactive={presentation.interactive}
-          presentation={presentation}
+          interactive={displayPresentation.interactive}
+          presentation={displayPresentation}
           requestProgress={props.requestProgress}
           t={t}
           onToggle={handleTopToggle}
         />
         <ConversationMeasuredCollapse collapseId={`file-change:${presentation.id}:single`} expanded={effectiveExpanded}>
           <FileChangeExpandableBody
-            errorDetail={presentation.state === "failed" ? presentation.errorDetail : null}
+            errorDetail={displayPresentation.state === "failed" ? displayPresentation.errorDetail : null}
             file={singleFile}
+            loadingDetail={loadingDetail}
             t={t}
           />
         </ConversationMeasuredCollapse>
@@ -2255,29 +2320,29 @@ function FileChangePresentationCard(props: {
   }
 
   return (
-    <div className={cn("tool-presentation-card file-change", effectiveExpanded && "expanded", !presentation.interactive && "disabled")}>
+    <div className={cn("tool-presentation-card file-change", effectiveExpanded && "expanded", !displayPresentation.interactive && "disabled")}>
       <button
         aria-expanded={effectiveExpanded}
         className="tool-presentation-summary file-change-summary"
-        disabled={!presentation.interactive}
+        disabled={!displayPresentation.interactive}
         onClick={handleTopToggle}
-        title={presentation.files.map((file) => file.displayPath).join("\n")}
+        title={displayPresentation.files.map((file) => file.displayPath).join("\n")}
         type="button"
       >
-        <FileChangeOperationIcon accessAction={presentation.accessAction} operation={presentation.operation} />
-          <span className={cn("tool-presentation-state", (props.requestProgress?.receiving || presentation.state === "running") && "shimmer")}>{props.requestProgress?.statusLabel ?? fileChangeStatusLabel(presentation, presentation.operation, t)} {formatTranslation(t, "toolPresentation.file.count", { count: String(presentation.files.length) })}</span>
+        <FileChangeOperationIcon accessAction={displayPresentation.accessAction} operation={displayPresentation.operation} />
+          <span className={cn("tool-presentation-state", (props.requestProgress?.receiving || displayPresentation.state === "running") && "shimmer")}>{props.requestProgress?.statusLabel ?? fileChangeStatusLabel(displayPresentation, displayPresentation.operation, t)} {formatTranslation(t, "toolPresentation.file.count", { count: String(displayPresentation.files.length) })}</span>
         <span className="file-change-path multi">
           <span className="file-change-path-text">{t("toolPresentation.file.multiChange")}</span>
           <ToolRequestInlineProgress progress={props.requestProgress} />
-          <FileChangeCounts added={presentation.totalAdded} failed={presentation.state === "failed"} removed={presentation.totalRemoved} />
+          <FileChangeCounts added={displayPresentation.totalAdded} failed={displayPresentation.state === "failed"} removed={displayPresentation.totalRemoved} />
         </span>
-        {presentation.interactive ? (effectiveExpanded ? <ChevronDown className="tool-presentation-toggle file-change-toggle" size={15} /> : <ChevronRight className="tool-presentation-toggle file-change-toggle" size={15} />) : <span />}
+        {displayPresentation.interactive ? (effectiveExpanded ? <ChevronDown className="tool-presentation-toggle file-change-toggle" size={15} /> : <ChevronRight className="tool-presentation-toggle file-change-toggle" size={15} />) : <span />}
       </button>
       <ConversationMeasuredCollapse collapseId={`file-change:${presentation.id}:tree`} expanded={effectiveExpanded}>
         <div className="file-change-tree">
-          {presentation.state === "failed" && presentation.errorDetail ? (
-            <FileChangeErrorDetail detail={presentation.errorDetail} />
-          ) : presentation.files.map((file) => {
+          {displayPresentation.state === "failed" && displayPresentation.errorDetail ? (
+            <FileChangeErrorDetail detail={displayPresentation.errorDetail} />
+          ) : displayPresentation.files.map((file) => {
             const fileExpanded = expandedToolPresentationIds.has(fileExpansionId(presentation, file));
             return (
               <div className="file-change-tree-item" key={file.id}>
@@ -2285,7 +2350,7 @@ function FileChangePresentationCard(props: {
                   expanded={fileExpanded}
                   file={file}
                   interactive={file.expandable}
-                  presentation={presentation}
+                  presentation={displayPresentation}
                   t={t}
                   showOperationIcon={false}
                   showStatusLabel={false}
@@ -2298,7 +2363,7 @@ function FileChangePresentationCard(props: {
                   }}
                 />
                 <ConversationMeasuredCollapse collapseId={fileExpansionId(presentation, file)} expanded={fileExpanded}>
-                  <FileChangeExpandableBody file={file} t={t} />
+                  <FileChangeExpandableBody file={file} loadingDetail={loadingDetail} t={t} />
                 </ConversationMeasuredCollapse>
               </div>
             );
@@ -2352,7 +2417,7 @@ function FileChangeSummaryButton(props: {
       )}
       disabled={!props.interactive}
       onClick={props.onToggle}
-      title={props.file.path}
+      title={props.file.readRange ? `${props.file.path}\n${props.file.readRange}` : props.file.path}
       type="button"
     >
       {showOperationIcon ? <FileChangeOperationIcon accessAction={props.presentation.accessAction} operation={props.file.operation} /> : null}
@@ -2360,6 +2425,7 @@ function FileChangeSummaryButton(props: {
       <span className="file-change-path">
         <span className="file-change-icon-stack"><FileTypeIcon icon={props.file.icon} /></span>
         <span className="file-change-path-text">{props.file.displayPath}</span>
+        {props.file.readRange ? <span className="file-change-path-range">{props.file.readRange}</span> : null}
         <ToolRequestInlineProgress progress={props.requestProgress ?? null} />
         <FileChangeCounts added={props.file.added} failed={props.presentation.state === "failed"} removed={props.file.removed} />
       </span>
@@ -2474,6 +2540,9 @@ function FileChangeExpandableBody(props: {
   // File row model.
   // 文件行模型。
   file: FileChangeFilePresentation;
+  // Whether the hidden native result is currently being loaded.
+  // 是否正在加载隐藏的原生工具结果。
+  loadingDetail?: boolean;
   // Translates stable UI copy keys.
   // 翻译稳定 UI 文案键。
   t: (key: TranslationKey) => string;
@@ -2481,24 +2550,33 @@ function FileChangeExpandableBody(props: {
   if (props.errorDetail) {
     return <FileChangeErrorDetail detail={props.errorDetail} />;
   }
-  if (props.file.readOnly && props.file.rows.length) {
+  if (props.file.readOnly && props.file.diffFile) {
     return (
-      <div className="file-change-detail">
-        <div className="file-change-code-scroll">
-          {props.file.rows.map((row, index) => (
-            <div className="file-change-read-row" data-kind={row.kind} key={`${row.lineNumber ?? "none"}:${index}`}>
-              <span className="file-change-read-line-number">{row.lineNumber ?? ""}</span>
-              <span className="file-change-read-content">{row.content}</span>
-            </div>
-          ))}
-        </div>
+      <div className="file-change-detail review file-change-read-preview">
+        <ChangeSetDiffPreview
+          file={props.file.diffFile}
+          hunkSeparatorStyle="simple"
+          inlineDiff={false}
+        />
       </div>
     );
+  }
+  if (props.file.readOnly && props.file.rows.length) {
+    return <FileChangeErrorDetail detail={props.file.rows.map((row) => row.content).join("\n")} />;
   }
   if (props.file.diffFile) {
     return (
       <div className="file-change-detail review">
         <ChangeSetDiffPreview file={props.file.diffFile} />
+      </div>
+    );
+  }
+  if (props.loadingDetail) {
+    return (
+      <div className="file-change-detail">
+        <div className="file-change-code-scroll">
+          <div className="file-change-empty">{props.t("toolPresentation.output.loading")}</div>
+        </div>
       </div>
     );
   }

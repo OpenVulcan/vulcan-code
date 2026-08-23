@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   liveToolRequestProgress,
   toolExecutionDetailLoadEnabled,
+  toolExecutionSummary,
   toolRequestProgress,
+  toolRequestProgressForDisplay,
   toolRequestProgressLabel,
 } from "./conversation-tool-execution-model";
 import type { ToolExecutionConversationBlock } from "./conversation-tool-execution-types";
@@ -113,6 +115,44 @@ describe("conversation tool request progress", () => {
       revision: 4,
       preview: { kind: "command" },
     });
+  });
+
+  it("does not let the durable data-received marker override an executing tool", () => {
+    const ready = {
+      requestStreamId: "request-ready",
+      state: "ready" as const,
+      receivedCharacters: 128,
+      receivedBytes: 128,
+      revision: 8,
+      preview: { kind: "file_edit" },
+    };
+
+    expect(toolRequestProgressForDisplay(ready, "running")).toBeNull();
+    expect(toolRequestProgressForDisplay(ready, "completed")).toBeNull();
+    expect(toolRequestProgressForDisplay({ ...ready, state: "receiving" }, "running")).toMatchObject({
+      state: "receiving",
+    });
+  });
+
+  it("uses the terminal execution state in the compact summary after data is received", () => {
+    const blocks = [{
+      body: "",
+      id: "change-set",
+      kind: "diff",
+      rawMetadata: {
+        request_stream_id: "request-ready",
+        tool_display_state: "ready",
+        received_characters: 128,
+        received_bytes: 128,
+        request_revision: 8,
+      },
+      status: "completed",
+      summary: "",
+      title: "file_edit",
+      toolName: "file_edit",
+    }] as ToolExecutionConversationBlock[];
+
+    expect(toolExecutionSummary(blocks, true)).toBe("Tool call · file_edit · Completed");
   });
 
   it("permits detail hydration only for a terminal host-owned reference", () => {

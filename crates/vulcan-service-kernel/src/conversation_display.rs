@@ -513,6 +513,7 @@ fn push_display_session_message_once(
 
 /// Removes legacy persisted Goal internal prompts that were incorrectly stored as user messages.
 /// 移除历史上被错误持久化成用户消息的 Goal 内部提示词。
+#[cfg(test)]
 pub(crate) fn filter_legacy_goal_internal_user_messages(
     messages: Vec<SessionMessageEntry>,
 ) -> Vec<SessionMessageEntry> {

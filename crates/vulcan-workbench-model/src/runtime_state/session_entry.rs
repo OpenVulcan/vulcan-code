@@ -356,6 +356,10 @@ pub struct SessionRuntimeStateEntry {
     /// 仅在所属服务进程运行期间保留的完整实时重试状态。
     #[serde(skip)]
     pub transient_execution_retry_snapshot: Option<Arc<ExecutionRetrySnapshot>>,
+    /// Latest client submission whose first semantic latency was recorded in this process.
+    /// 当前进程中最近一次已经记录首语义延迟的客户端提交标识。
+    #[serde(skip)]
+    pub observed_first_semantic_submission_id: Option<String>,
     /// Absolute input-token baseline for the current BodyAfterPrefix compaction window.
     /// 当前 BodyAfterPrefix 压缩窗口使用的绝对输入 Token 基线。
     #[serde(default, skip_serializing_if = "Option::is_none")]

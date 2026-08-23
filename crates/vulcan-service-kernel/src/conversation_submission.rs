@@ -25,9 +25,10 @@ use vulcan_workbench_model::{
 use vulcan_workspace_store::workspace_store::WorkspaceSnapshot;
 
 use super::{
-    ExistingSubmissionAdmissionAuthorization, PromptSessionMaterializationKind, ServiceBridgeState,
-    SessionContinuationRuntimeBlockers, SharedServiceBridgeState, UserPromptEditSubmitRequest,
-    active_kernel_session_ids, advance_session_goal_dispatch_version,
+    ControllerRuntimeHandle, ExistingSubmissionAdmissionAuthorization,
+    PromptSessionMaterializationKind, ServiceBridgeState, SessionContinuationRuntimeBlockers,
+    SharedServiceBridgeState, UserPromptEditSubmitRequest, active_kernel_session_ids,
+    advance_session_goal_dispatch_version,
     apply_webui_prompt_begin_outer_steps_deferred_context_persist,
     begin_existing_prompt_submission_exclusion, build_conversation_messages_patched_delta,
     capture_preserved_workspace_run_state, capture_webui_prompt_preparation_generation,
@@ -42,6 +43,7 @@ use super::{
     mark_webui_prompt_preparation_failed, mark_webui_prompt_snapshot_preparing,
     materialize_prompt_session, owning_project_id_for_session, parse_prompt_session_target,
     parse_session_id, persist_initial_submission_goal,
+    persist_latest_retained_session_runtime_state_update,
     persist_latest_retained_workspace_session_update, persist_workspace_session_update,
     prepare_submission_media, preserve_active_session_run_state, provider_tool_capability_key,
     refresh_exact_vmm_hook_session_projection, replace_conversation_messages_in_workbench_window,
@@ -51,12 +53,12 @@ use super::{
     runtime_parts_from_state, session_continuation_runtime_blockers,
     session_has_blocking_system_prompt_work, session_process_public_ai_selection,
     snapshot_webui_context_before_user_prompt, spawn_service_task,
-    spawn_workspace_session_persist_task, start_reserved_webui_session_kernel_user_turn,
-    start_webui_precheck_or_continue, start_webui_session_kernel_user_turn,
-    sync_hydrated_session_dialogue_ready_marker, validate_composer_attachment_summary,
-    webui_session_allows_user_prompt_editing, webui_session_kernel_has_active_turn,
-    webui_shared_prompt_precheck_plan, webui_submit_trace, webui_trace_if_slow,
-    workbench_with_live_pending_question, workspace_path_for_session,
+    spawn_workspace_session_persist_task, spawn_workspace_session_runtime_state_persist_task,
+    start_reserved_webui_session_kernel_user_turn, start_webui_precheck_or_continue,
+    start_webui_session_kernel_user_turn, sync_hydrated_session_dialogue_ready_marker,
+    validate_composer_attachment_summary, webui_session_allows_user_prompt_editing,
+    webui_session_kernel_has_active_turn, webui_shared_prompt_precheck_plan, webui_submit_trace,
+    webui_trace_if_slow, workbench_with_live_pending_question, workspace_path_for_session,
     workspace_session_summary_for_session, workspace_user_prompt_message_allows_destructive_edit,
 };
 mod activation;
@@ -87,13 +89,26 @@ const CONTINUATION_CLAIM_IN_FLIGHT_REASON: &str = "ERR_CONVERSATION_CONTINUE_CLA
 /// Defers retirement of one consumed durable retry file until the replacement runtime state is durable.
 /// 将一个已消费可靠重试文件的退役操作延迟到替代运行态可靠落盘之后。
 #[derive(Debug)]
-struct DeferredConsumedExecutionRetryCleanup {
+pub(crate) struct DeferredConsumedExecutionRetryCleanup {
     /// Exact segmented session directory containing the single fixed retry file.
     /// 包含唯一固定重试文件的精确分段会话目录。
     session_directory: PathBuf,
     /// Digest-bound reference that alone authorizes removal of the consumed file.
     /// 唯一有权删除已消费文件的摘要绑定引用。
     reference: vulcan_workbench_model::ExecutionRetrySnapshotRef,
+}
+
+impl DeferredConsumedExecutionRetryCleanup {
+    /// Returns the durable generation that the replacement live checkpoint must supersede.
+    /// 返回替代实时检查点必须超过的可靠代际。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The exact generation carried by the consumed digest-bound reference.
+    /// 返回已消费摘要绑定引用携带的精确代际。
+    pub(crate) fn generation(&self) -> u64 {
+        self.reference.generation
+    }
 }
 
 /// Captures exact cleanup authority for the durable retry body consumed by a newly accepted turn.
@@ -110,7 +125,7 @@ struct DeferredConsumedExecutionRetryCleanup {
 /// 返回值
 /// An exact deferred cleanup token only for a durable prior body, or `None` for a memory-only/absent checkpoint.
 /// 仅对可靠旧正文返回精确延迟清理令牌；内存检查点或缺失检查点返回 `None`。
-fn deferred_consumed_execution_retry_cleanup(
+pub(crate) fn deferred_consumed_execution_retry_cleanup(
     controller_runtime: &vulcan_workspace_store::data_plane::ControllerRuntimeHandle,
     workspace_snapshot: &WorkspaceSnapshot,
     session_id: SessionId,
@@ -147,6 +162,69 @@ fn deferred_consumed_execution_retry_cleanup(
         session_directory,
         reference,
     }))
+}
+
+/// Persists a newly accepted live retry reference and then retires the consumed durable body.
+/// 持久化新接纳的实时重试引用，并在成功后退役已消费的可靠正文。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the authoritative retained runtime row containing the replacement reference.
+/// `state` 持有包含替代引用的权威保留运行态记录。
+/// `controller_runtime` resolves the exact session runtime-state and retry-file targets.
+/// `controller_runtime` 解析精确的会话运行态与重试文件目标。
+/// `session_id` selects the single session whose retry ownership is changing.
+/// `session_id` 选择重试所有权正在变化的唯一会话。
+/// `consumed_retry_cleanup` authorizes deletion only after replacement state persistence succeeds.
+/// `consumed_retry_cleanup` 仅在替代状态持久化成功后授权删除旧正文。
+/// `reason` labels the asynchronous persistence transaction for diagnostics.
+/// `reason` 为异步持久化事务提供诊断标签。
+pub(crate) fn spawn_accepted_retry_runtime_state_persist_task(
+    state: SharedServiceBridgeState,
+    controller_runtime: ControllerRuntimeHandle,
+    session_id: SessionId,
+    consumed_retry_cleanup: Option<DeferredConsumedExecutionRetryCleanup>,
+    reason: &'static str,
+) {
+    let Some(consumed_retry_cleanup) = consumed_retry_cleanup else {
+        spawn_workspace_session_runtime_state_persist_task(
+            state,
+            controller_runtime,
+            session_id,
+            Some(String::from(reason)),
+        );
+        return;
+    };
+    // The old file remains the valid crash boundary until the replacement memory-only reference is durable.
+    // 在替代的仅内存引用可靠落盘前，旧文件继续作为有效崩溃边界。
+    spawn_service_task(async move {
+        match persist_latest_retained_session_runtime_state_update(
+            &state,
+            &controller_runtime,
+            session_id,
+        )
+        .await
+        {
+            Ok(()) => {
+                // Exact-reference deletion cannot remove a newer terminal retry publication.
+                // 精确引用删除不会移除更新的终止重试发布。
+                if let Err(error) =
+                    vulcan_workspace_store::workspace_store::delete_execution_retry_snapshot(
+                        &consumed_retry_cleanup.session_directory,
+                        session_id,
+                        &consumed_retry_cleanup.reference,
+                    )
+                {
+                    eprintln!(
+                        "[webui-service] consumed execution retry cleanup failed after runtime-state persistence ({reason}): {error}"
+                    );
+                }
+            }
+            Err(error) => eprintln!(
+                "[webui-service] background runtime-state persist failed ({reason}): {error}"
+            ),
+        }
+    });
 }
 
 /// Advances the session retry generation from both the live checkpoint and the durable terminal ledger.
@@ -902,7 +980,7 @@ fn execution_retry_sha256_hex(encoded: &[u8]) -> String {
 /// 返回值
 /// Success after the process-local body and lightweight runtime reference are installed without filesystem mutation.
 /// 在不修改文件系统的情况下安装进程内正文与轻量运行态引用后返回成功。
-fn retain_accepted_preparation_retry_checkpoint(
+pub(crate) fn retain_accepted_preparation_retry_checkpoint(
     workspace_snapshot: &mut WorkspaceSnapshot,
     session_id: SessionId,
     physical_attempt_id: &str,

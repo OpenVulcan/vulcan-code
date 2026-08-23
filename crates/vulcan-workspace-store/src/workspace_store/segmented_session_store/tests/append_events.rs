@@ -42,10 +42,303 @@ fn append_session_events_advances_sequence_without_rewriting_first_line() {
     assert_eq!(metadata.segments[0].line_count, 3);
 }
 
-/// Verifies an explicit load upgrades legacy segment metadata with exact sequence and message locators.
-/// 验证显式加载会为旧版分段元数据补齐精确序号与消息定位信息。
+/// Verifies a resident transcript cursor observes intervening metadata writes and follows rollover.
+/// 验证常驻转录游标能够观察中间元数据写入并跟随分段滚动。
 #[test]
-fn explicit_load_upgrades_legacy_segment_locators() {
+fn resident_transcript_cursor_reuses_metadata_across_intervening_append() {
+    let root = test_root("resident_transcript_cursor_reuses_metadata_across_intervening_append");
+    let session_id = Uuid::new_v4();
+    let mut request = test_session_request(SegmentPolicy {
+        max_lines: 2,
+        max_bytes: 1024 * 1024,
+    });
+    request.session_id = session_id.to_string();
+    let session_dir = create_segmented_session_in_location(&root, false, request)
+        .expect("create segmented session");
+    let (mut cursor, initial_checkpoint) =
+        open_segmented_session_transcript_append_cursor(&session_dir, session_id)
+            .expect("open resident transcript cursor");
+    let first_message = test_message(
+        "m-resident-1",
+        SessionMessageKind::User,
+        SessionMessageRecordKind::Transcript,
+        "first",
+    );
+    let first_checkpoint = append_segmented_session_message_tail_with_cursor(
+        &mut cursor,
+        &initial_checkpoint,
+        std::slice::from_ref(&first_message),
+    )
+    .expect("append first resident suffix");
+
+    append_segmented_session_events(
+        &session_dir,
+        &[test_event(
+            "2026-06-06T10:04:00Z",
+            SegmentedSessionEventKind::AssistantOutput,
+        )],
+    )
+    .expect("append intervening non-transcript event");
+
+    let second_message = test_message(
+        "m-resident-2",
+        SessionMessageKind::Assistant,
+        SessionMessageRecordKind::AssistantOutput,
+        "second",
+    );
+    let second_checkpoint = append_segmented_session_message_tail_with_cursor(
+        &mut cursor,
+        &first_checkpoint,
+        std::slice::from_ref(&second_message),
+    )
+    .expect("append second resident suffix");
+    let metadata = read_session_metadata(&session_dir).expect("read final metadata");
+
+    assert_eq!(second_checkpoint.message_count, 2);
+    assert_eq!(metadata.message_count, 2);
+    assert!(metadata.segments.len() >= 2);
+    assert_eq!(metadata.storage_generation, metadata.next_global_seq);
+    assert_eq!(metadata.integrity_version, 1);
+}
+
+/// Verifies one resident writer command can cross a segment boundary without losing its exact checkpoint.
+/// 验证单个常驻写入器命令跨越分段边界时不会丢失精确检查点。
+#[test]
+fn resident_transcript_cursor_publishes_rollover_locator_before_tail_bytes() {
+    // root isolates the deterministic rollover transaction fixture.
+    // root 隔离确定性滚段事务夹具。
+    let root = test_root("resident_transcript_cursor_publishes_rollover_locator_before_tail_bytes");
+    // session_id is the exact owner identity required by the resident cursor.
+    // session_id 是常驻游标要求的精确所属身份。
+    let session_id = Uuid::new_v4();
+    // request forces the three-message command to cross from s001 into s002.
+    // request 强制三消息命令从 s001 跨入 s002。
+    let mut request = test_session_request(SegmentPolicy {
+        max_lines: 2,
+        max_bytes: 1024 * 1024,
+    });
+    request.session_id = session_id.to_string();
+    // session_dir is the exact deterministic session path used by every assertion.
+    // session_dir 是所有断言使用的精确确定性会话路径。
+    let session_dir = create_segmented_session_in_location(&root, false, request)
+        .expect("create rollover session");
+    // cursor and initial_checkpoint represent the single cold-open metadata read.
+    // cursor 与 initial_checkpoint 表示唯一一次冷启动元数据读取。
+    let (mut cursor, initial_checkpoint) =
+        open_segmented_session_transcript_append_cursor(&session_dir, session_id)
+            .expect("open rollover cursor");
+    // messages form one immutable command whose first row fills s001 and remaining rows occupy s002.
+    // messages 构成一个不可变命令：首行填满 s001，其余行进入 s002。
+    let messages = vec![
+        test_message(
+            "m-rollover-1",
+            SessionMessageKind::User,
+            SessionMessageRecordKind::Transcript,
+            "first",
+        ),
+        test_message(
+            "m-rollover-2",
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::AssistantOutput,
+            "second",
+        ),
+        test_message(
+            "m-rollover-3",
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::AssistantOutput,
+            "third",
+        ),
+    ];
+    // final_checkpoint is returned only after every row and final metadata are durable.
+    // final_checkpoint 仅在每行与最终元数据全部可靠落盘后返回。
+    let final_checkpoint = append_segmented_session_message_tail_with_cursor(
+        &mut cursor,
+        &initial_checkpoint,
+        &messages,
+    )
+    .expect("append cross-segment resident command");
+    // metadata proves the published locator and logical transcript frontier agree.
+    // metadata 证明已发布定位与逻辑转录前沿一致。
+    let metadata = read_session_metadata(&session_dir).expect("read rollover metadata");
+    // first_lines and second_lines prove physical ordering without enumerating the directory.
+    // first_lines 与 second_lines 在不枚举目录的情况下证明物理顺序。
+    let first_lines = read_segment_event_lines(&session_dir.join("s001.jsonl"))
+        .expect("read first exact segment");
+    let second_lines = read_segment_event_lines(&session_dir.join("s002.jsonl"))
+        .expect("read second exact segment");
+
+    assert_eq!(final_checkpoint.message_count, 3);
+    assert_eq!(metadata.message_count, 3);
+    assert_eq!(metadata.active_segment, "s002.jsonl");
+    assert_eq!(metadata.segments.len(), 2);
+    assert_eq!(first_lines.len(), 2);
+    assert_eq!(second_lines.len(), 2);
+    assert_eq!(second_lines[0].seq, 2);
+    assert_eq!(second_lines[1].seq, 3);
+    assert_eq!(
+        metadata.last_message_id,
+        Some(stable_segmented_message_id(2, &messages[2]))
+    );
+}
+
+/// Verifies shutdown retry republishes an already completed row without duplicating its JSONL record.
+/// 验证关闭重试会重新发布已完成记录，且不会复制其 JSONL 记录。
+#[test]
+fn resident_transcript_retry_is_idempotent_after_data_commit() {
+    // root isolates the exact resident retry fixture.
+    // root 隔离精确的常驻重试夹具。
+    let root = test_root("resident_transcript_retry_is_idempotent_after_data_commit");
+    // session_id is the exact cursor owner.
+    // session_id 是精确的游标所有者。
+    let session_id = Uuid::new_v4();
+    // request creates one deterministic active transcript segment.
+    // request 创建一个确定性的活动转录分段。
+    let mut request = test_session_request(SegmentPolicy::default());
+    request.session_id = session_id.to_string();
+    // session_dir is resolved directly and never discovered by enumeration.
+    // session_dir 通过直接解析获得，绝不通过枚举发现。
+    let session_dir = create_segmented_session_in_location(&root, false, request)
+        .expect("create idempotent retry session");
+    // cursor and initial_checkpoint own the original immutable append boundary.
+    // cursor 与 initial_checkpoint 持有最初的不可变追加边界。
+    let (mut cursor, initial_checkpoint) =
+        open_segmented_session_transcript_append_cursor(&session_dir, session_id)
+            .expect("open idempotent retry cursor");
+    // message is the single stable semantic record required by the writer contract.
+    // message 是写入器契约要求的单条稳定语义记录。
+    let message = test_message(
+        "m-idempotent-retry",
+        SessionMessageKind::Assistant,
+        SessionMessageRecordKind::AssistantOutput,
+        "durable output",
+    );
+    // committed_checkpoint represents the successful data and metadata publication.
+    // committed_checkpoint 表示成功的数据与元数据发布。
+    let committed_checkpoint = append_segmented_session_message_tail_with_cursor(
+        &mut cursor,
+        &initial_checkpoint,
+        std::slice::from_ref(&message),
+    )
+    .expect("persist original row");
+    // lines_before captures the exact physical cardinality before retry.
+    // lines_before 捕获重试前的精确物理记录数量。
+    let lines_before =
+        read_segment_event_lines(&session_dir.join("s001.jsonl")).expect("read rows before retry");
+    // retried_checkpoint must equal the already committed checkpoint without another append.
+    // retried_checkpoint 必须等于已经提交的检查点，且不发生再次追加。
+    let retried_checkpoint = retry_segmented_session_message_tail_with_cursor(
+        &mut cursor,
+        &initial_checkpoint,
+        std::slice::from_ref(&message),
+    )
+    .expect("retry already durable row");
+    // lines_after proves the retry changed no physical transcript cardinality.
+    // lines_after 证明重试未改变物理转录记录数量。
+    let lines_after =
+        read_segment_event_lines(&session_dir.join("s001.jsonl")).expect("read rows after retry");
+
+    assert_eq!(retried_checkpoint, committed_checkpoint);
+    assert_eq!(lines_after, lines_before);
+}
+
+/// Verifies cold writer recovery adopts complete rows and discards only one trailing half-row.
+/// 验证冷态写入器恢复会接纳完整记录，并且只丢弃最后一条半行。
+#[test]
+fn resident_transcript_cursor_recovers_bounded_active_tail() {
+    // root isolates the simulated crash-between-data-and-metadata fixture.
+    // root 隔离“数据已写入但元数据未发布”的模拟崩溃夹具。
+    let root = test_root("resident_transcript_cursor_recovers_bounded_active_tail");
+    // session_id is the exact owner required by cursor admission.
+    // session_id 是游标准入要求的精确所属身份。
+    let session_id = Uuid::new_v4();
+    // request creates one empty transcript after the SessionMeta audit row.
+    // request 在 SessionMeta 审计记录之后创建空转录。
+    let mut request = test_session_request(SegmentPolicy::default());
+    request.session_id = session_id.to_string();
+    let session_dir = create_segmented_session_in_location(&root, false, request)
+        .expect("create recovery session");
+    // metadata_before captures the only authorized historical prefix.
+    // metadata_before 捕获唯一授权的历史前缀。
+    let metadata_before = read_session_metadata(&session_dir).expect("read pre-crash metadata");
+    // recovered_message is the complete canonical row physically durable before the crash.
+    // recovered_message 是崩溃前已经物理耐久的完整规范记录。
+    let recovered_message = test_message(
+        "recovered-assistant",
+        SessionMessageKind::Assistant,
+        SessionMessageRecordKind::AssistantOutput,
+        "durable before metadata",
+    );
+    // recovered_input carries the exact next message and turn coordinates.
+    // recovered_input 携带精确的下一消息与轮次坐标。
+    let recovered_input = segmented_event_input_from_message(0, &recovered_message, 0)
+        .expect("build recoverable event");
+    // recovered_line receives the sequence the interrupted writer had reserved.
+    // recovered_line 接收被中断写入器已经预留的序号。
+    let recovered_line = SegmentedSessionEventLine {
+        seq: metadata_before.next_global_seq,
+        timestamp: recovered_input.timestamp,
+        kind: recovered_input.kind,
+        payload: recovered_input.payload,
+    };
+    // segment_path comes directly from the active metadata row without enumeration.
+    // segment_path 直接来自活动元数据记录，不进行枚举。
+    let segment_path = session_dir.join(&metadata_before.active_segment);
+    // interrupted_file simulates a synced complete row followed by an unsynced JSON half-row.
+    // interrupted_file 模拟一个已同步完整记录及其后的未同步 JSON 半行。
+    let mut interrupted_file = OpenOptions::new()
+        .append(true)
+        .open(&segment_path)
+        .expect("open interrupted active segment");
+    writeln!(
+        interrupted_file,
+        "{}",
+        serde_json::to_string(&recovered_line).expect("encode recoverable row")
+    )
+    .expect("append recoverable row");
+    interrupted_file
+        .write_all(b"{\"incomplete\"")
+        .expect("append half row");
+    interrupted_file.sync_data().expect("sync interrupted tail");
+    drop(interrupted_file);
+
+    // checkpoint proves cold cursor recovery advanced only the complete transcript row.
+    // checkpoint 证明冷态游标恢复只推进了完整转录记录。
+    let (_cursor, checkpoint) =
+        open_segmented_session_transcript_append_cursor(&session_dir, session_id)
+            .expect("recover bounded active tail");
+    // metadata_after must now describe the recovered durable file exactly.
+    // metadata_after 现在必须精确描述恢复后的耐久文件。
+    let metadata_after = read_session_metadata(&session_dir).expect("read recovered metadata");
+    // lines verifies the incomplete suffix was removed and the complete row remains canonical.
+    // lines 验证不完整后缀已被移除，完整记录仍保持规范。
+    let lines = read_segment_event_lines(&segment_path).expect("read recovered segment");
+
+    assert_eq!(checkpoint.message_count, 1);
+    assert_eq!(metadata_after.message_count, 1);
+    assert_eq!(
+        metadata_after.next_global_seq,
+        metadata_before.next_global_seq + 1
+    );
+    assert_eq!(
+        metadata_after
+            .segments
+            .last()
+            .expect("recovered active metadata")
+            .byte_len,
+        fs::metadata(&segment_path)
+            .expect("inspect recovered segment")
+            .len()
+    );
+    assert_eq!(lines.len(), 2);
+    let messages = segmented_lines_to_session_messages(&lines).expect("project recovered messages");
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].body, "durable before metadata");
+}
+
+/// Verifies explicit maintenance upgrades legacy segment metadata before ordinary read.
+/// 验证显式维护会在普通读取前补齐旧版分段元数据。
+#[test]
+fn explicit_maintenance_upgrades_legacy_segment_locators() {
     let root = test_root("explicit_load_upgrades_legacy_segment_locators");
     let session_dir = create_segmented_session_in_location(
         &root,
@@ -86,8 +379,10 @@ fn explicit_load_upgrades_legacy_segment_locators() {
     )
     .expect("write legacy metadata fixture");
 
+    repair_segmented_session_display_if_needed(&session_dir)
+        .expect("explicit maintenance upgrades segment locators");
     read_segmented_session_event_window(&session_dir, None, 16)
-        .expect("explicit load upgrades segment locators");
+        .expect("ordinary read accepts maintained locators");
 
     let upgraded_metadata: SegmentedSessionMetadata =
         read_required_json(&metadata_path).expect("read upgraded metadata");
@@ -100,10 +395,10 @@ fn explicit_load_upgrades_legacy_segment_locators() {
     assert_eq!(upgraded_segment.last_message_index, Some(1));
 }
 
-/// Verifies hot append rejects a missing newline until an explicit load performs repair.
-/// 验证热路径追加会拒绝缺失换行，直至显式加载执行修复。
+/// Verifies hot append rejects a missing newline until explicit maintenance performs repair.
+/// 验证热路径追加会拒绝缺失换行，直至显式维护执行修复。
 #[test]
-fn append_session_events_reject_missing_jsonl_tail_newline_until_load_repair() {
+fn append_session_events_reject_missing_jsonl_tail_newline_until_explicit_repair() {
     let root = test_root("append_session_events_repairs_missing_jsonl_tail_newline");
     let session_dir = create_segmented_session_in_location(
         &root,
@@ -124,9 +419,9 @@ fn append_session_events_reject_missing_jsonl_tail_newline_until_load_repair() {
         )],
     )
     .expect_err("hot append must reject a missing newline without scanning history");
-    assert!(append_error.contains("load-time repair is required"));
-    read_segmented_session_event_window(&session_dir, None, 16)
-        .expect("explicit read repairs missing newline");
+    assert!(append_error.contains("explicit maintenance repair is required"));
+    repair_segmented_session_display_if_needed(&session_dir)
+        .expect("explicit maintenance repairs missing newline");
     append_segmented_session_events(
         &session_dir,
         &[test_event(
@@ -149,10 +444,10 @@ fn append_session_events_reject_missing_jsonl_tail_newline_until_load_repair() {
     assert_eq!(events[1].seq, 1);
 }
 
-/// Verifies hot append rejects a truncated tail until an explicit load performs repair.
-/// 验证热路径追加会拒绝截断尾部，直至显式加载执行修复。
+/// Verifies hot append rejects a truncated tail until explicit maintenance performs repair.
+/// 验证热路径追加会拒绝截断尾部，直至显式维护执行修复。
 #[test]
-fn append_session_events_reject_truncated_jsonl_tail_until_load_repair() {
+fn append_session_events_reject_truncated_jsonl_tail_until_explicit_repair() {
     let root = test_root("append_session_events_repairs_truncated_jsonl_tail_line");
     let session_dir = create_segmented_session_in_location(
         &root,
@@ -183,9 +478,9 @@ fn append_session_events_reject_truncated_jsonl_tail_until_load_repair() {
         )],
     )
     .expect_err("hot append must reject a truncated tail without scanning history");
-    assert!(append_error.contains("load-time repair is required"));
-    read_segmented_session_event_window(&session_dir, None, 16)
-        .expect("explicit read repairs truncated tail");
+    assert!(append_error.contains("explicit maintenance repair is required"));
+    repair_segmented_session_display_if_needed(&session_dir)
+        .expect("explicit maintenance repairs truncated tail");
     append_segmented_session_events(
         &session_dir,
         &[test_event(
@@ -473,8 +768,15 @@ fn append_exact_message_tail_rejects_changed_metadata_checkpoint() {
         SessionMessageRecordKind::Transcript,
         "changed prompt",
     );
-    append_segmented_session_message_update(&session_dir, std::slice::from_ref(&changed))
-        .expect("rewrite same-length message prefix");
+    let ordinary_rewrite_error =
+        append_segmented_session_message_update(&session_dir, std::slice::from_ref(&changed))
+            .expect_err("ordinary persistence must reject same-length display rewrites");
+    assert!(ordinary_rewrite_error.contains("non-append display mutation"));
+    replace_segmented_session_message_records_for_repair(
+        &session_dir,
+        std::slice::from_ref(&changed),
+    )
+    .expect("explicitly repair same-length message prefix");
     let assistant = test_message(
         "m-assistant-1",
         SessionMessageKind::Assistant,
@@ -528,7 +830,7 @@ fn append_exact_message_tail_rejects_stale_checkpoint() {
     )
     .expect_err("reject stale checkpoint");
 
-    assert!(error.contains("checkpoint advanced from 0 to 1"));
+    assert!(error.contains("does not match the retained immutable command"));
     let metadata: SegmentedSessionMetadata =
         read_required_json(&session_dir.join(SEGMENTED_METADATA_FILE)).expect("read metadata");
     assert_eq!(metadata.message_count, 1);
@@ -594,14 +896,14 @@ fn append_message_update_rejects_duplicate_index_until_load_repair() {
         &[replacement_user.clone(), assistant.clone()],
     )
     .expect_err("hot message append must reject external segment growth");
-    assert!(append_error.contains("load-time repair is required"));
-    read_segmented_session_event_window(&session_dir, None, 16)
-        .expect("explicit read repairs duplicate message index");
-    append_segmented_session_message_update(
+    assert!(append_error.contains("explicit maintenance repair is required"));
+    repair_segmented_session_display_if_needed(&session_dir)
+        .expect("explicit maintenance repairs duplicate message index");
+    replace_segmented_session_message_records_for_repair(
         &session_dir,
         &[replacement_user.clone(), assistant.clone()],
     )
-    .expect("update messages after explicit load repair");
+    .expect("replace messages after explicit load repair");
 
     let lines = read_segment_event_lines(&segment_path).expect("read repaired lines");
     let messages = segmented_lines_to_session_messages(&lines).expect("project messages");
