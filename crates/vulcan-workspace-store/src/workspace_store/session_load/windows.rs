@@ -59,14 +59,26 @@ pub(super) fn merge_raw_timeline_window_into_boundary_window(
         .any(session_message_is_timeline_process_row);
     let raw_has_more_history = raw_window.has_more_history;
     let raw_earliest_ordinal = raw_window.earliest_ordinal;
+    let raw_message_start_index = raw_window.message_start_index;
+    let boundary_has_timeline_process_rows = boundary_window
+        .messages
+        .iter()
+        .any(session_message_is_timeline_process_row);
     boundary_window.tool_detail_messages = raw_window.tool_detail_messages;
     boundary_window.has_more_history = boundary_window.has_more_history || raw_has_more_history;
 
-    if raw_has_timeline_process_rows {
+    // Boundary projection owns order whenever it already contains process rows; raw rows are only a legacy gap filler.
+    // 当边界投影已包含过程行时由其负责顺序；原始行仅用于填补旧版边界记录缺口。
+    if raw_has_timeline_process_rows && !boundary_has_timeline_process_rows {
         boundary_window.messages = raw_window.messages;
         boundary_window.full_messages = raw_window.full_messages;
         boundary_window.earliest_ordinal =
             raw_earliest_ordinal.or(boundary_window.earliest_ordinal);
+        boundary_window.message_start_index = raw_message_start_index;
+    } else if boundary_window.messages.len() == raw_window.messages.len() {
+        // Equal row counts allow the canonical projection to reuse only the raw absolute coordinate, never its order.
+        // 行数一致时规范投影仅复用原始绝对坐标，绝不复用其顺序。
+        boundary_window.message_start_index = raw_message_start_index;
     }
 }
 
@@ -101,6 +113,12 @@ fn load_segmented_raw_window_messages(
         .lines
         .first()
         .and_then(|line| i64::try_from(line.seq).ok());
+    let message_start_index = turn_window.lines.iter().find_map(|line| {
+        line.payload
+            .get("message_index")
+            .and_then(Value::as_u64)
+            .and_then(|index| usize::try_from(index).ok())
+    });
     let messages = segmented_lines_to_session_messages(&turn_window.lines)?;
     if messages.is_empty() {
         return Ok(None);
@@ -113,6 +131,7 @@ fn load_segmented_raw_window_messages(
     Ok(Some(SegmentedWindowMessages {
         messages: messages.clone(),
         tool_detail_messages,
+        message_start_index,
         earliest_ordinal,
         has_more_history: turn_window.has_more_history,
         full_messages: messages,
@@ -219,6 +238,7 @@ pub(super) fn session_boundary_lines_to_window_messages(
     Ok(Some(SegmentedWindowMessages {
         messages: messages.clone(),
         tool_detail_messages,
+        message_start_index: None,
         earliest_ordinal: lines.first().and_then(|line| i64::try_from(line.seq).ok()),
         has_more_history,
         full_messages: messages,

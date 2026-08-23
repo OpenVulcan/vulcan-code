@@ -403,6 +403,97 @@ fn append_exact_message_tail_does_not_read_inactive_segments() {
     assert_eq!(metadata.message_count, 3);
 }
 
+/// Verifies a captured metadata token validates the durable boundary independently of UI ordering.
+/// 验证捕获的元数据令牌可独立于界面顺序校验可靠边界。
+#[test]
+fn append_exact_message_tail_accepts_captured_metadata_checkpoint() {
+    let root = test_root("append_exact_message_tail_accepts_captured_metadata_checkpoint");
+    let session_dir = create_segmented_session_in_location(
+        &root,
+        false,
+        test_session_request(SegmentPolicy::default()),
+    )
+    .expect("create session");
+    let user = test_message(
+        "m-user-1",
+        SessionMessageKind::User,
+        SessionMessageRecordKind::Transcript,
+        "prompt",
+    );
+    append_segmented_session_message_update(&session_dir, std::slice::from_ref(&user))
+        .expect("append initial message");
+    let checkpoint: SegmentedSessionMetadata =
+        read_required_json(&session_dir.join(SEGMENTED_METADATA_FILE)).expect("read checkpoint");
+    let assistant = test_message(
+        "m-assistant-1",
+        SessionMessageKind::Assistant,
+        SessionMessageRecordKind::AssistantOutput,
+        "answer",
+    );
+
+    let appended = append_segmented_session_message_tail_from_checkpoint(
+        &session_dir,
+        1,
+        checkpoint.last_message_id.as_deref(),
+        checkpoint.last_message_fingerprint.as_deref(),
+        std::slice::from_ref(&assistant),
+    )
+    .expect("append from exact metadata checkpoint");
+
+    assert_eq!(appended.len(), 1);
+    let metadata: SegmentedSessionMetadata =
+        read_required_json(&session_dir.join(SEGMENTED_METADATA_FILE)).expect("read metadata");
+    assert_eq!(metadata.message_count, 2);
+}
+
+/// Verifies a metadata token rejects a same-length prefix whose final content changed concurrently.
+/// 验证元数据令牌会拒绝末消息内容并发变化但长度相同的前缀。
+#[test]
+fn append_exact_message_tail_rejects_changed_metadata_checkpoint() {
+    let root = test_root("append_exact_message_tail_rejects_changed_metadata_checkpoint");
+    let session_dir = create_segmented_session_in_location(
+        &root,
+        false,
+        test_session_request(SegmentPolicy::default()),
+    )
+    .expect("create session");
+    let original = test_message(
+        "m-user-1",
+        SessionMessageKind::User,
+        SessionMessageRecordKind::Transcript,
+        "original prompt",
+    );
+    append_segmented_session_message_update(&session_dir, std::slice::from_ref(&original))
+        .expect("append original message");
+    let checkpoint: SegmentedSessionMetadata =
+        read_required_json(&session_dir.join(SEGMENTED_METADATA_FILE)).expect("read checkpoint");
+    let changed = test_message(
+        "m-user-1",
+        SessionMessageKind::User,
+        SessionMessageRecordKind::Transcript,
+        "changed prompt",
+    );
+    append_segmented_session_message_update(&session_dir, std::slice::from_ref(&changed))
+        .expect("rewrite same-length message prefix");
+    let assistant = test_message(
+        "m-assistant-1",
+        SessionMessageKind::Assistant,
+        SessionMessageRecordKind::AssistantOutput,
+        "answer",
+    );
+
+    let error = append_segmented_session_message_tail_from_checkpoint(
+        &session_dir,
+        1,
+        checkpoint.last_message_id.as_deref(),
+        checkpoint.last_message_fingerprint.as_deref(),
+        std::slice::from_ref(&assistant),
+    )
+    .expect_err("reject changed metadata checkpoint");
+
+    assert!(error.contains("no longer matches the exact metadata boundary"));
+}
+
 /// Verifies exact suffix append rejects a stale caller checkpoint without repairing or scanning history.
 /// 验证精确后缀追加会拒绝过期调用方检查点，且不会修复或扫描历史。
 #[test]

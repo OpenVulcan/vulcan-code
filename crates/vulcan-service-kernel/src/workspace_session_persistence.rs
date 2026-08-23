@@ -39,13 +39,110 @@ struct RetainedWorkspaceSessionPersistencePayload {
     /// Whether the exact session currently belongs to archived storage.
     /// 精确会话当前是否属于归档存储。
     archived: bool,
-    /// Exact display transcript for this session only.
-    /// 仅属于该会话的精确展示转录。
-    messages: Vec<SessionMessageEntry>,
+    /// Explicit transcript authority available to this exact retained write.
+    /// 本次精确保留写入可使用的显式转录权威范围。
+    transcript: RetainedTranscriptPersistence,
     /// Optional history-free `state.json` projection produced while borrowing runtime state.
     /// 借用运行态期间生成的可选无历史 `state.json` 投影。
     runtime_projection:
         Option<vulcan_workspace_store::workspace_store::SessionRuntimeStatePersistenceProjection>,
+}
+
+/// Transcript authority available to one retained-session persistence operation.
+/// 单次保留会话持久化操作可用的转录权威范围。
+enum RetainedTranscriptPersistence {
+    /// The retained window starts at absolute index zero and contains the complete transcript.
+    /// 保留窗口从绝对下标零开始并包含完整转录。
+    Complete(Vec<SessionMessageEntry>),
+    /// The retained partial window can be reconciled after the global state lock is released.
+    /// 保留的局部窗口可在释放全局状态锁后进行协调。
+    PartialWindow {
+        /// Absolute persisted index represented by the first retained message.
+        /// 第一条保留消息所表示的绝对持久化下标。
+        message_start_index: usize,
+        /// Bounded retained rows used to select a checkpointed immutable suffix later.
+        /// 稍后用于选择带检查点不可变后缀的有界保留行。
+        messages: Vec<SessionMessageEntry>,
+    },
+    /// Only the existing index row and runtime projection may be updated.
+    /// 仅允许更新既有索引行与运行时投影。
+    ExistingIndexOnly,
+}
+
+/// Classifies retained transcript authority without inferring completeness from vector length.
+/// 在不根据向量长度推断完整性的前提下分类保留转录权威。
+///
+/// # Parameters
+/// 参数
+/// `messages` is the retained display cache for the exact session.
+/// `messages` 是精确会话的保留展示缓存。
+/// `window` is the explicit hydration boundary retained for that cache.
+/// `window` 是为该缓存保留的显式水合边界。
+/// # Returns
+/// 返回值
+/// Complete authority for an index-zero window, deferred partial authority for a bounded window,
+/// or index-only authority when no exact transcript coordinate exists.
+/// 对零起点窗口返回完整权威，对有界窗口返回延迟局部权威；没有精确转录坐标时仅返回索引权威。
+fn classify_retained_transcript_persistence(
+    messages: &[SessionMessageEntry],
+    window: Option<&HydratedConversationWindowState>,
+) -> RetainedTranscriptPersistence {
+    match window {
+        Some(window) if window.message_start_index == Some(0) && !window.has_more_history => {
+            RetainedTranscriptPersistence::Complete(messages.to_vec())
+        }
+        Some(window) => match window.message_start_index {
+            Some(message_start_index) => RetainedTranscriptPersistence::PartialWindow {
+                message_start_index,
+                messages: messages.to_vec(),
+            },
+            None => RetainedTranscriptPersistence::ExistingIndexOnly,
+        },
+        None => RetainedTranscriptPersistence::ExistingIndexOnly,
+    }
+}
+
+/// Selects one immutable transcript suffix from absolute persisted and retained-window coordinates.
+/// 根据绝对持久化坐标与保留窗口坐标选择一段不可变转录后缀。
+///
+/// # Parameters
+/// 参数
+/// `messages` is the retained window in ascending display order.
+/// `messages` 是按展示正序排列的保留窗口。
+/// `message_start_index` is the absolute index represented by `messages[0]`.
+/// `message_start_index` 是 `messages[0]` 所表示的绝对下标。
+/// `persisted_message_count` is the exact durable prefix length read from metadata.
+/// `persisted_message_count` 是从元数据读取的精确可靠前缀长度。
+///
+/// # Returns
+/// 返回值
+/// No work when the window end is already durable, otherwise the exact immutable suffix.
+/// 当窗口末端已可靠持久化时无工作，否则返回精确的不可变后缀。
+fn retained_transcript_tail_for_persisted_boundary(
+    messages: &[SessionMessageEntry],
+    message_start_index: usize,
+    persisted_message_count: usize,
+) -> Result<Option<Vec<SessionMessageEntry>>, String> {
+    let retained_message_end = message_start_index
+        .checked_add(messages.len())
+        .ok_or_else(|| {
+            format!(
+                "Retained transcript window boundary overflowed: start={message_start_index} retained={}",
+                messages.len()
+            )
+        })?;
+    if persisted_message_count < message_start_index
+        || persisted_message_count > retained_message_end
+    {
+        return Err(format!(
+            "Persisted transcript checkpoint {persisted_message_count} is outside retained absolute window {message_start_index}..={retained_message_end}."
+        ));
+    }
+    if persisted_message_count == retained_message_end {
+        return Ok(None);
+    }
+    let local_boundary = persisted_message_count - message_start_index;
+    Ok(Some(messages[local_boundary..].to_vec()))
 }
 
 /// Persists only the changed session after a WebUI runtime mutation.
@@ -205,15 +302,18 @@ fn retained_workspace_session_persistence_payload(
         }
         None => None,
     };
+    let retained_messages = session_messages
+        .get(&session_id)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    let retained_window = guard.hydrated_conversation_windows.get(&session_id);
+    let transcript = classify_retained_transcript_persistence(retained_messages, retained_window);
     Ok(RetainedWorkspaceSessionPersistencePayload {
         session_directory,
         project_id,
         session: session.clone(),
         archived,
-        messages: session_messages
-            .get(&session_id)
-            .cloned()
-            .unwrap_or_default(),
+        transcript,
         runtime_projection,
     })
 }
@@ -234,25 +334,123 @@ async fn persist_retained_workspace_session_payload(
     controller_runtime: ControllerRuntimeHandle,
     payload: RetainedWorkspaceSessionPersistencePayload,
 ) -> Result<(), String> {
-    vulcan_workspace_store::workspace_store::persist_single_session_update(
-        controller_runtime,
-        &payload.project_id,
-        &payload.session,
-        payload.archived,
-        &payload.messages,
-        None,
-    )
-    .await?;
-    if let Some(runtime_projection) = payload.runtime_projection.as_ref() {
+    let RetainedWorkspaceSessionPersistencePayload {
+        session_directory,
+        project_id,
+        session,
+        archived,
+        transcript,
+        runtime_projection,
+    } = payload;
+    match transcript {
+        RetainedTranscriptPersistence::Complete(messages) => {
+            vulcan_workspace_store::workspace_store::persist_single_session_update(
+                controller_runtime,
+                &project_id,
+                &session,
+                archived,
+                &messages,
+                None,
+            )
+            .await?;
+        }
+        RetainedTranscriptPersistence::PartialWindow {
+            message_start_index,
+            messages,
+        } => {
+            persist_partial_retained_transcript_and_index(
+                controller_runtime,
+                &session_directory,
+                &project_id,
+                &session,
+                archived,
+                message_start_index,
+                &messages,
+            )
+            .await?;
+        }
+        RetainedTranscriptPersistence::ExistingIndexOnly => {
+            vulcan_workspace_store::workspace_store::persist_existing_session_index_update(
+                controller_runtime,
+                &project_id,
+                &session,
+                archived,
+            )
+            .await?;
+        }
+    }
+    if let Some(runtime_projection) = runtime_projection.as_ref() {
         vulcan_workspace_store::workspace_store::
             persist_projected_single_session_runtime_state_update(
-                payload.session_directory,
-                payload.session.id,
+                session_directory,
+                session.id,
                 runtime_projection,
             )
             .await?;
     }
     Ok(())
+}
+
+/// Persists one partial retained transcript window after leaving the global service-state lock.
+/// 在离开全局服务状态锁后持久化一个局部保留转录窗口。
+///
+/// # Parameters
+/// 参数
+/// `controller_runtime` owns the exact locator index update route.
+/// `controller_runtime` 持有精确定位索引更新路由。
+/// `session_directory` is the deterministic storage target for the exact session.
+/// `session_directory` 是精确会话的确定性存储目标。
+/// `project_id` identifies the existing locator row owner.
+/// `project_id` 标识既有定位行的所属项目。
+/// `session` is the exact retained session summary being persisted.
+/// `session` 是正在持久化的精确保留会话摘要。
+/// `archived` records which deterministic storage branch owns the session.
+/// `archived` 记录该会话属于哪个确定性存储分支。
+/// `message_start_index` is the absolute transcript coordinate represented by `messages[0]`.
+/// `message_start_index` 是 `messages[0]` 所表示的绝对转录坐标。
+/// `messages` is the bounded retained display window in ascending order.
+/// `messages` 是按正序排列的有界保留展示窗口。
+///
+/// # Returns
+/// 返回值
+/// Success after any exact immutable suffix and the existing locator row are durable.
+/// 精确不可变后缀（若存在）与既有定位行可靠落盘后返回成功。
+async fn persist_partial_retained_transcript_and_index(
+    controller_runtime: ControllerRuntimeHandle,
+    session_directory: &Path,
+    project_id: &str,
+    session: &SessionSummary,
+    archived: bool,
+    message_start_index: usize,
+    messages: &[SessionMessageEntry],
+) -> Result<(), String> {
+    // Metadata is read only after the global service-state lock has been released.
+    // 元数据仅在全局服务状态锁释放后读取。
+    let checkpoint = vulcan_workspace_store::workspace_store::
+        load_single_session_transcript_checkpoint_in_directory(
+            session_directory,
+            session.id,
+        )?;
+    if let Some(tail) = retained_transcript_tail_for_persisted_boundary(
+        messages,
+        message_start_index,
+        checkpoint.message_count,
+    )? {
+        vulcan_workspace_store::workspace_store::
+            persist_single_session_transcript_tail_from_checkpoint_in_directory(
+                session_directory,
+                session.id,
+                &checkpoint,
+                &tail,
+            )?;
+    }
+    vulcan_workspace_store::workspace_store::persist_existing_session_index_update(
+        controller_runtime,
+        project_id,
+        session,
+        archived,
+    )
+    .await
 }
 
 /// Persists one session snapshot after the caller has acquired the shared WebUI write gate.
@@ -859,14 +1057,14 @@ pub(crate) fn spawn_session_transcript_messages_persist_task(
                 return;
             }
         };
-        // persistedMessageCount is read from metadata only; historical JSONL segments are never opened here.
-        // persistedMessageCount 仅从元数据读取；此处绝不打开历史 JSONL 分段。
-        let persisted_message_count = match vulcan_workspace_store::workspace_store::
-            load_single_session_transcript_message_count_in_directory(
+        // persistedCheckpoint is read from metadata only; historical JSONL segments are never opened here.
+        // persistedCheckpoint 仅从元数据读取；此处绝不打开历史 JSONL 分段。
+        let persisted_checkpoint = match vulcan_workspace_store::workspace_store::
+            load_single_session_transcript_checkpoint_in_directory(
                 &session_directory,
                 session_id,
             ) {
-            Ok(message_count) => message_count,
+            Ok(checkpoint) => checkpoint,
             Err(error) => {
                 eprintln!(
                     "[webui-service] live transcript checkpoint read failed: session={session_id} error={error}"
@@ -874,9 +1072,9 @@ pub(crate) fn spawn_session_transcript_messages_persist_task(
                 return;
             }
         };
-        // Only one boundary row plus the new immutable suffix is cloned after writer coalescing.
-        // 写入任务合并后仅克隆一个边界行及新的不可变后缀。
-        let (previous_message, tail_messages) = match state.lock() {
+        // Only the new immutable suffix is cloned after writer coalescing.
+        // 写入任务合并后仅克隆新的不可变后缀。
+        let tail_messages = match state.lock() {
             Ok(guard) => {
                 let Some(workspace) = guard.workspace_snapshot.as_ref() else {
                     return;
@@ -884,23 +1082,33 @@ pub(crate) fn spawn_session_transcript_messages_persist_task(
                 let Some(messages) = workspace.session_messages.get(&session_id) else {
                     return;
                 };
-                if persisted_message_count > messages.len() {
-                    eprintln!(
-                        "[webui-service] live transcript checkpoint exceeds retained messages: session={session_id} persisted={persisted_message_count} retained={} ",
-                        messages.len()
-                    );
-                    return;
+                let message_start_index = match guard
+                    .hydrated_conversation_windows
+                    .get(&session_id)
+                    .and_then(|window| window.message_start_index)
+                {
+                    Some(index) => index,
+                    None => {
+                        eprintln!(
+                            "[webui-service] live transcript window lacks an absolute message boundary: session={session_id}"
+                        );
+                        return;
+                    }
+                };
+                match retained_transcript_tail_for_persisted_boundary(
+                    messages,
+                    message_start_index,
+                    persisted_checkpoint.message_count,
+                ) {
+                    Ok(Some(tail)) => tail,
+                    Ok(None) => return,
+                    Err(error) => {
+                        eprintln!(
+                            "[webui-service] live transcript retained-window boundary rejected: session={session_id} error={error}"
+                        );
+                        return;
+                    }
                 }
-                if persisted_message_count == messages.len() {
-                    return;
-                }
-                (
-                    persisted_message_count
-                        .checked_sub(1)
-                        .and_then(|index| messages.get(index))
-                        .cloned(),
-                    messages[persisted_message_count..].to_vec(),
-                )
             }
             Err(error) => {
                 eprintln!(
@@ -914,11 +1122,10 @@ pub(crate) fn spawn_session_transcript_messages_persist_task(
             return;
         }
         if let Err(error) = vulcan_workspace_store::workspace_store::
-            persist_single_session_transcript_tail_in_directory(
+            persist_single_session_transcript_tail_from_checkpoint_in_directory(
                 &session_directory,
                 session_id,
-                persisted_message_count,
-                previous_message.as_ref(),
+                &persisted_checkpoint,
                 &tail_messages,
             )
         {
@@ -1100,5 +1307,138 @@ mod tests {
             &workspace_snapshot,
             missing_session_id
         ));
+    }
+
+    /// Verifies a partial or untracked display cache can never authorize a complete transcript rewrite.
+    /// 验证局部或未跟踪的展示缓存永远不能授权完整转录重写。
+    #[test]
+    fn partial_retained_window_never_authorizes_complete_transcript_persistence() {
+        let messages = vec![SessionMessageEntry {
+            id: String::from("tail-message"),
+            kind: vulcan_context::SessionMessageKind::Assistant,
+            record_kind: SessionMessageRecordKind::AssistantOutput,
+            visible: true,
+            title: String::from("output"),
+            body: String::from("tail"),
+            metadata: None,
+            created_at: String::from("1"),
+        }];
+        let partial_window = HydratedConversationWindowState {
+            message_start_index: Some(40),
+            earliest_ordinal: Some(100),
+            has_more_history: true,
+        };
+
+        assert!(matches!(
+            classify_retained_transcript_persistence(&messages, Some(&partial_window)),
+            RetainedTranscriptPersistence::PartialWindow {
+                message_start_index: 40,
+                messages: retained_messages,
+            } if retained_messages == messages
+        ));
+        assert!(matches!(
+            classify_retained_transcript_persistence(&messages, None),
+            RetainedTranscriptPersistence::ExistingIndexOnly
+        ));
+    }
+
+    /// Verifies only a complete index-zero window retains full transcript persistence authority.
+    /// 验证仅从下标零开始的完整窗口保留完整转录持久化权威。
+    #[test]
+    fn complete_retained_window_authorizes_complete_transcript_persistence() {
+        let complete_window = HydratedConversationWindowState {
+            message_start_index: Some(0),
+            earliest_ordinal: Some(0),
+            has_more_history: false,
+        };
+
+        assert!(matches!(
+            classify_retained_transcript_persistence(&[], Some(&complete_window)),
+            RetainedTranscriptPersistence::Complete(messages) if messages.is_empty()
+        ));
+    }
+
+    /// Verifies a partial retained window defers exact suffix selection until after capture.
+    /// 验证局部保留窗口会将精确后缀选择延迟到捕获之后。
+    #[test]
+    fn partial_retained_window_preserves_absolute_coordinate_for_deferred_append() {
+        let messages = (40..43)
+            .map(|index| SessionMessageEntry {
+                id: format!("message-{index}"),
+                kind: vulcan_context::SessionMessageKind::Assistant,
+                record_kind: SessionMessageRecordKind::AssistantOutput,
+                visible: true,
+                title: String::from("output"),
+                body: index.to_string(),
+                metadata: None,
+                created_at: index.to_string(),
+            })
+            .collect::<Vec<_>>();
+        let partial_window = HydratedConversationWindowState {
+            message_start_index: Some(40),
+            earliest_ordinal: Some(100),
+            has_more_history: true,
+        };
+        let authority = classify_retained_transcript_persistence(&messages, Some(&partial_window));
+
+        match authority {
+            RetainedTranscriptPersistence::PartialWindow {
+                message_start_index,
+                messages: retained_messages,
+            } => {
+                assert_eq!(message_start_index, 40);
+                assert_eq!(retained_messages, messages);
+            }
+            _ => panic!("partial window should retain deferred append authority"),
+        }
+    }
+
+    /// Verifies absolute persisted counts are translated into local retained-window coordinates.
+    /// 验证绝对持久化数量会转换为保留窗口的局部坐标。
+    #[test]
+    fn retained_transcript_tail_translates_absolute_window_boundary() {
+        let messages = (40..44)
+            .map(|index| SessionMessageEntry {
+                id: format!("message-{index}"),
+                kind: vulcan_context::SessionMessageKind::Assistant,
+                record_kind: SessionMessageRecordKind::AssistantOutput,
+                visible: true,
+                title: String::from("output"),
+                body: index.to_string(),
+                metadata: None,
+                created_at: index.to_string(),
+            })
+            .collect::<Vec<_>>();
+
+        let tail = retained_transcript_tail_for_persisted_boundary(&messages, 40, 42)
+            .expect("translate absolute boundary")
+            .expect("two new messages remain");
+        assert_eq!(
+            tail.into_iter()
+                .map(|message| message.id)
+                .collect::<Vec<_>>(),
+            vec![String::from("message-42"), String::from("message-43")]
+        );
+    }
+
+    /// Verifies a metadata checkpoint allows a partial window to append from its exact start.
+    /// 验证元数据检查点允许局部窗口从其精确起点执行追加。
+    #[test]
+    fn retained_transcript_tail_can_begin_at_partial_window_start() {
+        let messages = vec![SessionMessageEntry {
+            id: String::from("message-40"),
+            kind: vulcan_context::SessionMessageKind::Assistant,
+            record_kind: SessionMessageRecordKind::AssistantOutput,
+            visible: true,
+            title: String::from("output"),
+            body: String::from("40"),
+            metadata: None,
+            created_at: String::from("40"),
+        }];
+
+        let tail = retained_transcript_tail_for_persisted_boundary(&messages, 40, 40)
+            .expect("translate partial window start")
+            .expect("one new message remains");
+        assert_eq!(tail[0].id, "message-40");
     }
 }

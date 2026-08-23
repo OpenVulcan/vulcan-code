@@ -151,6 +151,17 @@ WebUI. Do not request or relay sensitive values.
 
 `sensitive=true` 是宿主披露策略，不代表 LuaSkills 配置文件提供静态加密。配置仍位于当前用户的数据目录中，部署方必须依靠操作系统账户、文件权限和磁盘安全策略保护该目录。秘密不得写入默认值、示例、日志、错误信息或技能提示词。
 
+`managedRuntime.invokeDefaultTimeoutMs` 的系统默认值为 `60000`。当技能通过受管运行时调用
+`node.invoke` 等入口且没有显式传入 `timeout_ms` 时，调用最多等待 60 秒；技能显式声明的正数
+`timeout_ms` 仍然优先。旧版配置中的 `null` 会在读取时规范化为 `60000`，不会继续保留无限等待。
+该配置只约束受管 Node/Python 调用，不会强制中断普通 Lua handler、同步 FFI 或
+`vulcan.process.exec`；这些边界必须由对应技能或 LuaSkills 运行时自身提供明确上限。
+
+LuaSkills 宿主会在调用等待 5 秒、30 秒以及之后每 60 秒输出一次阶段诊断。`engine_lock_wait`
+表示仍在等待进程级引擎锁，`skill_body_or_host_call` 表示已经进入 Lua 技能或其宿主调用；诊断
+中的 `blocking_runtime_operation` 表示 RunLua 生命周期等通用阻塞操作已经开始。诊断只包含规范
+工具名、进程内调用关联 ID、阶段与耗时，不包含完整参数。
+
 ## 9. 外部修改、显式刷新与事件
 
 LuaSkills 0.5.5 文件监听器会观察两个固定存储。WebUI 打开配置弹窗时轮询有序配置事件：

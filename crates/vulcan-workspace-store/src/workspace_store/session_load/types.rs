@@ -25,6 +25,9 @@ pub(super) struct SegmentedWindowMessages {
     /// Tool-detail messages split out for the existing WebUI side channel.
     /// 为现有 WebUI 带外通道拆出的工具明细消息。
     pub(super) tool_detail_messages: Vec<SessionMessageEntry>,
+    /// Absolute persisted message index represented by the first raw message row.
+    /// 第一条原始消息行所表示的绝对持久化消息下标。
+    pub(super) message_start_index: Option<usize>,
     /// Earliest event sequence included in this window.
     /// 当前窗口包含的最早事件序号。
     pub(super) earliest_ordinal: Option<i64>,

@@ -95,12 +95,15 @@ pub(super) struct HydratedSessionWorkbench {
 /// 单个已水合 WebUI 会话的保留分页状态。
 #[derive(Debug, Clone, Copy)]
 pub(super) struct HydratedConversationWindowState {
+    /// Absolute persisted message index owned by the first raw row in the retained window.
+    /// 保留窗口首条原始行对应的绝对持久化消息下标。
+    pub(super) message_start_index: Option<usize>,
     /// Earliest loaded transcript ordinal used to page older turns.
     /// 用于继续分页加载更早轮次的已加载最早转录序号。
-    earliest_ordinal: Option<i64>,
+    pub(super) earliest_ordinal: Option<i64>,
     /// Whether older transcript turns exist before the current window.
     /// 当前窗口之前是否存在更早的转录轮次。
-    has_more_history: bool,
+    pub(super) has_more_history: bool,
 }
 
 /// Converts retained window states into the WebUI API summary shape.
@@ -131,6 +134,7 @@ pub(super) fn retain_hydrated_conversation_windows_for_workspace(
         windows
             .entry(*session_id)
             .or_insert(HydratedConversationWindowState {
+                message_start_index: None,
                 earliest_ordinal: None,
                 has_more_history: false,
             });
@@ -142,12 +146,14 @@ pub(super) fn retain_hydrated_conversation_windows_for_workspace(
 pub(super) fn remember_hydrated_conversation_window(
     windows: &mut BTreeMap<SessionId, HydratedConversationWindowState>,
     session_id: SessionId,
+    message_start_index: Option<usize>,
     earliest_ordinal: Option<i64>,
     has_more_history: bool,
 ) {
     windows.insert(
         session_id,
         HydratedConversationWindowState {
+            message_start_index,
             earliest_ordinal,
             has_more_history,
         },
@@ -270,6 +276,7 @@ fn retained_hydrated_session_messages_response(
             .get(&parsed_session_id)
             .copied()
             .unwrap_or(HydratedConversationWindowState {
+                message_start_index: None,
                 earliest_ordinal: None,
                 has_more_history: false,
             });
@@ -398,6 +405,7 @@ pub(super) async fn service_session_history_page(
         remember_hydrated_conversation_window(
             &mut guard.hydrated_conversation_windows,
             parsed_session_id,
+            page.message_start_index,
             page.earliest_ordinal,
             page.has_more_history,
         );
@@ -442,6 +450,7 @@ fn empty_session_history_page(session_id: SessionId) -> SessionHistoryPage {
         session_id,
         messages: Vec::new(),
         tool_detail_messages: Vec::new(),
+        message_start_index: None,
         earliest_ordinal: None,
         has_more_history: false,
     }
@@ -761,6 +770,7 @@ pub(super) async fn load_hydrated_session_workbench(
         );
     })?;
     let earliest_ordinal = hydration.earliest_ordinal;
+    let message_start_index = hydration.message_start_index;
     let has_more_history = hydration.has_more_history;
     emit_conversation_hydration_progress(
         app,
@@ -869,6 +879,7 @@ pub(super) async fn load_hydrated_session_workbench(
         remember_hydrated_conversation_window(
             &mut hydrated_windows,
             parsed_session_id,
+            message_start_index,
             earliest_ordinal,
             has_more_history,
         );
@@ -1167,6 +1178,7 @@ mod tests {
             session_id,
             messages: vec![older_unique.clone(), older_duplicate],
             tool_detail_messages: vec![older_tool_detail.clone()],
+            message_start_index: Some(0),
             earliest_ordinal: Some(1),
             has_more_history: false,
         };

@@ -28,11 +28,16 @@ use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use vulcan_luaskills_config::{LuaSkillsRuntimeSettings, load_runtime_settings};
 
 mod runlua;
+
+/// Process-local sequence used to correlate all diagnostics from one LuaSkills host invocation.
+/// 用于关联同一次 LuaSkills 宿主调用全部诊断的进程内序列。
+static LUASKILLS_HOST_INVOCATION_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 mod schema;
 mod types;
 
@@ -202,6 +207,101 @@ where
 
 /// Execute one LuaSkills host operation on a dedicated blocking thread without stalling the async caller.
 /// 在专用阻塞线程上执行单次 LuaSkills 宿主操作，并避免阻塞异步调用方。
+async fn run_luaskills_blocking_task_async_with_diagnostics<T, F>(
+    thread_name: &str,
+    operation_label: String,
+    operation: F,
+) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce(Arc<AtomicU8>, u64) -> Result<T, String> + Send + 'static,
+{
+    // stage distinguishes queueing, engine-lock contention, skill execution, and terminal delivery.
+    // stage 用于区分排队、引擎锁竞争、技能执行与终态投递。
+    let stage = Arc::new(AtomicU8::new(0));
+    let (sender, receiver) = oneshot::channel();
+    let thread_name = thread_name.to_string();
+    let worker_stage = Arc::clone(&stage);
+    // invocation_id correlates queue, lock, body, and result-delivery diagnostics for one call.
+    // invocation_id 关联一次调用的排队、锁、技能体和结果投递诊断。
+    let invocation_id = LUASKILLS_HOST_INVOCATION_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+
+    std::thread::Builder::new()
+        .name(thread_name.clone())
+        .spawn(move || {
+            worker_stage.store(1, Ordering::Release);
+            let operation_stage = Arc::clone(&worker_stage);
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                operation(operation_stage, invocation_id)
+            }))
+            .map_err(|panic_payload| {
+                let panic_message = if let Some(message) = panic_payload.downcast_ref::<String>() {
+                    message.clone()
+                } else if let Some(message) = panic_payload.downcast_ref::<&'static str>() {
+                    (*message).to_string()
+                } else {
+                    String::from("未知 panic")
+                };
+                format!("LuaSkills 阻塞线程执行失败：{panic_message}")
+            })
+            .and_then(|value| value);
+            worker_stage.store(3, Ordering::Release);
+            let _ = sender.send(result);
+        })
+        .map_err(|error| format!("启动 LuaSkills 阻塞线程失败：{error}"))?;
+
+    // started_at is the monotonic watchdog origin for this exact host invocation.
+    // started_at 是本次精确宿主调用的单调看门狗起点。
+    let started_at = Instant::now();
+    // receiver remains pinned to the same worker result while diagnostics wake independently.
+    // receiver 在诊断独立唤醒期间始终绑定同一工作线程结果。
+    let mut receiver = receiver;
+    // next_diagnostic_delay emits once at five seconds, again at thirty seconds, then once per minute.
+    // next_diagnostic_delay 在五秒、三十秒以及之后每分钟输出一次诊断。
+    let mut next_diagnostic_delay = Duration::from_secs(5);
+    loop {
+        tokio::select! {
+            result = &mut receiver => {
+                return result
+                    .map_err(|_| format!("LuaSkills 阻塞线程 `{thread_name}` 意外断开。"))?;
+            }
+            _ = tokio::time::sleep(next_diagnostic_delay) => {
+                let elapsed_ms = started_at.elapsed().as_millis();
+                let stage_label = match stage.load(Ordering::Acquire) {
+                    0 => "thread_queued",
+                    1 => "engine_lock_wait",
+                    2 => "skill_body_or_host_call",
+                    3 => "result_delivery",
+                    4 => "blocking_runtime_operation",
+                    _ => "unknown",
+                };
+                eprintln!(
+                    "[luaskills-runtime][invoke-still-running] invocation_id={invocation_id} operation={operation_label} stage={stage_label} elapsed_ms={elapsed_ms}"
+                );
+                next_diagnostic_delay = if elapsed_ms < 30_000 {
+                    Duration::from_secs(25)
+                } else {
+                    Duration::from_secs(60)
+                };
+            }
+        }
+    }
+}
+
+/// Executes one unlabeled LuaSkills host operation through the shared stage watchdog.
+/// 通过共享阶段看门狗执行一次无独立标签的 LuaSkills 宿主操作。
+///
+/// # Parameters
+/// 参数
+/// `thread_name` is both the worker-thread name and stable diagnostic label.
+/// `thread_name` 同时作为工作线程名称与稳定诊断标签。
+/// `operation` is the blocking LuaSkills operation executed on that worker.
+/// `operation` 是在该工作线程上执行的阻塞 LuaSkills 操作。
+///
+/// # Returns
+/// 返回值
+/// The operation result or the exact worker startup/delivery failure.
+/// 返回操作结果或精确的工作线程启动/投递失败。
 async fn run_luaskills_blocking_task_async<T, F>(
     thread_name: &str,
     operation: F,
@@ -210,32 +310,15 @@ where
     T: Send + 'static,
     F: FnOnce() -> Result<T, String> + Send + 'static,
 {
-    let (sender, receiver) = oneshot::channel();
-    let thread_name = thread_name.to_string();
-
-    std::thread::Builder::new()
-        .name(thread_name.clone())
-        .spawn(move || {
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(operation))
-                .map_err(|panic_payload| {
-                    let panic_message =
-                        if let Some(message) = panic_payload.downcast_ref::<String>() {
-                            message.clone()
-                        } else if let Some(message) = panic_payload.downcast_ref::<&'static str>() {
-                            (*message).to_string()
-                        } else {
-                            String::from("未知 panic")
-                        };
-                    format!("LuaSkills 阻塞线程执行失败：{panic_message}")
-                })
-                .and_then(|value| value);
-            let _ = sender.send(result);
-        })
-        .map_err(|error| format!("启动 LuaSkills 阻塞线程失败：{error}"))?;
-
-    receiver
-        .await
-        .map_err(|_| format!("LuaSkills 阻塞线程 `{thread_name}` 意外断开。"))?
+    run_luaskills_blocking_task_async_with_diagnostics(
+        thread_name,
+        thread_name.to_string(),
+        move |stage, _invocation_id| {
+            stage.store(4, Ordering::Release);
+            operation()
+        },
+    )
+    .await
 }
 
 /// Ensures the configured host-managed ROOT skills are installed before the runtime catalog is loaded.
@@ -580,10 +663,36 @@ pub async fn call_luaskills_tool_entry(
     args: Value,
     invocation_context: Option<LuaInvocationContext>,
 ) -> Result<RuntimeInvocationResult, String> {
-    run_luaskills_blocking_task_async("luaskills-tool-call", move || {
+    let operation_label = tool_name.clone();
+    run_luaskills_blocking_task_async_with_diagnostics(
+        "luaskills-tool-call",
+        operation_label,
+        move |stage, invocation_id| {
+        // lock_started_at measures only contention for the process-wide LuaSkills engine.
+        // lock_started_at 仅测量进程级 LuaSkills 引擎锁的竞争耗时。
+        let lock_started_at = Instant::now();
         let engine = lock_runtime_engine(&handle)?;
-        engine.call_skill(&tool_name, &args, invocation_context.as_ref())
-    })
+        let lock_wait_ms = lock_started_at.elapsed().as_millis();
+        if lock_wait_ms >= 1_000 {
+                eprintln!(
+                    "[luaskills-runtime][engine-lock-slow] invocation_id={invocation_id} operation={tool_name} elapsed_ms={lock_wait_ms}"
+                );
+        }
+        stage.store(2, Ordering::Release);
+        // invocation_started_at separates engine contention from time spent inside Lua or one host call.
+        // invocation_started_at 将引擎竞争耗时与 Lua 或宿主调用内部耗时分离。
+        let invocation_started_at = Instant::now();
+        let result = engine.call_skill(&tool_name, &args, invocation_context.as_ref());
+        let invocation_elapsed_ms = invocation_started_at.elapsed().as_millis();
+        if invocation_elapsed_ms >= 1_000 {
+                eprintln!(
+                    "[luaskills-runtime][skill-call-slow] invocation_id={invocation_id} operation={tool_name} elapsed_ms={invocation_elapsed_ms} status={}",
+                if result.is_ok() { "ok" } else { "error" }
+            );
+        }
+        result
+        },
+    )
     .await
 }
 

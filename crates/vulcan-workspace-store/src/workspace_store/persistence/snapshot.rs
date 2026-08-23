@@ -91,6 +91,67 @@ pub async fn persist_single_session_update(
     .await
 }
 
+/// Persists only the exact existing session index row without touching transcript files.
+/// 仅持久化精确的既有会话索引行，不触碰转录文件。
+///
+/// # Parameters
+/// 参数
+/// `controller` owns the workspace database connection and exact locator query route.
+/// `controller` 持有工作区数据库连接与精确定位查询路径。
+/// `project_id` is the retained authoritative project owner.
+/// `project_id` 是保留态中的权威项目归属。
+/// `session` is the updated session summary.
+/// `session` 是更新后的会话摘要。
+/// `archived` selects the already-existing lifecycle locator.
+/// `archived` 选择已经存在的生命周期定位行。
+///
+/// # Returns
+/// 返回值
+/// Success only after the exact existing locator has been validated and updated.
+/// 仅在精确既有定位行完成校验与更新后返回成功。
+pub async fn persist_existing_session_index_update(
+    controller: ControllerRuntimeHandle,
+    project_id: &str,
+    session: &SessionSummary,
+    archived: bool,
+) -> Result<(), String> {
+    let retained_project_id = session
+        .project_id
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| format!("单会话索引保存失败：会话未携带所属项目：{}", session.id))?;
+    if project_id.trim().is_empty() || project_id != retained_project_id {
+        return Err(format!(
+            "单会话索引保存失败：会话 `{}` 的精确项目归属不匹配。",
+            session.id,
+        ));
+    }
+    let active_locator_exists = query_session_index_locator(&controller, session.id, false)
+        .await?
+        .is_some();
+    let archived_locator_exists = query_session_index_locator(&controller, session.id, true)
+        .await?
+        .is_some();
+    validate_single_session_update_lifecycle(
+        session.id,
+        archived,
+        active_locator_exists,
+        archived_locator_exists,
+    )?;
+    let selected_locator_exists = if archived {
+        archived_locator_exists
+    } else {
+        active_locator_exists
+    };
+    if !selected_locator_exists {
+        return Err(format!(
+            "单会话索引保存失败：会话 `{}` 的精确既有定位行不存在。",
+            session.id,
+        ));
+    }
+    upsert_session_index_row(&controller, session, retained_project_id, archived, 0, None).await
+}
+
 /// Validates that an ordinary session snapshot write cannot change authoritative archive state.
 /// 校验普通会话快照写入不能改变权威归档状态。
 ///
@@ -194,15 +255,19 @@ pub fn persist_single_session_transcript_messages_in_directory(
 ///
 /// # Returns
 /// 返回值
-/// The metadata checkpoint count without opening or scanning any transcript segment.
-/// 返回元数据检查点数量，且不打开或扫描任何转录分段。
-pub fn load_single_session_transcript_message_count_in_directory(
+/// The complete metadata checkpoint without opening or scanning any transcript segment.
+/// 返回完整元数据检查点，且不打开或扫描任何转录分段。
+pub fn load_single_session_transcript_checkpoint_in_directory(
     session_directory: &Path,
     session_id: SessionId,
-) -> Result<usize, String> {
+) -> Result<PersistedSessionTranscriptCheckpoint, String> {
     validate_exact_segmented_session_directory_owner(session_directory, session_id)?;
     let metadata = read_session_metadata(session_directory)?;
-    usize::try_from(metadata.message_count).map_err(to_store_error)
+    Ok(PersistedSessionTranscriptCheckpoint {
+        message_count: usize::try_from(metadata.message_count).map_err(to_store_error)?,
+        last_message_id: metadata.last_message_id,
+        last_message_fingerprint: metadata.last_message_fingerprint,
+    })
 }
 
 /// Appends one exact immutable transcript suffix without cloning or scanning the historical prefix.
@@ -237,6 +302,41 @@ pub fn persist_single_session_transcript_tail_in_directory(
         session_directory,
         expected_message_count,
         previous_message,
+        tail_messages,
+    )?;
+    Ok(())
+}
+
+/// Appends one exact immutable suffix using a metadata checkpoint captured from the same session.
+/// 使用从同一会话捕获的元数据检查点追加一个精确的不可变后缀。
+///
+/// # Parameters
+/// 参数
+/// `session_directory` is the exact main-session or TaskSession directory.
+/// `session_directory` 是精确的主会话或 TaskSession 目录。
+/// `session_id` is the expected directory owner.
+/// `session_id` 是预期的目录所有者。
+/// `checkpoint` is the metadata-only durable prefix token captured before suffix selection.
+/// `checkpoint` 是选择后缀前捕获的纯元数据可靠前缀令牌。
+/// `tail_messages` contains only new immutable rows.
+/// `tail_messages` 仅包含新的不可变行。
+///
+/// # Returns
+/// 返回值
+/// Success only when the same exact metadata boundary still owns the append.
+/// 仅当同一个精确元数据边界仍然持有本次追加时返回成功。
+pub fn persist_single_session_transcript_tail_from_checkpoint_in_directory(
+    session_directory: &Path,
+    session_id: SessionId,
+    checkpoint: &PersistedSessionTranscriptCheckpoint,
+    tail_messages: &[SessionMessageEntry],
+) -> Result<(), String> {
+    validate_exact_segmented_session_directory_owner(session_directory, session_id)?;
+    append_segmented_session_message_tail_from_checkpoint(
+        session_directory,
+        checkpoint.message_count,
+        checkpoint.last_message_id.as_deref(),
+        checkpoint.last_message_fingerprint.as_deref(),
         tail_messages,
     )?;
     Ok(())

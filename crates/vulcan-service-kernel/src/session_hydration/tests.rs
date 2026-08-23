@@ -93,6 +93,7 @@ fn selected_session_runtime_hydration_preserves_existing_display_window() {
         tool_detail_messages: vec![hidden_tool_detail_entry.clone()],
         compactions: Vec::new(),
         runtime_state: Some(runtime_state),
+        message_start_index: Some(0),
         earliest_ordinal: None,
         has_more_history: false,
     };

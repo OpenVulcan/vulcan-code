@@ -15,6 +15,7 @@ mod tests;
 use super::segmented_session_store::{
     SegmentPolicy, SegmentedSessionCreateRequest, SegmentedSessionForkRequest,
     SegmentedSessionForkSource, SegmentedSessionReplayResult,
+    append_segmented_session_message_tail_from_checkpoint,
     append_segmented_session_message_tail_update, append_segmented_session_message_update,
     archive_segmented_session_by_created_date, create_segmented_session_in_location,
     finalize_staged_archived_session_deletion,
@@ -61,8 +62,9 @@ pub use session_lifecycle::{
     restore_project,
 };
 pub use snapshot::{
-    load_single_session_transcript_message_count_in_directory,
+    load_single_session_transcript_checkpoint_in_directory, persist_existing_session_index_update,
     persist_single_session_runtime_state_update,
     persist_single_session_transcript_messages_in_directory,
+    persist_single_session_transcript_tail_from_checkpoint_in_directory,
     persist_single_session_transcript_tail_in_directory, persist_single_session_update,
 };

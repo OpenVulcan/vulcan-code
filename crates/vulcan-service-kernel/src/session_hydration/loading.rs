@@ -223,6 +223,7 @@ pub(crate) fn empty_session_hydration_snapshot(session_id: SessionId) -> Session
         tool_detail_messages: Vec::new(),
         compactions: Vec::new(),
         runtime_state: None,
+        message_start_index: Some(0),
         earliest_ordinal: None,
         has_more_history: false,
     }

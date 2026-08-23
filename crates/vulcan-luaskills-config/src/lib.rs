@@ -207,8 +207,8 @@ pub struct LuaSkillsManagedRuntimeSettings {
     /// Default retained byte limit for each persistent-session output stream.
     /// 每个持久会话输出流默认保留的字节上限。
     pub persistent_session_default_buffer_limit_bytes_per_stream: usize,
-    /// Default invoke timeout in milliseconds; absent means unlimited.
-    /// 默认调用超时毫秒数；缺失表示无限制。
+    /// Default invoke timeout in milliseconds; legacy null input is normalized to the finite host default.
+    /// 默认调用超时毫秒数；旧版空值输入会规范化为宿主的有限默认值。
     pub invoke_default_timeout_ms: Option<u64>,
 }
 
@@ -281,12 +281,30 @@ impl Default for LuaSkillsManagedRuntimeSettings {
             worker_idle_ttl_secs: 60,
             persistent_session_limit_per_engine: 256,
             persistent_session_default_buffer_limit_bytes_per_stream: 1024 * 1024,
-            invoke_default_timeout_ms: None,
+            invoke_default_timeout_ms: Some(60_000),
         }
     }
 }
 
 impl LuaSkillsManagedRuntimeSettings {
+    /// Normalizes legacy unlimited invocation settings into the finite host boundary.
+    /// 将旧版无限调用设置规范化为宿主的有限边界。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A validated managed-runtime policy with an explicit positive invocation timeout.
+    /// 返回带有显式正数调用超时且校验通过的受管运行时策略。
+    fn normalized(&self) -> Result<Self, String> {
+        let normalized = Self {
+            invoke_default_timeout_ms: self
+                .invoke_default_timeout_ms
+                .or(Self::default().invoke_default_timeout_ms),
+            ..*self
+        };
+        normalized.validate()?;
+        Ok(normalized)
+    }
+
     /// Validate every configured managed-runtime capacity and timeout boundary.
     /// 校验每个已配置的受管运行时容量与超时边界。
     ///
@@ -413,7 +431,7 @@ impl LuaSkillsRuntimeSettings {
         self.vm_pool.validate("vmPool")?;
         self.run_lua_pool.validate("runLuaPool")?;
         self.tool_cache.validate()?;
-        self.managed_runtime.validate()?;
+        let managed_runtime = self.managed_runtime.normalized()?;
         Ok(Self {
             schema_version: self.schema_version,
             vm_pool: self.vm_pool,
@@ -421,7 +439,7 @@ impl LuaSkillsRuntimeSettings {
             tool_cache: self.tool_cache,
             network: self.network.normalized(),
             capabilities: self.capabilities.normalized()?,
-            managed_runtime: self.managed_runtime,
+            managed_runtime,
             ai_tools: self.ai_tools,
         })
     }
@@ -508,7 +526,7 @@ fn normalized_optional_text(value: Option<&str>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     /// Verify the repository template synchronized into output matches the compiled defaults.
     /// 验证同步到 output 的仓库模板与编译默认值一致。
@@ -647,6 +665,34 @@ mod tests {
         assert_eq!(
             parsed.managed_runtime,
             LuaSkillsManagedRuntimeSettings::default()
+        );
+    }
+
+    /// Verify omitted managed-runtime invocation timeouts are bounded by the host default.
+    /// 验证省略受管运行时调用超时时会受到宿主默认上限约束。
+    #[test]
+    fn managed_runtime_default_invocation_timeout_is_finite() {
+        assert_eq!(
+            LuaSkillsManagedRuntimeSettings::default().invoke_default_timeout_ms,
+            Some(60_000)
+        );
+    }
+
+    /// Verify legacy explicit null invocation timeouts migrate to the finite host boundary.
+    /// 验证旧版显式空调用超时会迁移为宿主的有限边界。
+    #[test]
+    fn legacy_null_invocation_timeout_normalizes_to_finite_default() {
+        let mut value = serde_json::to_value(LuaSkillsRuntimeSettings::default())
+            .expect("serialize runtime settings");
+        value["managedRuntime"]["invokeDefaultTimeoutMs"] = Value::Null;
+        let decoded = serde_json::from_value::<LuaSkillsRuntimeSettings>(value)
+            .expect("decode legacy null timeout")
+            .normalized()
+            .expect("normalize legacy null timeout");
+
+        assert_eq!(
+            decoded.managed_runtime.invoke_default_timeout_ms,
+            Some(60_000)
         );
     }
 }

@@ -162,6 +162,7 @@ fn boundary_window_keeps_raw_timeline_process_rows() {
     let raw_window = SegmentedWindowMessages {
         messages: raw_messages.clone(),
         tool_detail_messages: vec![raw_tool_call],
+        message_start_index: Some(0),
         earliest_ordinal: Some(10),
         has_more_history: true,
         full_messages: raw_messages,
@@ -187,6 +188,156 @@ fn boundary_window_keeps_raw_timeline_process_rows() {
     assert_eq!(boundary_window.earliest_ordinal, Some(10));
     assert!(boundary_window.has_more_history);
     assert!(boundary_window.boundary_conversation_state.is_some());
+}
+
+/// Verifies canonical boundary process order cannot be replaced by a stale raw display window.
+/// 验证规范边界过程顺序不会被陈旧的原始展示窗口替换。
+#[test]
+fn boundary_process_order_wins_over_stale_raw_window() {
+    let thread_id = SessionNodeId::new_v4();
+    let mut boundary_tool = session_boundary_line(
+        2,
+        thread_id,
+        SessionBoundaryEventKind::ItemStarted,
+        SessionEventVisibility::Visible,
+        "boundary tool",
+    );
+    boundary_tool.payload["payload"] = json!({
+        "text": "boundary tool",
+        "tool_name": "shell_command",
+    });
+    let mut boundary_window = session_boundary_lines_to_window_messages(
+        &[
+            session_boundary_line(
+                1,
+                thread_id,
+                SessionBoundaryEventKind::UserInput,
+                SessionEventVisibility::Visible,
+                "run command",
+            ),
+            boundary_tool,
+            session_boundary_line(
+                3,
+                thread_id,
+                SessionBoundaryEventKind::AgentMessage,
+                SessionEventVisibility::Visible,
+                "done",
+            ),
+        ],
+        false,
+    )
+    .expect("project canonical boundary order")
+    .expect("visible canonical boundary transcript");
+    let mut stale_raw_tool = test_message(
+        "stale-tool",
+        SessionMessageKind::Assistant,
+        SessionMessageRecordKind::ToolCallOutput,
+        "",
+    );
+    stale_raw_tool.metadata = Some(json!({
+        "tool_call_id": "call-stale",
+        "tool_name": "shell_command",
+    }));
+    let stale_raw_messages = vec![
+        test_message(
+            "stale-user",
+            SessionMessageKind::User,
+            SessionMessageRecordKind::Transcript,
+            "run command",
+        ),
+        test_message(
+            "stale-assistant",
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::AssistantOutput,
+            "done",
+        ),
+        stale_raw_tool.clone(),
+    ];
+    let stale_raw_window = SegmentedWindowMessages {
+        messages: stale_raw_messages.clone(),
+        tool_detail_messages: vec![stale_raw_tool],
+        message_start_index: Some(40),
+        earliest_ordinal: Some(100),
+        has_more_history: true,
+        full_messages: stale_raw_messages,
+        boundary_conversation_state: None,
+    };
+
+    merge_raw_timeline_window_into_boundary_window(&mut boundary_window, stale_raw_window);
+
+    assert!(matches!(
+        boundary_window.messages[0].record_kind,
+        SessionMessageRecordKind::Transcript
+    ));
+    assert!(matches!(
+        boundary_window.messages[1].record_kind,
+        SessionMessageRecordKind::ToolCallOutput
+    ));
+    assert!(matches!(
+        boundary_window.messages[2].record_kind,
+        SessionMessageRecordKind::AssistantOutput
+    ));
+    assert_eq!(boundary_window.message_start_index, Some(40));
+    assert_eq!(boundary_window.earliest_ordinal, Some(1));
+    assert!(boundary_window.has_more_history);
+}
+
+/// Verifies a simple canonical window inherits only the matching raw absolute coordinate.
+/// 验证简单规范窗口仅继承行数匹配的原始绝对坐标。
+#[test]
+fn simple_boundary_window_inherits_matching_raw_message_coordinate() {
+    let thread_id = SessionNodeId::new_v4();
+    let mut boundary_window = session_boundary_lines_to_window_messages(
+        &[
+            session_boundary_line(
+                1,
+                thread_id,
+                SessionBoundaryEventKind::UserInput,
+                SessionEventVisibility::Visible,
+                "question",
+            ),
+            session_boundary_line(
+                2,
+                thread_id,
+                SessionBoundaryEventKind::AgentMessage,
+                SessionEventVisibility::Visible,
+                "answer",
+            ),
+        ],
+        false,
+    )
+    .expect("project simple boundary order")
+    .expect("visible simple boundary transcript");
+    let raw_messages = vec![
+        test_message(
+            "raw-user",
+            SessionMessageKind::User,
+            SessionMessageRecordKind::Transcript,
+            "question",
+        ),
+        test_message(
+            "raw-assistant",
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::AssistantOutput,
+            "answer",
+        ),
+    ];
+    let raw_window = SegmentedWindowMessages {
+        messages: raw_messages.clone(),
+        tool_detail_messages: Vec::new(),
+        message_start_index: Some(20),
+        earliest_ordinal: Some(100),
+        has_more_history: true,
+        full_messages: raw_messages,
+        boundary_conversation_state: None,
+    };
+
+    merge_raw_timeline_window_into_boundary_window(&mut boundary_window, raw_window);
+
+    assert_eq!(boundary_window.messages[0].body, "question");
+    assert_eq!(boundary_window.messages[1].body, "answer");
+    assert_eq!(boundary_window.message_start_index, Some(20));
+    assert_eq!(boundary_window.earliest_ordinal, Some(1));
 }
 
 /// Verifies boundary-turn reads skip over large non-boundary tails without losing the latest turn.

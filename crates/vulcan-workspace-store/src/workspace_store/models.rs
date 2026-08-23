@@ -67,6 +67,9 @@ pub struct SessionHydrationSnapshot {
     /// Runtime metadata restored without forcing global startup to read every session body.
     /// 在不迫使全局启动读取所有会话正文的前提下恢复出的运行时元数据。
     pub runtime_state: Option<SessionRuntimeStateEntry>,
+    /// Absolute persisted message index owned by the first raw transcript row in this window.
+    /// 当前窗口首条原始转录行对应的绝对持久化消息下标。
+    pub message_start_index: Option<usize>,
     /// Earliest loaded ordinal, used as the cursor for older history pagination.
     /// 已加载的最早序号，用作继续分页加载更早历史的游标。
     pub earliest_ordinal: Option<i64>,
@@ -127,12 +130,30 @@ pub struct SessionHistoryPage {
     /// Complete tool-detail rows belonging to this older transcript page, loaded together with the visible turns.
     /// 归属于当前更早转录页的完整工具明细行，并与可见轮次一同加载完成。
     pub tool_detail_messages: Vec<SessionMessageEntry>,
+    /// Absolute persisted message index owned by the first raw transcript row in this page.
+    /// 当前分页首条原始转录行对应的绝对持久化消息下标。
+    pub message_start_index: Option<usize>,
     /// Earliest loaded ordinal after this page is merged.
     /// 合并该页后已加载的最早序号。
     pub earliest_ordinal: Option<i64>,
     /// Whether more older transcript rows probably still exist.
     /// 是否大概率仍存在更多更早的转录行。
     pub has_more_history: bool,
+}
+
+/// Exact metadata-only checkpoint used to append one immutable transcript suffix.
+/// 用于追加一段不可变转录后缀的精确纯元数据检查点。
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct PersistedSessionTranscriptCheckpoint {
+    /// Exact durable transcript prefix length.
+    /// 精确的可靠转录前缀长度。
+    pub message_count: usize,
+    /// Stable identity retained for the final durable message.
+    /// 为最后一条可靠消息保留的稳定身份。
+    pub last_message_id: Option<String>,
+    /// Content fingerprint retained for the final durable message.
+    /// 为最后一条可靠消息保留的内容指纹。
+    pub last_message_fingerprint: Option<String>,
 }
 
 /// Raw project row decoded from the controller SQLite query payload.

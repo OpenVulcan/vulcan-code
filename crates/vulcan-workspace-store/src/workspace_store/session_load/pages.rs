@@ -51,6 +51,7 @@ pub async fn load_session_history_page_for_project_created_at(
             session_id,
             messages: window.messages,
             tool_detail_messages: window.tool_detail_messages,
+            message_start_index: window.message_start_index,
             earliest_ordinal: window.earliest_ordinal,
             has_more_history: window.has_more_history,
         });
@@ -59,6 +60,7 @@ pub async fn load_session_history_page_for_project_created_at(
         session_id,
         messages: Vec::new(),
         tool_detail_messages: Vec::new(),
+        message_start_index: None,
         earliest_ordinal: None,
         has_more_history: false,
     })
@@ -110,6 +112,7 @@ pub async fn load_session_transcript_window_for_project_created_at(
             session_id,
             messages: window.messages,
             tool_detail_messages: window.tool_detail_messages,
+            message_start_index: window.message_start_index,
             earliest_ordinal: window.earliest_ordinal,
             has_more_history: window.has_more_history,
         });
@@ -118,6 +121,7 @@ pub async fn load_session_transcript_window_for_project_created_at(
         session_id,
         messages: Vec::new(),
         tool_detail_messages: Vec::new(),
+        message_start_index: None,
         earliest_ordinal: None,
         has_more_history: false,
     })

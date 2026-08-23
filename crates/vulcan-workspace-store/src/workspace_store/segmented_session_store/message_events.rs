@@ -118,6 +118,61 @@ pub(in crate::workspace_store) fn append_segmented_session_message_tail_update(
     previous_message: Option<&SessionMessageEntry>,
     tail_messages: &[SessionMessageEntry],
 ) -> Result<Vec<SegmentedSessionEventLine>, String> {
+    let (expected_last_message_id, expected_last_message_fingerprint) = if expected_message_count
+        == 0
+    {
+        (None, None)
+    } else {
+        let previous_message = previous_message.ok_or_else(|| {
+                format!(
+                    "Segmented transcript checkpoint {expected_message_count} requires its exact previous message."
+                )
+            })?;
+        let previous_index = expected_message_count - 1;
+        (
+            Some(stable_segmented_message_id(
+                previous_index,
+                previous_message,
+            )),
+            Some(segmented_message_fingerprint(previous_message)?),
+        )
+    };
+    append_segmented_session_message_tail_from_checkpoint(
+        session_dir,
+        expected_message_count,
+        expected_last_message_id.as_deref(),
+        expected_last_message_fingerprint.as_deref(),
+        tail_messages,
+    )
+}
+
+/// Appends one immutable suffix after revalidating a metadata checkpoint captured from the same session.
+/// 重新校验从同一会话捕获的元数据检查点后追加一段不可变后缀。
+///
+/// # Parameters
+/// 参数
+/// `session_dir` is the exact owning session directory.
+/// `session_dir` 是精确的所属会话目录。
+/// `expected_message_count` is the captured durable prefix length.
+/// `expected_message_count` 是已捕获的可靠前缀长度。
+/// `expected_last_message_id` is the captured final-message identity.
+/// `expected_last_message_id` 是已捕获的末消息身份。
+/// `expected_last_message_fingerprint` is the captured final-message content fingerprint.
+/// `expected_last_message_fingerprint` 是已捕获的末消息内容指纹。
+/// `tail_messages` contains only the immutable suffix to append.
+/// `tail_messages` 仅包含需要追加的不可变后缀。
+///
+/// # Returns
+/// 返回值
+/// The exact appended event lines, or a stale/corrupt checkpoint error without historical scanning.
+/// 返回精确追加的事件行；若检查点过期或损坏，则在不扫描历史的情况下返回错误。
+pub(in crate::workspace_store) fn append_segmented_session_message_tail_from_checkpoint(
+    session_dir: &Path,
+    expected_message_count: usize,
+    expected_last_message_id: Option<&str>,
+    expected_last_message_fingerprint: Option<&str>,
+    tail_messages: &[SessionMessageEntry],
+) -> Result<Vec<SegmentedSessionEventLine>, String> {
     let _append_guard = segmented_append_file_io_lock()
         .lock()
         .map_err(to_store_error)?;
@@ -131,26 +186,32 @@ pub(in crate::workspace_store) fn append_segmented_session_message_tail_update(
         ));
     }
     if expected_message_count == 0 {
-        if metadata.last_message_id.is_some() || metadata.last_message_fingerprint.is_some() {
+        if expected_last_message_id.is_some()
+            || expected_last_message_fingerprint.is_some()
+            || metadata.last_message_id.is_some()
+            || metadata.last_message_fingerprint.is_some()
+        {
             return Err(String::from(
                 "Empty segmented transcript checkpoint retains a last-message identity; load-time repair is required.",
             ));
         }
     } else {
-        let previous_message = previous_message.ok_or_else(|| {
+        let expected_last_message_id = expected_last_message_id.ok_or_else(|| {
             format!(
-                "Segmented transcript checkpoint {expected_message_count} requires its exact previous message."
+                "Segmented transcript checkpoint {expected_message_count} requires its last-message identity."
             )
         })?;
-        let previous_index = expected_message_count - 1;
-        let previous_message_id = stable_segmented_message_id(previous_index, previous_message);
-        let previous_message_fingerprint = segmented_message_fingerprint(previous_message)?;
-        if metadata.last_message_id.as_deref() != Some(previous_message_id.as_str())
+        let expected_last_message_fingerprint = expected_last_message_fingerprint.ok_or_else(|| {
+            format!(
+                "Segmented transcript checkpoint {expected_message_count} requires its last-message fingerprint."
+            )
+        })?;
+        if metadata.last_message_id.as_deref() != Some(expected_last_message_id)
             || metadata.last_message_fingerprint.as_deref()
-                != Some(previous_message_fingerprint.as_str())
+                != Some(expected_last_message_fingerprint)
         {
             return Err(format!(
-                "Segmented transcript checkpoint {expected_message_count} no longer matches the exact retained prefix boundary."
+                "Segmented transcript checkpoint {expected_message_count} no longer matches the exact metadata boundary."
             ));
         }
     }

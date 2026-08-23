@@ -149,6 +149,16 @@ pub(crate) fn commit_created_submission_workspace_slice(
     workspace.session_run_phases.insert(session_id, run_phase);
     workspace.hydrated_session_ids.insert(session_id);
     workspace.selected_session = session_id;
+    // A newly materialized conversation owns every retained transcript row, so its absolute window starts at zero.
+    // 新物化会话持有全部保留转录行，因此其绝对窗口明确从零开始。
+    hydrated_conversation_windows.insert(
+        session_id,
+        crate::HydratedConversationWindowState {
+            message_start_index: Some(0),
+            earliest_ordinal: None,
+            has_more_history: false,
+        },
+    );
     crate::retain_hydrated_conversation_windows_for_workspace(
         hydrated_conversation_windows,
         workspace,

@@ -125,6 +125,7 @@ async fn load_session_hydration_snapshot_from_locator(
         has_more_history,
         mut messages,
         mut tool_detail_messages,
+        message_start_index,
         earliest_ordinal,
         full_messages,
         _boundary_conversation_state,
@@ -134,12 +135,13 @@ async fn load_session_hydration_snapshot_from_locator(
                 window.has_more_history,
                 window.messages,
                 window.tool_detail_messages,
+                window.message_start_index,
                 window.earliest_ordinal,
                 window.full_messages,
                 window.boundary_conversation_state,
             )
         })
-        .unwrap_or_else(|| (false, Vec::new(), Vec::new(), None, Vec::new(), None));
+        .unwrap_or_else(|| (false, Vec::new(), Vec::new(), None, None, Vec::new(), None));
     let runtime_state =
         match load_segmented_runtime_state(&controller, locator.as_ref(), session_id)? {
             Some(runtime_state) => Some(runtime_state),
@@ -164,6 +166,7 @@ async fn load_session_hydration_snapshot_from_locator(
         tool_detail_messages,
         compactions,
         runtime_state,
+        message_start_index,
         earliest_ordinal,
         has_more_history,
     })

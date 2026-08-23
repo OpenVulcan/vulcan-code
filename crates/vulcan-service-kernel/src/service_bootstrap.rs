@@ -53,6 +53,42 @@ pub(crate) use recovery::service_rebuild_startup_session_vmm;
 pub(super) use startup_snapshot::*;
 pub(super) use startup_updates::*;
 
+/// Starts one bounded startup-stage timer and emits its explicit entry boundary.
+/// 启动一个有界的启动阶段计时器，并输出其显式进入边界。
+///
+/// # Parameters
+/// 参数
+/// `stage` is the stable startup stage identifier.
+/// `stage` 是稳定的启动阶段标识。
+///
+/// # Returns
+/// 返回值
+/// The monotonic origin used by the matching completion record.
+/// 返回供对应完成记录使用的单调计时起点。
+fn start_bootstrap_stage(stage: &str) -> Instant {
+    eprintln!("[webui-service][startup-timing] stage={stage} status=started");
+    Instant::now()
+}
+
+/// Emits one bounded startup-stage timing record without performing any additional I/O.
+/// 在不执行任何额外 I/O 的前提下输出一条有界启动阶段耗时记录。
+///
+/// # Parameters
+/// 参数
+/// `stage` is the stable startup stage identifier.
+/// `stage` 是稳定的启动阶段标识。
+/// `started_at` is the monotonic origin captured around existing work.
+/// `started_at` 是包围既有工作的单调计时起点。
+/// `detail` contains already-available counts or status labels only.
+/// `detail` 仅包含已经存在的数量或状态标签。
+fn trace_bootstrap_stage(stage: &str, started_at: Instant, detail: impl AsRef<str>) {
+    let elapsed_ms = started_at.elapsed().as_millis();
+    eprintln!(
+        "[webui-service][startup-timing] stage={stage} status=completed elapsed_ms={elapsed_ms} {}",
+        detail.as_ref()
+    );
+}
+
 /// Emits initial service events after the WebView is created.
 /// 在 WebView 创建后发出初始服务事件。
 pub fn emit_initial_service_events(
@@ -86,6 +122,12 @@ fn run_service_bootstrap(
     state: &SharedServiceBridgeState,
     event_emitter: &ServiceEventEmitter,
 ) -> Result<(), ServiceBootstrapError> {
+    // bootstrap_started_at measures the complete synchronous service bootstrap lifecycle.
+    // bootstrap_started_at 测量完整的同步服务引导生命周期。
+    let bootstrap_started_at = start_bootstrap_stage("total");
+    // configuration_started_at measures only the three exact startup configuration files.
+    // configuration_started_at 仅测量三个精确启动配置文件。
+    let configuration_started_at = start_bootstrap_stage("configuration");
     let mut logs = vec![format!(
         "[webui-service] workspace root: {}",
         normalized_workspace_path_text_from_path(&workspace_root())
@@ -100,6 +142,11 @@ fn run_service_bootstrap(
         vulcan_provider_config::config::load_public_ai_connections_file()
             .map_err(|error| ServiceBootstrapError::new("service-process", "Core Service", error))?
             .configuration;
+    trace_bootstrap_stage("configuration", configuration_started_at, "files=3");
+    // configuration_reconciliation_started_at covers migration, startup projection, and Tokio runtime creation.
+    // configuration_reconciliation_started_at 覆盖配置迁移、启动投影与 Tokio Runtime 创建。
+    let configuration_reconciliation_started_at =
+        start_bootstrap_stage("configuration_reconciliation");
     // legacy_custom_provider_ids are embedded providers not yet represented by standalone
     // references. They migrate through the same recoverable journal as ordinary saves, so a
     // crash cannot split provider bytes from the central reference document.
@@ -184,7 +231,15 @@ fn run_service_bootstrap(
                 )
             })?,
     );
+    trace_bootstrap_stage(
+        "configuration_reconciliation",
+        configuration_reconciliation_started_at,
+        format!("migrated_providers={}", legacy_custom_provider_ids.len()),
+    );
 
+    // data_plane_started_at measures controller startup without any workspace body hydration.
+    // data_plane_started_at 测量不包含工作区正文水合的 Controller 启动耗时。
+    let data_plane_started_at = start_bootstrap_stage("controller_data_plane");
     let controller_report = bootstrap_step(
         runtime.block_on(
             vulcan_workspace_store::data_plane::bootstrap_application_data_plane(
@@ -194,6 +249,11 @@ fn run_service_bootstrap(
         "vldb",
         "VLDB",
     )?;
+    trace_bootstrap_stage(
+        "controller_data_plane",
+        data_plane_started_at,
+        "result=ready",
+    );
     logs.push(format!(
         "[webui-service] vldb ready: {}",
         controller_report.handle.sqlite_path.display()
@@ -202,11 +262,19 @@ fn run_service_bootstrap(
     let knowledge_runtime = vulcan_workspace_store::knowledge_base::KnowledgeBaseRuntime::new(
         controller_runtime.clone(),
     );
+    // knowledge_recovery_started_at measures only exact persisted interrupted-job recovery.
+    // knowledge_recovery_started_at 仅测量精确的持久化中断任务恢复。
+    let knowledge_recovery_started_at = start_bootstrap_stage("knowledge_job_recovery");
     bootstrap_step(
         runtime.block_on(knowledge_runtime.recover_interrupted_jobs()),
         "vldb",
         "VLDB",
     )?;
+    trace_bootstrap_stage(
+        "knowledge_job_recovery",
+        knowledge_recovery_started_at,
+        "result=ready",
+    );
 
     update_startup(
         state,
@@ -246,6 +314,9 @@ fn run_service_bootstrap(
 
     // LuaSkills bootstrap is an optional execution adapter; catalog-only plugins must survive its failure.
     // LuaSkills 引导属于可选执行适配器；仅含内容的插件必须能在其失败时继续工作。
+    // luaskills_started_at covers engine bootstrap plus the first exact catalog load.
+    // luaskills_started_at 覆盖引擎引导与首次精确目录加载。
+    let luaskills_started_at = start_bootstrap_stage("luaskills");
     let (luaskills_runtime, luaskills_catalog, luaskills_step_status, luaskills_step_message) =
         match vulcan_service_runtime::luaskills_bridge::bootstrap_luaskills(
             controller_configuration.clone(),
@@ -311,6 +382,23 @@ fn run_service_bootstrap(
                 )
             }
         };
+    trace_bootstrap_stage(
+        "luaskills",
+        luaskills_started_at,
+        format!(
+            "result={} skills={} entries={}",
+            if luaskills_runtime.is_some() {
+                "available"
+            } else {
+                "degraded"
+            },
+            luaskills_catalog.skills.len(),
+            luaskills_catalog.entry_count
+        ),
+    );
+    // plugin_runtime_started_at measures catalog preparation without the asynchronous prewarm join.
+    // plugin_runtime_started_at 测量不包含异步预热等待的插件目录准备。
+    let plugin_runtime_started_at = start_bootstrap_stage("plugin_catalog_prepare");
     let (vulcan_plugin_runtime, vulcan_plugin_catalog) = prepare_vulcan_plugin_runtime(
         luaskills_runtime.as_ref(),
         &provider_configuration,
@@ -318,6 +406,11 @@ fn run_service_bootstrap(
         runtime.handle().clone(),
         event_emitter.clone(),
     )?;
+    trace_bootstrap_stage(
+        "plugin_catalog_prepare",
+        plugin_runtime_started_at,
+        format!("plugins={}", vulcan_plugin_catalog.plugins.len()),
+    );
     // pluginPrewarmTask overlaps the cold System VM creation cost with independent MCP initialization.
     // pluginPrewarmTask 将冷启动 System VM 的创建成本与独立的 MCP 初始化并行重叠。
     let plugin_prewarm_runtime = vulcan_plugin_runtime.clone();
@@ -369,6 +462,9 @@ fn run_service_bootstrap(
         )
     });
 
+    // mcp_started_at measures the complete MCP runtime bootstrap call.
+    // mcp_started_at 测量完整的 MCP Runtime 引导调用。
+    let mcp_started_at = start_bootstrap_stage("mcp");
     let mcp_runtime = runtime
         .block_on(vulcan_service_runtime::mcp_bridge::bootstrap_mcp_runtime(
             provider_configuration.clone(),
@@ -381,6 +477,16 @@ fn run_service_bootstrap(
             )
         })?;
     let mcp_catalog = mcp_runtime.catalog();
+    trace_bootstrap_stage(
+        "mcp",
+        mcp_started_at,
+        format!(
+            "configured={} connected={} tools={}",
+            mcp_catalog.configured_server_count,
+            mcp_catalog.connected_server_count,
+            mcp_catalog.tool_count
+        ),
+    );
     logs.push(format!(
         "[webui-service] mcp ready: servers={}/{} connected={} tools={} prompts={} resources={}",
         mcp_catalog.enabled_server_count,
@@ -429,6 +535,9 @@ fn run_service_bootstrap(
             )
         },
     );
+    // plugin_prewarm_join_started_at measures only the remaining wait after MCP overlap completes.
+    // plugin_prewarm_join_started_at 仅测量 MCP 重叠阶段结束后的剩余等待。
+    let plugin_prewarm_join_started_at = start_bootstrap_stage("plugin_prewarm_join");
     let (prewarmed_plugin_ids, plugin_prewarm_elapsed) =
         runtime.block_on(plugin_prewarm_task).map_err(|error| {
             ServiceBootstrapError::new(
@@ -444,6 +553,11 @@ fn run_service_bootstrap(
             format!("预热已启用插件 Hook 运行时失败：{error}"),
         )
     })?;
+    trace_bootstrap_stage(
+        "plugin_prewarm_join",
+        plugin_prewarm_join_started_at,
+        format!("prewarmed={}", prewarmed_plugin_ids.len()),
+    );
     logs.push(format!(
         "[webui-service] Vulcan plugins ready: plugins={} tools={} prewarmed_runtimes={} revision={} elapsed_ms={}",
         vulcan_plugin_catalog.plugins.len(),
@@ -452,6 +566,9 @@ fn run_service_bootstrap(
         vulcan_plugin_catalog.revision,
         plugin_prewarm_elapsed.as_millis()
     ));
+    // static_catalogs_started_at measures already-configured profile, prompt-skill, and subagent roots.
+    // static_catalogs_started_at 测量已配置的画像、提示技能与智能体根目录。
+    let static_catalogs_started_at = start_bootstrap_stage("static_catalogs");
     let agent_profile_catalog = load_agent_profile_catalog()
         .map_err(|error| ServiceBootstrapError::new("workspace", "Workspace", error))?;
     // promptSkillConfig and promptSkillCatalog are captured once before the service accepts
@@ -486,6 +603,20 @@ fn run_service_bootstrap(
             error.message
         ));
     }
+    trace_bootstrap_stage(
+        "static_catalogs",
+        static_catalogs_started_at,
+        format!(
+            "agent_profiles={} prompt_skills={} subagents={} errors={}",
+            agent_profile_catalog.agents.len(),
+            prompt_skill_catalog.skills.len(),
+            subagent_catalog.definitions.len(),
+            subagent_catalog.errors.len()
+        ),
+    );
+    // agent_runtime_assembly_started_at covers provider catalogs, Agent MCP, hooks, and runtime bridge construction.
+    // agent_runtime_assembly_started_at 覆盖 Provider 目录、Agent MCP、Hook 与运行时桥构造。
+    let agent_runtime_assembly_started_at = start_bootstrap_stage("agent_runtime_assembly");
     // agent_luaskills_runtime is absent in degraded mode while the independent plugin runtime remains mounted.
     // agent_luaskills_runtime 在降级模式下为空，而独立插件运行时仍保持挂载。
     let agent_luaskills_runtime = luaskills_runtime.as_ref().and_then(|runtime_handle| {
@@ -865,6 +996,11 @@ fn run_service_bootstrap(
     logs.push(String::from(
         "[webui-service] agent runtime bridge ready: provider/LuaSkills/MCP handles are mounted",
     ));
+    trace_bootstrap_stage(
+        "agent_runtime_assembly",
+        agent_runtime_assembly_started_at,
+        "result=ready",
+    );
 
     update_startup(state, event_emitter, "loading-workspace", &logs, |now| {
         startup_steps_with_status(
@@ -900,6 +1036,9 @@ fn run_service_bootstrap(
         )
     });
 
+    // workspace_index_started_at measures only the indexed project/session summary load.
+    // workspace_index_started_at 仅测量已索引项目与会话摘要加载。
+    let workspace_index_started_at = start_bootstrap_stage("workspace_index");
     let workspace_snapshot = bootstrap_step(
         runtime.block_on(
             vulcan_workspace_store::workspace_store::load_or_seed_workspace_index(
@@ -909,6 +1048,16 @@ fn run_service_bootstrap(
         "workspace",
         "Workspace",
     )?;
+    trace_bootstrap_stage(
+        "workspace_index",
+        workspace_index_started_at,
+        format!(
+            "projects={} sessions={} archived_sessions={}",
+            workspace_snapshot.task_projects.len(),
+            workspace_snapshot.sessions.len(),
+            workspace_snapshot.archived_sessions.len()
+        ),
+    );
     let selected_session_id = workspace_snapshot.selected_session;
     let vmm_hook_snapshot =
         build_vmm_hook_config_snapshot(&provider_configuration, &workspace_snapshot);
@@ -969,6 +1118,9 @@ fn run_service_bootstrap(
         &logs,
     );
     startup.ui_locale = provider_configuration.ui_locale.clone();
+    // initial_projection_started_at measures selected-session locator validation and first workbench projection.
+    // initial_projection_started_at 测量选中会话定位校验与首次工作台投影。
+    let initial_projection_started_at = start_bootstrap_stage("initial_workbench_projection");
     let mut emitted_workbench = {
         // guard retains runtime and workbench state without publishing startup readiness before every fallible validation finishes.
         // guard 保留运行时与工作台状态，但不会在全部可失败校验完成前发布启动就绪。
@@ -1088,16 +1240,25 @@ fn run_service_bootstrap(
         guard.cached_mcp_catalog = Some(mcp_catalog);
         workbench
     };
+    trace_bootstrap_stage(
+        "initial_workbench_projection",
+        initial_projection_started_at,
+        format!("selected={selected_session_id}"),
+    );
     // Managed VMM starts only after the configured inference service and shared Controller have
     // both been published into service state. Failure degrades memory without blocking the workbench.
     // 托管 VMM 仅在配置化推理服务与共享 Controller 都已发布到服务状态后启动。
     // 启动失败只降级记忆能力，不阻止工作台可用。
+    // managed_vmm_started_at measures only managed memory runtime reconciliation.
+    // managed_vmm_started_at 仅测量托管记忆运行时协调。
+    let managed_vmm_started_at = start_bootstrap_stage("managed_vmm");
     runtime.block_on(reconcile_managed_memory_mesh_runtime(
         state,
         &public_ai_configuration,
         &provider_configuration.vmm,
         &mut logs,
     ));
+    trace_bootstrap_stage("managed_vmm", managed_vmm_started_at, "result=finished");
     // The managed runtime is a separate lifecycle domain; publish its exact fields even when a
     // broader workspace refresh is temporarily unable to reopen one historical VMM session.
     // 托管运行时属于独立生命周期域；即使更广泛的工作区刷新暂时无法重新打开某个历史 VMM 会话，
@@ -1111,22 +1272,54 @@ fn run_service_bootstrap(
     // Reproject the canonical workbench after managed VMM reconciliation so the first emitted
     // snapshot cannot retain the pre-launch external-runtime placeholder.
     // 托管 VMM 协调完成后重新投影规范工作台，避免首次发布的快照保留启动前的外部运行时占位状态。
-    match runtime.block_on(crate::refresh_workbench_snapshot(state.clone())) {
-        Ok(workbench) => emitted_workbench = workbench,
-        Err(error) => logs.push(format!(
-            "[webui-service] post-managed workspace refresh degraded: {error}"
-        )),
-    }
+    // post_managed_refresh_started_at measures the first retained workbench refresh.
+    // post_managed_refresh_started_at 测量首次保留工作台刷新。
+    let post_managed_refresh_started_at = start_bootstrap_stage("post_managed_workbench_refresh");
+    // post_managed_refresh_result reports the actual fallible projection outcome.
+    // post_managed_refresh_result 报告可失败投影的真实结果。
+    let post_managed_refresh_result =
+        match runtime.block_on(crate::refresh_workbench_snapshot(state.clone())) {
+            Ok(workbench) => {
+                emitted_workbench = workbench;
+                "ready"
+            }
+            Err(error) => {
+                logs.push(format!(
+                    "[webui-service] post-managed workspace refresh degraded: {error}"
+                ));
+                "degraded"
+            }
+        };
+    trace_bootstrap_stage(
+        "post_managed_workbench_refresh",
+        post_managed_refresh_started_at,
+        format!("result={post_managed_refresh_result}"),
+    );
     // Managed Codebase Memory enablement survives restart; unavailable packaged assets degrade only that integration.
     // 托管 Codebase Memory 启用意图会跨重启保留；打包资产不可用时仅降级该集成。
-    if let Err(error) = runtime.block_on(crate::reconcile_codebase_memory_runtime(state)) {
-        if let Ok(guard) = state.lock() {
-            guard
-                .codebase_memory_controller
-                .mark_runtime_unsynchronized(&error);
-        }
-        eprintln!("[webui-service] managed Codebase Memory bootstrap degraded: {error}");
-    }
+    // codebase_memory_started_at measures managed Codebase Memory reconciliation independently.
+    // codebase_memory_started_at 单独测量托管 Codebase Memory 协调。
+    let codebase_memory_started_at = start_bootstrap_stage("codebase_memory");
+    // codebase_memory_result reports whether reconciliation completed or degraded.
+    // codebase_memory_result 报告协调过程是完成还是降级。
+    let codebase_memory_result =
+        match runtime.block_on(crate::reconcile_codebase_memory_runtime(state)) {
+            Ok(()) => "ready",
+            Err(error) => {
+                if let Ok(guard) = state.lock() {
+                    guard
+                        .codebase_memory_controller
+                        .mark_runtime_unsynchronized(&error);
+                }
+                eprintln!("[webui-service] managed Codebase Memory bootstrap degraded: {error}");
+                "degraded"
+            }
+        };
+    trace_bootstrap_stage(
+        "codebase_memory",
+        codebase_memory_started_at,
+        format!("result={codebase_memory_result}"),
+    );
     // runtime_guard makes the retained service runtime current while the notify loop is spawned.
     // runtime_guard 在生成 notify 循环期间使保留的服务运行时成为当前运行时。
     let _runtime_guard = runtime.enter();
@@ -1164,6 +1357,7 @@ fn run_service_bootstrap(
     mark_webui_service_discovery_ready(state);
     emit_service_snapshots(event_emitter, &startup, &emitted_workbench);
     crate::vmm::start_vmm_health_monitor(state.clone(), event_emitter.clone());
+    trace_bootstrap_stage("total", bootstrap_started_at, "result=ready");
     Ok(())
 }
 

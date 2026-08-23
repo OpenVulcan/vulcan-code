@@ -33,7 +33,7 @@
     "workerIdleTtlSecs": 60,
     "persistentSessionLimitPerEngine": 256,
     "persistentSessionDefaultBufferLimitBytesPerStream": 1048576,
-    "invokeDefaultTimeoutMs": null
+    "invokeDefaultTimeoutMs": 60000
   },
   "aiTools": {
     "enableRunLua": true,
